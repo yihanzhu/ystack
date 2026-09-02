@@ -486,10 +486,11 @@ then run:
 bash scripts/test/telemetry-trace-ledger.test.sh
 ```
 
-This checks canonical bounded events, explicit unavailable facts, exact sequence
-and prior-digest links, the sealed tail, deterministic receipts, and fail-closed
-handling of duplicates, reorder, truncation, tampering, time reversal, malformed
-input, and symlinks. It does not collect or write telemetry, grant authority or
+This checks canonical bounded events, exact session and attempt bindings,
+explicit unavailable facts, exact sequence and prior-digest links, the sealed
+tail, deterministic bounded receipts, and fail-closed handling of duplicates,
+replay, reorder, truncation, tampering, time reversal, malformed input, symlinks,
+and unverified runtimes. It does not collect or write telemetry, grant authority or
 qualification, run a tool or adapter, use a credential or network, activate a
 profile, publish, deploy, or touch a target.
 

@@ -7,6 +7,7 @@ umask 077
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 validator="$root/telemetry/v1/validate-trace-ledger.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-trace-ledger-test.XXXXXX")
+tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 cleanup() { /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
@@ -52,10 +53,11 @@ unsealed="$tmp/unsealed.json"
     task_class:recorded("task.routine";"7"),tool:$tool,workflow:recorded("workflow.example";"8")};
   def event($id;$trace;$sequence;$time;$type;$facts): {
     schema_version:1,kind:"telemetry_trace_event",id:$id,session_id:"session.example",
-    trace_id:$trace,sequence:$sequence,prior_digest:null,occurred_at:$time,event_type:$type,
-    facts:$facts,record_digest:("0"*64)};
+    attempt_id:"attempt.example",trace_id:$trace,sequence:$sequence,prior_digest:null,
+    occurred_at:$time,event_type:$type,facts:$facts,record_digest:("0"*64)};
   {schema_version:1,kind:"telemetry_trace_ledger",id:"trace-ledger.example",
-   body:{session_id:"session.example",trace_ids:["trace.one","trace.two"],events:[
+   body:{session_id:"session.example",attempt_id:"attempt.example",
+     trace_ids:["trace.one","trace.two"],events:[
      event("event.000";"trace.one";0;"2026-09-02T12:00:00Z";"session.started";
        facts("stage.session";unavailable("tool.unavailable");"status.running";unavailable("result.unavailable");null)),
      event("event.001";"trace.one";1;"2026-09-02T12:00:01Z";"tool.finished";
@@ -100,7 +102,8 @@ reseal "$unsealed" "$valid"
 
 run_validator() {
   local input=$1 out=$2 err=$3 status=0
-  PATH="$bin:/usr/bin:/bin" "$validator" validate "$input" > "$out" 2> "$err" || status=$?
+  PATH="$bin:/usr/bin:/bin" "$validator" validate session.example attempt.example \
+    "$input" > "$out" 2> "$err" || status=$?
   RUN_STATUS=$status
 }
 expect_pass() {
@@ -138,11 +141,17 @@ ledger_sha=$(sha_file "$valid")
 "$jq_bin" -e --arg sha "$ledger_sha" '
   .kind == "telemetry_trace_ledger_validation" and .body.activation_state == "inactive" and
   .body.authority_effect == "none" and .body.storage_effect == "none" and
-  .body.event_count == 3 and (.body.trace_ids | length) == 2 and
+  .body.session_id == "session.example" and .body.attempt_id == "attempt.example" and
+  .body.replay_key == {session_id:"session.example",attempt_id:"attempt.example",
+    final_digest:.body.final_digest} and .body.event_count == 3 and
+  (.body.trace_ids | length) == 2 and
   .body.ledger_ref.sha256 == $sha and .body.ledger_ref.media_type ==
     "application/vnd.ystack.telemetry-trace-ledger+json"
 ' "$tmp/canonical-valid.out" >/dev/null || fail 'receipt shape'
 pass 'canonical deterministic validation receipt'
+[ "$(/usr/bin/wc -c < "$tmp/canonical-valid.out" | /usr/bin/tr -d ' ')" -le 2048 ] ||
+  fail 'receipt size bound'
+pass 'validation receipt is bounded'
 
 expect_error sequence E_RELATION "$(resealed_mutation sequence '.body.events[1].sequence=7')"
 expect_error prior-digest E_RELATION "$(raw_mutation prior-digest '.body.events[1].prior_digest=("f"*64)')"
@@ -152,6 +161,7 @@ expect_error truncation E_RELATION "$(raw_mutation truncation '.body.events |= .
 expect_error tamper E_RELATION "$(raw_mutation tamper '.body.events[1].facts.status.value="status.failed"')"
 expect_error time-order E_RELATION "$(resealed_mutation time-order '.body.events[2].occurred_at="2026-09-02T11:59:59Z"')"
 expect_error trace-set E_RELATION "$(resealed_mutation trace-set '.body.events[2].trace_id="trace.three"')"
+expect_error event-attempt E_RELATION "$(resealed_mutation event-attempt '.body.events[1].attempt_id="attempt.other"')"
 expect_error missing-unavailable E_SHAPE "$(raw_mutation missing-unavailable 'del(.body.events[0].facts.adapter)')"
 expect_error malformed-time E_SHAPE "$(raw_mutation malformed-time '.body.events[0].occurred_at="2026-02-30T00:00:00Z"')"
 for field in authority command credential effect network provider; do
@@ -176,7 +186,8 @@ expect_error symlink-input E_RUNTIME "$tmp/ledger-link.json"
 expect_error nonregular-input E_RUNTIME "$tmp/ledger.fifo"
 
 usage_status=0
-PATH="$bin:/usr/bin:/bin" "$validator" validate "$valid" extra > "$tmp/usage.out" 2> "$tmp/usage.err" || usage_status=$?
+PATH="$bin:/usr/bin:/bin" "$validator" validate session.example attempt.example "$valid" extra \
+  > "$tmp/usage.out" 2> "$tmp/usage.err" || usage_status=$?
 [ "$usage_status" -ne 0 ] && [ ! -s "$tmp/usage.out" ] && [ "$(/bin/cat "$tmp/usage.err")" = E_USAGE ] || fail usage
 pass 'closed command surface'
 
@@ -186,8 +197,36 @@ runtime="$tmp/runtime"
 /bin/chmod 0555 "$runtime/validate-trace-ledger.sh"
 /bin/ln -s "$root/telemetry/v1/trace-ledger.jq" "$runtime/trace-ledger.jq"
 runtime_status=0
-PATH="$bin:/usr/bin:/bin" "$runtime/validate-trace-ledger.sh" validate "$valid" > "$tmp/runtime.out" 2> "$tmp/runtime.err" || runtime_status=$?
+PATH="$bin:/usr/bin:/bin" "$runtime/validate-trace-ledger.sh" validate \
+  session.example attempt.example "$valid" > "$tmp/runtime.out" 2> "$tmp/runtime.err" || runtime_status=$?
 [ "$runtime_status" -ne 0 ] && [ ! -s "$tmp/runtime.out" ] && [ "$(/bin/cat "$tmp/runtime.err")" = E_RUNTIME ] || fail 'symlinked program'
 pass 'symlinked validator program rejected'
+
+other_attempt_status=0
+PATH="$bin:/usr/bin:/bin" "$validator" validate session.example attempt.other "$valid" \
+  > "$tmp/other-attempt.out" 2> "$tmp/other-attempt.err" || other_attempt_status=$?
+[ "$other_attempt_status" -ne 0 ] && [ ! -s "$tmp/other-attempt.out" ] &&
+  [ "$(/bin/cat "$tmp/other-attempt.err")" = E_RELATION ] || fail 'cross-attempt replay'
+pass 'caller attempt binding rejects replay'
+
+other_session_status=0
+PATH="$bin:/usr/bin:/bin" "$validator" validate session.other attempt.example "$valid" \
+  > "$tmp/other-session.out" 2> "$tmp/other-session.err" || other_session_status=$?
+[ "$other_session_status" -ne 0 ] && [ ! -s "$tmp/other-session.out" ] &&
+  [ "$(/bin/cat "$tmp/other-session.err")" = E_RELATION ] || fail 'cross-session replay'
+pass 'caller session binding rejects replay'
+
+fake_bin="$tmp/fake-bin"
+/bin/mkdir -m 700 "$fake_bin"
+/usr/bin/printf '#!/bin/sh\n/usr/bin/touch %s\n/usr/bin/printf "jq-1.6\\n"\n' \
+  "$tmp/fake-jq-ran" > "$fake_bin/jq"
+/bin/chmod 0500 "$fake_bin/jq"
+fake_status=0
+PATH="$fake_bin:/usr/bin:/bin" "$validator" validate session.example attempt.example "$valid" \
+  > "$tmp/fake.out" 2> "$tmp/fake.err" || fake_status=$?
+[ "$fake_status" -ne 0 ] && [ ! -s "$tmp/fake.out" ] &&
+  [ "$(/bin/cat "$tmp/fake.err")" = E_RUNTIME ] && [ ! -e "$tmp/fake-jq-ran" ] ||
+  fail 'unverified jq execution'
+pass 'unverified jq is rejected without execution'
 
 /usr/bin/printf 'PASS: %s telemetry trace-ledger checks\n' "$passes"

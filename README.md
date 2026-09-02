@@ -248,12 +248,20 @@ grant authority or qualification, or activate a profile.
 ## Inactive telemetry trace ledger
 
 `telemetry/v1/validate-trace-ledger.sh` validates one bounded canonical session
-ledger. Every event names its session and trace, carries explicit recorded,
+ledger against caller-supplied session and attempt identities. Every event names
+that session and attempt plus its trace, carries explicit recorded,
 computed, unavailable, or not-applicable facts, and joins a SHA-256 chain. A
 sealed count and final digest expose tail truncation. The validator returns one
 deterministic canonical receipt bound to the exact ledger bytes.
 Each record digest covers its jq 1.6 sorted compact event without
 `record_digest`, including the terminating line feed.
+The receipt repeats a session, attempt, and final-digest replay key for the
+canonical state store to consume once. Validation runs only with the repository's
+digest-pinned jq 1.6 runtime bytes.
+
+```text
+telemetry/v1/validate-trace-ledger.sh validate SESSION_ID ATTEMPT_ID LEDGER.json
+```
 
 The chain detects an unrehashed change; it is not a signature or an authority
 grant. The package stays inactive and repo-only. It does not collect telemetry,

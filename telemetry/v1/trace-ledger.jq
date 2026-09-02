@@ -57,11 +57,13 @@ def facts_ok:
   (.workflow | fact_ok(id_ok));
 
 def event_ok:
-  exact(["event_type","facts","id","kind","occurred_at","prior_digest",
-    "record_digest","schema_version","sequence","session_id","trace_id"]) and
+  exact(["attempt_id","event_type","facts","id","kind","occurred_at",
+    "prior_digest","record_digest","schema_version","sequence","session_id",
+    "trace_id"]) and
   .schema_version == 1 and .kind == "telemetry_trace_event" and
-  (.id | id_ok) and (.event_type | id_ok) and (.occurred_at | time_ok) and
-  (.sequence | int_ok) and (.session_id | id_ok) and (.trace_id | id_ok) and
+  (.attempt_id | id_ok) and (.id | id_ok) and (.event_type | id_ok) and
+  (.occurred_at | time_ok) and (.sequence | int_ok) and
+  (.session_id | id_ok) and (.trace_id | id_ok) and
   ((.prior_digest == null) or (.prior_digest | sha256_ok)) and
   (.record_digest | sha256_ok) and (.facts | facts_ok);
 
@@ -76,21 +78,24 @@ def ledger_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
   .kind == "telemetry_trace_ledger" and (.id | content_id_ok) and
   (.body |
-    exact(["events","session_id","trace_ids","seal"]) and
-    (.session_id | id_ok) and
+    exact(["attempt_id","events","session_id","trace_ids","seal"]) and
+    (.attempt_id | id_ok) and (.session_id | id_ok) and
     (.trace_ids | type == "array" and length >= 1 and length <= 32 and
       all(.[];id_ok) and . == (sort | unique)) and
     (.events | type == "array" and length >= 1 and length <= 256 and
       all(.[];event_ok)) and (.seal | seal_ok));
 
-def relations_ok($digests):
+def relations_ok($digests;$expected_session;$expected_attempt):
   . as $ledger |
   $ledger.body.events as $events |
   ($events | length) as $count |
   ($digests | type == "array" and length == $count and all(.[];sha256_ok)) and
+  $ledger.body.session_id == $expected_session and
+  $ledger.body.attempt_id == $expected_attempt and
   (($events | map(.id)) | length == (unique | length)) and
   all(range(0;$count);$events[.].sequence == .) and
   all($events[];.session_id == $ledger.body.session_id) and
+  all($events[];.attempt_id == $ledger.body.attempt_id) and
   $ledger.body.trace_ids == ($events | map(.trace_id) | sort | unique) and
   all(range(1;$count);$events[. - 1].occurred_at <= $events[.].occurred_at) and
   all(range(0;$count);$events[.].record_digest == $digests[.]) and
@@ -103,9 +108,11 @@ def relations_ok($digests):
 def receipt($ledger_sha):
   {schema_version:1,kind:"telemetry_trace_ledger_validation",id:.id,
    body:{activation_state:"inactive",authority_effect:"none",storage_effect:"none",
-     session_id:.body.session_id,trace_ids:.body.trace_ids,
+     session_id:.body.session_id,attempt_id:.body.attempt_id,trace_ids:.body.trace_ids,
      event_count:.body.seal.event_count,first_digest:.body.seal.first_digest,
      final_digest:.body.seal.final_digest,
+     replay_key:{session_id:.body.session_id,attempt_id:.body.attempt_id,
+       final_digest:.body.seal.final_digest},
      ledger_ref:{content_id:.id,
        media_type:"application/vnd.ystack.telemetry-trace-ledger+json",
        sha256:$ledger_sha}}};
@@ -114,7 +121,8 @@ if $operation == "shape" then
   if ledger_ok then empty else "E_SHAPE" end
 elif $operation == "validate" then
   if (ledger_ok | not) then "E_SHAPE"
-  elif (relations_ok($event_digests) | not) then "E_RELATION"
+  elif (relations_ok($event_digests;$expected_session;$expected_attempt) | not)
+  then "E_RELATION"
   else receipt($ledger_sha)
   end
 else "E_RUNTIME"
