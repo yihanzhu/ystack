@@ -50,7 +50,7 @@ source_dir=$(CDPATH='' cd -P -- "${self%/*}" 2>/dev/null && pwd -P) || emit_erro
 repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 [ "$source_dir" = "$repo/evals/v1" ] || emit_error E_RUNTIME
 
-program_sha=6fb15ba938580b340cfdd6f628de0f72ee0bdb589c0673c47e5444daf16f51bf
+program_sha=1cdb63cd246f0fd2a2de484d62a0be297cb24ad1dffd5fc9a6c57b967d10778d
 schema_sha=8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
 registry_sha=f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1
 generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
@@ -136,11 +136,17 @@ if [ "$status" -ne 0 ]; then
   emit_error E_RUNTIME
 fi
 [ ! -s "$scratch/error" ] || emit_error E_RUNTIME
+status=0
+snapshot_file "$scratch/output.json" "$scratch/bounded-output.json" 1048576 0400 || status=$?
+[ "$status" -eq 0 ] || { [ "$status" -eq 42 ] && emit_error E_LIMIT; emit_error E_RUNTIME; }
+"$scratch/jq" -S -c . "$scratch/bounded-output.json" > "$scratch/canonical-output.json" 2>/dev/null ||
+  emit_error E_RUNTIME
+/usr/bin/cmp -s "$scratch/bounded-output.json" "$scratch/canonical-output.json" || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/input.json")" = "$bundle_sha" ] || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/framework.jq")" = "$program_sha" ] || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/schema.jq")" = "$schema_sha" ] || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/registry.json")" = "$registry_sha" ] || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/jq")" = "$jq_sha" ] || emit_error E_RUNTIME
-/bin/cat "$scratch/output.json" || emit_error E_RUNTIME
+/bin/cat "$scratch/bounded-output.json" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM
 cleanup

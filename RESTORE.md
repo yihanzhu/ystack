@@ -487,11 +487,13 @@ bash scripts/test/eval-framework.test.sh
 ```
 
 This checks canonical suite, case, trial, and grade records; immutable framework
-and scope references; deterministic and stochastic multi-trial results; explicit
+and scope references; exact trial/attempt identities; coherent trial and grade
+timestamps; deterministic and stochastic multi-trial results; explicit
 `unavailable` and `inconclusive` states; and stale, tampered, duplicate, missing,
-or out-of-order input rejection. The runner invokes no grader, model, adapter, or
-arbitrary command. It uses no network or credential and grants no authority,
-activation, qualification, or external effect.
+or out-of-order input rejection. Failed grades cannot be hidden by an unavailable
+trial. The runner invokes no grader, model, adapter, or arbitrary command. It uses
+no network or credential and grants no authority, activation, qualification, or
+external effect.
 
 ---
 

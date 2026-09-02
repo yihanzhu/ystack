@@ -50,7 +50,7 @@ def case_ok:
   (.body |
    schema::exact_fields(
      ["case_version","suite_ref","execution_kind","input_ref","expected_ref",
-      "trial_count","trial_ids","graders"];[]) and
+      "trial_count","trial_ids","attempt_ids","graders"];[]) and
    .case_version == "v1" and
    (.suite_ref | schema::content_ref_ok) and
    (.execution_kind == "deterministic" or .execution_kind == "model") and
@@ -59,17 +59,23 @@ def case_ok:
    (.trial_count | schema::int_ok) and .trial_count >= 1 and .trial_count <= 16 and
    (if .execution_kind == "model" then .trial_count >= 2 else true end) and
    (.trial_ids | schema::bounded_set(1;16;schema::id_ok;.)) and
+   (.attempt_ids | schema::bounded_set(1;16;schema::id_ok;.)) and
    .trial_count == (.trial_ids | length) and
+   .trial_count == (.attempt_ids | length) and
    (.graders | schema::bounded_set(1;8;grader_ok;.grader_id)));
 
 def trial_ok:
   envelope_ok("eval_trial") and
   (.body |
    schema::exact_fields(
-     ["trial_version","case_ref","trial_index","status","output_ref","reason"];[]) and
+     ["trial_version","case_ref","trial_index","attempt_id","started_at","finished_at",
+      "status","output_ref","reason"];[]) and
    .trial_version == "v1" and
    (.case_ref | schema::content_ref_ok) and
    (.trial_index | schema::int_ok) and .trial_index >= 1 and .trial_index <= 16 and
+   (.attempt_id | schema::id_ok) and
+   (.started_at | schema::time_ok) and (.finished_at | schema::time_ok) and
+   .started_at <= .finished_at and
    (.output_ref | present_ref_ok) and (.reason | present_reason_ok) and
    ((.status == "completed" and .output_ref.state == "present" and
      .reason.state == "absent") or
@@ -81,13 +87,14 @@ def grade_ok:
   (.body |
    schema::exact_fields(
      ["grade_version","trial_ref","grader_id","grader_kind","grader_ref",
-      "status","evidence_ref","reason"];[]) and
+      "graded_at","status","evidence_ref","reason"];[]) and
    .grade_version == "v1" and
    (.trial_ref | schema::content_ref_ok) and
    (.grader_id | schema::id_ok) and
    (.grader_kind == "deterministic" or .grader_kind == "model" or
     .grader_kind == "human") and
    (.grader_ref | schema::content_ref_ok) and
+   (.graded_at | schema::time_ok) and
    (.evidence_ref | present_ref_ok) and (.reason | present_reason_ok) and
    (((.status == "passed" or .status == "failed") and
      .evidence_ref.state == "present" and .reason.state == "absent") or
@@ -146,6 +153,8 @@ def bundle_order_ok:
   ($body.trials | map([.value.body.case_ref.content_id,.value.body.trial_index])) as $trial_keys |
   $trial_keys == ($trial_keys | sort) and
   ($trial_keys | length) == ($trial_keys | unique | length) and
+  ($body.trials | map(.value.body.attempt_id)) as $attempt_ids |
+  ($attempt_ids | length) == ($attempt_ids | unique | length) and
   ($body.grades | map([.value.body.trial_ref.content_id,.value.body.grader_id])) as $grade_keys |
   $grade_keys == ($grade_keys | sort) and
   ($grade_keys | length) == ($grade_keys | unique | length);
@@ -159,6 +168,7 @@ def bundle_relations_ok:
   all($body.cases[]; . as $case |
     [$body.trials[] | select(.value.body.case_ref == $case.ref)] as $trials |
     ($trials | map(.value.id)) == $case.value.body.trial_ids and
+    ($trials | map(.value.body.attempt_id)) == $case.value.body.attempt_ids and
     ($trials | map(.value.body.trial_index)) ==
       [range(1;($case.value.body.trial_count + 1))]) and
   all($body.trials[]; . as $trial |
@@ -167,6 +177,10 @@ def bundle_relations_ok:
     ($cases[0].value.body.graders) as $graders |
     [$body.grades[] | select(.value.body.trial_ref == $trial.ref)] as $grades |
     ($grades | map(.value.body.grader_id)) == ($graders | map(.grader_id)) and
+    all($grades[]; .value.body.graded_at >= $trial.value.body.finished_at) and
+    (if $trial.value.body.status == "unavailable"
+     then all($grades[]; .value.body.status == "unavailable")
+     else true end) and
     all($grades[]; . as $grade |
       [$graders[] | select(.grader_id == $grade.value.body.grader_id)] as $matches |
       ($matches | length) == 1 and
@@ -188,7 +202,9 @@ def trial_summary($body;$trial):
   (if $trial.value.body.status == "unavailable" then "unavailable"
    else fold_status($grade_statuses)
    end) as $status |
-  {trial_ref:$trial.ref,trial_index:$trial.value.body.trial_index,status:$status};
+  {trial_ref:$trial.ref,trial_index:$trial.value.body.trial_index,
+   attempt_id:$trial.value.body.attempt_id,started_at:$trial.value.body.started_at,
+   finished_at:$trial.value.body.finished_at,status:$status};
 
 def case_summary($body;$case):
   [$body.trials[] | select(.value.body.case_ref == $case.ref) |

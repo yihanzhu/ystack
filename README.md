@@ -251,12 +251,14 @@ grant authority or qualification, or activate a profile.
 its cases, trials, and grades, then emits one deterministic report. Every record
 is content-bound. The suite pins its scope and framework version. Model cases
 require multiple trials, while deterministic, model, and human graders remain
-immutable data references rather than commands the runner can invoke.
+immutable data references rather than commands the runner can invoke. Declared
+trial and attempt identities are exact, and trial/grade timestamps must agree.
 
 The runner snapshots a fixed jq program and the selected public-core schema into
 a private directory. It accepts only canonical JSON, rejects stale links,
 tampering, duplicates, and non-canonical order, and keeps `unavailable` distinct
-from `inconclusive`. It has no adapter or arbitrary-command seam, uses no network
+from `inconclusive`. Failed grades cannot be hidden by another trial state. It
+has no adapter or arbitrary-command seam, uses no network
 or credential, grants no authority, and makes no activation or qualification
 claim.
 

@@ -98,14 +98,16 @@ expected_model=$(ref expected.model application/json "$(printf '4%.0s' {1..64})"
   --argjson expected "$expected_det" --argjson det "$grader_det" --argjson human "$grader_human" '
   {schema_version:1,kind:"eval_case",id:"case.deterministic",body:{case_version:"v1",
    suite_ref:$suite,execution_kind:"deterministic",input_ref:$input,expected_ref:$expected,
-   trial_count:1,trial_ids:["trial.det.1"],graders:[$det,$human]}}
+   trial_count:1,trial_ids:["trial.det.1"],attempt_ids:["attempt.trial.det.1"],
+   graders:[$det,$human]}}
 ' > "$tmp/case.det.value"
 "$jq_bin" -S -c -n --argjson suite "$suite_ref" --argjson input "$input_model" \
   --argjson expected "$expected_model" --argjson det "$grader_det" --argjson human "$grader_human" \
   --argjson model "$grader_model" '
   {schema_version:1,kind:"eval_case",id:"case.model",body:{case_version:"v1",
    suite_ref:$suite,execution_kind:"model",input_ref:$input,expected_ref:$expected,
-   trial_count:2,trial_ids:["trial.model.1","trial.model.2"],graders:[$det,$human,$model]}}
+   trial_count:2,trial_ids:["trial.model.1","trial.model.2"],
+   attempt_ids:["attempt.trial.model.1","attempt.trial.model.2"],graders:[$det,$human,$model]}}
 ' > "$tmp/case.model.value"
 wrap "$tmp/case.det.value" "$tmp/case.det.wrap"
 wrap "$tmp/case.model.value" "$tmp/case.model.wrap"
@@ -118,7 +120,8 @@ make_trial() {
   output=$(ref "$id.output" application/json "$(printf "$digit%.0s" {1..64})")
   "$jq_bin" -S -c -n --arg id "$id" --argjson case_ref "$case_ref" --argjson index "$index" \
     --argjson output "$output" '{schema_version:1,kind:"eval_trial",id:$id,body:{
-      trial_version:"v1",case_ref:$case_ref,trial_index:$index,status:"completed",
+      trial_version:"v1",case_ref:$case_ref,trial_index:$index,attempt_id:("attempt."+$id),
+      started_at:"2026-09-01T00:00:00Z",finished_at:"2026-09-01T00:00:10Z",status:"completed",
       output_ref:{state:"present",value:$output},reason:{state:"absent"}}}'
 }
 make_trial trial.det.1 "$case_det_ref" 1 5 > "$tmp/trial.det.value"
@@ -144,7 +147,8 @@ make_grade() {
     --arg grader_kind "$grader_kind" --argjson grader_ref "$grader_ref" --arg status "$status" \
     --argjson evidence "$evidence_state" --argjson reason "$reason" '
     {schema_version:1,kind:"eval_grade",id:$id,body:{grade_version:"v1",trial_ref:$trial,
-     grader_id:$grader_id,grader_kind:$grader_kind,grader_ref:$grader_ref,status:$status,
+     grader_id:$grader_id,grader_kind:$grader_kind,grader_ref:$grader_ref,
+     graded_at:"2026-09-01T00:00:20Z",status:$status,
      evidence_ref:$evidence,reason:$reason}}'
 }
 trial_det_ref=$("$jq_bin" -c .ref "$tmp/trial.det.wrap")
@@ -179,6 +183,8 @@ done
 pass valid-multi-trial-report
 "$runner" evaluate "$tmp/bundle.json" > "$tmp/repeat.json"
 /usr/bin/cmp -s "$tmp/report.json" "$tmp/repeat.json" || fail 'deterministic report'
+[ "$(/usr/bin/wc -c < "$tmp/report.json" | /usr/bin/tr -d ' ')" -le 1048576 ] ||
+  fail 'bounded report'
 pass deterministic-report
 
 "$jq_bin" -S -c '.body.cases[0].value.body.expected_ref.sha256=("f"*64)' \
@@ -188,6 +194,18 @@ expect_error tampered-record E_STALE "$tmp/tamper.json"
   "$tmp/bundle.json" > "$tmp/stale-unhashed.json"
 rehash "$tmp/stale-unhashed.json" cases 0 "$tmp/stale.json"
 expect_error stale-record-link E_RELATION "$tmp/stale.json"
+"$jq_bin" -S -c '.body.trials[0].value.body.started_at="2026-09-01T00:00:11Z"' \
+  "$tmp/bundle.json" > "$tmp/trial-time-unhashed.json"
+rehash "$tmp/trial-time-unhashed.json" trials 0 "$tmp/trial-time.json"
+expect_error inverted-trial-time E_SHAPE "$tmp/trial-time.json"
+"$jq_bin" -S -c '.body.grades[0].value.body.graded_at="2026-09-01T00:00:09Z"' \
+  "$tmp/bundle.json" > "$tmp/grade-time-unhashed.json"
+rehash "$tmp/grade-time-unhashed.json" grades 0 "$tmp/grade-time.json"
+expect_error early-grade-time E_RELATION "$tmp/grade-time.json"
+"$jq_bin" -S -c '.body.trials[1].value.body.attempt_id=.body.trials[0].value.body.attempt_id' \
+  "$tmp/bundle.json" > "$tmp/attempt-unhashed.json"
+rehash "$tmp/attempt-unhashed.json" trials 1 "$tmp/attempt.json"
+expect_error duplicate-attempt E_RELATION "$tmp/attempt.json"
 "$jq_bin" -S -c '.body.cases|=reverse' "$tmp/bundle.json" > "$tmp/order.json"
 expect_error record-order E_RELATION "$tmp/order.json"
 "$jq_bin" -S -c '.body.trials += [.body.trials[0]]' "$tmp/bundle.json" > "$tmp/duplicate.json"
@@ -198,6 +216,45 @@ expect_error missing-grade E_RELATION "$tmp/missing-grade.json"
 "$jq_bin" -S -c '.body.suite.value.body.extra_command="printf unsafe"' \
   "$tmp/bundle.json" > "$tmp/command.json"
 expect_error arbitrary-command-field E_SHAPE "$tmp/command.json"
+"$jq_bin" -S -c '.body.cases[0].value.body.graders[0].implementation_ref.content_id=("x"*129)' \
+  "$tmp/bundle.json" > "$tmp/grader-metadata.json"
+expect_error bounded-grader-metadata E_SHAPE "$tmp/grader-metadata.json"
+
+"$jq_bin" -S -c '
+  .body.trials[2].value.body.status="unavailable" |
+  .body.trials[2].value.body.output_ref={state:"absent"} |
+  .body.trials[2].value.body.reason={state:"present",value:"trial.output-unavailable"}
+' "$tmp/bundle.json" > "$tmp/hidden-trial-unhashed.json"
+rehash "$tmp/hidden-trial-unhashed.json" trials 2 "$tmp/hidden-trial.json"
+hidden_trial_ref=$("$jq_bin" -c '.body.trials[2].ref' "$tmp/hidden-trial.json")
+"$jq_bin" -S -c --argjson trial "$hidden_trial_ref" '
+  .body.grades |= map(if .value.body.trial_ref.content_id=="trial.model.2" then
+    .value.body.trial_ref=$trial |
+    if .value.id=="grade.model2.model" then .value.body.status="failed"
+    else .value.body.status="unavailable" | .value.body.evidence_ref={state:"absent"} |
+      .value.body.reason={state:"present",value:"grader.unavailable"} end
+    else . end)
+' "$tmp/hidden-trial.json" > "$tmp/hidden-grades-0.json"
+hidden_current="$tmp/hidden-grades-0.json"
+hidden_count=0
+for hidden_id in grade.model2.det grade.model2.human grade.model2.model; do
+  hidden_index=$("$jq_bin" -r --arg id "$hidden_id" '.body.grades|map(.value.id)|index($id)' "$hidden_current")
+  hidden_next="$tmp/hidden-grades-$((hidden_count + 1)).json"
+  rehash "$hidden_current" grades "$hidden_index" "$hidden_next"
+  hidden_current=$hidden_next
+  hidden_count=$((hidden_count + 1))
+done
+expect_error unavailable-trial-hides-failure E_RELATION "$hidden_current"
+
+"$jq_bin" -S -c '
+  .body.grades |= map(if .value.id=="grade.model2.model" then
+    .value.body.status="failed" else . end)
+' "$tmp/bundle.json" > "$tmp/failed-unhashed.json"
+failed_index=$("$jq_bin" -r '.body.grades|map(.value.id)|index("grade.model2.model")' "$tmp/failed-unhashed.json")
+rehash "$tmp/failed-unhashed.json" grades "$failed_index" "$tmp/failed.json"
+"$runner" evaluate "$tmp/failed.json" > "$tmp/failed-report.json"
+[ "$("$jq_bin" -r .body.status "$tmp/failed-report.json")" = failed ] || fail 'failed grade precedence'
+pass failed-grade-precedence
 
 "$jq_bin" -S -c '
   .body.grades |= map(if .value.id=="grade.model2.human" then
