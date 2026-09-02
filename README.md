@@ -230,6 +230,21 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive hermetic eval framework
+
+`evals/v1/run.sh evaluate BUNDLE.json` validates a bounded canonical eval suite,
+its cases, trials, and grades, then emits one deterministic report. Every record
+is content-bound. The suite pins its scope and framework version. Model cases
+require multiple trials, while deterministic, model, and human graders remain
+immutable data references rather than commands the runner can invoke.
+
+The runner snapshots a fixed jq program and the selected public-core schema into
+a private directory. It accepts only canonical JSON, rejects stale links,
+tampering, duplicates, and non-canonical order, and keeps `unavailable` distinct
+from `inconclusive`. It has no adapter or arbitrary-command seam, uses no network
+or credential, grants no authority, and makes no activation or qualification
+claim.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

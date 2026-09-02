@@ -232,3 +232,8 @@ scripts/test/orchestrator-reconciliation-plan.test.sh
 # Inactive GitHub forge normalizer payload
 adapters/github-forge/v1/normalize.jq
 scripts/test/default-github-forge-adapter.test.sh
+
+# Inactive hermetic eval framework
+evals/v1/framework.jq
+evals/v1/run.sh
+scripts/test/eval-framework.test.sh

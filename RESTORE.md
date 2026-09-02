@@ -464,6 +464,20 @@ durable main commit and add default-set wiring. The pure jq payload is offline a
 unqualified. It does not call GitHub, use a credential, change a repository or
 request, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive hermetic eval framework block,
+then run:
+
+```sh
+bash scripts/test/eval-framework.test.sh
+```
+
+This checks canonical suite, case, trial, and grade records; immutable framework
+and scope references; deterministic and stochastic multi-trial results; explicit
+`unavailable` and `inconclusive` states; and stale, tampered, duplicate, missing,
+or out-of-order input rejection. The runner invokes no grader, model, adapter, or
+arbitrary command. It uses no network or credential and grants no authority,
+activation, qualification, or external effect.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
