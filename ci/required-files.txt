@@ -232,3 +232,8 @@ scripts/test/orchestrator-reconciliation-plan.test.sh
 # Inactive GitHub forge normalizer payload
 adapters/github-forge/v1/normalize.jq
 scripts/test/default-github-forge-adapter.test.sh
+
+# Inactive telemetry trace ledger
+telemetry/v1/trace-ledger.jq
+telemetry/v1/validate-trace-ledger.sh
+scripts/test/telemetry-trace-ledger.test.sh

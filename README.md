@@ -230,6 +230,21 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive telemetry trace ledger
+
+`telemetry/v1/validate-trace-ledger.sh` validates one bounded canonical session
+ledger. Every event names its session and trace, carries explicit recorded,
+computed, unavailable, or not-applicable facts, and joins a SHA-256 chain. A
+sealed count and final digest expose tail truncation. The validator returns one
+deterministic canonical receipt bound to the exact ledger bytes.
+Each record digest covers its jq 1.6 sorted compact event without
+`record_digest`, including the terminating line feed.
+
+The chain detects an unrehashed change; it is not a signature or an authority
+grant. The package stays inactive and repo-only. It does not collect telemetry,
+run a tool or adapter, read a credential, use a network, write a ledger, activate
+a profile, qualify a workflow, publish, deploy, or touch a target.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

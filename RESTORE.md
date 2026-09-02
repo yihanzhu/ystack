@@ -464,6 +464,20 @@ durable main commit and add default-set wiring. The pure jq payload is offline a
 unqualified. It does not call GitHub, use a credential, change a repository or
 request, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive telemetry trace-ledger block,
+then run:
+
+```sh
+bash scripts/test/telemetry-trace-ledger.test.sh
+```
+
+This checks canonical bounded events, explicit unavailable facts, exact sequence
+and prior-digest links, the sealed tail, deterministic receipts, and fail-closed
+handling of duplicates, reorder, truncation, tampering, time reversal, malformed
+input, and symlinks. It does not collect or write telemetry, grant authority or
+qualification, run a tool or adapter, use a credential or network, activate a
+profile, publish, deploy, or touch a target.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
