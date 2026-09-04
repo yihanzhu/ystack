@@ -52,7 +52,7 @@ repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) || emit_err
 
 program_sha=1cdb63cd246f0fd2a2de484d62a0be297cb24ad1dffd5fc9a6c57b967d10778d
 schema_sha=8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
-registry_sha=f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1
+registry_sha=3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
   Darwin:*) jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
@@ -82,9 +82,10 @@ snapshot_file "$jq_source" "$scratch/jq" 33554432 0500 || emit_error E_RUNTIME
 [ "$(sha_file "$scratch/registry.json")" = "$registry_sha" ] || emit_error E_STALE
 [ "$(sha_file "$scratch/jq")" = "$jq_sha" ] || emit_error E_RUNTIME
 generation=$("$scratch/jq" -er '
-  if length==1 and .[0].semantic_identity=="core.contracts.v2" and
-     (.[0].generation_id | type=="string" and test("\\Ag-[0-9a-f]{64}\\z"))
-  then .[0].generation_id else error("E_STALE") end
+  if type=="array" and length>=1 and
+     all(.[]; .semantic_identity=="core.contracts.v2" and
+       (.generation_id | type=="string" and test("\\Ag-[0-9a-f]{64}\\z")))
+  then .[-1].generation_id else error("E_STALE") end
 ' "$scratch/registry.json" 2>/dev/null) || emit_error E_STALE
 schema="$repo/core/v2/generations/$generation/modules/schema.jq"
 snapshot_file "$schema" "$scratch/schema.jq" 1048576 0400 || emit_error E_STALE

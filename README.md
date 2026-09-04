@@ -47,6 +47,12 @@ The stable `scripts/core-contract.sh` wrapper and inactive resolver select this 
 generation together. This is a repo-only compatibility switch. It does not install
 the resolver, select a live profile, or qualify a real forge.
 
+The v2 registry also carries the selected evidence-identity correction. It requires
+every passed evidence item to come from the exact selected execution; incident
+mismatches remain valid only when all evidence is non-passing. The stable wrapper,
+inactive resolver, Control closure, and scanner select it together. The prior
+generation remains immutable and restorable.
+
 ## Inactive fake adapter contract matrix
 
 `adapter-tests/v1/` runs a fixed 2×2 producer/forge matrix against one unrelated
@@ -230,6 +236,22 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive Codex native reviewer normalizer payload
+
+`adapters/codex-native-reviewer/v1/normalize.jq` validates one untrusted
+native-review snapshot against caller-supplied repository, change request,
+review, head, base, GitHub app, time, instruction, policy, and execution-boundary
+bindings. It returns a canonical generic observation for clean, findings,
+dismissed, timeout, failed, stale, incomplete, or non-terminal state. Provider
+severity and metadata stay opaque data, and unavailable hidden execution facts
+remain explicit.
+
+This stage lands only the immutable normalizer payload. A later assembly PR can
+add its manifest and default-set wiring after this payload has a durable commit
+on main. The payload is offline, read-only, and unqualified. It does not invoke a
+model or CLI, use a credential or network, post a review, grant authority or
+qualification, or activate a profile.
+
 ## Inactive GitHub Actions CI normalizer payload
 
 `adapters/github-actions-ci/v1/normalize.jq` validates one untrusted GitHub
@@ -261,6 +283,125 @@ from `inconclusive`. Failed grades cannot be hidden by another trial state. It
 has no adapter or arbitrary-command seam, uses no network
 or credential, grants no authority, and makes no activation or qualification
 claim.
+## Inactive local Git candidate materializer
+
+`adapters/local-git-materializer/v1/` implements the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability without a Git forge. It reads one
+exact, sanitized bare source repository and one contract-bound patch. It imports
+reachable objects into a caller-disposable bare repository, applies the patch to a
+scratch-only index, and returns a canonical receipt and validated stage result.
+Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
+object data; the streamed pack is capped at the same byte limit.
+The complete source filesystem inventory is capped at 65,536 entries and 8 MiB,
+and repository config is snapshotted at 1 MiB before parsing.
+Each tree scan is limited to 65,536 entries, 1,024 tree objects, 64 path
+components, and a 16 MiB encoded listing. Each commit or tree is size-checked
+before a non-recursive tree step, and each step validates UTF-8 before its bounded
+built-in path walk.
+Before mutating the index, patch paths must already fit the contract and their
+cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budget.
+
+The fixed `materialize` command accepts only caller-named physical source,
+candidate, and scratch boundaries, with every path independently absolute. It
+also receives the execution boundary's compiled `ystack-object-closure-v1` helper,
+whose source is private to this adapter package, and an explicit pinned jq 1.6
+executable. It ignores the caller's executable search path.
+It rejects worktrees, alternates, shallow or
+partial repositories, replace or graft state, active hooks and filters, remote
+configuration, unsafe paths, binary or copy/rename patches, empty subtrees,
+symlinks, and submodules. It never
+inherits host Git templates, checks out a worktree, or runs a transport command.
+An empty producer patch returns the explicit `no-change` result. Tests cover both
+SHA-1 and SHA-256 object formats with disposable local fixtures.
+
+This PR lands only the inactive package payload. A later assembly PR may add a
+manifest whose package reference points to this payload's durable commit on main.
+GitHub and later GitLab change-request normalizers remain separate observation
+inputs; they do not claim this materialization capability. The package is not
+qualified, selected, installed, or activated. It reads no credential, contacts no
+provider or real target during construction, and cannot push, publish, merge, or
+grant authority.
+
+## Inactive Claude Code producer normalizer payload
+
+`adapters/claude-code-producer/v1/normalize.jq` validates one untrusted producer
+snapshot against a caller-supplied core request, resolved profile, manifest,
+target, package, config, prompt, skills, tools, model, effort, and execution
+boundary. It returns a canonical observation for changed, unchanged, stale,
+failed, timed out, degraded, or inconclusive work. Provider text stays data.
+Before constructing the trust context, the caller must canonicalize the snapshot,
+verify its SHA-256, and supply that verified content-and-digest pair. The
+normalizer requires the untrusted snapshot to equal the pair, binds the expected
+attempt ID and number, and requires `text/x-diff` output for a changed git patch.
+
+This payload ships no adapter manifest. Its focused test owns a synthetic
+manifest only to prove the caller-manifest and binding checks stay closed. A
+later assembly PR can bind the durable main payload into the default profile.
+The payload is inactive and unqualified. It does not call Claude Code, invoke a
+model, use a credential or network, write a target, publish, or activate a
+profile.
+
+## Inactive local Git materializer protocol
+
+`adapters/local-git-materializer/v1/protocol.jq` defines the pure input, receipt,
+and stage-result boundary for the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability. It validates a complete profile,
+resolved profile, manifest set, exact stage request, materialization contract, and
+patch payload links before projecting a canonical path-free receipt and core-valid
+result. The caller first canonicalizes and hashes both payloads, supplies those
+verified content-and-digest pairs in the trust context, and keeps raw payloads
+separate; changed bytes are rejected before any projection.
+
+Successful result projection likewise requires the raw materialization receipt and
+its caller-verified content-and-digest pair. The protocol rechecks the receipt's
+request, attempt, source, candidate, path count, and changed/no-change relation
+before its digest may back passing evidence.
+
+This stage contains no materialization executable. Its fixture builder is test-only
+and creates synthetic JSON under a caller-owned test directory; it is not a product
+execution seam. The protocol cannot read a repository, write a candidate, invoke a
+hook or filter, use a credential or network, contact a provider, or perform an
+external effect.
+
+A later runtime PR can consume this exact protocol and test fixture without copying
+them. That PR must separately prove the physical Git and scratch boundaries before
+any manifest or profile may bind the package. Nothing here is qualified, selected,
+installed, or activated.
+
+## Inactive dormant publisher normalizer payload
+
+`adapters/dormant-publisher/v1/normalize.jq` validates one bounded publisher
+decision claim against caller-supplied attempt, idempotency, repository,
+change-request, head, base, tree, allowed-path, CI, review, decision-record, time,
+and execution-boundary bindings. Before calling it, the caller canonicalizes and
+hashes the claim, then supplies that verified content-and-digest pair. The
+normalizer requires the input to equal the pair and returns only a canonical
+dormant, stale, or inconclusive observation. A permit claim remains unqualified
+data; it never becomes approval or authority.
+
+This stage intentionally ships no adapter manifest. A later assembly PR can bind
+the durable main payload as the default profile's deterministic publisher with no
+capabilities, permissions, or tools. The payload is not the temporary construction
+publisher gate and cannot call it. It uses no credential or network, performs no
+merge or external write, and activates no profile.
+
+## Inactive deterministic verifier normalizer payload
+
+`adapters/deterministic-verifier/v1/normalize.jq` validates an already-supplied
+portable-core v2 verifier request, resolved profile, adapter contract, and stage
+result. It reuses the core's request, profile, and result relations, then returns
+one canonical observation. It does not interpret provider or CI status as verifier
+evidence. GitHub Actions remains a separate CI observation boundary. The caller
+first canonicalizes and hashes the snapshot and stage result, supplies those
+verified content-and-digest pairs, and fixes the expected attempt ID and number.
+The normalizer rejects any mismatch before emitting their references.
+
+This payload is offline and unqualified. It does not execute a candidate or tool,
+read proof bytes, enforce a sandbox, use a credential or network, write evidence,
+grant authority or qualification, or activate a profile. A later assembly PR may
+add its manifest and inactive default-set binding only after the payload has a
+durable commit on main. A runnable verifier still requires a separately qualified
+sandbox launcher and fixed verification implementation.
 
 ## The current default team
 
