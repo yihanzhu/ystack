@@ -229,4 +229,4 @@ PATH="$fake_bin:/usr/bin:/bin" "$validator" validate session.example attempt.exa
   fail 'unverified jq execution'
 pass 'unverified jq is rejected without execution'
 
-/usr/bin/printf 'PASS: %s telemetry trace-ledger checks\n' "$passes"
+/usr/bin/printf 'PASS: %s telemetry trace-record validator checks\n' "$passes"
