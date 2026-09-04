@@ -826,12 +826,12 @@ schema_import_path_ok() {
   local test_path
   case "$import_path" in
     adapters/local-git-materializer/v1/protocol.jq|\
-     adapters/deterministic-verifier/v1/normalize.jq|\
-     evals/v1/framework.jq|\
-     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
+    adapters/deterministic-verifier/v1/normalize.jq|\
+    evals/v1/framework.jq|\
+    orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\
     scripts/test/default-dormant-publisher-adapter.test.sh|\
-     scripts/test/default-deterministic-verifier-adapter.test.sh|\
+    scripts/test/default-deterministic-verifier-adapter.test.sh|\
     scripts/test/default-github-forge-adapter.test.sh) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"

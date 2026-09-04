@@ -276,4 +276,4 @@ expect_error canonical-bytes E_CANONICAL "$tmp/noncanonical.json"
 ' "$tmp/report.json" >/dev/null || fail 'inactive data-only output'
 pass inactive-data-only-output
 
-/usr/bin/printf 'PASS: %s eval framework checks\n' "$passes"
+/usr/bin/printf 'PASS: %s eval-record evaluator checks\n' "$passes"

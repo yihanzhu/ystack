@@ -267,14 +267,15 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
-## Inactive hermetic eval framework
+## Inactive hermetic eval-record evaluator
 
-`evals/v1/run.sh evaluate BUNDLE.json` validates a bounded canonical eval suite,
-its cases, trials, and grades, then emits one deterministic report. Every record
-is content-bound. The suite pins its scope and framework version. Model cases
-require multiple trials, while deterministic, model, and human graders remain
-immutable data references rather than commands the runner can invoke. Declared
-trial and attempt identities are exact, and trial/grade timestamps must agree.
+`evals/v1/run.sh evaluate BUNDLE.json` validates already-recorded, bounded
+canonical eval suites, cases, trials, and grades, then emits one deterministic
+report. It does not execute trials or invoke graders. Every record is
+content-bound. The suite pins its scope and framework version. Model cases require
+multiple supplied trials, while deterministic, model, and human graders remain
+immutable data references. Declared trial and attempt identities are exact, and
+trial/grade timestamps must agree.
 
 The runner snapshots a fixed jq program and the selected public-core schema into
 a private directory. It accepts only canonical JSON, rejects stale links,
@@ -283,6 +284,10 @@ from `inconclusive`. Failed grades cannot be hidden by another trial state. It
 has no adapter or arbitrary-command seam, uses no network
 or credential, grants no authority, and makes no activation or qualification
 claim.
+
+This is a bounded first slice for eval records, not a runnable eval system or
+qualification evidence. A later unit must provide hermetic built-in trial and
+grader execution before it can make either claim.
 ## Inactive local Git candidate materializer
 
 `adapters/local-git-materializer/v1/` implements the existing portable-core v2
