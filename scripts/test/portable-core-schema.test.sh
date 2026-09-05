@@ -832,6 +832,7 @@ schema_import_path_ok() {
     scripts/test/default-dormant-publisher-adapter.test.sh|\
     scripts/test/default-deterministic-verifier-adapter.test.sh|\
     scripts/test/default-github-forge-adapter.test.sh) ;;
+    scripts/test/default-gitlab-forge-adapter.test.sh) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"
       case "$test_path" in */*) return 1 ;; esac
