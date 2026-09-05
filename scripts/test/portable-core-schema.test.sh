@@ -810,6 +810,7 @@ v2_activation_path_ok() {
     control/v1/control-policy-set.json|\
     core/v2/generation-registry.json|\
     evals/v1/evals-driver.sh|evals/v1/evals-launcher.sh|evals/v1/evals.jq|\
+    evals/v1/seed-set-approvals.json|\
     orchestrator/v1/state-scanner-driver.sh|\
     orchestrator/v1/state-scanner-launcher.sh|\
     orchestrator/v1/state-scanner.jq|\
@@ -930,6 +931,7 @@ printf '%s\n' \
   evals/v1/evals-driver.sh \
   evals/v1/evals-launcher.sh \
   evals/v1/evals.jq \
+  evals/v1/seed-set-approvals.json \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
