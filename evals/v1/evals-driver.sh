@@ -54,14 +54,16 @@ scanner="$runtime/orchestrator/v1/scan-state.sh"
 scanner_sha256=556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5
 planner="$runtime/orchestrator/v1/reconciliation-plan.jq"
 planner_sha256=03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4
+sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
+sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=c141ed838ec480e27a2bc9f6535b99b686100c613a1a1e3ff7f21cd161823776
+program_sha256=25b3665b163d3f3741408dc907a3eebef977587a5d23ebd2eff18972e33f6ac2
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083 "$catalog" &&
+  verify_hash 1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1 "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -82,6 +84,17 @@ verify_runtime() {
     "$core_front_door" &&
   verify_hash "$scanner_sha256" "$scanner" &&
   verify_hash "$planner_sha256" "$planner" &&
+  verify_hash "$sandbox_sha256" "$sandbox_evaluator" &&
+  verify_hash 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 \
+    "$runtime/control/v1/policy-set.jq" &&
+  verify_hash c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd \
+    "$runtime/control/v1/sandbox-decision.json" &&
+  verify_hash 4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e \
+    "$runtime/control/v1/sandbox-policy.json" &&
+  verify_hash 83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3 \
+    "$runtime/control/v1/sandbox.jq" &&
+  verify_hash cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a \
+    "$runtime/control/v1/validate.sh" &&
   verify_hash 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b \
     "$runtime/orchestrator/v1/state-scanner-driver.sh" &&
   verify_hash 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb \
@@ -100,11 +113,12 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083 \
+    --arg catalog_sha256 1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1 \
     --arg evaluator_sha256 "$evaluator_sha256" \
     --arg seed_set_sha256 "$seed_set_sha256" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
+    --arg sandbox_sha256 "$sandbox_sha256" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$input" \
@@ -128,7 +142,8 @@ run_program() {
 
 seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
 case "$seed_source" in
-  core.stage-run.v2|orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
+  control.sandbox-policy.v1|core.stage-run.v2|orchestrator.reconciliation-plan.v1) ;;
+  orchestrator.state-scanner.v1) ;;
   *) emit_error E_SHAPE ;;
 esac
 case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
@@ -198,6 +213,62 @@ replay_scanner_cases() {
       esac
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
         '{case_id:$case_id,disposition:"rejected",classification:{state:"absent"},
+          error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
+# Boundary claims replay through the real sandbox-policy evaluator, which finds
+# its jq on PATH and its policy beside itself; both come from the private runtime.
+replay_sandbox_cases() {
+  local sandbox_tmp set_doc duty_doc claim_doc eval_out eval_err eval_status
+  local evaluation observation token
+  sandbox_tmp="$work/sandbox-tmp"
+  /bin/mkdir -m 0700 "$sandbox_tmp" || emit_error E_RUNTIME
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    set_doc="$work/policy-set-$i.json"
+    duty_doc="$work/duty-$i.json"
+    claim_doc="$work/claim-$i.json"
+    for member in policy_set duty claim; do
+      case "$member" in
+        policy_set) target=$set_doc ;;
+        duty) target=$duty_doc ;;
+        claim) target=$claim_doc ;;
+      esac
+      "$jq_bin" -S -c ".body.cases[$i].inputs.$member.content" "$input" > "$target" ||
+        emit_error E_RUNTIME
+      [ "$(sha256_path "$target")" = \
+        "$("$jq_bin" -r ".body.cases[$i].inputs.$member.sha256" "$input")" ] ||
+        emit_error E_RELATION
+    done
+    eval_out="$work/sandbox-$i.out"
+    eval_err="$work/sandbox-$i.err"
+    /usr/bin/env -i LC_ALL=C PATH="$runtime/bin:/usr/bin:/bin" TMPDIR="$sandbox_tmp" \
+      /bin/bash "$sandbox_evaluator" evaluate "$set_doc" "$duty_doc" "$claim_doc" \
+      </dev/null >"$eval_out" 2>"$eval_err"
+    eval_status=$?
+    if [ "$eval_status" -eq 0 ]; then
+      [ ! -s "$eval_err" ] || emit_error E_RUNTIME
+      evaluation=$("$jq_bin" -S -c '{reason_ids:.body.reason_ids,verdict:.body.verdict}' \
+        "$eval_out") || emit_error E_RUNTIME
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        --argjson evaluation "$evaluation" \
+        '{case_id:$case_id,disposition:"evaluated",
+          evaluation:{state:"present",value:$evaluation},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$eval_out" ] || emit_error E_RUNTIME
+      token=$(/bin/cat "$eval_err" 2>/dev/null) || emit_error E_RUNTIME
+      case "$token" in
+        E_CANONICAL|E_LIMIT|E_PARSE|E_POLICY_SET|E_RELATION|E_RUNTIME|E_USAGE) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
+        '{case_id:$case_id,disposition:"rejected",evaluation:{state:"absent"},
           error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
     fi
     record_observation "$observation"
@@ -313,6 +384,7 @@ done
 case "$seed_source" in
   core.stage-run.v2) replay_stage_run_cases ;;
   orchestrator.state-scanner.v1) replay_scanner_cases ;;
+  control.sandbox-policy.v1) replay_sandbox_cases ;;
   *) replay_planner_cases ;;
 esac
 /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
