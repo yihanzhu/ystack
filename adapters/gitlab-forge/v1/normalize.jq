@@ -104,8 +104,9 @@ def ready_merge_status: . == "mergeable";
 def blocking_merge_status:
   IN("blocked_status","broken_status","ci_must_pass","ci_still_running","commits_status",
      "conflict","discussions_not_resolved","draft_status","external_status_checks",
-     "jira_association_missing","need_rebase","not_approved","policies_denied",
-     "requested_changes");
+     "jira_association_missing","locked_lfs_files","locked_paths","merge_request_blocked",
+     "merge_time","need_rebase","not_approved","policies_denied","requested_changes",
+     "security_policy_violations","status_checks_must_pass");
 def transitional_merge_status:
   IN("approvals_syncing","checking","preparing","unchecked");
 def merge_status_ok:

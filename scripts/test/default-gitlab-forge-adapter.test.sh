@@ -132,7 +132,9 @@ modules="$root/core/v2/generations/$generation/modules"
 expect_state open-ready '.' open-ready gitlab.merge-request-open-ready
 for blocking in blocked_status broken_status ci_must_pass ci_still_running commits_status \
   conflict discussions_not_resolved draft_status external_status_checks \
-  jira_association_missing need_rebase not_approved policies_denied requested_changes; do
+  jira_association_missing locked_lfs_files locked_paths merge_request_blocked merge_time \
+  need_rebase not_approved policies_denied requested_changes security_policy_violations \
+  status_checks_must_pass; do
   expect_state "open-$blocking" ".snapshot.detailed_merge_status=\"$blocking\"" open-blocked \
     gitlab.merge-request-open-blocked
 done
