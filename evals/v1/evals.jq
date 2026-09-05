@@ -54,14 +54,32 @@ def expected_orchestrator_closure:
      sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
   ];
 
-# The inactive sandbox-policy evaluator replayed for the boundaries family. It
-# needs no core: the policy-set validator and the policy are its whole closure.
+# The inactive control evaluators replayed here: the sandbox-policy evaluator for
+# the boundaries family, and the risk-gates evaluator (with the duty-separation
+# evaluator it regenerates) for the approval family. Both read only this closure
+# and the core mirror.
 def expected_control_closure:
   [
+    {path:"control/v1/duty-separation-decision.json",
+     sha256:"4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99"},
+    {path:"control/v1/duty-separation-policy.json",
+     sha256:"b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9"},
+    {path:"control/v1/duty-separation.jq",
+     sha256:"b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c"},
+    {path:"control/v1/evaluate-duty.sh",
+     sha256:"146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa"},
+    {path:"control/v1/evaluate-risk-gates.sh",
+     sha256:"0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8"},
     {path:"control/v1/evaluate-sandbox.sh",
      sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
     {path:"control/v1/policy-set.jq",
      sha256:"2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58"},
+    {path:"control/v1/risk-gates-decision.json",
+     sha256:"8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5"},
+    {path:"control/v1/risk-gates-policy.json",
+     sha256:"3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e"},
+    {path:"control/v1/risk-gates.jq",
+     sha256:"d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff"},
     {path:"control/v1/sandbox-decision.json",
      sha256:"c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd"},
     {path:"control/v1/sandbox-policy.json",
@@ -110,16 +128,18 @@ def family_ids:
    "reviewer-severity-false-positive-negative",
    "stale-moved-artifacts"];
 def seed_sources:
-  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1","control.sandbox-policy.v1",
-   "core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1","control.risk-gates.v1",
+   "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+   "orchestrator.state-scanner.v1"];
 def stage_statuses:
   ["blocked","cancelled","completed","failed","skipped","stale"];
 def core_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_REF","E_RELATION","E_RUNTIME","E_SHAPE","E_USAGE"];
 def request_roles: ["producer","reviewer","verifier"];
 def active_seed_sources:
-  ["adapters.provider-normalizers.v1","control.sandbox-policy.v1","core.stage-run.v2",
-   "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+  ["adapters.provider-normalizers.v1","control.risk-gates.v1","control.sandbox-policy.v1",
+   "core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+def risk_gates_error_tokens: ["E_DUTY","E_LIMIT","E_RELATION","E_RUNTIME","E_USAGE"];
 def normalizer_ids: ["codex-native-reviewer","github-actions-ci","github-forge"];
 def normalizer_error_ids:
   ["codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
@@ -152,6 +172,7 @@ def tool_content_id($source):
   if $source == "core.stage-run.v2" then "core-contract-front-door.v2"
   elif $source == "orchestrator.state-scanner.v1" then "orchestrator-state-scanner-bootstrap.v1"
   elif $source == "control.sandbox-policy.v1" then "control-evaluator-driver.sandbox.v1"
+  elif $source == "control.risk-gates.v1" then "control-evaluator-driver.risk-gates.v1"
   else "orchestrator-reconciliation-planner.v1" end;
 def tool_media_type($source):
   if $source == "orchestrator.reconciliation-plan.v1" then "text/x-jq"
@@ -316,17 +337,20 @@ def normalizer_expectation_shape:
    .disposition == "rejected" and
    (.error_token as $token | normalizer_error_ids | index($token) != null));
 
-def sandbox_expectation_shape:
+def control_expectation_shape($tokens):
   (schema::exact_fields(["disposition","reason_ids","verdict"];[]) and
    .disposition == "evaluated" and (del(.disposition) | sandbox_evaluation_shape)) or
   (schema::exact_fields(["disposition","error_token"];[]) and
    .disposition == "rejected" and
-   (.error_token as $token | sandbox_error_tokens | index($token) != null));
+   (.error_token as $token | $tokens | index($token) != null));
+def sandbox_expectation_shape: control_expectation_shape(sandbox_error_tokens);
+def risk_gates_expectation_shape: control_expectation_shape(risk_gates_error_tokens);
 
 def expectation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_expectation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_expectation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_expectation_shape
+  elif $source == "control.risk-gates.v1" then risk_gates_expectation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_expectation_shape
   else planner_expectation_shape end;
 
@@ -396,6 +420,23 @@ def normalizer_case_shape:
    (.content | type == "object") and
    (.sha256 | schema::sha256_ok));
 
+# A risk-gates case carries the whole tuple the evaluator binds: the policy set,
+# the core request, resolved profile, and result, the duty evaluation, and the
+# decision claim under judgement.
+def risk_gates_case_shape:
+  schema::exact_fields(["case_id","expectation","family_id","inputs"];[]) and
+  (.case_id | schema::id_ok) and
+  (.family_id as $id | family_ids | index($id) != null) and
+  (.expectation | risk_gates_expectation_shape) and
+  (.inputs |
+   schema::exact_fields(["claim","duty","policy_set","request","resolved_profile","result"];[]) and
+   (.policy_set | control_pair_shape("control_policy_set")) and
+   (.request | pair_shape("stage_request")) and
+   (.resolved_profile | pair_shape("resolved_profile")) and
+   (.result | pair_shape("stage_result")) and
+   (.duty | control_pair_shape("duty_separation_evaluation")) and
+   (.claim | control_pair_shape("risk_gate_decision_claim")));
+
 def scanner_case_shape:
   schema::exact_fields(
     ["case_id","expected_revision","expectation","family_id","snapshot"];[]) and
@@ -435,6 +476,9 @@ def seed_set_shape:
     elif .seed_source == "control.sandbox-policy.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;sandbox_case_shape;.case_id))
+    elif .seed_source == "control.risk-gates.v1" then
+      .shared == {} and
+      (.cases | schema::bounded_set(1;64;risk_gates_case_shape;.case_id))
     elif .seed_source == "adapters.provider-normalizers.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;normalizer_case_shape;.case_id))
@@ -490,20 +534,23 @@ def normalizer_observation_shape:
     (.error_token | present_shape(. as $t | normalizer_error_ids | index($t) != null)) and
     .error_token.state == "present"));
 
-def sandbox_observation_shape:
+def control_observation_shape($tokens):
   schema::exact_fields(["case_id","disposition","error_token","evaluation"];[]) and
   (.case_id | schema::id_ok) and
   ((.disposition == "evaluated" and
     (.evaluation | present_shape(sandbox_evaluation_shape)) and
     .evaluation.state == "present" and .error_token == {state:"absent"}) or
    (.disposition == "rejected" and .evaluation == {state:"absent"} and
-    (.error_token | present_shape(. as $t | sandbox_error_tokens | index($t) != null)) and
+    (.error_token | present_shape(. as $t | $tokens | index($t) != null)) and
     .error_token.state == "present"));
+def sandbox_observation_shape: control_observation_shape(sandbox_error_tokens);
+def risk_gates_observation_shape: control_observation_shape(risk_gates_error_tokens);
 
 def observation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_observation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_observation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_observation_shape
+  elif $source == "control.risk-gates.v1" then risk_gates_observation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_observation_shape
   else planner_observation_shape end;
 
@@ -588,6 +635,7 @@ def tool_ref($source; $case):
      sha256:(if $source == "core.stage-run.v2" then $tool_sha256
              elif $source == "orchestrator.state-scanner.v1" then $scanner_sha256
              elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
+             elif $source == "control.risk-gates.v1" then $risk_gates_sha256
              else $planner_sha256 end)}
   end;
 
@@ -626,6 +674,9 @@ def build_run_result(
              id:$case.snapshot.content.id,sha256:$case.snapshot.sha256}
           elif $seed_set.body.seed_source == "control.sandbox-policy.v1" then
             {schema_version:1,kind:"execution_environment_claim",
+             id:$case.inputs.claim.content.id,sha256:$case.inputs.claim.sha256}
+          elif $seed_set.body.seed_source == "control.risk-gates.v1" then
+            {schema_version:1,kind:"risk_gate_decision_claim",
              id:$case.inputs.claim.content.id,sha256:$case.inputs.claim.sha256}
           elif $seed_set.body.seed_source == "adapters.provider-normalizers.v1" then
             {content_id:"adapter-provider-snapshot.v1",
@@ -668,6 +719,10 @@ def subject_ref_shape($source):
     ref_shape("orchestrator-reconciliation-input.v1";"application/json")
   elif $source == "adapters.provider-normalizers.v1" then
     ref_shape("adapter-provider-snapshot.v1";"application/json")
+  elif $source == "control.risk-gates.v1" then
+    schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
+    .schema_version == 1 and .kind == "risk_gate_decision_claim" and
+    (.id | schema::id_ok) and (.sha256 | schema::sha256_ok)
   elif $source == "control.sandbox-policy.v1" then
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
     .schema_version == 1 and .kind == "execution_environment_claim" and

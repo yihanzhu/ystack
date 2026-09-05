@@ -49,14 +49,14 @@ jq_bin="$tmp/bin/jq"
 observed_at=2026-09-05T00:00:00Z
 
 # --- one run per shipped seed set, then one dashboard over all of them -----------
-seeds=(seed-set seed-set-events seed-set-plans seed-set-boundaries seed-set-adapters)
+seeds=(seed-set seed-set-events seed-set-plans seed-set-boundaries seed-set-adapters seed-set-approvals)
 pairs=()
 for name in "${seeds[@]}"; do
   "$framework" run "$root/evals/v1/$name.json" "$observed_at" \
     >"$tmp/$name.result.json" 2>"$tmp/$name.err" || fail "run failed for $name: $(<"$tmp/$name.err")"
   pairs+=("$root/evals/v1/$name.json" "$tmp/$name.result.json")
 done
-pass 'all five shipped seed sets produce run results'
+pass 'all six shipped seed sets produce run results'
 
 dashboard="$tmp/dashboard.json"
 "$framework" dashboard "$observed_at" "${pairs[@]}" >"$dashboard" 2>"$tmp/dashboard.err" ||
@@ -66,13 +66,13 @@ dashboard="$tmp/dashboard.json"
   .kind == "eval_dashboard" and .id == "evals.dashboard.v1" and
   .body.activation_state == "inactive" and .body.authority_effect == "none" and
   .body.mode == "deterministic-offline" and .body.catalog_ref.sha256 == $catalog_sha and
-  (.body.inputs | length) == 5 and
-  .body.coverage == {families_total:9,families_seeded:5,families_declared:4,
-                     families_with_results:5,
+  (.body.inputs | length) == 6 and
+  .body.coverage == {families_total:9,families_seeded:6,families_declared:3,
+                     families_with_results:6,
                      sources_with_results:["adapters.provider-normalizers.v1",
-                       "control.sandbox-policy.v1","core.stage-run.v2",
+                       "control.risk-gates.v1","control.sandbox-policy.v1","core.stage-run.v2",
                        "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"]} and
-  .body.quality == {total:86,passed:86,failed:0,inconclusive:0} and
+  .body.quality == {total:102,passed:102,failed:0,inconclusive:0} and
   (.body.families | length) == 9 and
   (.body.families[] | select(.family_id == "repeated-cancelled-missed-events") |
     .runs == 2 and .cases.total == 25 and .cases.passed == 25) and

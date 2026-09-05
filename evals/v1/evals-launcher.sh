@@ -143,9 +143,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
-catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
-driver_sha=cd1966bd981543945279aa0a52f03607d31de04525f82da66109f59cbdd8bb07
+program_sha=1f037fd9386e5719e5e3cf76682d3e9918274b6962fbd2e4900845f188155d86
+catalog_sha=ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65
+driver_sha=d60a659e94bcc1e369663634e218f53fc5bdbe08c64765cd69d3f6a8da613be6
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -192,11 +192,20 @@ for member in \
   snapshot_expected "$digest" "$repo/orchestrator/v1/$name" \
     "$runtime/orchestrator/v1/$name" 0400 || emit_error E_STALE
 done
-# The inactive sandbox-policy evaluator, replayed for the boundaries family. Its
-# policy-set validator and policy travel with it; it reads nothing outside.
+# The inactive control evaluators replayed here: sandbox policy for the boundaries
+# family; risk gates (with the duty-separation evaluator it regenerates) for the
+# approval family. They read only this runtime.
 for member in \
+  'duty-separation-decision.json 4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99' \
+  'duty-separation-policy.json b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9' \
+  'duty-separation.jq b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c' \
+  'evaluate-duty.sh 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa' \
+  'evaluate-risk-gates.sh 0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8' \
   'evaluate-sandbox.sh 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb' \
   'policy-set.jq 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58' \
+  'risk-gates-decision.json 8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5' \
+  'risk-gates-policy.json 3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e' \
+  'risk-gates.jq d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff' \
   'sandbox-decision.json c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd' \
   'sandbox-policy.json 4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e' \
   'sandbox.jq 83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3' \
@@ -292,8 +301,16 @@ seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
         {path:"adapters/github-forge/v1/normalize.jq",sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
       ],
       control_closure:[
+        {path:"control/v1/duty-separation-decision.json",sha256:"4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99"},
+        {path:"control/v1/duty-separation-policy.json",sha256:"b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9"},
+        {path:"control/v1/duty-separation.jq",sha256:"b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c"},
+        {path:"control/v1/evaluate-duty.sh",sha256:"146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa"},
+        {path:"control/v1/evaluate-risk-gates.sh",sha256:"0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8"},
         {path:"control/v1/evaluate-sandbox.sh",sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
         {path:"control/v1/policy-set.jq",sha256:"2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58"},
+        {path:"control/v1/risk-gates-decision.json",sha256:"8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5"},
+        {path:"control/v1/risk-gates-policy.json",sha256:"3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e"},
+        {path:"control/v1/risk-gates.jq",sha256:"d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff"},
         {path:"control/v1/sandbox-decision.json",sha256:"c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd"},
         {path:"control/v1/sandbox-policy.json",sha256:"4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e"},
         {path:"control/v1/sandbox.jq",sha256:"83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"},
@@ -351,6 +368,7 @@ program_check() {
     --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
     --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
     --argjson normalizer_shas '{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}' \
+    --arg risk_gates_sha256 0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8 \
     --arg observed_at "$check_observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$5" \
@@ -400,6 +418,22 @@ fi
     b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be ] &&
 [ "$(sha256_path "$runtime/control/v1/evaluate-sandbox.sh")" = \
     8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb ] &&
+[ "$(sha256_path "$runtime/control/v1/evaluate-risk-gates.sh")" = \
+    0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8 ] &&
+[ "$(sha256_path "$runtime/control/v1/risk-gates-policy.json")" = \
+    3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e ] &&
+[ "$(sha256_path "$runtime/control/v1/risk-gates-decision.json")" = \
+    8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5 ] &&
+[ "$(sha256_path "$runtime/control/v1/risk-gates.jq")" = \
+    d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff ] &&
+[ "$(sha256_path "$runtime/control/v1/duty-separation-policy.json")" = \
+    b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9 ] &&
+[ "$(sha256_path "$runtime/control/v1/duty-separation-decision.json")" = \
+    4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99 ] &&
+[ "$(sha256_path "$runtime/control/v1/duty-separation.jq")" = \
+    b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c ] &&
+[ "$(sha256_path "$runtime/control/v1/evaluate-duty.sh")" = \
+    146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa ] &&
 [ "$(sha256_path "$runtime/control/v1/policy-set.jq")" = \
     2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 ] &&
 [ "$(sha256_path "$runtime/control/v1/sandbox-decision.json")" = \

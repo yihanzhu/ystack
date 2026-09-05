@@ -65,15 +65,17 @@ planner="$runtime/orchestrator/v1/reconciliation-plan.jq"
 planner_sha256=03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4
 sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
 sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
+risk_gates_evaluator="$runtime/control/v1/evaluate-risk-gates.sh"
+risk_gates_sha256=0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8
 normalizer_shas='{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
+program_sha256=1f037fd9386e5719e5e3cf76682d3e9918274b6962fbd2e4900845f188155d86
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089 "$catalog" &&
+  verify_hash ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65 "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -95,6 +97,21 @@ verify_runtime() {
   verify_hash "$scanner_sha256" "$scanner" &&
   verify_hash "$planner_sha256" "$planner" &&
   verify_hash "$sandbox_sha256" "$sandbox_evaluator" &&
+  verify_hash "$risk_gates_sha256" "$risk_gates_evaluator" &&
+  verify_hash 3d8f0802777b4d7a63ded72643aca5cc8afd7613b76b5463291ca0ea63607a7e \
+    "$runtime/control/v1/risk-gates-policy.json" &&
+  verify_hash 8e13f844fad5280aedc21a7d4c9b4bcf43f8eb0b0dd41a32a5989ce1473e28d5 \
+    "$runtime/control/v1/risk-gates-decision.json" &&
+  verify_hash d00fccd8e31b770c6df01fba17e3cc315d58edfbbf0a8055d66d537dc6ad21ff \
+    "$runtime/control/v1/risk-gates.jq" &&
+  verify_hash b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9 \
+    "$runtime/control/v1/duty-separation-policy.json" &&
+  verify_hash 4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99 \
+    "$runtime/control/v1/duty-separation-decision.json" &&
+  verify_hash b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c \
+    "$runtime/control/v1/duty-separation.jq" &&
+  verify_hash 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa \
+    "$runtime/control/v1/evaluate-duty.sh" &&
   verify_hash 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 \
     "$runtime/adapters/codex-native-reviewer/v1/normalize.jq" &&
   verify_hash 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7 \
@@ -139,12 +156,13 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089 \
+    --arg catalog_sha256 ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65 \
     --arg evaluator_sha256 "$program_evaluator_sha" \
     --arg seed_set_sha256 "$program_seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
     --arg sandbox_sha256 "$sandbox_sha256" --argjson normalizer_shas "$normalizer_shas" \
+    --arg risk_gates_sha256 "$risk_gates_sha256" \
     --arg observed_at "$program_observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$seed_docs_file" \
@@ -240,7 +258,8 @@ seed_docs_file=$input
 
 seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
 case "$seed_source" in
-  adapters.provider-normalizers.v1|control.sandbox-policy.v1|core.stage-run.v2) ;;
+  adapters.provider-normalizers.v1|control.risk-gates.v1|control.sandbox-policy.v1) ;;
+  core.stage-run.v2) ;;
   orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
   *) emit_error E_SHAPE ;;
 esac
@@ -311,6 +330,59 @@ replay_scanner_cases() {
       esac
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
         '{case_id:$case_id,disposition:"rejected",classification:{state:"absent"},
+          error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
+# Decision claims replay through the real risk-gates evaluator, which regenerates
+# the duty-separation evaluation and validates the core tuple from a mirror it
+# builds out of this runtime. Verdict and reason set are recorded; a refusal by
+# its one token.
+replay_risk_gates_cases() {
+  local risk_tmp doc member eval_out eval_err eval_status evaluation observation token
+  local -a docs
+  risk_tmp="$work/risk-gates-tmp"
+  /bin/mkdir -m 0700 "$risk_tmp" || emit_error E_RUNTIME
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    docs=()
+    for member in policy_set request resolved_profile result duty claim; do
+      doc="$work/risk-$member-$i.json"
+      "$jq_bin" -S -c ".body.cases[$i].inputs.$member.content" "$input" > "$doc" ||
+        emit_error E_RUNTIME
+      [ "$(sha256_path "$doc")" = \
+        "$("$jq_bin" -r ".body.cases[$i].inputs.$member.sha256" "$input")" ] ||
+        emit_error E_RELATION
+      docs+=("$doc")
+    done
+    eval_out="$work/risk-$i.out"
+    eval_err="$work/risk-$i.err"
+    /usr/bin/env -i LC_ALL=C PATH="$runtime/bin:/usr/bin:/bin" TMPDIR="$risk_tmp" \
+      /bin/bash "$risk_gates_evaluator" evaluate "${docs[@]}" \
+      </dev/null >"$eval_out" 2>"$eval_err"
+    eval_status=$?
+    if [ "$eval_status" -eq 0 ]; then
+      [ ! -s "$eval_err" ] || emit_error E_RUNTIME
+      evaluation=$("$jq_bin" -S -c '{reason_ids:.body.reason_ids,verdict:.body.verdict}' \
+        "$eval_out") || emit_error E_RUNTIME
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        --argjson evaluation "$evaluation" \
+        '{case_id:$case_id,disposition:"evaluated",
+          evaluation:{state:"present",value:$evaluation},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$eval_out" ] || emit_error E_RUNTIME
+      token=$(/bin/cat "$eval_err" 2>/dev/null) || emit_error E_RUNTIME
+      case "$token" in
+        E_DUTY|E_LIMIT|E_RELATION|E_RUNTIME|E_USAGE) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
+        '{case_id:$case_id,disposition:"rejected",evaluation:{state:"absent"},
           error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
     fi
     record_observation "$observation"
@@ -536,6 +608,7 @@ case "$seed_source" in
   core.stage-run.v2) replay_stage_run_cases ;;
   orchestrator.state-scanner.v1) replay_scanner_cases ;;
   control.sandbox-policy.v1) replay_sandbox_cases ;;
+  control.risk-gates.v1) replay_risk_gates_cases ;;
   adapters.provider-normalizers.v1) replay_normalizer_cases ;;
   *) replay_planner_cases ;;
 esac

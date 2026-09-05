@@ -403,8 +403,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Five families are
-seeded; the other four are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Six families are
+seeded; the other three are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -457,6 +457,21 @@ inconclusive; provider text that can never decide a state; and malformed
 envelopes, bindings, or snapshots refused with the normalizer's own error id. The
 normalizer is the only judge; the framework records the generic state, reason, and
 stale-binding set it reports.
+
+The approval-invalidation and no-push-after-approval family is seeded from
+`evals/v1/seed-set-approvals.json`. Each case carries a whole decision tuple
+(policy set, core request, resolved profile, result, duty evaluation, decision
+claim) and replays it through the real inactive risk-gates evaluator
+(`control/v1/evaluate-risk-gates.sh`), which regenerates the duty-separation
+evaluation and validates the core tuple from a mirror built out of the same
+private runtime. A request whose basis moved after the decision is violated
+(decision.stale); a decision recorded after the request, a missing, rejected,
+downgraded, wrong-role, wrong-kind, unbound-actor, unbound, ambiguous, or
+malformed claim is violated with its exact reason; a duty violation is violated;
+an honest accept claim is still only inconclusive because no qualified
+decision-provenance adapter exists; a forged duty evaluation is refused. Each
+expectation's verdict and primary reason were hand-written and checked against
+the real evaluator before being recorded.
 
 The `dashboard` operation aggregates one to sixteen run results into one canonical
 flow-and-quality document. Each result is first re-validated against its own seed
@@ -752,7 +767,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, risk-gates, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below

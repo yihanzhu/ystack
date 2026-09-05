@@ -618,9 +618,10 @@ payload is offline and unqualified. It does not execute a candidate or tool, rea
 proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
 authority or qualification, or activate a profile.
 
-Restore the fifteen paths in the manifest's inactive eval and trace framework
+Restore the seventeen paths in the manifest's inactive eval and trace framework
 block from the same commit, plus the inactive state scanner, reconciliation
-planner, sandbox-policy evaluator, and default normalizer payloads it replays.
+planner, sandbox-policy and risk-gates evaluator, and default normalizer payloads
+it replays.
 With the same pinned, architecture-bound jq 1.6 runtime used by the portable
 core, run:
 
@@ -630,6 +631,7 @@ bash scripts/test/evals-events.test.sh
 bash scripts/test/evals-plans.test.sh
 bash scripts/test/evals-boundaries.test.sh
 bash scripts/test/evals-adapters.test.sh
+bash scripts/test/evals-approvals.test.sh
 bash scripts/test/evals-dashboard.test.sh
 ```
 
@@ -637,11 +639,12 @@ The second suite replays the seeded orchestrator snapshots through the real stat
 scanner inside the private runtime; the third replays observation-plus-ledger
 bundles through the real reconciliation planner; the fourth replays
 execution-environment claims through the real sandbox-policy evaluator; the fifth
-replays provider snapshots through the real default normalizers; the sixth builds
-the flow-and-quality dashboard over all five run results. Together they check the
-events, boundaries, and adapter-compliance families end to end.
+replays provider snapshots through the real default normalizers; the sixth replays
+decision tuples through the real risk-gates evaluator; the seventh builds the
+flow-and-quality dashboard over all six run results. Together they check the
+events, boundaries, adapter-compliance, and approval families end to end.
 
-The first checks the canonical catalog (nine roadmap families, five seeded), the exact
+The first checks the canonical catalog (nine roadmap families, six seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded
 core replays through the real portable core, byte-identical repeat runs, honest
 grading (a wrong expectation fails; a model-only family stays inconclusive), and
