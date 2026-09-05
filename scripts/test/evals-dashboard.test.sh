@@ -142,6 +142,10 @@ expect_error() {
 "$jq_bin" -S -c '.body.cases[0].verdict = "failed" | .body.cases[0].reason_id = "evals.status-mismatch" |
   .body.summary.passed -= 1 | .body.summary.failed += 1' "$tmp/seed-set.result.json" > "$tmp/flipped.json"
 expect_error flipped-verdict E_RELATION "$root/evals/v1/seed-set.json" "$tmp/flipped.json"
+"$jq_bin" -S -c '.body.evaluator.sha256 = ("e" * 64) |
+  .body.trace |= map(.identity.evaluator_ref.sha256 = ("e" * 64))' "$tmp/seed-set.result.json" \
+  > "$tmp/claimed-evaluator.json"
+expect_error claimed-evaluator-digest E_RELATION "$root/evals/v1/seed-set.json" "$tmp/claimed-evaluator.json"
 expect_error mismatched-pair E_RELATION "$root/evals/v1/seed-set-events.json" "$tmp/seed-set.result.json"
 expect_error duplicate-result E_RUNTIME "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json" \
   "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json"
@@ -153,6 +157,6 @@ if "$framework" dashboard "$observed_at" "$root/evals/v1/seed-set.json" >"$tmp/o
   fail 'an unpaired seed set was accepted'
 fi
 [ "$(<"$tmp/odd.err")" = E_USAGE ] || fail 'unpaired arguments are a usage error'
-pass 'a flipped verdict, a mismatched pair, a duplicate, a non-canonical or truncated result, and odd arguments fail closed'
+pass 'a flipped verdict, a claimed evaluator digest, a mismatched pair, a duplicate, a non-canonical or truncated result, and odd arguments fail closed'
 
 /usr/bin/printf '1..%s\n' "$passes"

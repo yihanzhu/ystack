@@ -193,8 +193,9 @@ run_dashboard() {
       emit_error E_RUNTIME
     # A result is rebuilt at its own recorded time, not the dashboard's.
     program_evaluator=$evaluator_doc
-    program_evaluator_sha=$("$jq_bin" -r '.body.evaluator.sha256' "$result_doc") ||
-      emit_error E_RUNTIME
+    # The evaluator digest is recomputed from the embedded content, never read
+    # from the result that is itself under check.
+    program_evaluator_sha=$(sha256_path "$evaluator_doc") || emit_error E_RUNTIME
     program_seed_sha=$(sha256_path "$seed_doc") || emit_error E_RUNTIME
     program_observed_at=$("$jq_bin" -r '.body.observed_at' "$result_doc") || emit_error E_RUNTIME
     [[ "$program_observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||

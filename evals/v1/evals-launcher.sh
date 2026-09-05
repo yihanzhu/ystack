@@ -145,7 +145,7 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 
 program_sha=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
 catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
-driver_sha=c24cf94d50b0c50c57975d696159c841f9c6dfa4a7f093f0ef6d6c63bb5e458b
+driver_sha=cd1966bd981543945279aa0a52f03607d31de04525f82da66109f59cbdd8bb07
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -375,7 +375,7 @@ else
     check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$scratch/inputs/result-$j.json") ||
       emit_error E_RUNTIME
     program_check validate-run-result "$scratch/work/check-$j-evaluator.json" \
-      "$("$runtime/bin/jq" -r '.body.evaluator.sha256' "$scratch/inputs/result-$j.json")" \
+      "$(sha256_path "$scratch/work/check-$j-evaluator.json")" \
       "$(sha256_path "$scratch/inputs/seed-$j.json")" "$scratch/inputs/seed-$j.json" \
       "$scratch/work/check-$j-observations.json" "$scratch/inputs/result-$j.json" \
       "$scratch/work/check-$j-observations.json" '[]' || emit_error E_RELATION
