@@ -72,6 +72,17 @@ def expected_control_closure:
      sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
   ];
 
+# The inactive provider-snapshot normalizers replayed for the adapter family.
+def expected_adapter_closure:
+  [
+    {path:"adapters/codex-native-reviewer/v1/normalize.jq",
+     sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
+    {path:"adapters/github-actions-ci/v1/normalize.jq",
+     sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
+    {path:"adapters/github-forge/v1/normalize.jq",
+     sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
+  ];
+
 def ref_shape($content_id; $media_type):
   schema::content_ref_ok and
   .content_id == $content_id and .media_type == $media_type;
@@ -99,16 +110,27 @@ def family_ids:
    "reviewer-severity-false-positive-negative",
    "stale-moved-artifacts"];
 def seed_sources:
-  ["adapter-tests.contract.v1","control.sandbox-policy.v1","core.stage-run.v2",
-   "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1","control.sandbox-policy.v1",
+   "core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
 def stage_statuses:
   ["blocked","cancelled","completed","failed","skipped","stale"];
 def core_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_REF","E_RELATION","E_RUNTIME","E_SHAPE","E_USAGE"];
 def request_roles: ["producer","reviewer","verifier"];
 def active_seed_sources:
-  ["control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
-   "orchestrator.state-scanner.v1"];
+  ["adapters.provider-normalizers.v1","control.sandbox-policy.v1","core.stage-run.v2",
+   "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+def normalizer_ids: ["codex-native-reviewer","github-actions-ci","github-forge"];
+def normalizer_error_ids:
+  ["codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
+   "codex-reviewer.invalid-trust-context","github-actions-ci.invalid-envelope",
+   "github-actions-ci.invalid-snapshot","github-actions-ci.invalid-trust-context",
+   "github-actions-ci.provider-contradiction","github-forge.invalid-envelope",
+   "github-forge.invalid-snapshot","github-forge.invalid-trust-context"];
+def normalizer_states:
+  ["action-required","cancelled","clean","closed-unmerged","dismissed","failed","findings",
+   "in-progress","inconclusive","merged","open-blocked","open-ready","passed","queued","stale",
+   "timed-out","timeout"];
 def sandbox_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
 def sandbox_verdicts: ["inconclusive","satisfied","violated"];
@@ -176,11 +198,13 @@ def evaluator_shape:
   .id == "evals.framework.v1" and
   (.body |
    schema::exact_fields(
-     ["bootstrap_ref","catalog_ref","control_closure","core_closure","core_contract",
-      "driver_ref","launcher_ref","orchestrator_closure","program_ref","runtime"];[]) and
+     ["adapter_closure","bootstrap_ref","catalog_ref","control_closure","core_closure",
+      "core_contract","driver_ref","launcher_ref","orchestrator_closure","program_ref",
+      "runtime"];[]) and
    .core_contract == expected_core and .core_closure == expected_core_closure and
    .orchestrator_closure == expected_orchestrator_closure and
    .control_closure == expected_control_closure and
+   .adapter_closure == expected_adapter_closure and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
    # Shipped artifacts are pinned to the digests the launcher and driver verified,
@@ -277,6 +301,21 @@ def sandbox_evaluation_shape:
   (.verdict as $v | sandbox_verdicts | index($v) != null) and
   (.reason_ids | schema::bounded_set(1;64;schema::id_ok;.));
 
+# A normalizer is graded on the generic state it reports, its reason, and the
+# exact set of stale bindings; provider text stays opaque and ungraded.
+def normalization_shape:
+  schema::exact_fields(["reason_id","stale_bindings","state"];[]) and
+  (.state as $st | normalizer_states | index($st) != null) and
+  (.reason_id | schema::id_ok) and
+  (.stale_bindings | schema::bounded_set(0;16;schema::id_ok;.));
+
+def normalizer_expectation_shape:
+  (schema::exact_fields(["disposition","reason_id","stale_bindings","state"];[]) and
+   .disposition == "normalized" and (del(.disposition) | normalization_shape)) or
+  (schema::exact_fields(["disposition","error_token"];[]) and
+   .disposition == "rejected" and
+   (.error_token as $token | normalizer_error_ids | index($token) != null));
+
 def sandbox_expectation_shape:
   (schema::exact_fields(["disposition","reason_ids","verdict"];[]) and
    .disposition == "evaluated" and (del(.disposition) | sandbox_evaluation_shape)) or
@@ -288,6 +327,7 @@ def expectation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_expectation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_expectation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_expectation_shape
+  elif $source == "adapters.provider-normalizers.v1" then normalizer_expectation_shape
   else planner_expectation_shape end;
 
 def stage_run_case_shape:
@@ -343,6 +383,19 @@ def sandbox_case_shape:
    (.duty | control_pair_shape("duty_separation_evaluation")) and
    (.claim | control_pair_shape("execution_environment_claim")));
 
+# Normalizer inputs are untrusted provider envelopes with caller bindings. Only
+# the normalizer judges their shape, so a malformed envelope can be a case.
+def normalizer_case_shape:
+  schema::exact_fields(["case_id","expectation","family_id","input","normalizer"];[]) and
+  (.case_id | schema::id_ok) and
+  (.family_id as $id | family_ids | index($id) != null) and
+  (.normalizer as $n | normalizer_ids | index($n) != null) and
+  (.expectation | normalizer_expectation_shape) and
+  (.input |
+   schema::exact_fields(["content","sha256"];[]) and
+   (.content | type == "object") and
+   (.sha256 | schema::sha256_ok));
+
 def scanner_case_shape:
   schema::exact_fields(
     ["case_id","expected_revision","expectation","family_id","snapshot"];[]) and
@@ -382,6 +435,9 @@ def seed_set_shape:
     elif .seed_source == "control.sandbox-policy.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;sandbox_case_shape;.case_id))
+    elif .seed_source == "adapters.provider-normalizers.v1" then
+      .shared == {} and
+      (.cases | schema::bounded_set(1;64;normalizer_case_shape;.case_id))
     else
       .shared == {} and
       (.cases | schema::bounded_set(1;64;planner_case_shape;.case_id))
@@ -424,6 +480,16 @@ def planner_observation_shape:
     (.error_token | present_shape(. as $t | planner_error_tokens | index($t) != null)) and
     .error_token.state == "present"));
 
+def normalizer_observation_shape:
+  schema::exact_fields(["case_id","disposition","error_token","normalization"];[]) and
+  (.case_id | schema::id_ok) and
+  ((.disposition == "normalized" and
+    (.normalization | present_shape(normalization_shape)) and
+    .normalization.state == "present" and .error_token == {state:"absent"}) or
+   (.disposition == "rejected" and .normalization == {state:"absent"} and
+    (.error_token | present_shape(. as $t | normalizer_error_ids | index($t) != null)) and
+    .error_token.state == "present"));
+
 def sandbox_observation_shape:
   schema::exact_fields(["case_id","disposition","error_token","evaluation"];[]) and
   (.case_id | schema::id_ok) and
@@ -438,6 +504,7 @@ def observation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_observation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_observation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_observation_shape
+  elif $source == "adapters.provider-normalizers.v1" then normalizer_observation_shape
   else planner_observation_shape end;
 
 def observation_set_shape($source):
@@ -472,6 +539,11 @@ def grade($family; $expectation; $observation):
        {state:"present",value:($expectation | del(.disposition))} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
     else {verdict:"failed",reason_id:"evals.verdict-mismatch"} end
+  elif $expectation.disposition == "normalized" then
+    if $observation.normalization ==
+       {state:"present",value:($expectation | del(.disposition))} then
+      {verdict:"passed",reason_id:"evals.expectation-met"}
+    else {verdict:"failed",reason_id:"evals.normalization-mismatch"} end
   else
     if $observation.error_token == {state:"present",value:$expectation.error_token} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
@@ -504,9 +576,31 @@ def evaluator_ref($evaluator_sha):
 def document_ref($doc; $sha):
   {schema_version:1,kind:$doc.kind,id:$doc.id,sha256:$sha};
 
+# The tool each case was replayed through: the core front door for stage runs,
+# the scanner bootstrap, the sandbox evaluator, the planner, or the one
+# normalizer the case names. Digests come from the caller.
+def tool_ref($source; $case):
+  if $source == "adapters.provider-normalizers.v1" then
+    {content_id:("adapter-normalizer." + $case.normalizer + ".v1"),media_type:"text/x-jq",
+     sha256:$normalizer_shas[$case.normalizer]}
+  else
+    {content_id:tool_content_id($source),media_type:tool_media_type($source),
+     sha256:(if $source == "core.stage-run.v2" then $tool_sha256
+             elif $source == "orchestrator.state-scanner.v1" then $scanner_sha256
+             elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
+             else $planner_sha256 end)}
+  end;
+
+def tool_ref_ok($source):
+  if $source == "adapters.provider-normalizers.v1" then
+    schema::content_ref_ok and .media_type == "text/x-jq" and
+    (.content_id | test("\\Aadapter-normalizer\\.(codex-native-reviewer|github-actions-ci|github-forge)\\.v1\\z")) and
+    .sha256 == $normalizer_shas[.content_id | ltrimstr("adapter-normalizer.") | rtrimstr(".v1")]
+  else ref_shape(tool_content_id($source);tool_media_type($source)) end;
+
 def build_run_result(
     $catalog; $catalog_sha; $evaluator; $evaluator_sha;
-    $seed_set; $seed_set_sha; $observations; $tool_ref; $observed_at):
+    $seed_set; $seed_set_sha; $observations; $observed_at):
   ($catalog.body.families | map({key:.family_id,value:.}) | from_entries) as $families |
   ($observations | map({key:.case_id,value:.}) | from_entries) as $observed |
   ($seed_set.body.cases | sort_by(.case_id) | map(
@@ -533,6 +627,9 @@ def build_run_result(
           elif $seed_set.body.seed_source == "control.sandbox-policy.v1" then
             {schema_version:1,kind:"execution_environment_claim",
              id:$case.inputs.claim.content.id,sha256:$case.inputs.claim.sha256}
+          elif $seed_set.body.seed_source == "adapters.provider-normalizers.v1" then
+            {content_id:"adapter-provider-snapshot.v1",
+             media_type:"application/json",sha256:$case.input.sha256}
           else
             {content_id:"orchestrator-reconciliation-input.v1",
              media_type:"application/json",sha256:$case.input.sha256}
@@ -560,7 +657,8 @@ def build_run_result(
       },
       cases:$cases,
       trace:($seed_set.body.cases | sort_by(.case_id) | map(
-        trace_event(.;$families[.family_id];$tool_ref;evaluator_ref($evaluator_sha))))
+        trace_event(.;$families[.family_id];tool_ref($seed_set.body.seed_source;.);
+                    evaluator_ref($evaluator_sha))))
     }
   };
 
@@ -568,6 +666,8 @@ def subject_ref_shape($source):
   if $source == "core.stage-run.v2" then schema::document_ref_kind_ok("stage_result")
   elif $source == "orchestrator.reconciliation-plan.v1" then
     ref_shape("orchestrator-reconciliation-input.v1";"application/json")
+  elif $source == "adapters.provider-normalizers.v1" then
+    ref_shape("adapter-provider-snapshot.v1";"application/json")
   elif $source == "control.sandbox-policy.v1" then
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
     .schema_version == 1 and .kind == "execution_environment_claim" and
@@ -600,7 +700,7 @@ def trace_event_shape($source):
   .event_kind == "eval-case" and (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
   (.grader_kind == "deterministic" or .grader_kind == "none") and
-  (.tool_ref | ref_shape(tool_content_id($source);tool_media_type($source))) and
+  (.tool_ref | tool_ref_ok($source)) and
   .adapter == {state:"absent"} and .gate == {state:"absent"} and
   .latency == {state:"absent"} and .cost == {state:"absent"} and
   (.identity |
@@ -651,15 +751,6 @@ def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
       ($result.body.cases | map(select(.verdict == "inconclusive")) | length)) and
    all(.trace[]; .identity.evaluator_ref.sha256 == $result.body.evaluator.sha256));
 
-# The tool each case was replayed through: the core front door for stage runs,
-# the scanner bootstrap for orchestrator snapshots. Digests come from the caller.
-def tool_ref($source):
-  {content_id:tool_content_id($source),media_type:tool_media_type($source),
-   sha256:(if $source == "core.stage-run.v2" then $tool_sha256
-           elif $source == "orchestrator.state-scanner.v1" then $scanner_sha256
-           elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
-           else $planner_sha256 end)};
-
 # Driver entry points, selected with --arg evals_operation.
 if $evals_operation == "validate-catalog" then
   $catalog_docs[0] | catalog_shape
@@ -673,8 +764,7 @@ elif $evals_operation == "build-run-result" then
   if . then
     build_run_result(
       $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
-      $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];
-      tool_ref($seed_set_docs[0].body.seed_source);$observed_at)
+      $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];$observed_at)
   else error("E_SHAPE") end
 elif $evals_operation == "validate-run-result" then
   # A candidate passes only if it is exactly the result this program derives
@@ -688,6 +778,5 @@ elif $evals_operation == "validate-run-result" then
   $candidate_docs[0] ==
     build_run_result(
       $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
-      $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];
-      tool_ref($seed_set_docs[0].body.seed_source);$observed_at)
+      $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];$observed_at)
 else error("E_RUNTIME") end

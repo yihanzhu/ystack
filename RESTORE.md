@@ -618,25 +618,28 @@ payload is offline and unqualified. It does not execute a candidate or tool, rea
 proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
 authority or qualification, or activate a profile.
 
-Restore the thirteen paths in the manifest's inactive eval and trace framework
+Restore the fifteen paths in the manifest's inactive eval and trace framework
 block from the same commit, plus the inactive state scanner, reconciliation
-planner, and sandbox-policy evaluator blocks it replays. With the same pinned,
-architecture-bound jq 1.6 runtime used by the portable core, run:
+planner, sandbox-policy evaluator, and default normalizer payloads it replays.
+With the same pinned, architecture-bound jq 1.6 runtime used by the portable
+core, run:
 
 ```sh
 bash scripts/test/evals-framework.test.sh
 bash scripts/test/evals-events.test.sh
 bash scripts/test/evals-plans.test.sh
 bash scripts/test/evals-boundaries.test.sh
+bash scripts/test/evals-adapters.test.sh
 ```
 
 The second suite replays the seeded orchestrator snapshots through the real state
 scanner inside the private runtime; the third replays observation-plus-ledger
 bundles through the real reconciliation planner; the fourth replays
-execution-environment claims through the real sandbox-policy evaluator. Together
-they check the events and boundaries families end to end.
+execution-environment claims through the real sandbox-policy evaluator; the fifth
+replays provider snapshots through the real default normalizers. Together they
+check the events, boundaries, and adapter-compliance families end to end.
 
-The first checks the canonical catalog (nine roadmap families, four seeded), the exact
+The first checks the canonical catalog (nine roadmap families, five seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded
 core replays through the real portable core, byte-identical repeat runs, honest
 grading (a wrong expectation fails; a model-only family stays inconclusive), and
