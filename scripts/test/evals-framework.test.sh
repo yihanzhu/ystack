@@ -303,6 +303,13 @@ copy="$tmp/copy"
 /bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages must be present, so the only stale thing
+# in this fixture is the edit below.
+for component in orchestrator/v1 control/v1 adapters; do
+  if [ -d "$root/$component" ]; then
+    /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+  fi
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json seed-set.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
 done
