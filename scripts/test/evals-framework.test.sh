@@ -80,14 +80,14 @@ pass 'launcher and driver pin the exact shipped program, catalog, and driver'
 "$jq_bin" -e '
   .kind == "eval_catalog" and .body.activation_state == "inactive" and
   .body.fail_mode == "closed" and (.body.families | length) == 9 and
-  ([.body.families[] | select(.seed_status == "seeded")] | length) == 2 and
-  ([.body.families[] | select(.seed_status == "declared")] | length) == 7 and
+  ([.body.families[] | select(.seed_status == "seeded")] | length) == 3 and
+  ([.body.families[] | select(.seed_status == "declared")] | length) == 6 and
   all(.body.families[]; .seed_status == "seeded" and .seed_source.state == "present" or
       .seed_status == "declared" and .seed_source.state == "absent") and
   all(.body.families[] | select((.grader_kinds | index("deterministic")) == null);
       .trial_policy.kind == "multi")
 ' "$catalog" > /dev/null || fail 'catalog shape'
-pass 'catalog names all nine roadmap families, two seeded, stochastic ones multi-trial'
+pass 'catalog names all nine roadmap families, three seeded, stochastic ones multi-trial'
 
 # --- the run on the committed seed set ---------------------------------------
 observed_at=2026-09-05T00:00:00Z
@@ -216,6 +216,7 @@ validate_result() {
     --arg evaluator_sha256 "$("$jq_bin" -r .body.evaluator.sha256 "$1")" \
     --arg seed_set_sha256 "$(sha_file "$seed_set")" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+    --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
     --slurpfile observation_docs "$tmp/observations.json" \
@@ -265,6 +266,13 @@ copy="$tmp/copy"
 /bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages must be present, so the only stale thing
+# in this fixture is the edit below.
+for component in orchestrator/v1 control/v1 adapters; do
+  if [ -d "$root/$component" ]; then
+    /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+  fi
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json seed-set.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
 done
