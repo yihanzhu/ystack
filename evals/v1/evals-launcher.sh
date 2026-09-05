@@ -111,16 +111,19 @@ trap signal_exit HUP INT TERM
 runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/bin" "$runtime/core" "$runtime/core/v2" \
   "$runtime/core/v2/generations" "$runtime/scripts" "$runtime/orchestrator" \
-  "$runtime/orchestrator/v1" "$runtime/control" "$runtime/control/v1" "$scratch/work" ||
+  "$runtime/orchestrator/v1" "$runtime/control" "$runtime/control/v1" "$runtime/adapters" \
+  "$runtime/adapters/codex-native-reviewer" "$runtime/adapters/codex-native-reviewer/v1" \
+  "$runtime/adapters/github-actions-ci" "$runtime/adapters/github-actions-ci/v1" \
+  "$runtime/adapters/github-forge" "$runtime/adapters/github-forge/v1" "$scratch/work" ||
   emit_error E_RUNTIME
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=25b3665b163d3f3741408dc907a3eebef977587a5d23ebd2eff18972e33f6ac2
-catalog_sha=1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1
-driver_sha=fbe30a2771a60a93269d642d3e3f064fb2dc136ea00901def12c74bd80bd8ff8
+program_sha=786174eaf8ad375d312f7a3bb029391966cbbb94518d4773c328c68b9e7b0891
+catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
+driver_sha=223e857c9dada13fedb35db13ac4fb1e63068a93c44f67d24de59326a8a7f50d
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -180,6 +183,15 @@ for member in \
   snapshot_expected "$digest" "$repo/control/v1/$name" \
     "$runtime/control/v1/$name" 0400 || emit_error E_STALE
 done
+# The inactive provider-snapshot normalizers, replayed for the adapter family.
+for member in \
+  'codex-native-reviewer 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603' \
+  'github-actions-ci 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7' \
+  'github-forge b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/adapters/$name/v1/normalize.jq" \
+    "$runtime/adapters/$name/v1/normalize.jq" 0400 || emit_error E_STALE
+done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
 snapshot_file "$input" "$scratch/input.json" 1048576 0400 || {
@@ -224,6 +236,11 @@ seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         {path:"orchestrator/v1/state-scanner-driver.sh",sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
         {path:"orchestrator/v1/state-scanner-launcher.sh",sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
         {path:"orchestrator/v1/state-scanner.jq",sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
+      ],
+      adapter_closure:[
+        {path:"adapters/codex-native-reviewer/v1/normalize.jq",sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
+        {path:"adapters/github-actions-ci/v1/normalize.jq",sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
+        {path:"adapters/github-forge/v1/normalize.jq",sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
       ],
       control_closure:[
         {path:"control/v1/evaluate-sandbox.sh",sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
@@ -279,6 +296,7 @@ fi
     --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
     --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
     --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
+    --argjson normalizer_shas '{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}' \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$scratch/input.json" \
@@ -290,6 +308,12 @@ fi
   emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/adapters/codex-native-reviewer/v1/normalize.jq")" = \
+    7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 ] &&
+[ "$(sha256_path "$runtime/adapters/github-actions-ci/v1/normalize.jq")" = \
+    690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7 ] &&
+[ "$(sha256_path "$runtime/adapters/github-forge/v1/normalize.jq")" = \
+    b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be ] &&
 [ "$(sha256_path "$runtime/control/v1/evaluate-sandbox.sh")" = \
     8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb ] &&
 [ "$(sha256_path "$runtime/control/v1/policy-set.jq")" = \
