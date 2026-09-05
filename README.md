@@ -325,6 +325,22 @@ The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
 
+## Inactive Codex CLI producer normalizer payload
+
+`adapters/codex-cli-producer/v1/normalize.jq` is the first alternative harness.
+It is the Claude Code producer normalizer with only the harness identity
+swapped: the snapshot kind and content id, the manifest id, the recorded
+snapshot fact, the adapter id, and the model provider the binding must name
+(`openai`). Every trust relation, snapshot relation, state, reason, and the
+generic observation are the same, so a profile can select either harness under
+one core contract. The focused test proves the two programs differ only in
+those six tokens and that a snapshot, fact, or binding from the other harness
+is refused.
+
+This payload ships no adapter manifest and is inactive and unqualified. It does
+not call Codex, invoke a model, use a credential or network, write a target,
+publish, or activate a profile.
+
 ## Inactive local Git materializer protocol
 
 `adapters/local-git-materializer/v1/protocol.jq` defines the pure input, receipt,
