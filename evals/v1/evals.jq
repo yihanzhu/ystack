@@ -154,6 +154,9 @@ def normalizer_states:
 def sandbox_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
 def sandbox_verdicts: ["inconclusive","satisfied","violated"];
+# The risk-gates evaluator has no satisfied result: no qualified decision
+# provenance exists, so an accept claim is at most inconclusive.
+def risk_gates_verdicts: ["inconclusive","violated"];
 def planner_error_tokens: ["E_RECONCILIATION_INPUT"];
 def plan_operations: ["dispatch-stage","recover-stranded-attempt","retry-stage"];
 def delivery_modes: ["first-delivery","redelivery"];
@@ -317,10 +320,11 @@ def planner_expectation_shape:
    (.error_token as $token | planner_error_tokens | index($token) != null));
 
 # A sandbox evaluation is graded on its verdict and exact reason set.
-def sandbox_evaluation_shape:
+def control_evaluation_shape($verdicts):
   schema::exact_fields(["reason_ids","verdict"];[]) and
-  (.verdict as $v | sandbox_verdicts | index($v) != null) and
+  (.verdict as $v | $verdicts | index($v) != null) and
   (.reason_ids | schema::bounded_set(1;64;schema::id_ok;.));
+def sandbox_evaluation_shape: control_evaluation_shape(sandbox_verdicts);
 
 # A normalizer is graded on the generic state it reports, its reason, and the
 # exact set of stale bindings; provider text stays opaque and ungraded.
@@ -337,14 +341,17 @@ def normalizer_expectation_shape:
    .disposition == "rejected" and
    (.error_token as $token | normalizer_error_ids | index($token) != null));
 
-def control_expectation_shape($tokens):
+def control_expectation_shape($verdicts; $tokens):
   (schema::exact_fields(["disposition","reason_ids","verdict"];[]) and
-   .disposition == "evaluated" and (del(.disposition) | sandbox_evaluation_shape)) or
+   .disposition == "evaluated" and
+   (del(.disposition) | control_evaluation_shape($verdicts))) or
   (schema::exact_fields(["disposition","error_token"];[]) and
    .disposition == "rejected" and
    (.error_token as $token | $tokens | index($token) != null));
-def sandbox_expectation_shape: control_expectation_shape(sandbox_error_tokens);
-def risk_gates_expectation_shape: control_expectation_shape(risk_gates_error_tokens);
+def sandbox_expectation_shape:
+  control_expectation_shape(sandbox_verdicts; sandbox_error_tokens);
+def risk_gates_expectation_shape:
+  control_expectation_shape(risk_gates_verdicts; risk_gates_error_tokens);
 
 def expectation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_expectation_shape
@@ -534,17 +541,19 @@ def normalizer_observation_shape:
     (.error_token | present_shape(. as $t | normalizer_error_ids | index($t) != null)) and
     .error_token.state == "present"));
 
-def control_observation_shape($tokens):
+def control_observation_shape($verdicts; $tokens):
   schema::exact_fields(["case_id","disposition","error_token","evaluation"];[]) and
   (.case_id | schema::id_ok) and
   ((.disposition == "evaluated" and
-    (.evaluation | present_shape(sandbox_evaluation_shape)) and
+    (.evaluation | present_shape(control_evaluation_shape($verdicts))) and
     .evaluation.state == "present" and .error_token == {state:"absent"}) or
    (.disposition == "rejected" and .evaluation == {state:"absent"} and
     (.error_token | present_shape(. as $t | $tokens | index($t) != null)) and
     .error_token.state == "present"));
-def sandbox_observation_shape: control_observation_shape(sandbox_error_tokens);
-def risk_gates_observation_shape: control_observation_shape(risk_gates_error_tokens);
+def sandbox_observation_shape:
+  control_observation_shape(sandbox_verdicts; sandbox_error_tokens);
+def risk_gates_observation_shape:
+  control_observation_shape(risk_gates_verdicts; risk_gates_error_tokens);
 
 def observation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_observation_shape

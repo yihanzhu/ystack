@@ -180,6 +180,10 @@ expect_error token-from-another-evaluator E_SHAPE "$tmp/badtoken.json"
 "$jq_bin" -S -c '.body.cases |= map(if .case_id == "approval.missing-decision-violated"
   then .inputs.request.content.kind = "stage_result" else . end)' "$seed_set" > "$tmp/badkind.json"
 expect_error wrong-input-kind E_SHAPE "$tmp/badkind.json"
+# The risk-gates evaluator has no satisfied verdict, so a seed claiming one is refused.
+"$jq_bin" -S -c '.body.cases |= map(if .case_id == "approval.routine-independent-check-unqualified"
+  then .expectation.verdict = "satisfied" else . end)' "$seed_set" > "$tmp/satisfied.json"
+expect_error satisfied-verdict-claimed E_SHAPE "$tmp/satisfied.json"
 pass 'moved, misfiled, and mis-shaped approval seed sets fail closed with one token'
 
 # --- the launcher refuses an edited evaluator ---------------------------------------

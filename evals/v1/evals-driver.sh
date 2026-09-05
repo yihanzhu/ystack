@@ -70,7 +70,7 @@ risk_gates_sha256=0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852
 normalizer_shas='{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=1f037fd9386e5719e5e3cf76682d3e9918274b6962fbd2e4900845f188155d86
+program_sha256=723e6d001227565fb0649391233e0208fd172e507ead670f19888da9739fd26a
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
