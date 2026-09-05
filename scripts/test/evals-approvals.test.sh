@@ -137,7 +137,7 @@ pass 'inactive data-only boundary holds for risk-gates replays'
 wrong="$tmp/wrong.json"
 "$jq_bin" -S -c '
   .body.cases |= map(if .case_id == "approval.routine-independent-check-unqualified"
-    then .expectation.verdict = "satisfied" | .expectation.reason_ids = ["decision.qualified"]
+    then .expectation.verdict = "violated" | .expectation.reason_ids = ["decision.missing"]
     else . end)
 ' "$seed_set" > "$wrong"
 run_framework "$tmp/wrong.out" "$tmp/wrong.err" "$wrong" || fail 'wrong-expectation run errored'
@@ -145,7 +145,7 @@ run_framework "$tmp/wrong.out" "$tmp/wrong.err" "$wrong" || fail 'wrong-expectat
   .body.summary == {total:16,passed:15,failed:1,inconclusive:0} and
   (.body.cases[] | select(.case_id == "approval.routine-independent-check-unqualified") |
     .verdict == "failed" and .reason_id == "evals.verdict-mismatch")
-' "$tmp/wrong.out" > /dev/null || fail 'an unqualified accept expected as satisfied was not failed'
+' "$tmp/wrong.out" > /dev/null || fail 'an unqualified accept expected as violated was not failed'
 partial="$tmp/partial.json"
 "$jq_bin" -S -c '
   .body.cases |= map(if .case_id == "approval.request-moved-after-decision-violated"
