@@ -97,21 +97,36 @@ def files_ok($reported_count; $complete):
   ($reported_count | type == "number" and . == floor and . >= 0 and . <= 100000) and
   (if $complete then length == $reported_count else length <= $reported_count end);
 
+# GitLab's documented detailed_merge_status values, taken as the API reports
+# them. Blocking values make an open request open-blocked; transitional values
+# leave it inconclusive; not_open belongs to a closed or merged request.
+def ready_merge_status: . == "mergeable";
+def blocking_merge_status:
+  IN("blocked_status","broken_status","ci_must_pass","ci_still_running","commits_status",
+     "conflict","discussions_not_resolved","draft_status","external_status_checks",
+     "jira_association_missing","need_rebase","not_approved","policies_denied",
+     "requested_changes");
+def transitional_merge_status:
+  IN("approvals_syncing","checking","preparing","unchecked");
+def merge_status_ok:
+  type == "string" and
+  (ready_merge_status or blocking_merge_status or transitional_merge_status or . == "not_open");
+
 # GitLab keeps merged and closed apart: a merged request is never also closed,
 # and a locked request is one whose merge is in flight.
 def state_facts_ok:
   if .state == "opened" or .state == "locked" then
     .closed == false and .merged == false and
-    .closed_at == null and .merged_at == null
+    .closed_at == null and .merged_at == null and .detailed_merge_status != "not_open"
   elif .state == "closed" then
     .closed == true and .merged == false and
-    (.closed_at | time_ok) and .merged_at == null and .merge_status == "unknown"
+    (.closed_at | time_ok) and .merged_at == null and .detailed_merge_status == "not_open"
   elif .state == "merged" then
     .closed == false and .merged == true and
-    .closed_at == null and (.merged_at | time_ok) and .merge_status == "unknown"
+    .closed_at == null and (.merged_at | time_ok) and .detailed_merge_status == "not_open"
   elif .state == "unknown" then
     .closed == false and .merged == false and
-    .closed_at == null and .merged_at == null and .merge_status == "unknown"
+    .closed_at == null and .merged_at == null
   else false
   end;
 
@@ -129,7 +144,7 @@ def snapshot_ok:
   . as $snapshot |
   exact_fields(
     ["project_id","merge_request_iid","head","base","bot_user_id",
-     "observed_at","complete","reported_file_count","state","merge_status",
+     "observed_at","complete","reported_file_count","state","detailed_merge_status",
      "closed","merged","created_at","updated_at","closed_at","merged_at",
      "files","provider_metadata"];
     []) and
@@ -142,7 +157,7 @@ def snapshot_ok:
   (.observed_at | time_ok) and
   (.complete | type == "boolean") and
   (.state | IN("opened","closed","merged","locked","unknown")) and
-  (.merge_status | IN("mergeable","conflict","blocked","checking","unchecked","unknown")) and
+  (.detailed_merge_status | merge_status_ok) and
   (.closed | type == "boolean") and
   (.merged | type == "boolean") and
   (.provider_metadata | type == "object") and
@@ -166,10 +181,11 @@ def normalized_state($snapshot; $stale):
   elif $snapshot.state == "merged" then ["merged","gitlab.merge-request-merged"]
   elif $snapshot.state == "closed" then ["closed-unmerged","gitlab.merge-request-closed-unmerged"]
   elif $snapshot.state == "locked" then ["inconclusive","gitlab.merge-request-locked"]
-  elif $snapshot.merge_status == "mergeable" then ["open-ready","gitlab.merge-request-open-ready"]
-  elif $snapshot.merge_status == "conflict" or $snapshot.merge_status == "blocked" then
+  elif ($snapshot.detailed_merge_status | ready_merge_status) then
+    ["open-ready","gitlab.merge-request-open-ready"]
+  elif ($snapshot.detailed_merge_status | blocking_merge_status) then
     ["open-blocked","gitlab.merge-request-open-blocked"]
-  else ["inconclusive","gitlab.merge-status-unknown"]
+  else ["inconclusive","gitlab.merge-status-unsettled"]
   end;
 
 if (exact_fields(["trust_context","snapshot"];[]) | not) then

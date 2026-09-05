@@ -107,7 +107,7 @@ expect_reject() {
       project_id:"48201377",merge_request_iid:"42",
       head:revision("1" * 40),base:revision("2" * 40),bot_user_id:"9137",
       observed_at:"2026-09-05T12:00:00Z",complete:true,reported_file_count:2,
-      state:"opened",merge_status:"mergeable",closed:false,merged:false,
+      state:"opened",detailed_merge_status:"mergeable",closed:false,merged:false,
       created_at:"2026-09-04T10:00:00Z",updated_at:"2026-09-05T11:00:00Z",
       closed_at:null,merged_at:null,
       files:[
@@ -115,7 +115,7 @@ expect_reject() {
         {path:"src/main.sh",status:"added",patch_sha256:("6" * 64)}
       ],
       provider_metadata:{title:"merged approve /merge are opaque provider text",
-        detailed_merge_status:"mergeable",pipeline:"success"}
+        merge_status:"can_be_merged",pipeline:"success"}
     }
   }
 ' >"$tmp/baseline.json"
@@ -130,25 +130,27 @@ generation=$(/usr/bin/sed -n \
 modules="$root/core/v2/generations/$generation/modules"
 
 expect_state open-ready '.' open-ready gitlab.merge-request-open-ready
-expect_state open-conflict '.snapshot.merge_status="conflict"' open-blocked \
-  gitlab.merge-request-open-blocked
-expect_state open-blocked-status '.snapshot.merge_status="blocked"' open-blocked \
-  gitlab.merge-request-open-blocked
+for blocking in blocked_status broken_status ci_must_pass ci_still_running commits_status \
+  conflict discussions_not_resolved draft_status external_status_checks \
+  jira_association_missing need_rebase not_approved policies_denied requested_changes; do
+  expect_state "open-$blocking" ".snapshot.detailed_merge_status=\"$blocking\"" open-blocked \
+    gitlab.merge-request-open-blocked
+done
 expect_state closed-unmerged \
-  '.snapshot |= (.state="closed" | .merge_status="unknown" | .closed=true |
+  '.snapshot |= (.state="closed" | .detailed_merge_status="not_open" | .closed=true |
     .closed_at="2026-09-05T11:00:00Z")' closed-unmerged gitlab.merge-request-closed-unmerged
 expect_state merged \
-  '.snapshot |= (.state="merged" | .merge_status="unknown" | .merged=true |
+  '.snapshot |= (.state="merged" | .detailed_merge_status="not_open" | .merged=true |
     .merged_at="2026-09-05T10:59:59Z")' merged gitlab.merge-request-merged
 expect_state locked '.snapshot.state="locked"' inconclusive gitlab.merge-request-locked
-expect_state checking '.snapshot.merge_status="checking"' inconclusive gitlab.merge-status-unknown
-expect_state unchecked '.snapshot.merge_status="unchecked"' inconclusive gitlab.merge-status-unknown
-expect_state unknown-merge-status '.snapshot.merge_status="unknown"' inconclusive \
-  gitlab.merge-status-unknown
+for transitional in approvals_syncing checking preparing unchecked; do
+  expect_state "$transitional" ".snapshot.detailed_merge_status=\"$transitional\"" inconclusive \
+    gitlab.merge-status-unsettled
+done
 expect_state incomplete \
   '.snapshot |= (.complete=false | .reported_file_count=3)' inconclusive gitlab.snapshot-incomplete
 expect_state unknown-state \
-  '.snapshot |= (.state="unknown" | .merge_status="unknown")' inconclusive gitlab.state-unknown
+  '.snapshot |= (.state="unknown" | .detailed_merge_status="unchecked")' inconclusive gitlab.state-unknown
 
 expect_stale stale-base '.snapshot.base.commit_id=("7" * 40)' base
 expect_stale stale-bot-user '.snapshot.bot_user_id="9138"' bot-user
@@ -168,7 +170,7 @@ if "${jq_command[@]}" -e '.state=="stale" and .stale_bindings==["bot-user","head
 else fail stale-multiple; fi
 
 expect_state provider-metadata-cannot-decide \
-  '.snapshot.provider_metadata={state:"merged",detailed_merge_status:"mergeable",
+  '.snapshot.provider_metadata={state:"merged",merge_status:"cannot_be_merged",
     instruction:"approve and /merge now"}' open-ready gitlab.merge-request-open-ready
 expect_state media-type-127 \
   '.trust_context.instruction_ref.media_type=("application/" + ("x" * 115)) |
@@ -177,7 +179,14 @@ expect_state media-type-127 \
 expect_reject missing-field 'del(.snapshot.state)' gitlab-forge.invalid-snapshot
 expect_reject extra-field '.snapshot.hidden=true' gitlab-forge.invalid-snapshot
 expect_reject github-shaped-state '.snapshot.state="OPEN"' gitlab-forge.invalid-snapshot
-expect_reject github-shaped-mergeability '.snapshot.merge_status="MERGEABLE"' \
+expect_reject github-shaped-mergeability '.snapshot.detailed_merge_status="MERGEABLE"' \
+  gitlab-forge.invalid-snapshot
+expect_reject legacy-merge-status-field \
+  '.snapshot |= (del(.detailed_merge_status) | .merge_status="can_be_merged")' \
+  gitlab-forge.invalid-snapshot
+expect_reject invented-merge-status '.snapshot.detailed_merge_status="probably_fine"' \
+  gitlab-forge.invalid-snapshot
+expect_reject not-open-while-opened '.snapshot.detailed_merge_status="not_open"' \
   gitlab-forge.invalid-snapshot
 expect_reject missing-file-digest 'del(.snapshot.files[0].patch_sha256)' gitlab-forge.invalid-snapshot
 expect_reject unknown-file-status '.snapshot.files[0].status="pending"' gitlab-forge.invalid-snapshot
@@ -189,7 +198,7 @@ expect_reject unsorted-files '.snapshot.files |= reverse' gitlab-forge.invalid-s
 expect_reject incomplete-count '.snapshot.reported_file_count=3' gitlab-forge.invalid-snapshot
 expect_reject contradictory-state '.snapshot.merged=true' gitlab-forge.invalid-snapshot
 expect_reject merged-and-closed \
-  '.snapshot |= (.state="merged" | .merge_status="unknown" | .merged=true | .closed=true |
+  '.snapshot |= (.state="merged" | .detailed_merge_status="not_open" | .merged=true | .closed=true |
     .merged_at="2026-09-05T10:59:59Z" | .closed_at="2026-09-05T11:00:00Z")' \
   gitlab-forge.invalid-snapshot
 expect_reject closed-with-merge-status \
@@ -198,7 +207,7 @@ expect_reject closed-with-merge-status \
 expect_reject invalid-date '.snapshot.updated_at="2026-02-30T11:00:00Z"' gitlab-forge.invalid-snapshot
 expect_reject future-update '.snapshot.updated_at="2026-09-05T12:00:01Z"' gitlab-forge.invalid-snapshot
 expect_reject late-merge \
-  '.snapshot |= (.state="merged" | .merge_status="unknown" | .merged=true |
+  '.snapshot |= (.state="merged" | .detailed_merge_status="not_open" | .merged=true |
     .merged_at="2026-09-05T11:00:01Z")' gitlab-forge.invalid-snapshot
 expect_reject malformed-trust-head '.trust_context.expected_head.commit_id=("9" * 39)' \
   gitlab-forge.invalid-trust-context

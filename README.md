@@ -245,10 +245,11 @@ bindings and returns the same canonical generic observation the GitHub forge
 returns: open-ready, open-blocked, closed-unmerged, merged, stale, or
 inconclusive, with the same output keys, effect boundary, and stale-binding
 shape, so a profile can swap one forge for the other. GitLab vocabulary stays at
-the edge: a locked request and a checking or unchecked merge status are
-inconclusive, a merged request is never also closed, and the acting identity is
-the bot user the integration runs as, since GitLab has no app id. Provider
-metadata stays opaque data.
+the edge and is taken as the API reports it: `detailed_merge_status` values such
+as `mergeable`, `conflict`, `ci_must_pass`, or `checking` decide ready, blocked,
+or inconclusive; a locked request is inconclusive; a merged request is never
+also closed; and the acting identity is the bot user the integration runs as,
+since GitLab has no app id. Provider metadata stays opaque data.
 
 This PR lands only the immutable normalizer payload. A later assembly PR can add
 its manifest and profile wiring. The payload is offline and unqualified. It does
