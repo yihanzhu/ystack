@@ -183,6 +183,27 @@ done
 pass valid-multi-trial-report
 "$runner" evaluate "$tmp/bundle.json" > "$tmp/repeat.json"
 /usr/bin/cmp -s "$tmp/report.json" "$tmp/repeat.json" || fail 'deterministic report'
+# Invoked by a relative path, the runner still binds itself to its own directory.
+( cd "$root" && ./evals/v1/run.sh evaluate "$tmp/bundle.json" ) > "$tmp/relative.json" ||
+  fail 'relative-path invocation'
+/usr/bin/cmp -s "$tmp/report.json" "$tmp/relative.json" || fail 'relative-path report differs'
+pass relative-path-invocation
+# Trial ids are bound by position, so ids whose lexical order differs from
+# their trial order are still one valid case shape; a repeated id is not.
+generation=$(/usr/bin/sed -n "s/^PORTABLE_CORE_GENERATION='\\(g-[0-9a-f]\\{64\\}\\)'$/\\1/p" \
+  "$root/scripts/core-contract.sh")
+modules="$root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] || fail 'selected generation modules'
+/usr/bin/awk 'NR > 48 && /^def / { exit } { print }' "$root/evals/v1/framework.jq" \
+  > "$tmp/framework-shapes.jq"
+"$jq_bin" -L "$tmp" -L "$modules" -e --slurpfile c "$tmp/case.model.value" -n '
+  import "framework-shapes" as shapes;
+  ($c[0] | .body.trial_ids = ["trial.model.9","trial.model.10"] |
+   .body.attempt_ids = ["attempt.trial.model.9","attempt.trial.model.10"] | shapes::case_ok) and
+  ($c[0] | .body.trial_ids = ["trial.model.1","trial.model.1"] | shapes::case_ok | not) and
+  ($c[0] | .body.attempt_ids = ["attempt.trial.model.1","attempt.trial.model.1"] | shapes::case_ok | not)
+' >/dev/null || fail 'trial ids are not bound by position'
+pass trial-ids-bound-by-position
 [ "$(/usr/bin/wc -c < "$tmp/report.json" | /usr/bin/tr -d ' ')" -le 1048576 ] ||
   fail 'bounded report'
 pass deterministic-report

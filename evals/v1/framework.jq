@@ -58,8 +58,12 @@ def case_ok:
    (.expected_ref | schema::content_ref_ok) and
    (.trial_count | schema::int_ok) and .trial_count >= 1 and .trial_count <= 16 and
    (if .execution_kind == "model" then .trial_count >= 2 else true end) and
-   (.trial_ids | schema::bounded_set(1;16;schema::id_ok;.)) and
-   (.attempt_ids | schema::bounded_set(1;16;schema::id_ok;.)) and
+   # Trial and attempt ids are listed in trial order, not sorted: each must be
+   # a distinct id, and the relation checks bind position to trial index.
+   (.trial_ids | type == "array" and length >= 1 and length <= 16 and
+    all(.[]; schema::id_ok) and length == (unique | length)) and
+   (.attempt_ids | type == "array" and length >= 1 and length <= 16 and
+    all(.[]; schema::id_ok) and length == (unique | length)) and
    .trial_count == (.trial_ids | length) and
    .trial_count == (.attempt_ids | length) and
    (.graders | schema::bounded_set(1;8;grader_ok;.grader_id)));

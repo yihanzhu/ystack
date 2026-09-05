@@ -46,11 +46,12 @@ self=${BASH_SOURCE[0]}
 case "$self" in /*) ;; *) self="$(pwd -P)/$self" ;; esac
 [ -f "$self" ] && [ ! -L "$self" ] || emit_error E_RUNTIME
 source_dir=$(CDPATH='' cd -P -- "${self%/*}" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+self="$source_dir/${self##*/}"
 [ "$self" = "$source_dir/run.sh" ] || emit_error E_RUNTIME
 repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 [ "$source_dir" = "$repo/evals/v1" ] || emit_error E_RUNTIME
 
-program_sha=1cdb63cd246f0fd2a2de484d62a0be297cb24ad1dffd5fc9a6c57b967d10778d
+program_sha=d164a102919f42ef002e93c8b515b58028604819e6c09b87c6e4afadb0bbcce4
 schema_sha=8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade
 registry_sha=3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
