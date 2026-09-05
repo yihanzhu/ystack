@@ -131,6 +131,7 @@ verify_runtime || emit_error E_STALE
 program_evaluator=$evaluator
 program_evaluator_sha=$evaluator_sha256
 program_seed_sha=$seed_set_sha256
+program_observed_at=$observed_at
 seed_docs_file=$input_document
 result_docs_file=$input_document
 result_shas_json='[]'
@@ -144,7 +145,7 @@ run_program() {
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
     --arg sandbox_sha256 "$sandbox_sha256" --argjson normalizer_shas "$normalizer_shas" \
-    --arg observed_at "$observed_at" \
+    --arg observed_at "$program_observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$seed_docs_file" \
     --slurpfile observation_docs "$2" \
@@ -190,17 +191,23 @@ run_dashboard() {
       emit_error E_RUNTIME
     "$jq_bin" -S -c '.body.evaluator.content' "$result_doc" > "$evaluator_doc" ||
       emit_error E_RUNTIME
+    # A result is rebuilt at its own recorded time, not the dashboard's.
     program_evaluator=$evaluator_doc
     program_evaluator_sha=$("$jq_bin" -r '.body.evaluator.sha256' "$result_doc") ||
       emit_error E_RUNTIME
     program_seed_sha=$(sha256_path "$seed_doc") || emit_error E_RUNTIME
+    program_observed_at=$("$jq_bin" -r '.body.observed_at' "$result_doc") || emit_error E_RUNTIME
+    [[ "$program_observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+      emit_error E_SHAPE
     [ "$(run_program validate-run-result "$observations" "$result_doc" 2>/dev/null)" = true ] ||
       emit_error E_RELATION
     program_evaluator=$evaluator
     program_evaluator_sha=$evaluator_sha256
     program_seed_sha=$seed_set_sha256
-    /bin/cat "$seed_doc" >> "$work/seeds.jsonl" || emit_error E_RUNTIME
-    /bin/cat "$result_doc" >> "$work/results.jsonl" || emit_error E_RUNTIME
+    program_observed_at=$observed_at
+    # Re-emitted one document per line so adjacent files never run together.
+    "$jq_bin" -S -c . "$seed_doc" >> "$work/seeds.jsonl" || emit_error E_RUNTIME
+    "$jq_bin" -S -c . "$result_doc" >> "$work/results.jsonl" || emit_error E_RUNTIME
     j=$((j + 1))
   done
   seed_docs_file="$work/seeds.jsonl"

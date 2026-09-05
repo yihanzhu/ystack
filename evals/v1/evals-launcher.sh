@@ -145,7 +145,7 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 
 program_sha=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
 catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
-driver_sha=c5a423a7379becc5ea9d738cdb02ef966b470bd083987fffc6602283f5e8afa5
+driver_sha=c24cf94d50b0c50c57975d696159c841f9c6dfa4a7f093f0ef6d6c63bb5e458b
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -337,6 +337,9 @@ fi
 # Independent re-validation of the delivered document against the exact same
 # private program and core, after the driver has exited.
 # program_check OPERATION EVALUATOR EVALUATOR_SHA SEED_SHA SEEDS OBSERVATIONS CANDIDATE RESULTS RESULT_SHAS
+# check_observed_at names the time the candidate was built at; a run result is
+# rebuilt at its own recorded time, the dashboard at this invocation's time.
+check_observed_at=$observed_at
 program_check() {
   [ "$("$runtime/bin/jq" -S -c -n -L "$generation_runtime/modules" \
     --arg evals_operation "$1" \
@@ -348,7 +351,7 @@ program_check() {
     --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
     --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
     --argjson normalizer_shas '{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}' \
-    --arg observed_at "$observed_at" \
+    --arg observed_at "$check_observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$5" \
     --slurpfile observation_docs "$6" \
@@ -369,6 +372,8 @@ else
       > "$scratch/work/check-$j-observations.json" 2>/dev/null || emit_error E_RUNTIME
     "$runtime/bin/jq" -S -c '.body.evaluator.content' "$scratch/inputs/result-$j.json" \
       > "$scratch/work/check-$j-evaluator.json" 2>/dev/null || emit_error E_RUNTIME
+    check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$scratch/inputs/result-$j.json") ||
+      emit_error E_RUNTIME
     program_check validate-run-result "$scratch/work/check-$j-evaluator.json" \
       "$("$runtime/bin/jq" -r '.body.evaluator.sha256' "$scratch/inputs/result-$j.json")" \
       "$(sha256_path "$scratch/inputs/seed-$j.json")" "$scratch/inputs/seed-$j.json" \
@@ -376,6 +381,7 @@ else
       "$scratch/work/check-$j-observations.json" '[]' || emit_error E_RELATION
     j=$((j + 1))
   done
+  check_observed_at=$observed_at
   program_check validate-dashboard "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
     "$scratch/work/seeds.jsonl" "$scratch/work/check-0-observations.json" "$output" \
     "$scratch/work/results.jsonl" \

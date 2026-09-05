@@ -113,6 +113,22 @@ pass 'repeat dashboard is byte-identical and canonical'
 ' "$tmp/one.json" > /dev/null || fail 'single-pair dashboard counts'
 pass 'a dashboard over one result counts only that result'
 
+# A result recorded at another time still counts, and a seed file without a
+# trailing newline (paired with the result it actually produced) still reads as
+# its own document beside the next one.
+/usr/bin/printf '%s' "$(<"$root/evals/v1/seed-set.json")" > "$tmp/seed-no-newline.json"
+"$framework" run "$tmp/seed-no-newline.json" 2026-08-30T00:00:00Z \
+  >"$tmp/earlier.result.json" 2>/dev/null || fail 'earlier run failed'
+"$framework" dashboard "$observed_at" "$tmp/seed-no-newline.json" "$tmp/earlier.result.json" \
+  "$root/evals/v1/seed-set-events.json" "$tmp/seed-set-events.result.json" \
+  >"$tmp/mixed.json" 2>"$tmp/mixed.err" || fail "mixed-time dashboard failed: $(<"$tmp/mixed.err")"
+"$jq_bin" -e '
+  .body.observed_at == "2026-09-05T00:00:00Z" and
+  ([.body.inputs[].observed_at] | sort) == ["2026-08-30T00:00:00Z","2026-09-05T00:00:00Z"] and
+  .body.quality.total == 20
+' "$tmp/mixed.json" > /dev/null || fail 'mixed-time dashboard inputs'
+pass 'results recorded at other times and seed files without a trailing newline are accepted'
+
 # --- results are re-validated before they count ------------------------------------
 expect_error() {
   local name=$1 expected=$2 out err status
