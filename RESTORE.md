@@ -630,14 +630,16 @@ bash scripts/test/evals-events.test.sh
 bash scripts/test/evals-plans.test.sh
 bash scripts/test/evals-boundaries.test.sh
 bash scripts/test/evals-adapters.test.sh
+bash scripts/test/evals-dashboard.test.sh
 ```
 
 The second suite replays the seeded orchestrator snapshots through the real state
 scanner inside the private runtime; the third replays observation-plus-ledger
 bundles through the real reconciliation planner; the fourth replays
 execution-environment claims through the real sandbox-policy evaluator; the fifth
-replays provider snapshots through the real default normalizers. Together they
-check the events, boundaries, and adapter-compliance families end to end.
+replays provider snapshots through the real default normalizers; the sixth builds
+the flow-and-quality dashboard over all five run results. Together they check the
+events, boundaries, and adapter-compliance families end to end.
 
 The first checks the canonical catalog (nine roadmap families, five seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded

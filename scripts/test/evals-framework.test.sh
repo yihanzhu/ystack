@@ -192,6 +192,7 @@ model_only_catalog_sha=$(sha_file "$model_only_catalog")
   --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
   --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
   --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
+  --slurpfile result_docs "$tmp/stochastic-observations.json" --argjson result_shas '[]' \
   --arg observed_at "$observed_at" \
   --slurpfile catalog_docs "$model_only_catalog" --slurpfile seed_set_docs "$stochastic" \
   --slurpfile observation_docs "$tmp/stochastic-observations.json" \
@@ -256,6 +257,7 @@ validate_result() {
     --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
     --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
     --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
+    --slurpfile result_docs "$tmp/observations.json" --argjson result_shas '[]' \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
     --slurpfile observation_docs "$tmp/observations.json" \

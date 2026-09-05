@@ -394,6 +394,7 @@ and returns one canonical run result:
 
 ```text
 evals/v1/run-evals.sh run SEED-SET.json OBSERVED_AT
+evals/v1/run-evals.sh dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
 ```
 
 `evals/v1/eval-catalog.json` names the nine regression families the roadmap
@@ -456,6 +457,21 @@ inconclusive; provider text that can never decide a state; and malformed
 envelopes, bindings, or snapshots refused with the normalizer's own error id. The
 normalizer is the only judge; the framework records the generic state, reason, and
 stale-binding set it reports.
+
+The `dashboard` operation aggregates one to sixteen run results into one canonical
+flow-and-quality document. Each result is first re-validated against its own seed
+set and this exact program, so a result from another framework version or with an
+altered verdict never counts. The dashboard reports seeded-family coverage,
+per-family and overall pass, fail, and inconclusive counts, and the recovery
+evidence the events family produced (missed attempts recovered, cancellations kept
+terminal, repeats redelivered once or suppressed, retry limits enforced, malformed
+or over-limit events refused). Every number is a count over the results handed in. Latency,
+cost, and token telemetry are recorded absent because no live run exists to
+measure, and the operating-flow metrics the roadmap names (intent-to-spec and
+plan-to-merge time, queue and human-gate wait, first-pass success, rework, review
+latency, precision, recall, and stale rate, escaped defects and vulnerabilities,
+DORA throughput and instability, target outcome) are recorded absent with the
+reason that there is no operating history yet. Nothing is estimated.
 
 Every run result carries the exact catalog, seed set, program, driver, launcher,
 and core-closure digests, plus one trace event per case in the shape the
