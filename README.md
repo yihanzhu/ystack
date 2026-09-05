@@ -236,6 +236,26 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive GitLab forge normalizer payload
+
+`adapters/gitlab-forge/v1/normalize.jq` is the first alternative forge. It
+validates one untrusted GitLab merge-request snapshot against caller-supplied
+project, merge-request iid, head, base, bot-user, time, instruction, and config
+bindings and returns the same canonical generic observation the GitHub forge
+returns: open-ready, open-blocked, closed-unmerged, merged, stale, or
+inconclusive, with the same output keys, effect boundary, and stale-binding
+shape, so a profile can swap one forge for the other. GitLab vocabulary stays at
+the edge and is taken as the API reports it: `detailed_merge_status` values such
+as `mergeable`, `conflict`, `ci_must_pass`, `security_policy_violations`, or
+`checking` decide ready, blocked, or inconclusive; a locked request is inconclusive; a merged request is never
+also closed; and the acting identity is the bot user the integration runs as,
+since GitLab has no app id. Provider metadata stays opaque data.
+
+This PR lands only the immutable normalizer payload. A later assembly PR can add
+its manifest and profile wiring. The payload is offline and unqualified. It does
+not call GitLab or a CLI, use a credential, change a project or merge request,
+grant authority or qualification, or activate a profile.
+
 ## Inactive Codex native reviewer normalizer payload
 
 `adapters/codex-native-reviewer/v1/normalize.jq` validates one untrusted
