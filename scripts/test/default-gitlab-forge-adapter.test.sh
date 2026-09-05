@@ -130,8 +130,8 @@ generation=$(/usr/bin/sed -n \
 modules="$root/core/v2/generations/$generation/modules"
 
 expect_state open-ready '.' open-ready gitlab.merge-request-open-ready
-for blocking in blocked_status broken_status ci_must_pass ci_still_running commits_status \
-  conflict discussions_not_resolved draft_status external_status_checks \
+for blocking in blocked_status broken_status ci_must_pass commits_status conflict \
+  discussions_not_resolved draft_status external_status_checks \
   jira_association_missing locked_lfs_files locked_paths merge_request_blocked merge_time \
   need_rebase not_approved policies_denied requested_changes security_policy_violations \
   status_checks_must_pass; do
@@ -145,7 +145,7 @@ expect_state merged \
   '.snapshot |= (.state="merged" | .detailed_merge_status="not_open" | .merged=true |
     .merged_at="2026-09-05T10:59:59Z")' merged gitlab.merge-request-merged
 expect_state locked '.snapshot.state="locked"' inconclusive gitlab.merge-request-locked
-for transitional in approvals_syncing checking preparing unchecked; do
+for transitional in approvals_syncing checking ci_still_running preparing unchecked; do
   expect_state "$transitional" ".snapshot.detailed_merge_status=\"$transitional\"" inconclusive \
     gitlab.merge-status-unsettled
 done

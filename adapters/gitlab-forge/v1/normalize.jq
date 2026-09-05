@@ -102,13 +102,15 @@ def files_ok($reported_count; $complete):
 # leave it inconclusive; not_open belongs to a closed or merged request.
 def ready_merge_status: . == "mergeable";
 def blocking_merge_status:
-  IN("blocked_status","broken_status","ci_must_pass","ci_still_running","commits_status",
-     "conflict","discussions_not_resolved","draft_status","external_status_checks",
+  IN("blocked_status","broken_status","ci_must_pass","commits_status","conflict",
+     "discussions_not_resolved","draft_status","external_status_checks",
      "jira_association_missing","locked_lfs_files","locked_paths","merge_request_blocked",
      "merge_time","need_rebase","not_approved","policies_denied","requested_changes",
      "security_policy_violations","status_checks_must_pass");
+# A status that can settle on its own with no action, such as a pipeline still
+# running, is transitional: the request is neither ready nor blocked yet.
 def transitional_merge_status:
-  IN("approvals_syncing","checking","preparing","unchecked");
+  IN("approvals_syncing","checking","ci_still_running","preparing","unchecked");
 def merge_status_ok:
   type == "string" and
   (ready_merge_status or blocking_merge_status or transitional_merge_status or . == "not_open");
