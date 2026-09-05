@@ -111,16 +111,16 @@ trap signal_exit HUP INT TERM
 runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/bin" "$runtime/core" "$runtime/core/v2" \
   "$runtime/core/v2/generations" "$runtime/scripts" "$runtime/orchestrator" \
-  "$runtime/orchestrator/v1" "$scratch/work" ||
+  "$runtime/orchestrator/v1" "$runtime/control" "$runtime/control/v1" "$scratch/work" ||
   emit_error E_RUNTIME
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=c141ed838ec480e27a2bc9f6535b99b686100c613a1a1e3ff7f21cd161823776
-catalog_sha=b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083
-driver_sha=ec70799595775e646a2af5a9bd33a5158685c874180de00ded3f1a88e4fc6cbb
+program_sha=25b3665b163d3f3741408dc907a3eebef977587a5d23ebd2eff18972e33f6ac2
+catalog_sha=1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1
+driver_sha=fbe30a2771a60a93269d642d3e3f064fb2dc136ea00901def12c74bd80bd8ff8
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -167,6 +167,19 @@ for member in \
   snapshot_expected "$digest" "$repo/orchestrator/v1/$name" \
     "$runtime/orchestrator/v1/$name" 0400 || emit_error E_STALE
 done
+# The inactive sandbox-policy evaluator, replayed for the boundaries family. Its
+# policy-set validator and policy travel with it; it reads nothing outside.
+for member in \
+  'evaluate-sandbox.sh 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb' \
+  'policy-set.jq 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58' \
+  'sandbox-decision.json c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd' \
+  'sandbox-policy.json 4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e' \
+  'sandbox.jq 83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3' \
+  'validate.sh cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/control/v1/$name" \
+    "$runtime/control/v1/$name" 0400 || emit_error E_STALE
+done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
 snapshot_file "$input" "$scratch/input.json" 1048576 0400 || {
@@ -211,6 +224,14 @@ seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         {path:"orchestrator/v1/state-scanner-driver.sh",sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
         {path:"orchestrator/v1/state-scanner-launcher.sh",sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
         {path:"orchestrator/v1/state-scanner.jq",sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
+      ],
+      control_closure:[
+        {path:"control/v1/evaluate-sandbox.sh",sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
+        {path:"control/v1/policy-set.jq",sha256:"2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58"},
+        {path:"control/v1/sandbox-decision.json",sha256:"c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd"},
+        {path:"control/v1/sandbox-policy.json",sha256:"4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e"},
+        {path:"control/v1/sandbox.jq",sha256:"83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"},
+        {path:"control/v1/validate.sh",sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
       ],
       bootstrap_ref:ref("evals-framework-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("evals-framework-launcher.v1";"text/x-shellscript";$launcher_sha),
@@ -257,6 +278,7 @@ fi
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
     --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
+    --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$scratch/input.json" \
@@ -268,6 +290,18 @@ fi
   emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/control/v1/evaluate-sandbox.sh")" = \
+    8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb ] &&
+[ "$(sha256_path "$runtime/control/v1/policy-set.jq")" = \
+    2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox-decision.json")" = \
+    c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox-policy.json")" = \
+    4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox.jq")" = \
+    83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3 ] &&
+[ "$(sha256_path "$runtime/control/v1/validate.sh")" = \
+    cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a ] &&
 [ "$(sha256_path "$runtime/orchestrator/v1/reconciliation-plan.jq")" = \
     03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 ] &&
 [ "$(sha256_path "$runtime/orchestrator/v1/scan-state.sh")" = \

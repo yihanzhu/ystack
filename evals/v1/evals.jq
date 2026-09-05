@@ -54,6 +54,24 @@ def expected_orchestrator_closure:
      sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
   ];
 
+# The inactive sandbox-policy evaluator replayed for the boundaries family. It
+# needs no core: the policy-set validator and the policy are its whole closure.
+def expected_control_closure:
+  [
+    {path:"control/v1/evaluate-sandbox.sh",
+     sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
+    {path:"control/v1/policy-set.jq",
+     sha256:"2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58"},
+    {path:"control/v1/sandbox-decision.json",
+     sha256:"c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd"},
+    {path:"control/v1/sandbox-policy.json",
+     sha256:"4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e"},
+    {path:"control/v1/sandbox.jq",
+     sha256:"83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"},
+    {path:"control/v1/validate.sh",
+     sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
+  ];
+
 def ref_shape($content_id; $media_type):
   schema::content_ref_ok and
   .content_id == $content_id and .media_type == $media_type;
@@ -81,7 +99,7 @@ def family_ids:
    "reviewer-severity-false-positive-negative",
    "stale-moved-artifacts"];
 def seed_sources:
-  ["adapter-tests.contract.v1","core.stage-run.v2",
+  ["adapter-tests.contract.v1","control.sandbox-policy.v1","core.stage-run.v2",
    "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
 def stage_statuses:
   ["blocked","cancelled","completed","failed","skipped","stale"];
@@ -89,7 +107,11 @@ def core_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_REF","E_RELATION","E_RUNTIME","E_SHAPE","E_USAGE"];
 def request_roles: ["producer","reviewer","verifier"];
 def active_seed_sources:
-  ["core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+  ["control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+   "orchestrator.state-scanner.v1"];
+def sandbox_error_tokens:
+  ["E_CANONICAL","E_LIMIT","E_PARSE","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
+def sandbox_verdicts: ["inconclusive","satisfied","violated"];
 def planner_error_tokens: ["E_RECONCILIATION_INPUT"];
 def plan_operations: ["dispatch-stage","recover-stranded-attempt","retry-stage"];
 def delivery_modes: ["first-delivery","redelivery"];
@@ -107,6 +129,7 @@ def scanner_reason_ids:
 def tool_content_id($source):
   if $source == "core.stage-run.v2" then "core-contract-front-door.v2"
   elif $source == "orchestrator.state-scanner.v1" then "orchestrator-state-scanner-bootstrap.v1"
+  elif $source == "control.sandbox-policy.v1" then "control-evaluator-driver.sandbox.v1"
   else "orchestrator-reconciliation-planner.v1" end;
 def tool_media_type($source):
   if $source == "orchestrator.reconciliation-plan.v1" then "text/x-jq"
@@ -153,10 +176,11 @@ def evaluator_shape:
   .id == "evals.framework.v1" and
   (.body |
    schema::exact_fields(
-     ["bootstrap_ref","catalog_ref","core_closure","core_contract","driver_ref",
-      "launcher_ref","orchestrator_closure","program_ref","runtime"];[]) and
+     ["bootstrap_ref","catalog_ref","control_closure","core_closure","core_contract",
+      "driver_ref","launcher_ref","orchestrator_closure","program_ref","runtime"];[]) and
    .core_contract == expected_core and .core_closure == expected_core_closure and
    .orchestrator_closure == expected_orchestrator_closure and
+   .control_closure == expected_control_closure and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
    # Shipped artifacts are pinned to the digests the launcher and driver verified,
@@ -247,9 +271,23 @@ def planner_expectation_shape:
    .disposition == "rejected" and
    (.error_token as $token | planner_error_tokens | index($token) != null));
 
+# A sandbox evaluation is graded on its verdict and exact reason set.
+def sandbox_evaluation_shape:
+  schema::exact_fields(["reason_ids","verdict"];[]) and
+  (.verdict as $v | sandbox_verdicts | index($v) != null) and
+  (.reason_ids | schema::bounded_set(1;64;schema::id_ok;.));
+
+def sandbox_expectation_shape:
+  (schema::exact_fields(["disposition","reason_ids","verdict"];[]) and
+   .disposition == "evaluated" and (del(.disposition) | sandbox_evaluation_shape)) or
+  (schema::exact_fields(["disposition","error_token"];[]) and
+   .disposition == "rejected" and
+   (.error_token as $token | sandbox_error_tokens | index($token) != null));
+
 def expectation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_expectation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_expectation_shape
+  elif $source == "control.sandbox-policy.v1" then sandbox_expectation_shape
   else planner_expectation_shape end;
 
 def stage_run_case_shape:
@@ -284,6 +322,26 @@ def planner_case_shape:
   (.family_id as $id | family_ids | index($id) != null) and
   (.expectation | planner_expectation_shape) and
   (.input | planner_input_pair_shape);
+
+# Control documents are schema_version 1 envelopes of a fixed kind.
+def control_pair_shape($kind):
+  schema::exact_fields(["content","sha256"];[]) and
+  (.content |
+   schema::exact_fields(["body","id","kind","schema_version"];[]) and
+   .schema_version == 1 and .kind == $kind and
+   (.id | schema::id_ok) and (.body | type == "object")) and
+  (.sha256 | schema::sha256_ok);
+
+def sandbox_case_shape:
+  schema::exact_fields(["case_id","expectation","family_id","inputs"];[]) and
+  (.case_id | schema::id_ok) and
+  (.family_id as $id | family_ids | index($id) != null) and
+  (.expectation | sandbox_expectation_shape) and
+  (.inputs |
+   schema::exact_fields(["claim","duty","policy_set"];[]) and
+   (.policy_set | control_pair_shape("control_policy_set")) and
+   (.duty | control_pair_shape("duty_separation_evaluation")) and
+   (.claim | control_pair_shape("execution_environment_claim")));
 
 def scanner_case_shape:
   schema::exact_fields(
@@ -321,6 +379,9 @@ def seed_set_shape:
       # Scanner cases are self-contained: each carries its own snapshot.
       .shared == {} and
       (.cases | schema::bounded_set(1;64;scanner_case_shape;.case_id))
+    elif .seed_source == "control.sandbox-policy.v1" then
+      .shared == {} and
+      (.cases | schema::bounded_set(1;64;sandbox_case_shape;.case_id))
     else
       .shared == {} and
       (.cases | schema::bounded_set(1;64;planner_case_shape;.case_id))
@@ -363,9 +424,20 @@ def planner_observation_shape:
     (.error_token | present_shape(. as $t | planner_error_tokens | index($t) != null)) and
     .error_token.state == "present"));
 
+def sandbox_observation_shape:
+  schema::exact_fields(["case_id","disposition","error_token","evaluation"];[]) and
+  (.case_id | schema::id_ok) and
+  ((.disposition == "evaluated" and
+    (.evaluation | present_shape(sandbox_evaluation_shape)) and
+    .evaluation.state == "present" and .error_token == {state:"absent"}) or
+   (.disposition == "rejected" and .evaluation == {state:"absent"} and
+    (.error_token | present_shape(. as $t | sandbox_error_tokens | index($t) != null)) and
+    .error_token.state == "present"));
+
 def observation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_observation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_observation_shape
+  elif $source == "control.sandbox-policy.v1" then sandbox_observation_shape
   else planner_observation_shape end;
 
 def observation_set_shape($source):
@@ -395,6 +467,11 @@ def grade($family; $expectation; $observation):
     if $observation.plan == {state:"present",value:($expectation | del(.disposition))} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
     else {verdict:"failed",reason_id:"evals.plan-mismatch"} end
+  elif $expectation.disposition == "evaluated" then
+    if $observation.evaluation ==
+       {state:"present",value:($expectation | del(.disposition))} then
+      {verdict:"passed",reason_id:"evals.expectation-met"}
+    else {verdict:"failed",reason_id:"evals.verdict-mismatch"} end
   else
     if $observation.error_token == {state:"present",value:$expectation.error_token} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
@@ -453,6 +530,9 @@ def build_run_result(
           elif $seed_set.body.seed_source == "orchestrator.state-scanner.v1" then
             {schema_version:1,kind:"orchestrator_state_snapshot",
              id:$case.snapshot.content.id,sha256:$case.snapshot.sha256}
+          elif $seed_set.body.seed_source == "control.sandbox-policy.v1" then
+            {schema_version:1,kind:"execution_environment_claim",
+             id:$case.inputs.claim.content.id,sha256:$case.inputs.claim.sha256}
           else
             {content_id:"orchestrator-reconciliation-input.v1",
              media_type:"application/json",sha256:$case.input.sha256}
@@ -488,6 +568,10 @@ def subject_ref_shape($source):
   if $source == "core.stage-run.v2" then schema::document_ref_kind_ok("stage_result")
   elif $source == "orchestrator.reconciliation-plan.v1" then
     ref_shape("orchestrator-reconciliation-input.v1";"application/json")
+  elif $source == "control.sandbox-policy.v1" then
+    schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
+    .schema_version == 1 and .kind == "execution_environment_claim" and
+    (.id | schema::id_ok) and (.sha256 | schema::sha256_ok)
   else
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
     .schema_version == 1 and .kind == "orchestrator_state_snapshot" and
@@ -573,6 +657,7 @@ def tool_ref($source):
   {content_id:tool_content_id($source),media_type:tool_media_type($source),
    sha256:(if $source == "core.stage-run.v2" then $tool_sha256
            elif $source == "orchestrator.state-scanner.v1" then $scanner_sha256
+           elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
            else $planner_sha256 end)};
 
 # Driver entry points, selected with --arg evals_operation.
