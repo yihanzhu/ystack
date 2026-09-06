@@ -759,3 +759,5 @@ Run the focused proof with:
 ```sh
 bash scripts/test/loop-review-fix-planner.test.sh
 ```
+
+The planner also re-derives the observation's own facts before trusting it: a terminal status must carry `terminal_at`, only a dismissed review may carry `dismissed_at`, an open status carries neither, timestamps must be ordered, and the claimed `state` and `reason_id` must be exactly what the normalizer derives from the snapshot. A snapshot that says completed while also dismissed, or a review marked incomplete that still claims a settled state, is refused as malformed rather than planned from.

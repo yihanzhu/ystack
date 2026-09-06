@@ -449,10 +449,13 @@ normalize "$(mutate "$review_input" review-partial-input \
   "$partial_review"
 expect_refusal incomplete degraded-review review.incomplete "$context" \
   "$partial_review"
-forged_incomplete=$(mutate "$observation" observation-forged-incomplete \
-  '.observation.complete=false')
-expect_refusal forged-incomplete degraded-review review.incomplete "$context" \
-  "$forged_incomplete"
+# A snapshot marked incomplete while the observation still claims a settled
+# state is not a degraded review but a forged one: the state disagrees with
+# the normalizer's own derivation, so the document is refused as malformed.
+expect_error forged-incomplete-state E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-forged-incomplete \
+    '.observation.complete=false')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 
 approved=$(bind_context approved-context "$credential" "$reconciliation" \
   "$risk" "$ledger" \
@@ -578,6 +581,18 @@ expect_error reconciliation-active E_RELATION "$planner" plan "$observation" \
   "$context" "$credential" \
   "$(mutate "$reconciliation" reconciliation-active '.body.mode="dispatching"')" \
   "$risk" "$ledger"
+expect_error completed-with-dismissed-at E_RELATION "$planner" plan \
+  "$(mutate "$observation" completed-dismissed \
+    '.observation.dismissed_at="2026-09-01T00:04:00Z"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error completed-without-terminal-at E_RELATION "$planner" plan \
+  "$(mutate "$observation" completed-no-terminal \
+    '.observation.terminal_at=null')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error forged-clean-state-over-dismissed E_RELATION "$planner" plan \
+  "$(mutate "$observation" forged-clean \
+    '.observation.status="DISMISSED"|.observation.dismissed_at="2026-09-01T00:04:00Z"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 
 race_root="$tmp/race"
 /bin/mkdir -p "$race_root/loop/v1"

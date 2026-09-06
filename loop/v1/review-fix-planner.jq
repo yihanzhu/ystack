@@ -157,7 +157,19 @@ def snapshot_ok:
   (if .complete then
      .reported_top_level_count == (.top_level_findings | length) and
      .reported_inline_count == (.inline_findings | length)
-   else true end);
+   else true end) and
+  # The normalizer's own status facts: a terminal status carries terminal_at,
+  # only DISMISSED carries dismissed_at, and an open status carries neither.
+  (if .status == "COMPLETED" or .status == "TIMED_OUT" or .status == "FAILED" then
+     (.terminal_at | time_ok) and .dismissed_at == null
+   elif .status == "DISMISSED" then
+     (.terminal_at | time_ok) and (.dismissed_at | time_ok) and
+     .terminal_at <= .dismissed_at
+   else .terminal_at == null and .dismissed_at == null end) and
+  .started_at <= .updated_at and .updated_at <= .observed_at and
+  (if .terminal_at == null then true
+   else .started_at <= .terminal_at and .terminal_at <= .updated_at end) and
+  (if .dismissed_at == null then true else .dismissed_at <= .updated_at end);
 def observation_ok:
   exact(["adapter","authority","effects","kind","observation","qualification",
     "reason_id","review_mode","schema_version","stale_bindings","state",
@@ -281,6 +293,24 @@ def recomputed_bindings($o):
    (if $s.repository_id != $t.expected_repository_id
     then "repository" else empty end),
    (if $s.review_id != $t.expected_review_id then "review" else empty end)];
+
+# The observation's state and reason must be what the normalizer derives from
+# the snapshot, so a forged "clean" over a dismissed or open review is refused.
+def expected_state($o):
+  $o.observation as $s |
+  if $s.status == "DISMISSED" then ["dismissed","codex.review-dismissed"]
+  elif $s.status == "TIMED_OUT" then ["timeout","codex.review-timeout"]
+  elif $s.status == "FAILED" then ["failed","codex.review-failed"]
+  elif $s.complete == false then ["inconclusive","codex.review-incomplete"]
+  elif $s.status != "COMPLETED" then ["inconclusive","codex.review-not-terminal"]
+  elif ($s.reported_top_level_count + $s.reported_inline_count) > 0 then
+    ["findings","codex.review-findings"]
+  else ["clean","codex.review-clean"] end;
+# Stale bindings are judged separately (review-stale); here only the snapshot
+# facts must agree with the claimed state and reason.
+def state_consistent($o):
+  (recomputed_bindings($o) | length) > 0 or
+  [$o.state, $o.reason_id] == expected_state($o);
 
 def stale_reasons($o; $c):
   recomputed_bindings($o) as $bindings |
@@ -409,7 +439,7 @@ $ledger[0] as $led |
 {policy:$policy_sha,observation:$observation_sha,context:$context_sha,
  credential:$credential_sha,reconciliation:$reconciliation_sha,
  risk:$risk_sha,ledger:$ledger_sha} as $shas |
-if input_ok($p;$o;$c;$cred;$rec;$risk_doc;$led) then
+if input_ok($p;$o;$c;$cred;$rec;$risk_doc;$led) and state_consistent($o) then
   plan($p;$o;$c;$cred;$rec;$risk_doc;$led;$shas)
 else error("E_REVIEW_FIX_INPUT")
 end
