@@ -283,6 +283,10 @@ scripts/test/default-claude-code-producer-adapter.test.sh
 profiles/default/v1/producer-config.json
 scripts/test/default-producer-config.test.sh
 
+# Inactive alternative producer config payload (Codex CLI producer)
+profiles/alternative/v1/producer-config.json
+scripts/test/alternative-producer-config.test.sh
+
 # Inactive Codex CLI producer normalizer payload (first alternative harness)
 adapters/codex-cli-producer/v1/normalize.jq
 scripts/test/default-codex-cli-producer-adapter.test.sh
@@ -322,10 +326,12 @@ evals/v1/seed-set-plans.json
 evals/v1/seed-set-boundaries.json
 evals/v1/seed-set-adapters.json
 evals/v1/seed-set-approvals.json
+evals/v1/seed-set-duty.json
 scripts/test/evals-framework.test.sh
 scripts/test/evals-events.test.sh
 scripts/test/evals-plans.test.sh
 scripts/test/evals-boundaries.test.sh
 scripts/test/evals-adapters.test.sh
 scripts/test/evals-approvals.test.sh
+scripts/test/evals-duty.test.sh
 scripts/test/evals-dashboard.test.sh

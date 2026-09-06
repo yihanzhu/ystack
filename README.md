@@ -431,6 +431,14 @@ default producer preference. It grants no capability and does not select a
 profile, invoke a model, or contact a provider. Its focused test checks the
 config shape and exact Git object identity.
 
+## Inactive alternative producer config payload
+
+`profiles/alternative/v1/producer-config.json` is an immutable Git payload for
+the producer preference the alternative profile (Codex CLI producer, openai
+provider) will pin by Git object. It grants no capability and does not select
+a profile, invoke a model, or contact a provider. Its focused test checks the
+config shape and exact Git object identity.
+
 ## Inactive Codex CLI producer normalizer payload
 
 `adapters/codex-cli-producer/v1/normalize.jq` is the first alternative harness.
@@ -525,8 +533,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Six families are
-seeded; the other three are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Seven families are
+seeded; the other two are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -580,6 +588,19 @@ envelopes, bindings, or snapshots refused with the normalizer's own error id. Th
 normalizer is the only judge; the framework records the generic state, reason, and
 stale-binding set it reports.
 
+The same family also replays the GitLab forge normalizer and the Codex CLI
+producer normalizer, the alternative forge and harness from roadmap item 6,
+through the same contract and safety evals as the GitHub defaults. The GitLab
+cases cover ready, conflict, security-policy-blocked, merged, closed, locked, and
+still-running merge requests; stale bindings named exactly; provider text that
+can never decide a state; and GitHub-shaped or legacy merge-status inputs
+refused. The Codex producer cases cover changed and no-change snapshots;
+provider failure, timeout, and degraded runs kept inconclusive; stale inputs and
+incomplete metadata; a moved attempt; another harness's provider; an unknown
+state; a moved untrusted snapshot; and a caller manifest ceiling, each refused.
+This is the roadmap item 6 proof that the alternative forge and harness meet the
+same contract and evals as the defaults.
+
 The approval-invalidation and no-push-after-approval family is seeded from
 `evals/v1/seed-set-approvals.json`. Each case carries a whole decision tuple
 (policy set, core request, resolved profile, result, duty evaluation, decision
@@ -594,6 +615,20 @@ an honest accept claim is still only inconclusive because no qualified
 decision-provenance adapter exists; a forged duty evaluation is refused. Each
 expectation's verdict and primary reason were hand-written and checked against
 the real evaluator before being recorded.
+
+The actor and re-run identity family is seeded from `evals/v1/seed-set-duty.json`.
+Each case carries the four documents the duty-separation evaluator binds (policy
+set, core request, resolved profile, result) and replays them through the real
+inactive duty-separation evaluator (`control/v1/evaluate-duty.sh`), which checks
+its policy set with its own validator pair and the core tuple against a mirror
+built out of the same private runtime. A clean stage and a skipped stage are
+satisfied; a request from a denied requester role, a result whose execution kind,
+capability, or reporting role does not match the binding it claims, is violated
+with its exact reason; an unclassified capability is only inconclusive, never
+guessed; a policy set naming the wrong duty policy, a request over the producer
+permission ceiling, and a profile that collides two protected roles are each
+refused with one token. Each expectation's verdict and primary reason were
+hand-written and checked against the real evaluator before being recorded.
 
 The `dashboard` operation aggregates one to sixteen run results into one canonical
 flow-and-quality document. Each seed set is first replayed in the same private
