@@ -212,7 +212,7 @@ model_only_catalog_sha=$(sha_file "$model_only_catalog")
 pass 'a misfiled family is refused; a seeded model-only family stays inconclusive in case and trace'
 
 # A run result built from a partial observation set marks the unobserved case
-# inconclusive; the dashboard must accept that result and count it as such.
+# inconclusive in the program; the dashboard, which replays every case, refuses it.
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/partial-evaluator.json"
 "$jq_bin" -S -c '[.body.cases[1:][].observation.value]' "$first" > "$tmp/partial-observations.json"
 "$jq_bin" -S -c -n -L "$modules" \
