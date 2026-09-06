@@ -354,3 +354,6 @@ packaging/v1/build-release.sh
 packaging/v1/install.sh
 packaging/v1/packaging.jq
 scripts/test/target-packaging.test.sh
+
+# Operating-mode transition proposal
+docs/transition.md
