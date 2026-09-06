@@ -522,9 +522,6 @@ adapter contract compliance). Each family declares which grader kinds may judge
 it, its trial policy, and the core evidence kinds it produces. Seven families are
 seeded; the other two are declared and wait for their own seeds.
 
-it, its trial policy, and the core evidence kinds it produces. Six families are
-seeded; the other three are declared and wait for their own seeds.
-
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
 The core is the only judge: the framework records whether the core accepted or
