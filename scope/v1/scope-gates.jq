@@ -93,18 +93,38 @@ $marker[0] as $mode_doc |
      target_repository_id: $record.body.target_repository_id}] |
    sort_by(.sha256)
  else [] end) as $records |
-($records | map(select(.target_repository_id == $s.target_repository_id))) as $mine |
+
+# The scope names the shadow records it claims as its own, by id and by digest.
+# A supplied record counts only when one of those refs names it exactly, so a
+# record produced for another workflow or task class never qualifies this scope.
+# Records nobody claimed are ignored and reported by digest; a ref that names no
+# supplied record leaves the claim unmet.
+($s.shadow_evidence_refs // []) as $refs |
+def claimed_by_scope($refs): . as $record |
+  $refs | any(.id == $record.id and .sha256 == $record.sha256);
+($records | map(select(claimed_by_scope($refs)))) as $claimed |
+($records | map(select(claimed_by_scope($refs) | not) | .sha256) |
+ sort | unique) as $unclaimed |
+($refs |
+ all(. as $ref |
+     $records | any(.id == $ref.id and .sha256 == $ref.sha256))) as $refs_resolved |
+($claimed | map(select(.target_repository_id == $s.target_repository_id))) as $mine |
 
 # A glob is protected when it names, or could expand into, a path the roadmap's
 # high-risk list reserves. A wildcard in any directory segment could expand into
-# a protected directory name, so it is refused with the same reason.
+# a protected directory name, so it is refused with the same reason. Names are
+# compared case-insensitively: a checkout may be case-insensitive, so a glob that
+# differs from a protected name only by case reaches the same file.
+($p.protected_path_prefixes | map(ascii_downcase)) as $protected_prefixes |
+($p.protected_root_files | map(ascii_downcase)) as $protected_root_files |
+($p.protected_path_segments | map(ascii_downcase)) as $protected_segments |
 (($s.allowed_paths |
-  map(split("/") as $segments |
-      ($p.protected_path_prefixes | index($segments[0] + "/") != null) or
+  map((split("/") | map(ascii_downcase)) as $segments |
+      ($protected_prefixes | index($segments[0] + "/") != null) or
       (($segments | length) == 1 and
-       ($p.protected_root_files | index($segments[0]) != null)) or
+       ($protected_root_files | index($segments[0]) != null)) or
       ($segments |
-       any(. as $segment | $p.protected_path_segments | index($segment) != null)) or
+       any(. as $segment | $protected_segments | index($segment) != null)) or
       ($segments[0:-1] | any(test("[*?]")))) |
   any(.))) as $protected |
 
@@ -129,7 +149,7 @@ $marker[0] as $mode_doc |
      $risk_doc.body.verdict != "violated"
   then [] else ["scope.tier-not-routine"] end) +
  (if $protected then ["scope.protected-path"] else [] end) +
- (if $set_ok and
+ (if $set_ok and $refs_resolved and
      ($s.required_shadow_environments |
       all(. as $environment |
           $mine |
@@ -167,7 +187,8 @@ content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_r
   policy_ref: $policy_ref,
   risk_evaluation_ref: document_ref($risk_doc; $risk_sha),
   shadow_records: $records,
-  shadow_set_ref: document_ref($set; $shadow_set_sha)
+  shadow_set_ref: document_ref($set; $shadow_set_sha),
+  unclaimed_shadow_records: $unclaimed
 } as $evidence |
 
 {

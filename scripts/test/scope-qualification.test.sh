@@ -108,22 +108,6 @@ done
 ' "$policy" >/dev/null || fail 'policy contract'
 pass 'the shipped gate policy is canonical, inactive, and routine-only'
 
-scope_record() {
-  "$jq_bin" -S -c -n '
-    {schema_version:1,kind:"workflow_scope",id:"scope.docs-typo-fix.v1",
-     body:{activation_state:"inactive",authority:"none",enabled:false,
-       push_allowed:false,scope_version:"v1",
-       target_repository_id:"repo.fixture-target",
-       workflow_id:"workflow.docs-typo-fix",task_class:"task.docs-typo-fix",
-       risk_tier:"routine",allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
-       required_proof_kinds:["deterministic","independent-review"],
-       required_eval_families:["protected-path-credential-network-publisher-boundaries",
-         "stale-moved-artifacts"],
-       required_shadow_environments:["env.ci-linux-fixture","env.local-macos-fixture"],
-       max_attempts:2}}'
-}
-scope_record >"$tmp/scope.json"
-
 "$jq_bin" -S -c -n '
   def record($id;$environment;$outcome;$repository):
     {schema_version:1,kind:"shadow_reproduction_record",id:$id,
@@ -141,6 +125,43 @@ scope_record >"$tmp/scope.json"
        "repo.fixture-target"),
      record("shadow.docs-typo-fix.ci";"env.ci-linux-fixture";"no-change";
        "repo.fixture-target")]}}' >"$tmp/shadow-set.json"
+
+# A scope claims its evidence by digest, so the shadow set is built first and the
+# scope record is written to name exactly the records it may count.
+set_record_sha() {
+  "$jq_bin" -S -c --argjson i "$2" '.body.records[$i]' "$1" >"$tmp/record-digest.json"
+  sha256_path "$tmp/record-digest.json"
+}
+evidence_refs() {
+  local set_path=$1 count index refs=()
+  count=$("$jq_bin" -r '.body.records | length' "$set_path")
+  index=0
+  while [ "$index" -lt "$count" ]; do
+    refs+=("$("$jq_bin" -S -c -n --arg sha "$(set_record_sha "$set_path" "$index")" \
+      --arg id "$("$jq_bin" -r --argjson i "$index" '.body.records[$i].id' "$set_path")" \
+      '{schema_version:1,kind:"shadow_reproduction_record",id:$id,sha256:$sha}')")
+    index=$((index + 1))
+  done
+  /usr/bin/printf '%s\n' "${refs[@]}" |
+    "$jq_bin" -S -c -s 'sort | unique'
+}
+# $1 = shadow evidence set the scope claims, $2 = output path.
+scope_record() {
+  "$jq_bin" -S -c -n --argjson refs "$(evidence_refs "$1")" '
+    {schema_version:1,kind:"workflow_scope",id:"scope.docs-typo-fix.v1",
+     body:{activation_state:"inactive",authority:"none",enabled:false,
+       push_allowed:false,scope_version:"v1",
+       target_repository_id:"repo.fixture-target",
+       workflow_id:"workflow.docs-typo-fix",task_class:"task.docs-typo-fix",
+       risk_tier:"routine",allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
+       required_proof_kinds:["deterministic","independent-review"],
+       required_eval_families:["protected-path-credential-network-publisher-boundaries",
+         "stale-moved-artifacts"],
+       required_shadow_environments:["env.ci-linux-fixture","env.local-macos-fixture"],
+       shadow_evidence_refs:$refs,
+       max_attempts:2}}' >"$2"
+}
+scope_record "$tmp/shadow-set.json" "$tmp/scope.json"
 
 "$jq_bin" -S -c -n '
   def family($id;$status;$total;$failed;$inconclusive):
@@ -210,9 +231,22 @@ mutate_scope '.body.required_proof_kinds = ["vibes"]' "$tmp/bad-proof.json"
 mutate_scope '.body.extra = true' "$tmp/bad-extra.json"
 mutate_scope 'del(.body.max_attempts)' "$tmp/bad-missing.json"
 mutate_scope '.kind = "other_record"' "$tmp/bad-kind.json"
+mutate_scope 'del(.body.shadow_evidence_refs)' "$tmp/bad-no-refs.json"
+mutate_scope '.body.shadow_evidence_refs = []' "$tmp/bad-empty-refs.json"
+mutate_scope '.body.shadow_evidence_refs =
+  [{schema_version:1,kind:"shadow_reproduction_record",id:"shadow.x"}]' \
+  "$tmp/bad-ref-shape.json"
+mutate_scope '.body.shadow_evidence_refs[0].sha256 = "not-a-digest"' \
+  "$tmp/bad-ref-digest.json"
+mutate_scope '.body.shadow_evidence_refs[0].kind = "other_record"' \
+  "$tmp/bad-ref-kind.json"
+mutate_scope '.body.shadow_evidence_refs =
+  [.body.shadow_evidence_refs[0], .body.shadow_evidence_refs[0]]' \
+  "$tmp/bad-ref-duplicate.json"
 for case_name in bad-attempts bad-tier bad-absolute bad-traversal bad-doublestar \
   bad-firstwild bad-git bad-backslash bad-duplicate bad-family bad-proof bad-extra \
-  bad-missing bad-kind; do
+  bad-missing bad-kind bad-no-refs bad-empty-refs bad-ref-shape bad-ref-digest \
+  bad-ref-kind bad-ref-duplicate; do
   expect_validator_error "$case_name" E_SHAPE "$tmp/$case_name.json"
 done
 for case_name in bad-enabled bad-push bad-workflow bad-task bad-version bad-active; do
@@ -251,13 +285,8 @@ risk_sha=$(sha256_path "$tmp/risk.json")
 kill_sha=$(sha256_path "$tmp/kill.json")
 duty_sha=$(sha256_path "$tmp/duty.json")
 marker_sha=$(sha256_path "$tmp/marker.json")
-record_sha() {
-  "$jq_bin" -S -c --argjson i "$1" '.body.records[$i]' "$tmp/shadow-set.json" \
-    >"$tmp/record.json"
-  sha256_path "$tmp/record.json"
-}
-record_0_sha=$(record_sha 0)
-record_1_sha=$(record_sha 1)
+record_0_sha=$(set_record_sha "$tmp/shadow-set.json" 0)
+record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
 
 "$jq_bin" -S -c -n \
   --arg policy_sha "$policy_sha" --arg scope_sha "$scope_sha" \
@@ -292,7 +321,8 @@ record_1_sha=$(record_sha 1)
       shadow_record("shadow.docs-typo-fix.ci";"env.ci-linux-fixture";
         "no-change";$record_1_sha)] | sort_by(.sha256)),
     shadow_set_ref:{schema_version:1,kind:"shadow_evidence_set",
-      id:"scope.evidence.docs-typo-fix.v1",sha256:$shadow_set_sha}};
+      id:"scope.evidence.docs-typo-fix.v1",sha256:$shadow_set_sha},
+    unclaimed_shadow_records:[]};
   {schema_version:1,kind:"scope_qualification_evaluation",
    id:"scope.docs-typo-fix.v1",
    body:{activation_state:"inactive",authority:"none",authority_effect:"none",
@@ -373,26 +403,68 @@ for glob in '.github/workflows/ci.yml' 'config/models.conf' 'AGENTS.md' \
 done
 pass 'a scope whose allowed paths touch a protected path is never proposable'
 
+# A checkout may be case-insensitive, so a glob that differs from a protected name
+# only by case reaches the same file and is refused for the same reason.
+for glob in 'agents.md' 'AGENTS.MD' 'src/Auth/login.ts' '.GitHub/workflows/x.yml' \
+  'Config/models.conf' 'app/SECRETS/token.txt'; do
+  "$jq_bin" -S -c --arg glob "$glob" '.body.allowed_paths = [$glob]' \
+    "$tmp/scope.json" >"$tmp/protected-case.json"
+  run_validator "$tmp/protected-case.json" || fail "case glob $glob was refused"
+  expect_reasons "protected case $glob" '["scope.protected-path"]' \
+    "$tmp/protected-case.json" "${good[@]:1}"
+done
+pass 'protected paths are matched case-insensitively in every segment'
+
 mutate_scope '.body.required_shadow_environments =
   ["env.ci-linux-fixture","env.local-macos-fixture","env.staging-fixture"]' \
   "$tmp/env-missing.json"
 expect_reasons shadow-missing '["scope.shadow-evidence-missing"]' \
   "$tmp/env-missing.json" "${good[@]:1}"
+# A record whose bytes changed is a different record, so these two fixtures get a
+# scope that claims the mutated set: the refusal under test is the outcome or the
+# repository, not an unmet claim.
 "$jq_bin" -S -c '.body.records[0].body.outcome = "inconclusive"' "$tmp/shadow-set.json" \
   >"$tmp/shadow-inconclusive.json"
+scope_record "$tmp/shadow-inconclusive.json" "$tmp/scope-inconclusive.json"
 expect_reasons shadow-inconclusive \
-  '["scope.shadow-evidence-missing","scope.shadow-inconclusive"]' "${good[@]:0:1}" \
-  "$tmp/shadow-inconclusive.json" "${good[@]:2}"
+  '["scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+  "$tmp/scope-inconclusive.json" "$tmp/shadow-inconclusive.json" "${good[@]:2}"
 "$jq_bin" -S -c '.body.records[0].body.target_repository_id = "repo.other"' \
   "$tmp/shadow-set.json" >"$tmp/shadow-other-repo.json"
+scope_record "$tmp/shadow-other-repo.json" "$tmp/scope-other-repo.json"
 expect_reasons shadow-other-repository '["scope.shadow-evidence-missing"]' \
-  "${good[@]:0:1}" "$tmp/shadow-other-repo.json" "${good[@]:2}"
+  "$tmp/scope-other-repo.json" "$tmp/shadow-other-repo.json" "${good[@]:2}"
 "$jq_bin" -S -c '.body.records[1] = .body.records[0]' "$tmp/shadow-set.json" \
   >"$tmp/shadow-replayed.json"
 expect_reasons shadow-replayed \
   '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "${good[@]:0:1}" "$tmp/shadow-replayed.json" "${good[@]:2}"
 pass 'shadow evidence must cover every environment, be conclusive, and be distinct'
+
+# The scope counts only the records it claims by digest. A record it never named
+# is ignored even when it would have covered a required environment, and it is
+# reported so the operator sees what was left out.
+"$jq_bin" -S -c '.body.shadow_evidence_refs =
+  [.body.shadow_evidence_refs[] | select(.id == "shadow.docs-typo-fix.ci")]' \
+  "$tmp/scope.json" >"$tmp/scope-unclaimed.json"
+run_validator "$tmp/scope-unclaimed.json" || fail 'a one-ref scope was refused'
+expect_reasons shadow-unclaimed '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-unclaimed.json" "${good[@]:1}"
+run_evaluator "$tmp/scope-unclaimed.json" "${good[@]:1}" >"$tmp/evaluation-unclaimed.json"
+"$jq_bin" -e --arg sha "$record_0_sha" '
+  .body.evidence.unclaimed_shadow_records == [$sha] and
+  .body.proposal == {state:"absent"}' "$tmp/evaluation-unclaimed.json" >/dev/null ||
+  fail 'the ignored record was not reported by digest'
+# A claim the supplied evidence never answers is missing evidence, not a pass.
+"$jq_bin" -S -c '.body.shadow_evidence_refs = ((.body.shadow_evidence_refs +
+  [{schema_version:1,kind:"shadow_reproduction_record",
+    id:"shadow.docs-typo-fix.absent",
+    sha256:"0000000000000000000000000000000000000000000000000000000000000000"}]) |
+  sort | unique)' "$tmp/scope.json" >"$tmp/scope-dangling-ref.json"
+run_validator "$tmp/scope-dangling-ref.json" || fail 'a three-ref scope was refused'
+expect_reasons shadow-dangling-ref '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-dangling-ref.json" "${good[@]:1}"
+pass 'only the shadow records a scope claims by digest count as its evidence'
 
 mutate_scope '.body.required_eval_families = ["malicious-instructions"]' \
   "$tmp/eval-declared.json"

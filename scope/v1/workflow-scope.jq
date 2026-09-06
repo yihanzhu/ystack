@@ -4,6 +4,9 @@ def exact($required):
 def id_ok:
   type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
 
+def sha256_ok:
+  type == "string" and test("\\A[0-9a-f]{64}\\z");
+
 def member_of($allowed):
   type == "string" and (. as $value | $allowed | index($value) != null);
 
@@ -38,6 +41,15 @@ def eval_family_ids:
 
 def risk_tiers: ["bootstrap", "high", "routine"];
 
+# A scope names its own shadow evidence: each ref is a document ref to one
+# shadow reproduction record, by id and by the digest of that record's canonical
+# bytes. The evaluator counts a supplied record only when a ref names it, so
+# evidence produced for some other scope can never qualify this one.
+def shadow_evidence_ref_ok:
+  exact(["id", "kind", "schema_version", "sha256"]) and
+  .schema_version == 1 and .kind == "shadow_reproduction_record" and
+  (.id | id_ok) and (.sha256 | sha256_ok);
+
 def shape_ok:
   exact(["body", "id", "kind", "schema_version"]) and
   .schema_version == 1 and .kind == "workflow_scope" and (.id | id_ok) and
@@ -45,7 +57,8 @@ def shape_ok:
    exact(["activation_state", "allowed_paths", "authority", "enabled",
      "max_attempts", "push_allowed", "required_eval_families",
      "required_proof_kinds", "required_shadow_environments", "risk_tier",
-     "scope_version", "target_repository_id", "task_class", "workflow_id"]) and
+     "scope_version", "shadow_evidence_refs", "target_repository_id",
+     "task_class", "workflow_id"]) and
    (.activation_state | type == "string") and
    (.authority | type == "string") and
    (.scope_version | type == "string") and
@@ -59,6 +72,7 @@ def shape_ok:
    (.required_proof_kinds | bounded_set(1; 4; member_of(proof_kinds))) and
    (.required_eval_families | bounded_set(1; 9; member_of(eval_family_ids))) and
    (.required_shadow_environments | bounded_set(1; 8; id_ok)) and
+   (.shadow_evidence_refs | bounded_set(1; 16; shadow_evidence_ref_ok)) and
    (.max_attempts |
     type == "number" and . == floor and . >= 1 and . <= 8));
 

@@ -694,12 +694,24 @@ A **workflow scope** (`scope/v1/workflow-scope.jq`, checked by
 `scope/v1/validate-scope.sh`) is a small written-down record: which repository,
 which workflow, which task class, which risk tier, which repo-relative paths the
 work may touch, which proof kinds and eval families it needs, which shadow
-environments it must have evidence from, and how many attempts it gets. Every
-record says `enabled: false` and `push_allowed: false`; one that claims otherwise
-is refused. Allowed paths are globs with small teeth: no absolute path, no
-traversal, no backslash, no `**`, and no wildcard in the first segment, because a
-wildcard there could expand into any top-level directory and the protected-path
-check could not bound it.
+environments it must have evidence from, which shadow records it claims as its own
+evidence, and how many attempts it gets. Every record says `enabled: false` and
+`push_allowed: false`; one that claims otherwise is refused. Allowed paths are
+globs with small teeth: one to 512 bytes of `A-Za-z0-9._/*?-` only, at most 32
+segments, no empty segment and no `.` or `..` segment, no absolute path, no
+backslash, no `**`, no `.git` segment in any case, no segment ending in a dot, and
+no wildcard in the first segment, because a wildcard there could expand into any
+top-level directory and the protected-path check could not bound it.
+
+A scope **names its own evidence**. `shadow_evidence_refs` is a set of one to
+sixteen document refs — `{schema_version, kind: "shadow_reproduction_record", id,
+sha256}` — naming exactly the shadow reproduction records this scope claims. A
+shadow record says which repository, which environment, which outcome, and which
+incident it reproduced, but nothing about which workflow or task class it belongs
+to; without this claim any reproduction for the same repository would qualify any
+scope, and a new scope could ride in on evidence produced for a different workflow.
+The claim lives in the scope record, so the reviewer of the scope pull request
+reviews the claim itself.
 
 The **evaluator** (`scope/v1/evaluate-scope.sh` with `scope/v1/scope-gates.jq`)
 reads seven documents: the scope record, a set of shadow reproduction records in
@@ -710,8 +722,9 @@ record — so nothing a supplied document says about its own identity is taken o
 trust. It answers `proposable` only when all of this holds: the tier is `routine`
 and the risk gate also classifies the work routine and reports no violation; no
 allowed path touches a protected path; every required shadow environment has a
-record for this repository whose outcome is `reproduced` or `no-change`, and none
-is `inconclusive`; every required eval family is seeded with at least one graded
+**claimed** record for this repository whose outcome is `reproduced` or
+`no-change`, and none is `inconclusive`; every required eval family is seeded with
+at least one graded
 case and no failing or inconclusive grade; the kill switch is clear; duty
 separation is satisfied; and the mode is readable. Otherwise the answer is
 `not-proposable` with one or more reason ids: `scope.tier-not-routine`,
@@ -719,6 +732,22 @@ separation is satisfied; and the mode is readable. Otherwise the answer is
 `scope.shadow-inconclusive`, `scope.eval-family-unseeded`, `scope.eval-failing`,
 `scope.kill-switch`, `scope.duty-violation`, `scope.mode-construction`, or
 `scope.malformed`.
+
+A supplied shadow record counts **only** when one of the scope's
+`shadow_evidence_refs` names both its id and the digest the evaluator measured over
+that record's own canonical bytes, and its target repository is the scope's.
+Evidence for another scope never counts: a record nobody claimed is ignored, and it
+is listed by digest under the evaluation's evidence as `unclaimed_shadow_records`
+so the operator can see what was left out. A required environment covered only by
+ignored records, or a claimed ref that no supplied record answers, is
+`scope.shadow-evidence-missing` — the reason-id set stays closed.
+
+Protected-path names are compared **case-insensitively**, both the glob's segments
+and the policy's prefix, root-file, and segment lists. A checkout may be
+case-insensitive, so `agents.md`, `AGENTS.MD`, `src/Auth/login.ts`, and
+`.GitHub/workflows/x.yml` all reach reserved files and are all refused with
+`scope.protected-path`; a glob differing from a protected name only by case is
+protected.
 
 The operating-mode marker is read from `config/construction-mode.json`
 **read-only** and only ever compared. A supplied marker that disagrees with the
@@ -747,6 +776,8 @@ Run the focused test with `bash scripts/test/scope-qualification.test.sh`. It
 bootstraps the pinned jq 1.6 release itself, proves the proposable evaluation byte
 for byte and byte-identical on repeat, proves every refusal above, proves the
 record validator's refusals, and proves that a copy of the component in a tree with
-no committed mode marker still only ever produces a blocked proposal.
+no committed mode marker still only ever produces a blocked proposal. It builds the
+shadow evidence set first and then writes the scope record to claim those exact
+digests, the way a real scope pull request would.
 
 Two closures worth naming: a dashboard that lists a family twice is malformed, so a failing entry can never be shadowed by a later passing duplicate; and the operating-mode marker's status is a closed vocabulary (`active` is construction, `retired` is operating), so any other value, including a typo, is unknown and refuses with `scope.mode-construction` even in a portable tree with no committed marker.
