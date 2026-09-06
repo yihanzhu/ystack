@@ -67,10 +67,10 @@ sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
 sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
 risk_gates_evaluator="$runtime/control/v1/evaluate-risk-gates.sh"
 risk_gates_sha256=0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8
-normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713"}'
+normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=c92eae2b20cff74e27af12bf38c8b0f5199eb7fa62bd02c41f205f0e04cda504
+program_sha256=911179d4806dde803fa8ea05e09bc0865fc1baae49956917d71a96bb92fe7c57
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
@@ -114,7 +114,7 @@ verify_runtime() {
     "$runtime/control/v1/evaluate-duty.sh" &&
   verify_hash dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25 \
     "$runtime/adapters/codex-cli-producer/v1/normalize.jq" &&
-  verify_hash b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713 \
+  verify_hash ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a \
     "$runtime/adapters/gitlab-forge/v1/normalize.jq" &&
   verify_hash 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 \
     "$runtime/adapters/codex-native-reviewer/v1/normalize.jq" &&
