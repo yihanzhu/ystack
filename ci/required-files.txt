@@ -256,6 +256,10 @@ scripts/test/default-codex-native-reviewer-adapter.test.sh
 adapters/github-actions-ci/v1/normalize.jq
 scripts/test/default-github-actions-ci-adapter.test.sh
 
+# Inactive hermetic eval-record evaluator
+evals/v1/framework.jq
+evals/v1/run.sh
+scripts/test/eval-framework.test.sh
 # Inactive provider-neutral local Git candidate materializer
 adapters/local-git-materializer/v1/materialize.sh
 adapters/local-git-materializer/v1/object-closure.c

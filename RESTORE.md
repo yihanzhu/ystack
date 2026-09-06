@@ -537,6 +537,22 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive hermetic eval-record evaluator block,
+then run:
+
+```sh
+bash scripts/test/eval-framework.test.sh
+```
+
+This checks supplied canonical suite, case, trial, and grade records; immutable
+framework and scope references; exact trial/attempt identities; coherent trial and
+grade timestamps; deterministic and stochastic multi-trial results; explicit
+`unavailable` and `inconclusive` states; and stale, tampered, duplicate, missing,
+or out-of-order input rejection. Failed grades cannot be hidden by an unavailable
+trial. The evaluator does not run trials or invoke a grader, model, adapter, or
+arbitrary command. It uses no network or credential and grants no authority,
+activation, qualification, or external effect. Hermetic built-in trial and grader
+execution is later work.
 Restore the four paths in the manifest's inactive local Git materializer block,
 then run:
 
