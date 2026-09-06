@@ -348,3 +348,9 @@ scripts/test/evals-dashboard.test.sh
 
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md
+
+# Inactive shadow reproduction slice
+shadow/v1/incident-record.jq
+shadow/v1/validate-incident.sh
+shadow/v1/shadow-environments.json
+scripts/test/shadow-slice.test.sh
