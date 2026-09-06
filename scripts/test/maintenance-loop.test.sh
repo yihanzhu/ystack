@@ -361,6 +361,27 @@ expect_scan old-rehearsal "${clean[@]}" "$fixtures/rehearsal-old.json" \
   "$tmp/out-old-rehearsal.json" >/dev/null || fail 'rehearsal age band'
 pass 'rehearsal age is counted in whole days from the dashboard time'
 
+# Age is whole days between full timestamps: 23:59 on the 5th to 00:00 on the
+# 5th of the next month is 30 days, not 31, so it sits exactly on the threshold.
+rehearsal rehearsal.edge 2026-08-05T23:59:00Z rehearsed > "$fixtures/rehearsal-edge.json"
+expect_scan edge-rehearsal "${clean[@]}" "$fixtures/rehearsal-edge.json"
+"$jq_bin" -e '([.body.bands[] | select(.band_id == "rollback-rehearsal-max-age")][0] |
+  .state == "in-band" and .value == 30)' \
+  "$tmp/out-edge-rehearsal.json" >/dev/null || fail 'rehearsal edge age'
+pass 'rehearsal age uses full timestamps, so a partial day is not counted'
+
+# One unresolved case in a large family must still cross the zero threshold:
+# the per-thousand rate rounds up, never down to zero.
+"$jq_bin" -S -c '.body.families |= map(if .family_id == "stale-moved-artifacts"
+  then .cases = {total:2000,passed:1999,failed:1,inconclusive:0} else . end)' \
+  "$fixtures/dashboard-clean.json" >"$fixtures/dashboard-large-stale.json"
+expect_scan large-stale "$fixtures/dashboard-large-stale.json" "$fixtures/ledger-clean.json" \
+  "$fixtures/kill-clear.json" "$fixtures/rehearsal-recent.json"
+"$jq_bin" -e '([.body.bands[] | select(.band_id == "stale-rate-max")][0] |
+  .state == "out-of-band" and .value == 1)' \
+  "$tmp/out-large-stale.json" >/dev/null || fail 'large stale family rate'
+pass 'one unresolved case in a large stale family still crosses the band'
+
 # --- refusals -------------------------------------------------------------
 /usr/bin/printf '{\n' > "$fixtures/broken.json"
 expect_refusal malformed E_PARSE "$fixtures/broken.json" \

@@ -58,6 +58,14 @@ def day_number:
    (($year_of_era / 100) | floor) + $day_of_year) as $day_of_era |
   $era * 146097 + $day_of_era - 719468;
 
+# Seconds since 1970-01-01T00:00:00Z for the same stamp, so an age in whole
+# days is floor((later - earlier) / 86400) over full timestamps, never a
+# difference of calendar dates that could overstate by a day.
+def epoch_seconds:
+  capture("T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})Z\\z") as $t |
+  day_number * 86400 + ($t.h | tonumber) * 3600 + ($t.mi | tonumber) * 60 +
+  ($t.s | tonumber);
+
 def severities: ["critical","high","low","medium"];
 def high_severities: ["critical","high"];
 def risk_tiers: ["high","routine"];
@@ -165,8 +173,9 @@ def metric_value($metric_id; $dashboard; $ledger; $rehearsals):
   elif $metric_id == "eval.stale-family-unresolved-permille" then
     ([$dashboard.body.families[] | select(.family_id == stale_family_id)]) as $family |
     (if ($family | length) != 1 or $family[0].cases.total == 0 then null
+     # Round up: one unresolved case must never disappear into a large total.
      else ((1000 * ($family[0].cases.total - $family[0].cases.passed)) /
-           $family[0].cases.total | floor) end)
+           $family[0].cases.total | ceil) end)
   elif $metric_id == "telemetry.refused-events" then
     ([$ledger.body.events[] |
       select((.facts.result.state == "recorded" or .facts.result.state == "computed") and
@@ -175,7 +184,8 @@ def metric_value($metric_id; $dashboard; $ledger; $rehearsals):
     ([$rehearsals[] | select(.body.outcome == "rehearsed") | .body.rehearsed_at] |
      max) as $latest |
     (if $latest == null then null
-     else (($dashboard.body.observed_at | day_number) - ($latest | day_number)) as $age |
+     else (((($dashboard.body.observed_at | epoch_seconds) -
+             ($latest | epoch_seconds)) / 86400) | floor) as $age |
        (if $age < 0 then null else $age end) end)
   else null end;
 
