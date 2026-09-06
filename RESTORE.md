@@ -56,6 +56,22 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive offline delivery replay
+
+Restore the three paths listed under “Inactive offline delivery replay” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/delivery-replay.test.sh
+```
+
+The replay is a local offline simulation. It materializes only a caller-owned
+candidate, reads one fixed candidate blob, and records test observations. Each
+observation must name the request digest, candidate tree, and candidate commit of
+the recorded materialization, and completion holds the candidate ref itself under a
+git transaction it owns. It does not execute candidate code, select a profile,
+authenticate review, publish, merge, deploy, or contact a provider or target.
+
 ### Restore the inactive default profile assembly
 
 Restore the eight paths listed under “Inactive default profile assembly” in
@@ -99,6 +115,26 @@ The payload records an inactive producer preference the alternative profile
 (Codex CLI producer, openai provider) will pin by Git object. It does not
 select or activate a profile and performs no model, credential, provider,
 publish, or target operation.
+
+### Restore the inactive alternative profile assembly (Codex CLI producer)
+
+Restore the eight paths listed under “Inactive alternative profile assembly
+(Codex CLI producer)” in [`ci/required-files.txt`](ci/required-files.txt) from one
+commit, together with the config restored under “Inactive alternative producer
+config payload (Codex CLI producer)” and the payload restored under “Inactive
+Codex CLI producer normalizer payload”, then run:
+
+```sh
+bash scripts/test/alternative-profile-assembly.test.sh
+```
+
+The proof validates the profile and six manifests, their exact main package
+objects, the producer config contract, the Codex CLI producer manifest contract,
+the accepted Roadmap decision record, role separation, empty tool requests, and
+that the profile differs from the default one only in the producer binding and
+the profile id. Restoring these records does not select, resolve, qualify,
+install, or activate the profile; it grants no authority and performs no model,
+credential, provider, publish, or target operation.
 
 ---
 

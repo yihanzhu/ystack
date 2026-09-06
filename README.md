@@ -247,6 +247,7 @@ and one row here.
 |---|---|---|---|
 | Inactive portable profile resolver | `resolver/v1/` | Reads exact local Git objects and assembles a portable-core `resolved_profile`; selects and activates nothing. | [read](docs/components.md#inactive-portable-profile-resolver) |
 | Inactive default profile assembly | `profiles/default/v1/` | Binds six default adapter packages to exact Git objects from one durable main commit. Source data only. | [read](docs/components.md#inactive-default-profile-assembly) |
+| Inactive alternative profile assembly | `profiles/alternative/v1/` | The same six-role team with the Codex CLI producer (openai provider) swapped in; the other five manifests are the default ones byte for byte. Selects nothing. | [read](docs/components.md#inactive-alternative-profile-assembly) |
 | Inactive portable core v2 fake-forge contract | `core/v2/` | The contract for deterministic candidate materialization by a fake forge adapter; a repo-only compatibility switch that is not qualified for a real forge. | [read](docs/components.md#inactive-portable-core-v2-fake-forge-contract) |
 | Inactive fake adapter contract matrix | `adapter-tests/v1/` | A fixed 2×2 producer/forge matrix run against one unrelated local Git fixture. Observation only. | [read](docs/components.md#inactive-fake-adapter-contract-matrix) |
 | Inactive control policy-set validator | `control/v1/` | Defines the canonical shape and order for the six Control foundation policies and checks the set's relations. | [read](docs/components.md#inactive-control-policy-set-validator) |

@@ -270,6 +270,11 @@ adapters/local-git-materializer/v1/materialize.sh
 adapters/local-git-materializer/v1/object-closure.c
 scripts/test/local-git-materializer-adapter.test.sh
 
+# Inactive offline delivery replay
+delivery/v1/replay.py
+scripts/test/delivery-replay.test.sh
+work/delivery-loop-first/plan.md
+
 # Inactive Claude Code producer normalizer payload
 adapters/claude-code-producer/v1/normalize.jq
 scripts/test/default-claude-code-producer-adapter.test.sh
@@ -308,6 +313,16 @@ profiles/default/v1/manifests/dormant-publisher.json
 profiles/default/v1/manifests/github-actions-ci.json
 profiles/default/v1/manifests/local-git-materializer.json
 scripts/test/default-profile-assembly.test.sh
+
+# Inactive alternative profile assembly (Codex CLI producer)
+profiles/alternative/v1/profile.json
+profiles/alternative/v1/manifests/codex-cli-producer.json
+profiles/alternative/v1/manifests/codex-native-reviewer.json
+profiles/alternative/v1/manifests/deterministic-verifier.json
+profiles/alternative/v1/manifests/dormant-publisher.json
+profiles/alternative/v1/manifests/github-actions-ci.json
+profiles/alternative/v1/manifests/local-git-materializer.json
+scripts/test/alternative-profile-assembly.test.sh
 
 # Inactive eval and trace framework
 evals/v1/run-evals.sh
