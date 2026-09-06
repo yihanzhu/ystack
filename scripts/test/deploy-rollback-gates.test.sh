@@ -383,6 +383,11 @@ expect_decision duty-violation-risk refused deploy.duty-violation \
   "$(mutate "$risk" risk-duty \
     '.body.verdict="violated"|.body.reason_ids=["duty.publisher-model-access"]')" \
   "$kill_switch"
+expect_decision risk-gate-violated refused deploy.risk-gate-violated \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-rejected \
+    '.body.verdict="violated"|.body.reason_ids=["decision.rejected"]')" \
+  "$kill_switch"
 expect_decision malformed-request-field refused deploy.malformed \
   "$(mutate "$request" extra-field-request '.body.untrusted="value"')" \
   "$release" "$authorization" "$rehearsal" "$risk" "$kill_switch"

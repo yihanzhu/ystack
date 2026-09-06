@@ -731,7 +731,7 @@ qualification reference, or activation. A refusal carries one or more reason
 ids: `deploy.tier-unknown`, `deploy.authorization-missing`,
 `deploy.authorization-stale`, `deploy.authorization-wrong-tier`,
 `deploy.release-unverified`, `deploy.rollback-unrehearsed`, `deploy.kill-switch`,
-`deploy.duty-violation`, and `deploy.malformed`. Production carries an
+`deploy.duty-violation`, `deploy.risk-gate-violated` (a violated risk-gate verdict for any non-duty reason, such as a rejected or role-denied decision), and `deploy.malformed`. Production carries an
 independent final guard: if the tier requires a named operator and the supplied
 authorization is not a named, authorized, same-tier operator record, the request
 is refused even when everything else passes.
