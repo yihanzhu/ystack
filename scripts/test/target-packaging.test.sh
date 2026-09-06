@@ -213,29 +213,101 @@ expect_refusal E_TARGET 'a target under home dotfiles' \
 ok 'install refuses a non-empty, unreadable, symlinked, in-repo, or home-dotfile target'
 
 target=$(fresh_target refusals)
+# Every tampered fixture below is resealed: its release id is recomputed from its own
+# edited body. Without that the id check alone would refuse them all and the checks
+# each fixture is aimed at would never run.
+reseal() {
+  local file=$1 body_sha
+  "$jq" -S -c '.body' "$file" >"$tmp/reseal-body.json"
+  body_sha=$(sha_file "$tmp/reseal-body.json")
+  "$jq" -S -c --arg id "release.$body_sha" '.id = $id' "$file" >"$tmp/reseal.json"
+  /bin/mv "$tmp/reseal.json" "$file"
+}
 expect_refusal E_PROFILE 'an unknown profile id' "$installer" install "$manifest" profile.missing.v1 "$target"
 "$jq" -S -c '.body.files[0].sha256 = "0000000000000000000000000000000000000000000000000000000000000000"' \
   "$manifest" >"$tmp/tampered-digest.json"
+reseal "$tmp/tampered-digest.json"
 expect_refusal E_DIGEST 'a tampered file digest' "$installer" install "$tmp/tampered-digest.json" profile.default.v1 "$target"
 "$jq" -S -c '.body.files[0].object_id = "0000000000000000000000000000000000000000"' \
   "$manifest" >"$tmp/tampered-object.json"
+reseal "$tmp/tampered-object.json"
 expect_refusal E_DIGEST 'a tampered Git object id' "$installer" install "$tmp/tampered-object.json" profile.default.v1 "$target"
 "$jq" -S -c '(.body.files[] | select(.mode == "100644") | .mode) |= "100755"' \
   "$manifest" >"$tmp/tampered-mode.json"
+reseal "$tmp/tampered-mode.json"
 expect_refusal E_DIGEST 'a tampered file mode with the same blob' "$installer" install "$tmp/tampered-mode.json" profile.default.v1 "$target"
 "$jq" -S -c '.body.activation = "live"' "$manifest" >"$tmp/active.json"
+reseal "$tmp/active.json"
 expect_refusal E_SHAPE 'a manifest claiming activation' "$installer" install "$tmp/active.json" profile.default.v1 "$target"
 "$jq" -S -c '.body.source.commit_id = "0123456789012345678901234567890123456789"' \
   "$manifest" >"$tmp/stale.json"
+reseal "$tmp/stale.json"
 expect_refusal E_RELATION 'a manifest naming a commit this repo does not have' \
   "$installer" install "$tmp/stale.json" profile.default.v1 "$target"
-"$jq" -S -c \
-  --arg other 'g-0000000000000000000000000000000000000000000000000000000000000000' \
-  '.body.core_contract.generation_id = $other' "$manifest" >"$tmp/generation.json"
+# The generation is moved on every packaged core path too, so the manifest stays
+# internally consistent and the repo-versus-manifest generation check is what refuses it.
+"$jq" -S -c --arg generation "$generation" \
+  --arg other 'g-0000000000000000000000000000000000000000000000000000000000000000' '
+  def remap: if startswith("core/v2/generations/\($generation)/")
+    then "core/v2/generations/\($other)/" + ltrimstr("core/v2/generations/\($generation)/")
+    else . end;
+  .body.core_contract.generation_id = $other |
+  (.body.files[].path) |= remap | .body.files |= sort_by(.path) |
+  (.body.profiles[].files) |= (map(remap) | sort)' "$manifest" >"$tmp/generation.json"
+reseal "$tmp/generation.json"
 expect_refusal E_RELATION 'a manifest naming another core generation' \
   "$installer" install "$tmp/generation.json" profile.default.v1 "$target"
 [ -z "$(/bin/ls -A -- "$target")" ] || fail 'a refused install wrote into the target'
 ok 'install refuses an unknown profile, a tampered digest, object, or mode, a claimed activation, and a stale release'
+
+# The release id is the SHA-256 of the canonical body, and a profile's packaged set is
+# derived from its own id and the manifest's generation. Neither is taken on trust.
+"$jq" -S -c \
+  '.id = "release.0000000000000000000000000000000000000000000000000000000000000000"' \
+  "$manifest" >"$tmp/edited-id.json"
+expect_refusal E_SHAPE 'a release id that is not the digest of its body' \
+  "$installer" install "$tmp/edited-id.json" profile.default.v1 "$target"
+"$jq" -S -c '[.body.profiles[] | select(.profile_id == "profile.default.v1").files][0] as $borrowed |
+  (.body.profiles[] | select(.profile_id == "profile.alternative.v1").files) = $borrowed' \
+  "$manifest" >"$tmp/swapped-profile.json"
+reseal "$tmp/swapped-profile.json"
+expect_refusal E_SHAPE "a profile carrying another profile's files" \
+  "$installer" install "$tmp/swapped-profile.json" profile.default.v1 "$target"
+"$jq" -S -c '(.body.profiles[] | select(.profile_id == "profile.default.v1").files) |=
+  (. - ["adapters/claude-code-producer/v1/normalize.jq"])' "$manifest" >"$tmp/orphan-file.json"
+reseal "$tmp/orphan-file.json"
+expect_refusal E_SHAPE 'a packaged file no profile claims' \
+  "$installer" install "$tmp/orphan-file.json" profile.default.v1 "$target"
+[ -z "$(/bin/ls -A -- "$target")" ] || fail 'a refused install wrote into the target'
+ok "install refuses a hand-edited release id, a borrowed profile file list, and an unclaimed packaged file"
+
+# Whatever survives the derived checks still has to rebuild, byte for byte, from the
+# commit the manifest names. These two edits are internally consistent and are refused
+# only because the rebuilt release does not match them.
+"$jq" -S -c '.body.files |=
+    map(select(.path != "adapters/claude-code-producer/v1/normalize.jq")) |
+  (.body.profiles[] | select(.profile_id == "profile.default.v1").files) |=
+    (. - ["adapters/claude-code-producer/v1/normalize.jq"])' \
+  "$manifest" >"$tmp/dropped-file.json"
+reseal "$tmp/dropped-file.json"
+expect_refusal E_DIGEST 'a manifest with one packaged file dropped' \
+  "$installer" install "$tmp/dropped-file.json" profile.default.v1 "$target"
+"$jq" -S -c '(.body.profiles[] | select(.profile_id == "profile.default.v1").files) |=
+  ((. + ["adapters/codex-cli-producer/v1/normalize.jq"]) | sort)' \
+  "$manifest" >"$tmp/extra-file.json"
+reseal "$tmp/extra-file.json"
+expect_refusal E_DIGEST "a profile handed an extra allowlisted file" \
+  "$installer" install "$tmp/extra-file.json" profile.default.v1 "$target"
+# The rebuild is a hard dependency: without the sibling builder nothing installs.
+builderless="$tmp/builderless"
+/bin/mkdir -p "$builderless/packaging"
+/bin/cp -R "$root/packaging/v1" "$builderless/packaging/v1"
+/bin/chmod -R u+w "$builderless"
+/bin/rm -f "$builderless/packaging/v1/build-release.sh"
+expect_refusal E_RUNTIME 'an installer with no sibling release builder' \
+  "$builderless/packaging/v1/install.sh" install "$manifest" profile.default.v1 "$target"
+[ -z "$(/bin/ls -A -- "$target")" ] || fail 'a refused install wrote into the target'
+ok 'install reproduces the release from its own commit and refuses every manifest that differs'
 
 /usr/bin/printf '{' >"$tmp/malformed.json"
 expect_refusal E_PARSE 'a malformed manifest' "$installer" install "$tmp/malformed.json" profile.default.v1 "$target"
@@ -280,5 +352,17 @@ expect_refusal E_PATH 'a profile binding personal configuration' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses to package a path outside the shipped product shapes'
+
+rebuilt="$tmp/rebuilt.json"
+"$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$rebuilt"
+/usr/bin/cmp -s "$manifest" "$rebuilt" || fail 'the unmodified manifest no longer reproduces'
+final_target=$(fresh_target reproduce)
+"$installer" install "$manifest" profile.alternative.v1 "$final_target" >/dev/null ||
+  fail 'the unmodified manifest no longer installs'
+tree_listing "$final_target" >"$tmp/listing-c"
+tree_listing "$alt_target" >"$tmp/listing-d"
+/usr/bin/cmp -s "$tmp/listing-c" "$tmp/listing-d" ||
+  fail 'the reproduced install is not byte-identical to the first one'
+ok 'the unmodified manifest reproduces and still installs byte-identically for both profiles'
 
 printf 'target packaging: %s focused checks passed\n' "$pass"

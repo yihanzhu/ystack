@@ -57,9 +57,12 @@ self="$self_dir/${self##*/}"
 repo=$(CDPATH='' cd -P -- "$self_dir/../.." 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 [ "$self_dir" = "$repo/packaging/v1" ] || emit_error E_RUNTIME
 program="$self_dir/packaging.jq"
-for required in "$self" "$program"; do
+# The release builder is the sibling this installer replays the manifest against.
+builder="$self_dir/build-release.sh"
+for required in "$self" "$program" "$builder"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
 done
+[ -x "$builder" ] || emit_error E_RUNTIME
 
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
 case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
@@ -118,13 +121,17 @@ manifest_sha=$(sha_file "$raw")
 commit=$("$jq_bin" -r '.body.source.commit_id // ""' "$raw" 2>/dev/null)
 generation=$("$jq_bin" -r '.body.core_contract.generation_id // ""' "$raw" 2>/dev/null)
 release_id=$("$jq_bin" -r '.id // ""' "$raw" 2>/dev/null)
+# The release id must be the SHA-256 of the canonical body, so the body is
+# re-canonicalised here and hashed rather than read back out of the manifest.
+"$jq_bin" -S -c '.body' "$raw" >"$scratch/body.json" 2>/dev/null || emit_error E_SHAPE
+body_sha=$(sha_file "$scratch/body.json")
 packaging_jq() {
   local operation=$1
   shift
   "$jq_bin" --arg operation "$operation" --arg commit "$commit" \
     --arg generation "$generation" --arg profile_id "$profile_id" \
-    --arg release_id "$release_id" --arg manifest_sha "$manifest_sha" \
-    --arg north_star_sha "${north_star_sha:-}" \
+    --arg release_id "$release_id" --arg body_sha "$body_sha" \
+    --arg manifest_sha "$manifest_sha" --arg north_star_sha "${north_star_sha:-}" \
     --rawfile files "$scratch/installed.tsv" --rawfile profiles "$scratch/empty" \
     -f "$program" "$@"
 }
@@ -143,6 +150,24 @@ repo_git() {
 source_generation=$(repo_git cat-file blob "$commit:scripts/core-contract.sh" 2>/dev/null |
   /usr/bin/sed -n "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p")
 [ "$source_generation" = "$generation" ] || emit_error E_RELATION
+
+# The manifest is not merely checked, it is reproduced: the sibling builder rebuilds
+# the release for the commit and profile ids the manifest itself names, and the
+# supplied bytes must equal the rebuilt bytes. That one comparison settles the
+# release id, every per-profile file list, every mode, object id, and digest, and
+# the core generation at once, so a hand-edited manifest cannot install. The
+# per-file checks below stay as defence in depth.
+manifest_profiles=()
+while IFS= read -r listed; do
+  [[ "$listed" =~ ^profile\.[a-z0-9][a-z0-9-]{0,30}\.v1$ ]] || emit_error E_SHAPE
+  manifest_profiles+=("$listed")
+done < <("$jq_bin" -r '.body.profiles[].profile_id' "$raw" 2>/dev/null)
+[ "${#manifest_profiles[@]}" -ge 1 ] && [ "${#manifest_profiles[@]}" -le 4 ] ||
+  emit_error E_SHAPE
+"$builder" build-release "$commit" "${manifest_profiles[@]}" >"$scratch/rebuilt.json" \
+  2>/dev/null || emit_error E_DIGEST
+/usr/bin/cmp -s "$raw" "$scratch/rebuilt.json" || emit_error E_DIGEST
+
 packaging_jq profile-files -r "$raw" >"$scratch/wanted.tsv" 2>/dev/null ||
   emit_error E_PROFILE
 [ -s "$scratch/wanted.tsv" ] || emit_error E_PROFILE

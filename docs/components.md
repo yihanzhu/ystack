@@ -708,7 +708,24 @@ profile cannot smuggle one in.
 `scripts/core-contract.sh` validates the installed profile and manifests in place.
 The target must already exist and be an empty, real directory: a non-empty
 directory, a symlink, a path inside this repo, and a path under the home directory's
-dotfiles are each refused. Nothing is written until every packaged blob has matched
+dotfiles are each refused.
+
+Install reproduces the release manifest from the commit and refuses any difference.
+Before anything is staged it rebuilds the release with `build-release.sh` for the
+commit and the profile ids the supplied manifest itself names, and requires the
+supplied bytes to equal the rebuilt bytes. That one comparison settles the release
+id, every per-profile file list, every file mode, Git object id, and digest, and the
+core generation at once, so a hand-edited manifest cannot install even when it has
+been made internally consistent. Two derived checks stand in front of it for a
+reader with no repository: the release id must be the SHA-256 of the manifest's own
+canonical body, and each profile's file list must be the set derived from its own id
+and the manifest's generation — the core files for that generation, its own
+`profile.json`, `producer-config.json`, and six adapter manifests, no other
+profile's files, no other generation's files, and nothing packaged that no profile
+claims. That derived set is written once, in `packaging.jq`, and the builder reads
+it rather than repeating it, so the two cannot drift apart.
+
+Nothing is written until every packaged blob has additionally matched
 the manifest's Git object id and SHA-256 and has passed a content denylist for home
 paths, credential-shaped tokens, and the shipped-default north-star marker. A
 malformed, oversized, multi-root, non-canonical, symlinked, or moved manifest is
@@ -727,7 +744,9 @@ twice produces byte-identical trees.
 Neither script uses a credential or the network, invokes a model, reads a git
 remote, touches `config/`, `.claude/`, `manager/`, or anything under the home
 directory, selects or resolves a profile, grants qualification, or activates
-anything. Run `bash scripts/test/target-packaging.test.sh` for the focused proof:
+anything. The installer's only new reach is its own sibling `build-release.sh`,
+resolved beside it and required to be a regular file; without it nothing installs.
+Run `bash scripts/test/target-packaging.test.sh` for the focused proof:
 it builds a release from HEAD, installs the default and alternative profiles into
 fresh temporary directories, validates each installed tree with its own installed
 contract validator, proves the repeat install is byte-identical, greps the

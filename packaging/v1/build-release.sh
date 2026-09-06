@@ -93,6 +93,16 @@ generation=$(/usr/bin/sed -n \
 
 : >"$scratch/paths"
 : >"$scratch/profiles.tsv"
+: >"$scratch/files.tsv"
+packaging_jq() {
+  local operation=$1
+  shift
+  "$jq_bin" --arg operation "$operation" --arg commit "$commit" \
+    --arg generation "$generation" --arg profile_id '' --arg release_id '' \
+    --arg body_sha "${body_sha:-}" --arg manifest_sha '' --arg north_star_sha '' \
+    --rawfile files "$scratch/files.tsv" --rawfile profiles "$scratch/profiles.tsv" \
+    -f "$program" "$@"
+}
 record_path() {
   packaged_path_ok "$1" || emit_error E_PATH
   /usr/bin/printf '%s\n' "$1" >>"$scratch/paths" || emit_error E_RUNTIME
@@ -136,12 +146,14 @@ for requested in "$@"; do
   done < <("$jq_bin" -r '.body.bindings[] |
     [.package_ref.object_type, .package_ref.location.value] | @tsv' \
     "$scratch/profile.json" 2>/dev/null)
-  record_path scripts/core-contract.sh "$requested"
-  record_path "core/v2/generations/$generation/contracts.jq" "$requested"
-  record_path "core/v2/generations/$generation/core-ingress.sh" "$requested"
-  for module in schema profile_graph stage_request result_facts result_truth; do
-    record_path "core/v2/generations/$generation/modules/$module.jq" "$requested"
-  done
+  # The core files a profile carries are named once, in packaging.jq, so the
+  # installer's derived check reads the same list this loop packages.
+  core_seen=0
+  while IFS= read -r core_path; do
+    record_path "$core_path" "$requested"
+    core_seen=$((core_seen + 1))
+  done < <(packaging_jq core-paths -r -n 2>/dev/null)
+  [ "$core_seen" -eq 8 ] || emit_error E_RELATION
 done
 
 /usr/bin/sort -u "$scratch/paths" >"$scratch/paths.sorted" || emit_error E_RUNTIME
@@ -167,17 +179,9 @@ while IFS= read -r path; do
     >>"$scratch/files.tsv" || emit_error E_RUNTIME
 done <"$scratch/paths.sorted"
 
-packaging_jq() {
-  local operation=$1
-  shift
-  "$jq_bin" --arg operation "$operation" --arg commit "$commit" \
-    --arg generation "$generation" --arg profile_id '' --arg release_id '' \
-    --arg manifest_sha '' --arg north_star_sha '' \
-    --rawfile files "$scratch/files.tsv" --rawfile profiles "$scratch/profiles.tsv" \
-    -f "$program" "$@"
-}
 packaging_jq release -S -c -n >"$scratch/body.json" 2>/dev/null || emit_error E_RELATION
-release_id="release.$(sha_file "$scratch/body.json")"
+body_sha=$(sha_file "$scratch/body.json")
+release_id="release.$body_sha"
 "$jq_bin" -S -c -n --arg id "$release_id" --slurpfile body "$scratch/body.json" \
   '{body: $body[0], id: $id, kind: "release_manifest", schema_version: 1}' \
   >"$scratch/manifest.json" 2>/dev/null || emit_error E_RUNTIME
