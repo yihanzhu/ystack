@@ -306,6 +306,31 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive telemetry trace-record validator
+
+`telemetry/v1/validate-trace-ledger.sh` validates one caller-supplied, bounded
+canonical trace-record bundle against caller-supplied session and attempt
+identities. Every event names that session and attempt plus its trace, carries explicit recorded,
+computed, unavailable, or not-applicable facts, and joins a SHA-256 chain. A
+sealed count and final digest expose tail truncation. The validator returns one
+deterministic canonical receipt bound to the exact input bytes.
+Each record digest covers its jq 1.6 sorted compact event without
+`record_digest`, including the terminating line feed.
+The receipt repeats a session, attempt, and final-digest replay key for a later
+state store to consume once. It is not itself a durable ledger or write protocol.
+Validation runs only with the repository's digest-pinned jq 1.6 runtime bytes.
+
+```text
+telemetry/v1/validate-trace-ledger.sh validate SESSION_ID ATTEMPT_ID LEDGER.json
+```
+
+The chain detects an unrehashed change; it is not a signature or an authority
+grant. The package stays inactive and repo-only. It does not collect telemetry,
+run a tool or adapter, read a credential, use a network, write a ledger, activate
+a profile, qualify a workflow, publish, deploy, or touch a target. A later unit
+must provide durable append, retention, access, and recovery behavior before it
+can claim a telemetry ledger runtime.
+
 ## Inactive hermetic eval-record evaluator
 
 `evals/v1/run.sh evaluate BUNDLE.json` validates already-recorded, bounded

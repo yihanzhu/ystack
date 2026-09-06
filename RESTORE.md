@@ -537,6 +537,22 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive telemetry trace-record validator block,
+then run:
+
+```sh
+bash scripts/test/telemetry-trace-ledger.test.sh
+```
+
+This validates supplied canonical bounded events, exact session and attempt bindings,
+explicit unavailable facts, exact sequence and prior-digest links, the sealed
+tail, deterministic bounded receipts, and fail-closed handling of duplicates,
+replay, reorder, truncation, tampering, time reversal, malformed input, symlinks,
+and unverified runtimes. It does not collect or write telemetry, grant authority or
+qualification, run a tool or adapter, use a credential or network, activate a
+profile, publish, deploy, or touch a target. Durable append, retention, access,
+and recovery behavior is later work.
+
 Restore the three paths in the manifest's inactive hermetic eval-record evaluator block,
 then run:
 
