@@ -514,9 +514,6 @@ adapter contract compliance). Each family declares which grader kinds may judge
 it, its trial policy, and the core evidence kinds it produces. Six families are
 seeded; the other three are declared and wait for their own seeds.
 
-it, its trial policy, and the core evidence kinds it produces. Five families are
-seeded; the other four are declared and wait for their own seeds.
-
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
 The core is the only judge: the framework records whether the core accepted or
@@ -881,7 +878,6 @@ scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
 evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, risk-gates, and normalizer replays, canonical run results
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below

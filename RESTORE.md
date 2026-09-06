@@ -684,9 +684,6 @@ block from the same commit, plus the inactive state scanner, reconciliation
 planner, sandbox-policy and risk-gates evaluator, and default normalizer payloads
 it replays.
 
-Restore the fifteen paths in the manifest's inactive eval and trace framework
-block from the same commit, plus the inactive state scanner, reconciliation
-planner, sandbox-policy evaluator, and default normalizer payloads it replays.
 With the same pinned, architecture-bound jq 1.6 runtime used by the portable
 core, run:
 
@@ -710,12 +707,6 @@ flow-and-quality dashboard over all six run results. Together they check the
 events, boundaries, adapter-compliance, and approval families end to end.
 
 The first checks the canonical catalog (nine roadmap families, six seeded), the exact
-
-replays provider snapshots through the real default normalizers; the sixth builds
-the flow-and-quality dashboard over all five run results. Together they check the
-events, boundaries, and adapter-compliance families end to end.
-
-The first checks the canonical catalog (nine roadmap families, five seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded
 core replays through the real portable core, byte-identical repeat runs, honest
 grading (a wrong expectation fails; a model-only family stays inconclusive), and
