@@ -387,6 +387,20 @@ expect_refusal E_RELATION 'a profile binding a root-location package ref' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses a package ref that is not a path'
+# A manifest edited after the profile pinned it is a stale profile: the file's
+# digest no longer matches the binding's manifest_ref, so the release refuses.
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" \
+  >"$fixture/profiles/default/v1/profile.json"
+"$jq" -S -c '.body.notes = "edited after assembly"' \
+  "$fixture/profiles/default/v1/manifests/github-actions-ci.json" >"$fixture/manifest.tmp"
+/bin/mv "$fixture/manifest.tmp" "$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging stale-manifest fixture'
+expect_refusal E_RELATION 'a manifest edited after the profile pinned it' \
+  "$fixture/packaging/v1/build-release.sh" build-release \
+  "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
+ok 'build-release refuses a manifest that no longer matches its binding'
 
 rebuilt="$tmp/rebuilt.json"
 "$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$rebuilt"

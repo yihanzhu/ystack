@@ -756,3 +756,5 @@ pull-request URL; the test pins that one line as the only permitted operator-nam
 hit and fails on any other.
 
 The builder packages the exact Git objects a profile pins: every package, config, and prompt reference must resolve at the release commit to the object id (and, for a blob, the mode) recorded in the profile, so a bound adapter whose bytes drifted after the profile was assembled makes the release refuse instead of shipping the drift.
+
+The six manifest files a profile carries are also checked against the profile's own `manifest_ref` pins by id and digest, so a manifest edited after the profile was assembled refuses the release instead of shipping beside a binding that no longer matches it.

@@ -140,6 +140,25 @@ for requested in "$@"; do
   record_path "$config_path" "$requested"
   record_tree "$requested" "$base/manifests"
   [ "$RECORD_TREE_COUNT" -eq 6 ] || emit_error E_PROFILE
+  # Each manifest file at the commit must be the exact document the profile's
+  # binding pins by id and digest; a manifest edited after the profile was
+  # assembled is a stale profile, not something to package.
+  : >"$scratch/manifests-found.tsv"
+  while IFS= read -r line; do
+    manifest_path=${line#*$'\t'}
+    blob_at "$manifest_path" || emit_error E_LIMIT
+    manifest_id=$("$jq_bin" -r 'if type == "object" and (.id | type) == "string" then .id else empty end' \
+      "$scratch/blob" 2>/dev/null)
+    [ -n "$manifest_id" ] || emit_error E_RELATION
+    /usr/bin/printf '%s\t%s\n' "$manifest_id" "$(sha_file "$scratch/blob")" \
+      >>"$scratch/manifests-found.tsv"
+  done < <(repo_git ls-tree -r -z --full-tree "$commit" -- "$base/manifests" | /usr/bin/tr '\0' '\n')
+  "$jq_bin" -r '.body.bindings[] | .manifest_ref | [.id, .sha256] | @tsv' \
+    "$scratch/profile.json" 2>/dev/null | /usr/bin/sort >"$scratch/manifests-pinned.tsv" ||
+    emit_error E_RUNTIME
+  /usr/bin/sort "$scratch/manifests-found.tsv" >"$scratch/manifests-found.sorted" || emit_error E_RUNTIME
+  /usr/bin/cmp -s "$scratch/manifests-pinned.tsv" "$scratch/manifests-found.sorted" ||
+    emit_error E_RELATION
   # Package the exact Git object the profile binds, not whatever sits at the
   # path in this commit: a drifted adapter, config, or prompt is a stale profile.
   # Every ref must still resolve to the object the profile pins (config and
