@@ -278,6 +278,10 @@ scripts/test/default-claude-code-producer-adapter.test.sh
 profiles/default/v1/producer-config.json
 scripts/test/default-producer-config.test.sh
 
+# Inactive alternative producer config payload (Codex CLI producer)
+profiles/alternative/v1/producer-config.json
+scripts/test/alternative-producer-config.test.sh
+
 # Inactive Codex CLI producer normalizer payload (first alternative harness)
 adapters/codex-cli-producer/v1/normalize.jq
 scripts/test/default-codex-cli-producer-adapter.test.sh

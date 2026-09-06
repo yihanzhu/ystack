@@ -417,6 +417,14 @@ default producer preference. It grants no capability and does not select a
 profile, invoke a model, or contact a provider. Its focused test checks the
 config shape and exact Git object identity.
 
+## Inactive alternative producer config payload
+
+`profiles/alternative/v1/producer-config.json` is an immutable Git payload for
+the producer preference the alternative profile (Codex CLI producer, openai
+provider) will pin by Git object. It grants no capability and does not select
+a profile, invoke a model, or contact a provider. Its focused test checks the
+config shape and exact Git object identity.
+
 ## Inactive Codex CLI producer normalizer payload
 
 `adapters/codex-cli-producer/v1/normalize.jq` is the first alternative harness.
