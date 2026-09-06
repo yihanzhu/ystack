@@ -268,7 +268,8 @@ expect_plan() {
   local reconciliation_input=$5 risk_input=$6 ledger_input=$7
   run_planner "$name" "$observation_input" "$context_input" \
     "$credential_input" "$reconciliation_input" "$risk_input" "$ledger_input"
-  [ "$RUN_STATUS" -eq 0 ] && [ ! -s "$RUN_ERR" ] || fail "$name status"
+  [ "$RUN_STATUS" -eq 0 ] && [ ! -s "$RUN_ERR" ] ||
+    fail "$name status ($RUN_STATUS): $(/usr/bin/head -c 400 "$RUN_ERR")"
   /usr/bin/cmp -s "$RUN_OUT" <("$jq_bin" -S -c . "$RUN_OUT") ||
     fail "$name canonical"
 }
@@ -336,7 +337,8 @@ expected="$tmp/expected.json"
          push_allowed:false,push_allowed_reason_id:"loop.inactive-planner",
          request_kind:"stage_request",
          review_ref:{change_request_id:"22",repository_id:"11",review_id:"33"},
-         role:"producer",target_repository_id:"repo.example"}},
+         role:"producer",target_repository_id:"repo.example"},
+       excluded_protected_findings:[]},
      effects:[],
      inputs:{
        attempt_ledger_ref:{schema_version:1,kind:"review_fix_attempt_ledger",
@@ -361,6 +363,29 @@ expected="$tmp/expected.json"
 ' >"$expected"
 /usr/bin/cmp -s "$happy" "$expected" || fail 'happy path bytes'
 pass 'one bounded fix request is produced byte for byte'
+
+# A finding on a constitution or protected path is never handed to the
+# autonomous producer: it is excluded from the fix request and listed for a
+# human, and if nothing else is actionable the plan refuses.
+protected_observation=$(mutate "$observation" observation-protected-finding \
+  '.observation.inline_findings += [(.observation.inline_findings[0] |
+      .finding_id = "F9" | .path = ".github/workflows/ci.yml")] |
+   .observation.inline_findings |= sort_by([.path,.line,.side,.finding_id]) |
+   .observation.reported_inline_count += 1')
+expect_plan protected-finding "$protected_observation" "$context" "$credential" \
+  "$reconciliation" "$risk" "$ledger"
+"$jq_bin" -e '.body.decision.outcome == "fix-request" and
+  .body.decision.fix_request.allowed_paths == ["loop/v1/plan-review-fix.sh"] and
+  ([.body.decision.fix_request.findings[].finding_id] | index("F9") == null) and
+  (.body.decision.excluded_protected_findings | map(.finding_id)) == ["F9"]' \
+  "$RUN_OUT" >/dev/null || fail 'protected finding was not excluded'
+only_protected=$(mutate "$observation" observation-only-protected \
+  '.observation.inline_findings |= map(if .provider_severity == "nit" then .
+      else .path = (if .finding_id == "F1" then "agents.md" else "config/models.conf" end) end) |
+   .observation.inline_findings |= sort_by([.path,.line,.side,.finding_id])')
+expect_refusal only-protected-findings no-actionable-findings \
+  findings.protected-path-excluded "$context" "$only_protected"
+pass 'findings on protected paths are excluded from autonomous fixes'
 
 expect_plan repeat "$observation" "$context" "$credential" "$reconciliation" \
   "$risk" "$ledger"

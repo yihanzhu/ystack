@@ -768,6 +768,8 @@ bash scripts/test/loop-review-fix-planner.test.sh
 
 The planner also re-derives the observation's own facts before trusting it: a terminal status must carry `terminal_at`, only a dismissed review may carry `dismissed_at`, an open status carries neither, timestamps must be ordered, and the claimed `state` and `reason_id` must be exactly what the normalizer derives from the snapshot. A snapshot that says completed while also dismissed, or a review marked incomplete that still claims a settled state, is refused as malformed rather than planned from.
 
+A finding that names a constitution or protected path (the policy's protected prefixes, root files, and segments, compared case-insensitively) is never handed to the autonomous producer: it is left out of the fix request's allowed paths and listed under `excluded_protected_findings` for a human, and a review whose only actionable findings are protected refuses with `no-actionable-findings` and the detail `findings.protected-path-excluded`.
+
 ## Inactive maintenance loop
 
 `maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item

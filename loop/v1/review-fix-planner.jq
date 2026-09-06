@@ -59,7 +59,14 @@ def policy_ok:
   (.body |
    exact(["actionable_severities","activation_state","fail_mode",
      "ignored_severities","max_attempts","policy_version","producer",
+     "protected_path_prefixes","protected_path_segments","protected_root_files",
      "push_allowed","reference_semantics"]) and
+   (.protected_path_prefixes | type == "array" and length >= 1 and length <= 32 and
+    all(.[]; type == "string" and endswith("/")) and . == (sort | unique)) and
+   (.protected_root_files | type == "array" and length >= 1 and length <= 32 and
+    all(.[]; type == "string" and (contains("/") | not)) and . == (sort | unique)) and
+   (.protected_path_segments | type == "array" and length >= 1 and length <= 32 and
+    all(.[]; type == "string" and (contains("/") | not)) and . == (sort | unique)) and
    .activation_state == "inactive" and .fail_mode == "closed" and
    .policy_version == "v1" and .push_allowed == false and
    .reference_semantics == "identity-only" and
@@ -528,11 +535,32 @@ def degraded_reasons($o):
    (if $o.observation.status == "COMPLETED" then []
     else ["review.not-completed"] end)) | sort | unique;
 
+# A finding on a constitution or protected path is never a target for an
+# autonomous fix: the roadmap keeps those paths high-risk and human-planned.
+# Names are compared case-insensitively because a checkout may be.
+def protected_path($p; $path):
+  ($path | split("/") | map(ascii_downcase)) as $segments |
+  ($p.body.protected_path_prefixes | map(ascii_downcase) | index($segments[0] + "/") != null) or
+  (($segments | length) == 1 and
+   ($p.body.protected_root_files | map(ascii_downcase) | index($segments[0]) != null)) or
+  ($segments | any(. as $segment |
+    $p.body.protected_path_segments | map(ascii_downcase) | index($segment) != null));
+
+def severity_actionable($p; $finding):
+  $p.body.actionable_severities | index($finding.provider_severity | ascii_downcase) != null;
+
 def actionable_findings($o; $p):
   [$o.observation.inline_findings[] |
    . as $finding |
-   select($p.body.actionable_severities |
-     index($finding.provider_severity | ascii_downcase) != null) |
+   select(severity_actionable($p; $finding) and (protected_path($p; $finding.path) | not)) |
+   {finding_id:$finding.finding_id,path:$finding.path,
+    provider_severity:$finding.provider_severity}] |
+  sort_by(.finding_id);
+
+def protected_findings($o; $p):
+  [$o.observation.inline_findings[] |
+   . as $finding |
+   select(severity_actionable($p; $finding) and protected_path($p; $finding.path)) |
    {finding_id:$finding.finding_id,path:$finding.path,
     provider_severity:$finding.provider_severity}] |
   sort_by(.finding_id);
@@ -569,6 +597,7 @@ def decision($p; $o; $c; $cred; $rec; $risk; $led; $shas):
    .approval_id] as $head_approvals |
   next_attempt($led) as $attempt |
   actionable_findings($o;$p) as $findings |
+  protected_findings($o;$p) as $protected |
   if $c.body.kill_switch.state != "cleared" then
     {outcome:"refusal",reason_id:"kill-switch",
      detail_ids:[$c.body.kill_switch.reason_id]}
@@ -586,11 +615,13 @@ def decision($p; $o; $c; $cred; $rec; $risk; $led; $shas):
      detail_ids:["attempt.limit-reached"]}
   elif ($findings | length) == 0 then
     {outcome:"refusal",reason_id:"no-actionable-findings",
-     detail_ids:(if $o.state == "clean" then ["findings.review-clean"]
-       else ["findings.none-actionable"] end)}
+     detail_ids:((if $o.state == "clean" then ["findings.review-clean"]
+       else ["findings.none-actionable"] end) +
+       (if ($protected | length) > 0 then ["findings.protected-path-excluded"] else [] end))}
   else
     {outcome:"fix-request",
-     fix_request:fix_request($p;$o;$c;$findings;$attempt)}
+     fix_request:fix_request($p;$o;$c;$findings;$attempt),
+     excluded_protected_findings:$protected}
   end;
 
 def plan($p; $o; $c; $cred; $rec; $risk; $led; $shas):

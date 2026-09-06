@@ -161,7 +161,8 @@ output_size=$(/usr/bin/wc -c <"$scratch/plan.json" | /usr/bin/tr -d ' ') ||
         "review-stale")) and
     (.body.decision.detail_ids|type=="array" and length>=1)) or
    (.body.decision.outcome=="fix-request" and
-    (.body.decision|keys|sort)==["fix_request","outcome"] and
+    (.body.decision|keys|sort)==["excluded_protected_findings","fix_request","outcome"] and
+    (.body.decision.excluded_protected_findings|type=="array") and
     .body.decision.fix_request.push_allowed==false and
     .body.decision.fix_request.authority=="none" and
     (.body.decision.fix_request.allowed_paths|length)>=1 and
