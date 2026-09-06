@@ -151,12 +151,16 @@ expect_error duplicate-result E_RUNTIME "$root/evals/v1/seed-set.json" "$tmp/see
   "$root/evals/v1/seed-set.json" "$tmp/seed-set.result.json"
 "$jq_bin" . "$tmp/seed-set.result.json" > "$tmp/pretty.json"
 expect_error non-canonical-result E_CANONICAL "$root/evals/v1/seed-set.json" "$tmp/pretty.json"
+/usr/bin/printf '%s  \n' "$(<"$tmp/seed-set.result.json")" > "$tmp/trailing-space.json"
+expect_error trailing-whitespace-result E_CANONICAL "$root/evals/v1/seed-set.json" "$tmp/trailing-space.json"
+/usr/bin/printf '%s' "$(<"$tmp/seed-set.result.json")" > "$tmp/no-newline.json"
+expect_error missing-final-newline-result E_CANONICAL "$root/evals/v1/seed-set.json" "$tmp/no-newline.json"
 /usr/bin/printf '{"kind":"eval_run_result"' > "$tmp/truncated.json"
 expect_error truncated-result E_PARSE "$root/evals/v1/seed-set.json" "$tmp/truncated.json"
 if "$framework" dashboard "$observed_at" "$root/evals/v1/seed-set.json" >"$tmp/odd.out" 2>"$tmp/odd.err"; then
   fail 'an unpaired seed set was accepted'
 fi
 [ "$(<"$tmp/odd.err")" = E_USAGE ] || fail 'unpaired arguments are a usage error'
-pass 'a flipped verdict, a claimed evaluator digest, a mismatched pair, a duplicate, a non-canonical or truncated result, and odd arguments fail closed'
+pass 'a flipped verdict, a claimed evaluator digest, a mismatched pair, a duplicate, a non-canonical, whitespace-padded, or truncated result, and odd arguments fail closed'
 
 /usr/bin/printf '1..%s\n' "$passes"

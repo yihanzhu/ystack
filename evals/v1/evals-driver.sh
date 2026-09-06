@@ -199,7 +199,10 @@ run_dashboard() {
       emit_error E_RELATION
     single_root "$seed_doc" || emit_error E_PARSE
     single_root "$result_doc" || emit_error E_PARSE
-    [ "$("$jq_bin" -S -c . "$result_doc")" = "$(/bin/cat "$result_doc")" ] || emit_error E_CANONICAL
+    # Byte comparison: command substitution would hide trailing whitespace.
+    "$jq_bin" -S -c . "$result_doc" > "$work/pair-$j-canonical.json" 2>/dev/null ||
+      emit_error E_CANONICAL
+    /usr/bin/cmp -s "$result_doc" "$work/pair-$j-canonical.json" || emit_error E_CANONICAL
     seed_docs_file=$seed_doc
     [ "$(run_program validate-seed-set "$work/empty-observations.json" \
           "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
