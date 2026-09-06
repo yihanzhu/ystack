@@ -137,6 +137,28 @@ the profile id. Restoring these records does not select, resolve, qualify,
 install, or activate the profile; it grants no authority and performs no model,
 credential, provider, publish, or target operation.
 
+### Restore the inactive shadow reproduction slice
+
+Restore the five paths listed under “Inactive shadow reproduction slice” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, together with the
+local Git materializer, the sandbox-policy evaluator, and the telemetry trace
+validator the driver calls, then run:
+
+```sh
+bash scripts/test/shadow-slice.test.sh
+```
+
+The proof builds a fixture repository with a failing revision and a fixed
+revision and shows the slice answering `reproduced` on the first and `no-change`
+on the second, byte-identically on a repeat run. It also shows every refusal: an
+environment outside the committed list, a claim the real sandbox evaluator does
+not find satisfied or refuses outright, a moved revision, a materialization input
+that carries patch bytes or asks for network, a missing revision, an unreadable
+check path, and malformed, unsorted, multi-root, oversized, symlinked, or
+relative inputs. Restoring these records reproduces nothing on its own: the slice
+is read-only, grants no authority and no deploy authority, and performs no model,
+credential, forge, network, publish, or target operation.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in
