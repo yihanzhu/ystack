@@ -55,6 +55,22 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive offline delivery replay
+
+Restore the three paths listed under “Inactive offline delivery replay” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/delivery-replay.test.sh
+```
+
+The replay is a local offline simulation. It materializes only a caller-owned
+candidate, reads one fixed candidate blob, and records test observations. Each
+observation must name the request digest, candidate tree, and candidate commit of
+the recorded materialization, and completion holds the candidate ref itself under a
+git transaction it owns. It does not execute candidate code, select a profile,
+authenticate review, publish, merge, deploy, or contact a provider or target.
+
 ### Restore the inactive default profile assembly
 
 Restore the eight paths listed under “Inactive default profile assembly” in
@@ -714,10 +730,10 @@ payload is offline and unqualified. It does not execute a candidate or tool, rea
 proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
 authority or qualification, or activate a profile.
 
-Restore the seventeen paths in the manifest's inactive eval and trace framework
+Restore the nineteen paths in the manifest's inactive eval and trace framework
 block from the same commit, plus the inactive state scanner, reconciliation
-planner, sandbox-policy and risk-gates evaluator, and default normalizer payloads
-it replays.
+planner, sandbox-policy, risk-gates and duty-separation evaluator, and default
+normalizer payloads it replays.
 
 With the same pinned, architecture-bound jq 1.6 runtime used by the portable
 core, run:
@@ -729,6 +745,7 @@ bash scripts/test/evals-plans.test.sh
 bash scripts/test/evals-boundaries.test.sh
 bash scripts/test/evals-adapters.test.sh
 bash scripts/test/evals-approvals.test.sh
+bash scripts/test/evals-duty.test.sh
 bash scripts/test/evals-dashboard.test.sh
 ```
 
@@ -737,11 +754,13 @@ scanner inside the private runtime; the third replays observation-plus-ledger
 bundles through the real reconciliation planner; the fourth replays
 execution-environment claims through the real sandbox-policy evaluator; the fifth
 replays provider snapshots through the real default normalizers; the sixth replays
-decision tuples through the real risk-gates evaluator; the seventh builds the
-flow-and-quality dashboard over all six run results. Together they check the
-events, boundaries, adapter-compliance, and approval families end to end.
+decision tuples through the real risk-gates evaluator; the seventh replays
+four-document stage tuples through the real duty-separation evaluator; the eighth
+builds the flow-and-quality dashboard over all seven run results. Together they
+check the events, boundaries, adapter-compliance, approval, and actor-identity
+families end to end.
 
-The first checks the canonical catalog (nine roadmap families, six seeded), the exact
+The first checks the canonical catalog (nine roadmap families, seven seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded
 core replays through the real portable core, byte-identical repeat runs, honest
 grading (a wrong expectation fails; a model-only family stays inconclusive), and

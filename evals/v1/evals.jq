@@ -55,9 +55,10 @@ def expected_orchestrator_closure:
   ];
 
 # The inactive control evaluators replayed here: the sandbox-policy evaluator for
-# the boundaries family, and the risk-gates evaluator (with the duty-separation
-# evaluator it regenerates) for the approval family. Both read only this closure
-# and the core mirror.
+# the boundaries family, the risk-gates evaluator (with the duty-separation
+# evaluator it regenerates) for the approval family, and that same
+# duty-separation evaluator on its own for the actor and re-run identity family.
+# All of them read only this closure and the core mirror.
 def expected_control_closure:
   [
     {path:"control/v1/duty-separation-decision.json",
@@ -90,15 +91,20 @@ def expected_control_closure:
      sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
   ];
 
-# The inactive provider-snapshot normalizers replayed for the adapter family.
+# The inactive default and alternative normalizers replayed for the adapter
+# family: three GitHub-side defaults, the GitLab forge, and the Codex CLI producer.
 def expected_adapter_closure:
   [
+    {path:"adapters/codex-cli-producer/v1/normalize.jq",
+     sha256:"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25"},
     {path:"adapters/codex-native-reviewer/v1/normalize.jq",
      sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
     {path:"adapters/github-actions-ci/v1/normalize.jq",
      sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
     {path:"adapters/github-forge/v1/normalize.jq",
-     sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
+     sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"},
+    {path:"adapters/gitlab-forge/v1/normalize.jq",
+     sha256:"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}
   ];
 
 def ref_shape($content_id; $media_type):
@@ -128,8 +134,9 @@ def family_ids:
    "reviewer-severity-false-positive-negative",
    "stale-moved-artifacts"];
 def seed_sources:
-  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1","control.risk-gates.v1",
-   "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1",
+   "control.duty-separation.v1","control.risk-gates.v1","control.sandbox-policy.v1",
+   "core.stage-run.v2","orchestrator.reconciliation-plan.v1",
    "orchestrator.state-scanner.v1"];
 def stage_statuses:
   ["blocked","cancelled","completed","failed","skipped","stale"];
@@ -137,26 +144,34 @@ def core_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_REF","E_RELATION","E_RUNTIME","E_SHAPE","E_USAGE"];
 def request_roles: ["producer","reviewer","verifier"];
 def active_seed_sources:
-  ["adapters.provider-normalizers.v1","control.risk-gates.v1","control.sandbox-policy.v1",
-   "core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
+  ["adapters.provider-normalizers.v1","control.duty-separation.v1","control.risk-gates.v1",
+   "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+   "orchestrator.state-scanner.v1"];
 def risk_gates_error_tokens: ["E_DUTY","E_LIMIT","E_RELATION","E_RUNTIME","E_USAGE"];
-def normalizer_ids: ["codex-native-reviewer","github-actions-ci","github-forge"];
+def duty_error_tokens:
+  ["E_CORE","E_LIMIT","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
+def normalizer_ids:
+  ["codex-cli-producer","codex-native-reviewer","github-actions-ci","github-forge","gitlab-forge"];
 def normalizer_error_ids:
-  ["codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
+  ["E_SHAPE","E_STALE","E_TRUST",
+   "codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
    "codex-reviewer.invalid-trust-context","github-actions-ci.invalid-envelope",
    "github-actions-ci.invalid-snapshot","github-actions-ci.invalid-trust-context",
    "github-actions-ci.provider-contradiction","github-forge.invalid-envelope",
-   "github-forge.invalid-snapshot","github-forge.invalid-trust-context"];
+   "github-forge.invalid-snapshot","github-forge.invalid-trust-context",
+   "gitlab-forge.invalid-envelope","gitlab-forge.invalid-snapshot",
+   "gitlab-forge.invalid-trust-context"];
 def normalizer_states:
-  ["action-required","cancelled","clean","closed-unmerged","dismissed","failed","findings",
-   "in-progress","inconclusive","merged","open-blocked","open-ready","passed","queued","stale",
-   "timed-out","timeout"];
+  ["action-required","cancelled","changed","clean","closed-unmerged","dismissed","failed",
+   "findings","in-progress","inconclusive","merged","no-change","open-blocked","open-ready",
+   "passed","queued","stale","timed-out","timeout"];
 def sandbox_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
 def sandbox_verdicts: ["inconclusive","satisfied","violated"];
 # The risk-gates evaluator has no satisfied result: no qualified decision
 # provenance exists, so an accept claim is at most inconclusive.
 def risk_gates_verdicts: ["inconclusive","violated"];
+def duty_verdicts: ["inconclusive","satisfied","violated"];
 def planner_error_tokens: ["E_RECONCILIATION_INPUT"];
 def plan_operations: ["dispatch-stage","recover-stranded-attempt","retry-stage"];
 def delivery_modes: ["first-delivery","redelivery"];
@@ -176,6 +191,8 @@ def tool_content_id($source):
   elif $source == "orchestrator.state-scanner.v1" then "orchestrator-state-scanner-bootstrap.v1"
   elif $source == "control.sandbox-policy.v1" then "control-evaluator-driver.sandbox.v1"
   elif $source == "control.risk-gates.v1" then "control-evaluator-driver.risk-gates.v1"
+  elif $source == "control.duty-separation.v1" then
+    "control-evaluator-driver.duty-separation.v1"
   else "orchestrator-reconciliation-planner.v1" end;
 def tool_media_type($source):
   if $source == "orchestrator.reconciliation-plan.v1" then "text/x-jq"
@@ -352,12 +369,15 @@ def sandbox_expectation_shape:
   control_expectation_shape(sandbox_verdicts; sandbox_error_tokens);
 def risk_gates_expectation_shape:
   control_expectation_shape(risk_gates_verdicts; risk_gates_error_tokens);
+def duty_expectation_shape:
+  control_expectation_shape(duty_verdicts; duty_error_tokens);
 
 def expectation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_expectation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_expectation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_expectation_shape
   elif $source == "control.risk-gates.v1" then risk_gates_expectation_shape
+  elif $source == "control.duty-separation.v1" then duty_expectation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_expectation_shape
   else planner_expectation_shape end;
 
@@ -444,6 +464,20 @@ def risk_gates_case_shape:
    (.duty | control_pair_shape("duty_separation_evaluation")) and
    (.claim | control_pair_shape("risk_gate_decision_claim")));
 
+# A duty case carries the four documents the duty-separation evaluator binds:
+# the policy set and the core request, resolved profile, and result it judges.
+def duty_case_shape:
+  schema::exact_fields(["case_id","expectation","family_id","inputs"];[]) and
+  (.case_id | schema::id_ok) and
+  (.family_id as $id | family_ids | index($id) != null) and
+  (.expectation | duty_expectation_shape) and
+  (.inputs |
+   schema::exact_fields(["policy_set","request","resolved_profile","result"];[]) and
+   (.policy_set | control_pair_shape("control_policy_set")) and
+   (.request | pair_shape("stage_request")) and
+   (.resolved_profile | pair_shape("resolved_profile")) and
+   (.result | pair_shape("stage_result")));
+
 def scanner_case_shape:
   schema::exact_fields(
     ["case_id","expected_revision","expectation","family_id","snapshot"];[]) and
@@ -486,6 +520,9 @@ def seed_set_shape:
     elif .seed_source == "control.risk-gates.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;risk_gates_case_shape;.case_id))
+    elif .seed_source == "control.duty-separation.v1" then
+      .shared == {} and
+      (.cases | schema::bounded_set(1;64;duty_case_shape;.case_id))
     elif .seed_source == "adapters.provider-normalizers.v1" then
       .shared == {} and
       (.cases | schema::bounded_set(1;64;normalizer_case_shape;.case_id))
@@ -554,12 +591,15 @@ def sandbox_observation_shape:
   control_observation_shape(sandbox_verdicts; sandbox_error_tokens);
 def risk_gates_observation_shape:
   control_observation_shape(risk_gates_verdicts; risk_gates_error_tokens);
+def duty_observation_shape:
+  control_observation_shape(duty_verdicts; duty_error_tokens);
 
 def observation_shape($source):
   if $source == "core.stage-run.v2" then stage_run_observation_shape
   elif $source == "orchestrator.state-scanner.v1" then scanner_observation_shape
   elif $source == "control.sandbox-policy.v1" then sandbox_observation_shape
   elif $source == "control.risk-gates.v1" then risk_gates_observation_shape
+  elif $source == "control.duty-separation.v1" then duty_observation_shape
   elif $source == "adapters.provider-normalizers.v1" then normalizer_observation_shape
   else planner_observation_shape end;
 
@@ -645,13 +685,14 @@ def tool_ref($source; $case):
              elif $source == "orchestrator.state-scanner.v1" then $scanner_sha256
              elif $source == "control.sandbox-policy.v1" then $sandbox_sha256
              elif $source == "control.risk-gates.v1" then $risk_gates_sha256
+             elif $source == "control.duty-separation.v1" then $duty_sha256
              else $planner_sha256 end)}
   end;
 
 def tool_ref_ok($source):
   if $source == "adapters.provider-normalizers.v1" then
     schema::content_ref_ok and .media_type == "text/x-jq" and
-    (.content_id | test("\\Aadapter-normalizer\\.(codex-native-reviewer|github-actions-ci|github-forge)\\.v1\\z")) and
+    (.content_id | test("\\Aadapter-normalizer\\.(codex-cli-producer|codex-native-reviewer|github-actions-ci|github-forge|gitlab-forge)\\.v1\\z")) and
     .sha256 == $normalizer_shas[.content_id | ltrimstr("adapter-normalizer.") | rtrimstr(".v1")]
   else ref_shape(tool_content_id($source);tool_media_type($source)) end;
 
@@ -687,6 +728,9 @@ def build_run_result(
           elif $seed_set.body.seed_source == "control.risk-gates.v1" then
             {schema_version:1,kind:"risk_gate_decision_claim",
              id:$case.inputs.claim.content.id,sha256:$case.inputs.claim.sha256}
+          elif $seed_set.body.seed_source == "control.duty-separation.v1" then
+            {schema_version:2,kind:"stage_result",
+             id:$case.inputs.result.content.id,sha256:$case.inputs.result.sha256}
           elif $seed_set.body.seed_source == "adapters.provider-normalizers.v1" then
             {content_id:"adapter-provider-snapshot.v1",
              media_type:"application/json",sha256:$case.input.sha256}
@@ -724,6 +768,8 @@ def build_run_result(
 
 def subject_ref_shape($source):
   if $source == "core.stage-run.v2" then schema::document_ref_kind_ok("stage_result")
+  elif $source == "control.duty-separation.v1" then
+    schema::document_ref_kind_ok("stage_result")
   elif $source == "orchestrator.reconciliation-plan.v1" then
     ref_shape("orchestrator-reconciliation-input.v1";"application/json")
   elif $source == "adapters.provider-normalizers.v1" then
