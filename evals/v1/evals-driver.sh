@@ -67,15 +67,17 @@ sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
 sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
 risk_gates_evaluator="$runtime/control/v1/evaluate-risk-gates.sh"
 risk_gates_sha256=0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8
+duty_evaluator="$runtime/control/v1/evaluate-duty.sh"
+duty_sha256=146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa
 normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=911179d4806dde803fa8ea05e09bc0865fc1baae49956917d71a96bb92fe7c57
+program_sha256=f5eee09d02d54934cf9313f5a9e2731dbfe6c4e83b4f5f49eaa5073a19040cd7
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65 "$catalog" &&
+  verify_hash 0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -110,8 +112,7 @@ verify_runtime() {
     "$runtime/control/v1/duty-separation-decision.json" &&
   verify_hash b4e480748dd4fb7dec769b25f0f7649b0e5dc31f9de438bba690e9eab6ac236c \
     "$runtime/control/v1/duty-separation.jq" &&
-  verify_hash 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa \
-    "$runtime/control/v1/evaluate-duty.sh" &&
+  verify_hash "$duty_sha256" "$duty_evaluator" &&
   verify_hash dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25 \
     "$runtime/adapters/codex-cli-producer/v1/normalize.jq" &&
   verify_hash ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a \
@@ -160,13 +161,13 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65 \
+    --arg catalog_sha256 0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac \
     --arg evaluator_sha256 "$program_evaluator_sha" \
     --arg seed_set_sha256 "$program_seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
     --arg sandbox_sha256 "$sandbox_sha256" --argjson normalizer_shas "$normalizer_shas" \
-    --arg risk_gates_sha256 "$risk_gates_sha256" \
+    --arg risk_gates_sha256 "$risk_gates_sha256" --arg duty_sha256 "$duty_sha256" \
     --arg observed_at "$program_observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$seed_docs_file" \
@@ -366,6 +367,59 @@ replay_risk_gates_cases() {
       token=$(/bin/cat "$eval_err" 2>/dev/null) || emit_error E_RUNTIME
       case "$token" in
         E_DUTY|E_LIMIT|E_RELATION|E_RUNTIME|E_USAGE) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
+        '{case_id:$case_id,disposition:"rejected",evaluation:{state:"absent"},
+          error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
+# Four-document tuples replay through the real duty-separation evaluator, which
+# validates the policy set with its own validator pair and the core tuple against
+# a mirror it builds out of this runtime. Verdict and reason set are recorded; a
+# refusal by its one token.
+replay_duty_cases() {
+  local duty_tmp doc member eval_out eval_err eval_status evaluation observation token
+  local -a docs
+  duty_tmp="$work/duty-tmp"
+  /bin/mkdir -m 0700 "$duty_tmp" || emit_error E_RUNTIME
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    docs=()
+    for member in policy_set request resolved_profile result; do
+      doc="$work/duty-$member-$i.json"
+      "$jq_bin" -S -c ".body.cases[$i].inputs.$member.content" "$input" > "$doc" ||
+        emit_error E_RUNTIME
+      [ "$(sha256_path "$doc")" = \
+        "$("$jq_bin" -r ".body.cases[$i].inputs.$member.sha256" "$input")" ] ||
+        emit_error E_RELATION
+      docs+=("$doc")
+    done
+    eval_out="$work/duty-$i.out"
+    eval_err="$work/duty-$i.err"
+    /usr/bin/env -i LC_ALL=C PATH="$runtime/bin:/usr/bin:/bin" TMPDIR="$duty_tmp" \
+      /bin/bash "$duty_evaluator" evaluate "${docs[@]}" \
+      </dev/null >"$eval_out" 2>"$eval_err"
+    eval_status=$?
+    if [ "$eval_status" -eq 0 ]; then
+      [ ! -s "$eval_err" ] || emit_error E_RUNTIME
+      evaluation=$("$jq_bin" -S -c '{reason_ids:.body.reason_ids,verdict:.body.verdict}' \
+        "$eval_out") || emit_error E_RUNTIME
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        --argjson evaluation "$evaluation" \
+        '{case_id:$case_id,disposition:"evaluated",
+          evaluation:{state:"present",value:$evaluation},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$eval_out" ] || emit_error E_RUNTIME
+      token=$(/bin/cat "$eval_err" 2>/dev/null) || emit_error E_RUNTIME
+      case "$token" in
+        E_CORE|E_LIMIT|E_POLICY_SET|E_RELATION|E_RUNTIME|E_USAGE) ;;
         *) emit_error E_RUNTIME ;;
       esac
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
@@ -604,7 +658,8 @@ produce_result() {
 
   seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
   case "$seed_source" in
-    adapters.provider-normalizers.v1|control.risk-gates.v1|control.sandbox-policy.v1) ;;
+    adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
+    control.risk-gates.v1|control.sandbox-policy.v1) ;;
     core.stage-run.v2) ;;
     orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
     *) emit_error E_SHAPE ;;
@@ -619,6 +674,7 @@ produce_result() {
     orchestrator.state-scanner.v1) replay_scanner_cases ;;
     control.sandbox-policy.v1) replay_sandbox_cases ;;
     control.risk-gates.v1) replay_risk_gates_cases ;;
+    control.duty-separation.v1) replay_duty_cases ;;
     adapters.provider-normalizers.v1) replay_normalizer_cases ;;
     *) replay_planner_cases ;;
   esac

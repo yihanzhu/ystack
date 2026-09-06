@@ -519,8 +519,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Six families are
-seeded; the other three are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Seven families are
+seeded; the other two are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -601,6 +601,20 @@ an honest accept claim is still only inconclusive because no qualified
 decision-provenance adapter exists; a forged duty evaluation is refused. Each
 expectation's verdict and primary reason were hand-written and checked against
 the real evaluator before being recorded.
+
+The actor and re-run identity family is seeded from `evals/v1/seed-set-duty.json`.
+Each case carries the four documents the duty-separation evaluator binds (policy
+set, core request, resolved profile, result) and replays them through the real
+inactive duty-separation evaluator (`control/v1/evaluate-duty.sh`), which checks
+its policy set with its own validator pair and the core tuple against a mirror
+built out of the same private runtime. A clean stage and a skipped stage are
+satisfied; a request from a denied requester role, a result whose execution kind,
+capability, or reporting role does not match the binding it claims, is violated
+with its exact reason; an unclassified capability is only inconclusive, never
+guessed; a policy set naming the wrong duty policy, a request over the producer
+permission ceiling, and a profile that collides two protected roles are each
+refused with one token. Each expectation's verdict and primary reason were
+hand-written and checked against the real evaluator before being recorded.
 
 The `dashboard` operation aggregates one to sixteen run results into one canonical
 flow-and-quality document. Each seed set is first replayed in the same private
