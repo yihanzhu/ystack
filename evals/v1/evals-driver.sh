@@ -140,13 +140,8 @@ verify_runtime() {
   verify_hash 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
     "$runtime/orchestrator/v1/state-scanner.jq" &&
   verify_hash "$evaluator_sha256" "$evaluator" &&
-  verify_hash "$seed_set_sha256" "$input_document"
+  verify_hash "$program_seed_sha" "$input_document"
 }
-verify_runtime || emit_error E_STALE
-[ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
-  [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
-[ -d "$work" ] && [ ! -L "$work" ] || emit_error E_RUNTIME
-
 # The program sees exactly the documents named here. A dashboard run swaps the
 # seed set, evaluator, and result documents per pair; every other run uses the
 # driver's own.
@@ -157,6 +152,11 @@ program_observed_at=$observed_at
 seed_docs_file=$input_document
 result_docs_file=$input_document
 result_shas_json='[]'
+verify_runtime || emit_error E_STALE
+[ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
+  [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
+[ -d "$work" ] && [ ! -L "$work" ] || emit_error E_RUNTIME
+
 run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
@@ -185,8 +185,8 @@ single_root() {
 # launcher. Each result must validate against its own seed set and this exact
 # program before it counts; the dashboard itself is then built and re-validated.
 run_dashboard() {
-  local manifest="$input/manifest.json" pair_count j seed_doc result_doc observations
-  local evaluator_doc dashboard
+  local manifest="$input/manifest.json" pair_count j pair_seed_doc pair_result_doc dashboard
+  local work_root=$work dashboard_input=$input pair_observed_at
   single_root "$manifest" || emit_error E_PARSE
   pair_count=$("$jq_bin" -r 'if type == "array" then length else empty end' "$manifest") ||
     emit_error E_RUNTIME
@@ -195,46 +195,43 @@ run_dashboard() {
   : > "$work/results.jsonl" || emit_error E_RUNTIME
   j=0
   while [ "$j" -lt "$pair_count" ]; do
-    seed_doc="$input/seed-$j.json"
-    result_doc="$input/result-$j.json"
-    [ -f "$seed_doc" ] && [ ! -L "$seed_doc" ] && [ -f "$result_doc" ] &&
-      [ ! -L "$result_doc" ] || emit_error E_RUNTIME
-    [ "$(sha256_path "$seed_doc")" = "$("$jq_bin" -r ".[$j].seed_sha256" "$manifest")" ] &&
-      [ "$(sha256_path "$result_doc")" = "$("$jq_bin" -r ".[$j].result_sha256" "$manifest")" ] ||
+    pair_seed_doc="$input/seed-$j.json"
+    pair_result_doc="$input/result-$j.json"
+    [ -f "$pair_seed_doc" ] && [ ! -L "$pair_seed_doc" ] && [ -f "$pair_result_doc" ] &&
+      [ ! -L "$pair_result_doc" ] || emit_error E_RUNTIME
+    [ "$(sha256_path "$pair_seed_doc")" = "$("$jq_bin" -r ".[$j].seed_sha256" "$manifest")" ] &&
+      [ "$(sha256_path "$pair_result_doc")" = "$("$jq_bin" -r ".[$j].result_sha256" "$manifest")" ] ||
       emit_error E_RELATION
-    single_root "$seed_doc" || emit_error E_PARSE
-    single_root "$result_doc" || emit_error E_PARSE
+    single_root "$pair_seed_doc" || emit_error E_PARSE
+    single_root "$pair_result_doc" || emit_error E_PARSE
     # Byte comparison: command substitution would hide trailing whitespace.
-    "$jq_bin" -S -c . "$result_doc" > "$work/pair-$j-canonical.json" 2>/dev/null ||
+    "$jq_bin" -S -c . "$pair_result_doc" > "$work/pair-$j-canonical.json" 2>/dev/null ||
       emit_error E_CANONICAL
-    /usr/bin/cmp -s "$result_doc" "$work/pair-$j-canonical.json" || emit_error E_CANONICAL
-    seed_docs_file=$seed_doc
-    [ "$(run_program validate-seed-set "$work/empty-observations.json" \
-          "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
-    observations="$work/pair-$j-observations.json"
-    evaluator_doc="$work/pair-$j-evaluator.json"
-    "$jq_bin" -S -c '[.body.cases[].observation.value]' "$result_doc" > "$observations" ||
-      emit_error E_RUNTIME
-    "$jq_bin" -S -c '.body.evaluator.content' "$result_doc" > "$evaluator_doc" ||
-      emit_error E_RUNTIME
-    # A result is rebuilt at its own recorded time, not the dashboard's.
-    program_evaluator=$evaluator_doc
-    # The evaluator digest is recomputed from the embedded content, never read
-    # from the result that is itself under check.
-    program_evaluator_sha=$(sha256_path "$evaluator_doc") || emit_error E_RUNTIME
-    program_seed_sha=$(sha256_path "$seed_doc") || emit_error E_RUNTIME
-    program_observed_at=$("$jq_bin" -r '.body.observed_at' "$result_doc") || emit_error E_RUNTIME
-    [[ "$program_observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    /usr/bin/cmp -s "$pair_result_doc" "$work/pair-$j-canonical.json" || emit_error E_CANONICAL
+    # The seed set is replayed here, in this runtime, at the result's own
+    # recorded time. Only a result the replay reproduces byte for byte counts;
+    # nothing embedded in the supplied result is trusted.
+    pair_observed_at=$("$jq_bin" -r '.body.observed_at' "$pair_result_doc") || emit_error E_RUNTIME
+    [[ "$pair_observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
       emit_error E_SHAPE
-    [ "$(run_program validate-run-result "$observations" "$result_doc" 2>/dev/null)" = true ] ||
-      emit_error E_RELATION
-    program_evaluator=$evaluator
-    program_evaluator_sha=$evaluator_sha256
+    work="$work_root/pair-$j"
+    /bin/mkdir -m 0700 "$work" || emit_error E_RUNTIME
+    /usr/bin/printf '[]\n' > "$work/empty-observations.json" || emit_error E_RUNTIME
+    /usr/bin/printf '{}\n' > "$work/empty-candidate.json" || emit_error E_RUNTIME
+    input=$pair_seed_doc
+    input_document=$pair_seed_doc
+    program_seed_sha=$(sha256_path "$pair_seed_doc") || emit_error E_RUNTIME
+    program_observed_at=$pair_observed_at
+    produce_result
+    /usr/bin/cmp -s "$work/run-result.json" "$pair_result_doc" || emit_error E_RELATION
+    work=$work_root
+    input=$dashboard_input
+    input_document="$dashboard_input/manifest.json"
     program_seed_sha=$seed_set_sha256
     program_observed_at=$observed_at
     # Re-emitted one document per line so adjacent files never run together.
-    "$jq_bin" -S -c . "$seed_doc" >> "$work/seeds.jsonl" || emit_error E_RUNTIME
-    "$jq_bin" -S -c . "$result_doc" >> "$work/results.jsonl" || emit_error E_RUNTIME
+    "$jq_bin" -S -c . "$pair_seed_doc" >> "$work/seeds.jsonl" || emit_error E_RUNTIME
+    "$jq_bin" -S -c . "$pair_result_doc" >> "$work/results.jsonl" || emit_error E_RUNTIME
     j=$((j + 1))
   done
   seed_docs_file="$work/seeds.jsonl"
@@ -259,24 +256,6 @@ seed_docs_file="$work/empty-observations.json"
 result_docs_file="$work/empty-observations.json"
 [ "$(run_program validate-catalog "$work/empty-observations.json" \
       "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_STALE
-[ "$mode" = run ] || run_dashboard
-seed_docs_file=$input
-[ "$(run_program validate-seed-set "$work/empty-observations.json" \
-      "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
-
-seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
-case "$seed_source" in
-  adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
-  control.risk-gates.v1|control.sandbox-policy.v1) ;;
-  core.stage-run.v2) ;;
-  orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
-  *) emit_error E_SHAPE ;;
-esac
-case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
-[[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
-observations="$work/observations.json"
-/usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
-
 record_observation() {
   if [ "$i" -gt 0 ]; then /usr/bin/printf ',' >> "$observations" || emit_error E_RUNTIME; fi
   /usr/bin/printf '%s' "$1" >> "$observations" || emit_error E_RUNTIME
@@ -669,21 +648,49 @@ while [ "$i" -lt "$case_count" ]; do
 done
 }
 
-case "$seed_source" in
-  core.stage-run.v2) replay_stage_run_cases ;;
-  orchestrator.state-scanner.v1) replay_scanner_cases ;;
-  control.sandbox-policy.v1) replay_sandbox_cases ;;
-  control.risk-gates.v1) replay_risk_gates_cases ;;
-  control.duty-separation.v1) replay_duty_cases ;;
-  adapters.provider-normalizers.v1) replay_normalizer_cases ;;
-  *) replay_planner_cases ;;
-esac
-/usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
+# One run over the seed set named by $input, into $work/run-result.json. Run mode
+# calls it once; dashboard mode calls it once per supplied pair to reproduce
+# the supplied result.
+produce_result() {
+  seed_docs_file=$input
+  [ "$(run_program validate-seed-set "$work/empty-observations.json" \
+        "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
 
-result="$work/run-result.json"
-run_program build-run-result "$observations" "$work/empty-candidate.json" \
-  > "$result" 2>/dev/null || emit_error E_RUNTIME
-[ "$(run_program validate-run-result "$observations" "$result" 2>/dev/null)" = true ] ||
-  emit_error E_RUNTIME
-verify_runtime || emit_error E_STALE
-/bin/cat "$result" || emit_error E_RUNTIME
+  seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
+  case "$seed_source" in
+    adapters.provider-normalizers.v1|control.duty-separation.v1) ;;
+    control.risk-gates.v1|control.sandbox-policy.v1) ;;
+    core.stage-run.v2) ;;
+    orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
+    *) emit_error E_SHAPE ;;
+  esac
+  case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
+  [[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
+  observations="$work/observations.json"
+  /usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
+
+  case "$seed_source" in
+    core.stage-run.v2) replay_stage_run_cases ;;
+    orchestrator.state-scanner.v1) replay_scanner_cases ;;
+    control.sandbox-policy.v1) replay_sandbox_cases ;;
+    control.risk-gates.v1) replay_risk_gates_cases ;;
+    control.duty-separation.v1) replay_duty_cases ;;
+    adapters.provider-normalizers.v1) replay_normalizer_cases ;;
+    *) replay_planner_cases ;;
+  esac
+  /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
+
+  result="$work/run-result.json"
+  run_program build-run-result "$observations" "$work/empty-candidate.json" \
+    > "$result" 2>/dev/null || emit_error E_RUNTIME
+  [ "$(run_program validate-run-result "$observations" "$result" 2>/dev/null)" = true ] ||
+    emit_error E_RUNTIME
+}
+
+if [ "$mode" = run ]; then
+  produce_result
+  verify_runtime || emit_error E_STALE
+  /bin/cat "$work/run-result.json" || emit_error E_RUNTIME
+else
+  run_dashboard
+fi
