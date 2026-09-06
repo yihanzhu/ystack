@@ -228,6 +228,7 @@ pass 'a misfiled family is refused; a seeded model-only family stays inconclusiv
   --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
   --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" --arg g "$(sha_file "$root/adapters/gitlab-forge/v1/normalize.jq")" --arg p "$(sha_file "$root/adapters/codex-cli-producer/v1/normalize.jq")" '{"codex-cli-producer":$p,"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f,"gitlab-forge":$g}')" \
   --arg risk_gates_sha256 "$(sha_file "$root/control/v1/evaluate-risk-gates.sh")" \
+  --arg duty_sha256 "$(sha_file "$root/control/v1/evaluate-duty.sh")" \
   --slurpfile result_docs "$tmp/partial-observations.json" --argjson result_shas '[]' \
   --arg observed_at "$observed_at" \
   --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
