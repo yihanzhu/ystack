@@ -330,6 +330,18 @@ expect_refusal E_USAGE 'a short commit' "$builder" build-release "${commit:0:12}
 expect_refusal E_USAGE 'a malformed profile id' "$builder" build-release "$commit" 'profile.Default.v1'
 expect_refusal E_RELATION 'a commit this repo does not have' \
   "$builder" build-release 0123456789012345678901234567890123456789 profile.default.v1
+# A commit where a bound adapter's bytes drifted from the object the profile
+# pins is a stale profile: the builder must refuse rather than package the drift.
+drift_index="$tmp/drift.index"
+GIT_INDEX_FILE="$drift_index" /usr/bin/git -C "$root" read-tree "$commit" 2>/dev/null
+drift_blob=$(printf '%s\n' '# drifted' | /usr/bin/git -C "$root" hash-object -w --stdin)
+printf '100644 %s\t%s\n' "$drift_blob" adapters/codex-native-reviewer/v1/normalize.jq |
+  GIT_INDEX_FILE="$drift_index" /usr/bin/git -C "$root" update-index --index-info
+drift_tree=$(GIT_INDEX_FILE="$drift_index" /usr/bin/git -C "$root" write-tree)
+drift_commit=$(GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.com GIT_AUTHOR_NAME=ci \
+  GIT_AUTHOR_EMAIL=ci@example.com /usr/bin/git -C "$root" commit-tree "$drift_tree" -p "$commit" -m drift)
+expect_refusal E_RELATION 'a commit whose bound adapter drifted from the pinned object' \
+  "$builder" build-release "$drift_commit" profile.default.v1
 expect_refusal E_PROFILE 'a profile that is not in the tree' \
   "$builder" build-release "$commit" profile.missing.v1
 ok 'build-release refuses a bad verb, commit, or profile id'

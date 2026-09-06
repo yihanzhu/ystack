@@ -137,14 +137,35 @@ for requested in "$@"; do
   record_path "$config_path" "$requested"
   record_tree "$requested" "$base/manifests"
   [ "$RECORD_TREE_COUNT" -eq 6 ] || emit_error E_PROFILE
-  while IFS=$'\t' read -r ref_kind ref_path; do
+  # Package the exact Git object the profile binds, not whatever sits at the
+  # path in this commit: a drifted adapter, config, or prompt is a stale profile.
+  # Every ref must still resolve to the object the profile pins (config and
+  # prompt refs included); only package refs are packaged, the config is
+  # recorded above and prompts are deliberately not shipped.
+  while IFS=$'\t' read -r ref_role ref_kind ref_path ref_oid ref_mode; do
+    if [ "$ref_role" = package_ref ]; then
+      # A tree is judged by where its entries would land.
+      case "$ref_kind" in
+        blob) packaged_path_ok "$ref_path" || emit_error E_PATH ;;
+        tree) packaged_path_ok "$ref_path/entry" || emit_error E_PATH ;;
+      esac
+    fi
+    [ "$(repo_git rev-parse --verify --quiet "$commit:$ref_path" 2>/dev/null)" = "$ref_oid" ] ||
+      emit_error E_RELATION
+    if [ "$ref_kind" = blob ]; then
+      [ "$(repo_git ls-tree --full-tree "$commit" -- "$ref_path" 2>/dev/null |
+           /usr/bin/cut -d' ' -f1)" = "$ref_mode" ] || emit_error E_RELATION
+    fi
+    [ "$ref_role" = package_ref ] || continue
     case "$ref_kind" in
       blob) record_path "$ref_path" "$requested" ;;
       tree) record_tree "$requested" "$ref_path" ;;
       *) emit_error E_RELATION ;;
     esac
   done < <("$jq_bin" -r '.body.bindings[] |
-    [.package_ref.object_type, .package_ref.location.value] | @tsv' \
+    to_entries[] | select(.key == "package_ref" or .key == "config_ref" or .key == "prompt_ref") |
+    select(.value.location.kind == "path") |
+    [.key, .value.object_type, .value.location.value, .value.object_id, .value.mode] | @tsv' \
     "$scratch/profile.json" 2>/dev/null)
   # The core files a profile carries are named once, in packaging.jq, so the
   # installer's derived check reads the same list this loop packages.

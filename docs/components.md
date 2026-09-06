@@ -754,3 +754,5 @@ installed trees for personal data and credential patterns, and walks every refus
 above. One packaged upstream source file cites its exception boundary by public
 pull-request URL; the test pins that one line as the only permitted operator-name
 hit and fails on any other.
+
+The builder packages the exact Git objects a profile pins: every package, config, and prompt reference must resolve at the release commit to the object id (and, for a blob, the mode) recorded in the profile, so a bound adapter whose bytes drifted after the profile was assembled makes the release refuse instead of shipping the drift.
