@@ -439,7 +439,15 @@ expect_reasons shadow-other-repository '["scope.shadow-evidence-missing"]' \
 expect_reasons shadow-replayed \
   '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "${good[@]:0:1}" "$tmp/shadow-replayed.json" "${good[@]:2}"
-pass 'shadow evidence must cover every environment, be conclusive, and be distinct'
+# An outcome outside the shadow slice's vocabulary is not a record this
+# evaluator understands, even when it is claimed: the set is malformed.
+"$jq_bin" -S -c '.body.records[0].body.outcome = "failed"' "$tmp/shadow-set.json" \
+  >"$tmp/shadow-unknown-outcome.json"
+scope_record "$tmp/shadow-unknown-outcome.json" "$tmp/scope-unknown-outcome.json"
+expect_reasons shadow-unknown-outcome \
+  '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+  "$tmp/scope-unknown-outcome.json" "$tmp/shadow-unknown-outcome.json" "${good[@]:2}"
+pass 'shadow evidence must cover every environment, be conclusive, use a known outcome, and be distinct'
 
 # The scope counts only the records it claims by digest. A record it never named
 # is ignored even when it would have covered a required environment, and it is

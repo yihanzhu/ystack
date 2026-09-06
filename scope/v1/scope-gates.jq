@@ -28,7 +28,11 @@ def shadow_record_ok:
   .body.authority == "none" and .body.shadow == true and
   (.body.qualification | type == "object") and
   .body.qualification.state == "unavailable" and
-  (.body.outcome | type == "string") and
+  # The shadow slice's closed outcome vocabulary; anything else is not a
+  # shadow record this evaluator understands, so the set is malformed.
+  (.body.outcome as $outcome |
+   ($policy[0].body.accepted_shadow_outcomes + $policy[0].body.refused_shadow_outcomes) |
+   index($outcome) != null) and
   (.body.target_repository_id | id_ok) and
   (.body.environment | type == "object") and
   (.body.environment.environment_id | id_ok);
