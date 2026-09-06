@@ -809,6 +809,7 @@ v2_activation_path_ok() {
     README.md|RESTORE.md|ci/required-files.txt|\
     control/v1/control-policy-set.json|\
     core/v2/generation-registry.json|\
+    evals/v1/evals-driver.sh|evals/v1/evals-launcher.sh|evals/v1/evals.jq|\
     orchestrator/v1/state-scanner-driver.sh|\
     orchestrator/v1/state-scanner-launcher.sh|\
     orchestrator/v1/state-scanner.jq|\
@@ -827,11 +828,13 @@ schema_import_path_ok() {
   case "$import_path" in
     adapters/local-git-materializer/v1/protocol.jq|\
     adapters/deterministic-verifier/v1/normalize.jq|\
+    evals/v1/evals.jq|\
     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\
     scripts/test/default-dormant-publisher-adapter.test.sh|\
     scripts/test/default-deterministic-verifier-adapter.test.sh|\
     scripts/test/default-github-forge-adapter.test.sh) ;;
+    scripts/test/default-gitlab-forge-adapter.test.sh) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"
       case "$test_path" in */*) return 1 ;; esac
@@ -925,6 +928,9 @@ printf '%s\n' \
   control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
+  evals/v1/evals-driver.sh \
+  evals/v1/evals-launcher.sh \
+  evals/v1/evals.jq \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
