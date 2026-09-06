@@ -1,0 +1,1 @@
+{"body":{"activation_state":"inactive","environments":[{"description":"Local developer macOS checkout, fixture repositories only.","environment_id":"env.local-macos-fixture","evidence_scope":"fixtures-only","proof_state":"unproven"}],"registry_version":"v1"},"id":"shadow.environments.v1","kind":"shadow_environment_registry","schema_version":1}
