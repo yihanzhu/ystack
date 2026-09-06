@@ -95,6 +95,10 @@ snapshot_file "$schema" "$scratch/schema.jq" 1048576 0400 || emit_error E_STALE
 if ! "$scratch/jq" -S -c . "$scratch/input.json" > "$scratch/canonical.json" 2>/dev/null; then
   emit_error E_PARSE
 fi
+# jq reads JSON streams, so canonical bytes alone would admit a file holding
+# several bundles. The input must be exactly one JSON text.
+"$scratch/jq" -e -n --slurpfile roots "$scratch/input.json" '($roots | length) == 1' \
+  >/dev/null 2>&1 || emit_error E_PARSE
 /usr/bin/cmp -s "$scratch/input.json" "$scratch/canonical.json" || emit_error E_CANONICAL
 bundle_sha=$(sha_file "$scratch/input.json") || emit_error E_RUNTIME
 if ! "$scratch/jq" -e '

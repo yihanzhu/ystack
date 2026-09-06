@@ -291,6 +291,8 @@ pass explicit-unavailable
 
 "$jq_bin" . "$tmp/bundle.json" > "$tmp/noncanonical.json"
 expect_error canonical-bytes E_CANONICAL "$tmp/noncanonical.json"
+/bin/cat "$tmp/bundle.json" "$tmp/bundle.json" > "$tmp/two-bundles.json"
+expect_error multi-root-stream E_PARSE "$tmp/two-bundles.json"
 "$jq_bin" -e '
   ([..|objects|keys[]|select(.=="authority" or .=="permissions" or .=="credential" or
     .=="network" or .=="command" or .=="activation" or .=="qualification")] | length)==0
