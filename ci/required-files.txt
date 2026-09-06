@@ -354,3 +354,7 @@ deploy/v1/environment-tiers.json
 deploy/v1/deploy_contracts.jq
 deploy/v1/validate-deploy-document.sh
 scripts/test/deploy-rollback-gates.test.sh
+deploy/v1/deploy-decision.json
+deploy/v1/deploy-gates.jq
+deploy/v1/evaluate-deploy.sh
+adapter-tests/v1/fakes/deploy-dormant.sh

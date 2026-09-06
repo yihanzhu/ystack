@@ -684,13 +684,14 @@ activate a profile.
 ## Inactive deploy and rollback gates
 
 `deploy/v1/` is the paper trail a deployment would need, and nothing that could
-perform one. This first half holds the environment tiers and the shape of every
-document the gates will read: the release record, the three environment-scoped
-capability requests (deploy, status, rollback), the recorded operator
-authorization, and the recorded rollback rehearsal. Nothing here deploys, rolls
-back, or reads the state of any environment. There is no deployment adapter in
-this repository, and adding a real one is a post-transition, operator-gated
-change.
+perform one. It holds the environment tiers, the shape of a release record, the
+three environment-scoped capability requests (deploy, status, rollback), the
+recorded operator authorization, the recorded rollback rehearsal, and one
+evaluator that reads all of them and answers a single question: may this request
+be handed to a deployment adapter once the operating-mode transition has
+happened? Nothing here deploys, rolls back, or reads the state of any
+environment. There is no deployment adapter in this repository, and adding a real
+one is a post-transition, operator-gated change.
 
 `deploy/v1/environment-tiers.json` names three environments and the gate each one
 requires. `dev` and `staging` are routine tier and accept a routine-gate
@@ -703,24 +704,73 @@ or operator may ask for status.
 
 ```text
 deploy/v1/validate-deploy-document.sh validate KIND DOCUMENT
+deploy/v1/evaluate-deploy.sh evaluate REQUEST RELEASE AUTHORIZATION REHEARSAL \
+  RISK-GATE-EVALUATION KILL-SWITCH-EVALUATION
 ```
 
 The validator checks one canonical document of a named kind and prints nothing
 when it is well formed. The kinds are the tier policy, `release_record`,
 `deploy_authorization`, `rollback_rehearsal_record`, the three request kinds, and
-the two control evaluations the gates consume (`risk_gate_evaluation` and
-`kill_switch_evaluation`). Every input must be a regular non-symlink file holding
-exactly one canonical JSON document within fixed size, depth, and member bounds;
-anything else is refused with a single error id and no output.
+the two control evaluations this unit consumes.
 
 A release record binds a release id to a verified source commit and tree and to
 the evidence proving it: the verifier stage result, an independent-review
-observation, a CI observation, and — when packaging has produced one — the
+observation, a CI observation, and - when packaging has produced one - the
 release manifest, referred to only by shape so this unit does not depend on the
-packaging code. A rollback rehearsal record binds one environment, one release
-pair, its outcome, and the stage result that evidences it. All references are
-identity only: a digest and a document identity, never content the validator
-fetches.
+packaging code. A release counts as verified only when it says so, when the
+commit and tree it was verified at are the ones it names as its source, and when
+its verifier evidence points at the same stage result as its verification record.
+
+The evaluator returns one canonical `deploy_gate_evaluation`. Its decision is
+`admissible` or `refused`. `admissible` means every gate in this unit is
+satisfied and the request may be handed to a deployment adapter after the
+transition; it is not authority, not qualification, and not a deployment. The
+output always records `authority: "none"` and
+`qualification: {state: "unavailable"}`, and it never carries a grant,
+qualification reference, or activation. A refusal carries one or more reason
+ids: `deploy.tier-unknown`, `deploy.authorization-missing`,
+`deploy.authorization-stale`, `deploy.authorization-wrong-tier`,
+`deploy.release-unverified`, `deploy.rollback-unrehearsed`, `deploy.kill-switch`,
+`deploy.duty-violation`, and `deploy.malformed`. Production carries an
+independent final guard: if the tier requires a named operator and the supplied
+authorization is not a named, authorized, same-tier operator record, the request
+is refused even when everything else passes.
+
+The risk-gates and kill-switch evaluations come in as inputs. An active kill
+switch, or a kill-switch result that is anything but satisfied, refuses the
+request. The risk-gates evaluator has no `satisfied` result yet by design, so
+this unit does not demand one: it records the reference and refuses with
+`deploy.duty-violation` when that evaluation carries a duty reason, or when the
+requesting actor's role is not one the tier policy allows for that capability.
+Admissible therefore never means the risk gate granted anything.
+
+Time is taken from the request, never from a clock, so the same six inputs always
+produce the same bytes. Every input must be a regular non-symlink file holding
+exactly one canonical JSON document within fixed size, depth, and member bounds;
+the tier policy is re-checked through the shipped validator inside a private
+runtime before the gates run, and every fixed and caller-supplied file is
+compared again after the evaluation, so a file moved mid-run is refused rather
+than used. A document that is a recognizable deploy envelope but whose body does
+not match its contract is refused as `deploy.malformed` rather than crashing;
+anything that is not even a valid envelope is a hard error.
+
+The rehearsal record is always supplied, and it is binding only for a rollback
+request from a non-operator actor: that request is admissible only when the
+rehearsal it names was recorded for the same environment, records the same
+release pair the rollback asks for, and succeeded. An operator asking for a
+rollback is not blocked on a rehearsal record, because the rehearsal requirement
+exists to gate autonomous maintenance, not the human.
+
+`adapter-tests/v1/fakes/deploy-dormant.sh` is the fake deployment adapter that
+proves the shape of the contract without being one. Given an admissible
+evaluation it returns a canonical refusal receipt - `outcome: "refused"`,
+`reason_id: "deploy.dormant"`, the message
+`dormant: deployment disabled in construction mode`, empty capability,
+permission, tool, and effect lists - and given anything that is not admissible it
+returns nothing at all. It is the dormant-publisher pattern applied to
+deployment. It is not registered in the fake adapter contract matrix: that
+runner's inventory is a fixed producer-then-forge pipeline with pinned package
+digests, and adding a deployment phase to it is its own change.
 
 Run the focused test with:
 
@@ -728,12 +778,11 @@ Run the focused test with:
 bash scripts/test/deploy-rollback-gates.test.sh
 ```
 
-It validates one well-formed document of every kind and refuses a document
-offered as the wrong kind, an unknown kind, an extra body field, a malformed
-timestamp, an authorization that expires before it was issued, a rehearsal whose
-release pair is the same release twice, a release whose object ids do not match
-its hash algorithm, and a broken packaging manifest reference, plus multi-root,
-non-canonical, oversized, and symlinked input. Nothing in the run reads a
+It proves the admissible path for each tier and each capability, the exact bytes
+of the admissible document and a byte-identical repeat run, every refusal reason,
+the production named-operator guard, and fail-closed handling of malformed,
+non-canonical, multi-root, oversized, too-deep, symlinked, stale, and moved
+inputs, plus the validator and the dormant adapter. Nothing in the run reads a
 credential, touches a network, invokes a model, writes outside its scratch
 directory, grants authority or qualification, activates a profile, or deploys
 anything.
