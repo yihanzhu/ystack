@@ -159,6 +159,51 @@ transition. The scripts read Git objects and write only into their own scratch a
 a caller-supplied empty directory; they use no credential or network, invoke no
 model, copy no personal configuration, and grant no authority or qualification.
 
+### Restore the inactive shadow reproduction slice
+
+Restore the five paths listed under “Inactive shadow reproduction slice” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, together with the
+local Git materializer, the sandbox-policy evaluator, and the telemetry trace
+validator the driver calls, then run:
+
+```sh
+bash scripts/test/shadow-slice.test.sh
+```
+
+The proof builds a fixture repository with a failing revision and a fixed
+revision and shows the slice answering `reproduced` on the first and `no-change`
+on the second, byte-identically on a repeat run. It also shows every refusal: an
+environment outside the committed list, a claim the real sandbox evaluator does
+not find satisfied or refuses outright, a moved revision, a materialization input
+that carries patch bytes or asks for network, a missing revision, an unreadable
+check path, and malformed, unsorted, multi-root, oversized, symlinked, or
+relative inputs. Restoring these records reproduces nothing on its own: the slice
+is read-only, grants no authority and no deploy authority, and performs no model,
+credential, forge, network, publish, or target operation.
+
+### Restore the inactive maintenance loop
+
+Restore the seven paths listed under “Inactive maintenance loop” in
+[`ci/required-files.txt`](ci/required-files.txt), together with the eval
+framework and the telemetry trace-record validator the scan reads, then run:
+
+```sh
+bash scripts/test/maintenance-loop.test.sh
+```
+
+The proof builds its own dashboard, sealed trace ledger, kill-switch, rollback
+rehearsal, scan-finding, incident, and shadow fixtures. It checks the band
+policy, a clean scan that raises nothing, two crossed bands that write two
+deterministically named intents, byte-identical repeat runs, an engaged kill
+switch that writes no intent, a high-severity finding that raises one, and one
+reproduced incident turned into an eval seed case skeleton in its family's own
+shape — plus every refusal for malformed, multi-root, non-canonical, oversized,
+symlinked, non-regular, unsealed, tampered, duplicate, unmatched, and
+non-empty-output inputs. The intents are documents for a human owner to triage.
+Restoring these records files no issue, opens no change request, modifies no
+eval seed set, and performs no model, credential, deploy, publish, or target
+operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
