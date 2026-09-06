@@ -129,7 +129,7 @@ def state_facts_ok:
     .closed_at == null and (.merged_at | time_ok) and .detailed_merge_status == "not_open"
   elif .state == "unknown" then
     .closed == false and .merged == false and
-    .closed_at == null and .merged_at == null
+    .closed_at == null and .merged_at == null and .detailed_merge_status != "not_open"
   else false
   end;
 
