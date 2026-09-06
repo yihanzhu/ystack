@@ -35,6 +35,25 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+## Inactive default profile assembly
+
+`profiles/default/v1/` binds six default adapter packages to exact Git
+objects from one durable main commit. Protected roles keep distinct principals,
+execution boundaries, and authority scopes; their decision records cite the exact
+accepted `ROADMAP.md` content. The producer manifest and binding also pin the
+profile's immutable producer config. Requested capabilities and permissions are
+inactive contract data, not grants. The profile requests no adapter tools, and
+the CI and dormant-publisher roles request no capability or permission.
+The current normalizer payloads only validate supplied records and return
+observations; they do not execute a model, verifier, forge, or other adapter.
+The GitHub forge normalizer remains a separate observation payload. Transport and
+runtime wiring are not part of this inactive assembly.
+
+This is source data only. It is not selected, resolved, qualified, installed, or
+activated, has no authority or qualification, and cannot invoke a model, use a
+credential, contact a provider, publish, or touch a target. Run
+`bash scripts/test/default-profile-assembly.test.sh` for the focused proof.
+
 ## Inactive portable core v2 fake-forge contract
 
 `core/v2/` contains an inactive, repo-only contract for deterministic candidate
@@ -311,6 +330,28 @@ run a tool or adapter, read a credential, use a network, write a ledger, activat
 a profile, qualify a workflow, publish, deploy, or touch a target. A later unit
 must provide durable append, retention, access, and recovery behavior before it
 can claim a telemetry ledger runtime.
+
+## Inactive hermetic eval-record evaluator
+
+`evals/v1/run.sh evaluate BUNDLE.json` validates already-recorded, bounded
+canonical eval suites, cases, trials, and grades, then emits one deterministic
+report. It does not execute trials or invoke graders. Every record is
+content-bound. The suite pins its scope and framework version. Model cases require
+multiple supplied trials, while deterministic, model, and human graders remain
+immutable data references. Declared trial and attempt identities are exact, and
+trial/grade timestamps must agree.
+
+The runner snapshots a fixed jq program and the selected public-core schema into
+a private directory. It accepts only canonical JSON, rejects stale links,
+tampering, duplicates, and non-canonical order, and keeps `unavailable` distinct
+from `inconclusive`. Failed grades cannot be hidden by another trial state. It
+has no adapter or arbitrary-command seam, uses no network
+or credential, grants no authority, and makes no activation or qualification
+claim.
+
+This is a bounded first slice for eval records, not a runnable eval system or
+qualification evidence. A later unit must provide hermetic built-in trial and
+grader execution before it can make either claim.
 ## Inactive local Git candidate materializer
 
 `adapters/local-git-materializer/v1/` implements the existing portable-core v2
@@ -368,6 +409,13 @@ later assembly PR can bind the durable main payload into the default profile.
 The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
+
+## Inactive default producer config
+
+`profiles/default/v1/producer-config.json` is an immutable Git payload for the
+default producer preference. It grants no capability and does not select a
+profile, invoke a model, or contact a provider. Its focused test checks the
+config shape and exact Git object identity.
 
 ## Inactive Codex CLI producer normalizer payload
 
