@@ -707,7 +707,8 @@ def replay_locked(arguments, state_dir):
                 raise ReplayError("execution bundle does not match current dependencies")
             if stop_if_interrupted(state, interrupted):
                 return 75
-            if state is None:
+            fresh_run = state is None
+            if fresh_run:
                 state = {"schema_version": 1, "kind": "delivery_replay_state", "identity": identity,
                          "phase": "materializing", "authority": "none", "qualification": "unavailable"}
                 atomic_bytes(input_snapshot_path, input_bytes)
@@ -743,8 +744,12 @@ def replay_locked(arguments, state_dir):
                 return 0
             if state["phase"] == "materializing":
                 try:
-                    reconciled = reconcile_materialization(arguments, execution, input_snapshot_path,
-                                                           identity, state_dir)
+                    # Only a resumed run may adopt a candidate that is already in
+                    # the candidate root; a fresh run always goes through the
+                    # materializer, whose root check refuses a pre-populated root.
+                    reconciled = None if fresh_run else reconcile_materialization(
+                        arguments, execution, input_snapshot_path, identity, state_dir
+                    )
                     state["materialization"] = reconciled or run_materializer(
                         arguments, execution, input_snapshot_path, identity
                     )

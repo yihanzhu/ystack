@@ -25,7 +25,19 @@ case "$platform" in
   Darwin:x86_64|Darwin:arm64) asset=jq-osx-amd64; asset_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
   *) fail "unsupported host $platform" ;;
 esac
-jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$asset"
+# Run alone on a fresh restore this suite cannot rely on another suite having
+# filled the shared jq 1.6 cache, so it fetches the pinned release itself.
+jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$jq_cache_dir"
+jq_bin="$jq_cache_dir/$asset"
+if [ ! -f "$jq_bin" ] || [ -L "$jq_bin" ] || [ "$(sha_file "$jq_bin")" != "$asset_sha" ]; then
+  download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$asset" -o "$download"
+  [ "$(sha_file "$download")" = "$asset_sha" ] || fail 'jq release digest'
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_bin"
+fi
 [ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] && [ "$(sha_file "$jq_bin")" = "$asset_sha" ] ||
   fail 'pinned jq 1.6 is required'
 
@@ -306,6 +318,19 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   >"$tmp/reconcile-retry.out"
 jq -e '.state.phase=="review-wait"' "$tmp/reconcile-retry.out" >/dev/null || fail reconcile-retry
 pass 'SIGKILL after materializer output reconciles the existing candidate once'
+
+# A fresh run (no journal yet) must not adopt a candidate already sitting in
+# the candidate root, even one that matches the input: only the materializer's
+# empty-root check may admit a root on a first run.
+mkdir -m 700 "$tmp/fresh-reuse-state" "$tmp/fresh-reuse-scratch"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/fresh-reuse-scratch" --state-dir "$tmp/fresh-reuse-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/fresh-reuse.out" 2>&1; then fail fresh-reuse-accepted; fi
+grep -Fq Traceback "$tmp/fresh-reuse.out" && fail fresh-reuse-traceback
+jq -e '.state.phase=="failed" and .state.reason=="materialization did not complete"' "$tmp/fresh-reuse.out" >/dev/null ||
+  fail fresh-reuse-outcome
+pass 'a fresh run never adopts a pre-populated candidate root'
 
 mkdir -m 700 "$tmp/repeated-kill-state" "$tmp/repeated-kill-candidate" "$tmp/repeated-kill-scratch"
 for kill_round in 1 2 3; do
