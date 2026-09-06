@@ -72,7 +72,7 @@ dashboard="$tmp/dashboard.json"
                      sources_with_results:["adapters.provider-normalizers.v1",
                        "control.risk-gates.v1","control.sandbox-policy.v1","core.stage-run.v2",
                        "orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"]} and
-  .body.quality == {total:102,passed:102,failed:0,inconclusive:0} and
+  .body.quality == {total:128,passed:128,failed:0,inconclusive:0} and
   (.body.families | length) == 9 and
   (.body.families[] | select(.family_id == "repeated-cancelled-missed-events") |
     .runs == 2 and .cases.total == 25 and .cases.passed == 25) and

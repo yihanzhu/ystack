@@ -698,7 +698,6 @@ Restore the seventeen paths in the manifest's inactive eval and trace framework
 block from the same commit, plus the inactive state scanner, reconciliation
 planner, sandbox-policy and risk-gates evaluator, and default normalizer payloads
 it replays.
-
 With the same pinned, architecture-bound jq 1.6 runtime used by the portable
 core, run:
 

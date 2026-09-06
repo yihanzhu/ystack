@@ -136,16 +136,18 @@ runtime="$scratch/runtime"
   "$runtime/orchestrator/v1" "$runtime/control" "$runtime/control/v1" "$runtime/adapters" \
   "$runtime/adapters/codex-native-reviewer" "$runtime/adapters/codex-native-reviewer/v1" \
   "$runtime/adapters/github-actions-ci" "$runtime/adapters/github-actions-ci/v1" \
-  "$runtime/adapters/github-forge" "$runtime/adapters/github-forge/v1" "$scratch/work" ||
+  "$runtime/adapters/github-forge" "$runtime/adapters/github-forge/v1" \
+  "$runtime/adapters/gitlab-forge" "$runtime/adapters/gitlab-forge/v1" \
+  "$runtime/adapters/codex-cli-producer" "$runtime/adapters/codex-cli-producer/v1" "$scratch/work" ||
   emit_error E_RUNTIME
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=723e6d001227565fb0649391233e0208fd172e507ead670f19888da9739fd26a
+program_sha=911179d4806dde803fa8ea05e09bc0865fc1baae49956917d71a96bb92fe7c57
 catalog_sha=ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65
-driver_sha=25ce8772c87aa8c46f25d9094fbe42f36d5818b2af12dc3f0342e110ae33fd41
+driver_sha=6d0ad6a05010fdf1a1cc2696db32f6d8fa3da3fa2ffb9c004077f7b222167bb6
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -216,6 +218,8 @@ for member in \
 done
 # The inactive provider-snapshot normalizers, replayed for the adapter family.
 for member in \
+  'codex-cli-producer dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25' \
+  'gitlab-forge ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a' \
   'codex-native-reviewer 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603' \
   'github-actions-ci 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7' \
   'github-forge b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be'; do
@@ -296,9 +300,11 @@ seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
         {path:"orchestrator/v1/state-scanner.jq",sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
       ],
       adapter_closure:[
+        {path:"adapters/codex-cli-producer/v1/normalize.jq",sha256:"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25"},
         {path:"adapters/codex-native-reviewer/v1/normalize.jq",sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
         {path:"adapters/github-actions-ci/v1/normalize.jq",sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
-        {path:"adapters/github-forge/v1/normalize.jq",sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
+        {path:"adapters/github-forge/v1/normalize.jq",sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"},
+        {path:"adapters/gitlab-forge/v1/normalize.jq",sha256:"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}
       ],
       control_closure:[
         {path:"control/v1/duty-separation-decision.json",sha256:"4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99"},
@@ -367,7 +373,7 @@ program_check() {
     --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
     --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
     --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
-    --argjson normalizer_shas '{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}' \
+    --argjson normalizer_shas '{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}' \
     --arg risk_gates_sha256 0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8 \
     --arg observed_at "$check_observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
@@ -409,6 +415,10 @@ fi
 /usr/bin/cmp -s "$output" "$scratch/output.canonical" || emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/adapters/codex-cli-producer/v1/normalize.jq")" = \
+    dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25 ] &&
+[ "$(sha256_path "$runtime/adapters/gitlab-forge/v1/normalize.jq")" = \
+    ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a ] &&
 [ "$(sha256_path "$runtime/adapters/codex-native-reviewer/v1/normalize.jq")" = \
     7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 ] &&
 [ "$(sha256_path "$runtime/adapters/github-actions-ci/v1/normalize.jq")" = \

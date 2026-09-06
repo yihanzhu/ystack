@@ -47,7 +47,7 @@ fi
 jq_bin="$tmp/bin/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 
-normalizers=(codex-native-reviewer github-actions-ci github-forge)
+normalizers=(codex-native-reviewer github-actions-ci github-forge gitlab-forge codex-cli-producer)
 
 # --- shipped seed set: canonical, listed, and the family names its source -------
 [ -f "$seed_set" ] && [ ! -L "$seed_set" ] || fail 'adapters seed set missing'
@@ -58,10 +58,10 @@ for path in evals/v1/seed-set-adapters.json scripts/test/evals-adapters.test.sh;
 done
 "$jq_bin" -e '
   .body.seed_source == "adapters.provider-normalizers.v1" and .body.shared == {} and
-  (.body.cases | length) == 37 and
+  (.body.cases | length) == 63 and
   all(.body.cases[]; .family_id == "adapter-contract-compliance") and
   ([.body.cases[].normalizer] | unique) ==
-    ["codex-native-reviewer","github-actions-ci","github-forge"]
+    ["codex-cli-producer","codex-native-reviewer","github-actions-ci","github-forge","gitlab-forge"]
 ' "$seed_set" > /dev/null || fail 'seed set header'
 "$jq_bin" -e '
   .body.families[] | select(.family_id == "adapter-contract-compliance") |
@@ -73,7 +73,7 @@ for name in "${normalizers[@]}"; do
   /usr/bin/grep -qF "'$name $(sha_file "$root/adapters/$name/v1/normalize.jq")'" "$launcher" ||
     fail "launcher does not pin adapters/$name/v1/normalize.jq"
 done
-pass 'launcher pins the three shipped normalizers by digest'
+pass 'launcher pins the five shipped normalizers by digest'
 
 # --- one deterministic pass through the real normalizers -------------------------
 observed_at=2026-09-05T00:00:00Z
@@ -87,23 +87,33 @@ run_framework "$first" "$tmp/first.err" "$seed_set" || fail "framework run faile
 "$jq_bin" -e --arg seed_sha "$(sha_file "$seed_set")" \
   --arg reviewer_sha "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" \
   --arg ci_sha "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" \
-  --arg forge_sha "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '
-  def tool($name; $sha):
-    {content_id:("adapter-normalizer." + $name + ".v1"),media_type:"text/x-jq",sha256:$sha};
+  --arg forge_sha "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" \
+  --arg gitlab_sha "$(sha_file "$root/adapters/gitlab-forge/v1/normalize.jq")" \
+  --arg producer_sha "$(sha_file "$root/adapters/codex-cli-producer/v1/normalize.jq")" '
+  {
+    "adapter-normalizer.codex-native-reviewer.v1": $reviewer_sha,
+    "adapter-normalizer.github-actions-ci.v1": $ci_sha,
+    "adapter-normalizer.github-forge.v1": $forge_sha,
+    "adapter-normalizer.gitlab-forge.v1": $gitlab_sha,
+    "adapter-normalizer.codex-cli-producer.v1": $producer_sha
+  } as $normalizer_shas |
   .kind == "eval_run_result" and .id == "evals.run.evals.seed.provider-normalizers.v1" and
   .body.seed_source == "adapters.provider-normalizers.v1" and
   .body.seed_set_ref.sha256 == $seed_sha and
-  .body.summary == {total:37,passed:37,failed:0,inconclusive:0} and
+  .body.summary == {total:63,passed:63,failed:0,inconclusive:0} and
   all(.body.cases[]; .verdict == "passed" and .grader_kind == "deterministic" and
       .subject_ref.content_id == "adapter-provider-snapshot.v1") and
-  (.body.trace | map(.tool_ref) | unique) ==
-    [tool("codex-native-reviewer";$reviewer_sha),tool("github-actions-ci";$ci_sha),
-     tool("github-forge";$forge_sha)] and
+  (.body.trace | map(.tool_ref) | unique | map(.content_id)) ==
+    ["adapter-normalizer.codex-cli-producer.v1","adapter-normalizer.codex-native-reviewer.v1",
+     "adapter-normalizer.github-actions-ci.v1","adapter-normalizer.github-forge.v1",
+     "adapter-normalizer.gitlab-forge.v1"] and
+  all(.body.trace[]; .tool_ref.media_type == "text/x-jq" and
+      .tool_ref.sha256 == $normalizer_shas[.tool_ref.content_id]) and
   all(.body.trace[]; .grader_kind == "deterministic" and
       .adapter == {state:"absent"} and .latency == {state:"absent"} and .cost == {state:"absent"}) and
-  (.body.evaluator.content.body.adapter_closure | length) == 3
+  (.body.evaluator.content.body.adapter_closure | length) == 5
 ' "$first" > /dev/null || fail 'run result shape or verdicts'
-pass 'all thirty-seven normalizer cases pass, each traced to the one normalizer that ran'
+pass 'all sixty-three normalizer cases pass, each traced to the one normalizer that ran'
 
 "$jq_bin" -e '
   def normalized($id): .body.cases[] | select(.case_id == $id) | .observation.value.normalization.value;
@@ -122,9 +132,22 @@ pass 'all thirty-seven normalizer cases pass, each traced to the one normalizer 
   normalized("adapter.ci.stale-run-attempt").stale_bindings == ["run-attempt"] and
   refused("adapter.forge.extra-envelope-field-rejected") == "github-forge.invalid-envelope" and
   refused("adapter.reviewer.exposed-model-rejected") == "codex-reviewer.invalid-snapshot" and
-  refused("adapter.ci.malformed-content-ref-rejected") == "github-actions-ci.invalid-trust-context"
+  refused("adapter.ci.malformed-content-ref-rejected") == "github-actions-ci.invalid-trust-context" and
+  normalized("adapter.gitlab.merged") ==
+    {state:"merged",reason_id:"gitlab.merge-request-merged",stale_bindings:[]} and
+  normalized("adapter.gitlab.stale-bot-user-head-project").stale_bindings ==
+    ["bot-user","head","project"] and
+  normalized("adapter.gitlab.pipeline-running-inconclusive").reason_id ==
+    "gitlab.merge-status-unsettled" and
+  normalized("adapter.codex-producer.changed") ==
+    {state:"changed",reason_id:"adapter.changed",stale_bindings:[]} and
+  normalized("adapter.codex-producer.metadata-incomplete-inconclusive").reason_id ==
+    "adapter.metadata-incomplete" and
+  refused("adapter.gitlab.legacy-merge-status-rejected") == "gitlab-forge.invalid-snapshot" and
+  refused("adapter.codex-producer.other-harness-provider-rejected") == "E_STALE" and
+  refused("adapter.codex-producer.caller-manifest-ceiling-rejected") == "E_TRUST"
 ' "$first" > /dev/null || fail 'normalizer states, reasons, stale bindings, or refusals misrecorded'
-pass 'forge, CI, and reviewer states, stale bindings, and refusals are recorded exactly'
+pass 'forge, CI, reviewer, GitLab forge, and Codex CLI producer states, stale bindings, and refusals are recorded exactly'
 
 second="$tmp/second.json"
 run_framework "$second" "$tmp/second.err" "$seed_set" || fail 'second run failed'
@@ -148,7 +171,7 @@ wrong="$tmp/wrong.json"
 ' "$seed_set" > "$wrong"
 run_framework "$tmp/wrong.out" "$tmp/wrong.err" "$wrong" || fail 'wrong-expectation run errored'
 "$jq_bin" -e '
-  .body.summary == {total:37,passed:36,failed:1,inconclusive:0} and
+  .body.summary == {total:63,passed:62,failed:1,inconclusive:0} and
   (.body.cases[] | select(.case_id == "adapter.forge.provider-metadata-cannot-decide") |
     .verdict == "failed" and .reason_id == "evals.normalization-mismatch")
 ' "$tmp/wrong.out" > /dev/null || fail 'provider text expected to decide a state was not failed'
@@ -193,24 +216,16 @@ pass 'moved, misfiled, and mis-shaped normalizer seed sets fail closed with one 
 
 # --- the launcher refuses an edited normalizer --------------------------------------
 copy="$tmp/copy"
-/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts" "$copy/orchestrator/v1" \
-  "$copy/control/v1"
+/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages is present, so the edit below is the
+# only stale thing in this fixture.
+for component in orchestrator/v1 control/v1 adapters; do
+  /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
-done
-for f in scan-state.sh state-scanner-launcher.sh state-scanner-driver.sh state-scanner.jq \
-  reconciliation-plan.jq; do
-  /bin/cp "$root/orchestrator/v1/$f" "$copy/orchestrator/v1/$f"
-done
-for f in evaluate-sandbox.sh policy-set.jq sandbox-decision.json sandbox-policy.json \
-  sandbox.jq validate.sh; do
-  /bin/cp "$root/control/v1/$f" "$copy/control/v1/$f"
-done
-for name in "${normalizers[@]}"; do
-  /bin/mkdir -p "$copy/adapters/$name/v1"
-  /bin/cp "$root/adapters/$name/v1/normalize.jq" "$copy/adapters/$name/v1/normalize.jq"
 done
 /usr/bin/printf '\n# tampered\n' >> "$copy/adapters/github-forge/v1/normalize.jq"
 if "$copy/evals/v1/run-evals.sh" run "$seed_set" "$observed_at" >"$tmp/stale.out" 2>"$tmp/stale.err"; then
