@@ -55,6 +55,22 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive offline delivery replay
+
+Restore the three paths listed under “Inactive offline delivery replay” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/delivery-replay.test.sh
+```
+
+The replay is a local offline simulation. It materializes only a caller-owned
+candidate, reads one fixed candidate blob, and records test observations. Each
+observation must name the request digest, candidate tree, and candidate commit of
+the recorded materialization, and completion holds the candidate ref itself under a
+git transaction it owns. It does not execute candidate code, select a profile,
+authenticate review, publish, merge, deploy, or contact a provider or target.
+
 ### Restore the inactive default profile assembly
 
 Restore the eight paths listed under “Inactive default profile assembly” in
