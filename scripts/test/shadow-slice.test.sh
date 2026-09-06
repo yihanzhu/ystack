@@ -302,7 +302,13 @@ expect_outcome() {
   local name=$1 outcome=$2 reason=$3
   shift 3
   run_case "$name" "$@"
-  if [ "$RUN_STATUS" -ne 0 ] || [ -s "$RUN_ROOT/err" ]; then fail "$name"; fi
+  if [ "$RUN_STATUS" -ne 0 ] || [ -s "$RUN_ROOT/err" ]; then
+    # Say what the driver said before failing, so a host-specific failure is
+    # diagnosable from the suite output alone.
+    /usr/bin/printf 'case %s: status %s; stderr: %s\n' "$name" "$RUN_STATUS" \
+      "$(/usr/bin/head -c 2000 "$RUN_ROOT/err" 2>/dev/null)" >&2
+    fail "$name"
+  fi
   "$jq_bin" -e --arg outcome "$outcome" --arg reason "$reason" '
     .schema_version == 1 and .kind == "shadow_reproduction_record" and
     .body.outcome == $outcome and .body.reason_id == $reason and

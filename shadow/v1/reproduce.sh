@@ -37,8 +37,10 @@ physical_dir() {
 
 empty_private_dir() {
   physical_dir "$1" &&
-    [ "$(/usr/bin/stat -f '%Lp' "$1" 2>/dev/null ||
-        /usr/bin/stat -c '%a' "$1" 2>/dev/null)" = 700 ] &&
+    # GNU stat first: on Linux `stat -f` is filesystem status and would succeed
+    # with the wrong answer; BSD stat has no -c, so it falls through cleanly.
+    [ "$(/usr/bin/stat -c '%a' "$1" 2>/dev/null ||
+        /usr/bin/stat -f '%Lp' "$1" 2>/dev/null)" = 700 ] &&
     [ -z "$(/usr/bin/find "$1" -mindepth 1 -print -quit 2>/dev/null)" ]
 }
 
