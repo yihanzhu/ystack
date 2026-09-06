@@ -68,6 +68,21 @@ The payload records an inactive producer preference. It does not select or
 activate a profile and performs no model, credential, provider, publish, or
 target operation.
 
+### Restore the inactive alternative producer config payload (Codex CLI producer)
+
+Restore the two paths listed under “Inactive alternative producer config
+payload (Codex CLI producer)” in [`ci/required-files.txt`](ci/required-files.txt),
+then run:
+
+```sh
+bash scripts/test/alternative-producer-config.test.sh
+```
+
+The payload records an inactive producer preference the alternative profile
+(Codex CLI producer, openai provider) will pin by Git object. It does not
+select or activate a profile and performs no model, credential, provider,
+publish, or target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
