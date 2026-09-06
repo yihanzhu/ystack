@@ -356,3 +356,6 @@ scope/v1/validate-scope.sh
 scope/v1/scope-gates.jq
 scope/v1/evaluate-scope.sh
 scripts/test/scope-qualification.test.sh
+
+# Operating-mode transition proposal
+docs/transition.md
