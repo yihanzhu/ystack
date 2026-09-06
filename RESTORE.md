@@ -99,6 +99,26 @@ The payload records an inactive producer preference the alternative profile
 select or activate a profile and performs no model, credential, provider,
 publish, or target operation.
 
+### Restore the inactive alternative profile assembly (Codex CLI producer)
+
+Restore the eight paths listed under “Inactive alternative profile assembly
+(Codex CLI producer)” in [`ci/required-files.txt`](ci/required-files.txt) from one
+commit, together with the config restored under “Inactive alternative producer
+config payload (Codex CLI producer)” and the payload restored under “Inactive
+Codex CLI producer normalizer payload”, then run:
+
+```sh
+bash scripts/test/alternative-profile-assembly.test.sh
+```
+
+The proof validates the profile and six manifests, their exact main package
+objects, the producer config contract, the Codex CLI producer manifest contract,
+the accepted Roadmap decision record, role separation, empty tool requests, and
+that the profile differs from the default one only in the producer binding and
+the profile id. Restoring these records does not select, resolve, qualify,
+install, or activate the profile; it grants no authority and performs no model,
+credential, provider, publish, or target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
