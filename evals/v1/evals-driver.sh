@@ -190,8 +190,10 @@ run_dashboard() {
           "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
     observations="$work/pair-$j-observations.json"
     evaluator_doc="$work/pair-$j-evaluator.json"
-    "$jq_bin" -S -c '[.body.cases[].observation.value]' "$result_doc" > "$observations" ||
-      emit_error E_RUNTIME
+    # Only present observations are handed back; an absent one is what made
+    # its case inconclusive, and the rebuild must reproduce that.
+    "$jq_bin" -S -c '[.body.cases[].observation | select(.state == "present") | .value]' \
+      "$result_doc" > "$observations" || emit_error E_RUNTIME
     "$jq_bin" -S -c '.body.evaluator.content' "$result_doc" > "$evaluator_doc" ||
       emit_error E_RUNTIME
     # A result is rebuilt at its own recorded time, not the dashboard's.
