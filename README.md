@@ -236,6 +236,26 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive GitLab forge normalizer payload
+
+`adapters/gitlab-forge/v1/normalize.jq` is the first alternative forge. It
+validates one untrusted GitLab merge-request snapshot against caller-supplied
+project, merge-request iid, head, base, bot-user, time, instruction, and config
+bindings and returns the same canonical generic observation the GitHub forge
+returns: open-ready, open-blocked, closed-unmerged, merged, stale, or
+inconclusive, with the same output keys, effect boundary, and stale-binding
+shape, so a profile can swap one forge for the other. GitLab vocabulary stays at
+the edge and is taken as the API reports it: `detailed_merge_status` values such
+as `mergeable`, `conflict`, `ci_must_pass`, `security_policy_violations`, or
+`checking` decide ready, blocked, or inconclusive; a locked request is inconclusive; a merged request is never
+also closed; and the acting identity is the bot user the integration runs as,
+since GitLab has no app id. Provider metadata stays opaque data.
+
+This PR lands only the immutable normalizer payload. A later assembly PR can add
+its manifest and profile wiring. The payload is offline and unqualified. It does
+not call GitLab or a CLI, use a credential, change a project or merge request,
+grant authority or qualification, or activate a profile.
+
 ## Inactive Codex native reviewer normalizer payload
 
 `adapters/codex-native-reviewer/v1/normalize.jq` validates one untrusted
@@ -402,6 +422,103 @@ grant authority or qualification, or activate a profile. A later assembly PR may
 add its manifest and inactive default-set binding only after the payload has a
 durable commit on main. A runnable verifier still requires a separately qualified
 sandbox launcher and fixed verification implementation.
+
+## Inactive eval and trace framework
+
+`evals/v1/run-evals.sh` runs one offline eval pass over a caller-supplied seed set
+and returns one canonical run result:
+
+```text
+evals/v1/run-evals.sh run SEED-SET.json OBSERVED_AT
+evals/v1/run-evals.sh dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
+```
+
+`evals/v1/eval-catalog.json` names the nine regression families the roadmap
+requires before any autonomous write (stale and moved artifacts; repeated,
+cancelled, and missed events; approval invalidation; actor and re-run identity;
+malicious instructions; protected-path, credential, network, and publisher
+boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
+adapter contract compliance). Each family declares which grader kinds may judge
+it, its trial policy, and the core evidence kinds it produces. Five families are
+seeded; the other four are declared and wait for their own seeds.
+
+The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
+through the real portable core (`scripts/core-contract.sh validate-stage-run`).
+The core is the only judge: the framework records whether the core accepted or
+rejected each run and with which token, then grades that observation against the
+case's expectation. A wrong expectation is graded `failed`. A family that only a
+model or a human can grade is graded `inconclusive`, never guessed.
+
+The repeated, cancelled, and missed events family is seeded from
+`evals/v1/seed-set-events.json`. Its cases replay canonical orchestrator state
+snapshots through the real inactive state scanner (`orchestrator/v1/scan-state.sh`),
+staged inside the same private runtime: a missed attempt deadline must classify as
+stranded, a cancelled stage must stay terminal even when the target moves, a
+failed stage must be retryable until its retry limit and blocked after it, and a
+snapshot that repeats a stage or mixes a live attempt with a terminal result must
+be refused. The scanner is the only judge; the framework records its
+classification or refusal token and grades that against the case's expectation.
+
+The same family is also seeded from `evals/v1/seed-set-plans.json`, which replays
+observation-plus-ledger bundles through the real inactive reconciliation planner
+(`orchestrator/v1/reconciliation-plan.jq`): a repeated delivery of the same key is a
+redelivery, not a second effect; an acknowledged delivery is suppressed; a retry is
+planned as the next attempt and refused past the retry limit; a stranded attempt is
+recovered; deliveries beyond the in-flight limit are deferred with redeliveries
+first; duplicate classifications or ledger entries are refused. Only what the plan
+would deliver, defer, suppress, or hand to an operator is graded. A seed set may
+only feed families the catalog says draw on its source.
+
+The protected-path, credential, network, and publisher boundaries family is seeded
+from `evals/v1/seed-set-boundaries.json`. Its cases replay execution-environment
+claims through the real inactive sandbox-policy evaluator
+(`control/v1/evaluate-sandbox.sh`), staged with its policy-set validator and policy
+in the same private runtime: a cleared, allowlisted sandbox is satisfied; a
+publisher role, an allowed network or endpoint, a tool that asks for network, an
+inherited environment or a secret-looking variable, a credential reference, a write
+root outside the fixed sandbox, and any target or external write are violated with
+their exact reason ids; unknown network or sensitive-material state is
+inconclusive; a claim with an unknown field or a wildcard path is refused. The
+evaluator is the only judge; the framework records its verdict and reason set.
+
+The adapter contract compliance family is seeded from
+`evals/v1/seed-set-adapters.json`. Its cases replay recorded provider snapshots
+with caller bindings through the real inactive default normalizers for the GitHub
+forge, GitHub Actions CI, and Codex native reviewer adapters, each staged in the
+private runtime at a pinned digest: open, blocked, merged, and closed change
+requests; queued, running, passed, failed, cancelled, timed-out, and
+action-required runs; clean, findings, dismissed, timed-out, and failed reviews;
+stale bindings named exactly; incomplete or unknown provider state kept
+inconclusive; provider text that can never decide a state; and malformed
+envelopes, bindings, or snapshots refused with the normalizer's own error id. The
+normalizer is the only judge; the framework records the generic state, reason, and
+stale-binding set it reports.
+
+The `dashboard` operation aggregates one to sixteen run results into one canonical
+flow-and-quality document. Each seed set is first replayed in the same private
+runtime at the result's own recorded time, and a result counts only if that replay
+reproduces it byte for byte. Nothing embedded in a supplied result is trusted: a
+result from another framework version or platform, or with any altered
+observation, verdict, or summary, never counts. The dashboard reports seeded-family coverage,
+per-family and overall pass, fail, and inconclusive counts, and the recovery
+evidence the events family produced (missed attempts recovered, cancellations kept
+terminal, repeats redelivered once or suppressed, retry limits enforced, malformed
+or over-limit events refused). Every number is a count over the results handed in. Latency,
+cost, and token telemetry are recorded absent because no live run exists to
+measure, and the operating-flow metrics the roadmap names (intent-to-spec and
+plan-to-merge time, queue and human-gate wait, first-pass success, rework, review
+latency, precision, recall, and stale rate, escaped defects and vulnerabilities,
+DORA throughput and instability, target outcome) are recorded absent with the
+reason that there is no operating history yet. Nothing is estimated.
+
+Every run result carries the exact catalog, seed set, program, driver, launcher,
+and core-closure digests, plus one trace event per case in the shape the
+Observability interface names (tool, adapter, gate, identity, latency, cost).
+Latency and cost are recorded as absent in this unit; the framework performs no
+model call, so there is nothing honest to charge. The framework is inactive and
+observation only: it does not run a candidate or adapter, invoke a model, use a
+credential or network, write outside its scratch, grant qualification, or
+activate a profile.
 
 ## The current default team
 
@@ -673,6 +790,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
