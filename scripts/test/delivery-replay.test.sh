@@ -516,6 +516,23 @@ if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/invalid-input.out" ||
    grep -Fq Traceback "$tmp/invalid-input.out"; then
   fail invalid-utf8-input-error
 fi
+mkfifo "$tmp/fifo-input.json"
+mkdir -m 700 "$tmp/fifo-input-state" "$tmp/fifo-input-candidate" "$tmp/fifo-input-scratch"
+# A FIFO with no writer would block a plain open-then-read forever; the replay
+# must refuse it before reading. The background watchdog only fires on a hang.
+python3 "$replay" --input "$tmp/fifo-input.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/fifo-input-candidate" --scratch-root "$tmp/fifo-input-scratch" --state-dir "$tmp/fifo-input-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/fifo-input.out" 2>&1 &
+fifo_pid=$!
+( sleep 20; kill -9 "$fifo_pid" 2>/dev/null ) &
+fifo_watchdog=$!
+if wait "$fifo_pid"; then fail fifo-input; fi
+kill "$fifo_watchdog" 2>/dev/null || true
+if ! grep -Fq 'delivery replay: input is not a regular file' "$tmp/fifo-input.out" ||
+   grep -Fq Traceback "$tmp/fifo-input.out"; then
+  fail fifo-input-error
+fi
 printf '\377' >"$tmp/reconcile-state/invalid-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \

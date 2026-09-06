@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -77,8 +78,16 @@ def canonical(value):
 
 
 def read_bytes(path, limit):
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    # Open without blocking and refuse anything but a regular file before the
+    # first read, so a FIFO or device cannot stall the replay.
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ReplayError("input is not readable: %s" % path) from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ReplayError("input is not a regular file: %s" % path)
         chunks = []
         remaining = limit + 1
         while remaining:
