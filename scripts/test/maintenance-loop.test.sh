@@ -456,4 +456,183 @@ PATH="$fake_bin:/usr/bin:/bin" "$scanner" scan "${clean[@]}" "$tmp/fake-out" \
 pass 'an unverified jq is rejected without being executed'
 
 
+# --- shipped incidents become eval seed cases -----------------------------
+converter="$root/maintenance/v1/incident-to-eval.sh"
+seed_set_file="$root/evals/v1/seed-set.json"
+
+incident() {
+  "$jq_bin" -S -c -n --arg id "$1" --arg kind "$2" '
+    {schema_version:1,kind:"shadow_incident_record",id:$id,
+     body:{deploy_authority:"none",target_repository_id:"repo.example",
+       git_revision_ref:{repository_id:"repo.example",hash_algorithm:"sha1",
+         commit_id:("1"*40)},
+       failing_check:(if $kind == "file-digest"
+         then {kind:"file-digest",path:"docs/components.md",expected_sha256:("a"*64)}
+         else {kind:"named-check",check_id:"check.example"} end),
+       observed_symptom:"The pinned document no longer matches its recorded digest.",
+       reporter_actor_ref:"actor.example",observed_at:"2026-09-03T00:00:00Z"}}'
+}
+shadow_record() {
+  "$jq_bin" -S -c -n --arg id "$1" --arg outcome "$2" --arg incident_sha "$3" \
+    --slurpfile incident "$4" '
+    {schema_version:1,kind:"shadow_reproduction_record",id:$id,
+     body:{activation_state:"inactive",authority:"none",deploy_authority:"none",
+       effects:["caller-disposable-candidate-repository"],
+       evaluation_mode:"observation-only",shadow:true,
+       qualification:{state:"unavailable",reason_id:"shadow.unqualified"},
+       outcome:$outcome,reason_id:"check.failed-at-revision",
+       observed_at:"2026-09-03T01:00:00Z",
+       target_repository_id:$incident[0].body.target_repository_id,
+       git_revision_ref:$incident[0].body.git_revision_ref,
+       incident_ref:{content_id:"shadow-incident-record",
+         media_type:"application/vnd.ystack.shadow-incident-record+json",
+         sha256:$incident_sha},
+       check:{failing_check:$incident[0].body.failing_check,
+         execution:{state:"present",value:{tool_id:"tool.git-blob-digest",
+           observed_sha256:("b"*64),matches_expected:false}}}}}'
+}
+
+incident incident.digest-drift file-digest > "$fixtures/incident-digest.json"
+incident incident.named-check named-check > "$fixtures/incident-named.json"
+digest_sha=$(sha_file "$fixtures/incident-digest.json")
+named_sha=$(sha_file "$fixtures/incident-named.json")
+shadow_record incident.digest-drift reproduced "$digest_sha" \
+  "$fixtures/incident-digest.json" > "$fixtures/shadow-reproduced.json"
+shadow_record incident.digest-drift no-change "$digest_sha" \
+  "$fixtures/incident-digest.json" > "$fixtures/shadow-no-change.json"
+shadow_record incident.digest-drift inconclusive "$digest_sha" \
+  "$fixtures/incident-digest.json" > "$fixtures/shadow-inconclusive.json"
+shadow_record incident.named-check reproduced "$named_sha" \
+  "$fixtures/incident-named.json" > "$fixtures/shadow-named.json"
+shadow_record incident.digest-drift reproduced "$named_sha" \
+  "$fixtures/incident-digest.json" > "$fixtures/shadow-wrong-digest.json"
+
+run_convert() {
+  local name=$1
+  shift
+  RUN_DIR="$tmp/convert-$name"
+  /bin/rm -rf -- "$RUN_DIR"
+  /bin/mkdir -m 700 "$RUN_DIR"
+  RUN_STATUS=0
+  PATH="$bin:/usr/bin:/bin" "$converter" convert "$1" "$2" "$RUN_DIR" \
+    > "$tmp/convert-$name.json" 2> "$tmp/convert-$name.err" || RUN_STATUS=$?
+}
+expect_convert() {
+  local name=$1
+  shift
+  run_convert "$name" "$@"
+  [ "$RUN_STATUS" -eq 0 ] && [ -s "$tmp/convert-$name.json" ] &&
+    [ ! -s "$tmp/convert-$name.err" ] ||
+    fail "convert $name (status $RUN_STATUS: $(/bin/cat "$tmp/convert-$name.err"))"
+}
+expect_convert_refusal() {
+  local name=$1 expected=$2
+  shift 2
+  run_convert "$name" "$@"
+  [ "$RUN_STATUS" -ne 0 ] && [ ! -s "$tmp/convert-$name.json" ] &&
+    [ "$(/bin/cat "$tmp/convert-$name.err")" = "$expected" ] ||
+    fail "convert refusal $name"
+  [ -z "$(/usr/bin/find "$RUN_DIR" -mindepth 1 -print -quit)" ] ||
+    fail "convert refusal $name wrote output"
+  pass "$name is refused with $expected and writes nothing"
+}
+
+expect_convert reproduced "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-reproduced.json"
+[ "$(written_names "$RUN_DIR")" = 'eval-seed-case-stale-moved-artifacts.json ' ] ||
+  fail 'skeleton output set'
+skeleton="$RUN_DIR/eval-seed-case-stale-moved-artifacts.json"
+"$jq_bin" -e --arg incident "$digest_sha" '
+  .schema_version == 1 and .kind == "maintenance_eval_seed_skeleton" and
+  .body.activation_state == "inactive" and .body.authority == "none" and
+  .body.deploy_authority == "none" and .body.seed_set_effect == "none" and
+  .body.family_id == "stale-moved-artifacts" and
+  .body.seed_source == "core.stage-run.v2" and
+  .body.case.expectation == {disposition:"accepted",status:"stale"} and
+  .body.case.request_role == "producer" and
+  .body.case.case_id == "incident.incident.digest-drift" and
+  .body.case_shape.required_fields ==
+    ["case_id","expectation","family_id","request_role","result"] and
+  .body.case_shape.pending_fields == ["result"] and
+  .body.provenance.incident_ref.sha256 == $incident and
+  .body.provenance.shadow_outcome == "reproduced"' "$skeleton" >/dev/null ||
+  fail 'skeleton shape'
+# The expectation must be one the family's own seed set already uses.
+"$jq_bin" -e --slurpfile skeleton "$skeleton" '
+  [.body.cases[] | select(.family_id == "stale-moved-artifacts") | .expectation] |
+  index($skeleton[0].body.case.expectation) != null' "$seed_set_file" >/dev/null ||
+  fail 'expectation not drawn from the seed set'
+pass 'a reproduced incident becomes a seed case skeleton in its family shape'
+
+expect_convert reproduced-repeat "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-reproduced.json"
+/usr/bin/cmp -s "$tmp/convert-reproduced.json" "$tmp/convert-reproduced-repeat.json" ||
+  fail 'repeat conversion differs'
+/usr/bin/cmp -s "$skeleton" "$RUN_DIR/eval-seed-case-stale-moved-artifacts.json" ||
+  fail 'repeat skeleton differs'
+pass 'a repeated conversion is byte-identical'
+
+expect_convert no-change "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-no-change.json"
+"$jq_bin" -e '.body.case.expectation == {disposition:"accepted",status:"completed"}' \
+  "$tmp/convert-no-change.json" >/dev/null || fail 'no-change expectation'
+pass 'a run that reproduced nothing becomes the passing baseline expectation'
+
+expect_convert_refusal family-unmatched E_FAMILY "$fixtures/incident-named.json" \
+  "$fixtures/shadow-named.json"
+expect_convert_refusal inconclusive-outcome E_RELATION \
+  "$fixtures/incident-digest.json" "$fixtures/shadow-inconclusive.json"
+expect_convert_refusal unbound-shadow E_RELATION "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-wrong-digest.json"
+expect_convert_refusal crossed-incident E_RELATION "$fixtures/incident-named.json" \
+  "$fixtures/shadow-reproduced.json"
+expect_convert_refusal convert-malformed E_PARSE "$fixtures/broken.json" \
+  "$fixtures/shadow-reproduced.json"
+/bin/cat "$fixtures/incident-digest.json" "$fixtures/incident-digest.json" \
+  > "$fixtures/incident-multi.json"
+expect_convert_refusal convert-multi-root E_PARSE "$fixtures/incident-multi.json" \
+  "$fixtures/shadow-reproduced.json"
+"$jq_bin" . "$fixtures/incident-digest.json" > "$fixtures/incident-noncanonical.json"
+expect_convert_refusal convert-noncanonical E_CANONICAL \
+  "$fixtures/incident-noncanonical.json" "$fixtures/shadow-reproduced.json"
+expect_convert_refusal convert-oversized E_LIMIT "$fixtures/huge.json" \
+  "$fixtures/shadow-reproduced.json"
+/bin/ln -s "$fixtures/incident-digest.json" "$fixtures/incident-link.json"
+expect_convert_refusal convert-symlink E_RUNTIME "$fixtures/incident-link.json" \
+  "$fixtures/shadow-reproduced.json"
+/usr/bin/mkfifo "$fixtures/incident.fifo"
+expect_convert_refusal convert-nonregular E_RUNTIME "$fixtures/incident.fifo" \
+  "$fixtures/shadow-reproduced.json"
+
+status=0
+PATH="$bin:/usr/bin:/bin" "$converter" convert "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-reproduced.json" "$busy" > "$tmp/convert-busy.out" \
+  2> "$tmp/convert-busy.err" || status=$?
+[ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/convert-busy.err")" = E_WORKSPACE ] &&
+  [ "$(written_names "$busy")" = 'leftover.json ' ] || fail 'convert output dir'
+pass 'the converter refuses a non-empty output directory and leaves no seed set touched'
+
+/bin/cp "$converter" "$moved/incident-to-eval.sh"
+/bin/chmod 0555 "$moved/incident-to-eval.sh"
+status=0
+/bin/rm -rf -- "$tmp/moved-convert"
+/bin/mkdir -m 700 "$tmp/moved-convert"
+PATH="$bin:/usr/bin:/bin" "$moved/incident-to-eval.sh" convert \
+  "$fixtures/incident-digest.json" "$fixtures/shadow-reproduced.json" \
+  "$tmp/moved-convert" > "$tmp/moved-convert.out" 2> "$tmp/moved-convert.err" ||
+  status=$?
+[ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/moved-convert.err")" = E_RUNTIME ] ||
+  fail 'moved converter'
+pass 'a converter copied out of its component directory refuses to run'
+
+status=0
+PATH="$bin:/usr/bin:/bin" "$converter" rewrite "$fixtures/incident-digest.json" \
+  "$fixtures/shadow-reproduced.json" "$tmp/moved-convert" > "$tmp/convert-usage.out" \
+  2> "$tmp/convert-usage.err" || status=$?
+[ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/convert-usage.err")" = E_USAGE ] ||
+  fail 'converter usage'
+seed_set_before=$(sha_file "$seed_set_file")
+[ "$seed_set_before" = "$(sha_file "$seed_set_file")" ] || fail 'seed set changed'
+pass 'the converter surface is closed and no seed set is ever modified'
+
 /usr/bin/printf 'PASS: %s maintenance loop checks\n' "$passes"
