@@ -60,9 +60,12 @@ case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 [ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
+# Reads must see the exact objects of the commit: no refs/replace substitution
+# and no lazy fetch of promised objects from a partial clone.
 repo_git() {
   GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 \
-    /usr/bin/git -C "$repo" -c core.askPass= -c credential.helper= "$@"
+    GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 \
+    /usr/bin/git --no-replace-objects -C "$repo" -c core.askPass= -c credential.helper= "$@"
 }
 [ "$(repo_git rev-parse --show-toplevel 2>/dev/null)" = "$repo" ] || emit_error E_RUNTIME
 [ "$(repo_git rev-parse --verify --quiet "$commit^{commit}" 2>/dev/null)" = "$commit" ] ||

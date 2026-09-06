@@ -13,7 +13,7 @@ ok() { pass=$((pass + 1)); printf 'ok %s - %s\n' "$pass" "$1"; }
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-target-packaging.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
-trap '/bin/chmod -R u+w "$tmp" >/dev/null 2>&1 || :; /bin/rm -rf -- "$tmp"' EXIT
+trap '[ -f "$tmp/replace-oid" ] && /usr/bin/git -C "$root" replace -d "$(/bin/cat "$tmp/replace-oid")" >/dev/null 2>&1 || :; /bin/chmod -R u+w "$tmp" >/dev/null 2>&1 || :; /bin/rm -rf -- "$tmp"' EXIT
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -54,6 +54,16 @@ generation=$(/usr/bin/sed -n \
 manifest="$tmp/release.json"
 "$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$manifest"
 "$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$tmp/release-again.json"
+# A refs/replace substitution for a packaged blob must not change what is
+# packaged: reads see the commit's exact objects, never a replacement.
+replaced_oid=$("$jq" -r '.body.files[0].object_id' "$manifest")
+replacement_oid=$(/usr/bin/printf '%s\n' '# replaced' | /usr/bin/git -C "$root" hash-object -w --stdin)
+/usr/bin/printf '%s\n' "$replaced_oid" >"$tmp/replace-oid"
+/usr/bin/git -C "$root" replace -f "$replaced_oid" "$replacement_oid"
+"$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$tmp/release-replaced.json"
+/usr/bin/git -C "$root" replace -d "$replaced_oid" >/dev/null
+/bin/rm -f "$tmp/replace-oid"
+/usr/bin/cmp -s "$manifest" "$tmp/release-replaced.json" || fail 'a replace ref changed the release'
 /usr/bin/cmp -s "$manifest" "$tmp/release-again.json" || fail 'release build is not deterministic'
 "$jq" -S -c . "$manifest" >"$tmp/release.canonical" || fail 'release parse'
 /usr/bin/cmp -s "$manifest" "$tmp/release.canonical" || fail 'release bytes are not canonical'
