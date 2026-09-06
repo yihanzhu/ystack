@@ -783,3 +783,5 @@ digests, the way a real scope pull request would.
 Two closures worth naming: a dashboard that lists a family twice is malformed, so a failing entry can never be shadowed by a later passing duplicate; and the operating-mode marker's status is a closed vocabulary (`active` is construction, `retired` is operating), so any other value, including a typo, is unknown and refuses with `scope.mode-construction` even in a portable tree with no committed marker.
 
 A claimed shadow record must use the shadow slice's own outcome vocabulary (reproduced, no-change, inconclusive); any other outcome makes the evidence set malformed rather than being quietly ignored.
+
+A wildcard in the last segment of an allowed path is judged by what it could expand to: if its pattern matches any protected segment name (or, for a single-segment glob, any protected root file), the glob is protected, so `src/*` and `src/auth*` refuse while `src/*.ts` does not. A wildcard in the first segment is refused by the record validator outright.

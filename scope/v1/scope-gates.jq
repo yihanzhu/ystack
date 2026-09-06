@@ -129,7 +129,16 @@ def claimed_by_scope($refs): . as $record |
        ($protected_root_files | index($segments[0]) != null)) or
       ($segments |
        any(. as $segment | $protected_segments | index($segment) != null)) or
-      ($segments[0:-1] | any(test("[*?]")))) |
+      ($segments[0:-1] | any(test("[*?]"))) or
+      # A leaf wildcard is judged by what it could expand to: if its pattern
+      # matches any protected segment name (or, for a root glob, any protected
+      # root file), the glob can reach a protected path.
+      (($segments[-1] | test("[*?]")) and
+       (($segments[-1] |
+         gsub("\\."; "\\.") | gsub("\\*"; ".*") | gsub("\\?"; ".")) as $leaf_re |
+        (($protected_segments +
+          (if ($segments | length) == 1 then $protected_root_files else [] end)) |
+         any(test("\\A" + $leaf_re + "\\z")))))) |
   any(.))) as $protected |
 
 (if $dash_ok then

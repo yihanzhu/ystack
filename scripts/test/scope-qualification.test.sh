@@ -68,7 +68,8 @@ expect_validator_error() {
 }
 evaluation_reasons() {
   local out
-  out=$(run_evaluator "$@") || fail 'evaluator refused a well-formed call'
+  out=$(run_evaluator "$@" 2>&1) ||
+    fail "evaluator refused a well-formed call ($1): $(/usr/bin/printf '%s' "$out" | /usr/bin/tail -c 300)"
   /usr/bin/printf '%s' "$out" | "$jq_bin" -c '.body.reason_ids'
 }
 expect_reasons() {
@@ -402,6 +403,20 @@ for glob in '.github/workflows/ci.yml' 'config/models.conf' 'AGENTS.md' \
     "${good[@]:1}"
 done
 pass 'a scope whose allowed paths touch a protected path is never proposable'
+# A leaf wildcard is judged by what it could expand to: src/* and src/auth* can
+# reach a protected segment (a bare * is already refused by the record validator,
+# which forbids a wildcard in the first segment), while src/*.ts cannot name any
+# protected segment and stays allowed.
+for glob in 'src/*' 'src/auth*' 'lib/secret?'; do
+  "$jq_bin" -S -c --arg glob "$glob" '.body.allowed_paths = [$glob]' \
+    "$tmp/scope.json" >"$tmp/protected-leaf.json"
+  expect_reasons "protected leaf $glob" '["scope.protected-path"]' "$tmp/protected-leaf.json" \
+    "${good[@]:1}"
+done
+"$jq_bin" -S -c '.body.allowed_paths = ["src/*.ts"]' "$tmp/scope.json" >"$tmp/leaf-allowed.json"
+expect_reasons 'leaf wildcard that reaches no protected name' '["scope.proposable"]' \
+  "$tmp/leaf-allowed.json" "${good[@]:1}"
+pass 'a leaf wildcard is refused when it could expand to a protected name'
 
 # A checkout may be case-insensitive, so a glob that differs from a protected name
 # only by case reaches the same file and is refused for the same reason.
