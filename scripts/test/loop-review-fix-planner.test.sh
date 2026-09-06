@@ -416,6 +416,21 @@ normalize "$(mutate "$review_input" review-stale-input \
   '.trust_context.expected_review_id="77"')" "$stale_review"
 expect_refusal stale-bindings review-stale review.bindings-stale "$context" \
   "$stale_review"
+cleared_review_binding=$(mutate "$stale_review" observation-cleared-review '
+  .stale_bindings=[]|.state="findings"|.reason_id="codex.review-findings"')
+expect_refusal cleared-review-binding review-stale review.bindings-stale \
+  "$context" "$cleared_review_binding"
+app_review="$fixtures/observation-app.json"
+normalize "$(mutate "$review_input" review-app-input \
+  '.trust_context.expected_github_app_id="55"')" "$app_review"
+cleared_app_binding=$(mutate "$app_review" observation-cleared-app '
+  .stale_bindings=[]|.state="findings"|.reason_id="codex.review-findings"')
+expect_refusal cleared-app-binding review-stale review.bindings-stale \
+  "$context" "$cleared_app_binding"
+forged_bindings=$(mutate "$observation" observation-forged-bindings \
+  '.stale_bindings=["head"]')
+expect_refusal forged-bindings review-stale review.bindings-unverified \
+  "$context" "$forged_bindings"
 
 dismissed_review="$fixtures/observation-dismissed.json"
 normalize "$(mutate "$review_input" review-dismissed-input \
@@ -434,6 +449,10 @@ normalize "$(mutate "$review_input" review-partial-input \
   "$partial_review"
 expect_refusal incomplete degraded-review review.incomplete "$context" \
   "$partial_review"
+forged_incomplete=$(mutate "$observation" observation-forged-incomplete \
+  '.observation.complete=false')
+expect_refusal forged-incomplete degraded-review review.incomplete "$context" \
+  "$forged_incomplete"
 
 approved=$(bind_context approved-context "$credential" "$reconciliation" \
   "$risk" "$ledger" \
@@ -538,6 +557,18 @@ expect_error observation-forged-adapter E_RELATION "$planner" plan \
   "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 expect_error observation-granted-authority E_RELATION "$planner" plan \
   "$(mutate "$observation" observation-authority '.authority="full"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-inline-count-over E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-inline-over \
+    '.observation.reported_inline_count=9')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-inline-count-under E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-inline-under \
+    '.observation.reported_inline_count=1')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-top-level-count-mismatch E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-top-level-miscount \
+    '.observation.reported_top_level_count=5')" \
   "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 expect_error ledger-count-mismatch E_RELATION "$planner" plan "$observation" \
   "$context" "$credential" "$reconciliation" "$risk" \

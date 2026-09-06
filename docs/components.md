@@ -712,12 +712,28 @@ credential, reconciliation, risk, or attempt-ledger document handed in is not th
 exact one the change context pins by kind, id, and SHA-256; whenever the
 credential or risk verdict is anything but `satisfied`; whenever the reconciliation
 plan still carries deferred deliveries or operator messages; or whenever the ledger
-belongs to another change or was recorded after the context was observed. The
-review is stale when the adapter reports stale bindings or when its head, base,
-repository, or change request is not the change's current one, and degraded when
-the review was dismissed, timed out, failed, is not complete, or never reached
-`COMPLETED`. An approval recorded on the exact reviewed head refuses outright; an
-approval on an earlier commit only forbids the push.
+belongs to another change or was recorded after the context was observed.
+
+The planner never trusts the observation's own list of stale bindings. It
+recomputes every binding the Codex native reviewer checks — repository, change
+request, head, base, review id, GitHub app id, and observation time — from the
+observation's trust context against its own snapshot, and refuses `review-stale`
+when any recomputed binding differs, so an observation whose list was cleared
+after the fact cannot drive a fix. A list that disagrees with the recomputation is
+itself a refusal, in either direction: a cleared list over a genuinely stale
+review, and a list claiming staleness the recomputation does not find, are both
+`review-stale`. The review is stale as well when the adapter reports the stale
+state, or when its head, base, repository, or change request is not the change's
+current one.
+
+A review is degraded when it was dismissed, timed out, failed, is not complete, or
+never reached `COMPLETED`; a partial review can never scope a fix, so
+`complete: false` always refuses. When a review does claim to be complete, its
+reported top-level and inline counts must equal the lengths of the arrays it
+carries; a complete review whose counts and findings disagree is a malformed
+document, refused as a shape violation rather than planned from the short array.
+An approval recorded on the exact reviewed head refuses outright; an approval on
+an earlier commit only forbids the push.
 
 Every input is treated as untrusted. The driver requires each of the six inputs to
 be an absolute path to a regular non-symlink file of at most 1 MiB, holding exactly

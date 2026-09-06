@@ -153,7 +153,11 @@ def snapshot_ok:
   (.inline_findings | type == "array" and length <= 256 and
    all(.[]; inline_finding_ok($snapshot.head))) and
   ((.top_level_findings + .inline_findings) | map(.finding_id) |
-   length == (unique | length));
+   length == (unique | length)) and
+  (if .complete then
+     .reported_top_level_count == (.top_level_findings | length) and
+     .reported_inline_count == (.inline_findings | length)
+   else true end);
 def observation_ok:
   exact(["adapter","authority","effects","kind","observation","qualification",
     "reason_id","review_mode","schema_version","stale_bindings","state",
@@ -265,9 +269,25 @@ def boundary_reasons($c; $cred; $rec; $risk; $led; $shas):
    (if $led.body.recorded_at <= $c.body.observed_at then []
     else ["boundary.attempt-ledger-not-yet-observed"] end)) | sort | unique;
 
+def recomputed_bindings($o):
+  $o.trust_context as $t | $o.observation as $s |
+  [(if $s.github_app_id != $t.expected_github_app_id then "app" else empty end),
+   (if $s.base != $t.expected_base then "base" else empty end),
+   (if $s.change_request_id != $t.expected_change_request_id
+    then "change-request" else empty end),
+   (if $s.head != $t.expected_head then "head" else empty end),
+   (if $s.observed_at != $t.observation_time
+    then "observation-time" else empty end),
+   (if $s.repository_id != $t.expected_repository_id
+    then "repository" else empty end),
+   (if $s.review_id != $t.expected_review_id then "review" else empty end)];
+
 def stale_reasons($o; $c):
+  recomputed_bindings($o) as $bindings |
   ((if $o.state == "stale" then ["review.state-stale"] else [] end) +
-   (if ($o.stale_bindings | length) > 0 then ["review.bindings-stale"] else [] end) +
+   (if ($bindings | length) > 0 then ["review.bindings-stale"] else [] end) +
+   (if $o.stale_bindings == $bindings then []
+    else ["review.bindings-unverified"] end) +
    (if $o.trust_context.expected_head == $c.body.head and
        $o.observation.head == $c.body.head
     then [] else ["review.head-mismatch"] end) +
