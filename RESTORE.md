@@ -55,6 +55,50 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive default profile assembly
+
+Restore the eight paths listed under “Inactive default profile assembly” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, together with
+the producer config restored under “Inactive default producer config”, then run:
+
+```sh
+bash scripts/test/default-profile-assembly.test.sh
+```
+
+The proof validates the profile and six manifests, their exact main package
+objects, the producer config contract, the accepted Roadmap decision record, role
+separation, and empty tool requests. Restoring these records does not select,
+resolve, qualify, install, or activate the profile; it grants no authority and
+performs no model, credential, provider, publish, or target operation.
+
+### Restore the inactive default producer config
+
+Restore the two paths listed under “Inactive default producer config” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/default-producer-config.test.sh
+```
+
+The payload records an inactive producer preference. It does not select or
+activate a profile and performs no model, credential, provider, publish, or
+target operation.
+
+### Restore the inactive alternative producer config payload (Codex CLI producer)
+
+Restore the two paths listed under “Inactive alternative producer config
+payload (Codex CLI producer)” in [`ci/required-files.txt`](ci/required-files.txt),
+then run:
+
+```sh
+bash scripts/test/alternative-producer-config.test.sh
+```
+
+The payload records an inactive producer preference the alternative profile
+(Codex CLI producer, openai provider) will pin by Git object. It does not
+select or activate a profile and performs no model, credential, provider,
+publish, or target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
@@ -508,6 +552,38 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive telemetry trace-record validator block,
+then run:
+
+```sh
+bash scripts/test/telemetry-trace-ledger.test.sh
+```
+
+This validates supplied canonical bounded events, exact session and attempt bindings,
+explicit unavailable facts, exact sequence and prior-digest links, the sealed
+tail, deterministic bounded receipts, and fail-closed handling of duplicates,
+replay, reorder, truncation, tampering, time reversal, malformed input, symlinks,
+and unverified runtimes. It does not collect or write telemetry, grant authority or
+qualification, run a tool or adapter, use a credential or network, activate a
+profile, publish, deploy, or touch a target. Durable append, retention, access,
+and recovery behavior is later work.
+
+Restore the three paths in the manifest's inactive hermetic eval-record evaluator block,
+then run:
+
+```sh
+bash scripts/test/eval-framework.test.sh
+```
+
+This checks supplied canonical suite, case, trial, and grade records; immutable
+framework and scope references; exact trial/attempt identities; coherent trial and
+grade timestamps; deterministic and stochastic multi-trial results; explicit
+`unavailable` and `inconclusive` states; and stale, tampered, duplicate, missing,
+or out-of-order input rejection. Failed grades cannot be hidden by an unavailable
+trial. The evaluator does not run trials or invoke a grader, model, adapter, or
+arbitrary command. It uses no network or credential and grants no authority,
+activation, qualification, or external effect. Hermetic built-in trial and grader
+execution is later work.
 Restore the four paths in the manifest's inactive local Git materializer block,
 then run:
 
