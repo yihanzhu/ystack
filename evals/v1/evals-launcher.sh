@@ -145,7 +145,7 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 
 program_sha=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
 catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
-driver_sha=cdd7e898ae26be541516faf5f9539371e937f5bb39ad5b5ca9d4733d69e51994
+driver_sha=e20544b094e48fbe49852ac1e4b5cefbbba0eb01a74bf911d7bf7775fdf3cb89
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -365,26 +365,23 @@ if [ "$mode" = run ]; then
     "$scratch/input.json" "$scratch/work/observations.json" "$output" \
     "$scratch/work/observations.json" '[]' || emit_error E_RUNTIME
 else
-  # Every pair is re-validated here as the driver did, then the dashboard itself.
+  # Every pair is re-validated against the driver's replay, then the dashboard itself.
   j=0
   while [ "$j" -lt "$pair_count" ]; do
-    "$runtime/bin/jq" -S -c '[.body.cases[].observation | select(.state == "present") | .value]' \
-      "$scratch/inputs/result-$j.json" \
-      > "$scratch/work/check-$j-observations.json" 2>/dev/null || emit_error E_RUNTIME
-    "$runtime/bin/jq" -S -c '.body.evaluator.content' "$scratch/inputs/result-$j.json" \
-      > "$scratch/work/check-$j-evaluator.json" 2>/dev/null || emit_error E_RUNTIME
     check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$scratch/inputs/result-$j.json") ||
       emit_error E_RUNTIME
-    program_check validate-run-result "$scratch/work/check-$j-evaluator.json" \
-      "$(sha256_path "$scratch/work/check-$j-evaluator.json")" \
+    # The driver replayed this seed set into pair-$j; re-validate the supplied
+    # result against that fresh observation set and this runtime's evaluator.
+    [ -f "$scratch/work/pair-$j/observations.json" ] || emit_error E_RUNTIME
+    program_check validate-run-result "$runtime/evaluator.json" "$evaluator_sha" \
       "$(sha256_path "$scratch/inputs/seed-$j.json")" "$scratch/inputs/seed-$j.json" \
-      "$scratch/work/check-$j-observations.json" "$scratch/inputs/result-$j.json" \
-      "$scratch/work/check-$j-observations.json" '[]' || emit_error E_RELATION
+      "$scratch/work/pair-$j/observations.json" "$scratch/inputs/result-$j.json" \
+      "$scratch/work/pair-$j/observations.json" '[]' || emit_error E_RELATION
     j=$((j + 1))
   done
   check_observed_at=$observed_at
   program_check validate-dashboard "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
-    "$scratch/work/seeds.jsonl" "$scratch/work/check-0-observations.json" "$output" \
+    "$scratch/work/seeds.jsonl" "$scratch/work/pair-0/observations.json" "$output" \
     "$scratch/work/results.jsonl" \
     "$("$runtime/bin/jq" -c 'map(.result_sha256)' "$scratch/inputs/manifest.json")" ||
     emit_error E_RUNTIME

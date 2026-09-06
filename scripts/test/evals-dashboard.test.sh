@@ -142,6 +142,12 @@ expect_error() {
 "$jq_bin" -S -c '.body.cases[0].verdict = "failed" | .body.cases[0].reason_id = "evals.status-mismatch" |
   .body.summary.passed -= 1 | .body.summary.failed += 1' "$tmp/seed-set.result.json" > "$tmp/flipped.json"
 expect_error flipped-verdict E_RELATION "$root/evals/v1/seed-set.json" "$tmp/flipped.json"
+# A forged result whose observation, verdict, and summary all agree with each
+# other still does not count: the replay of its seed set disagrees.
+"$jq_bin" -S -c '.body.cases[0].observation.value.error_token.value = "E_SHAPE" |
+  .body.cases[0].verdict = "failed" | .body.cases[0].reason_id = "evals.error-token-mismatch" |
+  .body.summary.passed -= 1 | .body.summary.failed += 1' "$tmp/seed-set.result.json" > "$tmp/forged.json"
+expect_error forged-consistent-result E_RELATION "$root/evals/v1/seed-set.json" "$tmp/forged.json"
 "$jq_bin" -S -c '.body.evaluator.sha256 = ("e" * 64) |
   .body.trace |= map(.identity.evaluator_ref.sha256 = ("e" * 64))' "$tmp/seed-set.result.json" \
   > "$tmp/claimed-evaluator.json"
@@ -161,6 +167,6 @@ if "$framework" dashboard "$observed_at" "$root/evals/v1/seed-set.json" >"$tmp/o
   fail 'an unpaired seed set was accepted'
 fi
 [ "$(<"$tmp/odd.err")" = E_USAGE ] || fail 'unpaired arguments are a usage error'
-pass 'a flipped verdict, a claimed evaluator digest, a mismatched pair, a duplicate, a non-canonical, whitespace-padded, or truncated result, and odd arguments fail closed'
+pass 'a flipped verdict, a forged self-consistent result, a claimed evaluator digest, a mismatched pair, a duplicate, a non-canonical, whitespace-padded, or truncated result, and odd arguments fail closed'
 
 /usr/bin/printf '1..%s\n' "$passes"
