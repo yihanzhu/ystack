@@ -212,7 +212,7 @@ model_only_catalog_sha=$(sha_file "$model_only_catalog")
 pass 'a misfiled family is refused; a seeded model-only family stays inconclusive in case and trace'
 
 # A run result built from a partial observation set marks the unobserved case
-# inconclusive; the dashboard must accept that result and count it as such.
+# inconclusive in the program; the dashboard, which replays every case, refuses it.
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/partial-evaluator.json"
 "$jq_bin" -S -c '[.body.cases[1:][].observation.value]' "$first" > "$tmp/partial-observations.json"
 "$jq_bin" -S -c -n -L "$modules" \
@@ -238,11 +238,14 @@ pass 'a misfiled family is refused; a seeded model-only family stays inconclusiv
 "$jq_bin" -e '.body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
   (.body.cases[0].observation == {state:"absent"})' "$tmp/partial.out" > /dev/null ||
   fail 'partial observation set did not yield one inconclusive case'
-"$framework" dashboard "$observed_at" "$seed_set" "$tmp/partial.out" > "$tmp/partial-dashboard.json" \
-  2>"$tmp/partial-dashboard.err" || fail "dashboard refused a partial result: $(<"$tmp/partial-dashboard.err")"
-"$jq_bin" -e '.body.quality == {total:8,passed:7,failed:0,inconclusive:1}' "$tmp/partial-dashboard.json" \
-  > /dev/null || fail 'dashboard miscounted a partial result'
-pass 'a result with an unobserved case is a valid dashboard input and counts as inconclusive'
+# The dashboard replays the seed set and observes every case, so a result with
+# an unobserved case cannot be reproduced and does not count.
+if "$framework" dashboard "$observed_at" "$seed_set" "$tmp/partial.out" > "$tmp/partial-dashboard.json" \
+  2>"$tmp/partial-dashboard.err"; then
+  fail 'dashboard counted a result its replay cannot reproduce'
+fi
+[ "$(<"$tmp/partial-dashboard.err")" = E_RELATION ] || fail 'partial result was not refused as E_RELATION'
+pass 'a partially observed result is inconclusive in the program and refused by the dashboard replay'
 
 # --- fail closed on bad or moved input ----------------------------------------
 expect_error() {
