@@ -188,26 +188,16 @@ pass 'moved, misfiled, and mis-shaped approval seed sets fail closed with one to
 
 # --- the launcher refuses an edited evaluator ---------------------------------------
 copy="$tmp/copy"
-/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts" "$copy/orchestrator/v1" \
-  "$copy/control/v1"
+/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages is present, so the edit below is the
+# only stale thing in this fixture.
+for component in orchestrator/v1 control/v1 adapters; do
+  /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
-done
-for f in scan-state.sh state-scanner-launcher.sh state-scanner-driver.sh state-scanner.jq \
-  reconciliation-plan.jq; do
-  /bin/cp "$root/orchestrator/v1/$f" "$copy/orchestrator/v1/$f"
-done
-for f in evaluate-sandbox.sh policy-set.jq sandbox-decision.json sandbox-policy.json \
-  sandbox.jq validate.sh evaluate-risk-gates.sh risk-gates-policy.json risk-gates-decision.json \
-  risk-gates.jq duty-separation-policy.json duty-separation-decision.json duty-separation.jq \
-  evaluate-duty.sh; do
-  /bin/cp "$root/control/v1/$f" "$copy/control/v1/$f"
-done
-for name in codex-native-reviewer github-actions-ci github-forge; do
-  /bin/mkdir -p "$copy/adapters/$name/v1"
-  /bin/cp "$root/adapters/$name/v1/normalize.jq" "$copy/adapters/$name/v1/normalize.jq"
 done
 /usr/bin/printf '\n# tampered\n' >> "$copy/control/v1/risk-gates.jq"
 if "$copy/evals/v1/run-evals.sh" run "$seed_set" "$observed_at" >"$tmp/stale.out" 2>"$tmp/stale.err"; then

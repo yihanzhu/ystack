@@ -67,10 +67,10 @@ sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
 sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
 risk_gates_evaluator="$runtime/control/v1/evaluate-risk-gates.sh"
 risk_gates_sha256=0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8
-normalizer_shas='{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}'
+normalizer_shas='{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=723e6d001227565fb0649391233e0208fd172e507ead670f19888da9739fd26a
+program_sha256=c92eae2b20cff74e27af12bf38c8b0f5199eb7fa62bd02c41f205f0e04cda504
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
@@ -112,6 +112,10 @@ verify_runtime() {
     "$runtime/control/v1/duty-separation.jq" &&
   verify_hash 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa \
     "$runtime/control/v1/evaluate-duty.sh" &&
+  verify_hash dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25 \
+    "$runtime/adapters/codex-cli-producer/v1/normalize.jq" &&
+  verify_hash b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713 \
+    "$runtime/adapters/gitlab-forge/v1/normalize.jq" &&
   verify_hash 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 \
     "$runtime/adapters/codex-native-reviewer/v1/normalize.jq" &&
   verify_hash 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7 \
@@ -400,7 +404,7 @@ replay_normalizer_cases() {
     case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
     normalizer=$("$jq_bin" -r ".body.cases[$i].normalizer" "$input") || emit_error E_RUNTIME
     case "$normalizer" in
-      codex-native-reviewer|github-actions-ci|github-forge) ;;
+      codex-cli-producer|codex-native-reviewer|github-actions-ci|github-forge|gitlab-forge) ;;
       *) emit_error E_SHAPE ;;
     esac
     input_doc="$work/normalizer-input-$i.json"
@@ -410,13 +414,14 @@ replay_normalizer_cases() {
       "$("$jq_bin" -r ".body.cases[$i].input.sha256" "$input")" ] || emit_error E_RELATION
     norm_out="$work/normalizer-$i.out"
     norm_err="$work/normalizer-$i.err"
-    "$jq_bin" -S -c -f "$runtime/adapters/$normalizer/v1/normalize.jq" "$input_doc" \
+    "$jq_bin" -L "$modules" -S -c -f "$runtime/adapters/$normalizer/v1/normalize.jq" "$input_doc" \
       </dev/null >"$norm_out" 2>"$norm_err"
     norm_status=$?
     if [ "$norm_status" -eq 0 ]; then
       [ ! -s "$norm_err" ] || emit_error E_RUNTIME
-      normalization=$("$jq_bin" -S -c '{reason_id,stale_bindings,state}' "$norm_out") ||
-        emit_error E_RUNTIME
+      # A producer normalizer has no bindings to go stale; its set is empty.
+      normalization=$("$jq_bin" -S -c '{reason_id,stale_bindings:(.stale_bindings // []),state}' \
+        "$norm_out") || emit_error E_RUNTIME
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
         --argjson normalization "$normalization" \
         '{case_id:$case_id,disposition:"normalized",
@@ -432,6 +437,8 @@ replay_normalizer_cases() {
         github-actions-ci.invalid-snapshot|github-actions-ci.invalid-trust-context) ;;
         github-actions-ci.provider-contradiction|github-forge.invalid-envelope) ;;
         github-forge.invalid-snapshot|github-forge.invalid-trust-context) ;;
+        gitlab-forge.invalid-envelope|gitlab-forge.invalid-snapshot) ;;
+        gitlab-forge.invalid-trust-context|E_SHAPE|E_STALE|E_TRUST) ;;
         *) emit_error E_RUNTIME ;;
       esac
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \

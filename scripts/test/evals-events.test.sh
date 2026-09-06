@@ -183,14 +183,16 @@ pass 'moved snapshots and mis-shaped scanner seed sets fail closed with one toke
 
 # --- the launcher refuses an edited scanner ------------------------------------------
 copy="$tmp/copy"
-/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts" "$copy/orchestrator/v1"
+/bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages is present, so the edit below is the
+# only stale thing in this fixture.
+for component in orchestrator/v1 control/v1 adapters; do
+  /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
-done
-for f in scan-state.sh state-scanner-launcher.sh state-scanner-driver.sh state-scanner.jq; do
-  /bin/cp "$root/orchestrator/v1/$f" "$copy/orchestrator/v1/$f"
 done
 /usr/bin/printf '\n# tampered\n' >> "$copy/orchestrator/v1/state-scanner.jq"
 if "$copy/evals/v1/run-evals.sh" run "$seed_set" "$observed_at" >"$tmp/stale.out" 2>"$tmp/stale.err"; then

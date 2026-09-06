@@ -90,15 +90,20 @@ def expected_control_closure:
      sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
   ];
 
-# The inactive provider-snapshot normalizers replayed for the adapter family.
+# The inactive default and alternative normalizers replayed for the adapter
+# family: three GitHub-side defaults, the GitLab forge, and the Codex CLI producer.
 def expected_adapter_closure:
   [
+    {path:"adapters/codex-cli-producer/v1/normalize.jq",
+     sha256:"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25"},
     {path:"adapters/codex-native-reviewer/v1/normalize.jq",
      sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
     {path:"adapters/github-actions-ci/v1/normalize.jq",
      sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
     {path:"adapters/github-forge/v1/normalize.jq",
-     sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
+     sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"},
+    {path:"adapters/gitlab-forge/v1/normalize.jq",
+     sha256:"b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713"}
   ];
 
 def ref_shape($content_id; $media_type):
@@ -140,17 +145,21 @@ def active_seed_sources:
   ["adapters.provider-normalizers.v1","control.risk-gates.v1","control.sandbox-policy.v1",
    "core.stage-run.v2","orchestrator.reconciliation-plan.v1","orchestrator.state-scanner.v1"];
 def risk_gates_error_tokens: ["E_DUTY","E_LIMIT","E_RELATION","E_RUNTIME","E_USAGE"];
-def normalizer_ids: ["codex-native-reviewer","github-actions-ci","github-forge"];
+def normalizer_ids:
+  ["codex-cli-producer","codex-native-reviewer","github-actions-ci","github-forge","gitlab-forge"];
 def normalizer_error_ids:
-  ["codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
+  ["E_SHAPE","E_STALE","E_TRUST",
+   "codex-reviewer.invalid-envelope","codex-reviewer.invalid-snapshot",
    "codex-reviewer.invalid-trust-context","github-actions-ci.invalid-envelope",
    "github-actions-ci.invalid-snapshot","github-actions-ci.invalid-trust-context",
    "github-actions-ci.provider-contradiction","github-forge.invalid-envelope",
-   "github-forge.invalid-snapshot","github-forge.invalid-trust-context"];
+   "github-forge.invalid-snapshot","github-forge.invalid-trust-context",
+   "gitlab-forge.invalid-envelope","gitlab-forge.invalid-snapshot",
+   "gitlab-forge.invalid-trust-context"];
 def normalizer_states:
-  ["action-required","cancelled","clean","closed-unmerged","dismissed","failed","findings",
-   "in-progress","inconclusive","merged","open-blocked","open-ready","passed","queued","stale",
-   "timed-out","timeout"];
+  ["action-required","cancelled","changed","clean","closed-unmerged","dismissed","failed",
+   "findings","in-progress","inconclusive","merged","no-change","open-blocked","open-ready",
+   "passed","queued","stale","timed-out","timeout"];
 def sandbox_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_POLICY_SET","E_RELATION","E_RUNTIME","E_USAGE"];
 def sandbox_verdicts: ["inconclusive","satisfied","violated"];
@@ -651,7 +660,7 @@ def tool_ref($source; $case):
 def tool_ref_ok($source):
   if $source == "adapters.provider-normalizers.v1" then
     schema::content_ref_ok and .media_type == "text/x-jq" and
-    (.content_id | test("\\Aadapter-normalizer\\.(codex-native-reviewer|github-actions-ci|github-forge)\\.v1\\z")) and
+    (.content_id | test("\\Aadapter-normalizer\\.(codex-cli-producer|codex-native-reviewer|github-actions-ci|github-forge|gitlab-forge)\\.v1\\z")) and
     .sha256 == $normalizer_shas[.content_id | ltrimstr("adapter-normalizer.") | rtrimstr(".v1")]
   else ref_shape(tool_content_id($source);tool_media_type($source)) end;
 

@@ -494,6 +494,19 @@ envelopes, bindings, or snapshots refused with the normalizer's own error id. Th
 normalizer is the only judge; the framework records the generic state, reason, and
 stale-binding set it reports.
 
+The same family also replays the GitLab forge normalizer and the Codex CLI
+producer normalizer, the alternative forge and harness from roadmap item 6,
+through the same contract and safety evals as the GitHub defaults. The GitLab
+cases cover ready, conflict, security-policy-blocked, merged, closed, locked, and
+still-running merge requests; stale bindings named exactly; provider text that
+can never decide a state; and GitHub-shaped or legacy merge-status inputs
+refused. The Codex producer cases cover changed and no-change snapshots;
+provider failure, timeout, and degraded runs kept inconclusive; stale inputs and
+incomplete metadata; a moved attempt; another harness's provider; an unknown
+state; a moved untrusted snapshot; and a caller manifest ceiling, each refused.
+This is the roadmap item 6 proof that the alternative forge and harness meet the
+same contract and evals as the defaults.
+
 The approval-invalidation and no-push-after-approval family is seeded from
 `evals/v1/seed-set-approvals.json`. Each case carries a whole decision tuple
 (policy set, core request, resolved profile, result, duty evaluation, decision
