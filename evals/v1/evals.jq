@@ -751,6 +751,160 @@ def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
       ($result.body.cases | map(select(.verdict == "inconclusive")) | length)) and
    all(.trace[]; .identity.evaluator_ref.sha256 == $result.body.evaluator.sha256));
 
+# Flow/quality dashboard over one or more validated run results. Every number
+# is a count derived from the results handed in; nothing is measured live, so
+# latency, cost, and operating-flow metrics are recorded absent with a reason.
+def flow_metric_ids:
+  ["accepted-plan-to-merge-time","dora-instability","dora-throughput","escaped-defects",
+   "escaped-vulnerabilities","first-pass-success","human-gate-wait","intent-to-spec-time",
+   "queue-wait","review-latency","review-precision","review-recall-samples",
+   "review-stale-rate","rework-cycles","target-outcome"];
+def telemetry_metric_ids: ["cost","latency","tokens"];
+def absent_metric($reason): {state:"absent",reason_id:$reason};
+def dashboard_id: "evals.dashboard.v1";
+
+def verdict_counts:
+  {total:length,
+   passed:(map(select(.verdict == "passed")) | length),
+   failed:(map(select(.verdict == "failed")) | length),
+   inconclusive:(map(select(.verdict == "inconclusive")) | length)};
+
+# Recovery evidence is read from the events family's passed cases: what the
+# scanner or planner did with a missed, cancelled, or repeated event.
+def recovery_counts:
+  map(select(.family_id == "repeated-cancelled-missed-events" and .verdict == "passed")) |
+  {stranded_recovered:
+     (map(select(.expectation.class == "stranded" or
+                 ((.expectation.deliveries // []) |
+                  any(.operation == "recover-stranded-attempt")))) | length),
+   cancelled_stayed_terminal:
+     (map(select(.expectation.reason_id == "scanner.stage-cancelled")) | length),
+   repeats_redelivered_once:
+     (map(select((.expectation.deliveries // []) | any(.delivery_mode == "redelivery"))) | length),
+   repeats_suppressed_after_acknowledgement:
+     (map(select(((.expectation.suppressed // []) | length) > 0)) | length),
+   retry_limit_enforced:
+     (map(select(.expectation.reason_id == "scanner.retry-limit-reached")) | length),
+   events_refused:
+     (map(select(.expectation.disposition == "rejected")) | length)};
+
+def build_dashboard($catalog; $catalog_sha; $evaluator; $evaluator_sha; $results;
+                    $result_shas; $observed_at):
+  ([range(0; $results | length) as $index |
+    {run_id:$results[$index].id,
+     seed_source:$results[$index].body.seed_source,
+     seed_set_ref:$results[$index].body.seed_set_ref,
+     result_sha256:$result_shas[$index],
+     observed_at:$results[$index].body.observed_at,
+     summary:$results[$index].body.summary}] | sort_by(.result_sha256)) as $inputs |
+  ([$results[].body.cases[]]) as $cases |
+  ([$results[].body.trace[]]) as $trace |
+  {
+    schema_version:1,
+    kind:"eval_dashboard",
+    id:dashboard_id,
+    body:{
+      activation_state:"inactive",
+      authority_effect:"none",
+      mode:"deterministic-offline",
+      core_contract:expected_core,
+      catalog_ref:document_ref($catalog;$catalog_sha),
+      evaluator:{content:$evaluator,sha256:$evaluator_sha},
+      observed_at:$observed_at,
+      inputs:$inputs,
+      coverage:{
+        families_total:($catalog.body.families | length),
+        families_seeded:([$catalog.body.families[] | select(.seed_status == "seeded")] | length),
+        families_declared:([$catalog.body.families[] | select(.seed_status == "declared")] | length),
+        families_with_results:([$cases[].family_id] | unique | length),
+        sources_with_results:([$results[].body.seed_source] | unique)
+      },
+      families:[
+        $catalog.body.families[] | .family_id as $family |
+        ([$cases[] | select(.family_id == $family)]) as $family_cases |
+        {family_id:$family,
+         seed_status:.seed_status,
+         seed_sources:.seed_sources,
+         grader_kinds:.grader_kinds,
+         trial_policy:.trial_policy,
+         runs:([$results[] | select(any(.body.cases[]; .family_id == $family))] | length),
+         cases:($family_cases | verdict_counts)}
+      ],
+      quality:($cases | verdict_counts),
+      recovery:($cases | recovery_counts),
+      telemetry:(
+        telemetry_metric_ids | map({key:.,
+          value:(if . == "tokens" then absent_metric("evals.no-live-runs")
+                 elif all($trace[]; .[if . == "cost" then "cost" else "latency" end] == {state:"absent"})
+                 then absent_metric("evals.no-live-runs")
+                 else absent_metric("evals.telemetry-not-aggregated") end)}) | from_entries),
+      flow:(flow_metric_ids | map({key:.,value:absent_metric("evals.no-operating-history")}) |
+            from_entries)
+    }
+  };
+
+def dashboard_input_shape:
+  schema::exact_fields(
+    ["observed_at","result_sha256","run_id","seed_set_ref","seed_source","summary"];[]) and
+  (.run_id | schema::id_ok) and (.result_sha256 | schema::sha256_ok) and
+  (.seed_source as $source | active_seed_sources | index($source) != null) and
+  (.observed_at | schema::time_ok) and
+  (.seed_set_ref |
+   schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
+   .schema_version == 1 and .kind == "eval_seed_set" and (.id | schema::id_ok) and
+   (.sha256 | schema::sha256_ok)) and
+  (.summary | schema::exact_fields(["failed","inconclusive","passed","total"];[]) and
+   all(.[]; schema::int_ok and . >= 0));
+
+def dashboard_shape($catalog; $catalog_sha; $evaluator_sha; $results; $result_shas;
+                    $observed_at):
+  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "eval_dashboard" and .id == dashboard_id and
+  (.body |
+   schema::exact_fields(
+     ["activation_state","authority_effect","catalog_ref","core_contract","coverage",
+      "evaluator","families","flow","inputs","mode","observed_at","quality","recovery",
+      "telemetry"];[]) and
+   .activation_state == "inactive" and .authority_effect == "none" and
+   .mode == "deterministic-offline" and .core_contract == expected_core and
+   .catalog_ref == document_ref($catalog;$catalog_sha) and
+   (.evaluator | schema::exact_fields(["content","sha256"];[]) and
+    (.content | evaluator_shape) and .sha256 == $evaluator_sha) and
+   .observed_at == $observed_at and
+   (.inputs | schema::bounded_set(1;16;dashboard_input_shape;.result_sha256)) and
+   ((.inputs | map(.result_sha256) | sort) == ($result_shas | sort)) and
+   (.families | schema::bounded_set(9;9;
+      (schema::exact_fields(
+         ["cases","family_id","grader_kinds","runs","seed_sources","seed_status",
+          "trial_policy"];[]) and
+       (.family_id as $id | family_ids | index($id) != null) and
+       (.runs | schema::int_ok) and .runs >= 0 and .runs <= 16 and
+       (.cases | all(.[]; schema::int_ok and . >= 0)));.family_id)) and
+   (.coverage | schema::exact_fields(
+      ["families_declared","families_seeded","families_total","families_with_results",
+       "sources_with_results"];[]) and .families_total == 9 and
+    .families_seeded + .families_declared == 9 and
+    (.sources_with_results | schema::enum_set_ok(1;8;active_seed_sources))) and
+   (.quality | all(.[]; schema::int_ok and . >= 0)) and
+   (.recovery | all(.[]; schema::int_ok and . >= 0)) and
+   (.telemetry | keys == telemetry_metric_ids and
+    all(.[]; .state == "absent" and (.reason_id | schema::id_ok))) and
+   (.flow | keys == flow_metric_ids and
+    all(.[]; . == absent_metric("evals.no-operating-history"))));
+
+# Results are accepted into a dashboard only after the driver and launcher have
+# validated each one against its own seed set; here they must be distinct,
+# canonical results of this catalog and program.
+def dashboard_results_ok($result_shas):
+  ($result_shas | type == "array" and length >= 1 and length <= 16 and
+   all(.[]; schema::sha256_ok) and (length == (unique | length))) and
+  length == ($result_shas | length) and
+  all(.[]; schema::exact_fields(["body","id","kind","schema_version"];[]) and
+           .schema_version == 1 and .kind == "eval_run_result" and
+           (.body.seed_source as $source | active_seed_sources | index($source) != null) and
+           (.body.evaluator.content | evaluator_shape) and
+           (.body.catalog_ref.sha256 == $catalog_sha256));
+
 # Driver entry points, selected with --arg evals_operation.
 if $evals_operation == "validate-catalog" then
   $catalog_docs[0] | catalog_shape
@@ -766,6 +920,26 @@ elif $evals_operation == "build-run-result" then
       $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
       $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];$observed_at)
   else error("E_SHAPE") end
+elif $evals_operation == "build-dashboard" then
+  ($catalog_docs[0] | catalog_shape) and
+  ($evaluator_docs[0] | evaluator_shape) and
+  ($result_docs | dashboard_results_ok($result_shas)) |
+  if . then
+    build_dashboard(
+      $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
+      $result_docs;$result_shas;$observed_at)
+  else error("E_SHAPE") end
+elif $evals_operation == "validate-dashboard" then
+  ($catalog_docs[0] | catalog_shape) and
+  ($evaluator_docs[0] | evaluator_shape) and
+  ($result_docs | dashboard_results_ok($result_shas)) and
+  ($candidate_docs[0] |
+   dashboard_shape($catalog_docs[0];$catalog_sha256;$evaluator_sha256;$result_docs;
+                   $result_shas;$observed_at)) and
+  $candidate_docs[0] ==
+    build_dashboard(
+      $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
+      $result_docs;$result_shas;$observed_at)
 elif $evals_operation == "validate-run-result" then
   # A candidate passes only if it is exactly the result this program derives
   # from the same catalog, evaluator, seed set, and recorded observations.

@@ -23,7 +23,9 @@ verify_hash() {
     [ "$(sha256_path "$2")" = "$1" ]
 }
 
-[ "$#" -eq 7 ] && [ "$1" = run ] || emit_error E_USAGE
+[ "$#" -eq 7 ] || emit_error E_USAGE
+mode=$1
+case "$mode" in run|dashboard) ;; *) emit_error E_USAGE ;; esac
 runtime=$2
 input=$3
 evaluator=$4
@@ -42,7 +44,14 @@ self="$self_dir/${self##*/}"
   emit_error E_RUNTIME
 [ -d "$runtime" ] && [ ! -L "$runtime" ] || emit_error E_RUNTIME
 runtime_parent=${runtime%/*}
-case "$input" in "$runtime_parent"/input.json) ;; *) emit_error E_RUNTIME ;; esac
+case "$mode:$input" in
+  run:"$runtime_parent"/input.json) input_document=$input ;;
+  dashboard:"$runtime_parent"/inputs)
+    [ -d "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
+    input_document="$input/manifest.json"
+    ;;
+  *) emit_error E_RUNTIME ;;
+esac
 case "$evaluator" in "$runtime"/evaluator.json) ;; *) emit_error E_RUNTIME ;; esac
 
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
@@ -59,7 +68,7 @@ sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
 normalizer_shas='{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=786174eaf8ad375d312f7a3bb029391966cbbb94518d4773c328c68b9e7b0891
+program_sha256=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
@@ -109,8 +118,18 @@ verify_runtime() {
   verify_hash 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
     "$runtime/orchestrator/v1/state-scanner.jq" &&
   verify_hash "$evaluator_sha256" "$evaluator" &&
-  verify_hash "$seed_set_sha256" "$input"
+  verify_hash "$program_seed_sha" "$input_document"
 }
+# The program sees exactly the documents named here. A dashboard run swaps the
+# seed set, evaluator, and result documents per pair; every other run uses the
+# driver's own.
+program_evaluator=$evaluator
+program_evaluator_sha=$evaluator_sha256
+program_seed_sha=$seed_set_sha256
+program_observed_at=$observed_at
+seed_docs_file=$input_document
+result_docs_file=$input_document
+result_shas_json='[]'
 verify_runtime || emit_error E_STALE
 [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
@@ -121,43 +140,99 @@ run_program() {
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
     --arg catalog_sha256 dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089 \
-    --arg evaluator_sha256 "$evaluator_sha256" \
-    --arg seed_set_sha256 "$seed_set_sha256" \
+    --arg evaluator_sha256 "$program_evaluator_sha" \
+    --arg seed_set_sha256 "$program_seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
     --arg sandbox_sha256 "$sandbox_sha256" --argjson normalizer_shas "$normalizer_shas" \
-    --arg observed_at "$observed_at" \
+    --arg observed_at "$program_observed_at" \
     --slurpfile catalog_docs "$catalog" \
-    --slurpfile seed_set_docs "$input" \
+    --slurpfile seed_set_docs "$seed_docs_file" \
     --slurpfile observation_docs "$2" \
-    --slurpfile evaluator_docs "$evaluator" \
+    --slurpfile evaluator_docs "$program_evaluator" \
     --slurpfile candidate_docs "$3" \
+    --slurpfile result_docs "$result_docs_file" --argjson result_shas "$result_shas_json" \
     -f "$program"
 }
+single_root() {
+  "$jq_bin" -e -n --slurpfile roots "$1" '($roots | length) == 1' >/dev/null 2>&1
+}
 
-# The seed set is caller input: it must be one parseable JSON root before any
-# contract runs, so a broken file reads as a parse error and nothing else.
-"$jq_bin" -e -n --slurpfile roots "$input" '($roots | length) == 1' \
-  >/dev/null 2>&1 || emit_error E_PARSE
+# A dashboard aggregates one to sixteen (seed set, run result) pairs staged by the
+# launcher. Each result must validate against its own seed set and this exact
+# program before it counts; the dashboard itself is then built and re-validated.
+run_dashboard() {
+  local manifest="$input/manifest.json" pair_count j pair_seed_doc pair_result_doc dashboard
+  local work_root=$work dashboard_input=$input pair_observed_at
+  single_root "$manifest" || emit_error E_PARSE
+  pair_count=$("$jq_bin" -r 'if type == "array" then length else empty end' "$manifest") ||
+    emit_error E_RUNTIME
+  [[ "$pair_count" =~ ^([1-9]|1[0-6])$ ]] || emit_error E_SHAPE
+  : > "$work/seeds.jsonl" || emit_error E_RUNTIME
+  : > "$work/results.jsonl" || emit_error E_RUNTIME
+  j=0
+  while [ "$j" -lt "$pair_count" ]; do
+    pair_seed_doc="$input/seed-$j.json"
+    pair_result_doc="$input/result-$j.json"
+    [ -f "$pair_seed_doc" ] && [ ! -L "$pair_seed_doc" ] && [ -f "$pair_result_doc" ] &&
+      [ ! -L "$pair_result_doc" ] || emit_error E_RUNTIME
+    [ "$(sha256_path "$pair_seed_doc")" = "$("$jq_bin" -r ".[$j].seed_sha256" "$manifest")" ] &&
+      [ "$(sha256_path "$pair_result_doc")" = "$("$jq_bin" -r ".[$j].result_sha256" "$manifest")" ] ||
+      emit_error E_RELATION
+    single_root "$pair_seed_doc" || emit_error E_PARSE
+    single_root "$pair_result_doc" || emit_error E_PARSE
+    # Byte comparison: command substitution would hide trailing whitespace.
+    "$jq_bin" -S -c . "$pair_result_doc" > "$work/pair-$j-canonical.json" 2>/dev/null ||
+      emit_error E_CANONICAL
+    /usr/bin/cmp -s "$pair_result_doc" "$work/pair-$j-canonical.json" || emit_error E_CANONICAL
+    # The seed set is replayed here, in this runtime, at the result's own
+    # recorded time. Only a result the replay reproduces byte for byte counts;
+    # nothing embedded in the supplied result is trusted.
+    pair_observed_at=$("$jq_bin" -r '.body.observed_at' "$pair_result_doc") || emit_error E_RUNTIME
+    [[ "$pair_observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+      emit_error E_SHAPE
+    work="$work_root/pair-$j"
+    /bin/mkdir -m 0700 "$work" || emit_error E_RUNTIME
+    /usr/bin/printf '[]\n' > "$work/empty-observations.json" || emit_error E_RUNTIME
+    /usr/bin/printf '{}\n' > "$work/empty-candidate.json" || emit_error E_RUNTIME
+    input=$pair_seed_doc
+    input_document=$pair_seed_doc
+    program_seed_sha=$(sha256_path "$pair_seed_doc") || emit_error E_RUNTIME
+    program_observed_at=$pair_observed_at
+    produce_result
+    /usr/bin/cmp -s "$work/run-result.json" "$pair_result_doc" || emit_error E_RELATION
+    work=$work_root
+    input=$dashboard_input
+    input_document="$dashboard_input/manifest.json"
+    program_seed_sha=$seed_set_sha256
+    program_observed_at=$observed_at
+    # Re-emitted one document per line so adjacent files never run together.
+    "$jq_bin" -S -c . "$pair_seed_doc" >> "$work/seeds.jsonl" || emit_error E_RUNTIME
+    "$jq_bin" -S -c . "$pair_result_doc" >> "$work/results.jsonl" || emit_error E_RUNTIME
+    j=$((j + 1))
+  done
+  seed_docs_file="$work/seeds.jsonl"
+  result_docs_file="$work/results.jsonl"
+  result_shas_json=$("$jq_bin" -c 'map(.result_sha256)' "$manifest") || emit_error E_RUNTIME
+  dashboard="$work/dashboard.json"
+  run_program build-dashboard "$work/empty-observations.json" "$work/empty-candidate.json" \
+    > "$dashboard" 2>/dev/null || emit_error E_RUNTIME
+  [ "$(run_program validate-dashboard "$work/empty-observations.json" "$dashboard" 2>/dev/null)" = true ] ||
+    emit_error E_RUNTIME
+  verify_runtime || emit_error E_STALE
+  /bin/cat "$dashboard" || emit_error E_RUNTIME
+  exit 0
+}
 
 /usr/bin/printf '[]\n' > "$work/empty-observations.json" || emit_error E_RUNTIME
 /usr/bin/printf '{}\n' > "$work/empty-candidate.json" || emit_error E_RUNTIME
+# Caller input must be one parseable JSON root before any contract runs, so a
+# broken file reads as a parse error and nothing else.
+single_root "$input_document" || emit_error E_PARSE
+seed_docs_file="$work/empty-observations.json"
+result_docs_file="$work/empty-observations.json"
 [ "$(run_program validate-catalog "$work/empty-observations.json" \
       "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_STALE
-[ "$(run_program validate-seed-set "$work/empty-observations.json" \
-      "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
-
-seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
-case "$seed_source" in
-  adapters.provider-normalizers.v1|control.sandbox-policy.v1|core.stage-run.v2) ;;
-  orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
-  *) emit_error E_SHAPE ;;
-esac
-case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
-[[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
-observations="$work/observations.json"
-/usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
-
 record_observation() {
   if [ "$i" -gt 0 ]; then /usr/bin/printf ',' >> "$observations" || emit_error E_RUNTIME; fi
   /usr/bin/printf '%s' "$1" >> "$observations" || emit_error E_RUNTIME
@@ -441,19 +516,45 @@ while [ "$i" -lt "$case_count" ]; do
 done
 }
 
-case "$seed_source" in
-  core.stage-run.v2) replay_stage_run_cases ;;
-  orchestrator.state-scanner.v1) replay_scanner_cases ;;
-  control.sandbox-policy.v1) replay_sandbox_cases ;;
-  adapters.provider-normalizers.v1) replay_normalizer_cases ;;
-  *) replay_planner_cases ;;
-esac
-/usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
+# One run over the seed set named by $input, into $work/run-result.json. Run mode
+# calls it once; dashboard mode calls it once per supplied pair to reproduce
+# the supplied result.
+produce_result() {
+  seed_docs_file=$input
+  [ "$(run_program validate-seed-set "$work/empty-observations.json" \
+        "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
 
-result="$work/run-result.json"
-run_program build-run-result "$observations" "$work/empty-candidate.json" \
-  > "$result" 2>/dev/null || emit_error E_RUNTIME
-[ "$(run_program validate-run-result "$observations" "$result" 2>/dev/null)" = true ] ||
-  emit_error E_RUNTIME
-verify_runtime || emit_error E_STALE
-/bin/cat "$result" || emit_error E_RUNTIME
+  seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
+  case "$seed_source" in
+    adapters.provider-normalizers.v1|control.sandbox-policy.v1|core.stage-run.v2) ;;
+    orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
+    *) emit_error E_SHAPE ;;
+  esac
+  case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
+  [[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
+  observations="$work/observations.json"
+  /usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
+
+  case "$seed_source" in
+    core.stage-run.v2) replay_stage_run_cases ;;
+    orchestrator.state-scanner.v1) replay_scanner_cases ;;
+    control.sandbox-policy.v1) replay_sandbox_cases ;;
+    adapters.provider-normalizers.v1) replay_normalizer_cases ;;
+    *) replay_planner_cases ;;
+  esac
+  /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
+
+  result="$work/run-result.json"
+  run_program build-run-result "$observations" "$work/empty-candidate.json" \
+    > "$result" 2>/dev/null || emit_error E_RUNTIME
+  [ "$(run_program validate-run-result "$observations" "$result" 2>/dev/null)" = true ] ||
+    emit_error E_RUNTIME
+}
+
+if [ "$mode" = run ]; then
+  produce_result
+  verify_runtime || emit_error E_STALE
+  /bin/cat "$work/run-result.json" || emit_error E_RUNTIME
+else
+  run_dashboard
+fi

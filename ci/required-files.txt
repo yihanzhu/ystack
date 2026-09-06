@@ -290,3 +290,4 @@ scripts/test/evals-events.test.sh
 scripts/test/evals-plans.test.sh
 scripts/test/evals-boundaries.test.sh
 scripts/test/evals-adapters.test.sh
+scripts/test/evals-dashboard.test.sh
