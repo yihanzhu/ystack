@@ -61,6 +61,7 @@ $marker[0] as $mode_doc |
  .body.activation_state == "inactive" and
  (.body.families |
   type == "array" and length == 9 and
+  (map(.family_id) | length == (unique | length)) and
   all(.[];
       type == "object" and (.family_id | type == "string") and
       (.seed_status | type == "string") and
@@ -75,9 +76,12 @@ $marker[0] as $mode_doc |
 ($duty_doc | evaluation_ok("duty_separation_evaluation")) as $duty_ok |
 ($mode_doc | type == "object" and (.status | type == "string")) as $mode_ok |
 
+# Only the two statuses the mode record can carry are meaningful: "active" is
+# construction and "retired" is operating. Anything else is unknown and refuses.
 (if ($mode_ok | not) or $mode_repo_state == "differs" then "unknown"
  elif $mode_doc.status == "active" then "construction"
- else "operating" end) as $mode_state |
+ elif $mode_doc.status == "retired" then "operating"
+ else "unknown" end) as $mode_state |
 
 (if $set_ok then
    [range(0; $set.body.records | length) as $index |

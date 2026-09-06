@@ -748,3 +748,5 @@ bootstraps the pinned jq 1.6 release itself, proves the proposable evaluation by
 for byte and byte-identical on repeat, proves every refusal above, proves the
 record validator's refusals, and proves that a copy of the component in a tree with
 no committed mode marker still only ever produces a blocked proposal.
+
+Two closures worth naming: a dashboard that lists a family twice is malformed, so a failing entry can never be shadowed by a later passing duplicate; and the operating-mode marker's status is a closed vocabulary (`active` is construction, `retired` is operating), so any other value, including a typo, is unknown and refuses with `scope.mode-construction` even in a portable tree with no committed marker.

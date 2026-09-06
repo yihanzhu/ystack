@@ -413,6 +413,18 @@ expect_reasons eval-inconclusive '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard.json" >"$tmp/dashboard-empty.json"
 expect_reasons eval-no-cases '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard-empty.json" "${good[@]:3}"
+# A dashboard that lists a required family twice, failing once and passing once,
+# must not let the later entry win: duplicate family ids are malformed.
+"$jq_bin" -S -c '(.body.families | map(select(.family_id == "stale-moved-artifacts"))[0]) as $pass |
+  .body.families |= (map(if .family_id == "stale-moved-artifacts" then .cases.failed = 1 else . end) |
+    (map(.family_id != "stale-moved-artifacts") | index(true)) as $slot | .[$slot] = $pass)' \
+  "$tmp/dashboard.json" >"$tmp/dashboard-duplicate.json"
+"$jq_bin" -e '[.body.families[] | select(.family_id == "stale-moved-artifacts")] | length == 2' \
+  "$tmp/dashboard-duplicate.json" >/dev/null || fail 'duplicate-family fixture must repeat the family'
+"$jq_bin" -e '.body.families | length == 9' "$tmp/dashboard-duplicate.json" >/dev/null ||
+  fail 'duplicate-family fixture must keep nine entries'
+expect_reasons eval-duplicate-family '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
+  "${good[@]:0:2}" "$tmp/dashboard-duplicate.json" "${good[@]:3}"
 pass 'every required eval family must be seeded and free of failing or inconclusive grades'
 
 "$jq_bin" -S -c '.body.verdict = "violated"' "$tmp/kill.json" >"$tmp/kill-violated.json"
@@ -508,5 +520,14 @@ PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6
 ' "$tmp/evaluation-portable.json" >/dev/null ||
   fail 'the portable copy enabled something or misread the mode'
 pass 'with no committed mode marker the outcome is still only a blocked proposal'
+# In that same portable tree an unknown status is not operating: only "active"
+# and "retired" mean anything, and a typo fails closed.
+"$jq_bin" -S -c -n '{schema_version:1,status:"activ"}' >"$tmp/marker-typo.json"
+PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
+  "$tmp/marker-typo.json" >"$tmp/evaluation-typo.json"
+"$jq_bin" -e '.body.outcome == "not-proposable" and
+  .body.reason_ids == ["scope.mode-construction"] and .body.enabled == false' \
+  "$tmp/evaluation-typo.json" >/dev/null || fail 'an unknown mode status was not refused'
+pass 'an unknown operating-mode status fails closed even without a committed marker'
 
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
