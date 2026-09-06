@@ -15,11 +15,15 @@ order — the operator supplies the judgment and the commit.
 
 Construction mode was a bounded exception: instead of running each roadmap item
 through the full intent → spec → plan → review chain, the accepted `ROADMAP.md` acted
-as the program authorization, and the twelve rollout items are implemented directly
-as dependency-ordered units. Every unit is inactive and repo-only — source,
-contracts, and a focused hermetic test — and every unit still passed required CI and
-an independent review to reach `main`. The result is a complete portable control
-plane that has never been switched on.
+as the program authorization, and the twelve rollout items are being implemented
+directly as dependency-ordered units. Every unit is inactive and repo-only — source,
+contracts, and a focused hermetic test — and each one reaches `main` only after
+required CI and an independent review. The table below is the current state, not a
+completion claim: steps 1–6 are on `main`; steps 7, 9, 10, and 11 are open PRs; steps
+8 and 12 are still being built. Construction is implementation-complete only when
+every row reads `merged`, and the transition PR in §3 must not be written before
+then. What construction produces is a portable control plane that has never been
+switched on.
 
 | Roadmap step | Unit path | Status |
 |---|---|---|
@@ -79,6 +83,8 @@ So the honest summary is: the harness is built and self-consistent; its behaviou
 against reality is untested.
 
 ## 3. The transition PR
+
+**Precondition:** every row of the table in §1 reads `merged`. Until then this section is a draft of a future PR, not an instruction.
 
 One PR, authored and merged by the operator, touching the mode record and nothing an
 agent could have authored.
@@ -152,8 +158,13 @@ refuse it anyway once the record no longer says `active`.
 
 Order matters. The mode record pins `roadmap_blob` and `north_star_blob`; while the
 gate is live, a PR that edits `ROADMAP.md` or `NORTH_STAR.md` without updating those
-digests fails closed. Keep the transition PR to the record and the ruleset
-verification — nothing else.
+digests fails closed. Keep the transition PR to the record, the ruleset
+verification, and the documentation that describes the mode as active — nothing
+more. The repo rule that every PR keeps README and docs in sync applies to this one
+too: the same PR updates README's construction-mode paragraph, the preamble of
+[`components.md`](components.md), and the present-tense text of this file so that
+none of them still says construction mode is active once the record says it is
+retired. Component code, tests, and `ci/required-files.txt` entries do not change.
 
 ## 4. What becomes possible only after the transition
 
