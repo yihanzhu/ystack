@@ -474,9 +474,11 @@ expectation's verdict and primary reason were hand-written and checked against
 the real evaluator before being recorded.
 
 The `dashboard` operation aggregates one to sixteen run results into one canonical
-flow-and-quality document. Each result is first re-validated against its own seed
-set and this exact program, so a result from another framework version or with an
-altered verdict never counts. The dashboard reports seeded-family coverage,
+flow-and-quality document. Each seed set is first replayed in the same private
+runtime at the result's own recorded time, and a result counts only if that replay
+reproduces it byte for byte. Nothing embedded in a supplied result is trusted: a
+result from another framework version or platform, or with any altered
+observation, verdict, or summary, never counts. The dashboard reports seeded-family coverage,
 per-family and overall pass, fail, and inconclusive counts, and the recovery
 evidence the events family produced (missed attempts recovered, cancellations kept
 terminal, repeats redelivered once or suppressed, retry limits enforced, malformed
