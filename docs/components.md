@@ -740,3 +740,5 @@ execution environment is a separate reviewed addition to
 `shadow/v1/shadow-environments.json` with its own evidence.
 
 Run the focused test with `bash scripts/test/shadow-slice.test.sh`.
+
+The read-only guards on the materialization input (no producer patch bytes, network mode deny, revision equal to the incident's) run on every invocation before the environment verdict is consulted, so an unlisted or unsatisfied environment can never turn a writable input into an inconclusive shadow record: it is refused outright.

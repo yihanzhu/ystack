@@ -425,6 +425,9 @@ expect_reproduce_error moved-revision E_STALE "$passing_incident" \
   "$tmp/fixture-failing/read-only-input.json"
 expect_reproduce_error writable-input E_READ_ONLY "$failing_incident" \
   "$tmp/fixture-failing/input.json"
+expect_reproduce_error writable-input-unlisted-environment E_READ_ONLY "$failing_incident" \
+  "$tmp/fixture-failing/input.json" \
+  "$(mutate "$claim" claim-unlisted-writable '.id = "env.unlisted-runner"')"
 expect_reproduce_error network-input E_READ_ONLY "$failing_incident" \
   "$(mutate "$tmp/fixture-failing/read-only-input.json" input-network \
     '.stage_request.content.body.operation.arguments.network_mode = "allow"')"

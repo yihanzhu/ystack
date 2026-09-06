@@ -235,22 +235,23 @@ if "$jq_bin" -e --arg id "$environment_id" \
   fi
 fi
 
-if [ "$reason" = environment.satisfied ]; then
-  "$jq_bin" -e --arg repository "$repository_id" --arg algorithm "$hash_algorithm" \
-    --arg commit "$commit_id" '
-    .stage_request.content.body as $body |
-    $body.target_repository_id == $repository and
-    $body.target_revision.value.repository_id == $repository and
-    $body.target_revision.value.hash_algorithm == $algorithm and
-    $body.target_revision.value.commit_id == $commit
-  ' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_STALE
-  "$jq_bin" -e '
-    ([.payloads[] | select(.input_id == "input.producer-patch") | .data] == [""]) and
-    ([.trust_context.verified_payloads[] |
-      select(.input_id == "input.producer-patch") | .content.data] == [""]) and
-    .stage_request.content.body.operation.arguments.network_mode == "deny"
-  ' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
-fi
+# The read-only guards hold for every run, whatever the environment verdict:
+# a materialization input that carries patch bytes or allows network is refused
+# outright, never recorded as an inconclusive shadow.
+"$jq_bin" -e --arg repository "$repository_id" --arg algorithm "$hash_algorithm" \
+  --arg commit "$commit_id" '
+  .stage_request.content.body as $body |
+  $body.target_repository_id == $repository and
+  $body.target_revision.value.repository_id == $repository and
+  $body.target_revision.value.hash_algorithm == $algorithm and
+  $body.target_revision.value.commit_id == $commit
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_STALE
+"$jq_bin" -e '
+  ([.payloads[] | select(.input_id == "input.producer-patch") | .data] == [""]) and
+  ([.trust_context.verified_payloads[] |
+    select(.input_id == "input.producer-patch") | .content.data] == [""]) and
+  .stage_request.content.body.operation.arguments.network_mode == "deny"
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
 
 if [ "$reason" = environment.satisfied ] && [ "$check_kind" != file-digest ]; then
   reason=check.not-runnable
