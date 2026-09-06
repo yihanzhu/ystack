@@ -736,12 +736,16 @@ independent final guard: if the tier requires a named operator and the supplied
 authorization is not a named, authorized, same-tier operator record, the request
 is refused even when everything else passes.
 
-The risk-gates and kill-switch evaluations come in as inputs. An active kill
-switch, or a kill-switch result that is anything but satisfied, refuses the
-request. The risk-gates evaluator has no `satisfied` result yet by design, so
-this unit does not demand one: it records the reference and refuses with
-`deploy.duty-violation` when that evaluation carries a duty reason, or when the
-requesting actor's role is not one the tier policy allows for that capability.
+The risk-gates and kill-switch evaluations come in as inputs. Each is checked
+against the full document its own evaluator emits - every field, every reference,
+and no others - so a hand-written stub carrying only a policy set, a verdict, and
+some reasons is refused as `deploy.malformed` rather than accepted as a real
+evaluation. An active kill switch, or a kill-switch result that is anything but
+satisfied, refuses the request. The risk-gates evaluator has no `satisfied`
+result yet by design, so this unit does not demand one: it records the reference
+and refuses with `deploy.duty-violation` when that evaluation carries a duty
+reason, or when the requesting actor's role is not one the tier policy allows
+for that capability.
 Admissible therefore never means the risk gate granted anything.
 
 Time is taken from the request, never from a clock, so the same six inputs always

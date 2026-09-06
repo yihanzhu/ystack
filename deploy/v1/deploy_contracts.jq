@@ -15,13 +15,22 @@ def content_ref_ok($media):
   exact(["content_id","media_type","sha256"]) and (.content_id | id_ok) and
   .media_type == $media and (.sha256 | sha256_ok);
 
-def core_document_ref_ok($kind):
-  exact(["id","kind","schema_version","sha256"]) and .schema_version == 2 and
-  .kind == $kind and (.id | id_ok) and (.sha256 | sha256_ok);
+def document_ref_ok($schema_version; $kind):
+  exact(["id","kind","schema_version","sha256"]) and
+  .schema_version == $schema_version and .kind == $kind and (.id | id_ok) and
+  (.sha256 | sha256_ok);
 
-def deploy_document_ref_ok($kind):
-  exact(["id","kind","schema_version","sha256"]) and .schema_version == 1 and
-  .kind == $kind and (.id | id_ok) and (.sha256 | sha256_ok);
+def core_document_ref_ok($kind): document_ref_ok(2; $kind);
+
+def deploy_document_ref_ok($kind): document_ref_ok(1; $kind);
+
+def control_document_ref_ok($kind): document_ref_ok(1; $kind);
+
+def core_contract_ok:
+  exact(["generation_id","package_ref","semantic_identity"]) and
+  (.semantic_identity | id_ok) and
+  (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
+  (.package_ref | content_ref_ok("application/vnd.ystack.core-contract+json"));
 
 def evidence_ref_ok:
   exact(["evidence_id","stage_result_ref"]) and (.evidence_id | id_ok) and
@@ -161,21 +170,53 @@ def rehearsal_ok:
     (.outcome == "failed" or .outcome == "rehearsed") and
     (.rehearsed_at | timestamp_ok));
 
-def control_evaluation_ok($kind; $verdicts):
-  envelope_ok([$kind]) and
-  (.body | type == "object" and
-    .activation_state == "inactive" and .evaluation_mode == "observation-only" and
-    .reference_semantics == "identity-only" and
-    (.policy_set | policy_set_ref_ok) and
-    (.verdict as $verdict | $verdicts | index($verdict) != null) and
-    (.reason_ids | type == "array" and length >= 1 and length <= 64 and
-      all(.[]; id_ok) and . == (sort | unique)));
+def control_markers_ok($verdicts):
+  .activation_state == "inactive" and .authority_effect == "none" and
+  .evaluation_mode == "observation-only" and .reference_semantics == "identity-only" and
+  (.policy_set | policy_set_ref_ok) and
+  (.verdict as $verdict | $verdicts | index($verdict) != null) and
+  (.reason_ids | type == "array" and length >= 1 and length <= 64 and
+    all(.[]; id_ok) and . == (sort | unique));
 
+# The two control evaluations are accepted only in the exact shape their own
+# evaluators emit, so a three-field stub cannot stand in for a real evaluation.
 def risk_evaluation_ok:
-  control_evaluation_ok("risk_gate_evaluation"; ["inconclusive","violated"]);
+  envelope_ok(["risk_gate_evaluation"]) and
+  (.body |
+    exact(["activation_state","authority_effect","classification","core_contract",
+      "decision_claim_ref","decision_ref","duty_evaluation_ref","evaluation_mode",
+      "policy_ref","policy_set","reason_ids","reference_semantics","stage","verdict"]) and
+    control_markers_ok(["inconclusive","violated"]) and
+    (.classification | exact(["declared_tier","minimum_tier"]) and
+      (.declared_tier | id_ok) and
+      (.minimum_tier as $tier |
+        ["bootstrap","high","routine","unknown"] | index($tier) != null)) and
+    (.core_contract | core_contract_ok) and
+    (.decision_claim_ref |
+      content_ref_ok("application/vnd.ystack.risk-gate-decision-claim+json")) and
+    (.decision_ref | content_ref_ok("application/vnd.ystack.control-decision+json")) and
+    (.duty_evaluation_ref |
+      content_ref_ok("application/vnd.ystack.duty-separation-evaluation+json")) and
+    (.policy_ref | content_ref_ok("application/vnd.ystack.control-policy+json")) and
+    (.stage | exact(["request_ref","resolved_profile_ref","result_ref"]) and
+      (.request_ref | core_document_ref_ok("stage_request")) and
+      (.resolved_profile_ref | core_document_ref_ok("resolved_profile")) and
+      (.result_ref | core_document_ref_ok("stage_result"))));
 
 def kill_evaluation_ok:
-  control_evaluation_ok("kill_switch_evaluation"; ["inconclusive","satisfied","violated"]);
+  envelope_ok(["kill_switch_evaluation"]) and
+  (.body |
+    exact(["activation_state","attempt_ref","authority_effect","decision_ref",
+      "duty_decision_ref","duty_evaluation_ref","evaluation_mode","policy_ref",
+      "policy_set","reason_ids","reference_semantics","state_ref","verdict"]) and
+    control_markers_ok(["inconclusive","satisfied","violated"]) and
+    (.decision_ref | content_ref_ok("application/vnd.ystack.control-decision+json")) and
+    (.duty_decision_ref |
+      content_ref_ok("application/vnd.ystack.control-decision+json")) and
+    (.policy_ref | content_ref_ok("application/vnd.ystack.control-policy+json")) and
+    (.state_ref | control_document_ref_ok("kill_switch_state")) and
+    (.attempt_ref | control_document_ref_ok("kill_switch_attempt")) and
+    (.duty_evaluation_ref | control_document_ref_ok("duty_separation_evaluation")));
 
 def document_ok($kind):
   if $kind == "deploy_environment_tiers" then tiers_ok

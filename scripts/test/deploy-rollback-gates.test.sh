@@ -125,21 +125,59 @@ request="$tmp/request-deploy.json"
      requested_at:"2026-09-05T12:00:00Z",requested_capability:"deploy"}}
 ' >"$request"
 
+# Both control evaluations are synthetic but shape-exact: every field the real
+# risk-gates and kill-switch evaluators emit, so a stub cannot pass this gate.
 risk="$tmp/risk.json"
 "$jq_bin" -S -c -n --arg policy_set_id "$policy_set_id" '
+  def content_ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+  def core_ref($kind;$id;$sha):
+    {schema_version:2,kind:$kind,id:$id,sha256:$sha};
   {schema_version:1,kind:"risk_gate_evaluation",id:"result.deploy-test",
-   body:{activation_state:"inactive",evaluation_mode:"observation-only",
+   body:{activation_state:"inactive",authority_effect:"none",
+     classification:{declared_tier:"routine",minimum_tier:"routine"},
+     core_contract:{generation_id:("g-" + ("8"*64)),
+       package_ref:content_ref("core-contract-package.v2";
+         "application/vnd.ystack.core-contract+json";("9"*64)),
+       semantic_identity:"core.contracts.v2"},
+     decision_claim_ref:content_ref("risk-gate-decision-claim.deploy-test";
+       "application/vnd.ystack.risk-gate-decision-claim+json";("a"*64)),
+     decision_ref:content_ref("control-decision.risk-gates";
+       "application/vnd.ystack.control-decision+json";("b"*64)),
+     duty_evaluation_ref:content_ref("result.deploy-test";
+       "application/vnd.ystack.duty-separation-evaluation+json";("c"*64)),
+     evaluation_mode:"observation-only",
+     policy_ref:content_ref("control-policy.risk-gates";
+       "application/vnd.ystack.control-policy+json";("d"*64)),
+     policy_set:{id:$policy_set_id,sha256:("6"*64)},
+     reason_ids:["risk-gates.minimum-tier-unknown"],
      reference_semantics:"identity-only",
-     policy_set:{id:$policy_set_id,sha256:("6"*64)},verdict:"inconclusive",
-     reason_ids:["risk-gates.minimum-tier-unknown"]}}
+     stage:{request_ref:core_ref("stage_request";"request.deploy-test";("e"*64)),
+       resolved_profile_ref:core_ref("resolved_profile";"profile.deploy-test";("f"*64)),
+       result_ref:core_ref("stage_result";"result.deploy-test";("0"*64))},
+     verdict:"inconclusive"}}
 ' >"$risk"
 kill_switch="$tmp/kill.json"
 "$jq_bin" -S -c -n --arg policy_set_id "$policy_set_id" '
+  def content_ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+  def control_ref($kind;$id;$sha):
+    {schema_version:1,kind:$kind,id:$id,sha256:$sha};
   {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.deploy-test",
-   body:{activation_state:"inactive",evaluation_mode:"observation-only",
-     reference_semantics:"identity-only",
-     policy_set:{id:$policy_set_id,sha256:("6"*64)},verdict:"satisfied",
-     reason_ids:["kill.cleared-current"]}}
+   body:{activation_state:"inactive",
+     attempt_ref:control_ref("kill_switch_attempt";"kill-attempt.deploy-test";("1"*64)),
+     authority_effect:"none",
+     decision_ref:content_ref("control-decision.kill-switch";
+       "application/vnd.ystack.control-decision+json";("2"*64)),
+     duty_decision_ref:content_ref("control-decision.duty-separation";
+       "application/vnd.ystack.control-decision+json";("3"*64)),
+     duty_evaluation_ref:control_ref("duty_separation_evaluation";"result.deploy-test";
+       ("4"*64)),
+     evaluation_mode:"observation-only",
+     policy_ref:content_ref("control-policy.kill-switch";
+       "application/vnd.ystack.control-policy+json";("5"*64)),
+     policy_set:{id:$policy_set_id,sha256:("6"*64)},
+     reason_ids:["kill.cleared-current"],reference_semantics:"identity-only",
+     state_ref:control_ref("kill_switch_state";"kill-state.deploy-test";("7"*64)),
+     verdict:"satisfied"}}
 ' >"$kill_switch"
 
 RUN_STATUS=0
@@ -395,6 +433,18 @@ expect_decision malformed-policy-set refused deploy.malformed \
   "$request" "$release" "$authorization" "$rehearsal" \
   "$(mutate "$risk" risk-other-policy-set '.body.policy_set.sha256=("0"*64)')" \
   "$kill_switch"
+expect_decision malformed-kill-missing-state refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" "$risk" \
+  "$(mutate "$kill_switch" kill-missing-state 'del(.body.state_ref)')"
+expect_decision malformed-kill-extra-field refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" "$risk" \
+  "$(mutate "$kill_switch" kill-extra-field '.body.untrusted="value"')"
+expect_decision malformed-risk-missing-stage refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-missing-stage 'del(.body.stage)')" "$kill_switch"
+expect_decision malformed-risk-extra-field refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-extra-field '.body.untrusted="value"')" "$kill_switch"
 malformed_id=$(mutate "$release" malformed-release-id '.body.release_id="release.other"')
 malformed_id_sha=$(sha256_path "$malformed_id")
 malformed_id_authorization=$(mutate "$authorization" malformed-id-authorization \
