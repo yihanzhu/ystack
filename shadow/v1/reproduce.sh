@@ -152,6 +152,8 @@ snapshot_bounded "$incident" "$scratch/incident.json" 262144
 snapshot_bounded "$claim" "$scratch/claim.json" 1048576
 snapshot_bounded "$registry" "$scratch/registry.json" 262144
 snapshot_bounded "$materialization_input" "$scratch/materialize-input.json" 8388608
+snapshot_bounded "$policy_set" "$scratch/policy-set.json" 1048576
+snapshot_bounded "$duty" "$scratch/duty.json" 1048576
 snapshot_bounded "$program" "$scratch/incident-record.jq" 262144
 for bounded in incident claim registry materialize-input; do
   canonical_json "$scratch/$bounded.json"
@@ -159,6 +161,10 @@ done
 incident_sha=$(sha256_path "$scratch/incident.json") || emit_error E_RUNTIME
 claim_sha=$(sha256_path "$scratch/claim.json") || emit_error E_RUNTIME
 registry_sha=$(sha256_path "$scratch/registry.json") || emit_error E_RUNTIME
+input_sha=$(sha256_path "$scratch/materialize-input.json") || emit_error E_RUNTIME
+policy_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
+duty_sha=$(sha256_path "$scratch/duty.json") || emit_error E_RUNTIME
+program_sha=$(sha256_path "$scratch/incident-record.jq") || emit_error E_RUNTIME
 
 shape=$("$jq_bin" -r --arg operation shape --arg record_sha "$incident_sha" \
   -f "$scratch/incident-record.jq" "$scratch/incident.json" 2>/dev/null) ||
@@ -230,7 +236,8 @@ if "$jq_bin" -e --arg id "$environment_id" \
    "$scratch/registry.json" >/dev/null 2>&1; then
   evaluation_status=0
   PATH="$scratch/bin:/usr/bin:/bin" "$sandbox_evaluator" evaluate \
-    "$policy_set" "$duty" "$claim" >"$scratch/sandbox.json" 2>/dev/null ||
+    "$scratch/policy-set.json" "$scratch/duty.json" "$scratch/claim.json" \
+    >"$scratch/sandbox.json" 2>/dev/null ||
     evaluation_status=$?
   if [ "$evaluation_status" -ne 0 ]; then
     reason=environment.evaluation-refused
@@ -481,9 +488,15 @@ if [ -f "$scratch/stage-result.json" ]; then
     emit_error E_RUNTIME
   /bin/chmod 0400 "$state_dir/materialization-result.json" || emit_error E_RUNTIME
 fi
+# Every caller-supplied input must still be the bytes this run snapshotted,
+# or the record describes something other than what the caller now holds.
 [ "$(sha256_path "$incident")" = "$incident_sha" ] &&
   [ "$(sha256_path "$claim")" = "$claim_sha" ] &&
   [ "$(sha256_path "$registry")" = "$registry_sha" ] &&
+  [ "$(sha256_path "$materialization_input")" = "$input_sha" ] &&
+  [ "$(sha256_path "$policy_set")" = "$policy_sha" ] &&
+  [ "$(sha256_path "$duty")" = "$duty_sha" ] &&
+  [ "$(sha256_path "$program")" = "$program_sha" ] &&
   [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_RELATION
 /bin/cat "$record" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM
