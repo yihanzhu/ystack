@@ -345,3 +345,6 @@ scripts/test/evals-adapters.test.sh
 scripts/test/evals-approvals.test.sh
 scripts/test/evals-duty.test.sh
 scripts/test/evals-dashboard.test.sh
+
+# Component write-ups indexed from README.md (restore-critical documentation)
+docs/components.md

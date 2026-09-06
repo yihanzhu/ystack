@@ -35,7 +35,8 @@ Accounts and access you need before starting:
     (ystack is its own target repo; add others as you adopt the team elsewhere.)
 
 Read [`README.md`](README.md) once for the mental model (the team, the loop, the
-design "why") and [`AGENTS.md`](AGENTS.md) for the conventions and safety rails before
+design "why") and [`docs/components.md`](docs/components.md) for the component
+write-ups, then [`AGENTS.md`](AGENTS.md) for the conventions and safety rails before
 you rebuild.
 
 ### Restore the inactive profile resolver source
