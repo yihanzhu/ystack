@@ -506,6 +506,19 @@ if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/huge-journal.out" ||
 fi
 pass 'huge JSON integers in input, observation, and journal fail without a traceback'
 
+long_repository_id=$(printf 'a%.0s' {1..200})
+mkdir -m 700 "$tmp/long-id-state" "$tmp/long-id-candidate" "$tmp/long-id-scratch"
+if python3 "$replay" --input "$base_input" --source-repository-id "$long_repository_id" --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/long-id-candidate" --scratch-root "$tmp/long-id-scratch" --state-dir "$tmp/long-id-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/long-id.out" 2>&1; then fail long-repository-id; fi
+if ! grep -Fq 'delivery replay: source repository id is invalid' "$tmp/long-id.out" ||
+   grep -Fq Traceback "$tmp/long-id.out"; then
+  fail long-repository-id-error
+fi
+[ ! -e "$tmp/long-id-state/run.json" ] || fail long-repository-id-journaled
+pass 'an out-of-contract source repository id is refused before anything is journaled'
+
 printf '\377' >"$tmp/invalid-input.json"
 mkdir -m 700 "$tmp/invalid-input-state" "$tmp/invalid-input-candidate" "$tmp/invalid-input-scratch"
 if python3 "$replay" --input "$tmp/invalid-input.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

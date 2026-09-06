@@ -42,6 +42,9 @@ GUARD_ACKNOWLEDGEMENT_SECONDS = 5
 MAX_GUARD_LINE_BYTES = 4096
 OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}\Z")
 ACTOR = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
+# The core contract's id rule; the source repository id is journaled, so it is
+# bounded before anything is written.
+REPOSITORY_ID = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
 GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
@@ -585,6 +588,7 @@ def validate_state(state, identity):
         for name in ("input_sha256", "request_sha256", "driver_sha256", "materializer_sha256",
                      "closure_helper_sha256", "jq_sha256", "run_key")
     ) or not isinstance(saved.get("source_repository_id"), str) or \
+       not REPOSITORY_ID.fullmatch(saved["source_repository_id"]) or \
        saved.get("source_hash_algorithm") not in {"sha1", "sha256"} or \
        any(not isinstance(saved.get(name), str) or not OID.fullmatch(saved[name])
            for name in ("source_commit_id", "source_tree_id")) or \
@@ -683,6 +687,8 @@ def replay_locked(arguments, state_dir):
             fcntl.flock(lock, fcntl.LOCK_EX)
             execution = create_execution_snapshot(repository, arguments, state_dir)
             sources_match = execution_sources_match(repository, arguments, execution)
+            if not REPOSITORY_ID.fullmatch(arguments.source_repository_id):
+                raise ReplayError("source repository id is invalid")
             input_bytes = read_bytes(arguments.input, MAX_INPUT_BYTES)
             input_value = parse_json(input_bytes)
             input_sha = digest_bytes(input_bytes)
