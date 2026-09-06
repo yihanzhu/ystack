@@ -37,7 +37,8 @@ Accounts and access you need before starting:
 Read [`README.md`](README.md) once for the mental model (the team, the loop, the
 design "why") and [`docs/components.md`](docs/components.md) for the component
 write-ups, then [`AGENTS.md`](AGENTS.md) for the conventions and safety rails before
-you rebuild.
+you rebuild. [`docs/transition.md`](docs/transition.md) is the operator-facing
+proposal for ending construction mode; it restores nothing by itself.
 
 ### Restore the inactive profile resolver source
 
