@@ -102,9 +102,10 @@ credential="$fixtures/credential.json"
   def cref($id;$media;$character):
     {content_id:$id,media_type:$media,sha256:sha($character)};
   def core:
-    {semantic_identity:"core.contracts.v2",generation_id_sha256:sha("2"),
+    {generation_id:("g-" + sha("2")),
      package_ref:cref("core-contract-package.v2";
-       "application/vnd.ystack.core-contract+json";"3")};
+       "application/vnd.ystack.core-contract+json";"3"),
+     semantic_identity:"core.contracts.v2"};
   def stage:
     {request_ref:dref(2;"stage_request";"request.review-fix";"8"),
      resolved_profile_ref:dref(2;"resolved_profile";"profile.review-fix";"9"),
@@ -134,16 +135,16 @@ risk="$fixtures/risk.json"
   {schema_version:1,kind:"risk_gate_evaluation",id:"result.review-fix",
    body:{activation_state:"inactive",authority_effect:"none",
      classification:{declared_tier:"routine",minimum_tier:"routine"},
-     core_contract:{semantic_identity:"core.contracts.v2",
-       generation_id_sha256:sha("2"),
+     core_contract:{generation_id:("g-" + sha("2")),
        package_ref:cref("core-contract-package.v2";
-         "application/vnd.ystack.core-contract+json";"3")},
+         "application/vnd.ystack.core-contract+json";"3"),
+       semantic_identity:"core.contracts.v2"},
      decision_claim_ref:cref("risk-claim.review-fix";
        "application/vnd.ystack.risk-gate-decision-claim+json";"b"),
      decision_ref:cref("control-decision.risk-gates";
        "application/vnd.ystack.control-decision+json";"c"),
-     duty_evaluation_ref:
-       dref(1;"duty_separation_evaluation";"result.review-fix";"5"),
+     duty_evaluation_ref:cref("result.review-fix";
+       "application/vnd.ystack.duty-separation-evaluation+json";"5"),
      evaluation_mode:"observation-only",
      policy_ref:cref("control-policy.risk-gates";
        "application/vnd.ystack.control-policy+json";"d"),
@@ -154,6 +155,42 @@ risk="$fixtures/risk.json"
        result_ref:dref(2;"stage_result";"result.review-fix";"a")},
      verdict:"satisfied"}}
 ' >"$risk"
+# The reconciler's own entry shapes, reused by the mutation cases below so that
+# an "unreconciled" plan is a real plan with work left, not a malformed one.
+reconciliation_shapes='
+  def sha($character): $character * 64;
+  def stage_key:
+    {initiative_id:"initiative.review-fix",stage_id:"stage.review-fix",
+     task_class_id:"task.review-fix",workflow_id:"workflow.review-fix"};
+  def delivery:
+    {delivery_key:{attempt_number:1,operation:"dispatch-stage",
+       request_sha256:sha("1"),stage_key:stage_key},
+     delivery_mode:"first-delivery",operation:"dispatch-stage",
+     provenance:{active_attempt:{state:"absent"},
+       evaluator_ref:{content_id:"orchestrator-state-scanner-evaluator.v1",
+         media_type:
+           "application/vnd.ystack.orchestrator-state-scanner-evaluator+json",
+         sha256:sha("2")},
+       item_ref:{schema_identity:"orchestrator.state-item.v1",sha256:sha("3")},
+       latest_result_ref:{state:"absent"},
+       request_ref:{schema_version:2,kind:"stage_request",
+         id:"request.reconcile",sha256:sha("1")},
+       resolved_profile_ref:{schema_version:2,kind:"resolved_profile",
+         id:"profile.reconcile",sha256:sha("4")},
+       snapshot_ref:{schema_identity:"orchestrator.state-snapshot.v1",
+         kind:"orchestrator_state_snapshot",id:"observation.review-fix",
+         sha256:sha("5")}},
+     recovery:{action:"dispatch-stage",attempt_number:0,
+       reason_id:"planner.dispatch-first-attempt",retry_limit:3,
+       source_reason:{state:"absent"}},
+     stage_key:stage_key};
+  def operator_message:
+    {class:"blocked",
+     recovery:{action:"operator-reconcile",attempt_number:3,
+       reason_id:"planner.operator-reconcile",retry_limit:3,
+       source_reason:{state:"present",value:"stage.blocked"}},
+     stage_key:stage_key};
+'
 reconciliation="$fixtures/reconciliation.json"
 "$jq_bin" -S -c -n '
   def sha($character): $character * 64;
@@ -366,7 +403,7 @@ expect_refusal credential-identity boundaries-unproven \
   "$credential_unproven"
 
 reconciliation_open=$(mutate "$reconciliation" reconciliation-open \
-  '.body.operator_messages=[{class:"blocked",stage_key:{}}]')
+  "$reconciliation_shapes"'.body.operator_messages=[operator_message]')
 reconciliation_open_context=$(bind_context reconciliation-open-context \
   "$credential" "$reconciliation_open" "$risk" "$ledger")
 expect_refusal reconciliation-open boundaries-unproven \
@@ -376,7 +413,7 @@ expect_refusal reconciliation-identity boundaries-unproven \
   boundary.reconciliation-identity-mismatch "$context" "$observation" \
   "$credential" "$reconciliation_open"
 reconciliation_pending=$(mutate "$reconciliation" reconciliation-pending \
-  '.body.deliveries=[{delivery_key:"delivery.one",delivery_mode:"dispatch",operation:"deliver",provenance:{},recovery:{},stage_key:{}}]')
+  "$reconciliation_shapes"'.body.deliveries=[delivery]')
 reconciliation_pending_context=$(bind_context reconciliation-pending-context \
   "$credential" "$reconciliation_pending" "$risk" "$ledger")
 expect_refusal reconciliation-pending-deliveries boundaries-unproven \
@@ -594,6 +631,26 @@ expect_error ledger-count-mismatch E_RELATION "$planner" plan "$observation" \
 expect_error reconciliation-active E_RELATION "$planner" plan "$observation" \
   "$context" "$credential" \
   "$(mutate "$reconciliation" reconciliation-active '.body.mode="dispatching"')" \
+  "$risk" "$ledger"
+# A boundary document is proof only in the exact shape its own evaluator emits:
+# a missing reference, an unknown field, a delivery entry that is not a public
+# candidate, or concurrency that cannot have been counted is malformed input.
+expect_error credential-missing-claim-ref E_RELATION "$planner" plan \
+  "$observation" "$context" \
+  "$(mutate "$credential" credential-no-claim 'del(.body.claim_ref)')" \
+  "$reconciliation" "$risk" "$ledger"
+expect_error risk-unknown-field E_RELATION "$planner" plan "$observation" \
+  "$context" "$credential" "$reconciliation" \
+  "$(mutate "$risk" risk-unknown '.body.untrusted="value"')" "$ledger"
+expect_error reconciliation-delivery-without-stage-key E_RELATION "$planner" \
+  plan "$observation" "$context" "$credential" \
+  "$(mutate "$reconciliation_pending" reconciliation-delivery-partial \
+    'del(.body.deliveries[0].stage_key)')" \
+  "$risk" "$ledger"
+expect_error reconciliation-over-capacity E_RELATION "$planner" plan \
+  "$observation" "$context" "$credential" \
+  "$(mutate "$reconciliation" reconciliation-over-capacity \
+    '.body.concurrency={active_pending:3,available_slots:0,max_in_flight:2}')" \
   "$risk" "$ledger"
 expect_error unordered-inline-findings E_RELATION "$planner" plan \
   "$(mutate "$observation" observation-unordered \

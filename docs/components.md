@@ -712,7 +712,13 @@ credential, reconciliation, risk, or attempt-ledger document handed in is not th
 exact one the change context pins by kind, id, and SHA-256; whenever the
 credential or risk verdict is anything but `satisfied`; whenever the reconciliation
 plan still carries pending, in-flight (`concurrency.active_pending`), or deferred deliveries or operator messages; or whenever the ledger
-belongs to another change or was recorded after the context was observed.
+belongs to another change or was recorded after the context was observed. The
+three boundary documents are checked field for field against the full shapes
+their own producers emit — `control/v1/credential-policy.jq`,
+`control/v1/risk-gates.jq`, and `orchestrator/v1/reconciliation-plan.jq`, down to
+every reference's kind, schema version, and media type and every delivery,
+deferral, suppression, and operator message — so a stub carrying nothing but an
+envelope and a verdict cannot prove a boundary.
 
 The planner never trusts the observation's own list of stale bindings. It
 recomputes every binding the Codex native reviewer checks — repository, change

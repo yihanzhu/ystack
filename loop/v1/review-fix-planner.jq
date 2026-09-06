@@ -35,9 +35,16 @@ def revision_ok:
 def content_ref_ok:
   exact(["content_id","media_type","sha256"]) and (.content_id | id_ok) and
   (.media_type | media_type_ok) and (.sha256 | sha256_ok);
-def document_ref_ok($kind):
-  exact(["id","kind","schema_version","sha256"]) and .schema_version == 1 and
-  .kind == $kind and (.id | id_ok) and (.sha256 | sha256_ok);
+def versioned_document_ref_ok($schema_version; $kind):
+  exact(["id","kind","schema_version","sha256"]) and
+  .schema_version == $schema_version and .kind == $kind and (.id | id_ok) and
+  (.sha256 | sha256_ok);
+def document_ref_ok($kind): versioned_document_ref_ok(1; $kind);
+def core_document_ref_ok($kind): versioned_document_ref_ok(2; $kind);
+def typed_content_ref_ok($media): content_ref_ok and .media_type == $media;
+def source_ref_ok($kind; $identity):
+  exact(["id","kind","schema_identity","sha256"]) and .kind == $kind and
+  .schema_identity == $identity and (.id | id_ok) and (.sha256 | sha256_ok);
 def path_ok:
   type == "string" and utf8bytelength >= 1 and utf8bytelength <= 4096 and
   (test("[\\x{0000}-\\x{001f}\\x{007f}-\\x{009f}]") | not) and
@@ -191,28 +198,186 @@ def observation_ok:
    all(.[]; type == "string")) and
   (.trust_context | trust_context_ok) and (.observation | snapshot_ok);
 
-def evaluation_ok($kind; $fields):
-  exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
-  .kind == $kind and (.id | id_ok) and
-  (.body |
-   exact($fields) and .activation_state == "inactive" and
-   .authority_effect == "none" and .evaluation_mode == "observation-only" and
-   .reference_semantics == "identity-only" and
-   (.verdict | IN("inconclusive","satisfied","violated")) and
-   (.reason_ids | id_set_ok(64)) and (.reason_ids | length) >= 1);
+# The two control evaluations are accepted only in the exact shape their own
+# evaluators emit (control/v1/credential-policy.jq and control/v1/risk-gates.jq),
+# so a document that carries the envelope, the markers and a verdict but none of
+# the evaluator's own evidence cannot stand in for a real evaluation.
+def core_contract_ok:
+  exact(["generation_id","package_ref","semantic_identity"]) and
+  .semantic_identity == "core.contracts.v2" and
+  (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
+  (.package_ref |
+   typed_content_ref_ok("application/vnd.ystack.core-contract+json")) and
+  .package_ref.content_id == "core-contract-package.v2";
+def policy_set_ref_ok:
+  exact(["id","sha256"]) and (.id | id_ok) and (.sha256 | sha256_ok);
+def stage_refs_ok:
+  exact(["request_ref","resolved_profile_ref","result_ref"]) and
+  (.request_ref | core_document_ref_ok("stage_request")) and
+  (.resolved_profile_ref | core_document_ref_ok("resolved_profile")) and
+  (.result_ref | core_document_ref_ok("stage_result"));
+# "satisfied" is kept in the vocabulary because it is the only verdict this
+# planner treats as proof; no shipped evaluator emits it while everything is
+# inactive, which is why real inputs refuse with boundaries-unproven.
+def control_markers_ok:
+  .activation_state == "inactive" and .authority_effect == "none" and
+  .evaluation_mode == "observation-only" and
+  .reference_semantics == "identity-only" and
+  (.policy_set | policy_set_ref_ok) and
+  (.verdict | IN("inconclusive","satisfied","violated")) and
+  (.reason_ids | id_set_ok(64)) and (.reason_ids | length) >= 1;
 def credential_ok:
-  evaluation_ok("credential_policy_evaluation";
-    ["activation_state","authority_effect","claim_ref","core_contract",
+  exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
+  .kind == "credential_policy_evaluation" and (.id | id_ok) and
+  (.body |
+   exact(["activation_state","authority_effect","claim_ref","core_contract",
      "decision_ref","duty_evaluation_ref","evaluation_mode","policy_ref",
      "policy_set","qualification_effect","reason_ids","reference_semantics",
-     "stage","verdict"]);
+     "stage","verdict"]) and
+   control_markers_ok and .qualification_effect == "none" and
+   (.claim_ref | document_ref_ok("credential_boundary_claim")) and
+   (.core_contract | core_contract_ok) and
+   (.decision_ref |
+    typed_content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.duty_evaluation_ref | document_ref_ok("duty_separation_evaluation")) and
+   (.policy_ref |
+    typed_content_ref_ok("application/vnd.ystack.control-policy+json")) and
+   (.stage | stage_refs_ok));
 def risk_ok:
-  evaluation_ok("risk_gate_evaluation";
-    ["activation_state","authority_effect","classification","core_contract",
-     "decision_claim_ref","decision_ref","duty_evaluation_ref",
+  exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
+  .kind == "risk_gate_evaluation" and (.id | id_ok) and
+  (.body |
+   exact(["activation_state","authority_effect","classification",
+     "core_contract","decision_claim_ref","decision_ref","duty_evaluation_ref",
      "evaluation_mode","policy_ref","policy_set","reason_ids",
-     "reference_semantics","stage","verdict"]);
+     "reference_semantics","stage","verdict"]) and
+   control_markers_ok and
+   (.classification | exact(["declared_tier","minimum_tier"]) and
+    (.declared_tier | id_ok) and
+    (.minimum_tier | IN("bootstrap","high","routine","unknown"))) and
+   (.core_contract | core_contract_ok) and
+   (.decision_claim_ref |
+    typed_content_ref_ok(
+      "application/vnd.ystack.risk-gate-decision-claim+json")) and
+   (.decision_ref |
+    typed_content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.duty_evaluation_ref |
+    typed_content_ref_ok(
+      "application/vnd.ystack.duty-separation-evaluation+json")) and
+   (.policy_ref |
+    typed_content_ref_ok("application/vnd.ystack.control-policy+json")) and
+   (.stage | stage_refs_ok));
+
+# The reconciliation plan is accepted only in the shape
+# orchestrator/v1/reconciliation-plan.jq emits, entry for entry, so an empty
+# envelope carrying arbitrary deliveries cannot report a reconciled boundary.
+def stage_key_ok:
+  exact(["initiative_id","stage_id","task_class_id","workflow_id"]) and
+  all(.[]; id_ok);
+def plan_operation_ok:
+  . == "dispatch-stage" or . == "retry-stage" or
+  . == "recover-stranded-attempt";
+def delivery_key_ok:
+  exact(["attempt_number","operation","request_sha256","stage_key"]) and
+  (.stage_key | stage_key_ok) and (.request_sha256 | sha256_ok) and
+  (.operation | plan_operation_ok) and (.attempt_number | int_ok) and
+  .attempt_number >= 1 and .attempt_number <= 10;
+def present_ok(value_ok):
+  (exact(["state"]) and .state == "absent") or
+  (exact(["state","value"]) and .state == "present" and (.value | value_ok));
+def attempt_ok:
+  exact(["attempt_id","attempt_number","deadline_at","request_ref","state"]) and
+  (.attempt_id | id_ok) and (.attempt_number | int_ok) and
+  .attempt_number >= 1 and .attempt_number <= 10 and
+  (.deadline_at | time_ok) and
+  (.request_ref | core_document_ref_ok("stage_request")) and
+  (.state == "dispatched" or .state == "started");
+def provenance_ok:
+  exact(["active_attempt","evaluator_ref","item_ref","latest_result_ref",
+    "request_ref","resolved_profile_ref","snapshot_ref"]) and
+  (.snapshot_ref |
+   source_ref_ok("orchestrator_state_snapshot";
+     "orchestrator.state-snapshot.v1")) and
+  (.evaluator_ref |
+   typed_content_ref_ok(
+     "application/vnd.ystack.orchestrator-state-scanner-evaluator+json")) and
+  .evaluator_ref.content_id == "orchestrator-state-scanner-evaluator.v1" and
+  (.item_ref | exact(["schema_identity","sha256"]) and
+   .schema_identity == "orchestrator.state-item.v1" and
+   (.sha256 | sha256_ok)) and
+  (.request_ref | core_document_ref_ok("stage_request")) and
+  (.resolved_profile_ref | core_document_ref_ok("resolved_profile")) and
+  (.latest_result_ref | present_ok(core_document_ref_ok("stage_result"))) and
+  (.active_attempt | present_ok(attempt_ok));
+def recovery_ok:
+  exact(["action","attempt_number","reason_id","retry_limit",
+    "source_reason"]) and
+  (.action | type == "string" and utf8bytelength >= 1 and
+   utf8bytelength <= 128) and
+  (.reason_id | id_ok) and (.source_reason | present_ok(id_ok)) and
+  (.attempt_number | int_ok) and (.retry_limit | int_ok) and
+  .retry_limit >= 1 and .retry_limit <= 10 and
+  .attempt_number <= .retry_limit;
+def class_action_ok:
+  (.class == "terminal" and .recovery.action == "none") or
+  (.class == "stale" and .recovery.action == "refresh-stage-inputs") or
+  (.class == "blocked" and
+   (.recovery.action == "resolve-stage-blocker" or
+    .recovery.action == "operator-reconcile")) or
+  (.class == "retryable" and .recovery.action == "retry-stage") or
+  (.class == "stranded" and
+   .recovery.action == "recover-stranded-attempt") or
+  (.class == "pending" and
+   (.recovery.action == "wait-for-attempt" or
+    .recovery.action == "dispatch-stage"));
+# The reconciler derives every public field of a candidate from the state
+# classification it planned from, so the derivation must hold here too.
+def candidate_ok:
+  (.stage_key | stage_key_ok) and (.provenance | provenance_ok) and
+  (.recovery | recovery_ok) and (.delivery_key | delivery_key_ok) and
+  (.delivery_mode == "first-delivery" or .delivery_mode == "redelivery") and
+  (.operation | plan_operation_ok) and .operation == .recovery.action and
+  .delivery_key.operation == .operation and
+  .delivery_key.stage_key == .stage_key and
+  .delivery_key.request_sha256 == .provenance.request_ref.sha256 and
+  .delivery_key.attempt_number ==
+    (if .recovery.action == "recover-stranded-attempt"
+     then .recovery.attempt_number else .recovery.attempt_number + 1 end) and
+  (if .provenance.active_attempt.state == "present" then
+     .provenance.active_attempt.value.request_ref == .provenance.request_ref and
+     .provenance.active_attempt.value.attempt_number == .recovery.attempt_number
+   else true end) and
+  (if .recovery.action == "dispatch-stage" then
+     .recovery.attempt_number == 0 and
+     .provenance.active_attempt.state == "absent" and
+     .provenance.latest_result_ref.state == "absent"
+   elif .recovery.action == "retry-stage" then
+     .recovery.attempt_number >= 1 and
+     .recovery.attempt_number < .recovery.retry_limit and
+     .provenance.active_attempt.state == "absent" and
+     .provenance.latest_result_ref.state == "present"
+   else
+     .recovery.attempt_number >= 1 and
+     .provenance.active_attempt.state == "present"
+   end);
+def delivery_ok:
+  exact(["delivery_key","delivery_mode","operation","provenance","recovery",
+    "stage_key"]) and candidate_ok;
+def deferred_ok:
+  exact(["delivery_key","delivery_mode","operation","provenance","reason_id",
+    "recovery","stage_key"]) and
+  .reason_id == "planner.backpressure-slots-exhausted" and candidate_ok;
+def suppressed_ok:
+  exact(["delivery_key","reason_id","stage_key"]) and
+  .reason_id == "planner.delivery-acknowledged" and
+  (.delivery_key | delivery_key_ok) and (.stage_key | stage_key_ok) and
+  .delivery_key.stage_key == .stage_key;
+def operator_message_ok:
+  exact(["class","recovery","stage_key"]) and (.stage_key | stage_key_ok) and
+  (.recovery | recovery_ok) and
+  ((.recovery.action | plan_operation_ok) | not) and class_action_ok;
 def reconciliation_ok:
+  . as $plan |
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
   .kind == "orchestrator_reconciliation_plan" and (.id | id_ok) and
   (.body |
@@ -221,8 +386,25 @@ def reconciliation_ok:
      "operator_messages","suppressed"]) and
    .activation_state == "inactive" and .authority_effect == "none" and
    .mode == "planning-only" and
-   ([.deliveries,.deferred,.suppressed,.operator_messages] |
-    all(.[]; type == "array" and length <= 256)));
+   (.observation_ref |
+    source_ref_ok("orchestrator_state_observation";
+      "orchestrator.state-observation.v1")) and
+   .observation_ref.id == $plan.id and
+   (.delivery_ledger_ref |
+    source_ref_ok("orchestrator_delivery_ledger";
+      "orchestrator.delivery-ledger.v1")) and
+   (.concurrency |
+    exact(["active_pending","available_slots","max_in_flight"]) and
+    all(.[]; int_ok) and .max_in_flight <= 64 and
+    .active_pending <= .max_in_flight and
+    .available_slots == .max_in_flight - .active_pending) and
+   (.deliveries | type == "array" and length <= 256 and
+    all(.[]; delivery_ok)) and
+   (.deferred | type == "array" and length <= 256 and all(.[]; deferred_ok)) and
+   (.suppressed | type == "array" and length <= 256 and
+    all(.[]; suppressed_ok)) and
+   (.operator_messages | type == "array" and length <= 256 and
+    all(.[]; operator_message_ok)));
 
 def ledger_entry_ok:
   exact(["attempt_id","attempt_number","head_commit_id","outcome",
