@@ -190,6 +190,8 @@ expect_reject invented-merge-status '.snapshot.detailed_merge_status="probably_f
   gitlab-forge.invalid-snapshot
 expect_reject not-open-while-opened '.snapshot.detailed_merge_status="not_open"' \
   gitlab-forge.invalid-snapshot
+expect_reject not-open-while-unknown \
+  '.snapshot |= (.state="unknown" | .detailed_merge_status="not_open")' gitlab-forge.invalid-snapshot
 expect_reject missing-file-digest 'del(.snapshot.files[0].patch_sha256)' gitlab-forge.invalid-snapshot
 expect_reject unknown-file-status '.snapshot.files[0].status="pending"' gitlab-forge.invalid-snapshot
 expect_reject malformed-file-digest '.snapshot.files[0].patch_sha256=("A" * 64)' \

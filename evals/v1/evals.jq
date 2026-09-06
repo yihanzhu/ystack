@@ -104,7 +104,7 @@ def expected_adapter_closure:
     {path:"adapters/github-forge/v1/normalize.jq",
      sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"},
     {path:"adapters/gitlab-forge/v1/normalize.jq",
-     sha256:"b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713"}
+     sha256:"ff2ec298eef102f94f28995f5306adeba8e078d19e4c22860c3b167cd9b7c37a"}
   ];
 
 def ref_shape($content_id; $media_type):
