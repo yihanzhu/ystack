@@ -225,7 +225,7 @@ jq -e '.state.phase=="review-wait" and .authority=="none" and .offline_simulatio
   fail missing-review-waits
 request_sha=$(jq -r '.identity.request_sha256' "$tmp/changed-state/run.json")
 candidate_tree=$(jq -r '.identity.candidate_tree_id' "$tmp/changed-state/run.json")
-candidate_commit=$(jq -r '.identity.candidate_commit_id' "$tmp/changed-state/run.json")
+candidate_commit=$(jq -r '.materialization.candidate_commit_id' "$tmp/changed-state/run.json")
 moved_candidate=$(printf '%s\n' moved | /usr/bin/env -i HOME="$tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
   GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture \
   GIT_COMMITTER_EMAIL=fixture@example.invalid /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" \
@@ -554,8 +554,8 @@ if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/invalid-journal.out" ||
 fi
 pass 'invalid UTF-8 input, review, and journal records fail without a traceback'
 
-printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/review.json"
-printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","candidate_commit_id":"'"$candidate_commit"'","verdict":"clean"}' >"$tmp/review.json"
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","candidate_commit_id":"'"$candidate_commit"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
 expect_candidate_move_rejected review-wait --review-observation "$tmp/review.json"
 lock_holder="$tmp/lock-holder.py"
 printf '%s\n' \
@@ -630,7 +630,7 @@ fi
 [ "$review_cancel_status" -eq 75 ] || fail review-cancel-code
 jq -e '(.phase=="review-wait") and (has("review")|not)' "$tmp/review-cancel-state/run.json" >/dev/null ||
   fail review-cancel-state
-printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/numeric-review.json"
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","candidate_commit_id":"'"$candidate_commit"'","verdict":"clean"}' >"$tmp/numeric-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
@@ -747,7 +747,7 @@ jq -e '.state.phase=="completed-offline"' "$tmp/git-env.out" >/dev/null || fail 
 [ "$(git_clean --git-dir="$tmp/changed-candidate/repository.git" rev-parse refs/heads/candidate)" = "$candidate_commit" ] ||
   fail git-env-candidate
 pass 'all candidate Git operations ignore ambient repository, namespace, config, work-tree, and hook settings'
-printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","candidate_commit_id":"'"$candidate_commit"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
@@ -804,6 +804,62 @@ if python3 "$replay" --input "$base_input" --source-repository-id fixture.target
   --review-observation "$tmp/changed-review.json" --publisher-observation "$tmp/publisher.json" >"$tmp/changed-review.out" 2>&1; then fail changed-review-after-wait; fi
 grep -Fq 'review changed after review wait' "$tmp/changed-review.out" || fail changed-review-after-wait-error
 pass 'a changed supplied review cannot advance publish wait'
+ref_holder="$tmp/candidate-ref-holder.py"
+printf '%s\n' \
+  'import pathlib, subprocess, sys, time' \
+  'repository, commit, ready, release = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])' \
+  'environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}' \
+  'command = ["/usr/bin/git", "--git-dir=" + repository, "update-ref", "--stdin"]' \
+  'holder = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE)' \
+  'holder.stdin.write(("option no-deref\nstart\nverify refs/heads/candidate " + commit + "\nprepare\n").encode())' \
+  'holder.stdin.flush()' \
+  'while True:' \
+  '    line = holder.stdout.readline()' \
+  '    if not line: raise SystemExit("holder could not lock the candidate ref")' \
+  '    if line.strip() == b"prepare: ok": break' \
+  'ready.write_text("held")' \
+  'while not release.exists(): time.sleep(0.01)' \
+  'holder.stdin.write(b"abort\n")' \
+  'holder.stdin.flush()' \
+  'holder.stdin.close()' \
+  'raise SystemExit(holder.wait())' >"$ref_holder"
+mkdir -m 700 "$tmp/held-lock-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/held-lock-state/"
+python3 "$ref_holder" "$tmp/changed-candidate/repository.git" "$candidate_commit" \
+  "$tmp/held-lock-ready" "$tmp/held-lock-release" &
+ref_holder_pid=$!
+held_lock_wait=0
+while [ ! -f "$tmp/held-lock-ready" ]; do
+  kill -0 "$ref_holder_pid" 2>/dev/null || fail held-lock-holder
+  held_lock_wait=$((held_lock_wait + 1))
+  [ "$held_lock_wait" -le 1000 ] || fail held-lock-holder-timeout
+  sleep 0.01
+done
+# Another process already holds the candidate ref lock, so this guard never owns
+# it. The background watchdog only fires if the guard hangs instead of failing.
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/held-lock-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/held-lock.out" 2>&1 &
+held_lock_pid=$!
+( sleep 60; kill -9 "$held_lock_pid" 2>/dev/null ) &
+held_lock_watchdog=$!
+if wait "$held_lock_pid"; then fail held-lock-status; fi
+kill "$held_lock_watchdog" 2>/dev/null || true
+if ! grep -Fq 'delivery replay: candidate repository identity guard failed' "$tmp/held-lock.out" ||
+   grep -Fq Traceback "$tmp/held-lock.out"; then
+  fail held-lock-error
+fi
+jq -e '.phase=="publish-wait" and (has("publisher")|not)' "$tmp/held-lock-state/run.json" >/dev/null ||
+  fail held-lock-state
+touch "$tmp/held-lock-release"
+wait "$ref_holder_pid" || fail held-lock-release
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/held-lock-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/held-lock-resume.out"
+jq -e '.state.phase=="completed-offline"' "$tmp/held-lock-resume.out" >/dev/null || fail held-lock-resume
+pass 'a candidate ref lock held elsewhere blocks completion until it is released'
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
@@ -830,13 +886,31 @@ mkdir -m 700 "$tmp/mismatch-state" "$tmp/mismatch-candidate" "$tmp/mismatch-scra
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/mismatch-candidate" --scratch-root "$tmp/mismatch-scratch" --state-dir "$tmp/mismatch-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" > /dev/null
-printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$(printf '0%.0s' {1..40})"'","verdict":"clean"}' >"$tmp/mismatch-review.json"
+mismatch_commit=$(jq -r '.materialization.candidate_commit_id' "$tmp/mismatch-state/run.json")
+mismatch_tree=$(jq -r '.materialization.candidate_tree_id' "$tmp/mismatch-state/run.json")
+zero_oid=$(printf '0%.0s' {1..40})
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$zero_oid"'","candidate_commit_id":"'"$mismatch_commit"'","verdict":"clean"}' >"$tmp/mismatch-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/mismatch-candidate" --scratch-root "$tmp/mismatch-scratch" --state-dir "$tmp/mismatch-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
   --review-observation "$tmp/mismatch-review.json" >"$tmp/mismatch.out" 2>&1; then fail mismatched-review; fi
 grep -Fq 'does not match this candidate' "$tmp/mismatch.out" || fail mismatched-review-error
 pass 'mismatched supplied review cannot complete the replay'
+
+# The same tree can belong to two candidate commits, so a review naming this
+# request and tree but another commit must not advance this candidate.
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$mismatch_tree"'","candidate_commit_id":"'"$zero_oid"'","verdict":"clean"}' >"$tmp/other-commit-review.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/mismatch-candidate" --scratch-root "$tmp/mismatch-scratch" --state-dir "$tmp/mismatch-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --review-observation "$tmp/other-commit-review.json" >"$tmp/other-commit.out" 2>&1; then fail other-commit-review; fi
+if ! grep -Fq 'does not match this candidate' "$tmp/other-commit.out" ||
+   grep -Fq Traceback "$tmp/other-commit.out"; then
+  fail other-commit-review-error
+fi
+jq -e '.phase=="review-wait" and (has("review")|not)' "$tmp/mismatch-state/run.json" >/dev/null ||
+  fail other-commit-review-state
+pass 'a review bound to another candidate commit with this tree is refused'
 
 make_empty_input "$base_input" "$tmp/empty-final.json"
 source_digest=$(printf '%s\n' alpha beta | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')

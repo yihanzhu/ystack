@@ -65,9 +65,11 @@ bash scripts/test/delivery-replay.test.sh
 ```
 
 The replay is a local offline simulation. It materializes only a caller-owned
-candidate, reads one fixed candidate blob, and records test observations. It does
-not execute candidate code, select a profile, authenticate review, publish, merge,
-deploy, or contact a provider or target.
+candidate, reads one fixed candidate blob, and records test observations. Each
+observation must name the request digest, candidate tree, and candidate commit of
+the recorded materialization, and completion holds the candidate ref itself under a
+git transaction it owns. It does not execute candidate code, select a profile,
+authenticate review, publish, merge, deploy, or contact a provider or target.
 
 ### Restore the inactive default profile assembly
 

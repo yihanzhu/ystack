@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import shutil
 import stat
@@ -37,6 +38,8 @@ if LOADED_DRIVER_BYTES is None and __name__ == "__main__":
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_OBSERVATION_BYTES = 64 * 1024
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
+GUARD_ACKNOWLEDGEMENT_SECONDS = 5
+MAX_GUARD_LINE_BYTES = 4096
 OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}\Z")
 ACTOR = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
 GIT_ENVIRONMENT = {
@@ -423,6 +426,33 @@ def candidate_identity(candidate_root, source_commit):
             "candidate_parent_commit_id": parent}
 
 
+def await_guard_prepared(process):
+    # Ownership of the candidate ref comes from git's own transaction
+    # acknowledgement, never from the lock file existing: a lock another process
+    # holds fails our prepare, and git then closes stdout without "prepare: ok".
+    deadline = time.monotonic() + GUARD_ACKNOWLEDGEMENT_SECONDS
+    descriptor = process.stdout.fileno()
+    pending = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            process.kill()
+            raise ReplayError("candidate repository identity guard timed out")
+        readable, _, _ = select.select([descriptor], [], [], remaining)
+        if not readable:
+            process.kill()
+            raise ReplayError("candidate repository identity guard timed out")
+        chunk = os.read(descriptor, MAX_GUARD_LINE_BYTES)
+        if not chunk:
+            raise ReplayError("candidate repository identity guard failed")
+        lines = (pending + chunk).split(b"\n")
+        pending = lines.pop()
+        if len(pending) > MAX_GUARD_LINE_BYTES:
+            raise ReplayError("candidate repository identity guard failed")
+        if b"prepare: ok" in lines:
+            return
+
+
 @contextmanager
 def hold_candidate_ref(candidate_root, expected_commit):
     repository = Path(candidate_root).resolve() / "repository.git"
@@ -430,20 +460,15 @@ def hold_candidate_ref(candidate_root, expected_commit):
     command = ["/usr/bin/git", f"--git-dir={repository}", "-c", "core.hooksPath=/dev/null",
                "update-ref", "--stdin"]
     process = subprocess.Popen(command, env=GIT_ENVIRONMENT, stdin=subprocess.PIPE,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         process.stdin.write(
             f"option no-deref\nstart\nverify refs/heads/candidate {expected_commit}\nprepare\n".encode()
         )
         process.stdin.flush()
-        for _ in range(1000):
-            if lock_path.is_file() and not lock_path.is_symlink():
-                break
-            if process.poll() is not None:
-                raise ReplayError("candidate repository identity guard failed")
-            time.sleep(0.001)
-        else:
-            raise ReplayError("candidate repository identity guard timed out")
+        await_guard_prepared(process)
+        if lock_path.is_symlink() or not lock_path.is_file():
+            raise ReplayError("candidate repository identity guard failed")
         symbolic = subprocess.run(
             ["/usr/bin/git", f"--git-dir={repository}", "symbolic-ref", "-q", "refs/heads/candidate"],
             env=GIT_ENVIRONMENT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
@@ -465,6 +490,8 @@ def hold_candidate_ref(candidate_root, expected_commit):
         except subprocess.TimeoutExpired:
             process.terminate()
             process.wait(timeout=5)
+        if process.stdout is not None:
+            process.stdout.close()
 
 
 def reconcile_materialization(arguments, execution, input_path, identity, state_dir):
@@ -528,7 +555,7 @@ def revalidate_candidate(arguments, state):
                      state["identity"]["verifier"]["expected_sha256"])
 
 
-def observation(path, kind, identity, field):
+def observation(path, kind, identity, candidate_commit_id, field):
     if path is None:
         return None
     source = read_bytes(path, MAX_OBSERVATION_BYTES)
@@ -538,7 +565,11 @@ def observation(path, kind, identity, field):
         raise ReplayError("offline observation is malformed")
     if not isinstance(value.get("actor_id"), str) or not ACTOR.fullmatch(value["actor_id"]):
         raise ReplayError("offline observation actor is invalid")
-    if value.get("request_sha256") != identity["request_sha256"] or value.get("candidate_tree_id") != identity["candidate_tree_id"]:
+    # Two candidate commits can carry one tree, so the commit binds the
+    # observation to this exact candidate and the tree alone never does.
+    if value.get("request_sha256") != identity["request_sha256"] or \
+       value.get("candidate_tree_id") != identity["candidate_tree_id"] or \
+       value.get("candidate_commit_id") != candidate_commit_id:
         raise ReplayError("offline observation does not match this candidate")
     return {"actor_id": value["actor_id"], field: value.get(field), "sha256": source_sha}
 
@@ -694,7 +725,10 @@ def replay_locked(arguments, state_dir):
                     (arguments.publisher_observation, "delivery_replay_publisher_observation", "disposition", state.get("publisher")),
                 ):
                     if supplied is not None:
-                        supplied_observation = observation(supplied, kind, state["identity"], field)
+                        supplied_observation = observation(
+                            supplied, kind, state["identity"],
+                            state["materialization"]["candidate_commit_id"], field
+                        )
                         if stop_if_interrupted(state, interrupted):
                             return 75
                         if supplied_observation != recorded:
@@ -743,7 +777,8 @@ def replay_locked(arguments, state_dir):
                 revalidate_candidate(arguments, state)
                 if stop_if_interrupted(state, interrupted):
                     return 75
-                review = observation(arguments.review_observation, "delivery_replay_review_observation", state["identity"], "verdict")
+                review = observation(arguments.review_observation, "delivery_replay_review_observation",
+                                     state["identity"], state["materialization"]["candidate_commit_id"], "verdict")
                 if stop_if_interrupted(state, interrupted):
                     return 75
                 if review is None:
@@ -766,14 +801,16 @@ def replay_locked(arguments, state_dir):
                     if arguments.review_observation is not None:
                         supplied_review = observation(arguments.review_observation,
                                                       "delivery_replay_review_observation",
-                                                      state["identity"], "verdict")
+                                                      state["identity"],
+                                                      state["materialization"]["candidate_commit_id"], "verdict")
                         if stop_if_interrupted(state, interrupted):
                             return 75
                         if supplied_review != state.get("review"):
                             raise ReplayError("supplied offline review changed after review wait")
                     publisher = observation(arguments.publisher_observation,
                                             "delivery_replay_publisher_observation",
-                                            state["identity"], "disposition")
+                                            state["identity"],
+                                            state["materialization"]["candidate_commit_id"], "disposition")
                     if stop_if_interrupted(state, interrupted):
                         return 75
                     if publisher is None:

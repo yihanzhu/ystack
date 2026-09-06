@@ -79,10 +79,12 @@ through the existing local Git materializer. It then checks one repo-relative
 candidate blob against a supplied SHA-256 and records a private, resumable state.
 It never executes candidate code or a user command string.
 
-Review and publisher records are supplied offline test observations. They bind the
-exact request and candidate but do not authenticate an actor or authorize a real
-publication. Missing review stays waiting; a completed receipt is explicitly an
-offline simulation with no authority or qualification.
+Review and publisher records are supplied offline test observations. Each names the
+exact request digest, candidate tree, and candidate commit, and all three must match
+the recorded materialization: two candidate commits can carry one tree, so the commit
+is what binds an observation to this candidate. They still do not authenticate an
+actor or authorize a real publication. Missing review stays waiting; a completed
+receipt is explicitly an offline simulation with no authority or qualification.
 
 ## Inactive fake adapter contract matrix
 
