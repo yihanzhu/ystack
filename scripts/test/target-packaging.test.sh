@@ -196,6 +196,9 @@ fresh_target() {
 
 occupied=$(fresh_target occupied); : >"$occupied/keep"
 expect_refusal E_TARGET 'a non-empty target' "$installer" install "$manifest" profile.default.v1 "$occupied"
+unreadable=$(fresh_target unreadable); : >"$unreadable/keep"; /bin/chmod 0300 "$unreadable"
+expect_refusal E_TARGET 'a target whose emptiness cannot be read' "$installer" install "$manifest" profile.default.v1 "$unreadable"
+/bin/chmod 0700 "$unreadable"
 link_real=$(fresh_target link-real)
 /bin/ln -s "$link_real" "$tmp/fresh-link"
 expect_refusal E_TARGET 'a symlinked target' "$installer" install "$manifest" profile.default.v1 "$tmp/fresh-link"
@@ -207,7 +210,7 @@ fake_home="$tmp/home"
 /bin/mkdir -p "$fake_home/.config"
 expect_refusal E_TARGET 'a target under home dotfiles' \
   /usr/bin/env HOME="$fake_home" "$installer" install "$manifest" profile.default.v1 "$fake_home/.config"
-ok 'install refuses a non-empty, symlinked, in-repo, or home-dotfile target'
+ok 'install refuses a non-empty, unreadable, symlinked, in-repo, or home-dotfile target'
 
 target=$(fresh_target refusals)
 expect_refusal E_PROFILE 'an unknown profile id' "$installer" install "$manifest" profile.missing.v1 "$target"
@@ -217,6 +220,9 @@ expect_refusal E_DIGEST 'a tampered file digest' "$installer" install "$tmp/tamp
 "$jq" -S -c '.body.files[0].object_id = "0000000000000000000000000000000000000000"' \
   "$manifest" >"$tmp/tampered-object.json"
 expect_refusal E_DIGEST 'a tampered Git object id' "$installer" install "$tmp/tampered-object.json" profile.default.v1 "$target"
+"$jq" -S -c '(.body.files[] | select(.mode == "100644") | .mode) |= "100755"' \
+  "$manifest" >"$tmp/tampered-mode.json"
+expect_refusal E_DIGEST 'a tampered file mode with the same blob' "$installer" install "$tmp/tampered-mode.json" profile.default.v1 "$target"
 "$jq" -S -c '.body.activation = "live"' "$manifest" >"$tmp/active.json"
 expect_refusal E_SHAPE 'a manifest claiming activation' "$installer" install "$tmp/active.json" profile.default.v1 "$target"
 "$jq" -S -c '.body.source.commit_id = "0123456789012345678901234567890123456789"' \
@@ -229,7 +235,7 @@ expect_refusal E_RELATION 'a manifest naming a commit this repo does not have' \
 expect_refusal E_RELATION 'a manifest naming another core generation' \
   "$installer" install "$tmp/generation.json" profile.default.v1 "$target"
 [ -z "$(/bin/ls -A -- "$target")" ] || fail 'a refused install wrote into the target'
-ok 'install refuses an unknown profile, a tampered digest or object, a claimed activation, and a stale release'
+ok 'install refuses an unknown profile, a tampered digest, object, or mode, a claimed activation, and a stale release'
 
 /usr/bin/printf '{' >"$tmp/malformed.json"
 expect_refusal E_PARSE 'a malformed manifest' "$installer" install "$tmp/malformed.json" profile.default.v1 "$target"

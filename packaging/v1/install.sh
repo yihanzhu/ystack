@@ -77,7 +77,11 @@ physical_leaf "$target_input" || emit_error E_TARGET
 target=$PHYSICAL_LEAF
 [ -d "$target" ] && [ ! -L "$target" ] || emit_error E_TARGET
 [ "$(CDPATH='' cd -P -- "$target" 2>/dev/null && pwd -P)" = "$target" ] || emit_error E_TARGET
-[ -z "$(/bin/ls -A -- "$target" 2>/dev/null)" ] || emit_error E_TARGET
+# Emptiness must be proven, not assumed: an unreadable directory makes ls fail
+# with no output, which must not pass as empty.
+[ -r "$target" ] || emit_error E_TARGET
+target_listing=$(/bin/ls -A -- "$target" 2>/dev/null) || emit_error E_TARGET
+[ -z "$target_listing" ] || emit_error E_TARGET
 case "$target" in
   "$repo"|"$repo"/*) emit_error E_TARGET ;;
 esac
@@ -152,6 +156,10 @@ while IFS=$'\t' read -r path mode object_id sha256; do
   packaged_path_ok "$path" || emit_error E_PATH
   case "$mode" in 100644|100755) ;; *) emit_error E_SHAPE ;; esac
   [ "$(repo_git rev-parse --verify --quiet "$commit:$path" 2>/dev/null)" = "$object_id" ] ||
+    emit_error E_DIGEST
+  # The mode is part of the packaged identity: a manifest may not turn a data
+  # file into an executable while keeping the same blob.
+  [ "$(repo_git ls-tree "$commit" -- "$path" 2>/dev/null | /usr/bin/cut -d' ' -f1)" = "$mode" ] ||
     emit_error E_DIGEST
   size=$(repo_git cat-file -s "$object_id" 2>/dev/null) || emit_error E_DIGEST
   [[ "$size" =~ ^[0-9]{1,7}$ ]] && [ "$size" -le 1048576 ] || emit_error E_LIMIT
