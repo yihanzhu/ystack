@@ -345,6 +345,13 @@ The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
 
+## Inactive default producer config
+
+`profiles/default/v1/producer-config.json` is an immutable Git payload for the
+default producer preference. It grants no capability and does not select a
+profile, invoke a model, or contact a provider. Its focused test checks the
+config shape and exact Git object identity.
+
 ## Inactive Codex CLI producer normalizer payload
 
 `adapters/codex-cli-producer/v1/normalize.jq` is the first alternative harness.
