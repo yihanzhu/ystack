@@ -18,6 +18,8 @@ harness is being built ahead of use, so every component it already carries is
 `inactive-repo-only` until the operator-merged operating-mode transition. They are
 indexed under [Components (all inactive)](#components-all-inactive) below, with the
 full write-ups in [`docs/components.md`](docs/components.md).
+[`docs/transition.md`](docs/transition.md) is the operator-facing proposal for that
+transition: what it changes, what it unlocks, and what is still open.
 
 **ystack** — Yihan's stack for the AI-native SDLC: an autonomous coding team, gated by human judgment.
 
