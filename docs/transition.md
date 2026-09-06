@@ -19,8 +19,8 @@ as the program authorization, and the twelve rollout items are being implemented
 directly as dependency-ordered units. Every unit is inactive and repo-only — source,
 contracts, and a focused hermetic test — and each one reaches `main` only after
 required CI and an independent review. The table below is the current state, not a
-completion claim: steps 1–6 are on `main`; steps 7, 9, 10, and 11 are open PRs; steps
-8 and 12 are still being built. Construction is implementation-complete only when
+completion claim: steps 1–6 are on `main`; steps 7 through 12 are open PRs (#249,
+#250, #251, #252, #254, #255). Construction is implementation-complete only when
 every row reads `merged`, and the transition PR in §3 must not be written before
 then. What construction produces is a portable control plane that has never been
 switched on.
@@ -34,11 +34,11 @@ switched on.
 | 5 — Agent evals and telemetry | `evals/v1/`, `telemetry/v1/` | merged (framework only — see §2) |
 | 6 — Alternative adapters | `adapters/gitlab-forge/v1/`, `adapters/codex-cli-producer/v1/`, `profiles/alternative/v1/` | merged |
 | 7 — Shadow vertical slice | `shadow/v1/` | pending PR #251 |
-| 8 — Bounded autonomous writes | `scope/v1/` | in progress (no branch or PR yet) |
+| 8 — Bounded autonomous writes | `scope/v1/` | pending PR #254 |
 | 9 — Safe review-fix loop | `loop/v1/` | pending PR #249 |
 | 10 — Target packaging | `packaging/v1/` | pending PR #250 |
 | 11 — Deploy and rollback | `deploy/v1/` | pending PR #252 |
-| 12 — Maintenance loop | `maintenance/v1/` | in progress (no branch or PR yet) |
+| 12 — Maintenance loop | `maintenance/v1/` | pending PR #255 |
 
 The per-unit write-ups are in [`components.md`](components.md), indexed from
 [`../README.md`](../README.md). A pending PR's write-up lives on its own branch until
