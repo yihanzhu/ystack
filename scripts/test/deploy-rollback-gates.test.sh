@@ -326,6 +326,13 @@ rollback_wrong_environment=$(mutate "$rollback" rollback-wrong-environment \
 expect_decision rollback-unrehearsed-environment refused deploy.rollback-unrehearsed \
   "$rollback_wrong_environment" "$release" "$authorization" "$staging_rehearsal" "$risk" \
   "$kill_switch"
+# A rehearsal dated after the request rehearsed nothing this request can rely on.
+late_rehearsal=$(mutate "$rehearsal" late-rehearsal '.body.rehearsed_at="2026-09-05T12:00:01Z"')
+late_rehearsal_sha=$(sha256_path "$late_rehearsal")
+rollback_late_rehearsal=$(mutate "$rollback" rollback-late-rehearsal \
+  ".body.rehearsal_ref.sha256=\"$late_rehearsal_sha\"")
+expect_decision rollback-rehearsed-after-request refused deploy.rollback-unrehearsed \
+  "$rollback_late_rehearsal" "$release" "$authorization" "$late_rehearsal" "$risk" "$kill_switch"
 rollback_wrong_pair=$(mutate "$rollback" rollback-wrong-pair \
   '.body.rollback_to_release_ref.sha256=("0"*64)')
 expect_decision rollback-unrehearsed-pair refused deploy.rollback-unrehearsed \

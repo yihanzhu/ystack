@@ -85,7 +85,10 @@ def decision_ok($tiers_sha):
         $reh.body.outcome != "rehearsed" or
         $reh.body.environment.tier != $tier_name or
         $reh.body.from_release_ref != $req.body.release_ref or
-        $reh.body.to_release_ref != $req.body.rollback_to_release_ref)
+        $reh.body.to_release_ref != $req.body.rollback_to_release_ref or
+        # A rehearsal must precede the request it licenses; one dated after
+        # the request rehearsed nothing this request can rely on.
+        $reh.body.rehearsed_at > $req.body.requested_at)
     then ["deploy.rollback-unrehearsed"] else [] end) +
    (if $kill_doc.body.verdict == "satisfied" then [] else ["deploy.kill-switch"] end) +
    # A violated risk-gate verdict refuses on its own, whatever produced it, and
