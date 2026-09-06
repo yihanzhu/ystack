@@ -680,3 +680,60 @@ observation only: it does not run a candidate or adapter, invoke a model, use a
 credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
+
+## Inactive deploy and rollback gates
+
+`deploy/v1/` is the paper trail a deployment would need, and nothing that could
+perform one. This first half holds the environment tiers and the shape of every
+document the gates will read: the release record, the three environment-scoped
+capability requests (deploy, status, rollback), the recorded operator
+authorization, and the recorded rollback rehearsal. Nothing here deploys, rolls
+back, or reads the state of any environment. There is no deployment adapter in
+this repository, and adding a real one is a post-transition, operator-gated
+change.
+
+`deploy/v1/environment-tiers.json` names three environments and the gate each one
+requires. `dev` and `staging` are routine tier and accept a routine-gate
+authorization record. `production` is high risk and accepts only a named operator
+authorization: a record whose kind is `named-operator` and whose named operator
+carries the `operator` role. Every tier requires that rollback has been rehearsed.
+The same file names which actor roles may ask for each capability: a publisher or
+an operator may ask to deploy or roll back; an observer, orchestrator, publisher,
+or operator may ask for status.
+
+```text
+deploy/v1/validate-deploy-document.sh validate KIND DOCUMENT
+```
+
+The validator checks one canonical document of a named kind and prints nothing
+when it is well formed. The kinds are the tier policy, `release_record`,
+`deploy_authorization`, `rollback_rehearsal_record`, the three request kinds, and
+the two control evaluations the gates consume (`risk_gate_evaluation` and
+`kill_switch_evaluation`). Every input must be a regular non-symlink file holding
+exactly one canonical JSON document within fixed size, depth, and member bounds;
+anything else is refused with a single error id and no output.
+
+A release record binds a release id to a verified source commit and tree and to
+the evidence proving it: the verifier stage result, an independent-review
+observation, a CI observation, and — when packaging has produced one — the
+release manifest, referred to only by shape so this unit does not depend on the
+packaging code. A rollback rehearsal record binds one environment, one release
+pair, its outcome, and the stage result that evidences it. All references are
+identity only: a digest and a document identity, never content the validator
+fetches.
+
+Run the focused test with:
+
+```sh
+bash scripts/test/deploy-rollback-gates.test.sh
+```
+
+It validates one well-formed document of every kind and refuses a document
+offered as the wrong kind, an unknown kind, an extra body field, a malformed
+timestamp, an authorization that expires before it was issued, a rehearsal whose
+release pair is the same release twice, a release whose object ids do not match
+its hash algorithm, and a broken packaging manifest reference, plus multi-root,
+non-canonical, oversized, and symlinked input. Nothing in the run reads a
+credential, touches a network, invokes a model, writes outside its scratch
+directory, grants authority or qualification, activates a profile, or deploys
+anything.

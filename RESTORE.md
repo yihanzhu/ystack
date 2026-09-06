@@ -769,6 +769,26 @@ fail-closed handling of malformed, moved, or edited inputs. The framework remain
 inactive and observation only. It does not run a candidate or adapter, invoke a
 model, use a credential or network, grant qualification, or activate a profile.
 
+Restore the four paths listed under "Inactive deploy and rollback gates" in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/deploy-rollback-gates.test.sh
+```
+
+The proof validates one well-formed document of every kind the deploy gates read
+— the environment tiers, a release record, an operator authorization, a rollback
+rehearsal, the deploy, status, and rollback requests, and the two control
+evaluations — and refuses a document offered as the wrong kind, an unknown kind,
+an extra body field, a malformed timestamp, an authorization that expires before
+it was issued, a rehearsal whose release pair is one release twice, a release
+whose object ids do not match its hash algorithm, a broken packaging manifest
+reference, and multi-root, non-canonical, oversized, or symlinked input. Nothing
+in this unit deploys, rolls back, or reads an environment; there is no deployment
+adapter here, and adding a real one is a post-transition, operator-gated change.
+It uses no credential or network, invokes no model, grants no authority or
+qualification, and activates no profile.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive

@@ -348,3 +348,9 @@ scripts/test/evals-dashboard.test.sh
 
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md
+
+# Inactive deploy and rollback gates
+deploy/v1/environment-tiers.json
+deploy/v1/deploy_contracts.jq
+deploy/v1/validate-deploy-document.sh
+scripts/test/deploy-rollback-gates.test.sh
