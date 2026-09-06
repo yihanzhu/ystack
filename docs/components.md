@@ -680,3 +680,71 @@ observation only: it does not run a candidate or adapter, invoke a model, use a
 credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
+
+## Inactive workflow-scope qualification evaluator
+
+Roadmap step 8 is "bounded autonomous writes": enable one low-risk qualified
+workflow scope at a time, in its own pull request, after that scope's own shadow
+evidence passes. This component is the part that decides whether a scope may even
+be **proposed** for that pull request. Enabling a scope is still an independent
+operator-merged pull request after the operating-mode transition. Nothing here
+turns anything on.
+
+A **workflow scope** (`scope/v1/workflow-scope.jq`, checked by
+`scope/v1/validate-scope.sh`) is a small written-down record: which repository,
+which workflow, which task class, which risk tier, which repo-relative paths the
+work may touch, which proof kinds and eval families it needs, which shadow
+environments it must have evidence from, and how many attempts it gets. Every
+record says `enabled: false` and `push_allowed: false`; one that claims otherwise
+is refused. Allowed paths are globs with small teeth: no absolute path, no
+traversal, no backslash, no `**`, and no wildcard in the first segment, because a
+wildcard there could expand into any top-level directory and the protected-path
+check could not bound it.
+
+The **evaluator** (`scope/v1/evaluate-scope.sh` with `scope/v1/scope-gates.jq`)
+reads seven documents: the scope record, a set of shadow reproduction records in
+the shape step 7 emits, the eval dashboard, a risk-gates evaluation, a kill-switch
+evaluation, a duty-separation evaluation, and the operating-mode marker. It
+measures every one of them itself — including a digest over each individual shadow
+record — so nothing a supplied document says about its own identity is taken on
+trust. It answers `proposable` only when all of this holds: the tier is `routine`
+and the risk gate also classifies the work routine and reports no violation; no
+allowed path touches a protected path; every required shadow environment has a
+record for this repository whose outcome is `reproduced` or `no-change`, and none
+is `inconclusive`; every required eval family is seeded with at least one graded
+case and no failing or inconclusive grade; the kill switch is clear; duty
+separation is satisfied; and the mode is readable. Otherwise the answer is
+`not-proposable` with one or more reason ids: `scope.tier-not-routine`,
+`scope.protected-path`, `scope.shadow-evidence-missing`,
+`scope.shadow-inconclusive`, `scope.eval-family-unseeded`, `scope.eval-failing`,
+`scope.kill-switch`, `scope.duty-violation`, `scope.mode-construction`, or
+`scope.malformed`.
+
+The operating-mode marker is read from `config/construction-mode.json`
+**read-only** and only ever compared. A supplied marker that disagrees with the
+committed one leaves the mode unknown and the evaluator refuses rather than
+guessing. While the repository is in construction mode the best possible answer is
+`proposable`; `enabled` is never an outcome in any mode.
+
+When the answer is `proposable` the evaluation carries one
+`scope_enablement_proposal` document: exactly what an operator pull request would
+add — the scope record digest, every evidence digest, the environment list, the
+allowed paths, the proof kinds, and a core v2 scope reference with purpose
+`qualification` bound to that exact record. It records `authority: "none"`,
+`enabled: false`, `push_allowed: false`, an enablement state of `blocked`, and the
+sentence that enabling is an independent operator-merged pull request after the
+operating-mode transition.
+
+The evaluator never writes outside its own scratch directory, never runs candidate
+code, never calls a model, never uses a credential or the network, never contacts
+a forge or target, and never grants qualification. Every input must be a regular
+non-symlink file holding exactly one canonical JSON object under one mebibyte; a
+malformed, non-canonical, multi-root, oversized, symlink, or missing input is
+refused with a single error token and no output. The same inputs always produce the
+same bytes.
+
+Run the focused test with `bash scripts/test/scope-qualification.test.sh`. It
+bootstraps the pinned jq 1.6 release itself, proves the proposable evaluation byte
+for byte and byte-identical on repeat, proves every refusal above, proves the
+record validator's refusals, and proves that a copy of the component in a tree with
+no committed mode marker still only ever produces a blocked proposal.

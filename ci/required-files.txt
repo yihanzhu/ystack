@@ -353,4 +353,6 @@ docs/components.md
 scope/v1/scope-policy.json
 scope/v1/workflow-scope.jq
 scope/v1/validate-scope.sh
+scope/v1/scope-gates.jq
+scope/v1/evaluate-scope.sh
 scripts/test/scope-qualification.test.sh
