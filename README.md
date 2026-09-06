@@ -54,6 +54,27 @@ activated, has no authority or qualification, and cannot invoke a model, use a
 credential, contact a provider, publish, or touch a target. Run
 `bash scripts/test/default-profile-assembly.test.sh` for the focused proof.
 
+## Inactive alternative profile assembly
+
+`profiles/alternative/v1/` is the same six-role team as the default profile with
+one swap: the producer is the Codex CLI harness instead of Claude Code. Its
+producer manifest points at `adapters/codex-cli-producer/v1/normalize.jq` at the
+durable main commit that carries it, and its producer binding asks for the
+`openai` provider and pins `profiles/alternative/v1/producer-config.json` by Git
+object. The other five manifests — CI, forge, publisher, reviewer, and verifier —
+are the default ones, byte for byte. Protected roles keep distinct principals,
+execution boundaries, and authority scopes, and the producer gets its own
+`principal.codex-producer` and `boundary.codex-producer`. This is the item 6
+wiring that shows one core contract can drive either harness.
+
+This profile is inactive and selects nothing. It is not resolved, qualified,
+installed, or activated, grants no authority, and cannot invoke a model, use a
+credential, contact a provider, publish, or touch a target. GitLab stays an
+observation payload the same way the GitHub forge does: neither is bound here.
+Run `bash scripts/test/alternative-profile-assembly.test.sh` for the focused
+proof, which also asserts the only differences from the default profile are the
+producer binding and the profile id.
+
 ## Inactive portable core v2 fake-forge contract
 
 `core/v2/` contains an inactive, repo-only contract for deterministic candidate
