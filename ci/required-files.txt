@@ -256,6 +256,15 @@ scripts/test/default-codex-native-reviewer-adapter.test.sh
 adapters/github-actions-ci/v1/normalize.jq
 scripts/test/default-github-actions-ci-adapter.test.sh
 
+# Inactive telemetry trace-record validator
+telemetry/v1/trace-ledger.jq
+telemetry/v1/validate-trace-ledger.sh
+scripts/test/telemetry-trace-ledger.test.sh
+
+# Inactive hermetic eval-record evaluator
+evals/v1/framework.jq
+evals/v1/run.sh
+scripts/test/eval-framework.test.sh
 # Inactive provider-neutral local Git candidate materializer
 adapters/local-git-materializer/v1/materialize.sh
 adapters/local-git-materializer/v1/object-closure.c
@@ -290,6 +299,16 @@ scripts/test/default-dormant-publisher-adapter.test.sh
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
 
+# Inactive default profile assembly
+profiles/default/v1/profile.json
+profiles/default/v1/manifests/claude-code-producer.json
+profiles/default/v1/manifests/codex-native-reviewer.json
+profiles/default/v1/manifests/deterministic-verifier.json
+profiles/default/v1/manifests/dormant-publisher.json
+profiles/default/v1/manifests/github-actions-ci.json
+profiles/default/v1/manifests/local-git-materializer.json
+scripts/test/default-profile-assembly.test.sh
+
 # Inactive eval and trace framework
 evals/v1/run-evals.sh
 evals/v1/evals-launcher.sh
@@ -301,9 +320,11 @@ evals/v1/seed-set-events.json
 evals/v1/seed-set-plans.json
 evals/v1/seed-set-boundaries.json
 evals/v1/seed-set-adapters.json
+evals/v1/seed-set-approvals.json
 scripts/test/evals-framework.test.sh
 scripts/test/evals-events.test.sh
 scripts/test/evals-plans.test.sh
 scripts/test/evals-boundaries.test.sh
 scripts/test/evals-adapters.test.sh
+scripts/test/evals-approvals.test.sh
 scripts/test/evals-dashboard.test.sh

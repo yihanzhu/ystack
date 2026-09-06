@@ -35,6 +35,25 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+## Inactive default profile assembly
+
+`profiles/default/v1/` binds six default adapter packages to exact Git
+objects from one durable main commit. Protected roles keep distinct principals,
+execution boundaries, and authority scopes; their decision records cite the exact
+accepted `ROADMAP.md` content. The producer manifest and binding also pin the
+profile's immutable producer config. Requested capabilities and permissions are
+inactive contract data, not grants. The profile requests no adapter tools, and
+the CI and dormant-publisher roles request no capability or permission.
+The current normalizer payloads only validate supplied records and return
+observations; they do not execute a model, verifier, forge, or other adapter.
+The GitHub forge normalizer remains a separate observation payload. Transport and
+runtime wiring are not part of this inactive assembly.
+
+This is source data only. It is not selected, resolved, qualified, installed, or
+activated, has no authority or qualification, and cannot invoke a model, use a
+credential, contact a provider, publish, or touch a target. Run
+`bash scripts/test/default-profile-assembly.test.sh` for the focused proof.
+
 ## Inactive portable core v2 fake-forge contract
 
 `core/v2/` contains an inactive, repo-only contract for deterministic candidate
@@ -287,6 +306,52 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive telemetry trace-record validator
+
+`telemetry/v1/validate-trace-ledger.sh` validates one caller-supplied, bounded
+canonical trace-record bundle against caller-supplied session and attempt
+identities. Every event names that session and attempt plus its trace, carries explicit recorded,
+computed, unavailable, or not-applicable facts, and joins a SHA-256 chain. A
+sealed count and final digest expose tail truncation. The validator returns one
+deterministic canonical receipt bound to the exact input bytes.
+Each record digest covers its jq 1.6 sorted compact event without
+`record_digest`, including the terminating line feed.
+The receipt repeats a session, attempt, and final-digest replay key for a later
+state store to consume once. It is not itself a durable ledger or write protocol.
+Validation runs only with the repository's digest-pinned jq 1.6 runtime bytes.
+
+```text
+telemetry/v1/validate-trace-ledger.sh validate SESSION_ID ATTEMPT_ID LEDGER.json
+```
+
+The chain detects an unrehashed change; it is not a signature or an authority
+grant. The package stays inactive and repo-only. It does not collect telemetry,
+run a tool or adapter, read a credential, use a network, write a ledger, activate
+a profile, qualify a workflow, publish, deploy, or touch a target. A later unit
+must provide durable append, retention, access, and recovery behavior before it
+can claim a telemetry ledger runtime.
+
+## Inactive hermetic eval-record evaluator
+
+`evals/v1/run.sh evaluate BUNDLE.json` validates already-recorded, bounded
+canonical eval suites, cases, trials, and grades, then emits one deterministic
+report. It does not execute trials or invoke graders. Every record is
+content-bound. The suite pins its scope and framework version. Model cases require
+multiple supplied trials, while deterministic, model, and human graders remain
+immutable data references. Declared trial and attempt identities are exact, and
+trial/grade timestamps must agree.
+
+The runner snapshots a fixed jq program and the selected public-core schema into
+a private directory. It accepts only canonical JSON, rejects stale links,
+tampering, duplicates, and non-canonical order, and keeps `unavailable` distinct
+from `inconclusive`. Failed grades cannot be hidden by another trial state. It
+has no adapter or arbitrary-command seam, uses no network
+or credential, grants no authority, and makes no activation or qualification
+claim.
+
+This is a bounded first slice for eval records, not a runnable eval system or
+qualification evidence. A later unit must provide hermetic built-in trial and
+grader execution before it can make either claim.
 ## Inactive local Git candidate materializer
 
 `adapters/local-git-materializer/v1/` implements the existing portable-core v2
@@ -454,8 +519,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Five families are
-seeded; the other four are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Six families are
+seeded; the other three are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -508,6 +573,21 @@ inconclusive; provider text that can never decide a state; and malformed
 envelopes, bindings, or snapshots refused with the normalizer's own error id. The
 normalizer is the only judge; the framework records the generic state, reason, and
 stale-binding set it reports.
+
+The approval-invalidation and no-push-after-approval family is seeded from
+`evals/v1/seed-set-approvals.json`. Each case carries a whole decision tuple
+(policy set, core request, resolved profile, result, duty evaluation, decision
+claim) and replays it through the real inactive risk-gates evaluator
+(`control/v1/evaluate-risk-gates.sh`), which regenerates the duty-separation
+evaluation and validates the core tuple from a mirror built out of the same
+private runtime. A request whose basis moved after the decision is violated
+(decision.stale); a decision recorded after the request, a missing, rejected,
+downgraded, wrong-role, wrong-kind, unbound-actor, unbound, ambiguous, or
+malformed claim is violated with its exact reason; a duty violation is violated;
+an honest accept claim is still only inconclusive because no qualified
+decision-provenance adapter exists; a forged duty evaluation is refused. Each
+expectation's verdict and primary reason were hand-written and checked against
+the real evaluator before being recorded.
 
 The `dashboard` operation aggregates one to sixteen run results into one canonical
 flow-and-quality document. Each seed set is first replayed in the same private
@@ -805,7 +885,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, risk-gates, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
