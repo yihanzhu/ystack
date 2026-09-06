@@ -277,3 +277,21 @@ scripts/test/default-dormant-publisher-adapter.test.sh
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
+
+# Inactive eval and trace framework
+evals/v1/run-evals.sh
+evals/v1/evals-launcher.sh
+evals/v1/evals-driver.sh
+evals/v1/evals.jq
+evals/v1/eval-catalog.json
+evals/v1/seed-set.json
+evals/v1/seed-set-events.json
+evals/v1/seed-set-plans.json
+evals/v1/seed-set-boundaries.json
+evals/v1/seed-set-adapters.json
+scripts/test/evals-framework.test.sh
+scripts/test/evals-events.test.sh
+scripts/test/evals-plans.test.sh
+scripts/test/evals-boundaries.test.sh
+scripts/test/evals-adapters.test.sh
+scripts/test/evals-dashboard.test.sh
