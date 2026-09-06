@@ -711,7 +711,7 @@ Refusal comes first and wins, in a fixed order: `kill-switch`,
 credential, reconciliation, risk, or attempt-ledger document handed in is not the
 exact one the change context pins by kind, id, and SHA-256; whenever the
 credential or risk verdict is anything but `satisfied`; whenever the reconciliation
-plan still carries deferred deliveries or operator messages; or whenever the ledger
+plan still carries pending or deferred deliveries or operator messages; or whenever the ledger
 belongs to another change or was recorded after the context was observed.
 
 The planner never trusts the observation's own list of stale bindings. It

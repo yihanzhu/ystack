@@ -375,6 +375,13 @@ expect_refusal reconciliation-open boundaries-unproven \
 expect_refusal reconciliation-identity boundaries-unproven \
   boundary.reconciliation-identity-mismatch "$context" "$observation" \
   "$credential" "$reconciliation_open"
+reconciliation_pending=$(mutate "$reconciliation" reconciliation-pending \
+  '.body.deliveries=[{delivery_key:"delivery.one",delivery_mode:"dispatch",operation:"deliver",provenance:{},recovery:{},stage_key:{}}]')
+reconciliation_pending_context=$(bind_context reconciliation-pending-context \
+  "$credential" "$reconciliation_pending" "$risk" "$ledger")
+expect_refusal reconciliation-pending-deliveries boundaries-unproven \
+  boundary.reconciliation-unreconciled "$reconciliation_pending_context" \
+  "$observation" "$credential" "$reconciliation_pending"
 
 risk_unproven=$(mutate "$risk" risk-unproven \
   '.body.verdict="violated"|.body.reason_ids=["push.after-approval"]')
