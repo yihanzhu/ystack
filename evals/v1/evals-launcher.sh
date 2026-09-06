@@ -147,7 +147,7 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 
 program_sha=c92eae2b20cff74e27af12bf38c8b0f5199eb7fa62bd02c41f205f0e04cda504
 catalog_sha=ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65
-driver_sha=c294520710af6bddcb0458ba10691619ce79b6633e835f84a9ea387459b906b9
+driver_sha=41556529d80050a296e321f9a87c41c9d28b5b9afb4e2df23caf71d674ec7521
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -412,8 +412,9 @@ else
     "$("$runtime/bin/jq" -c 'map(.result_sha256)' "$scratch/inputs/manifest.json")" ||
     emit_error E_RUNTIME
 fi
-[ "$("$runtime/bin/jq" -S -c . "$output")" = "$(/bin/cat "$output")" ] ||
+"$runtime/bin/jq" -S -c . "$output" > "$scratch/output.canonical" 2>/dev/null ||
   emit_error E_CANONICAL
+/usr/bin/cmp -s "$output" "$scratch/output.canonical" || emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
 [ "$(sha256_path "$runtime/adapters/codex-cli-producer/v1/normalize.jq")" = \
