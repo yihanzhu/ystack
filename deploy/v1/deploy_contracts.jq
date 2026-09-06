@@ -6,9 +6,19 @@ def sha256_ok: type == "string" and test("\\A[0-9a-f]{64}\\z");
 def git_oid_ok:
   type == "string" and (test("\\A[0-9a-f]{40}\\z") or test("\\A[0-9a-f]{64}\\z"));
 def tier_name_ok: type == "string" and test("\\A[a-z][a-z0-9-]{0,31}\\z");
+# A timestamp must be a real instant, not only a well-formed string: month,
+# day (leap years included), hour, minute, and second are all range-checked,
+# because stale and expiry decisions are made by comparing these values.
 def timestamp_ok:
   type == "string" and
-  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
+  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+  (capture("\\A(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<se>[0-9]{2})Z\\z") as $t |
+   ($t.y | tonumber) as $y | ($t.mo | tonumber) as $mo | ($t.d | tonumber) as $d |
+   ($t.h | tonumber) as $h | ($t.mi | tonumber) as $mi | ($t.se | tonumber) as $se |
+   ($y % 4 == 0 and ($y % 100 != 0 or $y % 400 == 0)) as $leap |
+   [31,(if $leap then 29 else 28 end),31,30,31,30,31,31,30,31,30,31] as $days |
+   $mo >= 1 and $mo <= 12 and $d >= 1 and $d <= $days[$mo - 1] and
+   $h <= 23 and $mi <= 59 and $se <= 59);
 def label_ok: type == "string" and utf8bytelength >= 1 and utf8bytelength <= 256;
 
 def content_ref_ok($media):

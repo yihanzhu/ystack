@@ -591,6 +591,10 @@ expect_invalid validate-extra-field E_SHAPE deploy_request \
   "$(mutate "$request" validator-extra-field '.body.untrusted="value"')"
 expect_invalid validate-bad-timestamp E_SHAPE deploy_request \
   "$(mutate "$request" validator-bad-timestamp '.body.requested_at="2026-09-05 12:00:00"')"
+expect_invalid validate-impossible-timestamp E_SHAPE deploy_request \
+  "$(mutate "$request" validator-impossible-timestamp '.body.requested_at="2026-99-99T99:99:99Z"')"
+expect_invalid validate-leap-day E_SHAPE deploy_request \
+  "$(mutate "$request" validator-leap-day '.body.requested_at="2026-02-29T00:00:00Z"')"
 expect_invalid validate-expiry-order E_SHAPE deploy_authorization \
   "$(mutate "$authorization" validator-expiry-order \
     '.body.expires_at=.body.issued_at')"
