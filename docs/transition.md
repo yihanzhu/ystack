@@ -86,8 +86,11 @@ against reality is untested.
 
 **Precondition:** every row of the table in §1 reads `merged`. Until then this section is a draft of a future PR, not an instruction.
 
-One PR, authored and merged by the operator, touching the mode record and nothing an
-agent could have authored.
+One PR, authored and merged by the operator. Its scope is the mode record, the
+ruleset verification, and the documentation that describes the mode as active
+(README's construction-mode paragraph, the preamble of `docs/components.md`, and the
+present-tense text of this file), so that README and docs stay in sync with the record
+as the repo rules require. Nothing else: no component code, tests, or manifest entries.
 
 ### 3.1 The fields in `config/construction-mode.json`
 
@@ -255,12 +258,15 @@ written.
 5. **What replaces `allowed_live_writes` and `delivery_credential`?** Both describe
    the construction-only arrangement (same-repository delivery, the operator's own
    `gh` login) and stop being accurate at the transition.
-6. **Do steps 8 and 12 land before the transition or after it?** `scope/v1/` and
-   `maintenance/v1/` are still in progress; the transition can wait for them or
-   proceed with them pending.
-7. **Do the four pending PRs (#249, #250, #251, #252) merge under construction mode
-   or under the restored gates?** Merging them first keeps the construction overlay's
-   simpler path; waiting subjects them to the full artifact chain.
+6. **Steps 8 and 12 (`scope/v1/`, `maintenance/v1/`) are now open PRs #254 and #255.**
+   They land before the transition, like every other row in §1; this is not a choice,
+   it is the precondition. The only question is whether any of them should be dropped
+   from the roadmap instead of merged.
+7. **The pending PRs (#249–#255) merge under construction mode.** The §1 precondition
+   requires every row to read `merged` before the transition PR exists, so none of them
+   can be left for the restored gates. If you want any of them re-reviewed under the full
+   artifact chain instead, say which, and it comes out of the table as "not part of
+   construction" rather than blocking the transition.
 8. **What happens to frozen PR #183 and draft PR #146?** The mode record freezes #183
    and `ROADMAP.md` says #146 must never merge; both need an explicit disposition
    once the overlay that froze them is retired.
