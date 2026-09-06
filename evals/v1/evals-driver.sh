@@ -56,14 +56,15 @@ planner="$runtime/orchestrator/v1/reconciliation-plan.jq"
 planner_sha256=03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4
 sandbox_evaluator="$runtime/control/v1/evaluate-sandbox.sh"
 sandbox_sha256=8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb
+normalizer_shas='{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}'
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=25b3665b163d3f3741408dc907a3eebef977587a5d23ebd2eff18972e33f6ac2
+program_sha256=786174eaf8ad375d312f7a3bb029391966cbbb94518d4773c328c68b9e7b0891
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash 1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1 "$catalog" &&
+  verify_hash dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089 "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -85,6 +86,12 @@ verify_runtime() {
   verify_hash "$scanner_sha256" "$scanner" &&
   verify_hash "$planner_sha256" "$planner" &&
   verify_hash "$sandbox_sha256" "$sandbox_evaluator" &&
+  verify_hash 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 \
+    "$runtime/adapters/codex-native-reviewer/v1/normalize.jq" &&
+  verify_hash 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7 \
+    "$runtime/adapters/github-actions-ci/v1/normalize.jq" &&
+  verify_hash b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be \
+    "$runtime/adapters/github-forge/v1/normalize.jq" &&
   verify_hash 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 \
     "$runtime/control/v1/policy-set.jq" &&
   verify_hash c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd \
@@ -113,12 +120,12 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 1a42036bfd4aa5b0a3866bfd39859a4675d85c38a0c9899f4518813abdd6d7f1 \
+    --arg catalog_sha256 dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089 \
     --arg evaluator_sha256 "$evaluator_sha256" \
     --arg seed_set_sha256 "$seed_set_sha256" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
-    --arg sandbox_sha256 "$sandbox_sha256" \
+    --arg sandbox_sha256 "$sandbox_sha256" --argjson normalizer_shas "$normalizer_shas" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$input" \
@@ -142,8 +149,8 @@ run_program() {
 
 seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
 case "$seed_source" in
-  control.sandbox-policy.v1|core.stage-run.v2|orchestrator.reconciliation-plan.v1) ;;
-  orchestrator.state-scanner.v1) ;;
+  adapters.provider-normalizers.v1|control.sandbox-policy.v1|core.stage-run.v2) ;;
+  orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
   *) emit_error E_SHAPE ;;
 esac
 case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
@@ -213,6 +220,59 @@ replay_scanner_cases() {
       esac
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
         '{case_id:$case_id,disposition:"rejected",classification:{state:"absent"},
+          error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
+# Provider snapshots replay through the one default normalizer the case names,
+# pure jq with no modules. The generic state, reason, and stale bindings are
+# recorded; a refusal is recorded by the normalizer's own error id.
+replay_normalizer_cases() {
+  local normalizer input_doc norm_out norm_err norm_status normalization token observation
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    normalizer=$("$jq_bin" -r ".body.cases[$i].normalizer" "$input") || emit_error E_RUNTIME
+    case "$normalizer" in
+      codex-native-reviewer|github-actions-ci|github-forge) ;;
+      *) emit_error E_SHAPE ;;
+    esac
+    input_doc="$work/normalizer-input-$i.json"
+    "$jq_bin" -S -c ".body.cases[$i].input.content" "$input" > "$input_doc" ||
+      emit_error E_RUNTIME
+    [ "$(sha256_path "$input_doc")" = \
+      "$("$jq_bin" -r ".body.cases[$i].input.sha256" "$input")" ] || emit_error E_RELATION
+    norm_out="$work/normalizer-$i.out"
+    norm_err="$work/normalizer-$i.err"
+    "$jq_bin" -S -c -f "$runtime/adapters/$normalizer/v1/normalize.jq" "$input_doc" \
+      </dev/null >"$norm_out" 2>"$norm_err"
+    norm_status=$?
+    if [ "$norm_status" -eq 0 ]; then
+      [ ! -s "$norm_err" ] || emit_error E_RUNTIME
+      normalization=$("$jq_bin" -S -c '{reason_id,stale_bindings,state}' "$norm_out") ||
+        emit_error E_RUNTIME
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        --argjson normalization "$normalization" \
+        '{case_id:$case_id,disposition:"normalized",
+          normalization:{state:"present",value:$normalization},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$norm_out" ] || emit_error E_RUNTIME
+      token=$(/bin/cat "$norm_err" 2>/dev/null) || emit_error E_RUNTIME
+      token=${token##*: }
+      case "$token" in
+        codex-reviewer.invalid-envelope|codex-reviewer.invalid-snapshot) ;;
+        codex-reviewer.invalid-trust-context|github-actions-ci.invalid-envelope) ;;
+        github-actions-ci.invalid-snapshot|github-actions-ci.invalid-trust-context) ;;
+        github-actions-ci.provider-contradiction|github-forge.invalid-envelope) ;;
+        github-forge.invalid-snapshot|github-forge.invalid-trust-context) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
+        '{case_id:$case_id,disposition:"rejected",normalization:{state:"absent"},
           error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
     fi
     record_observation "$observation"
@@ -385,6 +445,7 @@ case "$seed_source" in
   core.stage-run.v2) replay_stage_run_cases ;;
   orchestrator.state-scanner.v1) replay_scanner_cases ;;
   control.sandbox-policy.v1) replay_sandbox_cases ;;
+  adapters.provider-normalizers.v1) replay_normalizer_cases ;;
   *) replay_planner_cases ;;
 esac
 /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME

@@ -80,14 +80,14 @@ pass 'launcher and driver pin the exact shipped program, catalog, and driver'
 "$jq_bin" -e '
   .kind == "eval_catalog" and .body.activation_state == "inactive" and
   .body.fail_mode == "closed" and (.body.families | length) == 9 and
-  ([.body.families[] | select(.seed_status == "seeded")] | length) == 4 and
-  ([.body.families[] | select(.seed_status == "declared")] | length) == 5 and
+  ([.body.families[] | select(.seed_status == "seeded")] | length) == 5 and
+  ([.body.families[] | select(.seed_status == "declared")] | length) == 4 and
   all(.body.families[]; .seed_status == "seeded" and (.seed_sources | length) >= 1 or
       .seed_status == "declared" and .seed_sources == []) and
   all(.body.families[] | select((.grader_kinds | index("deterministic")) == null);
       .trial_policy.kind == "multi")
 ' "$catalog" > /dev/null || fail 'catalog shape'
-pass 'catalog names all nine roadmap families, four seeded, stochastic ones multi-trial'
+pass 'catalog names all nine roadmap families, five seeded, stochastic ones multi-trial'
 
 # --- the run on the committed seed set ---------------------------------------
 observed_at=2026-09-05T00:00:00Z
@@ -191,6 +191,7 @@ model_only_catalog_sha=$(sha_file "$model_only_catalog")
   --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
   --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
   --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+  --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
   --arg observed_at "$observed_at" \
   --slurpfile catalog_docs "$model_only_catalog" --slurpfile seed_set_docs "$stochastic" \
   --slurpfile observation_docs "$tmp/stochastic-observations.json" \
@@ -254,6 +255,7 @@ validate_result() {
     --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
     --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
     --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+    --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
     --slurpfile observation_docs "$tmp/observations.json" \

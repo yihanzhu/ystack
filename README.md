@@ -402,8 +402,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Four families are
-seeded; the other five are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Five families are
+seeded; the other four are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -443,6 +443,19 @@ root outside the fixed sandbox, and any target or external write are violated wi
 their exact reason ids; unknown network or sensitive-material state is
 inconclusive; a claim with an unknown field or a wildcard path is refused. The
 evaluator is the only judge; the framework records its verdict and reason set.
+
+The adapter contract compliance family is seeded from
+`evals/v1/seed-set-adapters.json`. Its cases replay recorded provider snapshots
+with caller bindings through the real inactive default normalizers for the GitHub
+forge, GitHub Actions CI, and Codex native reviewer adapters, each staged in the
+private runtime at a pinned digest: open, blocked, merged, and closed change
+requests; queued, running, passed, failed, cancelled, timed-out, and
+action-required runs; clean, findings, dismissed, timed-out, and failed reviews;
+stale bindings named exactly; incomplete or unknown provider state kept
+inconclusive; provider text that can never decide a state; and malformed
+envelopes, bindings, or snapshots refused with the normalizer's own error id. The
+normalizer is the only judge; the framework records the generic state, reason, and
+stale-binding set it reports.
 
 Every run result carries the exact catalog, seed set, program, driver, launcher,
 and core-closure digests, plus one trace event per case in the shape the
@@ -723,7 +736,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, and sandbox-policy replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
