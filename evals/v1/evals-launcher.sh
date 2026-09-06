@@ -145,7 +145,7 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 
 program_sha=723e6d001227565fb0649391233e0208fd172e507ead670f19888da9739fd26a
 catalog_sha=ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65
-driver_sha=405fa49bdc6890a7fac90fbedbaddabb7a916e8b7157c9224dd28796d2920b9d
+driver_sha=69943bdc92c8977e4eb4669ff77ca8f285f6c17e8d2a94f90a387ed569a85a44
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -386,7 +386,8 @@ else
   # Every pair is re-validated here as the driver did, then the dashboard itself.
   j=0
   while [ "$j" -lt "$pair_count" ]; do
-    "$runtime/bin/jq" -S -c '[.body.cases[].observation.value]' "$scratch/inputs/result-$j.json" \
+    "$runtime/bin/jq" -S -c '[.body.cases[].observation | select(.state == "present") | .value]' \
+      "$scratch/inputs/result-$j.json" \
       > "$scratch/work/check-$j-observations.json" 2>/dev/null || emit_error E_RUNTIME
     "$runtime/bin/jq" -S -c '.body.evaluator.content' "$scratch/inputs/result-$j.json" \
       > "$scratch/work/check-$j-evaluator.json" 2>/dev/null || emit_error E_RUNTIME
