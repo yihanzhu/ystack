@@ -159,6 +159,29 @@ relative inputs. Restoring these records reproduces nothing on its own: the slic
 is read-only, grants no authority and no deploy authority, and performs no model,
 credential, forge, network, publish, or target operation.
 
+### Restore the inactive maintenance loop
+
+Restore the seven paths listed under “Inactive maintenance loop” in
+[`ci/required-files.txt`](ci/required-files.txt), together with the eval
+framework and the telemetry trace-record validator the scan reads, then run:
+
+```sh
+bash scripts/test/maintenance-loop.test.sh
+```
+
+The proof builds its own dashboard, sealed trace ledger, kill-switch, rollback
+rehearsal, scan-finding, incident, and shadow fixtures. It checks the band
+policy, a clean scan that raises nothing, two crossed bands that write two
+deterministically named intents, byte-identical repeat runs, an engaged kill
+switch that writes no intent, a high-severity finding that raises one, and one
+reproduced incident turned into an eval seed case skeleton in its family's own
+shape — plus every refusal for malformed, multi-root, non-canonical, oversized,
+symlinked, non-regular, unsealed, tampered, duplicate, unmatched, and
+non-empty-output inputs. The intents are documents for a human owner to triage.
+Restoring these records files no issue, opens no change request, modifies no
+eval seed set, and performs no model, credential, deploy, publish, or target
+operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)

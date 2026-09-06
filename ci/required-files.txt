@@ -356,5 +356,14 @@ shadow/v1/reproduce.sh
 shadow/v1/shadow-environments.json
 scripts/test/shadow-slice.test.sh
 
+# Inactive maintenance loop
+maintenance/v1/control-bands.json
+maintenance/v1/bands.jq
+maintenance/v1/scan.jq
+maintenance/v1/scan.sh
+maintenance/v1/incident-to-eval.jq
+maintenance/v1/incident-to-eval.sh
+scripts/test/maintenance-loop.test.sh
+
 # Operating-mode transition proposal
 docs/transition.md
