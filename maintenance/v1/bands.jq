@@ -116,8 +116,8 @@ def ledger_ok:
     all(.[]; type == "object" and (.id | id_ok) and
       (.facts | type == "object") and
       (.facts.result | type == "object" and
-       (.state as $s | ["not-applicable","recorded","unavailable"] | index($s) != null) and
-       ((.state != "recorded") or (.value | id_ok))))));
+       (.state as $s | ["computed","not-applicable","recorded","unavailable"] | index($s) != null) and
+       ((.state != "recorded" and .state != "computed") or (.value | id_ok))))));
 
 def kill_switch_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
@@ -169,7 +169,7 @@ def metric_value($metric_id; $dashboard; $ledger; $rehearsals):
            $family[0].cases.total | floor) end)
   elif $metric_id == "telemetry.refused-events" then
     ([$ledger.body.events[] |
-      select(.facts.result.state == "recorded" and
+      select((.facts.result.state == "recorded" or .facts.result.state == "computed") and
              (.facts.result.value | test("refused")))] | length)
   elif $metric_id == "deploy.rollback-rehearsal-age-days" then
     ([$rehearsals[] | select(.body.outcome == "rehearsed") | .body.rehearsed_at] |

@@ -324,6 +324,27 @@ expect_scan refused-events "$fixtures/dashboard-clean.json" \
   fail 'refused events band'
 pass 'a refused event in the sealed ledger crosses its band'
 
+# A computed result fact is as valid as a recorded one to the telemetry validator
+# and must be read the same way by the bands.
+"$jq_bin" -S -c '.body.events[1].facts.result.state = "computed" |
+  .body.events[1].facts.result.value = "result.refused"' \
+  "$fixtures/ledger-open.json" >"$fixtures/ledger-open-computed.json"
+seal "$fixtures/ledger-open-computed.json" "$fixtures/ledger-computed.json"
+expect_scan computed-events "$fixtures/dashboard-clean.json" \
+  "$fixtures/ledger-computed.json" "$fixtures/kill-clear.json" \
+  "$fixtures/rehearsal-recent.json"
+"$jq_bin" -e '([.body.bands[] | select(.state == "out-of-band") | .band_id]) ==
+  ["events-refused-max"]' "$tmp/out-computed-events.json" >/dev/null ||
+  fail 'computed refused events band'
+pass 'a computed result fact counts like a recorded one'
+
+# A relative or dotted invocation must pass the driver self-check.
+/bin/mkdir -m 700 "$tmp/relative-out"
+( cd "$root" && PATH="$bin:/usr/bin:/bin" ./maintenance/v1/scan.sh scan "${clean[@]}" \
+  "$tmp/relative-out" >"$tmp/out-relative.json" 2>"$tmp/err-relative.txt" ) ||
+  fail "relative invocation: $(/bin/cat "$tmp/err-relative.txt")"
+pass 'the driver accepts a relative, dotted invocation path'
+
 expect_scan no-rehearsal "${clean[@]}"
 "$jq_bin" -e '([.body.bands[] | select(.state == "out-of-band")] |
   map({band_id,reason_id,value})) ==

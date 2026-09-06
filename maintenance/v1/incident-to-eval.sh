@@ -70,6 +70,8 @@ self=${BASH_SOURCE[0]}
 case "$self" in /*) ;; *) self="$(pwd -P)/$self" ;; esac
 [ -f "$self" ] && [ ! -L "$self" ] || emit_error E_RUNTIME
 self_dir=$(CDPATH='' cd -P -- "${self%/*}" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+# Normalize a relative or dotted spelling before the self-check, as siblings do.
+self="$self_dir/${self##*/}"
 [ "$self" = "$self_dir/incident-to-eval.sh" ] || emit_error E_RUNTIME
 repo=$(CDPATH='' cd -P -- "$self_dir/../.." 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 [ "$self_dir" = "$repo/maintenance/v1" ] || emit_error E_RUNTIME
