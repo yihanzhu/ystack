@@ -810,6 +810,7 @@ v2_activation_path_ok() {
     control/v1/control-policy-set.json|\
     core/v2/generation-registry.json|\
     evals/v1/evals-driver.sh|evals/v1/evals-launcher.sh|evals/v1/evals.jq|\
+    evals/v1/seed-set-approvals.json|\
     orchestrator/v1/state-scanner-driver.sh|\
     orchestrator/v1/state-scanner-launcher.sh|\
     orchestrator/v1/state-scanner.jq|\
@@ -828,6 +829,7 @@ schema_import_path_ok() {
   case "$import_path" in
     adapters/local-git-materializer/v1/protocol.jq|\
     adapters/deterministic-verifier/v1/normalize.jq|\
+    evals/v1/framework.jq|\
     evals/v1/evals.jq|\
     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\
@@ -931,6 +933,7 @@ printf '%s\n' \
   evals/v1/evals-driver.sh \
   evals/v1/evals-launcher.sh \
   evals/v1/evals.jq \
+  evals/v1/seed-set-approvals.json \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
