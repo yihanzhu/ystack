@@ -477,6 +477,17 @@ record="$scratch/shadow-record.json"
   (["inconclusive","no-change","reproduced"] | index($outcome) != null)
 ' "$record" >/dev/null 2>&1 || emit_error E_RELATION
 
+# Every caller-supplied input must still be the bytes this run snapshotted,
+# or the record describes something other than what the caller now holds; the
+# check runs before anything is published into the caller's state directory.
+[ "$(sha256_path "$incident")" = "$incident_sha" ] &&
+  [ "$(sha256_path "$claim")" = "$claim_sha" ] &&
+  [ "$(sha256_path "$registry")" = "$registry_sha" ] &&
+  [ "$(sha256_path "$materialization_input")" = "$input_sha" ] &&
+  [ "$(sha256_path "$policy_set")" = "$policy_sha" ] &&
+  [ "$(sha256_path "$duty")" = "$duty_sha" ] &&
+  [ "$(sha256_path "$program")" = "$program_sha" ] &&
+  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_RELATION
 /bin/cp "$record" "$state_dir/shadow-record.json" || emit_error E_RUNTIME
 /bin/cp "$ledger" "$state_dir/trace-ledger.json" || emit_error E_RUNTIME
 /bin/cp "$scratch/trace-receipt.json" "$state_dir/trace-receipt.json" ||
@@ -488,16 +499,6 @@ if [ -f "$scratch/stage-result.json" ]; then
     emit_error E_RUNTIME
   /bin/chmod 0400 "$state_dir/materialization-result.json" || emit_error E_RUNTIME
 fi
-# Every caller-supplied input must still be the bytes this run snapshotted,
-# or the record describes something other than what the caller now holds.
-[ "$(sha256_path "$incident")" = "$incident_sha" ] &&
-  [ "$(sha256_path "$claim")" = "$claim_sha" ] &&
-  [ "$(sha256_path "$registry")" = "$registry_sha" ] &&
-  [ "$(sha256_path "$materialization_input")" = "$input_sha" ] &&
-  [ "$(sha256_path "$policy_set")" = "$policy_sha" ] &&
-  [ "$(sha256_path "$duty")" = "$duty_sha" ] &&
-  [ "$(sha256_path "$program")" = "$program_sha" ] &&
-  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_RELATION
 /bin/cat "$record" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM
 cleanup
