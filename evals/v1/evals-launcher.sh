@@ -145,9 +145,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=c92eae2b20cff74e27af12bf38c8b0f5199eb7fa62bd02c41f205f0e04cda504
-catalog_sha=ddd8937325342d202ec57c3060be71881e603c00f423e5a3587339c57aa22b65
-driver_sha=c294520710af6bddcb0458ba10691619ce79b6633e835f84a9ea387459b906b9
+program_sha=25f89c2f6cfff82388cad0bc400ba971de665cd608d1009fecc33b15f7d3d6fb
+catalog_sha=0239138447a8f9fd420cb3c5da31660d8f75c85099d80d89a040dce2878a4cac
+driver_sha=dae78102bafb0eab14388fe8df1949ded7175bb21033a983dde1631d119ce427
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -196,7 +196,8 @@ for member in \
 done
 # The inactive control evaluators replayed here: sandbox policy for the boundaries
 # family; risk gates (with the duty-separation evaluator it regenerates) for the
-# approval family. They read only this runtime.
+# approval family; that same duty-separation evaluator on its own for the actor
+# and re-run identity family. They read only this runtime.
 for member in \
   'duty-separation-decision.json 4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99' \
   'duty-separation-policy.json b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9' \
@@ -375,6 +376,7 @@ program_check() {
     --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
     --argjson normalizer_shas '{"codex-cli-producer":"dc2fff5f40517b3dc7a633f90483c661b9a4b2e7e4f1f40d9aa7c8edcf268f25","codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be","gitlab-forge":"b8461e4341f0426b6f66664b859af38748deedcc199b772e487fb3aa3ee3c713"}' \
     --arg risk_gates_sha256 0df2094a1a86901d5db8bd463cdeb295f455585b345096719bdc6dcd0b8852e8 \
+    --arg duty_sha256 146e73dc880d363e889f32140ac375997fb709e3101de32b8d9603f1f38ca0fa \
     --arg observed_at "$check_observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$5" \
