@@ -776,6 +776,8 @@ deployment. It is not registered in the fake adapter contract matrix: that
 runner's inventory is a fixed producer-then-forge pipeline with pinned package
 digests, and adding a deployment phase to it is its own change.
 
+The two control evaluations must also be internally consistent the way their evaluators emit them: a kill-switch verdict of `satisfied` carries exactly `kill.cleared-current` and no other verdict carries that reason; a risk-gate evaluation says `minimum_tier: unknown` and `risk-gates.minimum-tier-unknown` together or not at all. Anything else is `deploy.malformed`, and an unknown minimum tier refuses with `deploy.risk-gate-violated` because a request whose risk cannot be classified cannot be admitted.
+
 ## Inactive shadow reproduction slice
 
 `shadow/v1/` is the Roadmap's step-7 shadow vertical slice: one narrow, read-only

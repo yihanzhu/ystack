@@ -93,7 +93,8 @@ def decision_ok($tiers_sha):
    (if $kill_doc.body.verdict == "satisfied" then [] else ["deploy.kill-switch"] end) +
    # A violated risk-gate verdict refuses on its own, whatever produced it, and
    # alongside any duty violation its reasons also carry.
-   (if $risk_doc.body.verdict == "violated"
+   (if $risk_doc.body.verdict == "violated" or
+       $risk_doc.body.classification.minimum_tier == "unknown"
     then ["deploy.risk-gate-violated"] else [] end) +
    (if ($tier_doc.body.requester_roles[$capability] |
         index($req.body.actor_ref.role)) == null or

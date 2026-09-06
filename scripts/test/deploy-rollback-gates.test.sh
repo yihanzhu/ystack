@@ -149,7 +149,7 @@ risk="$tmp/risk.json"
      policy_ref:content_ref("control-policy.risk-gates";
        "application/vnd.ystack.control-policy+json";("d"*64)),
      policy_set:{id:$policy_set_id,sha256:("6"*64)},
-     reason_ids:["risk-gates.minimum-tier-unknown"],
+     reason_ids:["decision.provenance-unqualified"],
      reference_semantics:"identity-only",
      stage:{request_ref:core_ref("stage_request";"request.deploy-test";("e"*64)),
        resolved_profile_ref:core_ref("resolved_profile";"profile.deploy-test";("f"*64)),
@@ -420,6 +420,21 @@ expect_decision kill-switch-inconclusive refused deploy.kill-switch \
   "$request" "$release" "$authorization" "$rehearsal" "$risk" \
   "$(mutate "$kill_switch" kill-inconclusive \
     '.body.verdict="inconclusive"|.body.reason_ids=["kill.duty-inconclusive"]')"
+expect_decision risk-tier-unknown refused deploy.risk-gate-violated \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-unknown-tier \
+    '.body.classification.minimum_tier="unknown"|.body.reason_ids=["risk-gates.minimum-tier-unknown"]')" \
+  "$kill_switch"
+expect_decision risk-unknown-reason-mismatch refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-unknown-mismatch '.body.reason_ids=["risk-gates.minimum-tier-unknown"]')" \
+  "$kill_switch"
+expect_decision kill-satisfied-with-stop-reason refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" "$risk" \
+  "$(mutate "$kill_switch" kill-satisfied-stop '.body.reason_ids=["kill.cleared-current","kill.state-rollback"]')"
+expect_decision kill-violated-with-cleared-reason refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" "$risk" \
+  "$(mutate "$kill_switch" kill-violated-cleared '.body.verdict="violated"|.body.reason_ids=["kill.cleared-current"]')"
 expect_decision duty-violation-role refused deploy.duty-violation \
   "$(mutate "$request" producer-request '.body.actor_ref.role="producer"')" \
   "$release" "$authorization" "$rehearsal" "$risk" "$kill_switch"

@@ -198,9 +198,14 @@ def risk_evaluation_ok:
       "policy_ref","policy_set","reason_ids","reference_semantics","stage","verdict"]) and
     control_markers_ok(["inconclusive","violated"]) and
     (.classification | exact(["declared_tier","minimum_tier"]) and
-      (.declared_tier | id_ok) and
+      (.declared_tier as $tier | ["bootstrap","high","routine"] | index($tier) != null) and
       (.minimum_tier as $tier |
         ["bootstrap","high","routine","unknown"] | index($tier) != null)) and
+    # The evaluator says "unknown" and "minimum-tier-unknown" together or not
+    # at all; a verdict and reasons that disagree with the classification are
+    # not something the real evaluator emits.
+    ((.reason_ids | index("risk-gates.minimum-tier-unknown") != null) ==
+      (.classification.minimum_tier == "unknown")) and
     (.core_contract | core_contract_ok) and
     (.decision_claim_ref |
       content_ref_ok("application/vnd.ystack.risk-gate-decision-claim+json")) and
@@ -220,6 +225,10 @@ def kill_evaluation_ok:
       "duty_decision_ref","duty_evaluation_ref","evaluation_mode","policy_ref",
       "policy_set","reason_ids","reference_semantics","state_ref","verdict"]) and
     control_markers_ok(["inconclusive","satisfied","violated"]) and
+    # The evaluator emits satisfied only with the single reason
+    # kill.cleared-current, and never that reason with any other verdict.
+    (if .verdict == "satisfied" then .reason_ids == ["kill.cleared-current"]
+     else (.reason_ids | index("kill.cleared-current") == null) end) and
     (.decision_ref | content_ref_ok("application/vnd.ystack.control-decision+json")) and
     (.duty_decision_ref |
       content_ref_ok("application/vnd.ystack.control-decision+json")) and
