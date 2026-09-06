@@ -680,3 +680,58 @@ observation only: it does not run a candidate or adapter, invoke a model, use a
 credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
+
+## Inactive target packaging
+
+`packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned
+release manifest, and `install.sh` copies exactly what that manifest names into a
+fresh target directory. Both are inactive. Running the installer against a real
+target is a versioned operator action and stays disabled until the operator-merged
+operating-mode transition; the focused test is the only thing that runs it today,
+and only against an empty directory it created itself.
+
+`build-release.sh build-release COMMIT PROFILE_ID...` reads this repo at one exact
+commit and prints one canonical JSON release manifest. The manifest records the
+release id (a SHA-256 of its own body), the source commit, the profile ids
+included, and every packaged file with its Git object id, file mode, and SHA-256,
+plus the core contract generation read out of `scripts/core-contract.sh` at that
+same commit rather than hardcoded. Two builds at the same commit produce the same
+bytes. Packaging is fail closed: a path is refused unless it is a profile file, an
+adapter payload the profile binds, a core v2 contract file, or the contract
+validator itself. Personal configuration, the operator's harness directory, the
+manager persona, ystack's own north star, and the prompts a target writes for
+itself are outside that closed set and can never be packaged, so a hand-edited
+profile cannot smuggle one in.
+
+`install.sh install MANIFEST PROFILE_ID TARGET` writes the profile's files into
+`TARGET/.ystack/`, keeping their repo-relative layout so the installed
+`scripts/core-contract.sh` validates the installed profile and manifests in place.
+The target must already exist and be an empty, real directory: a non-empty
+directory, a symlink, a path inside this repo, and a path under the home directory's
+dotfiles are each refused. Nothing is written until every packaged blob has matched
+the manifest's Git object id and SHA-256 and has passed a content denylist for home
+paths, credential-shaped tokens, and the shipped-default north-star marker. A
+malformed, oversized, multi-root, non-canonical, symlinked, or moved manifest is
+refused, and so is one that names a commit this repo does not have, another core
+generation, an unknown profile, or a tampered digest.
+
+The install writes two files the release does not contain. `TARGET/.ystack/north-star.md`
+is a target-owned placeholder: it states no goal, carries no approval record, and
+carries no shipped-default marker, so nothing about ystack's own direction is copied
+in as if the target had approved it. `TARGET/.ystack/install-record.json` is a
+canonical record of the release reference, every installed path with its digest and
+mode, the north star's placeholder-unset state, `activation: "none"`, and
+`qualification: {"state": "unavailable"}`. Installing the same release and profile
+twice produces byte-identical trees.
+
+Neither script uses a credential or the network, invokes a model, reads a git
+remote, touches `config/`, `.claude/`, `manager/`, or anything under the home
+directory, selects or resolves a profile, grants qualification, or activates
+anything. Run `bash scripts/test/target-packaging.test.sh` for the focused proof:
+it builds a release from HEAD, installs the default and alternative profiles into
+fresh temporary directories, validates each installed tree with its own installed
+contract validator, proves the repeat install is byte-identical, greps the
+installed trees for personal data and credential patterns, and walks every refusal
+above. One packaged upstream source file cites its exception boundary by public
+pull-request URL; the test pins that one line as the only permitted operator-name
+hit and fails on any other.

@@ -136,6 +136,28 @@ the profile id. Restoring these records does not select, resolve, qualify,
 install, or activate the profile; it grants no authority and performs no model,
 credential, provider, publish, or target operation.
 
+### Restore the inactive target packaging
+
+Restore the four paths listed under “Inactive target packaging” in
+[`ci/required-files.txt`](ci/required-files.txt), together with the profile
+assemblies, adapter payloads, and the portable contract validator restored above,
+then run:
+
+```sh
+bash scripts/test/target-packaging.test.sh
+```
+
+The proof builds a release manifest from the current commit, installs the default
+and alternative profiles into fresh temporary directories, validates each installed
+tree with its own installed `scripts/core-contract.sh`, proves a repeat install is
+byte-identical, and greps the installed trees for personal paths, credential
+patterns, and the shipped-default north-star marker. Restoring these files does not
+install anything: running the installer against a real target is a versioned
+operator action that stays disabled until the operator-merged operating-mode
+transition. The scripts read Git objects and write only into their own scratch and
+a caller-supplied empty directory; they use no credential or network, invoke no
+model, copy no personal configuration, and grant no authority or qualification.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
