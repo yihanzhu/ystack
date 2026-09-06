@@ -57,8 +57,9 @@ parent; restoring these files does not select a live profile.
 
 ### Restore the inactive default profile assembly
 
-Restore the nine paths listed under “Inactive default profile assembly” in
-[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+Restore the eight paths listed under “Inactive default profile assembly” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, together with
+the producer config restored under “Inactive default producer config”, then run:
 
 ```sh
 bash scripts/test/default-profile-assembly.test.sh

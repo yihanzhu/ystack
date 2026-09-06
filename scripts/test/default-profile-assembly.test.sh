@@ -83,11 +83,29 @@ history_git() {
     GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
     /usr/bin/git -C "$history_repo" "$@"
 }
+# A CI checkout keeps its token as an http extraheader in the checkout's local
+# Git config. Pass exactly those entries through the environment so the fresh
+# history repo can fetch a private origin; nothing is written to the checkout
+# and no other config leaks into the fetch.
+fetch_config=()
+fetch_config_count=0
+while IFS= read -r -d '' entry; do
+  fetch_config+=("GIT_CONFIG_KEY_$fetch_config_count=${entry%%$'\n'*}"
+    "GIT_CONFIG_VALUE_$fetch_config_count=${entry#*$'\n'}")
+  fetch_config_count=$((fetch_config_count + 1))
+done < <(/usr/bin/git -C "$root" config --local --null --get-regexp \
+  '^http\..*\.extraheader$' || true)
+history_fetch() {
+  /usr/bin/env -i HOME="$history_home" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_COUNT="$fetch_config_count" ${fetch_config[@]+"${fetch_config[@]}"} \
+    /usr/bin/git -C "$history_repo" -c credential.helper= -c core.askPass= \
+    fetch -q --no-tags --depth=1 "$origin_url" "$@"
+}
 origin_url=$(/usr/bin/git -C "$root" remote get-url origin)
 [[ "$origin_url" =~ ^https://[^/@[:space:]]+/[^?#[:space:]]+$ ]] ||
   fail origin-url
-history_git -c credential.helper= -c core.askPass= fetch -q --no-tags --depth=1 \
-  "$origin_url" "+$package_commit:refs/ystack/package"
+history_fetch "+$package_commit:refs/ystack/package"
 [ "$(history_git rev-parse 'refs/ystack/package^{commit}')" = "$package_commit" ] ||
   fail package-fetch
 [ "$(history_git rev-list --count refs/ystack/package)" -eq 1 ] ||
@@ -118,8 +136,7 @@ config_type=$(jq -r '.object_type' <<<"$producer_config_ref")
 [ "$config_path" = 'profiles/default/v1/producer-config.json' ] || fail producer-config-path
 [ "$config_oid" = "$(git -C "$root" hash-object "$producer_config")" ] ||
   fail producer-config-blob
-history_git -c credential.helper= -c core.askPass= fetch -q --no-tags --depth=1 \
-  "$origin_url" "+$config_commit:refs/ystack/producer-config"
+history_fetch "+$config_commit:refs/ystack/producer-config"
 [ "$(history_git rev-parse 'refs/ystack/producer-config^{commit}')" = "$config_commit" ] ||
   fail producer-config-fetch
 [ "$(history_git rev-list --count refs/ystack/producer-config)" -eq 1 ] ||
