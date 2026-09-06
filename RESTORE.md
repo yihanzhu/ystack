@@ -69,6 +69,19 @@ candidate, reads one fixed candidate blob, and records test observations. It doe
 not execute candidate code, select a profile, authenticate review, publish, merge,
 deploy, or contact a provider or target.
 
+### Restore the inactive default producer config
+
+Restore the two paths listed under “Inactive default producer config” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/default-producer-config.test.sh
+```
+
+The payload records an inactive producer preference. It does not select or
+activate a profile and performs no model, credential, provider, publish, or
+target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
