@@ -211,6 +211,39 @@ model_only_catalog_sha=$(sha_file "$model_only_catalog")
 ' "$tmp/stochastic.out" > /dev/null || fail 'model-only family was decided deterministically'
 pass 'a misfiled family is refused; a seeded model-only family stays inconclusive in case and trace'
 
+# A run result built from a partial observation set marks the unobserved case
+# inconclusive; the dashboard must accept that result and count it as such.
+"$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/partial-evaluator.json"
+"$jq_bin" -S -c '[.body.cases[1:][].observation.value]' "$first" > "$tmp/partial-observations.json"
+"$jq_bin" -S -c -n -L "$modules" \
+  --arg evals_operation build-run-result \
+  --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
+  --arg catalog_sha256 "$catalog_sha" \
+  --arg evaluator_sha256 "$(sha_file "$tmp/partial-evaluator.json")" \
+  --arg seed_set_sha256 "$(sha_file "$seed_set")" \
+  --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+  --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+  --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+  --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+  --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" --arg g "$(sha_file "$root/adapters/gitlab-forge/v1/normalize.jq")" --arg p "$(sha_file "$root/adapters/codex-cli-producer/v1/normalize.jq")" '{"codex-cli-producer":$p,"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f,"gitlab-forge":$g}')" \
+  --arg risk_gates_sha256 "$(sha_file "$root/control/v1/evaluate-risk-gates.sh")" \
+  --slurpfile result_docs "$tmp/partial-observations.json" --argjson result_shas '[]' \
+  --arg observed_at "$observed_at" \
+  --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
+  --slurpfile observation_docs "$tmp/partial-observations.json" \
+  --slurpfile evaluator_docs "$tmp/partial-evaluator.json" \
+  --slurpfile candidate_docs "$tmp/partial-observations.json" \
+  -f "$program" > "$tmp/partial.out" 2>"$tmp/partial.err" ||
+  fail "partial build errored: $(<"$tmp/partial.err")"
+"$jq_bin" -e '.body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
+  (.body.cases[0].observation == {state:"absent"})' "$tmp/partial.out" > /dev/null ||
+  fail 'partial observation set did not yield one inconclusive case'
+"$framework" dashboard "$observed_at" "$seed_set" "$tmp/partial.out" > "$tmp/partial-dashboard.json" \
+  2>"$tmp/partial-dashboard.err" || fail "dashboard refused a partial result: $(<"$tmp/partial-dashboard.err")"
+"$jq_bin" -e '.body.quality == {total:8,passed:7,failed:0,inconclusive:1}' "$tmp/partial-dashboard.json" \
+  > /dev/null || fail 'dashboard miscounted a partial result'
+pass 'a result with an unobserved case is a valid dashboard input and counts as inconclusive'
+
 # --- fail closed on bad or moved input ----------------------------------------
 expect_error() {
   local name=$1 expected=$2 seed=$3 out err status
