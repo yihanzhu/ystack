@@ -276,6 +276,7 @@ and one row here.
 | Inactive dormant publisher normalizer payload | `adapters/dormant-publisher/v1/normalize.jq` | Validates one bounded publisher decision claim and returns only a dormant, stale, or inconclusive observation. | [read](docs/components.md#inactive-dormant-publisher-normalizer-payload) |
 | Inactive deterministic verifier normalizer payload | `adapters/deterministic-verifier/v1/normalize.jq` | Validates an already-supplied core v2 verifier request, profile, contract, and stage result into one observation. | [read](docs/components.md#inactive-deterministic-verifier-normalizer-payload) |
 | Inactive eval and trace framework | `evals/v1/run-evals.sh` | Runs one offline eval pass over a caller-supplied seed set, plus the catalog of the nine required regression families and a dashboard. | [read](docs/components.md#inactive-eval-and-trace-framework) |
+| Inactive review-fix loop planner | `loop/v1/plan-review-fix.sh` | Turns one review observation plus the credential, reconciliation, risk, and attempt evidence into one bounded fix request or one named refusal. It dispatches nothing. | [read](docs/components.md#inactive-review-fix-loop-planner) |
 
 ## Portable contract validator
 

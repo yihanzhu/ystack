@@ -680,3 +680,66 @@ observation only: it does not run a candidate or adapter, invoke a model, use a
 credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
+
+## Inactive review-fix loop planner
+
+`loop/v1/plan-review-fix.sh` is the deterministic planner for roadmap step 9, the
+safe review-fix loop. It reads six already-recorded documents — one normalized
+review observation from the Codex native reviewer, the change's own head/base
+context, a credential-policy evaluation, a reconciliation plan, a risk-gate
+evaluation, and the change's attempt ledger — and returns exactly one canonical
+`review_fix_plan`. That plan holds either one bounded fix request or one refusal
+with a named reason. It never calls a model, a producer, a forge, or a network,
+and it dispatches nothing: the request is a document, not an action.
+
+The fix request is bounded by construction. It is bound to the exact reviewed head
+and base, lists the findings it wants addressed by their provider finding IDs, and
+its allowed paths are exactly the files those findings point at — nothing wider.
+Only inline findings count, because a top-level finding names no file and so
+cannot bound anything. Severity comes from the committed
+`loop/v1/review-fix-policy.json`: a finding is actionable only when its
+lower-cased provider severity is on that policy's actionable list, so nits, P3s,
+and severities the policy does not recognise are never acted on. The same policy
+carries the hard attempt limit (2). `push_allowed` is always `false`, and when the
+change carries any approval the request says so with
+`loop.no-push-after-approval`; the planner has no way to say `true`, because
+nothing here is authorized to push.
+
+Refusal comes first and wins, in a fixed order: `kill-switch`,
+`boundaries-unproven`, `review-stale`, `degraded-review`, `approval-present`,
+`attempt-limit`, `no-actionable-findings`. Boundaries are unproven whenever the
+credential, reconciliation, risk, or attempt-ledger document handed in is not the
+exact one the change context pins by kind, id, and SHA-256; whenever the
+credential or risk verdict is anything but `satisfied`; whenever the reconciliation
+plan still carries deferred deliveries or operator messages; or whenever the ledger
+belongs to another change or was recorded after the context was observed. The
+review is stale when the adapter reports stale bindings or when its head, base,
+repository, or change request is not the change's current one, and degraded when
+the review was dismissed, timed out, failed, is not complete, or never reached
+`COMPLETED`. An approval recorded on the exact reviewed head refuses outright; an
+approval on an earlier commit only forbids the push.
+
+Every input is treated as untrusted. The driver requires each of the six inputs to
+be an absolute path to a regular non-symlink file of at most 1 MiB, holding exactly
+one JSON text in canonical `jq -S -c` bytes within fixed depth, member, and string
+limits; it pins jq 1.6 by release digest and runs from a private copy; and it
+re-checks the driver, policy, program, jq, and all six inputs after the plan is
+built, so an input moved during the run is refused rather than used. Every failure
+prints one `E_*` class and nothing else. The planner re-validates the whole shape
+of each document it reads, so a forged adapter observation, an extra field, or a
+miscounted ledger is refused, not interpreted.
+
+The planner proves nothing about the boundaries themselves. It reads their
+recorded verdicts as input claims and binds them by identity; a credential or
+risk evaluation only becomes `satisfied` when a qualified evaluator says so, which
+no shipped evaluator can do while everything here is inactive. So on today's repo
+this planner refuses with `boundaries-unproven` for real inputs, which is the
+intended construction-mode answer. Enabling this loop for real is a step-8/9
+operator decision taken after the operating-mode transition; this unit only
+produces a request document and grants no authority, qualification, or activation.
+
+Run the focused proof with:
+
+```sh
+bash scripts/test/loop-review-fix-planner.test.sh
+```

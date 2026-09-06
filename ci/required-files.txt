@@ -348,3 +348,9 @@ scripts/test/evals-dashboard.test.sh
 
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md
+
+# Inactive review-fix loop planner
+loop/v1/plan-review-fix.sh
+loop/v1/review-fix-planner.jq
+loop/v1/review-fix-policy.json
+scripts/test/loop-review-fix-planner.test.sh

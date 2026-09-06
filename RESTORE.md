@@ -136,6 +136,27 @@ the profile id. Restoring these records does not select, resolve, qualify,
 install, or activate the profile; it grants no authority and performs no model,
 credential, provider, publish, or target operation.
 
+### Restore the inactive review-fix loop planner
+
+Restore the four paths listed under “Inactive review-fix loop planner” in
+[`ci/required-files.txt`](ci/required-files.txt), together with the payload
+restored under “Inactive Codex native reviewer normalizer payload”, then run:
+
+```sh
+bash scripts/test/loop-review-fix-planner.test.sh
+```
+
+The proof replays one real reviewer observation with the change's head/base
+context, a credential-policy evaluation, a reconciliation plan, a risk-gate
+evaluation, and an attempt ledger, and checks the one bounded fix request byte
+for byte plus every refusal: kill switch, unproven boundaries, a stale or
+degraded review, an approval on the reviewed head, the attempt limit, and a
+review with nothing actionable. Restoring these records plans nothing and runs
+nothing: the planner emits one request document and performs no model,
+credential, network, producer, push, publish, or target operation. Enabling the
+loop for real remains a step-8/9 operator decision after the operating-mode
+transition.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
