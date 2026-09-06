@@ -236,6 +236,26 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive GitLab forge normalizer payload
+
+`adapters/gitlab-forge/v1/normalize.jq` is the first alternative forge. It
+validates one untrusted GitLab merge-request snapshot against caller-supplied
+project, merge-request iid, head, base, bot-user, time, instruction, and config
+bindings and returns the same canonical generic observation the GitHub forge
+returns: open-ready, open-blocked, closed-unmerged, merged, stale, or
+inconclusive, with the same output keys, effect boundary, and stale-binding
+shape, so a profile can swap one forge for the other. GitLab vocabulary stays at
+the edge and is taken as the API reports it: `detailed_merge_status` values such
+as `mergeable`, `conflict`, `ci_must_pass`, `security_policy_violations`, or
+`checking` decide ready, blocked, or inconclusive; a locked request is inconclusive; a merged request is never
+also closed; and the acting identity is the bot user the integration runs as,
+since GitLab has no app id. Provider metadata stays opaque data.
+
+This PR lands only the immutable normalizer payload. A later assembly PR can add
+its manifest and profile wiring. The payload is offline and unqualified. It does
+not call GitLab or a CLI, use a credential, change a project or merge request,
+grant authority or qualification, or activate a profile.
+
 ## Inactive Codex native reviewer normalizer payload
 
 `adapters/codex-native-reviewer/v1/normalize.jq` validates one untrusted
@@ -325,6 +345,22 @@ The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
 
+## Inactive Codex CLI producer normalizer payload
+
+`adapters/codex-cli-producer/v1/normalize.jq` is the first alternative harness.
+It is the Claude Code producer normalizer with only the harness identity
+swapped: the snapshot kind and content id, the manifest id, the recorded
+snapshot fact, the adapter id, and the model provider the binding must name
+(`openai`). Every trust relation, snapshot relation, state, reason, and the
+generic observation are the same, so a profile can select either harness under
+one core contract. The focused test proves the two programs differ only in
+those six tokens and that a snapshot, fact, or binding from the other harness
+is refused.
+
+This payload ships no adapter manifest and is inactive and unqualified. It does
+not call Codex, invoke a model, use a credential or network, write a target,
+publish, or activate a profile.
+
 ## Inactive local Git materializer protocol
 
 `adapters/local-git-materializer/v1/protocol.jq` defines the pure input, receipt,
@@ -405,6 +441,9 @@ boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
 it, its trial policy, and the core evidence kinds it produces. Six families are
 seeded; the other three are declared and wait for their own seeds.
+
+it, its trial policy, and the core evidence kinds it produces. Five families are
+seeded; the other four are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -770,6 +809,7 @@ scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
 evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, risk-gates, and normalizer replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, planner, sandbox-policy, and normalizer replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
