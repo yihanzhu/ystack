@@ -378,7 +378,7 @@ expect_decision kill-switch-inconclusive refused deploy.kill-switch \
 expect_decision duty-violation-role refused deploy.duty-violation \
   "$(mutate "$request" producer-request '.body.actor_ref.role="producer"')" \
   "$release" "$authorization" "$rehearsal" "$risk" "$kill_switch"
-expect_decision duty-violation-risk refused deploy.duty-violation \
+expect_decision duty-violation-risk refused 'deploy.duty-violation deploy.risk-gate-violated' \
   "$request" "$release" "$authorization" "$rehearsal" \
   "$(mutate "$risk" risk-duty \
     '.body.verdict="violated"|.body.reason_ids=["duty.publisher-model-access"]')" \

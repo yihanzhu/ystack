@@ -88,10 +88,9 @@ def decision_ok($tiers_sha):
         $reh.body.to_release_ref != $req.body.rollback_to_release_ref)
     then ["deploy.rollback-unrehearsed"] else [] end) +
    (if $kill_doc.body.verdict == "satisfied" then [] else ["deploy.kill-switch"] end) +
-   # A violated risk-gate verdict refuses on its own, whatever produced it: a
-   # rejected or role-denied decision is not a duty matter but still a violation.
-   (if $risk_doc.body.verdict == "violated" and
-       ($risk_doc.body.reason_ids | any(.[]; startswith("duty."))) == false
+   # A violated risk-gate verdict refuses on its own, whatever produced it, and
+   # alongside any duty violation its reasons also carry.
+   (if $risk_doc.body.verdict == "violated"
     then ["deploy.risk-gate-violated"] else [] end) +
    (if ($tier_doc.body.requester_roles[$capability] |
         index($req.body.actor_ref.role)) == null or
