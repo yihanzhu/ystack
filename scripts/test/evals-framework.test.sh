@@ -80,14 +80,14 @@ pass 'launcher and driver pin the exact shipped program, catalog, and driver'
 "$jq_bin" -e '
   .kind == "eval_catalog" and .body.activation_state == "inactive" and
   .body.fail_mode == "closed" and (.body.families | length) == 9 and
-  ([.body.families[] | select(.seed_status == "seeded")] | length) == 2 and
-  ([.body.families[] | select(.seed_status == "declared")] | length) == 7 and
-  all(.body.families[]; .seed_status == "seeded" and .seed_source.state == "present" or
-      .seed_status == "declared" and .seed_source.state == "absent") and
+  ([.body.families[] | select(.seed_status == "seeded")] | length) == 5 and
+  ([.body.families[] | select(.seed_status == "declared")] | length) == 4 and
+  all(.body.families[]; .seed_status == "seeded" and (.seed_sources | length) >= 1 or
+      .seed_status == "declared" and .seed_sources == []) and
   all(.body.families[] | select((.grader_kinds | index("deterministic")) == null);
       .trial_policy.kind == "multi")
 ' "$catalog" > /dev/null || fail 'catalog shape'
-pass 'catalog names all nine roadmap families, two seeded, stochastic ones multi-trial'
+pass 'catalog names all nine roadmap families, five seeded, stochastic ones multi-trial'
 
 # --- the run on the committed seed set ---------------------------------------
 observed_at=2026-09-05T00:00:00Z
@@ -153,12 +153,53 @@ run_framework "$tmp/wrong.json" "$tmp/wrong.err" "$wrong" || fail 'wrong-expecta
 ' "$tmp/wrong.json" > /dev/null || fail 'wrong expectation was not failed'
 pass 'a wrong expectation is graded failed, never silently passed'
 
+generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
+[ -n "$generation" ] || fail 'launcher names one core generation'
+modules="$root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] || fail "core generation modules missing: $generation"
+
 stochastic="$tmp/stochastic.json"
 "$jq_bin" -S -c '
   .body.cases |= map(if .case_id == "stale.completed-baseline"
     then .family_id = "reviewer-severity-false-positive-negative" else . end)
 ' "$seed_set" > "$stochastic"
-run_framework "$tmp/stochastic.out" "$tmp/stochastic.err" "$stochastic" || fail 'stochastic run errored'
+# The shipped catalog does not seed that family from core stage runs, so the
+# launcher refuses the misfiled set before anything runs.
+if "$framework" run "$stochastic" "$observed_at" >"$tmp/misfiled.out" 2>"$tmp/misfiled.err"; then
+  fail 'seed set filed under an unseeded family was accepted'
+fi
+[ ! -s "$tmp/misfiled.out" ] && [ "$(<"$tmp/misfiled.err")" = E_SHAPE ] ||
+  fail "misfiled seed set was not refused: [$(<"$tmp/misfiled.err")]"
+# With a catalog that does draw that model-only family from stage runs, the
+# program grades the case inconclusive: no deterministic grader, nothing guessed.
+model_only_catalog="$tmp/model-only-catalog.json"
+"$jq_bin" -S -c '
+  .body.families |= map(if .family_id == "reviewer-severity-false-positive-negative"
+    then .seed_status = "seeded" | .seed_sources = ["core.stage-run.v2"] else . end)
+' "$catalog" > "$model_only_catalog"
+model_only_catalog_sha=$(sha_file "$model_only_catalog")
+"$jq_bin" -S -c --arg sha "$model_only_catalog_sha" \
+  '.body.evaluator.content | .body.catalog_ref.sha256 = $sha' "$first" > "$tmp/stochastic-evaluator.json"
+"$jq_bin" -S -c '[.body.cases[].observation.value]' "$first" > "$tmp/stochastic-observations.json"
+"$jq_bin" -S -c -n -L "$modules" \
+  --arg evals_operation build-run-result \
+  --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
+  --arg catalog_sha256 "$model_only_catalog_sha" \
+  --arg evaluator_sha256 "$(sha_file "$tmp/stochastic-evaluator.json")" \
+  --arg seed_set_sha256 "$(sha_file "$stochastic")" \
+  --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+  --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+  --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+  --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+  --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
+  --slurpfile result_docs "$tmp/stochastic-observations.json" --argjson result_shas '[]' \
+  --arg observed_at "$observed_at" \
+  --slurpfile catalog_docs "$model_only_catalog" --slurpfile seed_set_docs "$stochastic" \
+  --slurpfile observation_docs "$tmp/stochastic-observations.json" \
+  --slurpfile evaluator_docs "$tmp/stochastic-evaluator.json" \
+  --slurpfile candidate_docs "$tmp/stochastic-observations.json" \
+  -f "$program" > "$tmp/stochastic.out" 2>"$tmp/stochastic.err" ||
+  fail "stochastic build errored: $(<"$tmp/stochastic.err")"
 "$jq_bin" -e '
   .body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
   (.body.cases[] | select(.case_id == "stale.completed-baseline") |
@@ -167,7 +208,42 @@ run_framework "$tmp/stochastic.out" "$tmp/stochastic.err" "$stochastic" || fail 
   (.body.trace[] | select(.case_id == "stale.completed-baseline") | .grader_kind == "none") and
   ([.body.trace[] | select(.grader_kind == "deterministic")] | length) == 7
 ' "$tmp/stochastic.out" > /dev/null || fail 'model-only family was decided deterministically'
-pass 'a family without a deterministic grader stays inconclusive, in the case and in its trace'
+pass 'a misfiled family is refused; a seeded model-only family stays inconclusive in case and trace'
+
+# A run result built from a partial observation set marks the unobserved case
+# inconclusive; the dashboard must accept that result and count it as such.
+"$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/partial-evaluator.json"
+"$jq_bin" -S -c '[.body.cases[1:][].observation.value]' "$first" > "$tmp/partial-observations.json"
+"$jq_bin" -S -c -n -L "$modules" \
+  --arg evals_operation build-run-result \
+  --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
+  --arg catalog_sha256 "$catalog_sha" \
+  --arg evaluator_sha256 "$(sha_file "$tmp/partial-evaluator.json")" \
+  --arg seed_set_sha256 "$(sha_file "$seed_set")" \
+  --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+  --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+  --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+  --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+  --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
+  --slurpfile result_docs "$tmp/partial-observations.json" --argjson result_shas '[]' \
+  --arg observed_at "$observed_at" \
+  --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
+  --slurpfile observation_docs "$tmp/partial-observations.json" \
+  --slurpfile evaluator_docs "$tmp/partial-evaluator.json" \
+  --slurpfile candidate_docs "$tmp/partial-observations.json" \
+  -f "$program" > "$tmp/partial.out" 2>"$tmp/partial.err" ||
+  fail "partial build errored: $(<"$tmp/partial.err")"
+"$jq_bin" -e '.body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
+  (.body.cases[0].observation == {state:"absent"})' "$tmp/partial.out" > /dev/null ||
+  fail 'partial observation set did not yield one inconclusive case'
+# The dashboard replays the seed set and observes every case, so a result with
+# an unobserved case cannot be reproduced and does not count.
+if "$framework" dashboard "$observed_at" "$seed_set" "$tmp/partial.out" > "$tmp/partial-dashboard.json" \
+  2>"$tmp/partial-dashboard.err"; then
+  fail 'dashboard counted a result its replay cannot reproduce'
+fi
+[ "$(<"$tmp/partial-dashboard.err")" = E_RELATION ] || fail 'partial result was not refused as E_RELATION'
+pass 'a partially observed result is inconclusive in the program and refused by the dashboard replay'
 
 # --- fail closed on bad or moved input ----------------------------------------
 expect_error() {
@@ -202,10 +278,6 @@ pass 'a seed id too long to prefix is refused before any case runs'
 
 # validate-run-result binds every ref to the exact catalog, evaluator, and seed
 # set it was handed, not merely to well-formed digests.
-generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
-[ -n "$generation" ] || fail 'launcher names one core generation'
-modules="$root/core/v2/generations/$generation/modules"
-[ -d "$modules" ] || fail "core generation modules missing: $generation"
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
 "$jq_bin" -S -c '[.body.cases[].observation.value]' "$first" > "$tmp/observations.json"
 validate_result() {
@@ -216,6 +288,11 @@ validate_result() {
     --arg evaluator_sha256 "$("$jq_bin" -r .body.evaluator.sha256 "$1")" \
     --arg seed_set_sha256 "$(sha_file "$seed_set")" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+    --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+    --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+    --arg sandbox_sha256 "$(sha_file "$root/control/v1/evaluate-sandbox.sh")" \
+    --argjson normalizer_shas "$("$jq_bin" -n --arg r "$(sha_file "$root/adapters/codex-native-reviewer/v1/normalize.jq")" --arg c "$(sha_file "$root/adapters/github-actions-ci/v1/normalize.jq")" --arg f "$(sha_file "$root/adapters/github-forge/v1/normalize.jq")" '{"codex-native-reviewer":$r,"github-actions-ci":$c,"github-forge":$f}')" \
+    --slurpfile result_docs "$tmp/observations.json" --argjson result_shas '[]' \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
     --slurpfile observation_docs "$tmp/observations.json" \
@@ -265,6 +342,13 @@ copy="$tmp/copy"
 /bin/mkdir -p "$copy/evals/v1" "$copy/core/v2" "$copy/scripts"
 /bin/cp -R "$root/core/v2/." "$copy/core/v2/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy/scripts/core-contract.sh"
+# Every component the launcher stages must be present, so the only stale thing
+# in this fixture is the edit below.
+for component in orchestrator/v1 control/v1 adapters; do
+  if [ -d "$root/$component" ]; then
+    /bin/mkdir -p "$copy/$component" && /bin/cp -R "$root/$component/." "$copy/$component/"
+  fi
+done
 for f in run-evals.sh evals-launcher.sh evals-driver.sh evals.jq eval-catalog.json seed-set.json; do
   /bin/cp "$root/evals/v1/$f" "$copy/evals/v1/$f"
 done

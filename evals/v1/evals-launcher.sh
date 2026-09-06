@@ -53,9 +53,25 @@ snapshot_expected() {
   [ "$status" -eq 0 ] && [ "$(sha256_path "$target")" = "$expected" ]
 }
 
-[ "$#" -eq 3 ] && [ "$1" = run ] || emit_error E_USAGE
-input=$2
-observed_at=$3
+# run SEED-SET.json OBSERVED_AT
+# dashboard OBSERVED_AT SEED-SET.json RUN-RESULT.json [SEED-SET.json RUN-RESULT.json]...
+mode=${1:-}
+case "$mode" in
+  run)
+    [ "$#" -eq 3 ] || emit_error E_USAGE
+    input=$2
+    observed_at=$3
+    pair_files=()
+    ;;
+  dashboard)
+    [ "$#" -ge 4 ] && [ "$#" -le 34 ] && [ $(( ($# - 2) % 2 )) -eq 0 ] || emit_error E_USAGE
+    observed_at=$2
+    input=''
+    shift 2
+    pair_files=("$@")
+    ;;
+  *) emit_error E_USAGE ;;
+esac
 [[ "$observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
   emit_error E_USAGE
 
@@ -69,7 +85,13 @@ self="$source_dir/${self##*/}"
 repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
 [ "$source_dir" = "$repo/evals/v1" ] || emit_error E_RUNTIME
-[ -f "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
+if [ "$mode" = run ]; then
+  [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
+else
+  for pair_file in "${pair_files[@]}"; do
+    [ -f "$pair_file" ] && [ ! -L "$pair_file" ] || emit_error E_RUNTIME
+  done
+fi
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -110,16 +132,20 @@ trap cleanup EXIT
 trap signal_exit HUP INT TERM
 runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/bin" "$runtime/core" "$runtime/core/v2" \
-  "$runtime/core/v2/generations" "$runtime/scripts" "$scratch/work" ||
+  "$runtime/core/v2/generations" "$runtime/scripts" "$runtime/orchestrator" \
+  "$runtime/orchestrator/v1" "$runtime/control" "$runtime/control/v1" "$runtime/adapters" \
+  "$runtime/adapters/codex-native-reviewer" "$runtime/adapters/codex-native-reviewer/v1" \
+  "$runtime/adapters/github-actions-ci" "$runtime/adapters/github-actions-ci/v1" \
+  "$runtime/adapters/github-forge" "$runtime/adapters/github-forge/v1" "$scratch/work" ||
   emit_error E_RUNTIME
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=4e519644f21b1b7df3c7a5cc5c6002437b4168fa3d90cd6eb0bf8e1f7d86e5a1
-catalog_sha=8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc
-driver_sha=71b271d414565adf94f1791058299b0a8c2607939514ac7b9919ef7f1a9f001c
+program_sha=f293e70714c9eb1a61baf227eb65a655679ea18e05485ddd5cd60cdc019210de
+catalog_sha=dc6dc9637d89d99f56189bcb62815cae0d82a4bc68577dee4bc4e8083e17b089
+driver_sha=e20544b094e48fbe49852ac1e4b5cefbbba0eb01a74bf911d7bf7775fdf3cb89
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -154,14 +180,75 @@ done
 snapshot_expected b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
   "$repo/scripts/core-contract.sh" "$runtime/scripts/core-contract.sh" 0400 ||
   emit_error E_STALE
+# The inactive state scanner, replayed for the events family from inside the
+# private runtime. It reads its core from this runtime's mirror, never the repo.
+for member in \
+  'reconciliation-plan.jq 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4' \
+  'scan-state.sh 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5' \
+  'state-scanner-driver.sh 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b' \
+  'state-scanner-launcher.sh 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb' \
+  'state-scanner.jq 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/orchestrator/v1/$name" \
+    "$runtime/orchestrator/v1/$name" 0400 || emit_error E_STALE
+done
+# The inactive sandbox-policy evaluator, replayed for the boundaries family. Its
+# policy-set validator and policy travel with it; it reads nothing outside.
+for member in \
+  'evaluate-sandbox.sh 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb' \
+  'policy-set.jq 2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58' \
+  'sandbox-decision.json c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd' \
+  'sandbox-policy.json 4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e' \
+  'sandbox.jq 83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3' \
+  'validate.sh cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/control/v1/$name" \
+    "$runtime/control/v1/$name" 0400 || emit_error E_STALE
+done
+# The inactive provider-snapshot normalizers, replayed for the adapter family.
+for member in \
+  'codex-native-reviewer 7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603' \
+  'github-actions-ci 690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7' \
+  'github-forge b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/adapters/$name/v1/normalize.jq" \
+    "$runtime/adapters/$name/v1/normalize.jq" 0400 || emit_error E_STALE
+done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
-snapshot_file "$input" "$scratch/input.json" 1048576 0400 || {
-  status=$?
+snapshot_input() {
+  local status=0
+  snapshot_file "$1" "$2" 1048576 0400 || status=$?
   [ "$status" -eq 42 ] && emit_error E_LIMIT
-  emit_error E_RUNTIME
+  [ "$status" -eq 0 ] || emit_error E_RUNTIME
 }
-seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
+if [ "$mode" = run ]; then
+  snapshot_input "$input" "$scratch/input.json"
+  driver_input="$scratch/input.json"
+  input_document="$scratch/input.json"
+else
+  # Each (seed set, run result) pair is snapshotted once; a manifest of their
+  # digests is the single input document the driver binds to.
+  /bin/mkdir -m 0700 "$scratch/inputs" || emit_error E_RUNTIME
+  pair_count=$(( ${#pair_files[@]} / 2 ))
+  manifest_entries=''
+  j=0
+  while [ "$j" -lt "$pair_count" ]; do
+    snapshot_input "${pair_files[$((j * 2))]}" "$scratch/inputs/seed-$j.json"
+    snapshot_input "${pair_files[$((j * 2 + 1))]}" "$scratch/inputs/result-$j.json"
+    manifest_entries="$manifest_entries$(/usr/bin/printf '{"result_sha256":"%s","seed_sha256":"%s"}' \
+      "$(sha256_path "$scratch/inputs/result-$j.json")" \
+      "$(sha256_path "$scratch/inputs/seed-$j.json")")"
+    j=$((j + 1))
+    [ "$j" -eq "$pair_count" ] || manifest_entries="$manifest_entries,"
+  done
+  /usr/bin/printf '[%s]' "$manifest_entries" | "$runtime/bin/jq" -S -c . \
+    > "$scratch/inputs/manifest.json" 2>/dev/null || emit_error E_RUNTIME
+  /bin/chmod 0400 "$scratch/inputs/manifest.json" || emit_error E_RUNTIME
+  driver_input="$scratch/inputs"
+  input_document="$scratch/inputs/manifest.json"
+fi
+seed_sha=$(sha256_path "$input_document") || emit_error E_RUNTIME
 
 "$runtime/bin/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
@@ -192,6 +279,26 @@ seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/stage_request.jq",sha256:"6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e"},
         {path:"scripts/core-contract.sh",sha256:"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"}
       ],
+      orchestrator_closure:[
+        {path:"orchestrator/v1/reconciliation-plan.jq",sha256:"03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4"},
+        {path:"orchestrator/v1/scan-state.sh",sha256:"556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5"},
+        {path:"orchestrator/v1/state-scanner-driver.sh",sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
+        {path:"orchestrator/v1/state-scanner-launcher.sh",sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
+        {path:"orchestrator/v1/state-scanner.jq",sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
+      ],
+      adapter_closure:[
+        {path:"adapters/codex-native-reviewer/v1/normalize.jq",sha256:"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603"},
+        {path:"adapters/github-actions-ci/v1/normalize.jq",sha256:"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7"},
+        {path:"adapters/github-forge/v1/normalize.jq",sha256:"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}
+      ],
+      control_closure:[
+        {path:"control/v1/evaluate-sandbox.sh",sha256:"8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"},
+        {path:"control/v1/policy-set.jq",sha256:"2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58"},
+        {path:"control/v1/sandbox-decision.json",sha256:"c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd"},
+        {path:"control/v1/sandbox-policy.json",sha256:"4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e"},
+        {path:"control/v1/sandbox.jq",sha256:"83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"},
+        {path:"control/v1/validate.sh",sha256:"cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a"}
+      ],
       bootstrap_ref:ref("evals-framework-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("evals-framework-launcher.v1";"text/x-shellscript";$launcher_sha),
       driver_ref:ref("evals-framework-driver.v1";"text/x-shellscript";$driver_sha),
@@ -211,7 +318,7 @@ evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
 output="$scratch/output.json"
 error="$scratch/error"
 /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$scratch/work" \
-  /bin/bash "$runtime/driver.sh" run "$runtime" "$scratch/input.json" \
+  /bin/bash "$runtime/driver.sh" "$mode" "$runtime" "$driver_input" \
   "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" "$observed_at" \
   </dev/null >"$output" 2>"$error"
 status=$?
@@ -229,29 +336,95 @@ fi
 
 # Independent re-validation of the delivered document against the exact same
 # private program and core, after the driver has exited.
-[ "$("$runtime/bin/jq" -S -c -n -L "$generation_runtime/modules" \
-    --arg evals_operation validate-run-result \
+# program_check OPERATION EVALUATOR EVALUATOR_SHA SEED_SHA SEEDS OBSERVATIONS CANDIDATE RESULTS RESULT_SHAS
+# check_observed_at names the time the candidate was built at; a run result is
+# rebuilt at its own recorded time, the dashboard at this invocation's time.
+check_observed_at=$observed_at
+program_check() {
+  [ "$("$runtime/bin/jq" -S -c -n -L "$generation_runtime/modules" \
+    --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
-    --arg catalog_sha256 "$catalog_sha" --arg evaluator_sha256 "$evaluator_sha" \
-    --arg seed_set_sha256 "$seed_sha" \
+    --arg catalog_sha256 "$catalog_sha" --arg evaluator_sha256 "$3" \
+    --arg seed_set_sha256 "$4" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
-    --arg observed_at "$observed_at" \
+    --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
+    --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
+    --arg sandbox_sha256 8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb \
+    --argjson normalizer_shas '{"codex-native-reviewer":"7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603","github-actions-ci":"690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7","github-forge":"b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be"}' \
+    --arg observed_at "$check_observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
-    --slurpfile seed_set_docs "$scratch/input.json" \
-    --slurpfile observation_docs "$scratch/work/observations.json" \
-    --slurpfile evaluator_docs "$runtime/evaluator.json" \
-    --slurpfile candidate_docs "$output" \
-    -f "$runtime/program.jq" 2>/dev/null)" = true ] || emit_error E_RUNTIME
-[ "$("$runtime/bin/jq" -S -c . "$output")" = "$(/bin/cat "$output")" ] ||
+    --slurpfile seed_set_docs "$5" \
+    --slurpfile observation_docs "$6" \
+    --slurpfile evaluator_docs "$2" \
+    --slurpfile candidate_docs "$7" \
+    --slurpfile result_docs "$8" --argjson result_shas "$9" \
+    -f "$runtime/program.jq" 2>/dev/null)" = true ]
+}
+if [ "$mode" = run ]; then
+  program_check validate-run-result "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
+    "$scratch/input.json" "$scratch/work/observations.json" "$output" \
+    "$scratch/work/observations.json" '[]' || emit_error E_RUNTIME
+else
+  # Every pair is re-validated against the driver's replay, then the dashboard itself.
+  j=0
+  while [ "$j" -lt "$pair_count" ]; do
+    check_observed_at=$("$runtime/bin/jq" -r '.body.observed_at' "$scratch/inputs/result-$j.json") ||
+      emit_error E_RUNTIME
+    # The driver replayed this seed set into pair-$j; re-validate the supplied
+    # result against that fresh observation set and this runtime's evaluator.
+    [ -f "$scratch/work/pair-$j/observations.json" ] || emit_error E_RUNTIME
+    program_check validate-run-result "$runtime/evaluator.json" "$evaluator_sha" \
+      "$(sha256_path "$scratch/inputs/seed-$j.json")" "$scratch/inputs/seed-$j.json" \
+      "$scratch/work/pair-$j/observations.json" "$scratch/inputs/result-$j.json" \
+      "$scratch/work/pair-$j/observations.json" '[]' || emit_error E_RELATION
+    j=$((j + 1))
+  done
+  check_observed_at=$observed_at
+  program_check validate-dashboard "$runtime/evaluator.json" "$evaluator_sha" "$seed_sha" \
+    "$scratch/work/seeds.jsonl" "$scratch/work/pair-0/observations.json" "$output" \
+    "$scratch/work/results.jsonl" \
+    "$("$runtime/bin/jq" -c 'map(.result_sha256)' "$scratch/inputs/manifest.json")" ||
+    emit_error E_RUNTIME
+fi
+"$runtime/bin/jq" -S -c . "$output" > "$scratch/output.canonical" 2>/dev/null ||
   emit_error E_CANONICAL
+/usr/bin/cmp -s "$output" "$scratch/output.canonical" || emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/adapters/codex-native-reviewer/v1/normalize.jq")" = \
+    7baac5c59bc7934abc9512f3f949d1397d89b85f32b389f5c1f8a835e8c24603 ] &&
+[ "$(sha256_path "$runtime/adapters/github-actions-ci/v1/normalize.jq")" = \
+    690d9a8c35dc49f61a533d1ce1a9041e34895e5d337eb454bafa3a2e4d878df7 ] &&
+[ "$(sha256_path "$runtime/adapters/github-forge/v1/normalize.jq")" = \
+    b810117fb47c9f90efb0d0ea62efb3d46ff4c8c8e7a278c49a3abe1be57526be ] &&
+[ "$(sha256_path "$runtime/control/v1/evaluate-sandbox.sh")" = \
+    8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb ] &&
+[ "$(sha256_path "$runtime/control/v1/policy-set.jq")" = \
+    2be97550574ee4522fc0bd14780c92dee3c1b455f2c04b7763b0e437665a8d58 ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox-decision.json")" = \
+    c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox-policy.json")" = \
+    4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e ] &&
+[ "$(sha256_path "$runtime/control/v1/sandbox.jq")" = \
+    83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3 ] &&
+[ "$(sha256_path "$runtime/control/v1/validate.sh")" = \
+    cf173ad0eaa08244bf636e3937845e894b21f14291fc5e66753e8673bdd2bd2a ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/reconciliation-plan.jq")" = \
+    03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/scan-state.sh")" = \
+    556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner-driver.sh")" = \
+    5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner-launcher.sh")" = \
+    9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner.jq")" = \
+    722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae ] &&
 [ "$(sha256_path "$runtime/driver.sh")" = "$driver_sha" ] &&
 [ "$(sha256_path "$runtime/program.jq")" = "$program_sha" ] &&
 [ "$(sha256_path "$runtime/catalog.json")" = "$catalog_sha" ] &&
 [ "$(sha256_path "$runtime/bin/jq")" = "$jq_sha" ] &&
 [ "$(sha256_path /bin/bash)" = "$bash_sha" ] &&
-[ "$(sha256_path "$scratch/input.json")" = "$seed_sha" ] &&
+[ "$(sha256_path "$input_document")" = "$seed_sha" ] &&
 [ "$(sha256_path "$runtime/evaluator.json")" = "$evaluator_sha" ] ||
   emit_error E_RUNTIME
 /bin/cat "$output" || emit_error E_RUNTIME

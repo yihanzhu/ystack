@@ -244,6 +244,10 @@ scripts/test/orchestrator-reconciliation-plan.test.sh
 adapters/github-forge/v1/normalize.jq
 scripts/test/default-github-forge-adapter.test.sh
 
+# Inactive GitLab forge normalizer payload (first alternative forge)
+adapters/gitlab-forge/v1/normalize.jq
+scripts/test/default-gitlab-forge-adapter.test.sh
+
 # Inactive Codex native reviewer normalizer payload
 adapters/codex-native-reviewer/v1/normalize.jq
 scripts/test/default-codex-native-reviewer-adapter.test.sh
@@ -265,6 +269,10 @@ scripts/test/local-git-materializer-adapter.test.sh
 adapters/claude-code-producer/v1/normalize.jq
 scripts/test/default-claude-code-producer-adapter.test.sh
 
+# Inactive Codex CLI producer normalizer payload (first alternative harness)
+adapters/codex-cli-producer/v1/normalize.jq
+scripts/test/default-codex-cli-producer-adapter.test.sh
+
 # Inactive provider-neutral local Git materializer protocol
 adapters/local-git-materializer/v1/protocol.jq
 scripts/test/local-git-materializer-fixtures.sh
@@ -285,4 +293,13 @@ evals/v1/evals-driver.sh
 evals/v1/evals.jq
 evals/v1/eval-catalog.json
 evals/v1/seed-set.json
+evals/v1/seed-set-events.json
+evals/v1/seed-set-plans.json
+evals/v1/seed-set-boundaries.json
+evals/v1/seed-set-adapters.json
 scripts/test/evals-framework.test.sh
+scripts/test/evals-events.test.sh
+scripts/test/evals-plans.test.sh
+scripts/test/evals-boundaries.test.sh
+scripts/test/evals-adapters.test.sh
+scripts/test/evals-dashboard.test.sh
