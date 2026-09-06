@@ -198,6 +198,24 @@ environment_id=$("$jq_bin" -r '
 ' "$scratch/claim.json") || emit_error E_RUNTIME
 [ -n "$environment_id" ] || emit_error E_SHAPE
 
+# The read-only guards hold for every run, whatever the environment verdict:
+# a materialization input that carries patch bytes or allows network is refused
+# outright, never recorded as an inconclusive shadow.
+"$jq_bin" -e --arg repository "$repository_id" --arg algorithm "$hash_algorithm" \
+  --arg commit "$commit_id" '
+  .stage_request.content.body as $body |
+  $body.target_repository_id == $repository and
+  $body.target_revision.value.repository_id == $repository and
+  $body.target_revision.value.hash_algorithm == $algorithm and
+  $body.target_revision.value.commit_id == $commit
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_STALE
+"$jq_bin" -e '
+  ([.payloads[] | select(.input_id == "input.producer-patch") | .data] == [""]) and
+  ([.trust_context.verified_payloads[] |
+    select(.input_id == "input.producer-patch") | .content.data] == [""]) and
+  .stage_request.content.body.operation.arguments.network_mode == "deny"
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
+
 outcome=inconclusive
 reason=environment.unlisted
 environment_result=result.environment-refused
@@ -234,24 +252,6 @@ if "$jq_bin" -e --arg id "$environment_id" \
     fi
   fi
 fi
-
-# The read-only guards hold for every run, whatever the environment verdict:
-# a materialization input that carries patch bytes or allows network is refused
-# outright, never recorded as an inconclusive shadow.
-"$jq_bin" -e --arg repository "$repository_id" --arg algorithm "$hash_algorithm" \
-  --arg commit "$commit_id" '
-  .stage_request.content.body as $body |
-  $body.target_repository_id == $repository and
-  $body.target_revision.value.repository_id == $repository and
-  $body.target_revision.value.hash_algorithm == $algorithm and
-  $body.target_revision.value.commit_id == $commit
-' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_STALE
-"$jq_bin" -e '
-  ([.payloads[] | select(.input_id == "input.producer-patch") | .data] == [""]) and
-  ([.trust_context.verified_payloads[] |
-    select(.input_id == "input.producer-patch") | .content.data] == [""]) and
-  .stage_request.content.body.operation.arguments.network_mode == "deny"
-' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
 
 if [ "$reason" = environment.satisfied ] && [ "$check_kind" != file-digest ]; then
   reason=check.not-runnable
@@ -299,8 +299,15 @@ if [ "$reason" = check.completed ]; then
     LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0
     GIT_OPTIONAL_LOCKS=0)
-  blob_size=$("${git_env[@]}" /usr/bin/git --no-replace-objects \
-    --git-dir="$repository" cat-file -s "$candidate_tree:$check_path" 2>/dev/null) || :
+  # Only a blob can be digest-checked; a directory or other object at the
+  # path is an unreadable check, not a failed run.
+  object_type=$("${git_env[@]}" /usr/bin/git --no-replace-objects \
+    --git-dir="$repository" cat-file -t "$candidate_tree:$check_path" 2>/dev/null) || :
+  blob_size=''
+  if [ "${object_type:-}" = blob ]; then
+    blob_size=$("${git_env[@]}" /usr/bin/git --no-replace-objects \
+      --git-dir="$repository" cat-file -s "$candidate_tree:$check_path" 2>/dev/null) || :
+  fi
   case "${blob_size:-}" in
     ''|*[!0-9]*) blob_size='' ;;
     *) [ "${#blob_size}" -le 9 ] && [ "$blob_size" -le 1048576 ] || blob_size='' ;;

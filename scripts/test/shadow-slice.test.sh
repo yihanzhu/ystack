@@ -78,8 +78,12 @@ git_clean() {
 git_clean init -q --bare --object-format=sha1 "$tmp/source.git"
 failing_blob=$(/usr/bin/printf 'alpha\nbeta\n' |
   git_clean --git-dir="$tmp/source.git" hash-object -w --stdin)
-failing_tree=$(/usr/bin/printf '100644 blob %s\tsource.txt\n' "$failing_blob" |
+# The incident revision also carries a directory, so a check path that names a
+# tree instead of a blob can be proven inconclusive rather than a failed run.
+notes_tree=$(/usr/bin/printf '100644 blob %s\tkeep.txt\n' "$failing_blob" |
   git_clean --git-dir="$tmp/source.git" mktree)
+failing_tree=$(/usr/bin/printf '100644 blob %s\tsource.txt\n040000 tree %s\tnotes\n' \
+  "$failing_blob" "$notes_tree" | git_clean --git-dir="$tmp/source.git" mktree)
 failing_commit=$(/usr/bin/printf '%s\n' 'incident revision' |
   git_clean --git-dir="$tmp/source.git" commit-tree "$failing_tree")
 passing_blob=$(/usr/bin/printf 'alpha\nbeta\ngamma\n' |
@@ -419,7 +423,11 @@ expect_outcome missing-path inconclusive check.unreadable \
   "$(mutate "$failing_incident" incident-missing-path \
     '.body.failing_check.path = "not-present.txt"')" \
   "$tmp/fixture-failing/read-only-input.json"
-pass 'a check path absent at the revision is inconclusive, never a reproduction'
+pass 'a check path absent at the revision, or naming a directory, is inconclusive, never a reproduction'
+expect_outcome directory-path inconclusive check.unreadable \
+  "$(mutate "$failing_incident" incident-directory-path \
+    '.body.failing_check.path = "notes"')" \
+  "$tmp/fixture-failing/read-only-input.json"
 
 expect_reproduce_error moved-revision E_STALE "$passing_incident" \
   "$tmp/fixture-failing/read-only-input.json"
