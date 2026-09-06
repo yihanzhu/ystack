@@ -374,6 +374,19 @@ expect_refusal E_PATH 'a profile binding personal configuration' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses to package a path outside the shipped product shapes'
+# A binding whose package ref points at the repository root, not a path, cannot
+# be packaged and must refuse rather than be skipped.
+"$jq" -S -c '.body.bindings |= map(if .role == "ci"
+  then .package_ref.location = {kind:"root"} | .package_ref.object_type = "tree" else . end)' \
+  "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
+/bin/mv "$fixture/profile.tmp" "$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging root-ref fixture'
+expect_refusal E_RELATION 'a profile binding a root-location package ref' \
+  "$fixture/packaging/v1/build-release.sh" build-release \
+  "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
+ok 'build-release refuses a package ref that is not a path'
 
 rebuilt="$tmp/rebuilt.json"
 "$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$rebuilt"

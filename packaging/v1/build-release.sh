@@ -145,7 +145,10 @@ for requested in "$@"; do
   # Every ref must still resolve to the object the profile pins (config and
   # prompt refs included); only package refs are packaged, the config is
   # recorded above and prompts are deliberately not shipped.
-  while IFS=$'\t' read -r ref_role ref_kind ref_path ref_oid ref_mode; do
+  while IFS=$'\t' read -r ref_role ref_loc ref_kind ref_path ref_oid ref_mode; do
+    # Only a path location can be packaged; a root or unknown location is not
+    # skipped, it makes the profile unpackageable.
+    [ "$ref_loc" = path ] || emit_error E_RELATION
     if [ "$ref_role" = package_ref ]; then
       # A tree is judged by where its entries would land.
       case "$ref_kind" in
@@ -167,8 +170,8 @@ for requested in "$@"; do
     esac
   done < <("$jq_bin" -r '.body.bindings[] |
     to_entries[] | select(.key == "package_ref" or .key == "config_ref" or .key == "prompt_ref") |
-    select(.value.location.kind == "path") |
-    [.key, .value.object_type, .value.location.value, .value.object_id, .value.mode] | @tsv' \
+    [.key, (.value.location.kind // "missing"), .value.object_type,
+     (.value.location.value // ""), .value.object_id, .value.mode] | @tsv' \
     "$scratch/profile.json" 2>/dev/null)
   # The core files a profile carries are named once, in packaging.jq, so the
   # installer's derived check reads the same list this loop packages.
