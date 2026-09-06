@@ -104,7 +104,10 @@ def dashboard_ok:
   (.body | type == "object" and .activation_state == "inactive" and
    .authority_effect == "none" and .mode == "deterministic-offline" and
    (.observed_at | time_ok) and
-   (.quality | exact(["failed","inconclusive","passed","total"]) and all(.[]; int_ok)) and
+   # Counters must add up: a total that disagrees with its parts is not a
+   # measurement, and a negative or inflated rate must never read as in band.
+   (.quality | exact(["failed","inconclusive","passed","total"]) and all(.[]; int_ok) and
+    .total == .passed + .failed + .inconclusive) and
    (.recovery |
     exact(["cancelled_stayed_terminal","events_refused","repeats_redelivered_once",
       "repeats_suppressed_after_acknowledgement","retry_limit_enforced",
@@ -112,7 +115,8 @@ def dashboard_ok:
    (.families | type == "array" and length >= 1 and length <= 32 and
     all(.[]; type == "object" and (.family_id | id_ok) and
       (.cases | exact(["failed","inconclusive","passed","total"]) and
-       all(.[]; int_ok))) and (map(.family_id) | . == (sort | unique))));
+       all(.[]; int_ok) and .total == .passed + .failed + .inconclusive)) and
+    (map(.family_id) | . == (sort | unique))));
 
 # The seal itself is proved by the telemetry validator before this filter runs;
 # here the ledger is only read for the facts the bands count.

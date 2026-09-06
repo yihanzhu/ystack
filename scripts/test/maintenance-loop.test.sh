@@ -408,6 +408,13 @@ expect_refusal nonregular-input E_RUNTIME "$fixtures/dashboard.fifo" \
   "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
 "$jq_bin" -S -c 'del(.body.recovery.stranded_recovered)' \
   "$fixtures/dashboard-clean.json" > "$fixtures/dashboard-missing.json"
+# Counters that do not add up are not a measurement: total 8 with passed 9 would
+# otherwise yield a negative stale rate that reads as in band.
+"$jq_bin" -S -c '.body.families |= map(if .family_id == "stale-moved-artifacts"
+  then .cases = {total:8,passed:9,failed:0,inconclusive:0} else . end)' \
+  "$fixtures/dashboard-clean.json" >"$fixtures/dashboard-inconsistent.json"
+expect_refusal inconsistent-counters E_SHAPE "$fixtures/dashboard-inconsistent.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json" "$fixtures/rehearsal-recent.json"
 expect_refusal missing-recovery-count E_SHAPE "$fixtures/dashboard-missing.json" \
   "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
 expect_refusal unsealed-ledger E_RELATION "$fixtures/dashboard-clean.json" \
@@ -620,6 +627,10 @@ expect_convert no-change "$fixtures/incident-digest.json" \
   "$tmp/convert-no-change.json" >/dev/null || fail 'no-change expectation'
 pass 'a run that reproduced nothing becomes the passing baseline expectation'
 
+long_incident_id="incident.$(printf 'x%.0s' {1..118})"
+incident "$long_incident_id" file-digest > "$fixtures/incident-long-id.json"
+expect_convert_refusal long-incident-id E_SHAPE "$fixtures/incident-long-id.json" \
+  "$fixtures/shadow-reproduced.json"
 expect_convert_refusal family-unmatched E_FAMILY "$fixtures/incident-named.json" \
   "$fixtures/shadow-named.json"
 expect_convert_refusal inconclusive-outcome E_RELATION \

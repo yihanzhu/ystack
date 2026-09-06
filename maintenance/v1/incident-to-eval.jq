@@ -12,7 +12,9 @@ def failing_check_ok:
 
 def incident_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
-  .kind == "shadow_incident_record" and (.id | id_ok) and
+  # The incident id must leave room for the "incident." prefix the generated
+  # case id carries, so every skeleton is a valid seed case id as emitted.
+  .kind == "shadow_incident_record" and (.id | id_ok and (("incident." + .) | id_ok)) and
   (.body |
    exact(["deploy_authority","failing_check","git_revision_ref","observed_at",
      "observed_symptom","reporter_actor_ref","target_repository_id"]) and
