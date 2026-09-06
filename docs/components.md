@@ -680,3 +680,92 @@ observation only: it does not run a candidate or adapter, invoke a model, use a
 credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
+
+## Inactive maintenance loop
+
+`maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item
+describes: deterministic control bands and scans turn what the repo already
+measures into new intents for a service owner to triage, and a shipped incident
+that was reproduced turns into an eval seed case. It is inactive. It files no
+issue, opens no change request, deploys nothing, installs nothing, activates
+nothing, invokes no model, reads no credential, touches no network, and grants
+no authority. Everything it produces is a JSON document written into a
+caller-owned directory that the caller supplied empty.
+
+`control-bands.json` is the band policy: seven named bands, each with a fixed
+threshold and one plain-English line saying what it is for. No eval case may be
+failed. No eval case may be inconclusive. The sealed trace ledger may record no
+refused event. At least one recorded case must show a repeated event suppressed
+after it was acknowledged, and at least one must show a stranded attempt
+recovered. A rollback rehearsal that succeeded must be no more than thirty days
+old. Every stale-and-moved-artifact case must pass, counted as a rate in parts
+per thousand.
+
+`bands.jq` holds the shape every input must have and one pure function from the
+supplied documents to a per-band observation. Each metric is a count or an age
+over the documents handed in: the eval dashboard's own quality and recovery
+counts, the events in the sealed telemetry trace ledger, and the rollback
+rehearsal records. The rehearsal age is whole days between the newest successful
+rehearsal and the dashboard's own recorded time, so nothing reads a host clock.
+A metric that cannot be counted from the documents supplied — no rehearsal
+record at all, an empty family — is reported out of band with the reason
+`maintenance.metric-unmeasurable`. It is never quietly treated as in band.
+
+`scan.sh` takes one eval dashboard, one sealed trace ledger, one kill-switch
+evaluation, an empty output directory, and up to thirty-two further documents
+that are each either a security-scan finding or a rollback rehearsal record.
+A `maintenance_scan_finding` is deliberately small: the scanner that reported
+it, the rule it matched, a severity, a repository-relative path, and the digest
+of the evidence the scanner kept. The driver pins jq 1.6 by digest and refuses
+to run an unverified one, snapshots every input without following a symlink,
+requires each file to be exactly one canonical JSON text inside a size bound,
+and proves the ledger is really sealed by running it through the existing
+telemetry trace-record validator before any band counts an event in it.
+
+The output is one canonical `maintenance_scan` record naming every band, whether
+it held, the value that was measured, and the digest of every document the scan
+read. For each crossed band and each high-severity finding it also writes one
+canonical intent document, named `intent-band-<band id>.json` or
+`intent-finding-<finding id>.json`, so the same inputs always produce the same
+file names and one intent per band per scan. Each intent carries the sections
+this repo's own `work/<slug>/intent.md` uses — problem, proposed outcome,
+affected users and systems, constraints, open questions — plus `owner:
+unassigned`, `triage_state: pending`, `deploy_authority: none`, a guessed risk
+tier, and the evidence digests behind it. They are drafts for a human, not work
+orders. If the kill-switch evaluation is anything other than `satisfied`, the
+scan records the bands and writes no intent at all, with the reason
+`maintenance.kill-switch-engaged`.
+
+`incident-to-eval.sh` closes the loop the other way. Given one shadow incident
+record and the shadow reproduction record for it, it writes one eval seed case
+skeleton for the eval family the incident belongs to. The map from an incident's
+failing check to a family is closed: a file-digest check belongs to the
+stale-and-moved-artifacts family, and anything else is refused with `E_FAMILY`
+rather than guessed at. The two records must actually belong together — the
+shadow record's incident digest, id, failing check, revision, and repository all
+have to match the incident it was handed. A reproduced run becomes the
+expectation `{accepted, stale}`; a run that found nothing becomes the passing
+baseline `{accepted, completed}`; an inconclusive run proves nothing and is
+refused. The expectation, the case's field list, and its request role are all
+read out of that family's real seed set in `evals/v1/`, and the produced
+expectation must already be one that seed set uses. The skeleton names the
+fields it filled and the fields still pending, and carries a provenance block
+binding the incident and shadow digests. It never modifies a seed set: the
+skeleton is written to the output directory for a later reviewed change.
+
+Everything fails closed with one token on standard error and no output:
+`E_USAGE`, `E_PARSE`, `E_CANONICAL`, `E_LIMIT`, `E_SHAPE`, `E_RELATION`,
+`E_FAMILY`, `E_WORKSPACE`, `E_RUNTIME`. A relative path, a symlink, a named
+pipe, a file holding two JSON documents, a non-canonical file, an oversized
+file, an unsealed or tampered ledger, an unknown extra document, two findings
+with the same id, and a non-empty output directory are all refused, and nothing
+is written.
+
+Run the focused test with:
+
+```sh
+bash scripts/test/maintenance-loop.test.sh
+```
+
+It builds its own fixtures, seals its own trace ledgers, and proves the happy
+paths byte for byte on a repeat run alongside every refusal above.
