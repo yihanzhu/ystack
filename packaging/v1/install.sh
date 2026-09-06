@@ -177,7 +177,7 @@ packaging_jq profile-files -r "$raw" >"$scratch/wanted.tsv" 2>/dev/null ||
 
 # Nothing is written into the target until every packaged blob has matched the
 # manifest's Git object id and SHA-256 and passed the personal-data denylist.
-denied_content='(/Users/|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default)'
+denied_content='(/Users/|/home/[^/]+/|/root/|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default)'
 staged="$scratch/stage"
 /bin/mkdir -p "$staged" || emit_error E_RUNTIME
 while IFS=$'\t' read -r path mode object_id sha256; do

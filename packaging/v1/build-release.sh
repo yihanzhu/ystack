@@ -132,6 +132,22 @@ for requested in "$@"; do
   /bin/cp "$scratch/blob" "$scratch/profile.json" || emit_error E_RUNTIME
   "$jq_bin" -e --arg id "$requested" '.id == $id and (.body.bindings | length) == 6' \
     "$scratch/profile.json" >/dev/null 2>&1 || emit_error E_PROFILE
+  # The profile must be a valid core document with six complete bindings before
+  # anything is derived from it; a binding without a package ref would otherwise
+  # simply emit no row and the release would ship without that adapter.
+  "$jq_bin" -e '
+    [.body.bindings[] | .role] == (["ci","forge","producer","publisher","reviewer","verifier"] | sort) or
+    ([.body.bindings[] | .role] | sort) == ["ci","forge","producer","publisher","reviewer","verifier"]
+  ' "$scratch/profile.json" >/dev/null 2>&1 || emit_error E_PROFILE
+  "$jq_bin" -e '
+    all(.body.bindings[];
+      (.manifest_ref | type == "object" and (.id | type) == "string" and (.sha256 | type) == "string") and
+      (.package_ref | type == "object" and (.object_type | type) == "string" and
+        (.object_id | type) == "string" and (.mode | type) == "string" and
+        (.location | type == "object" and (.kind | type) == "string")))
+  ' "$scratch/profile.json" >/dev/null 2>&1 || emit_error E_PROFILE
+  "$repo/scripts/core-contract.sh" validate-document "$scratch/profile.json" >/dev/null 2>&1 ||
+    emit_error E_PROFILE
   record_path "$base/profile.json" "$requested"
   config_path=$("$jq_bin" -r '
     [.body.bindings[] | select(has("config_ref")) | .config_ref.location.value] |

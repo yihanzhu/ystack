@@ -174,7 +174,7 @@ north_star="$default_target/.ystack/north-star.md"
 ok 'the target gets an unset, target-owned north star with no marker and no approval history'
 
 for installed in "$default_target" "$alt_target" "$repeat_target"; do
-  ! /usr/bin/grep -raqE '/Users/|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default' \
+  ! /usr/bin/grep -raqE '/Users/|/home/[^/]+/|/root/|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default' \
     "$installed/.ystack" || fail "personal data or a credential pattern reached $installed"
   for absent in config manager .claude .github website templates routines reviewer work; do
     [ ! -e "$installed/.ystack/$absent" ] || fail "installed tree carries $absent"
@@ -358,7 +358,7 @@ ok 'build-release refuses a bad verb, commit, or profile id'
 
 fixture="$tmp/fixture"
 /bin/mkdir -p "$fixture"
-/usr/bin/git -C "$root" archive "$commit" profiles core scripts adapters | /usr/bin/tar -x -C "$fixture"
+/usr/bin/git -C "$root" archive "$commit" profiles core scripts adapters routines reviewer | /usr/bin/tar -x -C "$fixture"
 /bin/mkdir -p "$fixture/packaging"
 /bin/cp -R "$root/packaging/v1" "$fixture/packaging/v1"
 /bin/chmod -R u+w "$fixture"
@@ -374,8 +374,10 @@ expect_refusal E_PATH 'a profile binding personal configuration' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses to package a path outside the shipped product shapes'
-# A binding whose package ref points at the repository root, not a path, cannot
-# be packaged and must refuse rather than be skipped.
+# A binding whose package ref points at the repository root, not a path, is not
+# a valid profile document (a root location is a tree with a tree mode), so the
+# document validation refuses it before any ref is read; the builder's own
+# non-path guard stands behind that as defence in depth.
 "$jq" -S -c '.body.bindings |= map(if .role == "ci"
   then .package_ref.location = {kind:"root"} | .package_ref.object_type = "tree" else . end)' \
   "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
@@ -383,7 +385,7 @@ ok 'build-release refuses to package a path outside the shipped product shapes'
 /usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
 /usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
   commit -q -m 'packaging root-ref fixture'
-expect_refusal E_RELATION 'a profile binding a root-location package ref' \
+expect_refusal E_PROFILE 'a profile binding a root-location package ref' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses a package ref that is not a path'
@@ -401,6 +403,38 @@ expect_refusal E_RELATION 'a manifest edited after the profile pinned it' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses a manifest that no longer matches its binding'
+# A profile whose binding lacks a package ref is not a profile to package: the
+# release must refuse instead of quietly shipping without that adapter.
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
+  >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+"$jq" -S -c '.body.bindings |= map(if .role == "ci" then del(.package_ref) else . end)' \
+  "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
+/bin/mv "$fixture/profile.tmp" "$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging missing-ref fixture'
+expect_refusal E_PROFILE 'a profile binding without a package ref' \
+  "$fixture/packaging/v1/build-release.sh" build-release \
+  "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
+ok 'build-release refuses a profile that is not a complete, valid document'
+
+# Personal paths from any host must stay out of a target: a Linux home path in a
+# packaged, unpinned file is refused at install even though the release builds.
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" \
+  >"$fixture/profiles/default/v1/profile.json"
+/usr/bin/printf '\n# scratch note: /home/alice/.config/token\n' >>"$fixture/scripts/core-contract.sh"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging home-path fixture'
+home_commit=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
+"$fixture/packaging/v1/build-release.sh" build-release "$home_commit" profile.default.v1 \
+  >"$tmp/home-manifest.json" 2>"$tmp/home-manifest.err" ||
+  fail "home-path fixture release did not build: $(/bin/cat "$tmp/home-manifest.err")"
+home_target=$(fresh_target home-path)
+expect_refusal E_DENYLIST 'a packaged file carrying a Linux home path' \
+  "$fixture/packaging/v1/install.sh" install "$tmp/home-manifest.json" profile.default.v1 "$home_target"
+[ -z "$(/bin/ls -A -- "$home_target")" ] || fail 'a refused install wrote into the target'
+ok 'install refuses packaged content that names a home directory on any host'
 
 rebuilt="$tmp/rebuilt.json"
 "$builder" build-release "$commit" profile.default.v1 profile.alternative.v1 >"$rebuilt"
