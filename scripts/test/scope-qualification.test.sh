@@ -507,7 +507,7 @@ for shipped in scope-policy.json workflow-scope.jq scope-gates.jq validate-scope
   /bin/cp "$root/scope/v1/$shipped" "$fake_repo/$shipped"
 done
 /bin/chmod 0500 "$fake_repo/validate-scope.sh" "$fake_repo/evaluate-scope.sh"
-"$jq_bin" -S -c -n '{schema_version:1,status:"operating"}' >"$tmp/marker-operating.json"
+"$jq_bin" -S -c -n '{schema_version:1,status:"retired"}' >"$tmp/marker-operating.json"
 PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
   "$tmp/marker-operating.json" >"$tmp/evaluation-portable.json"
 "$jq_bin" -e '
