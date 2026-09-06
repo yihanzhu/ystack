@@ -16,7 +16,19 @@ case "$platform" in
   Darwin:x86_64|Darwin:arm64) asset='jq-osx-amd64'; asset_sha='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef' ;;
   *) fail "unsupported jq 1.6 proof platform: $platform" ;;
 esac
-jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$asset"
+# This suite sorts first among the tests, so it cannot rely on an earlier suite
+# having filled the shared jq 1.6 cache; it fetches the pinned release itself.
+jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$jq_cache_dir"
+jq_bin="$jq_cache_dir/$asset"
+if [ ! -f "$jq_bin" ] || [ -L "$jq_bin" ] || [ "$(sha_file "$jq_bin")" != "$asset_sha" ]; then
+  download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$asset" -o "$download"
+  [ "$(sha_file "$download")" = "$asset_sha" ] || fail 'jq release digest'
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_bin"
+fi
 [ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$(sha_file "$jq_bin")" = "$asset_sha" ] || fail 'pinned jq 1.6 is required'
 jq_command=("$jq_bin")
