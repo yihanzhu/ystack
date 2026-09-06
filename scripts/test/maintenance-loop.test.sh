@@ -1,0 +1,459 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016
+set -euo pipefail
+export LC_ALL=C
+umask 077
+
+root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
+scanner="$root/maintenance/v1/scan.sh"
+bands_policy="$root/maintenance/v1/control-bands.json"
+tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-maintenance-loop-test.XXXXXX")
+tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+cleanup() { /bin/chmod -R u+w "$tmp" >/dev/null 2>&1 || :; /bin/rm -rf -- "$tmp"; }
+trap cleanup EXIT
+fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+passes=0
+pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
+sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+
+platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+case "$platform" in
+  Darwin:*) jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
+  Linux:x86_64) jq_asset=jq-linux64; jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
+  *) fail "unsupported host $platform" ;;
+esac
+# This suite may run before any other, so it fills the shared jq 1.6 cache itself.
+jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$jq_cache_dir"
+jq_cache="$jq_cache_dir/$jq_asset"
+if [ ! -f "$jq_cache" ] || [ -L "$jq_cache" ] || [ "$(sha_file "$jq_cache")" != "$jq_sha" ]; then
+  download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" -o "$download"
+  [ "$(sha_file "$download")" = "$jq_sha" ] || fail 'jq release digest'
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_cache"
+fi
+bin="$tmp/bin"
+/bin/mkdir -m 700 "$bin"
+/bin/cp "$jq_cache" "$bin/jq"
+/bin/chmod 0555 "$bin/jq"
+jq_bin="$bin/jq"
+[ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
+
+fixtures="$tmp/fixtures"
+/bin/mkdir -m 700 "$fixtures"
+
+# --- the band policy ------------------------------------------------------
+"$jq_bin" -S -c . "$bands_policy" > "$tmp/bands-canonical.json"
+/usr/bin/cmp -s "$bands_policy" "$tmp/bands-canonical.json" || fail 'band policy canonical'
+"$jq_bin" -e -n -L "$root/maintenance/v1" --slurpfile policy "$bands_policy" \
+  'include "bands"; $policy[0] | bands_ok' >/dev/null || fail 'band policy shape'
+"$jq_bin" -e '.body.bands | length == 7 and
+  ([.[] | select(.band_id == "eval-failures-max")] | length) == 1 and
+  ([.[] | select(.band_id == "eval-failures-max")][0].threshold) == 0' \
+  "$bands_policy" >/dev/null || fail 'band policy contents'
+pass 'the control bands are a canonical, closed, fixed-threshold policy document'
+
+# --- fixtures -------------------------------------------------------------
+dashboard() {
+  "$jq_bin" -S -c -n --argjson failed "$1" --argjson stale_passed "$2" '
+    def cases($t;$p;$f;$i): {total:$t,passed:$p,failed:$f,inconclusive:$i};
+    {schema_version:1,kind:"eval_dashboard",id:"evals.dashboard.v1",
+     body:{activation_state:"inactive",authority_effect:"none",
+       mode:"deterministic-offline",observed_at:"2026-09-05T00:00:00Z",
+       quality:cases(20;20 - $failed;$failed;0),
+       recovery:{cancelled_stayed_terminal:1,events_refused:2,
+         repeats_redelivered_once:1,repeats_suppressed_after_acknowledgement:1,
+         retry_limit_enforced:1,stranded_recovered:1},
+       families:[{family_id:"repeated-cancelled-missed-events",cases:cases(12;12;0;0)},
+         {family_id:"stale-moved-artifacts",
+          cases:cases(8;$stale_passed;8 - $stale_passed;0)}]}}'
+}
+dashboard 0 8 > "$fixtures/dashboard-clean.json"
+dashboard 1 7 > "$fixtures/dashboard-two-out.json"
+
+seal() {
+  local source=$1 destination=$2 state count index prior digest first=''
+  state="$destination.state"
+  /bin/cp "$source" "$state"
+  count=$("$jq_bin" -r '.body.events | length' "$state")
+  prior=''
+  index=0
+  while [ "$index" -lt "$count" ]; do
+    if [ "$index" -eq 0 ]; then
+      "$jq_bin" -S -c --argjson i "$index" '.body.events[$i].prior_digest=null' \
+        "$state" > "$state.next"
+    else
+      "$jq_bin" -S -c --argjson i "$index" --arg prior "$prior" \
+        '.body.events[$i].prior_digest=$prior' "$state" > "$state.next"
+    fi
+    /bin/mv "$state.next" "$state"
+    "$jq_bin" -S -c --argjson i "$index" '.body.events[$i] | del(.record_digest)' \
+      "$state" > "$state.event"
+    digest=$(sha_file "$state.event")
+    [ -n "$first" ] || first=$digest
+    "$jq_bin" -S -c --argjson i "$index" --arg digest "$digest" \
+      '.body.events[$i].record_digest=$digest' "$state" > "$state.next"
+    /bin/mv "$state.next" "$state"
+    prior=$digest
+    index=$((index + 1))
+  done
+  "$jq_bin" -S -c --argjson count "$count" --arg first "$first" --arg final "$prior" \
+    '.body.seal.event_count=$count | .body.seal.first_digest=$first |
+     .body.seal.final_digest=$final' "$state" > "$destination"
+  /bin/rm -f "$state" "$state.event"
+}
+
+ledger_source() {
+  "$jq_bin" -S -c -n --arg second "$1" '
+    def ref($c): {content_id:("trace-source." + $c),
+      media_type:"application/vnd.ystack.trace-source+json",sha256:($c*64)};
+    def recorded($v;$c): {state:"recorded",value:$v,source_ref:ref($c)};
+    def unavailable($r): {state:"unavailable",reason_id:$r};
+    def facts($result): {adapter:unavailable("adapter.unavailable"),
+      cost_microunits:unavailable("cost.unavailable"),
+      execution_environment:recorded("environment.local";"1"),
+      gate:unavailable("gate.unavailable"),identity:recorded("actor.example";"2"),
+      initiative:recorded("initiative.example";"3"),
+      latency_ms:unavailable("latency.unavailable"),result:$result,
+      stage:recorded("stage.maintenance";"5"),status:recorded("status.completed";"6"),
+      task_class:recorded("task.routine";"7"),tool:unavailable("tool.unavailable"),
+      workflow:recorded("workflow.example";"8")};
+    def event($id;$sequence;$time;$result): {schema_version:1,
+      kind:"telemetry_trace_event",id:$id,session_id:"session.maintenance",
+      attempt_id:"attempt.maintenance",trace_id:"trace.maintenance",
+      sequence:$sequence,prior_digest:null,occurred_at:$time,
+      event_type:"stage.finished",facts:$result,record_digest:("0"*64)};
+    {schema_version:1,kind:"telemetry_trace_ledger",id:"maintenance-trace-ledger",
+     body:{session_id:"session.maintenance",attempt_id:"attempt.maintenance",
+       trace_ids:["trace.maintenance"],
+       events:[
+         event("event.000";0;"2026-09-04T12:00:00Z";facts(recorded("result.passed";"a"))),
+         event("event.001";1;"2026-09-04T12:00:01Z";facts(recorded($second;"b")))],
+       seal:{algorithm:"sha256",canonicalization:"jq-1.6-sort-compact-line",
+         event_count:0,first_digest:("0"*64),final_digest:("0"*64)}}}'
+}
+ledger_source result.changed > "$fixtures/ledger-open.json"
+seal "$fixtures/ledger-open.json" "$fixtures/ledger-clean.json"
+ledger_source result.environment-refused > "$fixtures/ledger-refused-open.json"
+seal "$fixtures/ledger-refused-open.json" "$fixtures/ledger-refused.json"
+
+kill_switch() {
+  "$jq_bin" -S -c -n --arg verdict "$1" --arg reason "$2" '
+    {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.example",
+     body:{activation_state:"inactive",authority_effect:"none",
+       evaluation_mode:"observation-only",reference_semantics:"identity-only",
+       verdict:$verdict,reason_ids:[$reason]}}'
+}
+kill_switch satisfied kill.cleared-current > "$fixtures/kill-clear.json"
+kill_switch violated kill.stop.global > "$fixtures/kill-stop.json"
+
+rehearsal() {
+  "$jq_bin" -S -c -n --arg id "$1" --arg at "$2" --arg outcome "$3" '
+    {schema_version:1,kind:"rollback_rehearsal_record",id:$id,
+     body:{activation_state:"inactive",authority:"none",environment:{tier:"staging"},
+       evidence:{evidence_id:"evidence.rehearsal",
+         stage_result_ref:{schema_version:2,kind:"stage_result",
+           id:"result.rehearsal",sha256:("b"*64)}},
+       from_release_ref:{schema_version:1,kind:"release_record",id:"release.one",
+         sha256:("c"*64)},
+       to_release_ref:{schema_version:1,kind:"release_record",id:"release.two",
+         sha256:("d"*64)},
+       outcome:$outcome,rehearsed_at:$at}}'
+}
+rehearsal rehearsal.recent 2026-08-20T00:00:00Z rehearsed > "$fixtures/rehearsal-recent.json"
+rehearsal rehearsal.old 2026-05-01T00:00:00Z rehearsed > "$fixtures/rehearsal-old.json"
+rehearsal rehearsal.failed 2026-09-01T00:00:00Z failed > "$fixtures/rehearsal-failed.json"
+
+finding() {
+  "$jq_bin" -S -c -n --arg id "$1" --arg severity "$2" '
+    {schema_version:1,kind:"maintenance_scan_finding",id:$id,
+     body:{activation_state:"inactive",authority:"none",scanner_id:"scanner.example",
+       rule_id:"rule.hardcoded-credential",severity:$severity,
+       path:"adapters/example/v1/normalize.jq",evidence_sha256:("e"*64),
+       observed_at:"2026-09-04T00:00:00Z"}}'
+}
+finding scan-finding-001 critical > "$fixtures/finding-critical.json"
+finding scan-finding-002 low > "$fixtures/finding-low.json"
+
+# --- driver harness -------------------------------------------------------
+run_count=0
+run_scan() {
+  local name=$1
+  shift
+  RUN_DIR="$tmp/run-$name"
+  /bin/rm -rf -- "$RUN_DIR"
+  /bin/mkdir -m 700 "$RUN_DIR"
+  RUN_STATUS=0
+  run_count=$((run_count + 1))
+  PATH="$bin:/usr/bin:/bin" "$scanner" scan "$1" "$2" "$3" "$RUN_DIR" "${@:4}" \
+    > "$tmp/out-$name.json" 2> "$tmp/err-$name.txt" || RUN_STATUS=$?
+}
+expect_scan() {
+  local name=$1
+  shift
+  run_scan "$name" "$@"
+  [ "$RUN_STATUS" -eq 0 ] && [ -s "$tmp/out-$name.json" ] &&
+    [ ! -s "$tmp/err-$name.txt" ] ||
+    fail "scan $name (status $RUN_STATUS: $(/bin/cat "$tmp/err-$name.txt"))"
+}
+expect_refusal() {
+  local name=$1 expected=$2
+  shift 2
+  run_scan "$name" "$@"
+  [ "$RUN_STATUS" -ne 0 ] && [ ! -s "$tmp/out-$name.json" ] &&
+    [ "$(/bin/cat "$tmp/err-$name.txt")" = "$expected" ] || fail "refusal $name"
+  [ -z "$(/usr/bin/find "$RUN_DIR" -mindepth 1 -print -quit)" ] ||
+    fail "refusal $name wrote output"
+  pass "$name is refused with $expected and writes nothing"
+}
+written_names() { /usr/bin/find "$1" -mindepth 1 -maxdepth 1 -print |
+  /usr/bin/awk -F/ '{print $NF}' | /usr/bin/sort | /usr/bin/tr '\n' ' '; }
+
+clean=("$fixtures/dashboard-clean.json" "$fixtures/ledger-clean.json"
+  "$fixtures/kill-clear.json")
+two_out=("$fixtures/dashboard-two-out.json" "$fixtures/ledger-clean.json"
+  "$fixtures/kill-clear.json")
+
+# --- happy path: every band held, nothing to triage ------------------------
+expect_scan in-band "${clean[@]}" "$fixtures/rehearsal-recent.json"
+[ "$(written_names "$RUN_DIR")" = 'maintenance-scan.json ' ] || fail 'in-band output set'
+"$jq_bin" -e '.schema_version == 1 and .kind == "maintenance_scan" and
+  .body.activation_state == "inactive" and .body.authority == "none" and
+  .body.deploy_authority == "none" and .body.filing_effect == "none" and
+  .body.evaluation_mode == "observation-only" and
+  .body.qualification.state == "unavailable" and
+  .body.reason_id == "maintenance.scan-completed" and
+  .body.kill_switch.engaged == false and
+  .body.summary == {bands_total:7,bands_in_band:7,bands_out_of_band:0,
+    findings_total:0,findings_high_severity:0,intents_written:0} and
+  (.body.bands | all(.[]; .state == "in-band"))' \
+  "$tmp/out-in-band.json" >/dev/null || fail 'in-band scan record'
+pass 'a dashboard inside every band produces a scan record and no intents'
+
+expect_scan in-band-repeat "${clean[@]}" "$fixtures/rehearsal-recent.json"
+/usr/bin/cmp -s "$tmp/out-in-band.json" "$tmp/out-in-band-repeat.json" ||
+  fail 'repeat scan differs'
+pass 'a repeated scan of the same documents is byte-identical'
+
+# --- two bands out of band ------------------------------------------------
+expect_scan two-out "${two_out[@]}" "$fixtures/rehearsal-recent.json"
+[ "$(written_names "$RUN_DIR")" = \
+  'intent-band-eval-failures-max.json intent-band-stale-rate-max.json maintenance-scan.json ' ] ||
+  fail 'two-out output set'
+two_out_dir=$RUN_DIR
+"$jq_bin" -e '.body.summary == {bands_total:7,bands_in_band:5,bands_out_of_band:2,
+    findings_total:0,findings_high_severity:0,intents_written:2} and
+  (.body.intents | map(.file_name)) ==
+    ["intent-band-eval-failures-max.json","intent-band-stale-rate-max.json"] and
+  ([.body.bands[] | select(.state == "out-of-band") | .reason_id] |
+    unique) == ["maintenance.band-crossed"]' \
+  "$tmp/out-two-out.json" >/dev/null || fail 'two-out scan record'
+"$jq_bin" -e '.schema_version == 1 and .kind == "maintenance_intent" and
+  .id == "maintenance-intent.band.stale-rate-max" and
+  .body.owner == "unassigned" and .body.triage_state == "pending" and
+  .body.deploy_authority == "none" and .body.authority == "none" and
+  .body.filing_effect == "none" and .body.risk_tier_guess == "routine" and
+  .body.source == {kind:"control-band",id:"stale-rate-max",
+    reason_id:"maintenance.band-crossed"} and
+  (.body.sections | keys) == ["affected_users_and_systems","constraints",
+    "open_questions","problem","proposed_outcome"] and
+  (.body.sections.problem | test("125")) and
+  (.body.evidence_refs | length) >= 3' \
+  "$two_out_dir/intent-band-stale-rate-max.json" >/dev/null || fail 'band intent shape'
+pass 'two out-of-band bands write two deterministically named unassigned intents'
+
+expect_scan two-out-repeat "${two_out[@]}" "$fixtures/rehearsal-recent.json"
+/usr/bin/cmp -s "$tmp/out-two-out.json" "$tmp/out-two-out-repeat.json" ||
+  fail 'repeat scan record differs'
+/usr/bin/cmp -s "$two_out_dir/intent-band-stale-rate-max.json" \
+  "$RUN_DIR/intent-band-stale-rate-max.json" || fail 'repeat intents differ'
+pass 'repeated intents are byte-identical'
+
+# --- kill switch ----------------------------------------------------------
+expect_scan kill-engaged "$fixtures/dashboard-two-out.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-stop.json" \
+  "$fixtures/rehearsal-recent.json"
+[ "$(written_names "$RUN_DIR")" = 'maintenance-scan.json ' ] || fail 'kill output set'
+"$jq_bin" -e '.body.reason_id == "maintenance.kill-switch-engaged" and
+  .body.kill_switch.engaged == true and .body.kill_switch.verdict == "violated" and
+  .body.summary.bands_out_of_band == 2 and .body.summary.intents_written == 0 and
+  .body.intents == []' "$tmp/out-kill-engaged.json" >/dev/null ||
+  fail 'kill scan record'
+pass 'an engaged kill switch records the bands and writes no intent'
+
+kill_switch inconclusive kill.duty-inconclusive > "$fixtures/kill-unknown.json"
+expect_scan kill-unknown "$fixtures/dashboard-two-out.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-unknown.json" \
+  "$fixtures/rehearsal-recent.json"
+"$jq_bin" -e '.body.kill_switch.engaged == true and .body.intents == []' \
+  "$tmp/out-kill-unknown.json" >/dev/null || fail 'inconclusive kill switch'
+pass 'a kill switch that is not satisfied counts as engaged'
+
+# --- findings -------------------------------------------------------------
+expect_scan finding-high "${clean[@]}" "$fixtures/rehearsal-recent.json" \
+  "$fixtures/finding-critical.json"
+[ "$(written_names "$RUN_DIR")" = \
+  'intent-finding-scan-finding-001.json maintenance-scan.json ' ] ||
+  fail 'finding output set'
+"$jq_bin" -e '.id == "maintenance-intent.finding.scan-finding-001" and
+  .body.risk_tier_guess == "high" and .body.owner == "unassigned" and
+  .body.triage_state == "pending" and
+  (.body.sections.problem | test("rule.hardcoded-credential")) and
+  (.body.sections.affected_users_and_systems |
+    test("adapters/example/v1/normalize.jq"))' \
+  "$RUN_DIR/intent-finding-scan-finding-001.json" >/dev/null ||
+  fail 'finding intent shape'
+pass 'a high-severity scan finding becomes one intent for a human owner'
+
+expect_scan finding-low "${clean[@]}" "$fixtures/rehearsal-recent.json" \
+  "$fixtures/finding-low.json"
+[ "$(written_names "$RUN_DIR")" = 'maintenance-scan.json ' ] || fail 'low finding output'
+"$jq_bin" -e '.body.summary.findings_total == 1 and
+  .body.summary.findings_high_severity == 0 and .body.intents == []' \
+  "$tmp/out-finding-low.json" >/dev/null || fail 'low finding record'
+pass 'a low-severity finding is recorded but raises no intent'
+
+# --- individual bands -----------------------------------------------------
+expect_scan refused-events "$fixtures/dashboard-clean.json" \
+  "$fixtures/ledger-refused.json" "$fixtures/kill-clear.json" \
+  "$fixtures/rehearsal-recent.json"
+"$jq_bin" -e '([.body.bands[] | select(.state == "out-of-band") | .band_id]) ==
+  ["events-refused-max"]' "$tmp/out-refused-events.json" >/dev/null ||
+  fail 'refused events band'
+pass 'a refused event in the sealed ledger crosses its band'
+
+expect_scan no-rehearsal "${clean[@]}"
+"$jq_bin" -e '([.body.bands[] | select(.state == "out-of-band")] |
+  map({band_id,reason_id,value})) ==
+  [{band_id:"rollback-rehearsal-max-age",
+    reason_id:"maintenance.metric-unmeasurable",value:null}]' \
+  "$tmp/out-no-rehearsal.json" >/dev/null || fail 'unmeasurable band'
+pass 'a metric with no evidence is out of band, not quietly in band'
+
+expect_scan old-rehearsal "${clean[@]}" "$fixtures/rehearsal-old.json" \
+  "$fixtures/rehearsal-failed.json"
+"$jq_bin" -e '([.body.bands[] | select(.band_id == "rollback-rehearsal-max-age")][0] |
+  .state == "out-of-band" and .value == 127 and
+  .reason_id == "maintenance.band-crossed")' \
+  "$tmp/out-old-rehearsal.json" >/dev/null || fail 'rehearsal age band'
+pass 'rehearsal age is counted in whole days from the dashboard time'
+
+# --- refusals -------------------------------------------------------------
+/usr/bin/printf '{\n' > "$fixtures/broken.json"
+expect_refusal malformed E_PARSE "$fixtures/broken.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+/bin/cat "$fixtures/dashboard-clean.json" "$fixtures/dashboard-clean.json" \
+  > "$fixtures/multi-root.json"
+expect_refusal multi-root E_PARSE "$fixtures/multi-root.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+/usr/bin/printf '\357\273\277' > "$fixtures/bom.json"
+/bin/cat "$fixtures/dashboard-clean.json" >> "$fixtures/bom.json"
+expect_refusal bom E_PARSE "$fixtures/bom.json" "$fixtures/ledger-clean.json" \
+  "$fixtures/kill-clear.json"
+"$jq_bin" . "$fixtures/dashboard-clean.json" > "$fixtures/noncanonical.json"
+expect_refusal noncanonical E_CANONICAL "$fixtures/noncanonical.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+/usr/bin/awk 'BEGIN { for (i = 0; i < 1048577; i++) printf "x" }' > "$fixtures/huge.json"
+expect_refusal oversized E_LIMIT "$fixtures/huge.json" "$fixtures/ledger-clean.json" \
+  "$fixtures/kill-clear.json"
+/bin/ln -s "$fixtures/dashboard-clean.json" "$fixtures/dashboard-link.json"
+expect_refusal symlink-input E_RUNTIME "$fixtures/dashboard-link.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+/usr/bin/mkfifo "$fixtures/dashboard.fifo"
+expect_refusal nonregular-input E_RUNTIME "$fixtures/dashboard.fifo" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+"$jq_bin" -S -c 'del(.body.recovery.stranded_recovered)' \
+  "$fixtures/dashboard-clean.json" > "$fixtures/dashboard-missing.json"
+expect_refusal missing-recovery-count E_SHAPE "$fixtures/dashboard-missing.json" \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json"
+expect_refusal unsealed-ledger E_RELATION "$fixtures/dashboard-clean.json" \
+  "$fixtures/ledger-refused-open.json" "$fixtures/kill-clear.json"
+"$jq_bin" -S -c '.body.events[1].facts.status.value = "status.failed"' \
+  "$fixtures/ledger-clean.json" > "$fixtures/ledger-tampered.json"
+expect_refusal tampered-ledger E_RELATION "$fixtures/dashboard-clean.json" \
+  "$fixtures/ledger-tampered.json" "$fixtures/kill-clear.json"
+expect_refusal unknown-extra-document E_SHAPE "${clean[@]}" \
+  "$fixtures/dashboard-clean.json"
+/bin/cp "$fixtures/finding-critical.json" "$fixtures/finding-duplicate.json"
+expect_refusal duplicate-finding E_RELATION "${clean[@]}" \
+  "$fixtures/finding-critical.json" "$fixtures/finding-duplicate.json"
+"$jq_bin" -S -c '.body.severity = "urgent"' "$fixtures/finding-critical.json" \
+  > "$fixtures/finding-bad-severity.json"
+expect_refusal unknown-severity E_SHAPE "${clean[@]}" \
+  "$fixtures/finding-bad-severity.json"
+"$jq_bin" -S -c '.body.path = "/etc/passwd"' "$fixtures/finding-critical.json" \
+  > "$fixtures/finding-absolute-path.json"
+expect_refusal absolute-finding-path E_SHAPE "${clean[@]}" \
+  "$fixtures/finding-absolute-path.json"
+
+# --- output directory and command surface ---------------------------------
+busy="$tmp/busy"
+/bin/mkdir -m 700 "$busy"
+: > "$busy/leftover.json"
+status=0
+PATH="$bin:/usr/bin:/bin" "$scanner" scan "${clean[@]}" "$busy" \
+  > "$tmp/busy.out" 2> "$tmp/busy.err" || status=$?
+[ "$status" -ne 0 ] && [ ! -s "$tmp/busy.out" ] &&
+  [ "$(/bin/cat "$tmp/busy.err")" = E_WORKSPACE ] &&
+  [ "$(written_names "$busy")" = 'leftover.json ' ] || fail 'non-empty output dir'
+pass 'a non-empty output directory is refused and left untouched'
+
+status=0
+PATH="$bin:/usr/bin:/bin" "$scanner" scan "${clean[@]}" "$tmp/absent-dir" \
+  > "$tmp/absent.out" 2> "$tmp/absent.err" || status=$?
+[ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/absent.err")" = E_WORKSPACE ] ||
+  fail 'missing output dir'
+pass 'a missing output directory is refused'
+
+for bad_usage in validate scan; do
+  status=0
+  /bin/rm -rf -- "$tmp/usage-out"
+  /bin/mkdir -m 700 "$tmp/usage-out"
+  if [ "$bad_usage" = validate ]; then
+    PATH="$bin:/usr/bin:/bin" "$scanner" validate "${clean[@]}" "$tmp/usage-out" \
+      > "$tmp/usage.out" 2> "$tmp/usage.err" || status=$?
+  else
+    PATH="$bin:/usr/bin:/bin" "$scanner" scan "${clean[@]}" \
+      > "$tmp/usage.out" 2> "$tmp/usage.err" || status=$?
+  fi
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/usage.out" ] &&
+    [ "$(/bin/cat "$tmp/usage.err")" = E_USAGE ] || fail "usage $bad_usage"
+done
+status=0
+(cd "$fixtures" && PATH="$bin:/usr/bin:/bin" "$scanner" scan dashboard-clean.json \
+  "$fixtures/ledger-clean.json" "$fixtures/kill-clear.json" "$tmp/run-in-band" \
+  > "$tmp/relative.out" 2> "$tmp/relative.err") || status=$?
+[ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/relative.err")" = E_USAGE ] ||
+  fail 'relative input path'
+pass 'the command surface is closed and every input path must be absolute'
+
+moved="$tmp/moved"
+/bin/mkdir -m 700 "$moved"
+/bin/cp "$scanner" "$moved/scan.sh"
+/bin/chmod 0555 "$moved/scan.sh"
+status=0
+/bin/mkdir -m 700 "$tmp/moved-out"
+PATH="$bin:/usr/bin:/bin" "$moved/scan.sh" scan "${clean[@]}" "$tmp/moved-out" \
+  > "$tmp/moved.out" 2> "$tmp/moved.err" || status=$?
+[ "$status" -ne 0 ] && [ ! -s "$tmp/moved.out" ] &&
+  [ "$(/bin/cat "$tmp/moved.err")" = E_RUNTIME ] || fail 'moved driver'
+pass 'a driver copied out of its component directory refuses to run'
+
+fake_bin="$tmp/fake-bin"
+/bin/mkdir -m 700 "$fake_bin"
+/usr/bin/printf '#!/bin/sh\n/usr/bin/touch %s\n/usr/bin/printf "jq-1.6\\n"\n' \
+  "$tmp/fake-jq-ran" > "$fake_bin/jq"
+/bin/chmod 0500 "$fake_bin/jq"
+status=0
+/bin/mkdir -m 700 "$tmp/fake-out"
+PATH="$fake_bin:/usr/bin:/bin" "$scanner" scan "${clean[@]}" "$tmp/fake-out" \
+  > "$tmp/fake.out" 2> "$tmp/fake.err" || status=$?
+[ "$status" -ne 0 ] && [ ! -s "$tmp/fake.out" ] &&
+  [ "$(/bin/cat "$tmp/fake.err")" = E_RUNTIME ] && [ ! -e "$tmp/fake-jq-ran" ] ||
+  fail 'unverified jq'
+pass 'an unverified jq is rejected without being executed'
+
+
+/usr/bin/printf 'PASS: %s maintenance loop checks\n' "$passes"
