@@ -382,6 +382,13 @@ reconciliation_pending_context=$(bind_context reconciliation-pending-context \
 expect_refusal reconciliation-pending-deliveries boundaries-unproven \
   boundary.reconciliation-unreconciled "$reconciliation_pending_context" \
   "$observation" "$credential" "$reconciliation_pending"
+reconciliation_inflight=$(mutate "$reconciliation" reconciliation-inflight \
+  '.body.concurrency.active_pending=1|.body.concurrency.available_slots=1')
+reconciliation_inflight_context=$(bind_context reconciliation-inflight-context \
+  "$credential" "$reconciliation_inflight" "$risk" "$ledger")
+expect_refusal reconciliation-inflight boundaries-unproven \
+  boundary.reconciliation-unreconciled "$reconciliation_inflight_context" \
+  "$observation" "$credential" "$reconciliation_inflight"
 
 risk_unproven=$(mutate "$risk" risk-unproven \
   '.body.verdict="violated"|.body.reason_ids=["push.after-approval"]')

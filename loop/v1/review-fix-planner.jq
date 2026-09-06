@@ -267,11 +267,12 @@ def boundary_reasons($c; $cred; $rec; $risk; $led; $shas):
     else ["boundary.credential-not-satisfied"] end) +
    (if $expected.reconciliation_plan_ref == ref($rec;$shas.reconciliation)
     then [] else ["boundary.reconciliation-identity-mismatch"] end) +
-   # Pending deliveries are the reconciler's own outstanding work, just as
-   # deferred entries and operator messages are; none may remain.
+   # Pending deliveries, in-flight deliveries counted by the reconciler, deferred
+   # entries, and operator messages are all outstanding work; none may remain.
    (if ($rec.body.deliveries | length) == 0 and
        ($rec.body.deferred | length) == 0 and
-       ($rec.body.operator_messages | length) == 0
+       ($rec.body.operator_messages | length) == 0 and
+       $rec.body.concurrency.active_pending == 0
     then [] else ["boundary.reconciliation-unreconciled"] end) +
    (if $expected.risk_gate_evaluation_ref == ref($risk;$shas.risk)
     then [] else ["boundary.risk-identity-mismatch"] end) +
