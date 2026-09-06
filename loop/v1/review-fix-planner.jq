@@ -146,12 +146,16 @@ def snapshot_ok:
   (.hidden_execution | type == "object") and
   (.provider_metadata | type == "object") and
   (.reported_top_level_count | int_ok) and (.reported_inline_count | int_ok) and
+  # The normalizer emits findings in one canonical order; anything else was
+  # not produced by it and is refused.
   (.top_level_findings | type == "array" and length <= 256 and
    all(.[];
      exact(["body","finding_id","provider_metadata","provider_severity"]) and
-     (.finding_id | finding_id_ok) and (.provider_severity | text_ok))) and
+     (.finding_id | finding_id_ok) and (.provider_severity | text_ok)) and
+   (map(.finding_id) as $ids | $ids == ($ids | sort))) and
   (.inline_findings | type == "array" and length <= 256 and
-   all(.[]; inline_finding_ok($snapshot.head))) and
+   all(.[]; inline_finding_ok($snapshot.head)) and
+   (map([.path,.line,.side,.finding_id]) as $keys | $keys == ($keys | sort))) and
   ((.top_level_findings + .inline_findings) | map(.finding_id) |
    length == (unique | length)) and
   (if .complete then
@@ -178,9 +182,7 @@ def observation_ok:
   .adapter == {id:"adapter.codex-native-reviewer.v1",version:"v1",
     status:"inactive"} and
   .review_mode == "read-only" and .authority == "none" and .effects == [] and
-  (.qualification |
-   exact(["reason_id","state"]) and .state == "unavailable" and
-   (.reason_id | id_ok)) and
+  .qualification == {state:"unavailable",reason_id:"adapter.unqualified"} and
   (.reason_id | id_ok) and
   (.state |
    IN("clean","dismissed","failed","findings","inconclusive","stale",

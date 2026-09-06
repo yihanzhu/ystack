@@ -595,6 +595,14 @@ expect_error reconciliation-active E_RELATION "$planner" plan "$observation" \
   "$context" "$credential" \
   "$(mutate "$reconciliation" reconciliation-active '.body.mode="dispatching"')" \
   "$risk" "$ledger"
+expect_error unordered-inline-findings E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-unordered \
+    '.observation.inline_findings |= reverse')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error foreign-qualification-reason E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-qualification \
+    '.qualification.reason_id="adapter.qualified"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 expect_error completed-with-dismissed-at E_RELATION "$planner" plan \
   "$(mutate "$observation" completed-dismissed \
     '.observation.dismissed_at="2026-09-01T00:04:00Z"')" \
