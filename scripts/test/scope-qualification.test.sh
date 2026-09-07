@@ -130,6 +130,9 @@ qualified_identity='{
     "schema_version":2,
     "sha256":"3bae8e45eea85ad41068735782b4750deb920654c34712b85159195ceec8b688"},
   "skill_refs":[],
+  "stage_request_ref":{"id":"stage.docs-typo-fix.request","kind":"stage_request",
+    "schema_version":2,
+    "sha256":"0cefa6d87f7869958b5ba9f0555a6327e8f49f3047b5bde500c7796024256592"},
   "target_revision":{"commit_id":"1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
     "hash_algorithm":"sha1","repository_id":"repo.fixture-target"},
   "verification_instructions_ref":{"content_id":"verification-instructions",
@@ -459,6 +462,7 @@ mutate_scope '.body.shadow_evidence_refs =
   [.body.shadow_evidence_refs[0], .body.shadow_evidence_refs[0]]' \
   "$tmp/bad-ref-duplicate.json"
 mutate_scope 'del(.body.qualified_identity)' "$tmp/bad-no-identity.json"
+mutate_scope 'del(.body.qualified_identity.stage_request_ref)' "$tmp/bad-no-stage-request.json"
 mutate_scope 'del(.body.qualified_identity.model_request)' "$tmp/bad-no-model.json"
 mutate_scope '.body.qualified_identity.model_request.effort_id = 3' \
   "$tmp/bad-model-shape.json"
@@ -485,7 +489,7 @@ mutate_scope '.body.gate_evidence_refs.duty_separation_evaluation_ref.sha256 =
 for case_name in bad-attempts bad-tier bad-absolute bad-traversal bad-doublestar \
   bad-firstwild bad-git bad-backslash bad-duplicate bad-family bad-proof bad-extra \
   bad-missing bad-kind bad-no-refs bad-empty-refs bad-ref-shape bad-ref-digest \
-  bad-ref-kind bad-ref-duplicate bad-no-identity bad-no-model bad-model-shape \
+  bad-ref-kind bad-ref-duplicate bad-no-identity bad-no-stage-request bad-no-model bad-model-shape \
   bad-no-prompt bad-prompt-object bad-config-media bad-no-verification \
   bad-profile-version bad-revision-repository bad-revision-commit \
   bad-no-gate-refs bad-gate-ref-missing bad-gate-ref-kind bad-gate-ref-digest; do
@@ -852,6 +856,31 @@ expect_reasons kill-other-duty-bytes '["scope.malformed"]' \
   "$tmp/scope-kill-other-duty-bytes.json" "${good[@]:1:3}" "$tmp/kill-other-duty-bytes.json" \
   "${good[@]:5}"
 pass 'gate evaluations must name the duty evaluation by digest, not only by id'
+# Gate outputs about another stage request never qualify this scope, even when
+# they are valid and use the same resolved profile.
+other_request='{"id":"stage.other-work.request","kind":"stage_request","schema_version":2,"sha256":"'"$(printf 'e%.0s' {1..64})"'"}'
+"$jq_bin" -S -c --argjson req "$other_request" '.body.stage.request_ref = $req' "$tmp/risk.json" >"$tmp/risk-other-stage.json"
+"$jq_bin" -S -c --argjson req "$other_request" '.body.stage.request_ref = $req' "$tmp/duty.json" >"$tmp/duty-other-stage.json"
+other_duty_sha=$(sha256_path "$tmp/duty-other-stage.json")
+"$jq_bin" -S -c --arg sha "$other_duty_sha" '.body.duty_evaluation_ref.sha256 = $sha' "$tmp/risk-other-stage.json" >"$tmp/risk-other-stage2.json"
+"$jq_bin" -S -c --arg sha "$other_duty_sha" '.body.duty_evaluation_ref.sha256 = $sha' "$tmp/kill.json" >"$tmp/kill-other-stage.json"
+scope_for_gates "$tmp/risk-other-stage2.json" "$tmp/kill-other-stage.json" "$tmp/duty-other-stage.json" \
+  "$tmp/scope-other-stage.json"
+expect_reasons gates-other-stage-request '["scope.malformed"]' \
+  "$tmp/scope-other-stage.json" "${good[@]:1:2}" "$tmp/risk-other-stage2.json" \
+  "$tmp/kill-other-stage.json" "$tmp/duty-other-stage.json" "${good[@]:6}"
+pass 'gate evidence must be about the scope'"'"'s own stage request'
+
+# A shadow record that claims any deploy authority is not an observation-only
+# shadow record, whatever else it says.
+"$jq_bin" -S -c '.body.records[0].body.deploy_authority = "grant"' "$tmp/shadow-set.json" \
+  >"$tmp/shadow-deploy-authority.json"
+scope_record "$tmp/shadow-deploy-authority.json" "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-deploy-authority.json"
+expect_reasons shadow-deploy-authority \
+  '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+  "$tmp/scope-deploy-authority.json" "$tmp/shadow-deploy-authority.json" "${good[@]:2}"
+pass 'a shadow record claiming deploy authority is refused as malformed'
 
 # A gate evaluation the scope did not name is not the one it was qualified
 # against, even when its verdict is fine: the digest the driver measured has to

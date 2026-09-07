@@ -871,6 +871,8 @@ A wildcard in the last segment of an allowed path is judged by what it could exp
 
 The risk-gate and kill-switch evaluations must name the duty evaluation by digest as well as id, so gate outputs computed over different duty bytes never combine into one proposal.
 
+The scope's qualified identity also names the stage request its gate evidence was produced for, and the risk and duty evaluations must be about that request; a claimed shadow record must carry `deploy_authority: none` like every record the shadow slice emits.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

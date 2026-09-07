@@ -394,7 +394,7 @@ def shadow_record_ok:
   type == "object" and .schema_version == 1 and
   .kind == "shadow_reproduction_record" and (.id | id_ok) and
   (.body | type == "object") and .body.activation_state == "inactive" and
-  .body.authority == "none" and .body.shadow == true and
+  .body.authority == "none" and .body.deploy_authority == "none" and .body.shadow == true and
   (.body.qualification | type == "object") and
   .body.qualification.state == "unavailable" and
   # The slice records the exact revision it reproduced at, so the scope can be
@@ -503,6 +503,10 @@ def named_by($ref; $document; $sha):
  $risk_doc.body.stage.result_ref == $duty_doc.body.stage.result_ref and
  $risk_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
  $duty_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
+ # Gate outputs must be about this scope's own stage request, not another
+ # workflow's or attempt's that happened to use the same profile.
+ $risk_doc.body.stage.request_ref == $identity.stage_request_ref and
+ $duty_doc.body.stage.request_ref == $identity.stage_request_ref and
  # The risk and kill evaluations must name this duty evaluation by digest, not
  # only by id: outputs computed over different duty bytes never combine.
  $risk_doc.body.duty_evaluation_ref.content_id == $duty_doc.id and

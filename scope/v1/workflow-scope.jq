@@ -120,9 +120,12 @@ def model_request_ok:
 # its own evidence rather than inherit this one's.
 def qualified_identity_ok($repository_id):
   exact(["adapter_config_refs", "model_request", "prompt_refs",
-    "resolved_profile_ref", "skill_refs", "target_revision",
+    "resolved_profile_ref", "skill_refs", "stage_request_ref", "target_revision",
     "verification_instructions_ref"]) and
   (.resolved_profile_ref | document_ref_ok(2; "resolved_profile")) and
+  # The stage request the scope's gate evidence was produced for: gate outputs
+  # from another workflow or attempt, however valid, never qualify this scope.
+  (.stage_request_ref | document_ref_ok(2; "stage_request")) and
   (.adapter_config_refs | bounded_set(1; 8; content_ref_ok)) and
   (.model_request | model_request_ok) and
   (.prompt_refs | bounded_set(1; 8; versioned_artifact_ref_ok)) and
