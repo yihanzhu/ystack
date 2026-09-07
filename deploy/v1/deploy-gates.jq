@@ -96,6 +96,17 @@ def decision_ok($tiers_sha):
    (if $risk_doc.body.verdict == "violated" or
        $risk_doc.body.classification.minimum_tier == "unknown"
     then ["deploy.risk-gate-violated"] else [] end) +
+   # The risk floor the gate classified must fit the environment: a request
+   # classified at least high may only reach a tier whose own risk tier is
+   # high (the named-operator gate), and a bootstrap classification is
+   # human-gated everywhere, so it is never admissible here.
+   (({routine:0,high:1}) as $rank |
+    ($risk_doc.body.classification.minimum_tier) as $floor |
+    if ($matched | length) != 1 then []
+    elif $floor == "unknown" then []
+    elif $floor == "bootstrap" or
+         (($rank[$floor] // 99) > ($rank[$matched[0].risk_tier] // -1))
+    then ["deploy.risk-gate-violated"] else [] end) +
    (if ($tier_doc.body.requester_roles[$capability] |
         index($req.body.actor_ref.role)) == null or
        ($risk_doc.body.reason_ids | any(.[]; startswith("duty.")))

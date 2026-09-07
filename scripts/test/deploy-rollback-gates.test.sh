@@ -264,6 +264,12 @@ expect_decision production-deploy-repeat admissible deploy.admissible \
   "$request" "$release" "$authorization" "$rehearsal" "$risk" "$kill_switch"
 /usr/bin/cmp -s "$first" "$VERDICT_OUTPUT" || fail 'repeat run drifted'
 pass 'repeat run is byte identical'
+
+# The risk floor must fit the tier: a high classification may reach production
+# (named-operator gate) but not a routine-gated tier, and bootstrap never.
+high_risk=$(mutate "$risk" risk-high-floor '.body.classification={declared_tier:"high",minimum_tier:"high"}')
+expect_decision production-high-floor-admissible admissible deploy.admissible \
+  "$request" "$release" "$authorization" "$rehearsal" "$high_risk" "$kill_switch"
 "$jq_bin" -e '
   .body.authority=="none" and .body.activation_state=="inactive" and
   .body.evaluation_mode=="observation-only" and
@@ -284,6 +290,10 @@ staging_request="$tmp/staging-request.json"
   .body.authorization_ref.sha256=$sha' "$request" >"$staging_request"
 expect_decision staging-deploy-admissible admissible deploy.admissible \
   "$staging_request" "$release" "$routine_authorization" "$rehearsal" "$risk" "$kill_switch"
+expect_decision staging-bootstrap-refused refused deploy.risk-gate-violated \
+  "$staging_request" "$release" "$routine_authorization" "$rehearsal" "$(mutate "$risk" risk-bootstrap-floor '.body.classification={declared_tier:"bootstrap",minimum_tier:"bootstrap"}')" "$kill_switch"
+expect_decision staging-high-floor-refused refused deploy.risk-gate-violated \
+  "$staging_request" "$release" "$routine_authorization" "$rehearsal" "$high_risk" "$kill_switch"
 
 dev_authorization=$(mutate "$routine_authorization" dev-authorization '
   .id="deploy-authorization.dev.0001"|.body.environment.tier="dev"')
@@ -646,6 +656,14 @@ expect_valid validate-absent-manifest release_record \
   "$(mutate "$release" release-absent-manifest \
     '.body.evidence.packaging_release_manifest=null')"
 
+# An admissible-looking evaluation with any extra body key is refused by the
+# dormant adapter with exit 65 and no receipt.
+"$jq_bin" -S -c '.body.grant = {kind:"forged"}' "$first" >"$tmp/first-forged.json"
+forged_status=0
+/usr/bin/env -i LC_ALL=C PATH="$bin:/usr/bin:/bin" HOME="$tmp" \
+  /usr/bin/perl -e 'alarm shift; exec @ARGV' 20 /bin/bash "$dormant" "$tmp/first-forged.json" "$jq_bin" \
+  >"$tmp/forged-receipt.json" 2>/dev/null || forged_status=$?
+[ "$forged_status" -eq 65 ] && [ ! -s "$tmp/forged-receipt.json" ] || fail 'dormant adapter accepted a forged evaluation'
 receipt="$tmp/receipt.json"
 dormant_status=0
 /usr/bin/env -i LC_ALL=C PATH="$bin:/usr/bin:/bin" HOME="$tmp" \

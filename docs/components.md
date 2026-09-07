@@ -778,6 +778,8 @@ digests, and adding a deployment phase to it is its own change.
 
 The two control evaluations must also be internally consistent the way their evaluators emit them: a kill-switch verdict of `satisfied` carries exactly `kill.cleared-current` and no other verdict carries that reason; a risk-gate verdict is `violated` exactly when at least one reason is a violation and `inconclusive` exactly when every reason is one of the evaluator's two unknowns. Anything else is `deploy.malformed`, and an unknown minimum tier refuses with `deploy.risk-gate-violated` because a request whose risk cannot be classified cannot be admitted.
 
+The risk floor the gate classified must fit the environment: a request whose minimum tier is `high` may reach only a tier whose own risk tier is `high` (the named-operator gate), and a `bootstrap` classification is human-gated everywhere and never admissible here; either case refuses with `deploy.risk-gate-violated`. The dormant deployment adapter checks the evaluation against the evaluator's complete output shape, so an admissible-looking document with any extra key is refused with exit 65 and no receipt.
+
 ## Inactive review-fix loop planner
 
 `loop/v1/plan-review-fix.sh` is the deterministic planner for roadmap step 9, the

@@ -9,11 +9,27 @@ evaluation=$1 jq_bin=$2
 [ -f "$evaluation" ] && [ ! -L "$evaluation" ] || exit 66
 [ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] || exit 66
 [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || exit 66
+# The evaluation must be exactly the document the gate evaluator emits; an
+# admissible-looking body with any other key, or any grant, is refused.
 "$jq_bin" -e '
   (keys | sort) == ["body","id","kind","schema_version"] and
   .schema_version == 1 and .kind == "deploy_gate_evaluation" and
-  .body.activation_state == "inactive" and .body.authority == "none" and
-  .body.decision == "admissible" and .body.reason_ids == ["deploy.admissible"]
+  (.body |
+    (keys | sort) == ["activation_state","authority","authorization_ref","decision",
+      "decision_ref","evaluation_mode","kill_switch_evaluation_ref","qualification",
+      "reason_ids","reference_semantics","rehearsal_ref","release_ref","request_ref",
+      "requested_capability","risk_evaluation_ref","tier","tiers_ref"] and
+    .activation_state == "inactive" and .authority == "none" and
+    .evaluation_mode == "observation-only" and
+    .reference_semantics == "identity-only" and
+    .qualification == {reason:"no-deployment-adapter-exists",state:"unavailable"} and
+    .decision == "admissible" and .reason_ids == ["deploy.admissible"] and
+    (.requested_capability | IN("deploy","status","rollback")) and
+    (.tier | type == "string") and
+    all(.request_ref, .release_ref, .risk_evaluation_ref, .kill_switch_evaluation_ref,
+        .decision_ref, .tiers_ref;
+        type == "object" and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))) and
+  ((.body | has("grant") or has("qualification_ref") or has("activation")) | not)
 ' "$evaluation" >/dev/null || exit 65
 evaluation_sha=$(/usr/bin/shasum -a 256 "$evaluation" | /usr/bin/awk '{print $1}')
 "$jq_bin" -S -c --arg evaluation_sha "$evaluation_sha" '
