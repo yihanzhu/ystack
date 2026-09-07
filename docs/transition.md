@@ -251,7 +251,8 @@ written.
    `0` today and `post_transition_ruleset` proposes keeping it there; raising it is a
    deliberate change to both the record and the live ruleset.
 3. **Is cross-vendor separation re-established immediately at the transition?**
-   During construction, Codex both wrote and reviewed; the intended default profile
+   For the earliest construction units Codex both wrote and reviewed; from the eval
+   framework onward Claude produced and Codex reviewed. The intended default profile
    has Claude produce and Codex review. If yes, the transition PR itself should be
    the first change reviewed under the restored separation.
 4. **Which unit is the first to leave inactive status?** The proposal is the shadow
@@ -264,8 +265,9 @@ written.
    the only question left is whether any unit should be removed rather than carried
    into the operating mode.
 7. **Should any construction PR be re-reviewed under the full artifact chain?** All of
-   them (#249–#256) merged under construction mode with a clean cross-vendor review on
-   their exact heads and CI green. Say which, if any, should be re-reviewed before the
+   them (#249–#256) merged under construction mode with a clean independent Codex
+   review on their exact heads and CI green; the producer for those units was Claude, so
+   they already had two vendors on them, unlike the earliest construction units. Say which, if any, should be re-reviewed before the
    transition; otherwise none is.
 8. **What happens to frozen PR #183 and draft PR #146?** The mode record freezes #183
    and `ROADMAP.md` says #146 must never merge; both need an explicit disposition
