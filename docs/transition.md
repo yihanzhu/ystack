@@ -259,15 +259,14 @@ written.
 5. **What replaces `allowed_live_writes` and `delivery_credential`?** Both describe
    the construction-only arrangement (same-repository delivery, the operator's own
    `gh` login) and stop being accurate at the transition.
-6. **Steps 8 and 12 (`scope/v1/`, `maintenance/v1/`) are now open PRs #254 and #255.**
-   They land before the transition, like every other row in §1; this is not a choice,
-   it is the precondition. The only question is whether any of them should be dropped
-   from the roadmap instead of merged.
-7. **The pending PRs (#249–#255) merge under construction mode.** The §1 precondition
-   requires every row to read `merged` before the transition PR exists, so none of them
-   can be left for the restored gates. If you want any of them re-reviewed under the full
-   artifact chain instead, say which, and it comes out of the table as "not part of
-   construction" rather than blocking the transition.
+6. **Should any unit be dropped from the roadmap before the transition?** Steps 8 and
+   12 (`scope/v1/`, `maintenance/v1/`) are merged (PRs #254, #255) like every other row;
+   the only question left is whether any unit should be removed rather than carried
+   into the operating mode.
+7. **Should any construction PR be re-reviewed under the full artifact chain?** All of
+   them (#249–#256) merged under construction mode with a clean cross-vendor review on
+   their exact heads and CI green. Say which, if any, should be re-reviewed before the
+   transition; otherwise none is.
 8. **What happens to frozen PR #183 and draft PR #146?** The mode record freezes #183
    and `ROADMAP.md` says #146 must never merge; both need an explicit disposition
    once the overlay that froze them is retired.
