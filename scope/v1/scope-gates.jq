@@ -469,12 +469,10 @@ def materialization_ok($revision; $repository):
      (.value |
       exact(["adapter_id","candidate","outcome","source","stage_result_ref"]) and
       .adapter_id == "adapter.local-git-materializer.v1" and
-      # The core v2 stage-result outcome vocabulary
-      # (core/v2/generations/<generation>/modules/result_truth.jq
-      # outcome_shape_ok); the slice copies the value through unchanged.
-      (.outcome as $outcome |
-       ["changed","failed","inconclusive","no-change","passed"] |
-       index($outcome) != null) and
+      # A shadow reproduction materializes the incident revision with an empty
+      # patch, so the only materialization a real record can carry is a
+      # no-change one; any other stage-result outcome is not a shadow record.
+      .outcome == "no-change" and
       (.candidate |
        exact(["commit_id","hash_algorithm","parent_commit_id","repository_kind",
          "tree_id"]) and

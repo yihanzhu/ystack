@@ -875,6 +875,8 @@ The scope's qualified identity also names the stage request its gate evidence wa
 
 A claimed shadow record is validated against the shadow slice's complete emitted shape - every top-level and body key, every nested block, and the reason id, outcome, and present-or-absent sections that go together in a real run - so a stub carrying only the fields the gate reads cannot back a scope.
 
+A present materialization in a claimed shadow record must be a `no-change` one, because the shadow slice materializes the incident revision with an empty patch; any other stage-result outcome is refused as malformed.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

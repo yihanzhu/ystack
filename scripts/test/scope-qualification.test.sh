@@ -1137,6 +1137,7 @@ pass 'the mode marker is canonicalized and single-rooted like every other input'
 # reproduced outcome whose materialization never ran, and a qualification with a
 # reason id the slice never writes are all records no shadow run produced.
 for malformed_case in 'del(.body.records[0].body.shadow)' \
+  '.body.records[0].body.materialization.value.outcome = "changed"' \
   '.body.records[0].body.authority = "publisher"' \
   '.body.records[0].body.activation_state = "active"' \
   '.body.records[0].kind = "other_record"' \
