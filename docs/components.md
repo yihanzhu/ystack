@@ -785,3 +785,156 @@ Two closures worth naming: a dashboard that lists a family twice is malformed, s
 A claimed shadow record must use the shadow slice's own outcome vocabulary (reproduced, no-change, inconclusive); any other outcome makes the evidence set malformed rather than being quietly ignored.
 
 A wildcard in the last segment of an allowed path is judged by what it could expand to: if its pattern matches any protected segment name (or, for a single-segment glob, any protected root file), the glob is protected, so `src/*` and `src/auth*` refuse while `src/*.ts` does not. A wildcard in the first segment is refused by the record validator outright.
+
+## Inactive shadow reproduction slice
+
+`shadow/v1/` is the Roadmap's step-7 shadow vertical slice: one narrow, read-only
+workflow, run here only on fixtures. The workflow is incident reproduction —
+take a reported failure, go back to the exact revision where it was seen, run the
+failing check again, and say whether it still fails. `no-change` and
+`inconclusive` are real answers, not failures of the run.
+
+An **incident record** is the canonical intake artifact. It names the incident
+id, the target repository, the exact source revision, the failing check (a
+repo-relative path plus an expected SHA-256, or a named deterministic check id),
+a short symptom line, who reported it, when it was observed, and an explicit
+`deploy_authority: "none"`. `shadow/v1/validate-incident.sh` checks one record
+against `shadow/v1/incident-record.jq` and returns one canonical receipt. It runs
+on the pinned jq 1.6 and refuses anything that is not exactly one canonical JSON
+text in a regular, non-symlink file inside a fixed size. Validating a record
+creates no issue, no change request, and no deploy authority.
+
+`shadow/v1/shadow-environments.json` is the committed list of execution
+environments a shadow run may use. It starts with exactly one entry,
+`env.local-macos-fixture`, marked `fixtures-only` and `unproven`. Adding an
+environment is a reviewed change to that file; no run may add one.
+
+`shadow/v1/reproduce.sh` is the driver. It takes one incident record, one
+execution-environment claim, the control policy set and duty evaluation that
+claim binds, one materialization input, a local source Git directory, and three
+caller-owned directories (candidate, scratch, state). It refuses to run unless
+the claim's document id is listed in the environment file **and** the real
+sandbox-policy evaluator (`control/v1/evaluate-sandbox.sh`) returns `satisfied`
+for it. It then materializes the incident's exact revision through the local Git
+materializer with an empty producer patch — a materialization input that carries
+any patch bytes, or that asks for network, is refused outright — so the candidate
+commit is the incident commit and nothing is changed. It reads the named blob out
+of that candidate repository and compares its SHA-256 with the expected one.
+
+The run emits one **shadow record** whose outcome is exactly one of `reproduced`
+(the check still fails there), `no-change` (the check passes there, so the
+incident does not reproduce at that revision), or `inconclusive` (the environment
+was not listed, the claim was not satisfied or was refused, the check has no
+runner here, materialization was impossible, or the check path could not be
+read). Every inconclusive answer carries a reason id. The record is a documented
+wrapper: it does not mint a core v2 `stage_result` of its own, it binds the
+materializer's real one by schema version, kind, id, and digest, and writes that
+document beside it so the reference is recoverable. The run also seals one
+telemetry trace ledger and validates it through `telemetry/v1`'s own validator.
+
+Every output says what it is not: `authority: "none"`,
+`deploy_authority: "none"`, `qualification: {state: "unavailable"}`,
+`shadow: true`, `activation_state: "inactive"`. The driver produces no patch, no
+change request, and no forge or network call; the only Git it runs is reading
+objects. All timestamps come from the incident record, never the clock, so two
+runs of the same inputs produce byte-identical output.
+
+This is the fixture proof only. The self-host proof and the external-target
+proof happen after the operator-merged operating-mode transition, and each new
+execution environment is a separate reviewed addition to
+`shadow/v1/shadow-environments.json` with its own evidence.
+
+Run the focused test with `bash scripts/test/shadow-slice.test.sh`.
+
+The read-only guards on the materialization input (no producer patch bytes, network mode deny, revision equal to the incident's) run on every invocation before the environment verdict is consulted, so an unlisted or unsatisfied environment can never turn a writable input into an inconclusive shadow record: it is refused outright.
+
+The read-only guards now run before the environment registry is consulted and before the sandbox evaluator is invoked, so the ordering the paragraph above promises holds in the code as well. A `file-digest` check whose path names a directory or any non-blob object at the incident revision is an unreadable check (`check.unreadable`, inconclusive), never a failed run.
+
+## Inactive maintenance loop
+
+`maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item
+describes: deterministic control bands and scans turn what the repo already
+measures into new intents for a service owner to triage, and a shipped incident
+that was reproduced turns into an eval seed case. It is inactive. It files no
+issue, opens no change request, deploys nothing, installs nothing, activates
+nothing, invokes no model, reads no credential, touches no network, and grants
+no authority. Everything it produces is a JSON document written into a
+caller-owned directory that the caller supplied empty.
+
+`control-bands.json` is the band policy: seven named bands, each with a fixed
+threshold and one plain-English line saying what it is for. No eval case may be
+failed. No eval case may be inconclusive. The sealed trace ledger may record no
+refused event. At least one recorded case must show a repeated event suppressed
+after it was acknowledged, and at least one must show a stranded attempt
+recovered. A rollback rehearsal that succeeded must be no more than thirty days
+old. Every stale-and-moved-artifact case must pass, counted as a rate in parts
+per thousand.
+
+`bands.jq` holds the shape every input must have and one pure function from the
+supplied documents to a per-band observation. Each metric is a count or an age
+over the documents handed in: the eval dashboard's own quality and recovery
+counts, the events in the sealed telemetry trace ledger, and the rollback
+rehearsal records. The rehearsal age is whole days between the newest successful
+rehearsal and the dashboard's own recorded time, so nothing reads a host clock.
+A metric that cannot be counted from the documents supplied — no rehearsal
+record at all, an empty family — is reported out of band with the reason
+`maintenance.metric-unmeasurable`. It is never quietly treated as in band.
+
+`scan.sh` takes one eval dashboard, one sealed trace ledger, one kill-switch
+evaluation, an empty output directory, and up to thirty-two further documents
+that are each either a security-scan finding or a rollback rehearsal record.
+A `maintenance_scan_finding` is deliberately small: the scanner that reported
+it, the rule it matched, a severity, a repository-relative path, and the digest
+of the evidence the scanner kept. The driver pins jq 1.6 by digest and refuses
+to run an unverified one, snapshots every input without following a symlink,
+requires each file to be exactly one canonical JSON text inside a size bound,
+and proves the ledger is really sealed by running it through the existing
+telemetry trace-record validator before any band counts an event in it.
+
+The output is one canonical `maintenance_scan` record naming every band, whether
+it held, the value that was measured, and the digest of every document the scan
+read. For each crossed band and each high-severity finding it also writes one
+canonical intent document, named `intent-band-<band id>.json` or
+`intent-finding-<finding id>.json`, so the same inputs always produce the same
+file names and one intent per band per scan. Each intent carries the sections
+this repo's own `work/<slug>/intent.md` uses — problem, proposed outcome,
+affected users and systems, constraints, open questions — plus `owner:
+unassigned`, `triage_state: pending`, `deploy_authority: none`, a guessed risk
+tier, and the evidence digests behind it. They are drafts for a human, not work
+orders. If the kill-switch evaluation is anything other than `satisfied`, the
+scan records the bands and writes no intent at all, with the reason
+`maintenance.kill-switch-engaged`.
+
+`incident-to-eval.sh` closes the loop the other way. Given one shadow incident
+record and the shadow reproduction record for it, it writes one eval seed case
+skeleton for the eval family the incident belongs to. The map from an incident's
+failing check to a family is closed: a file-digest check belongs to the
+stale-and-moved-artifacts family, and anything else is refused with `E_FAMILY`
+rather than guessed at. The two records must actually belong together — the
+shadow record's incident digest, id, failing check, revision, and repository all
+have to match the incident it was handed. A reproduced run becomes the
+expectation `{accepted, stale}`; a run that found nothing becomes the passing
+baseline `{accepted, completed}`; an inconclusive run proves nothing and is
+refused. The expectation, the case's field list, and its request role are all
+read out of that family's real seed set in `evals/v1/`, and the produced
+expectation must already be one that seed set uses. The skeleton names the
+fields it filled and the fields still pending, and carries a provenance block
+binding the incident and shadow digests. It never modifies a seed set: the
+skeleton is written to the output directory for a later reviewed change.
+
+Everything fails closed with one token on standard error and no output:
+`E_USAGE`, `E_PARSE`, `E_CANONICAL`, `E_LIMIT`, `E_SHAPE`, `E_RELATION`,
+`E_FAMILY`, `E_WORKSPACE`, `E_RUNTIME`. A relative path, a symlink, a named
+pipe, a file holding two JSON documents, a non-canonical file, an oversized
+file, an unsealed or tampered ledger, an unknown extra document, two findings
+with the same id, and a non-empty output directory are all refused, and nothing
+is written.
+
+Run the focused test with:
+
+```sh
+bash scripts/test/maintenance-loop.test.sh
+```
+
+It builds its own fixtures, seals its own trace ledgers, and proves the happy
+paths byte for byte on a repeat run alongside every refusal above.
