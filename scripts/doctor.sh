@@ -52,7 +52,13 @@ set -euo pipefail
 #       diagnoses. Also WARNs if there is no `status: active` entry (a malformed file). doctor
 #       reads the WORKING-TREE copy (diagnostic) and NOTES if it differs from HEAD, since the
 #       gate reads committed state. When a target arg is given, the local read is attributed
-#       only if the cwd's slug matches it (else WARN that it wasn't checked).
+#       only if the cwd's slug matches it (else WARN that it wasn't checked). ADDITIONALLY (a
+#       second, independent signal), (h) reads the resolved target root's on-disk
+#       `.ystack/install-record.json` — the record packaging/v1's installer writes — and WARNs
+#       when it reports `north_star.state: "placeholder-unset"` (the installer's own record that
+#       the target still carries its untouched placeholder, which itself has no `status: active`
+#       entry for the marker check above to anchor on), or WARNs (never crashes) when the record
+#       is present but malformed. Degrades to a regex-based read when `jq` is not on PATH.
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
@@ -320,6 +326,22 @@ fi
 # variant. We also WARN when there is no `status: active` entry at all (a malformed/active-less
 # file) — an independent readiness gap.
 #
+# SECOND, INDEPENDENT SOURCE — the installer's install-record.json (roadmap item 10): the marker
+# check above can only WARN on the shipped placeholder when there's a `status: active` entry to
+# scope onto, but packaging/v1/install.sh's north-star.md placeholder has NO active entry at all
+# (see its comment block) — a target that installed and never touched it falls through to the
+# generic "no active entry" / UNSET branches below, which don't name the installer's placeholder
+# specifically. So, after the marker-based verdict above, (h) ALSO reads the resolved target
+# root's on-disk `<toplevel>/.ystack/install-record.json` (NOT committed state — this file is the
+# installer's own on-disk record, not something the north-star gate reads) and WARNs when its
+# `.body.north_star.state` is `"placeholder-unset"`. A record that isn't a regular, non-symlink,
+# <=64 KiB file holding exactly one JSON text also WARNs (a distinct "malformed" message) rather
+# than crashing; any other state — or no record at all — adds nothing. Parsing prefers `jq` (as
+# check (e) already probes for) and degrades to a scoped regex read when `jq` is not on PATH, so
+# this diagnostic never hard-depends on it. Only checked when the cwd IS the target being asked
+# about (same `ns_h_cwd_is_target` guard the anchor-resolution block above uses), so a mismatched
+# target arg never has some OTHER repo's install record misattributed to it.
+#
 # (#98a) doctor (h) now diagnoses the SAME COMMITTED source the gate authorizes on — for a LOCAL
 # target, `HEAD:.ystack/north-star.md` (falling back to the legacy `HEAD:.fabrica/north-star.md`
 # when the new path is absent, matching the gate); for a ystack-self run, `HEAD:NORTH_STAR.md` —
@@ -545,6 +567,72 @@ else
     EMPTY) report_warn "(h) target repo has no commits yet — no north star expected; set + commit .ystack/north-star.md before enabling proactive mode" ;;
     YSTACK_SELF) report_warn "(h) the ystack control-plane root NORTH_STAR.md is not committed at the anchored source (${anchor_source}) — commit it before enabling proactive mode" ;;
     *)     report_warn "(h) could not resolve a north star from the cwd (resolver: ${ns_h_kind:-none}) — run doctor from the target repo's checkout to check its .ystack/north-star.md" ;;
+  esac
+fi
+
+# (h, continued) the installer's on-disk install-record.json — a SECOND, INDEPENDENT signal, in
+# addition to the marker-based verdict above (see the comment block above this check). Only
+# checked when the cwd IS the target being asked about (same guard the anchor-resolution block
+# uses), and only when a target root resolved at all (a NOREPO cwd has no $toplevel to look
+# under). Reads the file directly off disk — this is the installer's own record, not something
+# the north-star gate reads or that git-committed state applies to.
+if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
+  ns_h_record="$toplevel/.ystack/install-record.json"
+  ns_h_record_status="absent"
+  ns_h_record_state=""
+  if [ -e "$ns_h_record" ] || [ -L "$ns_h_record" ]; then
+    if [ -L "$ns_h_record" ] || [ ! -f "$ns_h_record" ]; then
+      # A symlink (or any non-regular-file entry — a directory, fifo, etc.) is refused outright:
+      # an installer never writes one, so it was hand-placed or edited.
+      ns_h_record_status="malformed"
+    else
+      ns_h_record_bytes="$(wc -c <"$ns_h_record" 2>/dev/null | tr -d '[:space:]')"
+      case "$ns_h_record_bytes" in
+        ''|*[!0-9]*) ns_h_record_status="malformed" ;;
+        *)
+          if [ "$ns_h_record_bytes" -gt 65536 ]; then
+            ns_h_record_status="malformed"
+          elif command -v jq >/dev/null 2>&1; then
+            # Mirror install.sh's own "exactly one JSON text" check: `jq .` must parse it, and
+            # slurped as a stream it must contain exactly one JSON value (a multi-document file
+            # would otherwise silently parse only its first value).
+            if jq . "$ns_h_record" >/dev/null 2>&1 \
+               && [ "$(jq -s 'length' "$ns_h_record" 2>/dev/null || true)" = "1" ]; then
+              ns_h_record_status="ok"
+              ns_h_record_state="$(jq -r '.body.north_star.state // empty' "$ns_h_record" 2>/dev/null || true)"
+            else
+              ns_h_record_status="malformed"
+            fi
+          else
+            # No jq on PATH (check (e) may already be WARNing/FAILing on this): best-effort,
+            # SCOPED regex extraction only — never a full JSON validation. The record is written
+            # canonically (`jq -S -c`, no whitespace around ':'/','), so a first pass isolates the
+            # north_star object (its fields are flat — no nested object of its own — so a
+            # non-greedy "up to the first '}'" match is safe) before pulling its state field. A
+            # record this degraded read can't confidently extract from is treated as malformed
+            # too, rather than silently skipped, so the operator still sees something is off.
+            ns_h_record_state="$(grep -oE '"north_star"[[:space:]]*:[[:space:]]*\{[^}]*\}' "$ns_h_record" 2>/dev/null |
+              grep -oE '"state"[[:space:]]*:[[:space:]]*"[^"]*"' | tail -n1 |
+              sed -E 's/^.*"([^"]*)"$/\1/' || true)"
+            if [ -n "$ns_h_record_state" ]; then
+              ns_h_record_status="ok"
+            else
+              ns_h_record_status="malformed"
+            fi
+          fi
+          ;;
+      esac
+    fi
+  fi
+  case "$ns_h_record_status" in
+    malformed)
+      report_warn "(h) $ns_h_record exists but is not readable as a single well-formed JSON document of at most 64 KiB — refusing to read it as the installer's install record"
+      ;;
+    ok)
+      if [ "$ns_h_record_state" = "placeholder-unset" ]; then
+        report_warn "(h) $ns_h_record reports north_star.state=placeholder-unset — north star is still the installer's placeholder; set and approve your own before enabling proactive mode"
+      fi
+      ;;
   esac
 fi
 
