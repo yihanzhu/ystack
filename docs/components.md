@@ -761,14 +761,16 @@ separation is satisfied; and the mode is readable. Otherwise the answer is
 
 A supplied shadow record counts **only** when one of the scope's
 `shadow_evidence_refs` names both its id and the digest the evaluator measured over
-that record's own canonical bytes, its target repository is the scope's, and the
-revision it ran against is the `target_revision` the scope's identity records.
+that record's own canonical bytes, its target repository is the scope's, the
+revision it ran against is the `target_revision` the scope's identity records, and
+the `qualified_identity` the record carries equals the scope's own
+`qualified_identity` field for field.
 Evidence for another scope never counts: a record nobody claimed is ignored, and it
 is listed by digest under the evaluation's evidence as `unclaimed_shadow_records`
 so the operator can see what was left out. A required environment covered only by
-ignored records, by records from another revision, or a claimed ref that no
-supplied record answers, is `scope.shadow-evidence-missing` — the reason-id set
-stays closed.
+ignored records, by records from another revision, by records produced under
+another qualified identity, or a claimed ref that no supplied record answers, is
+`scope.shadow-evidence-missing` — the reason-id set stays closed.
 
 The three gate evaluations are bound the same way, and this is what stops an
 evaluation produced for another workflow or another attempt from making a scope
@@ -812,15 +814,21 @@ evaluators each put that verdict into their own reasons (`duty.violated` and
 `kill.duty-inconclusive` for the kill switch), so a combination no run could have
 produced is `scope.malformed`.
 
-Two identities are **not yet bindable** from the evidence side. A shadow
-reproduction record carries its target repository and the exact revision it ran
-against, so `target_repository_id` and `target_revision` bind; it carries no
-resolved-profile, adapter-config, model, prompt, skill, or verification-instruction
-reference, so those parts of `qualified_identity` are recorded and reviewed in the
-scope pull request but cannot yet be checked against the shadow evidence. Binding
-them is work for the shadow slice, which would have to record the identity it ran
-under. The kill-switch evaluation likewise carries no stage or profile reference,
-so it binds by policy set, by the duty evaluation it names, and by digest only.
+The **qualified identity now binds against the shadow evidence**. The shadow
+slice records the identity each run was performed under, so a claimed record
+carries the same `qualified_identity` shape a scope records plus a
+`qualified_identity_ref` digest over the identity document it read. The evaluator
+requires the record's identity to equal the scope's byte for byte — the same
+resolved profile, adapter configs, model request, prompt and skill versions, stage
+request, verification instructions, and target revision — on top of the repository
+and revision binding. A record produced under a different model, profile, adapter
+config, prompt, or skill version is evidence about a different scope, and a
+required environment left uncovered by the remainder is
+`scope.shadow-evidence-missing`. Change one identity field in the scope and its
+existing shadow evidence stops counting, which is the point: that is a different
+scope and it has to earn its own. The kill-switch evaluation still carries no
+stage or profile reference, so it binds by policy set, by the duty evaluation it
+names, and by digest only.
 
 Protected-path names are compared **case-insensitively**, both the glob's segments
 and the policy's prefix, root-file, and segment lists. A checkout may be
@@ -873,7 +881,7 @@ The risk-gate and kill-switch evaluations must name the duty evaluation by diges
 
 The scope's qualified identity also names the stage request its gate evidence was produced for, and the risk and duty evaluations must be about that request; a claimed shadow record must carry `deploy_authority: none` like every record the shadow slice emits.
 
-A claimed shadow record is validated against the shadow slice's complete emitted shape - every top-level and body key, every nested block, and the reason id, outcome, and present-or-absent sections that go together in a real run - so a stub carrying only the fields the gate reads cannot back a scope.
+A claimed shadow record is validated against the shadow slice's complete emitted shape - every top-level and body key, every nested block, and the reason id, outcome, and present-or-absent sections that go together in a real run - so a stub carrying only the fields the gate reads cannot back a scope. The recorded `qualified_identity` is checked there for its eight exact keys and its `qualified_identity_ref` for the content id and media type the slice writes; the field rules inside the identity are not repeated in the gate program, because a record counts as evidence only when its identity equals the scope's, and the scope's identity has already been validated in full by the record validator.
 
 A present materialization in a claimed shadow record must be a `no-change` one, because the shadow slice materializes the incident revision with an empty patch; any other stage-result outcome is refused as malformed.
 
