@@ -349,6 +349,12 @@ scripts/test/evals-dashboard.test.sh
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md
 
+# Inactive target packaging
+packaging/v1/build-release.sh
+packaging/v1/install.sh
+packaging/v1/packaging.jq
+scripts/test/target-packaging.test.sh
+
 # Inactive deploy and rollback gates
 deploy/v1/environment-tiers.json
 deploy/v1/deploy_contracts.jq
