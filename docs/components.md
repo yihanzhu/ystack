@@ -877,6 +877,8 @@ A claimed shadow record is validated against the shadow slice's complete emitted
 
 A present materialization in a claimed shadow record must be a `no-change` one, because the shadow slice materializes the incident revision with an empty patch; any other stage-result outcome is refused as malformed.
 
+A required eval family counts only when every case passed: at least one case, none failed or inconclusive, and the passed count equal to the total.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

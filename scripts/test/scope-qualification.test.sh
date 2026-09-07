@@ -853,6 +853,11 @@ expect_reasons eval-inconclusive '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard.json" >"$tmp/dashboard-empty.json"
 expect_reasons eval-no-cases '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard-empty.json" "${good[@]:3}"
+"$jq_bin" -S -c '.body.families = (.body.families | map(
+   if .family_id == "stale-moved-artifacts" then .cases = {total:1,passed:0,failed:0,inconclusive:0} else . end))' \
+  "$tmp/dashboard.json" >"$tmp/dashboard-unpassed.json"
+expect_reasons eval-no-passing-case '["scope.eval-failing"]' "${good[@]:0:2}" \
+  "$tmp/dashboard-unpassed.json" "${good[@]:3}"
 # A dashboard that lists a required family twice, failing once and passing once,
 # must not let the later entry win: duplicate family ids are malformed.
 "$jq_bin" -S -c '(.body.families | map(select(.family_id == "stale-moved-artifacts"))[0]) as $pass |

@@ -820,8 +820,12 @@ def claimed_by_scope($refs): . as $record |
     if $entry == null or
        $entry.seed_status != $p.required_eval_seed_status then
       "scope.eval-family-unseeded"
+    # A family counts only when every case actually passed: at least one case,
+    # none failed or inconclusive, and the passed count equal to the total (a
+    # total no passing case accounts for is not evidence).
     elif $entry.cases.total < 1 or $entry.cases.failed > 0 or
-         $entry.cases.inconclusive > 0 then
+         $entry.cases.inconclusive > 0 or $entry.cases.passed < 1 or
+         $entry.cases.passed != $entry.cases.total then
       "scope.eval-failing"
     else empty end]
  else ["scope.eval-family-unseeded", "scope.eval-failing"] end) as $eval_reasons |
