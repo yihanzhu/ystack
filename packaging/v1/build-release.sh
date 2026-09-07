@@ -90,6 +90,17 @@ blob_at() {
 # The core generation is read out of the packaged validator at the exact release
 # commit, never hardcoded here, so a generation bump cannot silently drift.
 blob_at scripts/core-contract.sh || emit_error E_RELATION
+# Documents are validated with the contract validator AS COMMITTED at the release
+# commit, never the checkout's working copy: the release must read one exact
+# commit even when the checkout has local edits or is at another commit.
+committed="$scratch/committed"
+/bin/mkdir -m 0700 "$committed" || emit_error E_RUNTIME
+repo_git archive --format=tar "$commit" scripts/core-contract.sh core/v2 2>/dev/null |
+  /usr/bin/tar -x -C "$committed" 2>/dev/null || emit_error E_RELATION
+[ -f "$committed/scripts/core-contract.sh" ] && [ ! -L "$committed/scripts/core-contract.sh" ] ||
+  emit_error E_RELATION
+/bin/chmod 0500 "$committed/scripts/core-contract.sh" || emit_error E_RUNTIME
+committed_validator="$committed/scripts/core-contract.sh"
 generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$scratch/blob")
 [[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || emit_error E_RELATION
@@ -146,7 +157,7 @@ for requested in "$@"; do
         (.object_id | type) == "string" and (.mode | type) == "string" and
         (.location | type == "object" and (.kind | type) == "string")))
   ' "$scratch/profile.json" >/dev/null 2>&1 || emit_error E_PROFILE
-  "$repo/scripts/core-contract.sh" validate-document "$scratch/profile.json" >/dev/null 2>&1 ||
+  "$committed_validator" validate-document "$scratch/profile.json" >/dev/null 2>&1 ||
     emit_error E_PROFILE
   record_path "$base/profile.json" "$requested"
   config_path=$("$jq_bin" -r '
@@ -170,7 +181,7 @@ for requested in "$@"; do
     # must be the very object the profile's binding for that manifest packages;
     # a profile re-pinned to an edited manifest that points elsewhere is stale.
     /bin/cp "$scratch/blob" "$scratch/manifest.json" || emit_error E_RUNTIME
-    "$repo/scripts/core-contract.sh" validate-document "$scratch/manifest.json" >/dev/null 2>&1 ||
+    "$committed_validator" validate-document "$scratch/manifest.json" >/dev/null 2>&1 ||
       emit_error E_PROFILE
     "$jq_bin" -e --arg id "$manifest_id" --slurpfile manifest "$scratch/manifest.json" '
       [.body.bindings[] | select(.manifest_ref.id == $id)] as $bound |

@@ -431,6 +431,21 @@ expect_refusal E_RELATION 'a re-pinned manifest whose package differs from the b
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
   >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
 ok 'build-release validates each manifest and binds its package to the binding'
+# The validator that judges the release is the one committed at the release
+# commit: a broken working copy of scripts/core-contract.sh changes nothing.
+/bin/cp "$fixture/scripts/core-contract.sh" "$tmp/core-contract.keep"
+/usr/bin/printf '#!/bin/bash\nexit 1\n' >"$fixture/scripts/core-contract.sh"
+fixture_head=$(/usr/bin/git -C "$fixture" rev-parse HEAD)
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" >"$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A profiles
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging clean-profile fixture' || :
+"$fixture/packaging/v1/build-release.sh" build-release "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1 \
+  >"$tmp/committed-validator.json" 2>"$tmp/committed-validator.err" ||
+  fail "a broken working-copy validator changed the release: $(/bin/cat "$tmp/committed-validator.err")"
+/bin/cp "$tmp/core-contract.keep" "$fixture/scripts/core-contract.sh"
+[ "$fixture_head" != "" ] || fail 'fixture head'
+ok 'build-release validates with the contract validator committed at the release commit'
 # A profile whose binding lacks a package ref is not a profile to package: the
 # release must refuse instead of quietly shipping without that adapter.
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \

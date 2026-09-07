@@ -763,6 +763,8 @@ Before anything is derived from a profile, the builder requires it to be a valid
 
 Each manifest is also validated as a core document, and the package it offers must be the very object the profile's binding for that manifest packages, so re-pinning a profile to an edited manifest that points its package elsewhere refuses the release as well.
 
+Document validation runs the contract validator and core modules as committed at the release commit, extracted into private scratch, never the checkout's working copy, so a local edit or a checkout at another commit cannot change what a release accepts.
+
 ## Inactive review-fix loop planner
 
 `loop/v1/plan-review-fix.sh` is the deterministic planner for roadmap step 9, the
