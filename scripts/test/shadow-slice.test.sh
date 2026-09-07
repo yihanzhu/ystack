@@ -59,9 +59,11 @@ export PATH="$bin:/usr/bin:/bin"
   --arg reproduce "$(sha_file "$root/shadow/v1/reproduce.sh")" \
   --arg validate "$(sha_file "$root/shadow/v1/validate-incident.sh")" \
   --arg program "$(sha_file "$root/shadow/v1/incident-record.jq")" \
+  --arg identity_program "$(sha_file "$root/shadow/v1/qualified-identity.jq")" \
   --arg registry "$(sha_file "$registry")" '{
     "reproduce.sh":$reproduce,"validate-incident.sh":$validate,
-    "incident-record.jq":$program,"shadow-environments.json":$registry}' \
+    "incident-record.jq":$program,"qualified-identity.jq":$identity_program,
+    "shadow-environments.json":$registry}' \
   > "$tmp/component-digests.json"
 
 git_clean() {
@@ -211,6 +213,41 @@ passing_incident="$tmp/incident-passing.json"
 incident "$failing_incident" incident.fixture-failing "$failing_commit"
 incident "$passing_incident" incident.fixture-passing "$passing_commit"
 
+# The qualified identity a run is performed under. Every field is a shape the
+# workflow-scope record uses, and `target_revision` is the incident's own
+# revision, so each incident gets its own identity document.
+identity() {
+  local target=$1 id=$2 commit=$3
+  "$jq_bin" -S -c -n --arg id "$id" --arg commit "$commit" \
+    --arg blob "$failing_blob" --arg prompt_commit "$failing_commit" '
+    def digest($character): ($character * 64);
+    {schema_version:1,kind:"qualified_identity",id:$id,
+     body:{adapter_config_refs:[{content_id:"producer-config",
+         media_type:"application/vnd.ystack.adapter-config+json",
+         sha256:digest("1")}],
+       model_request:{effort_id:"high",model_id:"model.fixture",
+         provider_id:"provider.fixture"},
+       prompt_refs:[{location:{kind:"path",value:"routines/coder.md"},
+         mode:"100644",object_id:$blob,object_type:"blob",
+         revision:{commit_id:$prompt_commit,hash_algorithm:"sha1",
+           repository_id:"fixture.harness"}}],
+       resolved_profile_ref:{schema_version:2,kind:"resolved_profile",
+         id:"profile.shadow-fixture",sha256:digest("2")},
+       skill_refs:[],
+       stage_request_ref:{schema_version:2,kind:"stage_request",
+         id:"request.shadow-fixture",sha256:digest("3")},
+       target_revision:{commit_id:$commit,hash_algorithm:"sha1",
+         repository_id:"fixture.target"},
+       verification_instructions_ref:{content_id:"verification-instructions",
+         media_type:"application/vnd.ystack.verification-instructions+json",
+         sha256:digest("4")}}}
+  ' > "$target"
+}
+failing_identity="$tmp/identity-failing.json"
+passing_identity="$tmp/identity-passing.json"
+identity "$failing_identity" identity.fixture-failing "$failing_commit"
+identity "$passing_identity" identity.fixture-passing "$passing_commit"
+
 "$validator" validate "$failing_incident" > "$tmp/incident-receipt.json"
 "$jq_bin" -e '
   .schema_version == 1 and .kind == "shadow_incident_validation" and
@@ -288,12 +325,13 @@ pass 'the environment registry lists exactly the one proven-nowhere fixture envi
 run_case() {
   local name=$1 incident_input=$2 materialization=$3
   local claim_input=${4:-$claim} source=${5:-$tmp/source.git}
+  local identity_input=${6:-$failing_identity}
   local case_root="$tmp/case-$name" status=0
   /bin/mkdir -m 700 "$case_root" "$case_root/candidate" "$case_root/scratch" \
     "$case_root/state"
   "$reproducer" reproduce "$incident_input" "$claim_input" "$policy_set" "$duty" \
-    "$materialization" "$source" "$case_root/candidate" "$case_root/scratch" \
-    "$case_root/state" "$closure_helper" "$jq_bin" \
+    "$materialization" "$identity_input" "$source" "$case_root/candidate" \
+    "$case_root/scratch" "$case_root/state" "$closure_helper" "$jq_bin" \
     > "$case_root/out.json" 2> "$case_root/err" || status=$?
   RUN_STATUS=$status
   RUN_ROOT=$case_root
@@ -353,8 +391,18 @@ reproduced_root=$RUN_ROOT
 ' "$reproduced_root/out.json" >/dev/null || fail reproduced-detail
 pass 'the failing revision reproduces the incident with a read-only materialization'
 
+"$jq_bin" -e --slurpfile identity "$failing_identity" \
+  --arg sha "$(sha_file "$failing_identity")" '
+  .body.qualified_identity == $identity[0].body and
+  .body.qualified_identity_ref == {content_id:"shadow-qualified-identity",
+    media_type:"application/vnd.ystack.qualified-identity+json",sha256:$sha} and
+  .body.qualified_identity.target_revision == .body.git_revision_ref
+' "$reproduced_root/out.json" >/dev/null || fail identity-recorded
+pass 'the record carries the qualified identity it ran under and binds it by digest'
+
 expect_outcome no-change no-change check.passed-at-revision "$passing_incident" \
-  "$tmp/fixture-passing/read-only-input.json"
+  "$tmp/fixture-passing/read-only-input.json" "$claim" "$tmp/source.git" \
+  "$passing_identity"
 "$jq_bin" -e '.body.check.execution.value.matches_expected == true' \
   "$RUN_ROOT/out.json" >/dev/null || fail no-change-detail
 pass 'the fixed revision reports no-change instead of a reproduction'
@@ -436,7 +484,8 @@ expect_outcome directory-path inconclusive check.unreadable \
   "$tmp/fixture-failing/read-only-input.json"
 
 expect_reproduce_error moved-revision E_STALE "$passing_incident" \
-  "$tmp/fixture-failing/read-only-input.json"
+  "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/source.git" \
+  "$passing_identity"
 expect_reproduce_error writable-input E_READ_ONLY "$failing_incident" \
   "$tmp/fixture-failing/input.json"
 expect_reproduce_error writable-input-unlisted-environment E_READ_ONLY "$failing_incident" \
@@ -456,6 +505,47 @@ expect_reproduce_error unsorted-incident E_CANONICAL "$tmp/unsorted.json" \
 expect_reproduce_error malformed-incident E_SHAPE \
   "$tmp/incident-deploy-authority.json" "$tmp/fixture-failing/read-only-input.json"
 
+# The identity is an input like every other one: snapshotted, size-bounded,
+# required to be exactly one canonical JSON text in a regular file, checked
+# against the workflow-scope shape, and required to name this incident's own
+# repository and revision.
+expect_identity_error() {
+  local name=$1 expected=$2 identity_input=$3
+  expect_reproduce_error "$name" "$expected" "$failing_incident" \
+    "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/source.git" \
+    "$identity_input"
+}
+expect_identity_error identity-missing-key E_SHAPE \
+  "$(mutate "$failing_identity" identity-missing-key \
+    'del(.body.model_request)')"
+expect_identity_error identity-extra-key E_SHAPE \
+  "$(mutate "$failing_identity" identity-extra-key '.body.extra = true')"
+expect_identity_error identity-wrong-kind E_SHAPE \
+  "$(mutate "$failing_identity" identity-wrong-kind '.kind = "other_record"')"
+expect_identity_error identity-empty-prompts E_SHAPE \
+  "$(mutate "$failing_identity" identity-empty-prompts '.body.prompt_refs = []')"
+expect_identity_error identity-bad-profile-version E_SHAPE \
+  "$(mutate "$failing_identity" identity-bad-profile-version \
+    '.body.resolved_profile_ref.schema_version = 1')"
+expect_identity_error identity-other-repository E_SHAPE \
+  "$(mutate "$failing_identity" identity-other-repository \
+    '.body.target_revision.repository_id = "fixture.other"')"
+expect_identity_error identity-other-revision E_RELATION \
+  "$(mutate "$failing_identity" identity-other-revision \
+    ".body.target_revision.commit_id = \"$passing_commit\"")"
+"$jq_bin" -c '{kind,schema_version,id,body}' "$failing_identity" \
+  > "$tmp/identity-unsorted.json"
+expect_identity_error identity-unsorted E_CANONICAL "$tmp/identity-unsorted.json"
+/bin/cat "$failing_identity" "$failing_identity" > "$tmp/identity-two-roots.json"
+expect_identity_error identity-two-roots E_PARSE "$tmp/identity-two-roots.json"
+"$jq_bin" -S -c -n --slurpfile identity "$failing_identity" \
+  '$identity[0] | .body.padding = ("y" * 300000)' > "$tmp/identity-oversized.json"
+expect_identity_error identity-oversized E_LIMIT "$tmp/identity-oversized.json"
+/bin/ln -s "$failing_identity" "$tmp/identity-symlink.json"
+expect_identity_error identity-symlink E_RUNTIME "$tmp/identity-symlink.json"
+expect_identity_error identity-absent E_RUNTIME "$tmp/identity-does-not-exist.json"
+pass 'an identity that is malformed, oversized, unreadable, or from another revision is refused'
+
 status=0
 "$reproducer" reproduce "$failing_incident" > "$tmp/reproduce-usage.out" \
   2> "$tmp/reproduce-usage.err" || status=$?
@@ -464,9 +554,10 @@ status=0
 /bin/mkdir -m 700 "$tmp/relative-check"
 status=0
 (cd "$tmp" && "$reproducer" reproduce incident-failing.json "$claim" "$policy_set" \
-  "$duty" "$tmp/fixture-failing/read-only-input.json" "$tmp/source.git" \
-  "$tmp/relative-check" "$tmp/relative-check" "$tmp/relative-check" \
-  "$closure_helper" "$jq_bin") > /dev/null 2> "$tmp/relative.err" || status=$?
+  "$duty" "$tmp/fixture-failing/read-only-input.json" "$failing_identity" \
+  "$tmp/source.git" "$tmp/relative-check" "$tmp/relative-check" \
+  "$tmp/relative-check" "$closure_helper" "$jq_bin") > /dev/null \
+  2> "$tmp/relative.err" || status=$?
 [ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/relative.err")" = E_USAGE ] || fail relative-path
 pass 'the driver refuses a bad invocation and any relative path'
 
@@ -475,17 +566,19 @@ pass 'the driver refuses a bad invocation and any relative path'
 : > "$tmp/dirty/state/leftover"
 status=0
 "$reproducer" reproduce "$failing_incident" "$claim" "$policy_set" "$duty" \
-  "$tmp/fixture-failing/read-only-input.json" "$tmp/source.git" \
-  "$tmp/dirty/candidate" "$tmp/dirty/scratch" "$tmp/dirty/state" \
-  "$closure_helper" "$jq_bin" > /dev/null 2> "$tmp/dirty.err" || status=$?
+  "$tmp/fixture-failing/read-only-input.json" "$failing_identity" \
+  "$tmp/source.git" "$tmp/dirty/candidate" "$tmp/dirty/scratch" \
+  "$tmp/dirty/state" "$closure_helper" "$jq_bin" > /dev/null \
+  2> "$tmp/dirty.err" || status=$?
 [ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/dirty.err")" = E_WORKSPACE ] || fail dirty-state
 /bin/mkdir -m 700 "$tmp/nested" "$tmp/nested/candidate" "$tmp/nested/scratch"
 /bin/mkdir -m 700 "$tmp/nested/scratch/state"
 status=0
 "$reproducer" reproduce "$failing_incident" "$claim" "$policy_set" "$duty" \
-  "$tmp/fixture-failing/read-only-input.json" "$tmp/source.git" \
-  "$tmp/nested/candidate" "$tmp/nested/scratch" "$tmp/nested/scratch/state" \
-  "$closure_helper" "$jq_bin" > /dev/null 2> "$tmp/nested.err" || status=$?
+  "$tmp/fixture-failing/read-only-input.json" "$failing_identity" \
+  "$tmp/source.git" "$tmp/nested/candidate" "$tmp/nested/scratch" \
+  "$tmp/nested/scratch/state" "$closure_helper" "$jq_bin" > /dev/null \
+  2> "$tmp/nested.err" || status=$?
 [ "$status" -ne 0 ] && [ "$(/bin/cat "$tmp/nested.err")" = E_WORKSPACE ] || fail nested-state
 pass 'the driver refuses a used or overlapping caller directory'
 
@@ -493,7 +586,7 @@ pass 'the driver refuses a used or overlapping caller directory'
   LC_ALL=C sort -z | /usr/bin/xargs -0 /usr/bin/shasum -a 256 |
   /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')" ] || fail source-mutated
 for component in reproduce.sh validate-incident.sh incident-record.jq \
-  shadow-environments.json; do
+  qualified-identity.jq shadow-environments.json; do
   [ "$(sha_file "$root/shadow/v1/$component")" = \
     "$("$jq_bin" -r --arg name "$component" '.[$name]' "$tmp/component-digests.json")" ] ||
     fail component-mutated

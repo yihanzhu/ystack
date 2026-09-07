@@ -1188,8 +1188,9 @@ environment is a reviewed change to that file; no run may add one.
 
 `shadow/v1/reproduce.sh` is the driver. It takes one incident record, one
 execution-environment claim, the control policy set and duty evaluation that
-claim binds, one materialization input, a local source Git directory, and three
-caller-owned directories (candidate, scratch, state). It refuses to run unless
+claim binds, one materialization input, one qualified-identity document, a local
+source Git directory, and three caller-owned directories (candidate, scratch,
+state). It refuses to run unless
 the claim's document id is listed in the environment file **and** the real
 sandbox-policy evaluator (`control/v1/evaluate-sandbox.sh`) returns `satisfied`
 for it. It then materializes the incident's exact revision through the local Git
@@ -1208,6 +1209,24 @@ wrapper: it does not mint a core v2 `stage_result` of its own, it binds the
 materializer's real one by schema version, kind, id, and digest, and writes that
 document beside it so the reference is recoverable. The run also seals one
 telemetry trace ledger and validates it through `telemetry/v1`'s own validator.
+
+Every run also records **the qualified identity it was performed under**.
+`shadow/v1/qualified-identity.jq` holds that shape, copied verbatim out of
+`scope/v1/workflow-scope.jq` under a header naming the commit it was copied at,
+so the document the driver requires is exactly the `qualified_identity` a
+workflow scope records: the resolved profile, the adapter configs, the model,
+provider, and effort, the prompt and skill versions, the stage request, the
+versioned verification instructions, and the target revision. The identity is
+snapshotted, size-bounded, required to be exactly one canonical JSON text in a
+regular non-symlink file, and required to name this incident's own repository and
+revision — an identity from another target version is refused rather than
+recorded. The record then carries that identity verbatim as `qualified_identity`
+and binds its canonical bytes by digest as `qualified_identity_ref`. Before this
+a shadow record said only which repository and which revision it ran against, so
+evidence gathered under one profile, adapter config, model, prompt, or skill
+version was indistinguishable from evidence gathered under another; now the
+workflow-scope qualification evaluator can check the identity in the record
+against the identity in the scope.
 
 Every output says what it is not: `authority: "none"`,
 `deploy_authority: "none"`, `qualification: {state: "unavailable"}`,
