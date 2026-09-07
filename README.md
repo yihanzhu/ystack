@@ -280,7 +280,6 @@ and one row here.
 | Inactive deterministic verifier normalizer payload | `adapters/deterministic-verifier/v1/normalize.jq` | Validates an already-supplied core v2 verifier request, profile, contract, and stage result into one observation. | [read](docs/components.md#inactive-deterministic-verifier-normalizer-payload) |
 | Inactive eval and trace framework | `evals/v1/run-evals.sh` | Runs one offline eval pass over a caller-supplied seed set, plus the catalog of the nine required regression families and a dashboard. | [read](docs/components.md#inactive-eval-and-trace-framework) |
 | Inactive workflow-scope qualification evaluator | `scope/v1/evaluate-scope.sh` | Decides whether one low-risk workflow scope may be proposed for enablement, and emits the proposal an operator pull request would carry. It enables nothing. | [read](docs/components.md#inactive-workflow-scope-qualification-evaluator) |
-
 | Inactive review-fix loop planner | `loop/v1/plan-review-fix.sh` | Turns one review observation plus the credential, reconciliation, risk, and attempt evidence into one bounded fix request or one named refusal. It dispatches nothing. | [read](docs/components.md#inactive-review-fix-loop-planner) |
 
 | Inactive shadow reproduction slice | `shadow/v1/` | Replays one incident's failing check at its exact revision, read-only, in a listed execution environment, and answers reproduced, no-change, or inconclusive. It never patches, publishes, or deploys. | [read](docs/components.md#inactive-shadow-reproduction-slice) |
