@@ -873,6 +873,8 @@ The risk-gate and kill-switch evaluations must name the duty evaluation by diges
 
 The scope's qualified identity also names the stage request its gate evidence was produced for, and the risk and duty evaluations must be about that request; a claimed shadow record must carry `deploy_authority: none` like every record the shadow slice emits.
 
+A claimed shadow record is validated against the shadow slice's complete emitted shape - every top-level and body key, every nested block, and the reason id, outcome, and present-or-absent sections that go together in a real run - so a stub carrying only the fields the gate reads cannot back a scope.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

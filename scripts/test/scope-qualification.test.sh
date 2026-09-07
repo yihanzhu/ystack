@@ -139,17 +139,72 @@ qualified_identity='{
     "media_type":"application/vnd.ystack.verification-instructions+json",
     "sha256":"eebf0a48514a92396eb06ceee8fabc218f6b8c979e01ad5850bdedb42f494488"}}'
 
-"$jq_bin" -S -c -n --argjson revision "$fixture_revision" '
+# The shadow record fixtures are whole records in the shape
+# shadow/v1/reproduce.sh emits, not only the fields this evaluator reads: the
+# qualification gate now checks that slice's complete emitted shape, so a stub
+# carrying the envelope, the markers, and an accepted outcome is refused as
+# malformed. Every block is here field for field - the incident, environment
+# claim, registry, and trace ledger references, the sandbox evaluation section,
+# the read-only materialization with the materializer receipt's source and
+# candidate, and the executed file-digest check - and the reason id, outcome,
+# and section states are the combination the slice actually produces for that
+# run.
+expected_check_sha=8f434346648f6b96df89dda901c5176b10a6d83961dd3c2e6c66a9f0f95d4c9b
+observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752
+"$jq_bin" -S -c -n --argjson revision "$fixture_revision" \
+  --arg expected "$expected_check_sha" --arg observed "$observed_check_sha" '
+  def digest($character): ($character * 64);
   def record($id;$environment;$outcome;$repository):
+    ($revision | .repository_id = $repository) as $rev |
+    (if $outcome == "reproduced" then "check.failed-at-revision"
+     else "check.passed-at-revision" end) as $reason |
     {schema_version:1,kind:"shadow_reproduction_record",id:$id,
      body:{activation_state:"inactive",authority:"none",deploy_authority:"none",
        effects:["caller-disposable-candidate-repository"],
        evaluation_mode:"observation-only",shadow:true,
        qualification:{state:"unavailable",reason_id:"shadow.unqualified"},
-       outcome:$outcome,reason_id:"check.passed-at-revision",
+       outcome:$outcome,reason_id:$reason,
        observed_at:"2026-09-05T00:00:00Z",target_repository_id:$repository,
-       git_revision_ref:($revision | .repository_id = $repository),
-       environment:{environment_id:$environment}}};
+       git_revision_ref:$rev,
+       incident_ref:{content_id:"shadow-incident-record",
+         media_type:"application/vnd.ystack.shadow-incident-record+json",
+         sha256:digest("a")},
+       environment:{environment_id:$environment,
+         claim_ref:{content_id:"shadow-environment-claim",
+           media_type:"application/vnd.ystack.control-execution-environment-claim+json",
+           sha256:digest("b")},
+         registry_ref:{content_id:"shadow-environment-registry",
+           media_type:"application/vnd.ystack.shadow-environment-registry+json",
+           sha256:digest("c")},
+         evaluation:{state:"present",
+           value:{verdict:"satisfied",
+             reason_ids:["sandbox.declaration-satisfied"],
+             evaluation_ref:{content_id:"shadow-sandbox-evaluation",
+               media_type:"application/vnd.ystack.control-evaluation+json",
+               sha256:digest("d")}}}},
+       materialization:{state:"present",
+         value:{adapter_id:"adapter.local-git-materializer.v1",
+           outcome:"no-change",
+           source:{repository_id:$repository,
+             hash_algorithm:$rev.hash_algorithm,commit_id:$rev.commit_id,
+             tree_id:"4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
+           candidate:{repository_kind:"bare",
+             hash_algorithm:$rev.hash_algorithm,commit_id:$rev.commit_id,
+             tree_id:"4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+             parent_commit_id:$rev.commit_id},
+           stage_result_ref:{schema_version:2,kind:"stage_result",
+             id:("stage.docs-typo-fix.result." + $environment),
+             sha256:digest("e")}}},
+       check:{failing_check:{kind:"file-digest",path:"docs/components.md",
+           expected_sha256:$expected},
+         execution:{state:"present",
+           value:{tool_id:"tool.git-blob-digest",
+             observed_sha256:(if $outcome == "no-change" then $expected
+                              else $observed end),
+             matches_expected:($outcome == "no-change")}}},
+       trace_ledger_ref:{content_id:"shadow-trace-ledger",
+         media_type:"application/vnd.ystack.telemetry-trace-ledger+json",
+         sha256:digest("f")}}};
   {schema_version:1,kind:"shadow_evidence_set",
    id:"scope.evidence.docs-typo-fix.v1",
    body:{records:[
@@ -697,13 +752,23 @@ expect_reasons shadow-missing '["scope.shadow-evidence-missing"]' \
 # A record whose bytes changed is a different record, so these two fixtures get a
 # scope that claims the mutated set: the refusal under test is the outcome or the
 # repository, not an unmet claim.
-"$jq_bin" -S -c '.body.records[0].body.outcome = "inconclusive"' "$tmp/shadow-set.json" \
-  >"$tmp/shadow-inconclusive.json"
+# The inconclusive record is a whole record too: the slice reaches that outcome
+# with the environment reason beside it and the materialization and check
+# sections it never ran left absent.
+"$jq_bin" -S -c '.body.records[0].body |=
+  (.outcome = "inconclusive" | .reason_id = "environment.not-satisfied" |
+   .environment.evaluation.value.verdict = "inconclusive" |
+   .environment.evaluation.value.reason_ids = ["declaration.incomplete"] |
+   .materialization = {state:"absent",reason_id:"materialization.not-attempted"} |
+   .check.execution = {state:"absent",reason_id:"check.not-attempted"})' \
+  "$tmp/shadow-set.json" >"$tmp/shadow-inconclusive.json"
 scope_for_shadow "$tmp/shadow-inconclusive.json" "$tmp/scope-inconclusive.json"
 expect_reasons shadow-inconclusive \
   '["scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "$tmp/scope-inconclusive.json" "$tmp/shadow-inconclusive.json" "${good[@]:2}"
-"$jq_bin" -S -c '.body.records[0].body |= (.target_repository_id = "repo.other" | .git_revision_ref.repository_id = "repo.other")' \
+"$jq_bin" -S -c '.body.records[0].body |= (.target_repository_id = "repo.other" |
+  .git_revision_ref.repository_id = "repo.other" |
+  .materialization.value.source.repository_id = "repo.other")' \
   "$tmp/shadow-set.json" >"$tmp/shadow-other-repo.json"
 scope_for_shadow "$tmp/shadow-other-repo.json" "$tmp/scope-other-repo.json"
 expect_reasons shadow-other-repository '["scope.shadow-evidence-missing"]' \
@@ -722,6 +787,27 @@ expect_reasons shadow-unknown-outcome \
   '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "$tmp/scope-unknown-outcome.json" "$tmp/shadow-unknown-outcome.json" "${good[@]:2}"
 pass 'shadow evidence must cover every environment, be conclusive, use a known outcome, and be distinct'
+
+# A hand-written record carrying only the fields the gate reads - the envelope,
+# the inactive/none markers, an accepted outcome, the repository, the revision,
+# and an environment id - is not a shadow output. It is refused as malformed, so
+# a stub can never back a scope.
+"$jq_bin" -S -c --argjson revision "$fixture_revision" '
+  .body.records[0] =
+    {schema_version:1,kind:"shadow_reproduction_record",
+     id:"shadow.docs-typo-fix.local",
+     body:{activation_state:"inactive",authority:"none",deploy_authority:"none",
+       shadow:true,
+       qualification:{state:"unavailable",reason_id:"shadow.unqualified"},
+       outcome:"reproduced",target_repository_id:"repo.fixture-target",
+       git_revision_ref:$revision,
+       environment:{environment_id:"env.local-macos-fixture"}}}' \
+  "$tmp/shadow-set.json" >"$tmp/shadow-stub.json"
+scope_for_shadow "$tmp/shadow-stub.json" "$tmp/scope-stub.json"
+expect_reasons shadow-stub-record \
+  '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
+  "$tmp/scope-stub.json" "$tmp/shadow-stub.json" "${good[@]:2}"
+pass 'a stub carrying only the fields the gate reads is not a shadow record'
 
 # The scope counts only the records it claims by digest. A record it never named
 # is ignored even when it would have covered a required environment, and it is
@@ -1015,8 +1101,11 @@ run_validator "$tmp/scope-other-revision.json" ||
 expect_reasons scope-other-revision '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-other-revision.json" "${good[@]:1}"
 "$jq_bin" -S -c --argjson revision "$other_revision" \
-  '.body.records[0].body.git_revision_ref = $revision' "$tmp/shadow-set.json" \
-  >"$tmp/shadow-other-revision.json"
+  '.body.records[0].body |= (.git_revision_ref = $revision |
+   .materialization.value.source.commit_id = $revision.commit_id |
+   .materialization.value.candidate.commit_id = $revision.commit_id |
+   .materialization.value.candidate.parent_commit_id = $revision.commit_id)' \
+  "$tmp/shadow-set.json" >"$tmp/shadow-other-revision.json"
 scope_for_shadow "$tmp/shadow-other-revision.json" "$tmp/scope-shadow-revision.json"
 expect_reasons shadow-other-revision '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-shadow-revision.json" "$tmp/shadow-other-revision.json" "${good[@]:2}"
@@ -1043,11 +1132,20 @@ expect_evaluator_error marker-multi-root E_PARSE "${good[@]:0:6}" \
   "$tmp/marker-multi-root.json"
 pass 'the mode marker is canonicalized and single-rooted like every other input'
 
+# The last four cases are what the whole-shape check adds: a record missing one
+# of the slice's blocks, a record carrying one key more than the slice emits, a
+# reproduced outcome whose materialization never ran, and a qualification with a
+# reason id the slice never writes are all records no shadow run produced.
 for malformed_case in 'del(.body.records[0].body.shadow)' \
   '.body.records[0].body.authority = "publisher"' \
   '.body.records[0].body.activation_state = "active"' \
   '.body.records[0].kind = "other_record"' \
-  '.body.records = []'; do
+  '.body.records = []' \
+  'del(.body.records[0].body.materialization)' \
+  '.body.records[0].body.replayed_from = "shadow.other"' \
+  '.body.records[0].body.materialization =
+     {state:"absent",reason_id:"materialization.not-attempted"}' \
+  '.body.records[0].body.qualification.reason_id = "shadow.qualified"'; do
   "$jq_bin" -S -c "$malformed_case" "$tmp/shadow-set.json" >"$tmp/shadow-malformed.json"
   expect_reasons "malformed shadow $malformed_case" \
     '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
@@ -1142,5 +1240,42 @@ PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6
   .body.reason_ids == ["scope.mode-construction"] and .body.enabled == false' \
   "$tmp/evaluation-typo.json" >/dev/null || fail 'an unknown mode status was not refused'
 pass 'an unknown operating-mode status fails closed even without a committed marker'
+
+# The committed marker decides both the mode and the `repository_marker` field,
+# and it is read before the gate program runs, so it is rechecked afterwards
+# like every other input. These two cases change it while the run is in flight:
+# a shim on PATH rewrites (or creates) the committed marker when the evaluator
+# invokes the gate program, which is after the snapshot and before the stale
+# checks. Both must be refused rather than emitting a result about marker bytes
+# the repository no longer holds.
+race_marker_case() {
+  local label=$1 committed=$2 status=0 out
+  local race_repo="$tmp/race-$label" race_bin="$tmp/race-bin-$label"
+  /bin/mkdir -p "$race_repo/scope/v1" "$race_repo/config"
+  /bin/mkdir -m 700 "$race_bin"
+  for shipped in scope-policy.json workflow-scope.jq scope-gates.jq \
+    validate-scope.sh evaluate-scope.sh; do
+    /bin/cp "$root/scope/v1/$shipped" "$race_repo/scope/v1/$shipped"
+  done
+  /bin/chmod 0500 "$race_repo/scope/v1/evaluate-scope.sh"
+  if [ -n "$committed" ]; then
+    /bin/cp "$committed" "$race_repo/config/construction-mode.json"
+  fi
+  { /usr/bin/printf '#!/bin/bash\nfor argument in "$@"; do\n'
+    /usr/bin/printf '  case "$argument" in\n'
+    /usr/bin/printf '    */scope-gates.jq)\n'
+    /usr/bin/printf '      /bin/cat %s > %s ;;\n' \
+      "$tmp/marker-operating.json" "$race_repo/config/construction-mode.json"
+    /usr/bin/printf '  esac\ndone\nexec %s "$@"\n' "$jq_bin"
+  } >"$race_bin/jq"
+  /bin/chmod 0555 "$race_bin/jq"
+  out=$(PATH="$race_bin:/usr/bin:/bin" "$race_repo/scope/v1/evaluate-scope.sh" \
+    evaluate "${good[@]:0:6}" "$tmp/marker.json" 2>&1 >/dev/null) || status=$?
+  [ "$status" -ne 0 ] || fail "$label accepted a marker that changed mid-run"
+  [ "$out" = E_STALE ] || fail "$label expected E_STALE got $out"
+}
+race_marker_case rewritten "$tmp/marker.json"
+race_marker_case appeared ''
+pass 'a committed mode marker that changes while the run is in flight is stale'
 
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"

@@ -113,8 +113,11 @@ esac
 # form in the scratch directory before the byte comparison: two markers are the
 # same marker when their canonical bytes agree. The committed file is only read.
 mode_repo_state=absent
+committed_marker_sha=''
 if [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ]; then
   snapshot "$mode_marker" "$scratch/repo-marker.json"
+  committed_marker_sha=$(sha256_path "$scratch/repo-marker.json") ||
+    emit_error E_RUNTIME
   canonicalize "$scratch/repo-marker.json" "$scratch/repo-marker-canonical.json"
   if /usr/bin/cmp -s "$scratch/marker.json" "$scratch/repo-marker-canonical.json"; then
     mode_repo_state=matched
@@ -181,6 +184,18 @@ for input in "$@"; do
   /usr/bin/cmp -s "$input" "$scratch/${names[$index]}.json" || emit_error E_STALE
   index=$((index + 1))
 done
+# The committed marker is an input to the result too: the snapshot above decided
+# both the operating mode and the `repository_marker` field, so marker bytes
+# that changed during the run would leave the evaluation describing a marker the
+# repository no longer holds. It is rechecked here like every other input, and a
+# marker that appeared, vanished, or changed makes the run stale.
+if [ -n "$committed_marker_sha" ]; then
+  [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ] &&
+    [ "$(sha256_path "$mode_marker")" = "$committed_marker_sha" ] ||
+    emit_error E_STALE
+elif [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ]; then
+  emit_error E_STALE
+fi
 require_canonical "$scratch/evaluation.json"
 
 "$jq_bin" -e --arg scope_id "$(

@@ -389,26 +389,229 @@ def duty_evaluation_ok:
     content_ref_ok("application/vnd.ystack.control-policy+json")) and
    (.stage | stage_ok));
 
+# Copied verbatim from shadow/v1/incident-record.jq at
+# 949e08ddbe01252b405191e7e5ad5cc12afb8f75 (origin/main): the failing-check
+# shape the incident record carries and the shadow record copies into its check
+# block. The `exact`, `id_ok`, and `sha256_ok` helpers above are the same
+# definitions that file uses.
+def repo_path_ok:
+  type == "string" and utf8bytelength >= 1 and utf8bytelength <= 4096 and
+  (test("[[:cntrl:]]") | not) and (contains("\\") | not) and
+  (startswith("/") | not) and
+  (split("/") |
+   length <= 64 and
+   all(.[];
+       . != "" and . != "." and . != ".." and (ascii_downcase != ".git") and
+       (endswith(".") | not) and (endswith(" ") | not)));
+
+def failing_check_ok:
+  (exact(["expected_sha256","kind","path"]) and .kind == "file-digest" and
+   (.path | repo_path_ok) and (.expected_sha256 | sha256_ok)) or
+  (exact(["check_id","kind"]) and .kind == "named-check" and
+   (.check_id | id_ok));
+# End of the copied incident-record shape.
+
+# A claimed shadow record is judged against the whole record the shadow slice
+# emits, not a hand-picked subset of it: a scope may only be backed by evidence
+# a real shadow run produced, and a hand-written document carrying the envelope,
+# the markers, and an accepted outcome is not that. The slice encodes most of
+# the record's shape in bash-built JSON rather than in jq, so the exact-key
+# predicates below are written here and cited: the record body is built at
+# shadow/v1/reproduce.sh:434-474 and pinned again by that script's own
+# post-build self-check at 475-480; the environment evaluation section is built
+# at 249-254, the materialization section at 290-297 under the read-only
+# relations asserted at 283-288, and the check execution section at 342-346.
+# All line numbers are in shadow/v1/reproduce.sh at
+# 949e08ddbe01252b405191e7e5ad5cc12afb8f75 (origin/main).
+def shadow_ref_ok($content_id; $media_type):
+  exact(["content_id","media_type","sha256"]) and
+  .content_id == $content_id and .media_type == $media_type and
+  (.sha256 | sha256_ok);
+
+def absent_section_ok($reasons):
+  exact(["reason_id","state"]) and .state == "absent" and
+  (.reason_id as $reason | $reasons | index($reason) != null);
+
+# The sandbox evaluation the slice copies out of control/v1/sandbox.jq when the
+# environment is listed and that evaluator returned a document. The verdict
+# vocabulary and the satisfied/reason pairing are that evaluator's own
+# (control/v1/sandbox.jq:254-256).
+def environment_evaluation_ok:
+  type == "object" and
+  (if .state == "absent"
+   then absent_section_ok(["environment.evaluation-refused","environment.unlisted"])
+   else
+     exact(["state","value"]) and .state == "present" and
+     (.value |
+      exact(["evaluation_ref","reason_ids","verdict"]) and
+      (.verdict as $verdict |
+       ["inconclusive","satisfied","violated"] | index($verdict) != null) and
+      (.reason_ids |
+       type == "array" and length >= 1 and length <= 64 and all(.[]; id_ok)) and
+      ((.verdict == "satisfied") ==
+       (.reason_ids == ["sandbox.declaration-satisfied"])) and
+      (.evaluation_ref |
+       shadow_ref_ok("shadow-sandbox-evaluation";
+         "application/vnd.ystack.control-evaluation+json")))
+   end);
+
+# The materialization section, with the receipt fields
+# adapters/local-git-materializer/v1/protocol.jq:266-277 builds and the
+# relations the slice asserts over that receipt before recording it: the
+# materialization ran at this record's own repository and revision, changed
+# nothing, and named the core v2 stage result it produced.
+def materialization_ok($revision; $repository):
+  type == "object" and
+  (if .state == "absent"
+   then absent_section_ok(["materialization.not-attempted","materialization.refused"])
+   else
+     exact(["state","value"]) and .state == "present" and
+     (.value |
+      exact(["adapter_id","candidate","outcome","source","stage_result_ref"]) and
+      .adapter_id == "adapter.local-git-materializer.v1" and
+      # The core v2 stage-result outcome vocabulary
+      # (core/v2/generations/<generation>/modules/result_truth.jq
+      # outcome_shape_ok); the slice copies the value through unchanged.
+      (.outcome as $outcome |
+       ["changed","failed","inconclusive","no-change","passed"] |
+       index($outcome) != null) and
+      (.candidate |
+       exact(["commit_id","hash_algorithm","parent_commit_id","repository_kind",
+         "tree_id"]) and
+       .repository_kind == "bare" and
+       .hash_algorithm == $revision.hash_algorithm and
+       .commit_id == $revision.commit_id and
+       .parent_commit_id == $revision.commit_id and
+       (.tree_id | oid_ok($revision.hash_algorithm))) and
+      .source == {repository_id: $repository,
+        hash_algorithm: $revision.hash_algorithm,
+        commit_id: $revision.commit_id, tree_id: .candidate.tree_id} and
+      (.stage_result_ref | core_document_ref_ok("stage_result")))
+   end);
+
+# The check block: the incident's failing check verbatim, and the execution
+# section the slice records only after digesting the blob at that path.
+def check_block_ok:
+  . as $check |
+  exact(["execution","failing_check"]) and
+  ($check.failing_check | failing_check_ok) and
+  ($check.execution |
+   type == "object" and
+   (if .state == "absent"
+    then absent_section_ok(["check.not-attempted","check.unreadable"])
+    else
+      exact(["state","value"]) and .state == "present" and
+      # Only a file-digest check is ever executed; a named check is
+      # check.not-runnable and never reaches this section.
+      ($check.failing_check.kind == "file-digest") and
+      (.value |
+       exact(["matches_expected","observed_sha256","tool_id"]) and
+       .tool_id == "tool.git-blob-digest" and
+       (.observed_sha256 | sha256_ok) and
+       .matches_expected ==
+         (.observed_sha256 == $check.failing_check.expected_sha256))
+    end));
+
+# The slice sets exactly one reason id per run, and each one fixes the outcome
+# and which sections that run left present or absent
+# (shadow/v1/reproduce.sh:227-347: the initial inconclusive/unlisted state, then
+# the environment, materialization, and check stages in order, each reassigning
+# `reason` as it goes). Any other combination is one no run of the slice can
+# produce.
+def slice_states:
+  [{reason_id:"environment.unlisted",outcome:"inconclusive",
+    environment:"absent",materialization:"absent",execution:"absent"},
+   {reason_id:"environment.evaluation-refused",outcome:"inconclusive",
+    environment:"absent",materialization:"absent",execution:"absent"},
+   {reason_id:"environment.not-satisfied",outcome:"inconclusive",
+    environment:"unsatisfied",materialization:"absent",execution:"absent"},
+   {reason_id:"check.not-runnable",outcome:"inconclusive",
+    environment:"satisfied",materialization:"absent",execution:"absent"},
+   {reason_id:"materialization.refused",outcome:"inconclusive",
+    environment:"satisfied",materialization:"absent",execution:"absent"},
+   {reason_id:"check.unreadable",outcome:"inconclusive",
+    environment:"satisfied",materialization:"present",execution:"absent"},
+   {reason_id:"check.passed-at-revision",outcome:"no-change",
+    environment:"satisfied",materialization:"present",execution:"matched"},
+   {reason_id:"check.failed-at-revision",outcome:"reproduced",
+    environment:"satisfied",materialization:"present",execution:"differed"}];
+
+def slice_state_ok:
+  . as $body |
+  (slice_states | map(select(.reason_id == $body.reason_id))) as $states |
+  ($states | length) == 1 and
+  ($states[0] as $state |
+   $body.outcome == $state.outcome and
+   ($body.environment.evaluation |
+    if $state.environment == "absent"
+    then .state == "absent" and .reason_id == $body.reason_id
+    else .state == "present" and
+         ((.value.verdict == "satisfied") == ($state.environment == "satisfied"))
+    end) and
+   $body.materialization.state == $state.materialization and
+   (if $state.materialization == "absent"
+    then $body.materialization.reason_id ==
+         (if $body.reason_id == "materialization.refused"
+          then "materialization.refused"
+          else "materialization.not-attempted" end)
+    else true end) and
+   ($body.check.execution |
+    if $state.execution == "absent"
+    then .state == "absent" and
+         .reason_id == (if $body.reason_id == "check.unreadable"
+                        then "check.unreadable" else "check.not-attempted" end)
+    else .state == "present" and
+         (.value.matches_expected == ($state.execution == "matched"))
+    end));
+
 def shadow_record_ok:
-  . as $record |
-  type == "object" and .schema_version == 1 and
-  .kind == "shadow_reproduction_record" and (.id | id_ok) and
-  (.body | type == "object") and .body.activation_state == "inactive" and
-  .body.authority == "none" and .body.deploy_authority == "none" and .body.shadow == true and
-  (.body.qualification | type == "object") and
-  .body.qualification.state == "unavailable" and
-  # The slice records the exact revision it reproduced at, so the scope can be
-  # bound to it; a record that does not say which revision it ran against is not
-  # a record this evaluator can attach qualification to.
-  (.body.git_revision_ref | revision_ok($record.body.target_repository_id)) and
-  # The shadow slice's closed outcome vocabulary; anything else is not a
-  # shadow record this evaluator understands, so the set is malformed.
-  (.body.outcome as $outcome |
-   ($policy[0].body.accepted_shadow_outcomes + $policy[0].body.refused_shadow_outcomes) |
-   index($outcome) != null) and
-  (.body.target_repository_id | id_ok) and
-  (.body.environment | type == "object") and
-  (.body.environment.environment_id | id_ok);
+  exact(["body","id","kind","schema_version"]) and
+  .schema_version == 1 and .kind == "shadow_reproduction_record" and
+  (.id | id_ok) and
+  (.body |
+   . as $body |
+   exact(["activation_state","authority","check","deploy_authority","effects",
+     "environment","evaluation_mode","git_revision_ref","incident_ref",
+     "materialization","observed_at","outcome","qualification","reason_id",
+     "shadow","target_repository_id","trace_ledger_ref"]) and
+   .activation_state == "inactive" and .authority == "none" and
+   .deploy_authority == "none" and .shadow == true and
+   .evaluation_mode == "observation-only" and
+   .effects == ["caller-disposable-candidate-repository"] and
+   .qualification == {state:"unavailable",reason_id:"shadow.unqualified"} and
+   (.observed_at | time_ok) and
+   (.target_repository_id | id_ok) and
+   # The slice records the exact revision it reproduced at, so the scope can be
+   # bound to it; a record that does not say which revision it ran against is
+   # not a record this evaluator can attach qualification to.
+   (.git_revision_ref | revision_ok($body.target_repository_id)) and
+   (.incident_ref |
+    shadow_ref_ok("shadow-incident-record";
+      "application/vnd.ystack.shadow-incident-record+json")) and
+   (.trace_ledger_ref |
+    shadow_ref_ok("shadow-trace-ledger";
+      "application/vnd.ystack.telemetry-trace-ledger+json")) and
+   (.environment |
+    exact(["claim_ref","environment_id","evaluation","registry_ref"]) and
+    (.environment_id | id_ok) and
+    (.claim_ref |
+     shadow_ref_ok("shadow-environment-claim";
+       "application/vnd.ystack.control-execution-environment-claim+json")) and
+    (.registry_ref |
+     shadow_ref_ok("shadow-environment-registry";
+       "application/vnd.ystack.shadow-environment-registry+json")) and
+    (.evaluation | environment_evaluation_ok)) and
+   (.materialization |
+    materialization_ok($body.git_revision_ref; $body.target_repository_id)) and
+   (.check | check_block_ok) and
+   # The shadow slice's closed outcome vocabulary, which is the one this
+   # component's policy names; anything else is not a shadow record this
+   # evaluator understands, so the set is malformed.
+   (.outcome as $outcome |
+    ($policy[0].body.accepted_shadow_outcomes +
+     $policy[0].body.refused_shadow_outcomes) |
+    index($outcome) != null) and
+   slice_state_ok);
 
 $policy[0].body as $p |
 $scope[0] as $scope_doc |
