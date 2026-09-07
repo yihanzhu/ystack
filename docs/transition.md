@@ -266,9 +266,10 @@ written.
    12 (`scope/v1/`, `maintenance/v1/`) are merged (PRs #254, #255) like every other row;
    the only question left is whether any unit should be removed rather than carried
    into the operating mode.
-7. **Should any construction PR be re-reviewed under the full artifact chain?** All of
-   them (#249–#256) merged under construction mode with a clean independent Codex
-   review on their exact heads and CI green; whether a unit also had a second vendor
+7. **Should any construction PR be re-reviewed under the full artifact chain?** Every
+   PR merged while the mode record said `active` — from #233 through this document's own
+   PR — merged under construction mode with a clean independent Codex review on its exact
+   head and CI green; whether a unit also had a second vendor
    as producer is recorded on its PR, as question 3 notes. Say which, if any, should be re-reviewed before the
    transition; otherwise none is.
 8. **What happens to frozen PR #183 and draft PR #146?** The mode record freezes #183
