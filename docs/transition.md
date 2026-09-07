@@ -251,10 +251,12 @@ written.
    `0` today and `post_transition_ruleset` proposes keeping it there; raising it is a
    deliberate change to both the record and the live ruleset.
 3. **Is cross-vendor separation re-established immediately at the transition?**
-   For the earliest construction units Codex both wrote and reviewed; from the eval
-   framework onward Claude produced and Codex reviewed. The intended default profile
-   has Claude produce and Codex review. If yes, the transition PR itself should be
-   the first change reviewed under the restored separation.
+   During construction the producer varied by unit: some units were Codex-authored and
+   Codex-reviewed (one vendor), others Claude-produced and Codex-reviewed; which is
+   which is recorded on each PR (`git log --grep='Codex-authored'` lists the former).
+   The intended default profile has Claude produce and Codex review. If yes, the
+   transition PR itself should be the first change reviewed under the restored
+   separation.
 4. **Which unit is the first to leave inactive status?** The proposal is the shadow
    slice's self-host run (step 7), because it is read-only.
 5. **What replaces `allowed_live_writes` and `delivery_credential`?** Both describe
@@ -266,8 +268,8 @@ written.
    into the operating mode.
 7. **Should any construction PR be re-reviewed under the full artifact chain?** All of
    them (#249–#256) merged under construction mode with a clean independent Codex
-   review on their exact heads and CI green; the producer for those units was Claude, so
-   they already had two vendors on them, unlike the earliest construction units. Say which, if any, should be re-reviewed before the
+   review on their exact heads and CI green; whether a unit also had a second vendor
+   as producer is recorded on its PR, as question 3 notes. Say which, if any, should be re-reviewed before the
    transition; otherwise none is.
 8. **What happens to frozen PR #183 and draft PR #146?** The mode record freezes #183
    and `ROADMAP.md` says #146 must never merge; both need an explicit disposition
