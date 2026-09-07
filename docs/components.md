@@ -770,6 +770,8 @@ The planner also re-derives the observation's own facts before trusting it: a te
 
 A finding that names a constitution or protected path (the policy's protected prefixes, root files, and segments, compared case-insensitively) is never handed to the autonomous producer: it is left out of the fix request's allowed paths and listed under `excluded_protected_findings` for a human, and a review whose only actionable findings are protected refuses with `no-actionable-findings` and the detail `findings.protected-path-excluded`.
 
+The observation is checked with the normalizer's own shape predicates, copied verbatim from `adapters/codex-native-reviewer/v1/normalize.jq`, so the planner accepts exactly what the normalizer emits and nothing else.
+
 ## Inactive shadow reproduction slice
 
 `shadow/v1/` is the Roadmap's step-7 shadow vertical slice: one narrow, read-only

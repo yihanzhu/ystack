@@ -698,6 +698,32 @@ expect_error forged-clean-state-over-dismissed E_RELATION "$planner" plan \
     '.observation.status="DISMISSED"|.observation.dismissed_at="2026-09-01T00:04:00Z"')" \
   "$context" "$credential" "$reconciliation" "$risk" "$ledger"
 
+# The observation is checked with the normalizer's own shape predicates, copied
+# verbatim, so a document the normalizer would refuse to emit is refused here
+# too: a hidden-execution block that is not four unavailable facts, a top-level
+# finding with no body, an extra key on any finding, or provider metadata that
+# is not an object.
+expect_error observation-hidden-execution-empty E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-hidden-empty \
+    '.observation.hidden_execution={}')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-top-finding-null-body E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-top-null-body \
+    '.observation.top_level_findings[0].body=null')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-top-finding-extra-key E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-top-extra-key \
+    '.observation.top_level_findings[0].untrusted="value"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-inline-finding-extra-key E_RELATION "$planner" plan \
+  "$(mutate "$observation" observation-inline-extra-key \
+    '.observation.inline_findings[0].untrusted="value"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+expect_error observation-finding-metadata-not-object E_RELATION "$planner" \
+  plan "$(mutate "$observation" observation-finding-metadata-string \
+    '.observation.top_level_findings[0].provider_metadata="{}"')" \
+  "$context" "$credential" "$reconciliation" "$risk" "$ledger"
+
 race_root="$tmp/race"
 /bin/mkdir -p "$race_root/loop/v1"
 /bin/cp "$planner" "$policy" "$race_root/loop/v1/"
