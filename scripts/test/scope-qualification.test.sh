@@ -109,7 +109,34 @@ done
 ' "$policy" >/dev/null || fail 'policy contract'
 pass 'the shipped gate policy is canonical, inactive, and routine-only'
 
-"$jq_bin" -S -c -n '
+# The identities qualification is attached to. The scope records them, the shadow
+# records say which revision they ran against, and the evaluator binds the two.
+fixture_revision='{"commit_id":"1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d","hash_algorithm":"sha1","repository_id":"repo.fixture-target"}'
+other_revision='{"commit_id":"90abcdef1234567890abcdef1234567890abcdef","hash_algorithm":"sha1","repository_id":"repo.fixture-target"}'
+qualified_identity='{
+  "adapter_config_refs":[
+    {"content_id":"producer-config",
+     "media_type":"application/vnd.ystack.adapter-config+json",
+     "sha256":"dbb66b0ed70b09061474eb8a8245e7df9c26e3fb8eca1d1b5b5223c74d3699b4"}],
+  "model_request":{"effort_id":"high","model_id":"claude.sonnet",
+    "provider_id":"anthropic"},
+  "prompt_refs":[
+    {"location":{"kind":"path","value":"routines/coder.md"},"mode":"100644",
+     "object_id":"b307b85339fbfc060aec59c625918a3f20707438",
+     "object_type":"blob",
+     "revision":{"commit_id":"a637451d4b3fbef6b516a9c08f68c0dde46a7059",
+       "hash_algorithm":"sha1","repository_id":"repo.ystack"}}],
+  "resolved_profile_ref":{"id":"resolved.docs-typo-fix.v1","kind":"resolved_profile",
+    "schema_version":2,
+    "sha256":"3bae8e45eea85ad41068735782b4750deb920654c34712b85159195ceec8b688"},
+  "skill_refs":[],
+  "target_revision":{"commit_id":"1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "hash_algorithm":"sha1","repository_id":"repo.fixture-target"},
+  "verification_instructions_ref":{"content_id":"verification-instructions",
+    "media_type":"application/vnd.ystack.verification-instructions+json",
+    "sha256":"eebf0a48514a92396eb06ceee8fabc218f6b8c979e01ad5850bdedb42f494488"}}'
+
+"$jq_bin" -S -c -n --argjson revision "$fixture_revision" '
   def record($id;$environment;$outcome;$repository):
     {schema_version:1,kind:"shadow_reproduction_record",id:$id,
      body:{activation_state:"inactive",authority:"none",deploy_authority:"none",
@@ -118,6 +145,7 @@ pass 'the shipped gate policy is canonical, inactive, and routine-only'
        qualification:{state:"unavailable",reason_id:"shadow.unqualified"},
        outcome:$outcome,reason_id:"check.passed-at-revision",
        observed_at:"2026-09-05T00:00:00Z",target_repository_id:$repository,
+       git_revision_ref:($revision | .repository_id = $repository),
        environment:{environment_id:$environment}}};
   {schema_version:1,kind:"shadow_evidence_set",
    id:"scope.evidence.docs-typo-fix.v1",
@@ -126,43 +154,6 @@ pass 'the shipped gate policy is canonical, inactive, and routine-only'
        "repo.fixture-target"),
      record("shadow.docs-typo-fix.ci";"env.ci-linux-fixture";"no-change";
        "repo.fixture-target")]}}' >"$tmp/shadow-set.json"
-
-# A scope claims its evidence by digest, so the shadow set is built first and the
-# scope record is written to name exactly the records it may count.
-set_record_sha() {
-  "$jq_bin" -S -c --argjson i "$2" '.body.records[$i]' "$1" >"$tmp/record-digest.json"
-  sha256_path "$tmp/record-digest.json"
-}
-evidence_refs() {
-  local set_path=$1 count index refs=()
-  count=$("$jq_bin" -r '.body.records | length' "$set_path")
-  index=0
-  while [ "$index" -lt "$count" ]; do
-    refs+=("$("$jq_bin" -S -c -n --arg sha "$(set_record_sha "$set_path" "$index")" \
-      --arg id "$("$jq_bin" -r --argjson i "$index" '.body.records[$i].id' "$set_path")" \
-      '{schema_version:1,kind:"shadow_reproduction_record",id:$id,sha256:$sha}')")
-    index=$((index + 1))
-  done
-  /usr/bin/printf '%s\n' "${refs[@]}" |
-    "$jq_bin" -S -c -s 'sort | unique'
-}
-# $1 = shadow evidence set the scope claims, $2 = output path.
-scope_record() {
-  "$jq_bin" -S -c -n --argjson refs "$(evidence_refs "$1")" '
-    {schema_version:1,kind:"workflow_scope",id:"scope.docs-typo-fix.v1",
-     body:{activation_state:"inactive",authority:"none",enabled:false,
-       push_allowed:false,scope_version:"v1",
-       target_repository_id:"repo.fixture-target",
-       workflow_id:"workflow.docs-typo-fix",task_class:"task.docs-typo-fix",
-       risk_tier:"routine",allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
-       required_proof_kinds:["deterministic","independent-review"],
-       required_eval_families:["protected-path-credential-network-publisher-boundaries",
-         "stale-moved-artifacts"],
-       required_shadow_environments:["env.ci-linux-fixture","env.local-macos-fixture"],
-       shadow_evidence_refs:$refs,
-       max_attempts:2}}' >"$2"
-}
-scope_record "$tmp/shadow-set.json" "$tmp/scope.json"
 
 "$jq_bin" -S -c -n '
   def family($id;$status;$total;$failed;$inconclusive):
@@ -184,25 +175,120 @@ scope_record "$tmp/shadow-set.json" "$tmp/scope.json"
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;0;0)]}}' >"$tmp/dashboard.json"
 
-"$jq_bin" -S -c -n '
-  {schema_version:1,kind:"risk_gate_evaluation",id:"stage.docs-typo-fix.result",
-   body:{activation_state:"inactive",authority_effect:"none",
-     classification:{declared_tier:"routine",minimum_tier:"routine"},
-     evaluation_mode:"observation-only",reference_semantics:"identity-only",
-     verdict:"inconclusive",
-     reason_ids:["decision.provenance-unqualified"]}}' >"$tmp/risk.json"
-"$jq_bin" -S -c -n '
-  {schema_version:1,kind:"kill_switch_evaluation",
-   id:"kill-attempt.docs-typo-fix",
-   body:{activation_state:"inactive",authority_effect:"none",
-     evaluation_mode:"observation-only",reference_semantics:"identity-only",
-     verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$tmp/kill.json"
-"$jq_bin" -S -c -n '
+# The three gate evaluations carry the fields the real evaluators emit: the
+# policy set they ran under, the stage they are about, and the duty evaluation
+# the risk and kill-switch evaluators each bind. The duty document is written
+# first so the other two can name it.
+policy_set='{"id":"control.policy-set.v1","sha256":"42d342f42022ce1fb8c5c8e06c15dd3fd1ef604c215d1ce1ad6f7cc90ba8b747"}'
+stage_block='{
+  "request_ref":{"id":"stage.docs-typo-fix.request","kind":"stage_request",
+    "schema_version":2,
+    "sha256":"0cefa6d87f7869958b5ba9f0555a6327e8f49f3047b5bde500c7796024256592"},
+  "resolved_profile_ref":{"id":"resolved.docs-typo-fix.v1","kind":"resolved_profile",
+    "schema_version":2,
+    "sha256":"3bae8e45eea85ad41068735782b4750deb920654c34712b85159195ceec8b688"},
+  "result_ref":{"id":"stage.docs-typo-fix.result","kind":"stage_result",
+    "schema_version":2,
+    "sha256":"0fd5b4136f4b21757eeb1bcbd780cb5baac605663df3a9be4dd7b34c786a045d"}}'
+
+"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --argjson stage "$stage_block" '
   {schema_version:1,kind:"duty_separation_evaluation",
    id:"stage.docs-typo-fix.result",
    body:{activation_state:"inactive",evaluation_mode:"observation-only",
+     policy_set:$policy_set,stage:$stage,
      reference_semantics:"identity-only",verdict:"satisfied",
      reason_ids:["duty.satisfied"]}}' >"$tmp/duty.json"
+duty_sha=$(sha256_path "$tmp/duty.json")
+"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --argjson stage "$stage_block" \
+  --arg duty_sha "$duty_sha" '
+  {schema_version:1,kind:"risk_gate_evaluation",id:"stage.docs-typo-fix.result",
+   body:{activation_state:"inactive",authority_effect:"none",
+     classification:{declared_tier:"routine",minimum_tier:"routine"},
+     duty_evaluation_ref:{content_id:"stage.docs-typo-fix.result",
+       media_type:"application/vnd.ystack.duty-separation-evaluation+json",
+       sha256:$duty_sha},
+     policy_set:$policy_set,stage:$stage,
+     evaluation_mode:"observation-only",reference_semantics:"identity-only",
+     verdict:"inconclusive",
+     reason_ids:["decision.provenance-unqualified"]}}' >"$tmp/risk.json"
+"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --arg duty_sha "$duty_sha" '
+  {schema_version:1,kind:"kill_switch_evaluation",
+   id:"kill-attempt.docs-typo-fix",
+   body:{activation_state:"inactive",authority_effect:"none",
+     duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
+       id:"stage.docs-typo-fix.result",sha256:$duty_sha},
+     policy_set:$policy_set,
+     attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
+       id:"kill-attempt.docs-typo-fix",
+       sha256:"5f4cf0c000008d393df5f101db749ae7c6a29e967ea15ceb059fe2f84a6a99b9"},
+     evaluation_mode:"observation-only",reference_semantics:"identity-only",
+     verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$tmp/kill.json"
+
+# A scope claims its evidence by digest, so every evidence document is built
+# first and the scope record is written to name exactly the shadow records and
+# the three gate evaluations it may count.
+set_record_sha() {
+  "$jq_bin" -S -c --argjson i "$2" '.body.records[$i]' "$1" >"$tmp/record-digest.json"
+  sha256_path "$tmp/record-digest.json"
+}
+evidence_refs() {
+  local set_path=$1 count index refs=()
+  count=$("$jq_bin" -r '.body.records | length' "$set_path")
+  index=0
+  while [ "$index" -lt "$count" ]; do
+    refs+=("$("$jq_bin" -S -c -n --arg sha "$(set_record_sha "$set_path" "$index")" \
+      --arg id "$("$jq_bin" -r --argjson i "$index" '.body.records[$i].id' "$set_path")" \
+      '{schema_version:1,kind:"shadow_reproduction_record",id:$id,sha256:$sha}')")
+    index=$((index + 1))
+  done
+  /usr/bin/printf '%s\n' "${refs[@]}" |
+    "$jq_bin" -S -c -s 'sort | unique'
+}
+# One document ref naming the evaluation in $1 by its own kind, id, and digest.
+gate_ref() {
+  "$jq_bin" -S -c -n --arg sha "$(sha256_path "$1")" \
+    --arg id "$("$jq_bin" -r '.id' "$1")" --arg kind "$("$jq_bin" -r '.kind' "$1")" \
+    '{schema_version:1,kind:$kind,id:$id,sha256:$sha}'
+}
+# $1 = risk, $2 = kill-switch, $3 = duty evaluation the scope claims.
+gate_refs() {
+  "$jq_bin" -S -c -n --argjson risk "$(gate_ref "$1")" \
+    --argjson kill "$(gate_ref "$2")" --argjson duty "$(gate_ref "$3")" \
+    '{risk_gate_evaluation_ref:$risk,kill_switch_evaluation_ref:$kill,
+      duty_separation_evaluation_ref:$duty}'
+}
+# $1 = shadow evidence set, $2 = risk, $3 = kill, $4 = duty, $5 = output path.
+scope_record() {
+  "$jq_bin" -S -c -n --argjson refs "$(evidence_refs "$1")" \
+    --argjson gate_refs "$(gate_refs "$2" "$3" "$4")" \
+    --argjson identity "$qualified_identity" '
+    {schema_version:1,kind:"workflow_scope",id:"scope.docs-typo-fix.v1",
+     body:{activation_state:"inactive",authority:"none",enabled:false,
+       push_allowed:false,scope_version:"v1",
+       target_repository_id:"repo.fixture-target",
+       workflow_id:"workflow.docs-typo-fix",task_class:"task.docs-typo-fix",
+       risk_tier:"routine",allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
+       required_proof_kinds:["deterministic","independent-review"],
+       required_eval_families:["protected-path-credential-network-publisher-boundaries",
+         "stale-moved-artifacts"],
+       required_shadow_environments:["env.ci-linux-fixture","env.local-macos-fixture"],
+       shadow_evidence_refs:$refs,
+       qualified_identity:$identity,
+       gate_evidence_refs:$gate_refs,
+       max_attempts:2}}' >"$5"
+}
+# $1 = risk, $2 = kill, $3 = duty, $4 = output: the standard scope re-pointed at
+# one mutated gate evaluation, so a case can isolate a verdict from a rebinding.
+scope_for_gates() {
+  scope_record "$tmp/shadow-set.json" "$1" "$2" "$3" "$4"
+}
+# $1 = mutated shadow evidence set, $2 = output: the standard scope re-pointed at
+# that set, so a case can isolate the shadow problem from an unmet claim.
+scope_for_shadow() {
+  scope_record "$1" "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json" "$2"
+}
+scope_record "$tmp/shadow-set.json" "$tmp/risk.json" "$tmp/kill.json" \
+  "$tmp/duty.json" "$tmp/scope.json"
 /bin/cp "$repo_marker" "$tmp/marker.json"
 
 good=("$tmp/scope.json" "$tmp/shadow-set.json" "$tmp/dashboard.json" "$tmp/risk.json"
@@ -244,10 +330,37 @@ mutate_scope '.body.shadow_evidence_refs[0].kind = "other_record"' \
 mutate_scope '.body.shadow_evidence_refs =
   [.body.shadow_evidence_refs[0], .body.shadow_evidence_refs[0]]' \
   "$tmp/bad-ref-duplicate.json"
+mutate_scope 'del(.body.qualified_identity)' "$tmp/bad-no-identity.json"
+mutate_scope 'del(.body.qualified_identity.model_request)' "$tmp/bad-no-model.json"
+mutate_scope '.body.qualified_identity.model_request.effort_id = 3' \
+  "$tmp/bad-model-shape.json"
+mutate_scope '.body.qualified_identity.prompt_refs = []' "$tmp/bad-no-prompt.json"
+mutate_scope '.body.qualified_identity.prompt_refs[0].object_id = "not-an-object"' \
+  "$tmp/bad-prompt-object.json"
+mutate_scope '.body.qualified_identity.adapter_config_refs[0].media_type = "json"' \
+  "$tmp/bad-config-media.json"
+mutate_scope 'del(.body.qualified_identity.verification_instructions_ref)' \
+  "$tmp/bad-no-verification.json"
+mutate_scope '.body.qualified_identity.resolved_profile_ref.schema_version = 1' \
+  "$tmp/bad-profile-version.json"
+mutate_scope '.body.qualified_identity.target_revision.repository_id = "repo.other"' \
+  "$tmp/bad-revision-repository.json"
+mutate_scope '.body.qualified_identity.target_revision.commit_id = "abc"' \
+  "$tmp/bad-revision-commit.json"
+mutate_scope 'del(.body.gate_evidence_refs)' "$tmp/bad-no-gate-refs.json"
+mutate_scope 'del(.body.gate_evidence_refs.kill_switch_evaluation_ref)' \
+  "$tmp/bad-gate-ref-missing.json"
+mutate_scope '.body.gate_evidence_refs.risk_gate_evaluation_ref.kind =
+  "duty_separation_evaluation"' "$tmp/bad-gate-ref-kind.json"
+mutate_scope '.body.gate_evidence_refs.duty_separation_evaluation_ref.sha256 =
+  "not-a-digest"' "$tmp/bad-gate-ref-digest.json"
 for case_name in bad-attempts bad-tier bad-absolute bad-traversal bad-doublestar \
   bad-firstwild bad-git bad-backslash bad-duplicate bad-family bad-proof bad-extra \
   bad-missing bad-kind bad-no-refs bad-empty-refs bad-ref-shape bad-ref-digest \
-  bad-ref-kind bad-ref-duplicate; do
+  bad-ref-kind bad-ref-duplicate bad-no-identity bad-no-model bad-model-shape \
+  bad-no-prompt bad-prompt-object bad-config-media bad-no-verification \
+  bad-profile-version bad-revision-repository bad-revision-commit \
+  bad-no-gate-refs bad-gate-ref-missing bad-gate-ref-kind bad-gate-ref-digest; do
   expect_validator_error "$case_name" E_SHAPE "$tmp/$case_name.json"
 done
 for case_name in bad-enabled bad-push bad-workflow bad-task bad-version bad-active; do
@@ -294,7 +407,9 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
   --arg shadow_set_sha "$shadow_set_sha" --arg dashboard_sha "$dashboard_sha" \
   --arg risk_sha "$risk_sha" --arg kill_sha "$kill_sha" --arg duty_sha "$duty_sha" \
   --arg marker_sha "$marker_sha" --arg record_0_sha "$record_0_sha" \
-  --arg record_1_sha "$record_1_sha" '
+  --arg record_1_sha "$record_1_sha" \
+  --argjson identity "$qualified_identity" \
+  --argjson gate_refs "$(gate_refs "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json")" '
   def policy_ref: {content_id:"scope-qualification-policy",
     media_type:"application/vnd.ystack.control-policy+json",sha256:$policy_sha};
   def mode_ref: {content_id:"operating-mode-marker",media_type:"application/json",
@@ -353,6 +468,8 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
                sha256:$scope_sha}}},
            scope_sha256:$scope_sha},
          scope_document_ref:scope_ref,
+         qualified_identity:$identity,
+         gate_evidence_refs:$gate_refs,
          target_repository_id:"repo.fixture-target",
          workflow_id:"workflow.docs-typo-fix",task_class:"task.docs-typo-fix",
          risk_tier:"routine",
@@ -385,13 +502,21 @@ expect_reasons tier-high '["scope.tier-not-routine"]' "$tmp/tier-high.json" \
   "${good[@]:1}"
 expect_reasons tier-bootstrap '["scope.tier-not-routine"]' "$tmp/tier-bootstrap.json" \
   "${good[@]:1}"
+# A gate evaluation whose bytes changed is a different document, so each of
+# these cases gets a scope that claims the mutated one: the refusal under test is
+# the verdict, not an unbound claim.
 "$jq_bin" -S -c '.body.classification.minimum_tier = "high"' "$tmp/risk.json" \
   >"$tmp/risk-high.json"
+scope_for_gates "$tmp/risk-high.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-risk-high.json"
 "$jq_bin" -S -c '.body.verdict = "violated"' "$tmp/risk.json" >"$tmp/risk-violated.json"
-expect_reasons risk-tier-high '["scope.tier-not-routine"]' "${good[@]:0:3}" \
-  "$tmp/risk-high.json" "${good[@]:4}"
-expect_reasons risk-violated '["scope.tier-not-routine"]' "${good[@]:0:3}" \
-  "$tmp/risk-violated.json" "${good[@]:4}"
+scope_for_gates "$tmp/risk-violated.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-risk-violated.json"
+expect_reasons risk-tier-high '["scope.tier-not-routine"]' \
+  "$tmp/scope-risk-high.json" "${good[@]:1:2}" "$tmp/risk-high.json" "${good[@]:4}"
+expect_reasons risk-violated '["scope.tier-not-routine"]' \
+  "$tmp/scope-risk-violated.json" "${good[@]:1:2}" "$tmp/risk-violated.json" \
+  "${good[@]:4}"
 pass 'only a routine tier the risk gate also classifies routine may be proposed'
 
 for glob in '.github/workflows/ci.yml' 'config/models.conf' 'AGENTS.md' \
@@ -440,13 +565,13 @@ expect_reasons shadow-missing '["scope.shadow-evidence-missing"]' \
 # repository, not an unmet claim.
 "$jq_bin" -S -c '.body.records[0].body.outcome = "inconclusive"' "$tmp/shadow-set.json" \
   >"$tmp/shadow-inconclusive.json"
-scope_record "$tmp/shadow-inconclusive.json" "$tmp/scope-inconclusive.json"
+scope_for_shadow "$tmp/shadow-inconclusive.json" "$tmp/scope-inconclusive.json"
 expect_reasons shadow-inconclusive \
   '["scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "$tmp/scope-inconclusive.json" "$tmp/shadow-inconclusive.json" "${good[@]:2}"
-"$jq_bin" -S -c '.body.records[0].body.target_repository_id = "repo.other"' \
+"$jq_bin" -S -c '.body.records[0].body |= (.target_repository_id = "repo.other" | .git_revision_ref.repository_id = "repo.other")' \
   "$tmp/shadow-set.json" >"$tmp/shadow-other-repo.json"
-scope_record "$tmp/shadow-other-repo.json" "$tmp/scope-other-repo.json"
+scope_for_shadow "$tmp/shadow-other-repo.json" "$tmp/scope-other-repo.json"
 expect_reasons shadow-other-repository '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-other-repo.json" "$tmp/shadow-other-repo.json" "${good[@]:2}"
 "$jq_bin" -S -c '.body.records[1] = .body.records[0]' "$tmp/shadow-set.json" \
@@ -458,7 +583,7 @@ expect_reasons shadow-replayed \
 # evaluator understands, even when it is claimed: the set is malformed.
 "$jq_bin" -S -c '.body.records[0].body.outcome = "failed"' "$tmp/shadow-set.json" \
   >"$tmp/shadow-unknown-outcome.json"
-scope_record "$tmp/shadow-unknown-outcome.json" "$tmp/scope-unknown-outcome.json"
+scope_for_shadow "$tmp/shadow-unknown-outcome.json" "$tmp/scope-unknown-outcome.json"
 expect_reasons shadow-unknown-outcome \
   '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \
   "$tmp/scope-unknown-outcome.json" "$tmp/shadow-unknown-outcome.json" "${good[@]:2}"
@@ -522,21 +647,85 @@ expect_reasons eval-duplicate-family '["scope.eval-failing","scope.eval-family-u
   "${good[@]:0:2}" "$tmp/dashboard-duplicate.json" "${good[@]:3}"
 pass 'every required eval family must be seeded and free of failing or inconclusive grades'
 
-"$jq_bin" -S -c '.body.verdict = "violated"' "$tmp/kill.json" >"$tmp/kill-violated.json"
-"$jq_bin" -S -c '.body.verdict = "inconclusive"' "$tmp/kill.json" \
-  >"$tmp/kill-inconclusive.json"
-expect_reasons kill-violated '["scope.kill-switch"]' "${good[@]:0:4}" \
-  "$tmp/kill-violated.json" "${good[@]:5}"
-expect_reasons kill-inconclusive '["scope.kill-switch"]' "${good[@]:0:4}" \
-  "$tmp/kill-inconclusive.json" "${good[@]:5}"
-"$jq_bin" -S -c '.body.verdict = "violated"' "$tmp/duty.json" >"$tmp/duty-violated.json"
-"$jq_bin" -S -c '.body.verdict = "inconclusive"' "$tmp/duty.json" \
-  >"$tmp/duty-inconclusive.json"
-expect_reasons duty-violated '["scope.duty-violation"]' "${good[@]:0:5}" \
-  "$tmp/duty-violated.json" "${good[@]:6}"
-expect_reasons duty-inconclusive '["scope.duty-violation"]' "${good[@]:0:5}" \
-  "$tmp/duty-inconclusive.json" "${good[@]:6}"
+for verdict in violated inconclusive; do
+  "$jq_bin" -S -c --arg verdict "$verdict" '.body.verdict = $verdict' \
+    "$tmp/kill.json" >"$tmp/kill-$verdict.json"
+  scope_for_gates "$tmp/risk.json" "$tmp/kill-$verdict.json" "$tmp/duty.json" \
+    "$tmp/scope-kill-$verdict.json"
+  expect_reasons "kill-$verdict" '["scope.kill-switch"]' \
+    "$tmp/scope-kill-$verdict.json" "${good[@]:1:3}" "$tmp/kill-$verdict.json" \
+    "${good[@]:5}"
+  "$jq_bin" -S -c --arg verdict "$verdict" '.body.verdict = $verdict' \
+    "$tmp/duty.json" >"$tmp/duty-$verdict.json"
+  scope_for_gates "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty-$verdict.json" \
+    "$tmp/scope-duty-$verdict.json"
+  expect_reasons "duty-$verdict" '["scope.duty-violation"]' \
+    "$tmp/scope-duty-$verdict.json" "${good[@]:1:4}" "$tmp/duty-$verdict.json" \
+    "${good[@]:6}"
+done
 pass 'a live kill switch or an unsatisfied duty separation blocks the proposal'
+
+# A gate evaluation the scope did not name is not the one it was qualified
+# against, even when its verdict is fine: the digest the driver measured has to
+# equal the digest the scope claimed.
+"$jq_bin" -S -c '.body.reason_ids =
+  ["decision.provenance-unqualified","other.restated"]' "$tmp/risk.json" \
+  >"$tmp/risk-restated.json"
+expect_reasons risk-digest-mismatch '["scope.malformed"]' "${good[@]:0:3}" \
+  "$tmp/risk-restated.json" "${good[@]:4}"
+"$jq_bin" -S -c '.body.reason_ids = ["kill.cleared-current","other.restated"]' \
+  "$tmp/kill.json" >"$tmp/kill-restated.json"
+expect_reasons kill-digest-mismatch '["scope.malformed"]' "${good[@]:0:4}" \
+  "$tmp/kill-restated.json" "${good[@]:5}"
+# The three must belong together: one policy set, one stage, one duty
+# evaluation. Each of these is a satisfied verdict produced for something else.
+"$jq_bin" -S -c '.body.policy_set.id = "control.policy-set.other"' "$tmp/kill.json" \
+  >"$tmp/kill-other-policy-set.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-other-policy-set.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-other-policy-set.json"
+expect_reasons kill-other-policy-set '["scope.malformed"]' \
+  "$tmp/scope-kill-other-policy-set.json" "${good[@]:1:3}" \
+  "$tmp/kill-other-policy-set.json" "${good[@]:5}"
+"$jq_bin" -S -c '.body.stage.request_ref.id = "stage.other.request"' "$tmp/duty.json" \
+  >"$tmp/duty-other-stage.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty-other-stage.json" \
+  "$tmp/scope-duty-other-stage.json"
+expect_reasons duty-other-stage '["scope.malformed"]' \
+  "$tmp/scope-duty-other-stage.json" "${good[@]:1:4}" "$tmp/duty-other-stage.json" \
+  "${good[@]:6}"
+"$jq_bin" -S -c '.body.duty_evaluation_ref.id = "stage.other.result"' "$tmp/kill.json" \
+  >"$tmp/kill-other-duty.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-other-duty.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-other-duty.json"
+expect_reasons kill-other-duty '["scope.malformed"]' \
+  "$tmp/scope-kill-other-duty.json" "${good[@]:1:3}" "$tmp/kill-other-duty.json" \
+  "${good[@]:5}"
+# The scope's own resolved profile is the one the risk and duty evaluations must
+# be about; a scope that records a different profile was never qualified by them.
+"$jq_bin" -S -c '.body.qualified_identity.resolved_profile_ref.id =
+  "resolved.other.v1"' "$tmp/scope.json" >"$tmp/scope-other-profile.json"
+run_validator "$tmp/scope-other-profile.json" ||
+  fail 'a scope naming another resolved profile was refused as malformed'
+expect_reasons scope-other-profile '["scope.malformed"]' \
+  "$tmp/scope-other-profile.json" "${good[@]:1}"
+pass 'gate evidence counts only when the scope named it and the three agree'
+
+# Qualification is attached to one exact target version. Shadow evidence from a
+# different revision is evidence about a different target, so it does not count.
+"$jq_bin" -S -c --argjson revision "$other_revision" \
+  '.body.qualified_identity.target_revision = $revision' "$tmp/scope.json" \
+  >"$tmp/scope-other-revision.json"
+run_validator "$tmp/scope-other-revision.json" ||
+  fail 'a scope naming another target revision was refused as malformed'
+expect_reasons scope-other-revision '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-other-revision.json" "${good[@]:1}"
+"$jq_bin" -S -c --argjson revision "$other_revision" \
+  '.body.records[0].body.git_revision_ref = $revision' "$tmp/shadow-set.json" \
+  >"$tmp/shadow-other-revision.json"
+scope_for_shadow "$tmp/shadow-other-revision.json" "$tmp/scope-shadow-revision.json"
+expect_reasons shadow-other-revision '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-shadow-revision.json" "$tmp/shadow-other-revision.json" "${good[@]:2}"
+pass 'shadow evidence counts only at the target revision the scope records'
 
 "$jq_bin" -S '.status = "operating"' "$tmp/marker.json" >"$tmp/marker-stale.json"
 expect_reasons mode-stale-marker '["scope.mode-construction"]' "${good[@]:0:6}" \

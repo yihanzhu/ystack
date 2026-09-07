@@ -13,21 +13,59 @@ def document_ref($doc; $sha):
 def content_ref($content_id; $media_type; $sha):
   {content_id: $content_id, media_type: $media_type, sha256: $sha};
 
+def oid_ok($algorithm):
+  type == "string" and
+  (if $algorithm == "sha256" then test("\\A[0-9a-f]{64}\\z")
+   else test("\\A[0-9a-f]{40}\\z") end);
+
+def revision_ok($repository_id):
+  . as $revision |
+  type == "object" and
+  (keys | sort) == ["commit_id", "hash_algorithm", "repository_id"] and
+  $revision.repository_id == $repository_id and
+  ($revision.hash_algorithm == "sha1" or $revision.hash_algorithm == "sha256") and
+  ($revision.commit_id | oid_ok($revision.hash_algorithm));
+
+# Every real control evaluation names the policy set it was produced under.
+def policy_set_ok:
+  type == "object" and (keys | sort) == ["id", "sha256"] and
+  (.id | id_ok) and (.sha256 | sha256_ok);
+
+def core_document_ref_ok($kind):
+  type == "object" and
+  (keys | sort) == ["id", "kind", "schema_version", "sha256"] and
+  .schema_version == 2 and .kind == $kind and (.id | id_ok) and (.sha256 | sha256_ok);
+
+# The stage block the risk and duty evaluators both emit: which request, which
+# resolved profile, which result the evaluation is about.
+def stage_ok:
+  type == "object" and
+  (keys | sort) == ["request_ref", "resolved_profile_ref", "result_ref"] and
+  (.request_ref | core_document_ref_ok("stage_request")) and
+  (.resolved_profile_ref | core_document_ref_ok("resolved_profile")) and
+  (.result_ref | core_document_ref_ok("stage_result"));
+
 def evaluation_ok($kind):
   type == "object" and .schema_version == 1 and .kind == $kind and (.id | id_ok) and
   (.body | type == "object") and .body.activation_state == "inactive" and
+  (.body.policy_set | policy_set_ok) and
   (.body.verdict |
    type == "string" and
    (. as $verdict |
     ["inconclusive", "satisfied", "violated"] | index($verdict) != null));
 
 def shadow_record_ok:
+  . as $record |
   type == "object" and .schema_version == 1 and
   .kind == "shadow_reproduction_record" and (.id | id_ok) and
   (.body | type == "object") and .body.activation_state == "inactive" and
   .body.authority == "none" and .body.shadow == true and
   (.body.qualification | type == "object") and
   .body.qualification.state == "unavailable" and
+  # The slice records the exact revision it reproduced at, so the scope can be
+  # bound to it; a record that does not say which revision it ran against is not
+  # a record this evaluator can attach qualification to.
+  (.body.git_revision_ref | revision_ok($record.body.target_repository_id)) and
   # The shadow slice's closed outcome vocabulary; anything else is not a
   # shadow record this evaluator understands, so the set is malformed.
   (.body.outcome as $outcome |
@@ -40,6 +78,8 @@ def shadow_record_ok:
 $policy[0].body as $p |
 $scope[0] as $scope_doc |
 $scope_doc.body as $s |
+$s.qualified_identity as $identity |
+$s.gate_evidence_refs as $gate_refs |
 $shadow_set[0] as $set |
 $dashboard[0] as $dash |
 $risk[0] as $risk_doc |
@@ -80,6 +120,37 @@ $marker[0] as $mode_doc |
 ($duty_doc | evaluation_ok("duty_separation_evaluation")) as $duty_ok |
 ($mode_doc | type == "object" and (.status | type == "string")) as $mode_ok |
 
+# The scope names its three gate evaluations by kind, id, and digest, exactly as
+# it names its shadow evidence, and the driver measured each supplied document
+# itself. A document the scope did not name is not the one it was qualified
+# against, so it is refused as malformed instead of being read for a verdict.
+# The three must also belong together: one policy set; the risk and duty
+# evaluations about the same stage request and result and about the resolved
+# profile the scope records; and the risk and kill evaluations each naming this
+# duty evaluation, which is the only reference the kill-switch evaluation shares
+# with the other two. The shared duty reference is compared by id: the digest in
+# it is each evaluator's own binding, while the bytes of all three documents are
+# already pinned by the scope's own refs above.
+def named_by($ref; $document; $sha):
+  $ref == {schema_version: $document.schema_version, kind: $document.kind,
+    id: $document.id, sha256: $sha};
+($risk_ok and $kill_ok and $duty_ok and
+ named_by($gate_refs.risk_gate_evaluation_ref; $risk_doc; $risk_sha) and
+ named_by($gate_refs.kill_switch_evaluation_ref; $kill_doc; $kill_sha) and
+ named_by($gate_refs.duty_separation_evaluation_ref; $duty_doc; $duty_sha) and
+ $risk_doc.body.policy_set == $kill_doc.body.policy_set and
+ $risk_doc.body.policy_set == $duty_doc.body.policy_set and
+ ($risk_doc.body.stage | stage_ok) and
+ ($duty_doc.body.stage | stage_ok) and
+ $risk_doc.body.stage.request_ref == $duty_doc.body.stage.request_ref and
+ $risk_doc.body.stage.result_ref == $duty_doc.body.stage.result_ref and
+ $risk_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
+ $duty_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
+ ($risk_doc.body.duty_evaluation_ref |
+  type == "object" and .content_id == $duty_doc.id) and
+ ($kill_doc.body.duty_evaluation_ref |
+  type == "object" and .id == $duty_doc.id)) as $gates_bound |
+
 # Only the two statuses the mode record can carry are meaningful: "active" is
 # construction and "retired" is operating. Anything else is unknown and refuses.
 (if ($mode_ok | not) or $mode_repo_state == "differs" then "unknown"
@@ -94,9 +165,11 @@ $marker[0] as $mode_doc |
      sha256: $record_shas[$index],
      environment_id: $record.body.environment.environment_id,
      outcome: $record.body.outcome,
-     target_repository_id: $record.body.target_repository_id}] |
+     target_repository_id: $record.body.target_repository_id,
+     target_revision: $record.body.git_revision_ref}] |
    sort_by(.sha256)
- else [] end) as $records |
+ else [] end) as $bound_records |
+($bound_records | map(del(.target_revision))) as $records |
 
 # The scope names the shadow records it claims as its own, by id and by digest.
 # A supplied record counts only when one of those refs names it exactly, so a
@@ -106,13 +179,18 @@ $marker[0] as $mode_doc |
 ($s.shadow_evidence_refs // []) as $refs |
 def claimed_by_scope($refs): . as $record |
   $refs | any(.id == $record.id and .sha256 == $record.sha256);
-($records | map(select(claimed_by_scope($refs)))) as $claimed |
+($bound_records | map(select(claimed_by_scope($refs)))) as $claimed |
 ($records | map(select(claimed_by_scope($refs) | not) | .sha256) |
  sort | unique) as $unclaimed |
 ($refs |
  all(. as $ref |
      $records | any(.id == $ref.id and .sha256 == $ref.sha256))) as $refs_resolved |
-($claimed | map(select(.target_repository_id == $s.target_repository_id))) as $mine |
+# Evidence counts only when it was gathered for this scope's own target: the
+# same repository, and the same revision the scope's recorded identity names.
+# A record from another revision is evidence about a different target version.
+($claimed |
+ map(select(.target_repository_id == $s.target_repository_id and
+   .target_revision == $identity.target_revision))) as $mine |
 
 # A glob is protected when it names, or could expand into, a path the roadmap's
 # high-risk list reserves. A wildcard in any directory segment could expand into
@@ -182,7 +260,7 @@ def claimed_by_scope($refs): . as $record |
   else ["scope.duty-violation"] end) +
  (if $mode_state == "unknown" then ["scope.mode-construction"] else [] end) +
  (if $shas_ok and $set_ok and $dash_ok and $risk_ok and $kill_ok and $duty_ok and
-     $mode_ok
+     $mode_ok and $gates_bound
   then [] else ["scope.malformed"] end) |
  sort | unique) as $refusals |
 
@@ -252,6 +330,8 @@ content_ref("operating-mode-marker"; "application/json"; $marker_sha) as $mode_r
                   value: {type: "content", value: $scope_content_ref}},
                 scope_sha256: $scope_sha},
               scope_document_ref: document_ref($scope_doc; $scope_sha),
+              qualified_identity: $identity,
+              gate_evidence_refs: $gate_refs,
               target_repository_id: $s.target_repository_id,
               workflow_id: $s.workflow_id,
               task_class: $s.task_class,
