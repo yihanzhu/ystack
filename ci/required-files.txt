@@ -355,6 +355,12 @@ packaging/v1/install.sh
 packaging/v1/packaging.jq
 scripts/test/target-packaging.test.sh
 
+# Inactive review-fix loop planner
+loop/v1/plan-review-fix.sh
+loop/v1/review-fix-planner.jq
+loop/v1/review-fix-policy.json
+scripts/test/loop-review-fix-planner.test.sh
+
 # Inactive shadow reproduction slice
 shadow/v1/incident-record.jq
 shadow/v1/validate-incident.sh

@@ -763,6 +763,97 @@ Before anything is derived from a profile, the builder requires it to be a valid
 
 Each manifest is also validated as a core document, and the package it offers must be the very object the profile's binding for that manifest packages, so re-pinning a profile to an edited manifest that points its package elsewhere refuses the release as well.
 
+## Inactive review-fix loop planner
+
+`loop/v1/plan-review-fix.sh` is the deterministic planner for roadmap step 9, the
+safe review-fix loop. It reads six already-recorded documents — one normalized
+review observation from the Codex native reviewer, the change's own head/base
+context, a credential-policy evaluation, a reconciliation plan, a risk-gate
+evaluation, and the change's attempt ledger — and returns exactly one canonical
+`review_fix_plan`. That plan holds either one bounded fix request or one refusal
+with a named reason. It never calls a model, a producer, a forge, or a network,
+and it dispatches nothing: the request is a document, not an action.
+
+The fix request is bounded by construction. It is bound to the exact reviewed head
+and base, lists the findings it wants addressed by their provider finding IDs, and
+its allowed paths are exactly the files those findings point at — nothing wider.
+Only inline findings count, because a top-level finding names no file and so
+cannot bound anything. Severity comes from the committed
+`loop/v1/review-fix-policy.json`: a finding is actionable only when its
+lower-cased provider severity is on that policy's actionable list, so nits, P3s,
+and severities the policy does not recognise are never acted on. The same policy
+carries the hard attempt limit (2). `push_allowed` is always `false`, and when the
+change carries any approval the request says so with
+`loop.no-push-after-approval`; the planner has no way to say `true`, because
+nothing here is authorized to push.
+
+Refusal comes first and wins, in a fixed order: `kill-switch`,
+`boundaries-unproven`, `review-stale`, `degraded-review`, `approval-present`,
+`attempt-limit`, `no-actionable-findings`. Boundaries are unproven whenever the
+credential, reconciliation, risk, or attempt-ledger document handed in is not the
+exact one the change context pins by kind, id, and SHA-256; whenever the
+credential or risk verdict is anything but `satisfied`; whenever the reconciliation
+plan still carries pending, in-flight (`concurrency.active_pending`), or deferred deliveries or operator messages; or whenever the ledger
+belongs to another change or was recorded after the context was observed. The
+three boundary documents are checked field for field against the full shapes
+their own producers emit — `control/v1/credential-policy.jq`,
+`control/v1/risk-gates.jq`, and `orchestrator/v1/reconciliation-plan.jq`, down to
+every reference's kind, schema version, and media type and every delivery,
+deferral, suppression, and operator message — so a stub carrying nothing but an
+envelope and a verdict cannot prove a boundary.
+
+The planner never trusts the observation's own list of stale bindings. It
+recomputes every binding the Codex native reviewer checks — repository, change
+request, head, base, review id, GitHub app id, and observation time — from the
+observation's trust context against its own snapshot, and refuses `review-stale`
+when any recomputed binding differs, so an observation whose list was cleared
+after the fact cannot drive a fix. A list that disagrees with the recomputation is
+itself a refusal, in either direction: a cleared list over a genuinely stale
+review, and a list claiming staleness the recomputation does not find, are both
+`review-stale`. The review is stale as well when the adapter reports the stale
+state, or when its head, base, repository, or change request is not the change's
+current one.
+
+A review is degraded when it was dismissed, timed out, failed, is not complete, or
+never reached `COMPLETED`; a partial review can never scope a fix, so
+`complete: false` always refuses. When a review does claim to be complete, its
+reported top-level and inline counts must equal the lengths of the arrays it
+carries; a complete review whose counts and findings disagree is a malformed
+document, refused as a shape violation rather than planned from the short array.
+An approval recorded on the exact reviewed head refuses outright; an approval on
+an earlier commit only forbids the push.
+
+Every input is treated as untrusted. The driver requires each of the six inputs to
+be an absolute path to a regular non-symlink file of at most 1 MiB, holding exactly
+one JSON text in canonical `jq -S -c` bytes within fixed depth, member, and string
+limits; it pins jq 1.6 by release digest and runs from a private copy; and it
+re-checks the driver, policy, program, jq, and all six inputs after the plan is
+built, so an input moved during the run is refused rather than used. Every failure
+prints one `E_*` class and nothing else. The planner re-validates the whole shape
+of each document it reads, so a forged adapter observation, an extra field, or a
+miscounted ledger is refused, not interpreted.
+
+The planner proves nothing about the boundaries themselves. It reads their
+recorded verdicts as input claims and binds them by identity; a credential or
+risk evaluation only becomes `satisfied` when a qualified evaluator says so, which
+no shipped evaluator can do while everything here is inactive. So on today's repo
+this planner refuses with `boundaries-unproven` for real inputs, which is the
+intended construction-mode answer. Enabling this loop for real is a step-8/9
+operator decision taken after the operating-mode transition; this unit only
+produces a request document and grants no authority, qualification, or activation.
+
+Run the focused proof with:
+
+```sh
+bash scripts/test/loop-review-fix-planner.test.sh
+```
+
+The planner also re-derives the observation's own facts before trusting it: a terminal status must carry `terminal_at`, only a dismissed review may carry `dismissed_at`, an open status carries neither, timestamps must be ordered, and the claimed `state` and `reason_id` must be exactly what the normalizer derives from the snapshot. A snapshot that says completed while also dismissed, or a review marked incomplete that still claims a settled state, is refused as malformed rather than planned from.
+
+A finding that names a constitution or protected path (the policy's protected prefixes, root files, and segments, compared case-insensitively) is never handed to the autonomous producer: it is left out of the fix request's allowed paths and listed under `excluded_protected_findings` for a human, and a review whose only actionable findings are protected refuses with `no-actionable-findings` and the detail `findings.protected-path-excluded`.
+
+The observation is checked with the normalizer's own shape predicates, copied verbatim from `adapters/codex-native-reviewer/v1/normalize.jq`, so the planner accepts exactly what the normalizer emits and nothing else.
+
 ## Inactive shadow reproduction slice
 
 `shadow/v1/` is the Roadmap's step-7 shadow vertical slice: one narrow, read-only
