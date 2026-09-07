@@ -712,13 +712,29 @@ for verdict in violated inconclusive; do
   "$jq_bin" -S -c --arg verdict "$verdict" --arg reason "$duty_reason" \
     '.body.verdict = $verdict | .body.reason_ids = [$reason]' \
     "$tmp/duty.json" >"$tmp/duty-$verdict.json"
-  scope_for_gates "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty-$verdict.json" \
-    "$tmp/scope-duty-$verdict.json"
+  # The risk and kill evaluations are recomputed over the mutated duty bytes, so
+  # they name its digest; the refusal under test is the duty verdict alone.
+  duty_verdict_sha=$(sha256_path "$tmp/duty-$verdict.json")
+  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
+    "$tmp/risk.json" >"$tmp/risk-duty-$verdict.json"
+  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
+    "$tmp/kill.json" >"$tmp/kill-duty-$verdict.json"
+  scope_for_gates "$tmp/risk-duty-$verdict.json" "$tmp/kill-duty-$verdict.json" \
+    "$tmp/duty-$verdict.json" "$tmp/scope-duty-$verdict.json"
   expect_reasons "duty-$verdict" '["scope.duty-violation"]' \
-    "$tmp/scope-duty-$verdict.json" "${good[@]:1:4}" "$tmp/duty-$verdict.json" \
-    "${good[@]:6}"
+    "$tmp/scope-duty-$verdict.json" "${good[@]:1:2}" "$tmp/risk-duty-$verdict.json" \
+    "$tmp/kill-duty-$verdict.json" "$tmp/duty-$verdict.json" "${good[@]:6}"
 done
 pass 'a live kill switch or an unsatisfied duty separation blocks the proposal'
+# A kill-switch evaluation that names this duty evaluation by id but over other
+# bytes (a different digest) is not evidence about the same attempt.
+"$jq_bin" -S -c '.body.duty_evaluation_ref.sha256 = ("d" * 64)' "$tmp/kill.json" >"$tmp/kill-other-duty-bytes.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-other-duty-bytes.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-other-duty-bytes.json"
+expect_reasons kill-other-duty-bytes '["scope.malformed"]' \
+  "$tmp/scope-kill-other-duty-bytes.json" "${good[@]:1:3}" "$tmp/kill-other-duty-bytes.json" \
+  "${good[@]:5}"
+pass 'gate evaluations must name the duty evaluation by digest, not only by id'
 
 # A gate evaluation the scope did not name is not the one it was qualified
 # against, even when its verdict is fine: the digest the driver measured has to

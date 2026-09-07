@@ -857,6 +857,8 @@ A claimed shadow record must use the shadow slice's own outcome vocabulary (repr
 
 A wildcard in the last segment of an allowed path is judged by what it could expand to: if its pattern matches any protected segment name (or, for a single-segment glob, any protected root file), the glob is protected, so `src/*` and `src/auth*` refuse while `src/*.ts` does not. A wildcard in the first segment is refused by the record validator outright.
 
+The risk-gate and kill-switch evaluations must name the duty evaluation by digest as well as id, so gate outputs computed over different duty bytes never combine into one proposal.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

@@ -252,8 +252,12 @@ def named_by($ref; $document; $sha):
  $risk_doc.body.stage.result_ref == $duty_doc.body.stage.result_ref and
  $risk_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
  $duty_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
+ # The risk and kill evaluations must name this duty evaluation by digest, not
+ # only by id: outputs computed over different duty bytes never combine.
  $risk_doc.body.duty_evaluation_ref.content_id == $duty_doc.id and
- $kill_doc.body.duty_evaluation_ref.id == $duty_doc.id) as $gates_bound |
+ $risk_doc.body.duty_evaluation_ref.sha256 == $duty_sha and
+ $kill_doc.body.duty_evaluation_ref.id == $duty_doc.id and
+ $kill_doc.body.duty_evaluation_ref.sha256 == $duty_sha) as $gates_bound |
 
 # Only the two statuses the mode record can carry are meaningful: "active" is
 # construction and "retired" is operating. Anything else is unknown and refuses.
