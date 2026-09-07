@@ -990,14 +990,45 @@ write_install_record_raw() {
 
 # (24a) The installer's own record says the target's north star is still its untouched
 # placeholder → doctor (h) WARNs, naming both the state and the installer's placeholder.
+# write_placeholder_star <repo> — put the installer's untouched placeholder on disk (uncommitted,
+# exactly as install.sh leaves it) and print its sha256, so a record can name the same bytes.
+write_placeholder_star() {
+  local repo="$1"
+  mkdir -p "$repo/.ystack"
+  printf '# North star\n\nThis file belongs to this target. The ystack installer wrote a placeholder.\n' \
+    > "$repo/.ystack/north-star.md"
+  shasum -a 256 "$repo/.ystack/north-star.md" | awk '{print $1}'
+}
+# write_install_record <repo> <state> <sha256> — a canonical record naming that state and digest.
+write_install_record() {
+  local repo="$1" state="$2" sha="$3"
+  write_install_record_raw "$repo" <<JSON
+{"body":{"north_star":{"owner":"target","path":".ystack/north-star.md","sha256":"$sha","state":"$state"}},"id":"install.$sha","kind":"install_record","schema_version":1}
+JSON
+}
+
 test_doctor_install_record_placeholder_unset_warns() {
   local repo; repo="$(make_target "install-record-placeholder")"
-  write_install_record_raw "$repo" <<'JSON'
-{"body":{"north_star":{"owner":"target","path":".ystack/north-star.md","sha256":"deadbeef","state":"placeholder-unset"}},"id":"install.deadbeef","kind":"install_record","schema_version":1}
-JSON
+  local sha; sha="$(write_placeholder_star "$repo")"
+  write_install_record "$repo" placeholder-unset "$sha"
   local lines; lines="$(run_doctor_h_all "$repo")"
   assert_contains "(24a) doctor (h) WARNs when install-record.json reports north_star.state=placeholder-unset" "placeholder-unset" "$lines"
   assert_contains "(24a) install-record WARN names the installer's placeholder" "installer's placeholder" "$lines"
+}
+
+# (24k) The record is a one-time audit: once the star on disk is no longer the installer's
+# bytes, a stale "placeholder-unset" record adds nothing, even though the installer never
+# rewrites it.
+test_doctor_install_record_replaced_star_adds_nothing() {
+  local repo; repo="$(make_target "install-record-replaced")"
+  local sha; sha="$(write_placeholder_star "$repo")"
+  write_install_record "$repo" placeholder-unset "$sha"
+  printf '# North star\n\n### Ship the thing · status: **active**\n' > "$repo/.ystack/north-star.md"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  case "$lines" in
+    *install-record*) failed=$((failed + 1)); echo "FAIL: (24k) a stale placeholder-unset record must add nothing once the star was replaced"; echo "      actual: [$lines]" ;;
+    *) passed=$((passed + 1)); echo "pass: (24k) a stale placeholder-unset record adds nothing once the star was replaced" ;;
+  esac
 }
 
 # (24b) Any OTHER recorded state adds nothing — no install-record line at all (the marker-based
@@ -2539,6 +2570,7 @@ test_doctor_h_ystack_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
 test_doctor_install_record_placeholder_unset_warns
+test_doctor_install_record_replaced_star_adds_nothing
 test_doctor_install_record_other_state_adds_nothing
 test_doctor_install_record_symlink_warns_malformed
 test_doctor_install_record_invalid_json_warns_malformed

@@ -580,6 +580,7 @@ if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
   ns_h_record="$toplevel/.ystack/install-record.json"
   ns_h_record_status="absent"
   ns_h_record_state=""
+  ns_h_record_sha=""
   if [ -e "$ns_h_record" ] || [ -L "$ns_h_record" ]; then
     if [ -L "$ns_h_record" ] || [ ! -f "$ns_h_record" ]; then
       # A symlink (or any non-regular-file entry — a directory, fifo, etc.) is refused outright:
@@ -606,6 +607,7 @@ if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
                && [ "$(jq -s 'length' "$ns_h_record" 2>/dev/null || true)" = "1" ]; then
               ns_h_record_status="ok"
               ns_h_record_state="$(jq -r '.body.north_star.state // empty' "$ns_h_record" 2>/dev/null || true)"
+              ns_h_record_sha="$(jq -r '.body.north_star.sha256 // empty' "$ns_h_record" 2>/dev/null || true)"
             else
               ns_h_record_status="malformed"
             fi
@@ -620,6 +622,9 @@ if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
             ns_h_record_state="$(grep -oE '"north_star"[[:space:]]*:[[:space:]]*\{[^}]*\}' "$ns_h_record" 2>/dev/null |
               grep -oE '"state"[[:space:]]*:[[:space:]]*"[^"]*"' | tail -n1 |
               sed -E 's/^.*"([^"]*)"$/\1/' || true)"
+            ns_h_record_sha="$(grep -oE '"north_star"[[:space:]]*:[[:space:]]*\{[^}]*\}' "$ns_h_record" 2>/dev/null |
+              grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' | tail -n1 |
+              sed -E 's/^.*"([0-9a-f]{64})"$/\1/' || true)"
             if [ -n "$ns_h_record_state" ]; then
               ns_h_record_status="ok"
             else
@@ -635,8 +640,20 @@ if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
       report_warn "(h) $ns_h_record exists but is not readable as a single well-formed JSON document of at most 64 KiB — refusing to read it as the installer's install record"
       ;;
     ok)
+      # The record is a one-time audit the installer wrote; it never learns that the
+      # placeholder was later replaced. So its state only counts while the star on disk
+      # is STILL the bytes the installer wrote (the record carries their digest): a
+      # replaced star, or a record without a digest to compare, adds no warning.
       if [ "$ns_h_record_state" = "placeholder-unset" ]; then
-        report_warn "(h) $ns_h_record reports north_star.state=placeholder-unset — north star is still the installer's placeholder; set and approve your own before enabling proactive mode"
+        ns_h_star_now="$toplevel/.ystack/north-star.md"
+        ns_h_star_now_sha=""
+        if [ -f "$ns_h_star_now" ] && [ ! -L "$ns_h_star_now" ] && [ -r "$ns_h_star_now" ]; then
+          ns_h_star_now_sha="$(shasum -a 256 "$ns_h_star_now" 2>/dev/null | awk '{print $1}' || true)"
+        fi
+        if [ -n "$ns_h_record_sha" ] && [ -n "$ns_h_star_now_sha" ] &&
+           [ "$ns_h_record_sha" = "$ns_h_star_now_sha" ]; then
+          report_warn "(h) $ns_h_record reports north_star.state=placeholder-unset and $ns_h_star_now is still the installer's placeholder — set and approve your own before enabling proactive mode"
+        fi
       fi
       ;;
   esac
