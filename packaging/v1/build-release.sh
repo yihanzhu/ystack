@@ -166,6 +166,16 @@ for requested in "$@"; do
     manifest_id=$("$jq_bin" -r 'if type == "object" and (.id | type) == "string" then .id else empty end' \
       "$scratch/blob" 2>/dev/null)
     [ -n "$manifest_id" ] || emit_error E_RELATION
+    # Each manifest must be a valid core document, and the package it offers
+    # must be the very object the profile's binding for that manifest packages;
+    # a profile re-pinned to an edited manifest that points elsewhere is stale.
+    /bin/cp "$scratch/blob" "$scratch/manifest.json" || emit_error E_RUNTIME
+    "$repo/scripts/core-contract.sh" validate-document "$scratch/manifest.json" >/dev/null 2>&1 ||
+      emit_error E_PROFILE
+    "$jq_bin" -e --arg id "$manifest_id" --slurpfile manifest "$scratch/manifest.json" '
+      [.body.bindings[] | select(.manifest_ref.id == $id)] as $bound |
+      ($bound | length) == 1 and $bound[0].package_ref == $manifest[0].body.package_ref
+    ' "$scratch/profile.json" >/dev/null 2>&1 || emit_error E_RELATION
     /usr/bin/printf '%s\t%s\n' "$manifest_id" "$(sha_file "$scratch/blob")" \
       >>"$scratch/manifests-found.tsv"
   done < <(repo_git ls-tree -r -z --full-tree "$commit" -- "$base/manifests" | /usr/bin/tr '\0' '\n')

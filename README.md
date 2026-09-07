@@ -280,7 +280,6 @@ and one row here.
 | Inactive deterministic verifier normalizer payload | `adapters/deterministic-verifier/v1/normalize.jq` | Validates an already-supplied core v2 verifier request, profile, contract, and stage result into one observation. | [read](docs/components.md#inactive-deterministic-verifier-normalizer-payload) |
 | Inactive eval and trace framework | `evals/v1/run-evals.sh` | Runs one offline eval pass over a caller-supplied seed set, plus the catalog of the nine required regression families and a dashboard. | [read](docs/components.md#inactive-eval-and-trace-framework) |
 | Inactive target packaging | `packaging/v1/` | Builds a versioned release manifest from one exact commit and installs the profile it names into an empty target directory, reproducing the manifest from that commit first and copying no personal configuration. | [read](docs/components.md#inactive-target-packaging) |
-
 | Inactive shadow reproduction slice | `shadow/v1/` | Replays one incident's failing check at its exact revision, read-only, in a listed execution environment, and answers reproduced, no-change, or inconclusive. It never patches, publishes, or deploys. | [read](docs/components.md#inactive-shadow-reproduction-slice) |
 
 ## Portable contract validator

@@ -761,6 +761,8 @@ The six manifest files a profile carries are also checked against the profile's 
 
 Before anything is derived from a profile, the builder requires it to be a valid core document with six complete bindings (each with a manifest reference and a package reference), so a binding missing its package reference refuses the release instead of silently dropping that adapter. The installer's content denylist covers home directories on any host (`/Users/`, `/home/<name>/`, `/root/`), not only macOS.
 
+Each manifest is also validated as a core document, and the package it offers must be the very object the profile's binding for that manifest packages, so re-pinning a profile to an edited manifest that points its package elsewhere refuses the release as well.
+
 ## Inactive shadow reproduction slice
 
 `shadow/v1/` is the Roadmap's step-7 shadow vertical slice: one narrow, read-only

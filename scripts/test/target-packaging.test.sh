@@ -362,8 +362,14 @@ fixture="$tmp/fixture"
 /bin/mkdir -p "$fixture/packaging"
 /bin/cp -R "$root/packaging/v1" "$fixture/packaging/v1"
 /bin/chmod -R u+w "$fixture"
-"$jq" -S -c '.body.bindings |= map(if .role == "ci"
-  then .package_ref.location.value = "config/models.conf" else . end)' \
+# The manifest and the profile agree on the personal path, so the refusal under
+# test is the path allowlist itself, not a manifest/binding mismatch.
+"$jq" -S -c '.body.package_ref.location.value = "config/models.conf"' \
+  "$fixture/profiles/default/v1/manifests/github-actions-ci.json" >"$fixture/manifest.tmp"
+/bin/mv "$fixture/manifest.tmp" "$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+personal_manifest_sha=$(sha_file "$fixture/profiles/default/v1/manifests/github-actions-ci.json")
+"$jq" -S -c --arg sha "$personal_manifest_sha" '.body.bindings |= map(if .role == "ci"
+  then .package_ref.location.value = "config/models.conf" | .manifest_ref.sha256 = $sha else . end)' \
   "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
 /bin/mv "$fixture/profile.tmp" "$fixture/profiles/default/v1/profile.json"
 /usr/bin/git -C "$fixture" init -q 2>/dev/null
@@ -393,7 +399,7 @@ ok 'build-release refuses a package ref that is not a path'
 # digest no longer matches the binding's manifest_ref, so the release refuses.
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" \
   >"$fixture/profiles/default/v1/profile.json"
-"$jq" -S -c '.body.notes = "edited after assembly"' \
+"$jq" -S -c '.body.adapter_version = "v1-edited"' \
   "$fixture/profiles/default/v1/manifests/github-actions-ci.json" >"$fixture/manifest.tmp"
 /bin/mv "$fixture/manifest.tmp" "$fixture/profiles/default/v1/manifests/github-actions-ci.json"
 /usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
@@ -403,6 +409,28 @@ expect_refusal E_RELATION 'a manifest edited after the profile pinned it' \
   "$fixture/packaging/v1/build-release.sh" build-release \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses a manifest that no longer matches its binding'
+# A manifest edited to point its package elsewhere, with the profile re-pinned
+# to the edited manifest's digest, is still a stale profile: the manifest's
+# package must be the very object the binding packages.
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" \
+  >"$fixture/profiles/default/v1/profile.json"
+"$jq" -S -c '.body.package_ref.object_id = ("1" * 40)' \
+  "$fixture/profiles/default/v1/manifests/github-actions-ci.json" >"$fixture/manifest.tmp"
+/bin/mv "$fixture/manifest.tmp" "$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+repinned_sha=$(sha_file "$fixture/profiles/default/v1/manifests/github-actions-ci.json")
+"$jq" -S -c --arg sha "$repinned_sha" '.body.bindings |= map(
+  if .manifest_ref.id == "adapter.github-actions-ci.v1" then .manifest_ref.sha256 = $sha else . end)' \
+  "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
+/bin/mv "$fixture/profile.tmp" "$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging repinned-manifest fixture'
+expect_refusal E_RELATION 'a re-pinned manifest whose package differs from the binding' \
+  "$fixture/packaging/v1/build-release.sh" build-release \
+  "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
+  >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+ok 'build-release validates each manifest and binds its package to the binding'
 # A profile whose binding lacks a package ref is not a profile to package: the
 # release must refuse instead of quietly shipping without that adapter.
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
