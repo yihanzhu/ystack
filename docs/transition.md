@@ -19,10 +19,11 @@ as the program authorization, and the twelve rollout items are being implemented
 directly as dependency-ordered units. Every unit is inactive and repo-only — source,
 contracts, and a focused hermetic test — and each one reaches `main` only after
 required CI and an independent review. The table below is the current state, not a
-completion claim: steps 1–6 are on `main`; steps 7 through 12 are open PRs (#249,
-#250, #251, #252, #254, #255). Construction is implementation-complete only when
-every row reads `merged`, and the transition PR in §3 must not be written before
-then. What construction produces is a portable control plane that has never been
+completion claim: every row below now reads `merged`, so the precondition in §3 is
+met and construction is implementation-complete as far as inactive units go (the live
+proofs of §4 are still ahead). Construction is implementation-complete only when
+every row reads `merged`; that is now the case, so the transition PR in §3 may be
+written once the questions in §6 are answered. What construction produces is a portable control plane that has never been
 switched on.
 
 | Roadmap step | Unit path | Status |
@@ -33,12 +34,12 @@ switched on.
 | 4 — Default adapters | `adapters/github-forge/v1/`, `adapters/github-actions-ci/v1/`, `adapters/claude-code-producer/v1/`, `adapters/codex-native-reviewer/v1/`, `adapters/deterministic-verifier/v1/`, `adapters/dormant-publisher/v1/`, `adapters/local-git-materializer/v1/`, `profiles/default/v1/`, `delivery/v1/` | merged |
 | 5 — Agent evals and telemetry | `evals/v1/`, `telemetry/v1/` | merged (framework only — see §2) |
 | 6 — Alternative adapters | `adapters/gitlab-forge/v1/`, `adapters/codex-cli-producer/v1/`, `profiles/alternative/v1/` | merged |
-| 7 — Shadow vertical slice | `shadow/v1/` | pending PR #251 |
-| 8 — Bounded autonomous writes | `scope/v1/` | pending PR #254 |
-| 9 — Safe review-fix loop | `loop/v1/` | pending PR #249 |
-| 10 — Target packaging | `packaging/v1/` | pending PR #250 |
-| 11 — Deploy and rollback | `deploy/v1/` | pending PR #252 |
-| 12 — Maintenance loop | `maintenance/v1/` | pending PR #255 |
+| 7 — Shadow vertical slice | `shadow/v1/` | merged (PR #251) |
+| 8 — Bounded autonomous writes | `scope/v1/` | merged (PR #254) |
+| 9 — Safe review-fix loop | `loop/v1/` | merged (PR #249) |
+| 10 — Target packaging | `packaging/v1/` | merged (PR #250) |
+| 11 — Deploy and rollback | `deploy/v1/` | merged (PR #252) |
+| 12 — Maintenance loop | `maintenance/v1/` | merged (PR #255) |
 
 The per-unit write-ups are in [`components.md`](components.md), indexed from
 [`../README.md`](../README.md). A pending PR's write-up lives on its own branch until
@@ -60,7 +61,7 @@ What is **not** proven, and should not be described as if it were:
 
 - **Nothing has ever run against a real target.** Every run in this repo used
   fixtures or this repo's own Git objects. `real_target_use` is `disabled`, and
-  `shadow/v1/shadow-environments.json` (pending PR #251) lists exactly one execution
+  `shadow/v1/shadow-environments.json` (PR #251, merged) lists exactly one execution
   environment, `env.local-macos-fixture`, marked `fixtures-only` and `unproven`.
 - **Two of the nine required eval families have no seeds.** `evals/v1/eval-catalog.json`
   records `malicious-instructions` and `reviewer-severity-false-positive-negative` as
