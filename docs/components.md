@@ -786,6 +786,20 @@ three do not belong together — and `scope.tier-not-routine`,
 `scope.kill-switch`, and `scope.duty-violation` stay reserved for the real
 verdict problems.
 
+Each gate evaluation is also checked against its own evaluator's complete output
+shape — every body key, every nested reference by shape and by kind or media
+type, `authority_effect: "none"` where that evaluator emits it, that evaluator's
+own verdict vocabulary, and its verdict-to-reason consistency (a kill switch is
+`satisfied` only as `kill.cleared-current`, a risk gate is `inconclusive` only
+when every reason is one of its two unknowns, a duty separation is `satisfied`
+only as `duty.satisfied` and `inconclusive` only as
+`actual.capability-unclassified`) — so a hand-written stub carrying an envelope
+and a verdict is `scope.malformed` rather than evidence, and every input
+including the operating-mode marker goes through the same snapshot, single-root,
+size, and canonical checks before the digest recorded for it is measured, the
+committed marker being put into canonical form in the scratch directory for the
+comparison rather than ever being rewritten.
+
 Two identities are **not yet bindable** from the evidence side. A shadow
 reproduction record carries its target repository and the exact revision it ran
 against, so `target_repository_id` and `target_revision` bind; it carries no

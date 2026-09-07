@@ -26,33 +26,144 @@ def revision_ok($repository_id):
   ($revision.hash_algorithm == "sha1" or $revision.hash_algorithm == "sha256") and
   ($revision.commit_id | oid_ok($revision.hash_algorithm));
 
+def exact($fields):
+  type == "object" and (keys | sort) == ($fields | sort);
+
 # Every real control evaluation names the policy set it was produced under.
 def policy_set_ok:
-  type == "object" and (keys | sort) == ["id", "sha256"] and
-  (.id | id_ok) and (.sha256 | sha256_ok);
+  exact(["id", "sha256"]) and (.id | id_ok) and (.sha256 | sha256_ok);
 
-def core_document_ref_ok($kind):
-  type == "object" and
-  (keys | sort) == ["id", "kind", "schema_version", "sha256"] and
-  .schema_version == 2 and .kind == $kind and (.id | id_ok) and (.sha256 | sha256_ok);
+def content_ref_ok($media_type):
+  exact(["content_id", "media_type", "sha256"]) and (.content_id | id_ok) and
+  .media_type == $media_type and (.sha256 | sha256_ok);
+
+def document_ref_ok($schema_version; $kind):
+  exact(["id", "kind", "schema_version", "sha256"]) and
+  .schema_version == $schema_version and .kind == $kind and (.id | id_ok) and
+  (.sha256 | sha256_ok);
+
+def core_document_ref_ok($kind): document_ref_ok(2; $kind);
+
+def control_document_ref_ok($kind): document_ref_ok(1; $kind);
+
+# The portable core contract block the risk and duty evaluators copy out of the
+# control policy set they ran under.
+def core_contract_ok:
+  exact(["generation_id", "package_ref", "semantic_identity"]) and
+  (.semantic_identity | id_ok) and
+  (.generation_id | type == "string" and test("\\Ag-[0-9a-f]{64}\\z")) and
+  (.package_ref | content_ref_ok("application/vnd.ystack.core-contract+json"));
 
 # The stage block the risk and duty evaluators both emit: which request, which
 # resolved profile, which result the evaluation is about.
 def stage_ok:
-  type == "object" and
-  (keys | sort) == ["request_ref", "resolved_profile_ref", "result_ref"] and
+  exact(["request_ref", "resolved_profile_ref", "result_ref"]) and
   (.request_ref | core_document_ref_ok("stage_request")) and
   (.resolved_profile_ref | core_document_ref_ok("resolved_profile")) and
   (.result_ref | core_document_ref_ok("stage_result"));
 
-def evaluation_ok($kind):
-  type == "object" and .schema_version == 1 and .kind == $kind and (.id | id_ok) and
-  (.body | type == "object") and .body.activation_state == "inactive" and
-  (.body.policy_set | policy_set_ok) and
-  (.body.verdict |
-   type == "string" and
-   (. as $verdict |
-    ["inconclusive", "satisfied", "violated"] | index($verdict) != null));
+def envelope_ok($kind):
+  exact(["body", "id", "kind", "schema_version"]) and .schema_version == 1 and
+  .kind == $kind and (.id | id_ok) and (.body | type == "object");
+
+# The markers every control evaluation carries: it changed nothing, it only
+# observed, its references are identities, and it names one policy set, one
+# verdict from its own vocabulary, and a non-empty set of reason ids.
+def control_markers_ok($verdicts):
+  .activation_state == "inactive" and
+  .evaluation_mode == "observation-only" and
+  .reference_semantics == "identity-only" and
+  (.policy_set | policy_set_ok) and
+  (.verdict as $verdict | $verdicts | index($verdict) != null) and
+  (.reason_ids |
+   type == "array" and length >= 1 and length <= 64 and all(.[]; id_ok) and
+   . == (sort | unique));
+
+# The three gate evaluations are accepted only in the exact shape their own
+# evaluators emit (control/v1/risk-gates.jq, control/v1/kill-switch.jq, and
+# control/v1/duty-separation.jq), field for field and ref for ref, so a
+# hand-written document carrying the envelope, the markers, and a verdict cannot
+# stand in for a real evaluation. Each also has to be internally consistent: a
+# verdict that does not follow from the reasons beside it is not something the
+# real evaluator produces.
+def risk_evaluation_ok:
+  envelope_ok("risk_gate_evaluation") and
+  (.body |
+   exact(["activation_state", "authority_effect", "classification",
+     "core_contract", "decision_claim_ref", "decision_ref",
+     "duty_evaluation_ref", "evaluation_mode", "policy_ref", "policy_set",
+     "reason_ids", "reference_semantics", "stage", "verdict"]) and
+   control_markers_ok(["inconclusive", "violated"]) and
+   .authority_effect == "none" and
+   (.classification | exact(["declared_tier", "minimum_tier"]) and
+    (.declared_tier as $tier |
+     ["bootstrap", "high", "routine"] | index($tier) != null) and
+    (.minimum_tier as $tier |
+     ["bootstrap", "high", "routine", "unknown"] | index($tier) != null)) and
+   # "inconclusive" iff every reason is one of the two unknowns the risk gate
+   # can emit; anything else beside that verdict is a violation.
+   ((.reason_ids |
+     all(.[]; . == "duty.inconclusive" or
+       . == "decision.provenance-unqualified")) ==
+    (.verdict == "inconclusive")) and
+   (.core_contract | core_contract_ok) and
+   (.decision_claim_ref |
+    content_ref_ok("application/vnd.ystack.risk-gate-decision-claim+json")) and
+   (.decision_ref |
+    content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.duty_evaluation_ref |
+    content_ref_ok("application/vnd.ystack.duty-separation-evaluation+json")) and
+   (.policy_ref |
+    content_ref_ok("application/vnd.ystack.control-policy+json")) and
+   (.stage | stage_ok));
+
+def kill_evaluation_ok:
+  envelope_ok("kill_switch_evaluation") and
+  (.body |
+   exact(["activation_state", "attempt_ref", "authority_effect", "decision_ref",
+     "duty_decision_ref", "duty_evaluation_ref", "evaluation_mode", "policy_ref",
+     "policy_set", "reason_ids", "reference_semantics", "state_ref",
+     "verdict"]) and
+   control_markers_ok(["inconclusive", "satisfied", "violated"]) and
+   .authority_effect == "none" and
+   # The kill-switch evaluator emits "satisfied" only with the single reason
+   # kill.cleared-current, and never that reason with any other verdict.
+   (if .verdict == "satisfied" then .reason_ids == ["kill.cleared-current"]
+    else (.reason_ids | index("kill.cleared-current")) == null end) and
+   (.decision_ref |
+    content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.duty_decision_ref |
+    content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.policy_ref |
+    content_ref_ok("application/vnd.ystack.control-policy+json")) and
+   (.state_ref | control_document_ref_ok("kill_switch_state")) and
+   (.attempt_ref | control_document_ref_ok("kill_switch_attempt")) and
+   (.duty_evaluation_ref |
+    control_document_ref_ok("duty_separation_evaluation")));
+
+def duty_evaluation_ok:
+  envelope_ok("duty_separation_evaluation") and
+  (.body |
+   exact(["activation_state", "core_contract", "decision_ref",
+     "evaluation_mode", "policy_ref", "policy_set", "reason_ids",
+     "reference_semantics", "stage", "verdict"]) and
+   control_markers_ok(["inconclusive", "satisfied", "violated"]) and
+   # The duty evaluator emits "satisfied" only as duty.satisfied and
+   # "inconclusive" only as actual.capability-unclassified; a violation is
+   # neither of those reasons.
+   ((.verdict == "satisfied" and .reason_ids == ["duty.satisfied"]) or
+    (.verdict == "inconclusive" and
+     .reason_ids == ["actual.capability-unclassified"]) or
+    (.verdict == "violated" and
+     (.reason_ids |
+      all(.[]; . != "duty.satisfied" and
+        . != "actual.capability-unclassified")))) and
+   (.core_contract | core_contract_ok) and
+   (.decision_ref |
+    content_ref_ok("application/vnd.ystack.control-decision+json")) and
+   (.policy_ref |
+    content_ref_ok("application/vnd.ystack.control-policy+json")) and
+   (.stage | stage_ok));
 
 def shadow_record_ok:
   . as $record |
@@ -112,12 +223,9 @@ $marker[0] as $mode_doc |
       (.cases |
        type == "object" and (.total | count_ok) and (.failed | count_ok) and
        (.inconclusive | count_ok))))) as $dash_ok |
-(($risk_doc | evaluation_ok("risk_gate_evaluation")) and
- ($risk_doc.body.classification |
-  type == "object" and (.declared_tier | type == "string") and
-  (.minimum_tier | type == "string"))) as $risk_ok |
-($kill_doc | evaluation_ok("kill_switch_evaluation")) as $kill_ok |
-($duty_doc | evaluation_ok("duty_separation_evaluation")) as $duty_ok |
+($risk_doc | risk_evaluation_ok) as $risk_ok |
+($kill_doc | kill_evaluation_ok) as $kill_ok |
+($duty_doc | duty_evaluation_ok) as $duty_ok |
 ($mode_doc | type == "object" and (.status | type == "string")) as $mode_ok |
 
 # The scope names its three gate evaluations by kind, id, and digest, exactly as
@@ -140,16 +248,12 @@ def named_by($ref; $document; $sha):
  named_by($gate_refs.duty_separation_evaluation_ref; $duty_doc; $duty_sha) and
  $risk_doc.body.policy_set == $kill_doc.body.policy_set and
  $risk_doc.body.policy_set == $duty_doc.body.policy_set and
- ($risk_doc.body.stage | stage_ok) and
- ($duty_doc.body.stage | stage_ok) and
  $risk_doc.body.stage.request_ref == $duty_doc.body.stage.request_ref and
  $risk_doc.body.stage.result_ref == $duty_doc.body.stage.result_ref and
  $risk_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
  $duty_doc.body.stage.resolved_profile_ref == $identity.resolved_profile_ref and
- ($risk_doc.body.duty_evaluation_ref |
-  type == "object" and .content_id == $duty_doc.id) and
- ($kill_doc.body.duty_evaluation_ref |
-  type == "object" and .id == $duty_doc.id)) as $gates_bound |
+ $risk_doc.body.duty_evaluation_ref.content_id == $duty_doc.id and
+ $kill_doc.body.duty_evaluation_ref.id == $duty_doc.id) as $gates_bound |
 
 # Only the two statuses the mode record can carry are meaningful: "active" is
 # construction and "retired" is operating. Anything else is unknown and refuses.

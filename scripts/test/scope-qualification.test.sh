@@ -175,10 +175,14 @@ qualified_identity='{
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;0;0)]}}' >"$tmp/dashboard.json"
 
-# The three gate evaluations carry the fields the real evaluators emit: the
-# policy set they ran under, the stage they are about, and the duty evaluation
-# the risk and kill-switch evaluators each bind. The duty document is written
-# first so the other two can name it.
+# The three gate evaluations are complete documents in the shape their own
+# evaluators emit — control/v1/risk-gates.jq, control/v1/kill-switch.jq, and
+# control/v1/duty-separation.jq — field for field and ref for ref, because the
+# gate program accepts nothing less than an evaluator's whole output. They carry
+# the policy set they ran under, the portable core contract, the control
+# decision and policy they read, the stage they are about, and the duty
+# evaluation the risk and kill-switch evaluators each bind. The duty document is
+# written first so the other two can name it.
 policy_set='{"id":"control.policy-set.v1","sha256":"42d342f42022ce1fb8c5c8e06c15dd3fd1ef604c215d1ce1ad6f7cc90ba8b747"}'
 stage_block='{
   "request_ref":{"id":"stage.docs-typo-fix.request","kind":"stage_request",
@@ -190,34 +194,72 @@ stage_block='{
   "result_ref":{"id":"stage.docs-typo-fix.result","kind":"stage_result",
     "schema_version":2,
     "sha256":"0fd5b4136f4b21757eeb1bcbd780cb5baac605663df3a9be4dd7b34c786a045d"}}'
+# A fixture generation id, not the shipped one: the guard above forbids the real
+# generation id in this file, and the gate program checks the shape only.
+core_contract='{
+  "generation_id":"g-0bef6d994accaf957358a8f9c833c0ce64bb71fe2bc934b9569277bbe19b8d29",
+  "package_ref":{"content_id":"core-contract-package.v2",
+    "media_type":"application/vnd.ystack.core-contract+json",
+    "sha256":"84d29c91b3018a321dad4c036bc9140cec6ad1c2371e12b8b6a4ac1155e054cb"},
+  "semantic_identity":"core.contracts.v2"}'
+control_policy_ref='{"content_id":"control.policy.v1",
+  "media_type":"application/vnd.ystack.control-policy+json",
+  "sha256":"5cc06d264d934d9b143493f47ece687c295c283e8468438d355e3a8c449c95c5"}'
+control_decision_ref='{"content_id":"control.decision.docs-typo-fix",
+  "media_type":"application/vnd.ystack.control-decision+json",
+  "sha256":"47fd3c45b720f57074bf6c666716278c728ccda210df8f95a431dbde0b0b43d0"}'
+duty_decision_ref='{"content_id":"control.decision.duty-separation",
+  "media_type":"application/vnd.ystack.control-decision+json",
+  "sha256":"b4ff4ce76d4dfd90e7a6bace6bae19f95a76d8680ac3778a779d7c883ffc8548"}'
+decision_claim_ref='{"content_id":"risk.decision-claim.docs-typo-fix",
+  "media_type":"application/vnd.ystack.risk-gate-decision-claim+json",
+  "sha256":"ff7a0762578d99a4ebe04b14be2298d9934edebd12e5dc2dcde41ce4633275c6"}'
+kill_state_ref='{"schema_version":1,"kind":"kill_switch_state",
+  "id":"kill.state.v1",
+  "sha256":"e0a9c5c06f7afc6c7804e8033378ac583dba7a5a5adf5e035bb94092ccbe4a32"}'
 
-"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --argjson stage "$stage_block" '
+"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --argjson stage "$stage_block" \
+  --argjson core_contract "$core_contract" \
+  --argjson policy_ref "$control_policy_ref" \
+  --argjson decision_ref "$duty_decision_ref" '
   {schema_version:1,kind:"duty_separation_evaluation",
    id:"stage.docs-typo-fix.result",
-   body:{activation_state:"inactive",evaluation_mode:"observation-only",
-     policy_set:$policy_set,stage:$stage,
+   body:{activation_state:"inactive",core_contract:$core_contract,
+     decision_ref:$decision_ref,evaluation_mode:"observation-only",
+     policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
      reference_semantics:"identity-only",verdict:"satisfied",
      reason_ids:["duty.satisfied"]}}' >"$tmp/duty.json"
 duty_sha=$(sha256_path "$tmp/duty.json")
 "$jq_bin" -S -c -n --argjson policy_set "$policy_set" --argjson stage "$stage_block" \
+  --argjson core_contract "$core_contract" \
+  --argjson policy_ref "$control_policy_ref" \
+  --argjson decision_ref "$control_decision_ref" \
+  --argjson claim_ref "$decision_claim_ref" \
   --arg duty_sha "$duty_sha" '
   {schema_version:1,kind:"risk_gate_evaluation",id:"stage.docs-typo-fix.result",
    body:{activation_state:"inactive",authority_effect:"none",
      classification:{declared_tier:"routine",minimum_tier:"routine"},
+     core_contract:$core_contract,decision_claim_ref:$claim_ref,
+     decision_ref:$decision_ref,
      duty_evaluation_ref:{content_id:"stage.docs-typo-fix.result",
        media_type:"application/vnd.ystack.duty-separation-evaluation+json",
        sha256:$duty_sha},
-     policy_set:$policy_set,stage:$stage,
+     policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
      evaluation_mode:"observation-only",reference_semantics:"identity-only",
      verdict:"inconclusive",
      reason_ids:["decision.provenance-unqualified"]}}' >"$tmp/risk.json"
-"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --arg duty_sha "$duty_sha" '
+"$jq_bin" -S -c -n --argjson policy_set "$policy_set" --arg duty_sha "$duty_sha" \
+  --argjson policy_ref "$control_policy_ref" \
+  --argjson decision_ref "$control_decision_ref" \
+  --argjson duty_decision_ref "$duty_decision_ref" \
+  --argjson state_ref "$kill_state_ref" '
   {schema_version:1,kind:"kill_switch_evaluation",
    id:"kill-attempt.docs-typo-fix",
    body:{activation_state:"inactive",authority_effect:"none",
+     decision_ref:$decision_ref,duty_decision_ref:$duty_decision_ref,
      duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
        id:"stage.docs-typo-fix.result",sha256:$duty_sha},
-     policy_set:$policy_set,
+     policy_ref:$policy_ref,policy_set:$policy_set,state_ref:$state_ref,
      attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
        id:"kill-attempt.docs-typo-fix",
        sha256:"5f4cf0c000008d393df5f101db749ae7c6a29e967ea15ceb059fe2f84a6a99b9"},
@@ -289,7 +331,9 @@ scope_for_shadow() {
 }
 scope_record "$tmp/shadow-set.json" "$tmp/risk.json" "$tmp/kill.json" \
   "$tmp/duty.json" "$tmp/scope.json"
-/bin/cp "$repo_marker" "$tmp/marker.json"
+# Every input the evaluator reads must be canonical, the mode marker included,
+# so the committed marker is put into canonical form before it is supplied.
+"$jq_bin" -S -c . "$repo_marker" >"$tmp/marker.json"
 
 good=("$tmp/scope.json" "$tmp/shadow-set.json" "$tmp/dashboard.json" "$tmp/risk.json"
   "$tmp/kill.json" "$tmp/duty.json" "$tmp/marker.json")
@@ -509,7 +553,9 @@ expect_reasons tier-bootstrap '["scope.tier-not-routine"]' "$tmp/tier-bootstrap.
   >"$tmp/risk-high.json"
 scope_for_gates "$tmp/risk-high.json" "$tmp/kill.json" "$tmp/duty.json" \
   "$tmp/scope-risk-high.json"
-"$jq_bin" -S -c '.body.verdict = "violated"' "$tmp/risk.json" >"$tmp/risk-violated.json"
+"$jq_bin" -S -c '.body.verdict = "violated" |
+  .body.reason_ids = ["decision.actor-unbound"]' "$tmp/risk.json" \
+  >"$tmp/risk-violated.json"
 scope_for_gates "$tmp/risk-violated.json" "$tmp/kill.json" "$tmp/duty.json" \
   "$tmp/scope-risk-violated.json"
 expect_reasons risk-tier-high '["scope.tier-not-routine"]' \
@@ -647,15 +693,24 @@ expect_reasons eval-duplicate-family '["scope.eval-failing","scope.eval-family-u
   "${good[@]:0:2}" "$tmp/dashboard-duplicate.json" "${good[@]:3}"
 pass 'every required eval family must be seeded and free of failing or inconclusive grades'
 
+# Each verdict carries the reasons its own evaluator emits with it: a
+# kill-switch or duty evaluation that keeps a cleared or satisfied reason beside
+# another verdict is not a document either evaluator produces.
 for verdict in violated inconclusive; do
-  "$jq_bin" -S -c --arg verdict "$verdict" '.body.verdict = $verdict' \
+  case "$verdict" in
+    violated) kill_reason=kill.state-invalid; duty_reason=actual.capability-mismatch ;;
+    *) kill_reason=kill.duty-inconclusive; duty_reason=actual.capability-unclassified ;;
+  esac
+  "$jq_bin" -S -c --arg verdict "$verdict" --arg reason "$kill_reason" \
+    '.body.verdict = $verdict | .body.reason_ids = [$reason]' \
     "$tmp/kill.json" >"$tmp/kill-$verdict.json"
   scope_for_gates "$tmp/risk.json" "$tmp/kill-$verdict.json" "$tmp/duty.json" \
     "$tmp/scope-kill-$verdict.json"
   expect_reasons "kill-$verdict" '["scope.kill-switch"]' \
     "$tmp/scope-kill-$verdict.json" "${good[@]:1:3}" "$tmp/kill-$verdict.json" \
     "${good[@]:5}"
-  "$jq_bin" -S -c --arg verdict "$verdict" '.body.verdict = $verdict' \
+  "$jq_bin" -S -c --arg verdict "$verdict" --arg reason "$duty_reason" \
+    '.body.verdict = $verdict | .body.reason_ids = [$reason]' \
     "$tmp/duty.json" >"$tmp/duty-$verdict.json"
   scope_for_gates "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty-$verdict.json" \
     "$tmp/scope-duty-$verdict.json"
@@ -669,11 +724,12 @@ pass 'a live kill switch or an unsatisfied duty separation blocks the proposal'
 # against, even when its verdict is fine: the digest the driver measured has to
 # equal the digest the scope claimed.
 "$jq_bin" -S -c '.body.reason_ids =
-  ["decision.provenance-unqualified","other.restated"]' "$tmp/risk.json" \
+  ["decision.provenance-unqualified","duty.inconclusive"]' "$tmp/risk.json" \
   >"$tmp/risk-restated.json"
 expect_reasons risk-digest-mismatch '["scope.malformed"]' "${good[@]:0:3}" \
   "$tmp/risk-restated.json" "${good[@]:4}"
-"$jq_bin" -S -c '.body.reason_ids = ["kill.cleared-current","other.restated"]' \
+"$jq_bin" -S -c '.body.state_ref.sha256 =
+  "1ad2df26c1b0c9d5e3b3f0e0a3b6cf3f70b6e0e8e6b74ff96f5d0e1c6a0a3e12"' \
   "$tmp/kill.json" >"$tmp/kill-restated.json"
 expect_reasons kill-digest-mismatch '["scope.malformed"]' "${good[@]:0:4}" \
   "$tmp/kill-restated.json" "${good[@]:5}"
@@ -710,6 +766,43 @@ expect_reasons scope-other-profile '["scope.malformed"]' \
   "$tmp/scope-other-profile.json" "${good[@]:1}"
 pass 'gate evidence counts only when the scope named it and the three agree'
 
+# A gate evaluation is accepted only in its own evaluator's complete output
+# shape, so a document that carries the envelope, the markers, and a verdict but
+# is missing an evaluator field, carries one too many, names a ref of the wrong
+# kind, or states a verdict its reasons do not support, is malformed. Each case
+# claims the mutated document, so the refusal is the shape and not an unbound
+# claim, and the verdict reason for that gate stands beside scope.malformed
+# because a document that is not a real evaluation proves no verdict either.
+"$jq_bin" -S -c 'del(.body.state_ref)' "$tmp/kill.json" >"$tmp/kill-no-state.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-no-state.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-no-state.json"
+expect_reasons kill-missing-state-ref '["scope.kill-switch","scope.malformed"]' \
+  "$tmp/scope-kill-no-state.json" "${good[@]:1:3}" "$tmp/kill-no-state.json" \
+  "${good[@]:5}"
+"$jq_bin" -S -c '.body.extra_field = "unexpected"' "$tmp/risk.json" \
+  >"$tmp/risk-extra-key.json"
+scope_for_gates "$tmp/risk-extra-key.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-risk-extra-key.json"
+expect_reasons risk-extra-body-key '["scope.malformed","scope.tier-not-routine"]' \
+  "$tmp/scope-risk-extra-key.json" "${good[@]:1:2}" "$tmp/risk-extra-key.json" \
+  "${good[@]:4}"
+"$jq_bin" -S -c '.body.reason_ids =
+  ["kill.cleared-current","kill.state-invalid"]' "$tmp/kill.json" \
+  >"$tmp/kill-extra-reason.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-extra-reason.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-extra-reason.json"
+expect_reasons kill-satisfied-extra-reason '["scope.kill-switch","scope.malformed"]' \
+  "$tmp/scope-kill-extra-reason.json" "${good[@]:1:3}" \
+  "$tmp/kill-extra-reason.json" "${good[@]:5}"
+"$jq_bin" -S -c '.body.stage.result_ref.kind = "stage_request"' "$tmp/duty.json" \
+  >"$tmp/duty-wrong-kind.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty-wrong-kind.json" \
+  "$tmp/scope-duty-wrong-kind.json"
+expect_reasons duty-wrong-kind-ref '["scope.duty-violation","scope.malformed"]' \
+  "$tmp/scope-duty-wrong-kind.json" "${good[@]:1:4}" "$tmp/duty-wrong-kind.json" \
+  "${good[@]:6}"
+pass 'a gate evaluation missing, exceeding, or contradicting its evaluator output is malformed'
+
 # Qualification is attached to one exact target version. Shadow evidence from a
 # different revision is evidence about a different target, so it does not count.
 "$jq_bin" -S -c --argjson revision "$other_revision" \
@@ -727,13 +820,26 @@ expect_reasons shadow-other-revision '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-shadow-revision.json" "$tmp/shadow-other-revision.json" "${good[@]:2}"
 pass 'shadow evidence counts only at the target revision the scope records'
 
-"$jq_bin" -S '.status = "operating"' "$tmp/marker.json" >"$tmp/marker-stale.json"
+"$jq_bin" -S -c '.status = "operating"' "$tmp/marker.json" >"$tmp/marker-stale.json"
 expect_reasons mode-stale-marker '["scope.mode-construction"]' "${good[@]:0:6}" \
   "$tmp/marker-stale.json"
 "$jq_bin" -S -c '{status:"active"}' "$tmp/marker.json" >"$tmp/marker-shape.json"
 expect_reasons mode-marker-shape '["scope.mode-construction"]' "${good[@]:0:6}" \
   "$tmp/marker-shape.json"
 pass 'a marker that disagrees with the committed one leaves the mode unknown'
+
+# The mode marker is an input like any other: it is snapshotted, size-bounded,
+# required to be exactly one JSON text, and required to be canonical, so a
+# pretty-printed or two-root marker never reaches the gate program and never has
+# its digest recorded.
+"$jq_bin" -S '.status = "retired"' "$tmp/marker.json" >"$tmp/marker-pretty.json"
+expect_evaluator_error marker-non-canonical E_CANONICAL "${good[@]:0:6}" \
+  "$tmp/marker-pretty.json"
+{ /bin/cat "$tmp/marker.json"; /bin/cat "$tmp/marker.json"; } \
+  >"$tmp/marker-multi-root.json"
+expect_evaluator_error marker-multi-root E_PARSE "${good[@]:0:6}" \
+  "$tmp/marker-multi-root.json"
+pass 'the mode marker is canonicalized and single-rooted like every other input'
 
 for malformed_case in 'del(.body.records[0].body.shadow)' \
   '.body.records[0].body.authority = "publisher"' \

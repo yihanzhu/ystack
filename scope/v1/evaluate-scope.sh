@@ -62,8 +62,11 @@ snapshot() {
   "$jq_bin" -e 'type == "object"' "$target" >/dev/null 2>&1 || emit_error E_PARSE
   [ "$("$jq_bin" -s 'length' "$target" 2>/dev/null)" = 1 ] || emit_error E_PARSE
 }
+canonicalize() {
+  "$jq_bin" -S -c . "$1" >"$2" 2>/dev/null || emit_error E_PARSE
+}
 require_canonical() {
-  "$jq_bin" -S -c . "$1" >"$1.canonical" 2>/dev/null || emit_error E_PARSE
+  canonicalize "$1" "$1.canonical"
   /usr/bin/cmp -s "$1" "$1.canonical" || emit_error E_CANONICAL
 }
 
@@ -73,7 +76,7 @@ for input in "$@"; do
   snapshot "$input" "$scratch/${names[$index]}.json"
   index=$((index + 1))
 done
-for canonical in scope shadow-set dashboard risk kill duty; do
+for canonical in scope shadow-set dashboard risk kill duty marker; do
   require_canonical "$scratch/$canonical.json"
 done
 snapshot "$policy" "$scratch/policy.json"
@@ -105,11 +108,15 @@ esac
 
 # The operating-mode marker is read from the repository read-only and only ever
 # compared. A supplied marker that disagrees with the committed one leaves the
-# mode unknown, and the evaluator refuses rather than guessing.
+# mode unknown, and the evaluator refuses rather than guessing. The supplied
+# marker must already be canonical, so the committed one is put into canonical
+# form in the scratch directory before the byte comparison: two markers are the
+# same marker when their canonical bytes agree. The committed file is only read.
 mode_repo_state=absent
 if [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ]; then
   snapshot "$mode_marker" "$scratch/repo-marker.json"
-  if /usr/bin/cmp -s "$scratch/marker.json" "$scratch/repo-marker.json"; then
+  canonicalize "$scratch/repo-marker.json" "$scratch/repo-marker-canonical.json"
+  if /usr/bin/cmp -s "$scratch/marker.json" "$scratch/repo-marker-canonical.json"; then
     mode_repo_state=matched
   else
     mode_repo_state=differs
