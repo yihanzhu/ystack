@@ -137,6 +137,23 @@ the profile id. Restoring these records does not select, resolve, qualify,
 install, or activate the profile; it grants no authority and performs no model,
 credential, provider, publish, or target operation.
 
+### Restore the inactive workflow-scope qualification evaluator
+
+Restore the six paths listed under “Inactive workflow-scope qualification
+evaluator” in [`ci/required-files.txt`](ci/required-files.txt) from one commit,
+then run:
+
+```sh
+bash scripts/test/scope-qualification.test.sh
+```
+
+The evaluator decides whether one low-risk workflow scope may be **proposed** for
+enablement and, when it may, emits the proposal document an operator pull request
+would carry. Enabling a scope is still an independent operator-merged pull request
+after the operating-mode transition. It reads `config/construction-mode.json`
+read-only and only ever compares it. Restoring these files grants no authority and
+performs no model, credential, network, provider, publish, forge, or target
+
 ### Restore the inactive target packaging
 
 Restore the four paths listed under “Inactive target packaging” in

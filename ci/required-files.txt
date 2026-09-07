@@ -349,6 +349,14 @@ scripts/test/evals-dashboard.test.sh
 # Component write-ups indexed from README.md (restore-critical documentation)
 docs/components.md
 
+# Inactive workflow-scope qualification evaluator
+scope/v1/scope-policy.json
+scope/v1/workflow-scope.jq
+scope/v1/validate-scope.sh
+scope/v1/scope-gates.jq
+scope/v1/evaluate-scope.sh
+scripts/test/scope-qualification.test.sh
+
 # Inactive target packaging
 packaging/v1/build-release.sh
 packaging/v1/install.sh

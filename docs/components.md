@@ -681,6 +681,184 @@ credential or network, write outside its scratch, grant qualification, or
 activate a profile.
 
 
+## Inactive workflow-scope qualification evaluator
+
+Roadmap step 8 is "bounded autonomous writes": enable one low-risk qualified
+workflow scope at a time, in its own pull request, after that scope's own shadow
+evidence passes. This component is the part that decides whether a scope may even
+be **proposed** for that pull request. Enabling a scope is still an independent
+operator-merged pull request after the operating-mode transition. Nothing here
+turns anything on.
+
+A **workflow scope** (`scope/v1/workflow-scope.jq`, checked by
+`scope/v1/validate-scope.sh`) is a small written-down record: which repository,
+which workflow, which task class, which risk tier, which repo-relative paths the
+work may touch, which proof kinds and eval families it needs, which shadow
+environments it must have evidence from, which shadow records it claims as its own
+evidence, and how many attempts it gets. Every record says `enabled: false` and
+`push_allowed: false`; one that claims otherwise is refused. Allowed paths are
+globs with small teeth: one to 512 bytes of `A-Za-z0-9._/*?-` only, at most 32
+segments, no empty segment and no `.` or `..` segment, no absolute path, no
+backslash, no `**`, no `.git` segment in any case, no segment ending in a dot, and
+no wildcard in the first segment, because a wildcard there could expand into any
+top-level directory and the protected-path check could not bound it.
+
+A scope **names its own evidence**. `shadow_evidence_refs` is a set of one to
+sixteen document refs — `{schema_version, kind: "shadow_reproduction_record", id,
+sha256}` — naming exactly the shadow reproduction records this scope claims. A
+shadow record says which repository, which environment, which outcome, and which
+incident it reproduced, but nothing about which workflow or task class it belongs
+to; without this claim any reproduction for the same repository would qualify any
+scope, and a new scope could ride in on evidence produced for a different workflow.
+The claim lives in the scope record, so the reviewer of the scope pull request
+reviews the claim itself.
+
+A scope also records **the identities qualification is attached to**.
+Qualification is authority attached to one exact recorded workflow scope, not
+reputation attached to an agent, a model, or a profile, so the record carries a
+required `qualified_identity`: the resolved profile it runs under
+(`resolved_profile_ref`, a core v2 document ref), the adapter configs it runs with
+(`adapter_config_refs`, one to eight content refs, covering the producer config
+and any other adapter config), the model, provider, and effort (`model_request`),
+the prompt and skill versions (`prompt_refs` and `skill_refs`, each entry either a
+core v2 git object ref or a content ref, the two shapes a profile itself uses),
+the versioned verification instructions (`verification_instructions_ref`), and the
+exact target version (`target_revision`, a git revision whose repository is the
+scope's own target). Change any one of them — a different profile, a different
+adapter config or permission set, a different model, effort, prompt, or skill
+version, new verification instructions, a new target revision — and this is a
+**different scope**, which has to earn its own shadow and gate evidence rather
+than inherit this one's. Before this the record had no way to say what its
+evidence was gathered under, so any of those could change after the evidence was
+gathered and the same record would still qualify.
+
+A scope **names its gate evidence** the same way it names its shadow evidence: a
+required `gate_evidence_refs` with exactly `risk_gate_evaluation_ref`,
+`kill_switch_evaluation_ref`, and `duty_separation_evaluation_ref`, each naming
+one evaluation by kind, id, and the digest of that evaluation's canonical bytes.
+
+The **evaluator** (`scope/v1/evaluate-scope.sh` with `scope/v1/scope-gates.jq`)
+reads seven documents: the scope record, a set of shadow reproduction records in
+the shape step 7 emits, the eval dashboard, a risk-gates evaluation, a kill-switch
+evaluation, a duty-separation evaluation, and the operating-mode marker. It
+measures every one of them itself — including a digest over each individual shadow
+record — so nothing a supplied document says about its own identity is taken on
+trust. It answers `proposable` only when all of this holds: the tier is `routine`
+and the risk gate also classifies the work routine and reports no violation; no
+allowed path touches a protected path; every required shadow environment has a
+**claimed** record for this repository and this target revision whose outcome is
+`reproduced` or `no-change`, and none is `inconclusive`; the three gate
+evaluations are the ones the scope named and agree with each other and with the
+scope's recorded identity; every required eval family is seeded with
+at least one graded
+case and no failing or inconclusive grade; the kill switch is clear; duty
+separation is satisfied; and the mode is readable. Otherwise the answer is
+`not-proposable` with one or more reason ids: `scope.tier-not-routine`,
+`scope.protected-path`, `scope.shadow-evidence-missing`,
+`scope.shadow-inconclusive`, `scope.eval-family-unseeded`, `scope.eval-failing`,
+`scope.kill-switch`, `scope.duty-violation`, `scope.mode-construction`, or
+`scope.malformed`.
+
+A supplied shadow record counts **only** when one of the scope's
+`shadow_evidence_refs` names both its id and the digest the evaluator measured over
+that record's own canonical bytes, its target repository is the scope's, and the
+revision it ran against is the `target_revision` the scope's identity records.
+Evidence for another scope never counts: a record nobody claimed is ignored, and it
+is listed by digest under the evaluation's evidence as `unclaimed_shadow_records`
+so the operator can see what was left out. A required environment covered only by
+ignored records, by records from another revision, or a claimed ref that no
+supplied record answers, is `scope.shadow-evidence-missing` — the reason-id set
+stays closed.
+
+The three gate evaluations are bound the same way, and this is what stops an
+evaluation produced for another workflow or another attempt from making a scope
+proposable. Each supplied document's digest must equal the digest the scope
+claimed for it in `gate_evidence_refs`; the three must name the same
+`policy_set`; the risk and duty evaluations must be about the same stage request
+and the same stage result, and both about the `resolved_profile_ref` the scope's
+identity records; and the risk and kill-switch evaluations must each name this
+duty evaluation, which is the only reference the kill-switch evaluation shares
+with the other two. The shared duty reference is compared by id, because the
+digest inside it is each evaluator's own binding while the bytes of all three
+documents are already pinned by the scope's own refs. Any of these failing is
+`scope.malformed` — a supplied document is not the one the scope named, or the
+three do not belong together — and `scope.tier-not-routine`,
+`scope.kill-switch`, and `scope.duty-violation` stay reserved for the real
+verdict problems.
+
+Each gate evaluation is also checked against its own evaluator's complete output
+shape — every body key, every nested reference by shape and by kind or media
+type, `authority_effect: "none"` where that evaluator emits it, that evaluator's
+own verdict vocabulary, and its verdict-to-reason consistency (a kill switch is
+`satisfied` only as `kill.cleared-current`, a risk gate is `inconclusive` only
+when every reason is one of its two unknowns, a duty separation is `satisfied`
+only as `duty.satisfied` and `inconclusive` only as
+`actual.capability-unclassified`) — so a hand-written stub carrying an envelope
+and a verdict is `scope.malformed` rather than evidence, and every input
+including the operating-mode marker goes through the same snapshot, single-root,
+size, and canonical checks before the digest recorded for it is measured, the
+committed marker being put into canonical form in the scratch directory for the
+comparison rather than ever being rewritten.
+
+Two identities are **not yet bindable** from the evidence side. A shadow
+reproduction record carries its target repository and the exact revision it ran
+against, so `target_repository_id` and `target_revision` bind; it carries no
+resolved-profile, adapter-config, model, prompt, skill, or verification-instruction
+reference, so those parts of `qualified_identity` are recorded and reviewed in the
+scope pull request but cannot yet be checked against the shadow evidence. Binding
+them is work for the shadow slice, which would have to record the identity it ran
+under. The kill-switch evaluation likewise carries no stage or profile reference,
+so it binds by policy set, by the duty evaluation it names, and by digest only.
+
+Protected-path names are compared **case-insensitively**, both the glob's segments
+and the policy's prefix, root-file, and segment lists. A checkout may be
+case-insensitive, so `agents.md`, `AGENTS.MD`, `src/Auth/login.ts`, and
+`.GitHub/workflows/x.yml` all reach reserved files and are all refused with
+`scope.protected-path`; a glob differing from a protected name only by case is
+protected.
+
+The operating-mode marker is read from `config/construction-mode.json`
+**read-only** and only ever compared. A supplied marker that disagrees with the
+committed one leaves the mode unknown and the evaluator refuses rather than
+guessing. While the repository is in construction mode the best possible answer is
+`proposable`; `enabled` is never an outcome in any mode.
+
+When the answer is `proposable` the evaluation carries one
+`scope_enablement_proposal` document: exactly what an operator pull request would
+add — the scope record digest, every evidence digest, the environment list, the
+allowed paths, the proof kinds, and a core v2 scope reference with purpose
+`qualification` bound to that exact record. It records `authority: "none"`,
+`enabled: false`, `push_allowed: false`, an enablement state of `blocked`, and the
+sentence that enabling is an independent operator-merged pull request after the
+operating-mode transition.
+
+The evaluator never writes outside its own scratch directory, never runs candidate
+code, never calls a model, never uses a credential or the network, never contacts
+a forge or target, and never grants qualification. Every input must be a regular
+non-symlink file holding exactly one canonical JSON object under one mebibyte; a
+malformed, non-canonical, multi-root, oversized, symlink, or missing input is
+refused with a single error token and no output. The same inputs always produce the
+same bytes.
+
+Run the focused test with `bash scripts/test/scope-qualification.test.sh`. It
+bootstraps the pinned jq 1.6 release itself, proves the proposable evaluation byte
+for byte and byte-identical on repeat, proves every refusal above, proves the
+record validator's refusals, and proves that a copy of the component in a tree with
+no committed mode marker still only ever produces a blocked proposal. It builds
+every evidence document first — the shadow set and the three gate evaluations —
+and then writes the scope record to claim those exact digests, the way a real
+scope pull request would; a case that mutates one of those documents rebuilds the
+scope to claim the mutated one, so it isolates the verdict under test from an
+unbound claim.
+
+Two closures worth naming: a dashboard that lists a family twice is malformed, so a failing entry can never be shadowed by a later passing duplicate; and the operating-mode marker's status is a closed vocabulary (`active` is construction, `retired` is operating), so any other value, including a typo, is unknown and refuses with `scope.mode-construction` even in a portable tree with no committed marker.
+
+A claimed shadow record must use the shadow slice's own outcome vocabulary (reproduced, no-change, inconclusive); any other outcome makes the evidence set malformed rather than being quietly ignored.
+
+A wildcard in the last segment of an allowed path is judged by what it could expand to: if its pattern matches any protected segment name (or, for a single-segment glob, any protected root file), the glob is protected, so `src/*` and `src/auth*` refuse while `src/*.ts` does not. A wildcard in the first segment is refused by the record validator outright.
+
+The risk-gate and kill-switch evaluations must name the duty evaluation by digest as well as id, so gate outputs computed over different duty bytes never combine into one proposal.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned
