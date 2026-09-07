@@ -881,6 +881,8 @@ A required eval family counts only when every case passed: at least one case, no
 
 Each family's `cases` block must be exactly the four counters the dashboard emits, adding up to the total, and a committed mode marker present as anything but a regular file makes the evaluator refuse instead of treating the marker as absent.
 
+A scope id must leave room for the `proposal.` prefix so every emitted proposal id is itself a valid id, and anything that appears at the committed marker path mid-run, regular file or not, makes the run stale.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

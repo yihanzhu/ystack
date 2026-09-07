@@ -199,7 +199,9 @@ if [ -n "$committed_marker_sha" ]; then
   [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ] &&
     [ "$(sha256_path "$mode_marker")" = "$committed_marker_sha" ] ||
     emit_error E_STALE
-elif [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ]; then
+elif [ -e "$mode_marker" ] || [ -L "$mode_marker" ]; then
+  # Anything that appeared at the marker path mid-run, regular or not, means
+  # the repository's mode is no longer what this run read.
   emit_error E_STALE
 fi
 require_canonical "$scratch/evaluation.json"

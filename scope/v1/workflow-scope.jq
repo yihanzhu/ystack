@@ -148,7 +148,10 @@ def gate_evidence_refs_ok:
 
 def shape_ok:
   exact(["body", "id", "kind", "schema_version"]) and
-  .schema_version == 1 and .kind == "workflow_scope" and (.id | id_ok) and
+  # The scope id must leave room for the "proposal." prefix the emitted
+  # enablement proposal carries, so every proposal id is itself a valid id.
+  .schema_version == 1 and .kind == "workflow_scope" and
+  (.id | id_ok and (("proposal." + .) | id_ok)) and
   (.body |
    . as $body |
    exact(["activation_state", "allowed_paths", "authority", "enabled",

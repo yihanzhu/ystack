@@ -518,6 +518,7 @@ mutate_scope '.body.shadow_evidence_refs =
   "$tmp/bad-ref-duplicate.json"
 mutate_scope 'del(.body.qualified_identity)' "$tmp/bad-no-identity.json"
 mutate_scope 'del(.body.qualified_identity.stage_request_ref)' "$tmp/bad-no-stage-request.json"
+mutate_scope '.id = ("scope." + ("x" * 114))' "$tmp/bad-long-id.json"
 mutate_scope 'del(.body.qualified_identity.model_request)' "$tmp/bad-no-model.json"
 mutate_scope '.body.qualified_identity.model_request.effort_id = 3' \
   "$tmp/bad-model-shape.json"
@@ -544,7 +545,7 @@ mutate_scope '.body.gate_evidence_refs.duty_separation_evaluation_ref.sha256 =
 for case_name in bad-attempts bad-tier bad-absolute bad-traversal bad-doublestar \
   bad-firstwild bad-git bad-backslash bad-duplicate bad-family bad-proof bad-extra \
   bad-missing bad-kind bad-no-refs bad-empty-refs bad-ref-shape bad-ref-digest \
-  bad-ref-kind bad-ref-duplicate bad-no-identity bad-no-stage-request bad-no-model bad-model-shape \
+  bad-ref-kind bad-ref-duplicate bad-no-identity bad-no-stage-request bad-long-id bad-no-model bad-model-shape \
   bad-no-prompt bad-prompt-object bad-config-media bad-no-verification \
   bad-profile-version bad-revision-repository bad-revision-commit \
   bad-no-gate-refs bad-gate-ref-missing bad-gate-ref-kind bad-gate-ref-digest; do
@@ -1271,7 +1272,7 @@ pass 'a committed marker that is not a regular file fails closed'
 # checks. Both must be refused rather than emitting a result about marker bytes
 # the repository no longer holds.
 race_marker_case() {
-  local label=$1 committed=$2 status=0 out
+  local label=$1 committed=$2 shape=${3:-file} status=0 out
   local race_repo="$tmp/race-$label" race_bin="$tmp/race-bin-$label"
   /bin/mkdir -p "$race_repo/scope/v1" "$race_repo/config"
   /bin/mkdir -m 700 "$race_bin"
@@ -1286,8 +1287,12 @@ race_marker_case() {
   { /usr/bin/printf '#!/bin/bash\nfor argument in "$@"; do\n'
     /usr/bin/printf '  case "$argument" in\n'
     /usr/bin/printf '    */scope-gates.jq)\n'
-    /usr/bin/printf '      /bin/cat %s > %s ;;\n' \
-      "$tmp/marker-operating.json" "$race_repo/config/construction-mode.json"
+    if [ "$shape" = symlink ]; then
+      /usr/bin/printf '      /bin/ln -sf /dev/null %s ;;\n' "$race_repo/config/construction-mode.json"
+    else
+      /usr/bin/printf '      /bin/cat %s > %s ;;\n' \
+        "$tmp/marker-operating.json" "$race_repo/config/construction-mode.json"
+    fi
     /usr/bin/printf '  esac\ndone\nexec %s "$@"\n' "$jq_bin"
   } >"$race_bin/jq"
   /bin/chmod 0555 "$race_bin/jq"
@@ -1298,6 +1303,7 @@ race_marker_case() {
 }
 race_marker_case rewritten "$tmp/marker.json"
 race_marker_case appeared ''
+race_marker_case appeared-symlink '' symlink
 pass 'a committed mode marker that changes while the run is in flight is stale'
 
 /usr/bin/printf 'scope qualification: %s focused checks passed\n' "$passes"
