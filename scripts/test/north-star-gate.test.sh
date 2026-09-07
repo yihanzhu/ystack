@@ -954,6 +954,178 @@ test_doctor_missing_lib_reports_and_summarizes() {
 }
 
 # ---------------------------------------------------------------------------------
+# (24) doctor.sh check (h), continued — a SECOND, independent WARN signal read straight off the
+# target's own filesystem: packaging/v1's install.sh (roadmap item 10) writes
+# TARGET/.ystack/install-record.json recording (among other things) north_star.state, and doctor
+# WARNs when it reports "placeholder-unset" — a target that installed and never touched its
+# placeholder at all has no `status: active` entry for the MARKER check above to scope onto, so
+# that check alone reads it as a generic UNSET/no-active-entry gap rather than naming the
+# installer's placeholder specifically. This file is never committed by the gate's flow and isn't
+# read by manager-review.sh at all — it's the installer's own on-disk record, so these cases write
+# it directly to the working tree, uncommitted, exactly as install.sh would leave it.
+# ---------------------------------------------------------------------------------
+
+# run_doctor_h_all <repo_dir> — like run_doctor_h, but echoes EVERY '(h)'-tagged line doctor
+# printed, not just the first: check (h) now emits an install-record verdict (if any) IN ADDITION
+# to the marker-based verdict above it, and these tests need to see past run_doctor_h's
+# intentional `head -n1`.
+run_doctor_h_all() {
+  local repo_dir="$1" out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
+  out="$(
+    cd "$repo_dir"
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
+  )"
+  printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' || true
+}
+
+# write_install_record_raw <repo> — write TARGET/.ystack/install-record.json from EXACT stdin
+# bytes (mirroring commit_star_raw's shape), WITHOUT committing or pushing it: install.sh writes
+# this file straight to a target's working tree; it is not git-committed state and the gate never
+# reads it, so doctor's read of it is a plain on-disk file check, same as check (f)'s.
+write_install_record_raw() {
+  local repo="$1"
+  mkdir -p "$repo/.ystack"
+  cat > "$repo/.ystack/install-record.json"
+}
+
+# (24a) The installer's own record says the target's north star is still its untouched
+# placeholder → doctor (h) WARNs, naming both the state and the installer's placeholder.
+# write_placeholder_star <repo> — put the installer's untouched placeholder on disk (uncommitted,
+# exactly as install.sh leaves it) and print its sha256, so a record can name the same bytes.
+write_placeholder_star() {
+  local repo="$1"
+  mkdir -p "$repo/.ystack"
+  printf '# North star\n\nThis file belongs to this target. The ystack installer wrote a placeholder.\n' \
+    > "$repo/.ystack/north-star.md"
+  shasum -a 256 "$repo/.ystack/north-star.md" | awk '{print $1}'
+}
+# write_install_record <repo> <state> <sha256> — a canonical record naming that state and digest.
+write_install_record() {
+  local repo="$1" state="$2" sha="$3"
+  write_install_record_raw "$repo" <<JSON
+{"body":{"north_star":{"owner":"target","path":".ystack/north-star.md","sha256":"$sha","state":"$state"}},"id":"install.$sha","kind":"install_record","schema_version":1}
+JSON
+}
+
+test_doctor_install_record_placeholder_unset_warns() {
+  local repo; repo="$(make_target "install-record-placeholder")"
+  local sha; sha="$(write_placeholder_star "$repo")"
+  write_install_record "$repo" placeholder-unset "$sha"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  assert_contains "(24a) doctor (h) WARNs when install-record.json reports north_star.state=placeholder-unset" "placeholder-unset" "$lines"
+  assert_contains "(24a) install-record WARN names the installer's placeholder" "installer's placeholder" "$lines"
+}
+
+# (24k) The record is a one-time audit: once the star on disk is no longer the installer's
+# bytes, a stale "placeholder-unset" record adds nothing, even though the installer never
+# rewrites it.
+test_doctor_install_record_replaced_star_adds_nothing() {
+  local repo; repo="$(make_target "install-record-replaced")"
+  local sha; sha="$(write_placeholder_star "$repo")"
+  write_install_record "$repo" placeholder-unset "$sha"
+  printf '# North star\n\n### Ship the thing · status: **active**\n' > "$repo/.ystack/north-star.md"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  case "$lines" in
+    *install-record*) failed=$((failed + 1)); echo "FAIL: (24k) a stale placeholder-unset record must add nothing once the star was replaced"; echo "      actual: [$lines]" ;;
+    *) passed=$((passed + 1)); echo "pass: (24k) a stale placeholder-unset record adds nothing once the star was replaced" ;;
+  esac
+}
+
+# (24b) Any OTHER recorded state adds nothing — no install-record line at all (the marker-based
+# verdict above is the only "(h)" line doctor prints).
+test_doctor_install_record_other_state_adds_nothing() {
+  local repo; repo="$(make_target "install-record-approved")"
+  write_install_record_raw "$repo" <<'JSON'
+{"body":{"north_star":{"owner":"target","path":".ystack/north-star.md","sha256":"deadbeef","state":"approved"}},"id":"install.deadbeef","kind":"install_record","schema_version":1}
+JSON
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  case "$lines" in
+    *install-record*) failed=$((failed + 1)); echo "FAIL: (24b) doctor (h) must add nothing for a non-placeholder-unset install-record state"; echo "      actual: [$lines]" ;;
+    *) passed=$((passed + 1)); echo "pass: (24b) doctor (h) adds nothing for a non-placeholder-unset install-record state" ;;
+  esac
+}
+
+# (24c) A SYMLINK install-record.json is refused as malformed — never followed, never a crash.
+test_doctor_install_record_symlink_warns_malformed() {
+  local repo; repo="$(make_target "install-record-symlink")"
+  mkdir -p "$repo/.ystack"
+  printf '{"body":{"north_star":{"state":"placeholder-unset"}}}' > "$repo/.ystack/decoy-record.json"
+  ( cd "$repo/.ystack" && ln -s "decoy-record.json" "install-record.json" )
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  assert_contains "(24c) doctor (h) WARNs on a SYMLINK install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
+# (24d) Invalid JSON content is refused as malformed — never a crash.
+test_doctor_install_record_invalid_json_warns_malformed() {
+  local repo; repo="$(make_target "install-record-invalid-json")"
+  write_install_record_raw "$repo" <<'JSON'
+not json at all {{{
+JSON
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  assert_contains "(24d) doctor (h) WARNs on invalid-JSON install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
+# (24j) An UNREADABLE install-record.json (mode 000) is refused as malformed without aborting
+# the run: the size probe never reads the file, and the summary still prints.
+test_doctor_install_record_unreadable_warns_malformed() {
+  local repo; repo="$(make_target "install-record-unreadable")"
+  write_install_record_raw "$repo" <<'JSON'
+{"body":{"north_star":{"state":"placeholder-unset"}}}
+JSON
+  chmod 000 "$repo/.ystack/install-record.json"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  chmod 600 "$repo/.ystack/install-record.json"
+  assert_contains "(24j) doctor (h) WARNs on an UNREADABLE install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
+# (24f) A MULTI-ROOT file (two JSON texts back to back) is refused as malformed, mirroring
+# install.sh's own "exactly one JSON text" rule (jq -s length == 1).
+test_doctor_install_record_multi_root_warns_malformed() {
+  local repo; repo="$(make_target "install-record-multi-root")"
+  write_install_record_raw "$repo" <<'JSON'
+{"body":{"north_star":{"state":"placeholder-unset"}}}
+{"body":{"north_star":{"state":"placeholder-unset"}}}
+JSON
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  assert_contains "(24f) doctor (h) WARNs on a multi-root install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
+# (24g) An OVERSIZED file (>64 KiB) is refused as malformed without doctor reading its content.
+test_doctor_install_record_oversized_warns_malformed() {
+  local repo; repo="$(make_target "install-record-oversized")"
+  mkdir -p "$repo/.ystack"
+  { printf '{"body":{"north_star":{"state":"placeholder-unset"}},"pad":"'
+    head -c 70000 /dev/zero | tr '\0' 'a'
+    printf '"}'
+  } > "$repo/.ystack/install-record.json"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  assert_contains "(24g) doctor (h) WARNs on an install-record.json over 64 KiB (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
+# (24h) No install-record.json at all adds nothing (the common case: every OTHER doctor-(h) test
+# above never creates this file, and none of them show an install-record line either).
+test_doctor_install_record_absent_adds_nothing() {
+  local repo; repo="$(make_target "install-record-absent")"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  case "$lines" in
+    *install-record*) failed=$((failed + 1)); echo "FAIL: (24h) doctor (h) must add nothing when install-record.json is absent"; echo "      actual: [$lines]" ;;
+    *) passed=$((passed + 1)); echo "pass: (24h) doctor (h) adds nothing when install-record.json is absent" ;;
+  esac
+}
+
+# (24i) A malformed install-record.json must never abort doctor: the full run still reaches and
+# prints its final summary line.
+test_doctor_install_record_malformed_still_completes_summary() {
+  local repo; repo="$(make_target "install-record-summary")"
+  write_install_record_raw "$repo" <<'JSON'
+garbage, not json
+JSON
+  local out
+  out="$(cd "$repo" && PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR=1 bash "$doctor" 2>&1 || true)"
+  assert_contains "(24i) doctor still prints its summary line after a malformed install-record.json (no crash)" "doctor:" "$out"
+}
+
+# ---------------------------------------------------------------------------------
 # (11) #102 — the gate anchors to the gh-BOUND remote's DEFAULT branch, not the checked-out branch.
 # A star committed ONLY on a NON-default (feature) branch must NOT authorize; the gate anchors to
 # the DEFAULT branch (main), which carries the integrated/operator-approved star.
@@ -2397,6 +2569,16 @@ test_doctor_h_committed_worktree_modified
 test_doctor_h_ystack_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
+test_doctor_install_record_placeholder_unset_warns
+test_doctor_install_record_replaced_star_adds_nothing
+test_doctor_install_record_other_state_adds_nothing
+test_doctor_install_record_symlink_warns_malformed
+test_doctor_install_record_invalid_json_warns_malformed
+test_doctor_install_record_unreadable_warns_malformed
+test_doctor_install_record_multi_root_warns_malformed
+test_doctor_install_record_oversized_warns_malformed
+test_doctor_install_record_absent_adds_nothing
+test_doctor_install_record_malformed_still_completes_summary
 test_doctor_h_anchor_logs_ghbound
 test_doctor_h_is_read_only_no_fetch
 test_doctor_h_reads_local_not_fresh_remote
