@@ -86,9 +86,9 @@ def decision_ok($tiers_sha):
         $reh.body.environment.tier != $tier_name or
         $reh.body.from_release_ref != $req.body.release_ref or
         $reh.body.to_release_ref != $req.body.rollback_to_release_ref or
-        # A rehearsal must precede the request it licenses; one dated after
-        # the request rehearsed nothing this request can rely on.
-        $reh.body.rehearsed_at > $req.body.requested_at)
+        # A rehearsal must strictly precede the request it licenses; with
+        # second-level stamps, an equal time cannot prove it came first.
+        $reh.body.rehearsed_at >= $req.body.requested_at)
     then ["deploy.rollback-unrehearsed"] else [] end) +
    (if $kill_doc.body.verdict == "satisfied" then [] else ["deploy.kill-switch"] end) +
    # A violated risk-gate verdict refuses on its own, whatever produced it, and

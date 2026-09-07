@@ -333,6 +333,12 @@ rollback_late_rehearsal=$(mutate "$rollback" rollback-late-rehearsal \
   ".body.rehearsal_ref.sha256=\"$late_rehearsal_sha\"")
 expect_decision rollback-rehearsed-after-request refused deploy.rollback-unrehearsed \
   "$rollback_late_rehearsal" "$release" "$authorization" "$late_rehearsal" "$risk" "$kill_switch"
+same_time_rehearsal=$(mutate "$rehearsal" same-time-rehearsal '.body.rehearsed_at="2026-09-05T12:00:00Z"')
+same_time_rehearsal_sha=$(sha256_path "$same_time_rehearsal")
+rollback_same_time=$(mutate "$rollback" rollback-same-time-rehearsal \
+  ".body.rehearsal_ref.sha256=\"$same_time_rehearsal_sha\"")
+expect_decision rollback-rehearsed-same-second refused deploy.rollback-unrehearsed \
+  "$rollback_same_time" "$release" "$authorization" "$same_time_rehearsal" "$risk" "$kill_switch"
 rollback_wrong_pair=$(mutate "$rollback" rollback-wrong-pair \
   '.body.rollback_to_release_ref.sha256=("0"*64)')
 expect_decision rollback-unrehearsed-pair refused deploy.rollback-unrehearsed \
@@ -423,11 +429,15 @@ expect_decision kill-switch-inconclusive refused deploy.kill-switch \
 expect_decision risk-tier-unknown refused deploy.risk-gate-violated \
   "$request" "$release" "$authorization" "$rehearsal" \
   "$(mutate "$risk" risk-unknown-tier \
-    '.body.classification.minimum_tier="unknown"|.body.reason_ids=["risk-gates.minimum-tier-unknown"]')" \
+    '.body.classification.minimum_tier="unknown"|.body.verdict="violated"|.body.reason_ids=["risk.tier-unsupported"]')" \
   "$kill_switch"
-expect_decision risk-unknown-reason-mismatch refused deploy.malformed \
+expect_decision risk-inconclusive-with-violation refused deploy.malformed \
   "$request" "$release" "$authorization" "$rehearsal" \
-  "$(mutate "$risk" risk-unknown-mismatch '.body.reason_ids=["risk-gates.minimum-tier-unknown"]')" \
+  "$(mutate "$risk" risk-inconclusive-violation '.body.reason_ids=["decision.rejected"]')" \
+  "$kill_switch"
+expect_decision risk-violated-without-violation refused deploy.malformed \
+  "$request" "$release" "$authorization" "$rehearsal" \
+  "$(mutate "$risk" risk-violated-unknowns '.body.verdict="violated"|.body.reason_ids=["duty.inconclusive"]')" \
   "$kill_switch"
 expect_decision kill-satisfied-with-stop-reason refused deploy.malformed \
   "$request" "$release" "$authorization" "$rehearsal" "$risk" \

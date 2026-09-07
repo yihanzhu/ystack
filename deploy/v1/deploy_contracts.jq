@@ -201,11 +201,12 @@ def risk_evaluation_ok:
       (.declared_tier as $tier | ["bootstrap","high","routine"] | index($tier) != null) and
       (.minimum_tier as $tier |
         ["bootstrap","high","routine","unknown"] | index($tier) != null)) and
-    # The evaluator says "unknown" and "minimum-tier-unknown" together or not
-    # at all; a verdict and reasons that disagree with the classification are
-    # not something the real evaluator emits.
-    ((.reason_ids | index("risk-gates.minimum-tier-unknown") != null) ==
-      (.classification.minimum_tier == "unknown")) and
+    # The evaluator's verdict follows from its reasons: "violated" iff at least
+    # one reason is a violation, "inconclusive" iff every reason is one of the
+    # two unknowns it can emit. A verdict that disagrees with its reasons is not
+    # something the real evaluator produces.
+    ((.reason_ids | all(.[]; . == "duty.inconclusive" or . == "decision.provenance-unqualified")) ==
+      (.verdict == "inconclusive")) and
     (.core_contract | core_contract_ok) and
     (.decision_claim_ref |
       content_ref_ok("application/vnd.ystack.risk-gate-decision-claim+json")) and
