@@ -672,9 +672,13 @@ $marker[0] as $mode_doc |
   all(.[];
       type == "object" and (.family_id | type == "string") and
       (.seed_status | type == "string") and
+      # Exactly the four counters the dashboard emits, each a count; an extra
+      # or missing counter is not a dashboard the evals framework produced.
       (.cases |
-       type == "object" and (.total | count_ok) and (.failed | count_ok) and
-       (.inconclusive | count_ok))))) as $dash_ok |
+       exact(["failed","inconclusive","passed","total"]) and
+       (.total | count_ok) and (.passed | count_ok) and (.failed | count_ok) and
+       (.inconclusive | count_ok) and
+       .total == .passed + .failed + .inconclusive)))) as $dash_ok |
 ($risk_doc | risk_evaluation_ok) as $risk_ok |
 ($kill_doc | kill_evaluation_ok) as $kill_ok |
 ($duty_doc | duty_evaluation_ok) as $duty_ok |

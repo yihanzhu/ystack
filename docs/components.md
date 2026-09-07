@@ -879,6 +879,8 @@ A present materialization in a claimed shadow record must be a `no-change` one, 
 
 A required eval family counts only when every case passed: at least one case, none failed or inconclusive, and the passed count equal to the total.
 
+Each family's `cases` block must be exactly the four counters the dashboard emits, adding up to the total, and a committed mode marker present as anything but a regular file makes the evaluator refuse instead of treating the marker as absent.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

@@ -839,35 +839,39 @@ mutate_scope '.body.required_eval_families = ["malicious-instructions"]' \
 expect_reasons eval-unseeded '["scope.eval-family-unseeded"]' \
   "$tmp/eval-declared.json" "${good[@]:1}"
 "$jq_bin" -S -c '.body.families = (.body.families | map(
-   if .family_id == "stale-moved-artifacts" then .cases.failed = 1 else . end))' \
+   if .family_id == "stale-moved-artifacts" then .cases.failed = 1 | .cases.passed -= 1 else . end))' \
   "$tmp/dashboard.json" >"$tmp/dashboard-failing.json"
 expect_reasons eval-failing '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard-failing.json" "${good[@]:3}"
 "$jq_bin" -S -c '.body.families = (.body.families | map(
-   if .family_id == "stale-moved-artifacts" then .cases.inconclusive = 1 else . end))' \
+   if .family_id == "stale-moved-artifacts" then .cases.inconclusive = 1 | .cases.passed -= 1 else . end))' \
   "$tmp/dashboard.json" >"$tmp/dashboard-inconclusive.json"
 expect_reasons eval-inconclusive '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard-inconclusive.json" "${good[@]:3}"
 "$jq_bin" -S -c '.body.families = (.body.families | map(
-   if .family_id == "stale-moved-artifacts" then .cases.total = 0 else . end))' \
+   if .family_id == "stale-moved-artifacts" then .cases = {total:0,passed:0,failed:0,inconclusive:0} else . end))' \
   "$tmp/dashboard.json" >"$tmp/dashboard-empty.json"
 expect_reasons eval-no-cases '["scope.eval-failing"]' "${good[@]:0:2}" \
   "$tmp/dashboard-empty.json" "${good[@]:3}"
 "$jq_bin" -S -c '.body.families = (.body.families | map(
    if .family_id == "stale-moved-artifacts" then .cases = {total:1,passed:0,failed:0,inconclusive:0} else . end))' \
   "$tmp/dashboard.json" >"$tmp/dashboard-unpassed.json"
-expect_reasons eval-no-passing-case '["scope.eval-failing"]' "${good[@]:0:2}" \
+expect_reasons eval-no-passing-case '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' "${good[@]:0:2}" \
   "$tmp/dashboard-unpassed.json" "${good[@]:3}"
 # A dashboard that lists a required family twice, failing once and passing once,
 # must not let the later entry win: duplicate family ids are malformed.
 "$jq_bin" -S -c '(.body.families | map(select(.family_id == "stale-moved-artifacts"))[0]) as $pass |
-  .body.families |= (map(if .family_id == "stale-moved-artifacts" then .cases.failed = 1 else . end) |
+  .body.families |= (map(if .family_id == "stale-moved-artifacts" then .cases.failed = 1 | .cases.passed -= 1 else . end) |
     (map(.family_id != "stale-moved-artifacts") | index(true)) as $slot | .[$slot] = $pass)' \
   "$tmp/dashboard.json" >"$tmp/dashboard-duplicate.json"
 "$jq_bin" -e '[.body.families[] | select(.family_id == "stale-moved-artifacts")] | length == 2' \
   "$tmp/dashboard-duplicate.json" >/dev/null || fail 'duplicate-family fixture must repeat the family'
 "$jq_bin" -e '.body.families | length == 9' "$tmp/dashboard-duplicate.json" >/dev/null ||
   fail 'duplicate-family fixture must keep nine entries'
+"$jq_bin" -S -c '.body.families |= map(if .family_id == "stale-moved-artifacts"
+  then .cases.skipped = 0 else . end)' "$tmp/dashboard.json" >"$tmp/dashboard-extra-counter.json"
+expect_reasons eval-extra-counter '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
+  "${good[@]:0:2}" "$tmp/dashboard-extra-counter.json" "${good[@]:3}"
 expect_reasons eval-duplicate-family '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
   "${good[@]:0:2}" "$tmp/dashboard-duplicate.json" "${good[@]:3}"
 pass 'every required eval family must be seeded and free of failing or inconclusive grades'
@@ -1246,6 +1250,18 @@ PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6
   .body.reason_ids == ["scope.mode-construction"] and .body.enabled == false' \
   "$tmp/evaluation-typo.json" >/dev/null || fail 'an unknown mode status was not refused'
 pass 'an unknown operating-mode status fails closed even without a committed marker'
+# A committed marker present as a symlink is not absent: the portable tree must
+# refuse rather than let the supplied marker decide the mode.
+/bin/mkdir -p "$tmp/portable/config"
+/bin/ln -s /dev/null "$tmp/portable/config/construction-mode.json"
+symlink_status=0
+PATH="$bin:/usr/bin:/bin" "$fake_repo/evaluate-scope.sh" evaluate "${good[@]:0:6}" \
+  "$tmp/marker-operating.json" >"$tmp/evaluation-symlink-marker.json" 2>"$tmp/symlink-marker.err" ||
+  symlink_status=$?
+[ "$symlink_status" -ne 0 ] && [ ! -s "$tmp/evaluation-symlink-marker.json" ] &&
+  [ "$(/bin/cat "$tmp/symlink-marker.err")" = E_RUNTIME ] || fail 'a symlinked committed marker was not refused'
+/bin/rm -f "$tmp/portable/config/construction-mode.json"
+pass 'a committed marker that is not a regular file fails closed'
 
 # The committed marker decides both the mode and the `repository_marker` field,
 # and it is read before the gate program runs, so it is rechecked afterwards

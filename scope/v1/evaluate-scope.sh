@@ -114,6 +114,12 @@ esac
 # same marker when their canonical bytes agree. The committed file is only read.
 mode_repo_state=absent
 committed_marker_sha=''
+# A committed marker that exists as anything but a regular file (a symlink, a
+# directory, a device) is not "absent": it is a tree this evaluator cannot read
+# the mode from, and it refuses rather than letting a supplied marker decide.
+if [ -e "$mode_marker" ] || [ -L "$mode_marker" ]; then
+  [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ] || emit_error E_RUNTIME
+fi
 if [ -f "$mode_marker" ] && [ ! -L "$mode_marker" ]; then
   snapshot "$mode_marker" "$scratch/repo-marker.json"
   committed_marker_sha=$(sha256_path "$scratch/repo-marker.json") ||
