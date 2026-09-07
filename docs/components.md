@@ -1254,6 +1254,8 @@ The read-only guards on the materialization input (no producer patch bytes, netw
 
 The read-only guards now run before the environment registry is consulted and before the sandbox evaluator is invoked, so the ordering the paragraph above promises holds in the code as well. A `file-digest` check whose path names a directory or any non-blob object at the incident revision is an unreadable check (`check.unreadable`, inconclusive), never a failed run.
 
+The recorded identity must describe this very run: its stage request and resolved profile references have to equal, by id and digest, the ones the materialization input carries, so an identity for another profile or request cannot be recorded over this run.
+
 ## Inactive maintenance loop
 
 `maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item

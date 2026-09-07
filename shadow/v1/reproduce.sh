@@ -244,6 +244,16 @@ environment_id=$("$jq_bin" -r '
     select(.input_id == "input.producer-patch") | .content.data] == [""]) and
   .stage_request.content.body.operation.arguments.network_mode == "deny"
 ' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
+# The identity must describe this very run: its stage request and resolved
+# profile references are the ones the materialization input carries, by id and
+# digest, so a caller cannot record one profile's identity over another's run.
+"$jq_bin" -e --slurpfile identity "$scratch/identity.json" '
+  def pair_ref($pair):
+    {schema_version: $pair.content.schema_version, kind: $pair.content.kind,
+     id: $pair.content.id, sha256: $pair.sha256};
+  $identity[0].body.stage_request_ref == pair_ref(.stage_request) and
+  $identity[0].body.resolved_profile_ref == pair_ref(.resolved_profile)
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_RELATION
 
 outcome=inconclusive
 reason=environment.unlisted

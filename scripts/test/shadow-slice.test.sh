@@ -216,11 +216,17 @@ incident "$passing_incident" incident.fixture-passing "$passing_commit"
 # The qualified identity a run is performed under. Every field is a shape the
 # workflow-scope record uses, and `target_revision` is the incident's own
 # revision, so each incident gets its own identity document.
+# The stage request and resolved profile references come from the materialization
+# input the run will use, so the identity describes that run and no other.
 identity() {
-  local target=$1 id=$2 commit=$3
+  local target=$1 id=$2 commit=$3 input=$4
   "$jq_bin" -S -c -n --arg id "$id" --arg commit "$commit" \
-    --arg blob "$failing_blob" --arg prompt_commit "$failing_commit" '
+    --arg blob "$failing_blob" --arg prompt_commit "$failing_commit" \
+    --slurpfile input "$input" '
     def digest($character): ($character * 64);
+    def pair_ref($pair):
+      {schema_version:$pair.content.schema_version,kind:$pair.content.kind,
+       id:$pair.content.id,sha256:$pair.sha256};
     {schema_version:1,kind:"qualified_identity",id:$id,
      body:{adapter_config_refs:[{content_id:"producer-config",
          media_type:"application/vnd.ystack.adapter-config+json",
@@ -231,11 +237,9 @@ identity() {
          mode:"100644",object_id:$blob,object_type:"blob",
          revision:{commit_id:$prompt_commit,hash_algorithm:"sha1",
            repository_id:"fixture.harness"}}],
-       resolved_profile_ref:{schema_version:2,kind:"resolved_profile",
-         id:"profile.shadow-fixture",sha256:digest("2")},
+       resolved_profile_ref:pair_ref($input[0].resolved_profile),
        skill_refs:[],
-       stage_request_ref:{schema_version:2,kind:"stage_request",
-         id:"request.shadow-fixture",sha256:digest("3")},
+       stage_request_ref:pair_ref($input[0].stage_request),
        target_revision:{commit_id:$commit,hash_algorithm:"sha1",
          repository_id:"fixture.target"},
        verification_instructions_ref:{content_id:"verification-instructions",
@@ -245,8 +249,10 @@ identity() {
 }
 failing_identity="$tmp/identity-failing.json"
 passing_identity="$tmp/identity-passing.json"
-identity "$failing_identity" identity.fixture-failing "$failing_commit"
-identity "$passing_identity" identity.fixture-passing "$passing_commit"
+identity "$failing_identity" identity.fixture-failing "$failing_commit" \
+  "$tmp/fixture-failing/read-only-input.json"
+identity "$passing_identity" identity.fixture-passing "$passing_commit" \
+  "$tmp/fixture-passing/read-only-input.json"
 
 "$validator" validate "$failing_incident" > "$tmp/incident-receipt.json"
 "$jq_bin" -e '
@@ -483,6 +489,16 @@ expect_outcome directory-path inconclusive check.unreadable \
     '.body.failing_check.path = "notes"')" \
   "$tmp/fixture-failing/read-only-input.json"
 
+# An identity that names another stage request or profile than the run's own
+# materialization input is not this run's identity, even at the right revision.
+expect_reproduce_error identity-other-stage-request E_RELATION "$failing_incident" \
+  "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/source.git" \
+  "$(mutate "$failing_identity" identity-other-request \
+    '.body.stage_request_ref.sha256 = ("7" * 64)')"
+expect_reproduce_error identity-other-profile E_RELATION "$failing_incident" \
+  "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/source.git" \
+  "$(mutate "$failing_identity" identity-other-profile \
+    '.body.resolved_profile_ref.id = "profile.someone-else"')"
 expect_reproduce_error moved-revision E_STALE "$passing_incident" \
   "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/source.git" \
   "$passing_identity"
