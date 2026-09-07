@@ -92,6 +92,19 @@ def ref_shape($content_id; $media_type):
   content_ref_ok and
   .content_id == $content_id and .media_type == $media_type;
 
+# Copied verbatim from evals/v1/evals.jq (grader_kinds, seed_sources,
+# trial_policy_shape; schema:: qualifiers dropped as in the block above).
+def grader_kinds: ["deterministic","human","model"];
+def seed_sources:
+  ["adapter-tests.contract.v1","adapters.provider-normalizers.v1",
+   "control.duty-separation.v1","control.risk-gates.v1","control.sandbox-policy.v1",
+   "core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+   "orchestrator.state-scanner.v1"];
+def trial_policy_shape:
+  (exact_fields(["kind"];[]) and .kind == "single") or
+  (exact_fields(["kind","minimum_trials"];[]) and .kind == "multi" and
+   (.minimum_trials | int_ok) and
+   .minimum_trials >= 2 and .minimum_trials <= 16);
 def family_ids:
   ["actor-rerun-identity",
    "adapter-contract-compliance",
@@ -209,7 +222,17 @@ def dashboard_shape($catalog; $catalog_sha; $evaluator_sha; $results; $result_sh
           "trial_policy"];[]) and
        (.family_id as $id | family_ids | index($id) != null) and
        (.runs | int_ok) and .runs >= 0 and .runs <= 16 and
-       (.cases | all(.[]; int_ok and . >= 0)));.family_id)) and
+       (.cases | all(.[]; int_ok and . >= 0)) and
+       # The catalog metadata the dashboard copies through must be metadata a
+       # valid catalog can hold (evals/v1/evals.jq family_shape): a family the
+       # dashboard calls seeded names at least one active seed source.
+       (.grader_kinds | enum_set_ok(1;3;grader_kinds)) and
+       (.trial_policy | trial_policy_shape) and
+       (.seed_status == "seeded" or .seed_status == "declared") and
+       (.seed_sources | enum_set_ok(0;4;seed_sources)) and
+       ((.seed_status == "seeded") == ((.seed_sources | length) >= 1)) and
+       (if (.grader_kinds | index("deterministic")) == null
+        then .trial_policy.kind == "multi" else true end));.family_id)) and
    (.coverage | exact_fields(
       ["families_declared","families_seeded","families_total","families_with_results",
        "sources_with_results"];[]) and .families_total == 9 and

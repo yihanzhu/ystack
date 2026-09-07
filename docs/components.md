@@ -885,6 +885,8 @@ A scope id must leave room for the `proposal.` prefix so every emitted proposal 
 
 Each gate evaluation's id must be the one its evaluator derives (the stage result's id for risk and duty, the attempt's id for the kill switch), so a renamed envelope cannot be re-claimed as evidence.
 
+The catalog metadata each dashboard family carries (grader kinds, trial policy, seed status, seed sources) must be metadata a valid eval catalog can hold; a family called seeded with no seed source is malformed.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

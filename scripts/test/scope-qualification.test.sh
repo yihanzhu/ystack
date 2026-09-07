@@ -222,7 +222,8 @@ observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c
 # and the absent telemetry and flow metrics.
 "$jq_bin" -S -c -n '
   def family($id;$status;$total;$failed;$inconclusive):
-    {family_id:$id,seed_status:$status,seed_sources:[],
+    {family_id:$id,seed_status:$status,
+     seed_sources:(if $status == "seeded" then ["core.stage-run.v2"] else [] end),
      grader_kinds:["deterministic"],trial_policy:{kind:"single"},runs:1,
      cases:{total:$total,passed:($total - $failed - $inconclusive),
        failed:$failed,inconclusive:$inconclusive}};
@@ -670,7 +671,7 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
          environments:["env.ci-linux-fixture","env.local-macos-fixture"],
          evidence:evidence}}}}}' >"$tmp/expected.json"
 /usr/bin/cmp -s "$tmp/evaluation.json" "$tmp/expected.json" ||
-  fail 'the proposable evaluation does not match the expected document byte for byte'
+  fail "the proposable evaluation does not match the expected document byte for byte: $("$jq_bin" -c '{outcome:.body.outcome,reasons:.body.reason_ids}' "$tmp/evaluation.json" 2>/dev/null)"
 pass 'a routine scope with complete evidence is proposable, byte for byte and on repeat'
 
 "$jq_bin" -e '
@@ -873,6 +874,10 @@ expect_reasons eval-no-passing-case '["scope.eval-failing","scope.eval-family-un
   then .cases.skipped = 0 else . end)' "$tmp/dashboard.json" >"$tmp/dashboard-extra-counter.json"
 expect_reasons eval-extra-counter '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
   "${good[@]:0:2}" "$tmp/dashboard-extra-counter.json" "${good[@]:3}"
+"$jq_bin" -S -c '.body.families |= map(if .family_id == "stale-moved-artifacts"
+  then .seed_sources = [] else . end)' "$tmp/dashboard.json" >"$tmp/dashboard-seeded-no-source.json"
+expect_reasons eval-seeded-without-source '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
+  "${good[@]:0:2}" "$tmp/dashboard-seeded-no-source.json" "${good[@]:3}"
 expect_reasons eval-duplicate-family '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
   "${good[@]:0:2}" "$tmp/dashboard-duplicate.json" "${good[@]:3}"
 pass 'every required eval family must be seeded and free of failing or inconclusive grades'
