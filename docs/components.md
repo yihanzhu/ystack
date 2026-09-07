@@ -883,6 +883,8 @@ Each family's `cases` block must be exactly the four counters the dashboard emit
 
 A scope id must leave room for the `proposal.` prefix so every emitted proposal id is itself a valid id, and anything that appears at the committed marker path mid-run, regular file or not, makes the run stale.
 
+Each gate evaluation's id must be the one its evaluator derives (the stage result's id for risk and duty, the attempt's id for the kill switch), so a renamed envelope cannot be re-claimed as evidence.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned

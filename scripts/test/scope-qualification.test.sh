@@ -952,6 +952,17 @@ expect_reasons kill-other-duty-bytes '["scope.malformed"]' \
   "$tmp/scope-kill-other-duty-bytes.json" "${good[@]:1:3}" "$tmp/kill-other-duty-bytes.json" \
   "${good[@]:5}"
 pass 'gate evaluations must name the duty evaluation by digest, not only by id'
+# A gate evaluation whose envelope id was renamed away from the document it
+# describes is not that evaluator's output, even when the scope re-claims it.
+"$jq_bin" -S -c '.id = "stage.renamed.result"' "$tmp/risk.json" >"$tmp/risk-renamed.json"
+scope_for_gates "$tmp/risk-renamed.json" "$tmp/kill.json" "$tmp/duty.json" "$tmp/scope-risk-renamed.json"
+expect_reasons risk-renamed-id '["scope.malformed"]' \
+  "$tmp/scope-risk-renamed.json" "${good[@]:1:2}" "$tmp/risk-renamed.json" "${good[@]:4}"
+"$jq_bin" -S -c '.id = "kill-attempt.renamed"' "$tmp/kill.json" >"$tmp/kill-renamed.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-renamed.json" "$tmp/duty.json" "$tmp/scope-kill-renamed.json"
+expect_reasons kill-renamed-id '["scope.malformed"]' \
+  "$tmp/scope-kill-renamed.json" "${good[@]:1:3}" "$tmp/kill-renamed.json" "${good[@]:5}"
+pass 'a gate evaluation whose id does not match the document it describes is malformed'
 # Gate outputs about another stage request never qualify this scope, even when
 # they are valid and use the same resolved profile.
 other_request='{"id":"stage.other-work.request","kind":"stage_request","schema_version":2,"sha256":"'"$(printf 'e%.0s' {1..64})"'"}'

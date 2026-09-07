@@ -699,6 +699,15 @@ def named_by($ref; $document; $sha):
   $ref == {schema_version: $document.schema_version, kind: $document.kind,
     id: $document.id, sha256: $sha};
 ($risk_ok and $kill_ok and $duty_ok and
+ # Each evaluator derives its document id from the document it evaluated: the
+ # risk and duty ids are their stage result's id, the kill-switch id is its
+ # attempt's id (or the fixed "kill-attempt.invalid" when the attempt could not
+ # be read). A renamed envelope is not that evaluator's output.
+ $risk_doc.id == $risk_doc.body.stage.result_ref.id and
+ $duty_doc.id == $duty_doc.body.stage.result_ref.id and
+ (if ($kill_doc.body.reason_ids | index("kill.attempt-invalid") != null)
+  then $kill_doc.id == "kill-attempt.invalid"
+  else $kill_doc.id == $kill_doc.body.attempt_ref.id end) and
  named_by($gate_refs.risk_gate_evaluation_ref; $risk_doc; $risk_sha) and
  named_by($gate_refs.kill_switch_evaluation_ref; $kill_doc; $kill_sha) and
  named_by($gate_refs.duty_separation_evaluation_ref; $duty_doc; $duty_sha) and
