@@ -800,6 +800,18 @@ size, and canonical checks before the digest recorded for it is measured, the
 committed marker being put into canonical form in the scratch directory for the
 comparison rather than ever being rewritten.
 
+The eval dashboard is read the same way: it is checked against the evals
+framework's **complete emitted shape** — that shape predicate and its helpers
+copied out of `evals/v1/evals.jq` into the top of `scope/v1/scope-gates.jq`,
+under a header naming the commit they were copied at — rather than against the
+handful of fields this evaluator happens to read, so a stub carrying only a
+families list cannot make a scope proposable; and the three gate evaluations must
+**agree with each other about the duty verdict**, because the risk and kill-switch
+evaluators each put that verdict into their own reasons (`duty.violated` and
+`duty.inconclusive` for the risk gate, `kill.duty-violated` and
+`kill.duty-inconclusive` for the kill switch), so a combination no run could have
+produced is `scope.malformed`.
+
 Two identities are **not yet bindable** from the evidence side. A shadow
 reproduction record carries its target repository and the exact revision it ran
 against, so `target_repository_id` and `target_revision` bind; it carries no

@@ -1,12 +1,236 @@
-def id_ok:
-  type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
+# Copied from evals/v1/evals.jq at c76f42a5753f604c6c57245ee2c87a4eff474637 and
+# from the schema module of the selected core v2 generation
+# (core/v2/generations/<generation>/modules/schema.jq) at that same commit —
+# keep in sync. The eval dashboard has one fixed emitted shape, so the
+# qualification gate is written against that whole shape rather than a
+# hand-picked subset a stub could satisfy. Everything below is verbatim except
+# two mechanical adaptations: the `schema::` module qualifiers are dropped (this
+# program is run without a module path, and the helpers below are those module
+# functions byte for byte), and `evaluator_shape` is replaced by the scope-side
+# reading described above its own definition.
+def exact_fields($required; $optional):
+  . as $value |
+  ($value | type) == "object" and
+  (($value | keys_unsorted) - ($required + $optional) | length) == 0 and
+  all($required[]; . as $key | $value | has($key));
 
-def sha256_ok:
-  type == "string" and test("\\A[0-9a-f]{64}\\z");
+def bounded_set($minimum; $maximum; item_ok; key):
+  . as $items |
+  ($items | type) == "array" and
+  ($items | length) >= $minimum and
+  ($items | length) <= $maximum and
+  all($items[]; item_ok) and
+  (($items | map(key)) as $keys |
+   ($keys | length) == ($keys | unique | length) and
+   $keys == ($keys | sort));
+
+def enum_set_ok($minimum; $maximum; $allowed):
+  . as $items |
+  ($items | type) == "array" and
+  ($items | length) >= $minimum and
+  ($items | length) <= $maximum and
+  all($items[]; . as $item | $allowed | index($item) != null) and
+  ($items | length) == ($items | unique | length) and
+  $items == ($items | sort);
+
+def id_ok: type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
+# Schema receives only values accepted by the raw canonical-byte gate; jq 1.6 preserves -0 here.
+def int_ok:
+  type == "number" and
+  . == floor and
+  . >= 0 and
+  . <= 2147483647 and
+  tostring != "-0";
+def sha256_ok: type == "string" and test("\\A[0-9a-f]{64}\\z");
+def media_type_ok:
+  type == "string" and
+  length <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
+
+def time_ok:
+  type == "string" and
+  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+  (capture("\\A(?<year>[0-9]{4})-(?<month>[0-9]{2})-(?<day>[0-9]{2})T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}):(?<second>[0-9]{2})Z\\z") as $parts |
+   ($parts.year | tonumber) as $year |
+   ($parts.month | tonumber) as $month |
+   ($parts.day | tonumber) as $day |
+   ($parts.hour | tonumber) as $hour |
+   ($parts.minute | tonumber) as $minute |
+   ($parts.second | tonumber) as $second |
+   ($year % 4 == 0 and ($year % 100 != 0 or $year % 400 == 0)) as $leap |
+   [31,(if $leap then 29 else 28 end),31,30,31,30,31,31,30,31,30,31] as $days |
+   $month >= 1 and $month <= 12 and
+   $day >= 1 and $day <= $days[$month - 1] and
+   $hour >= 0 and $hour <= 23 and
+   $minute >= 0 and $minute <= 59 and
+   $second >= 0 and $second <= 59);
+
+def content_ref_ok:
+  exact_fields(["content_id","media_type","sha256"];[]) and
+  (.content_id | id_ok) and
+  (.content_id | contains(":") | not) and
+  (.content_id | contains("/") | not) and
+  (.media_type | media_type_ok) and
+  (.sha256 | sha256_ok);
+
+def expected_core:
+  {
+    generation_id_sha256:
+      "84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
+    package_ref:{
+      content_id:"core-contract-package.v2",
+      media_type:"application/vnd.ystack.core-contract+json",
+      sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"
+    },
+    semantic_identity:"core.contracts.v2"
+  };
+
+def document_ref($doc; $sha):
+  {schema_version:1,kind:$doc.kind,id:$doc.id,sha256:$sha};
+
+def ref_shape($content_id; $media_type):
+  content_ref_ok and
+  .content_id == $content_id and .media_type == $media_type;
+
+def family_ids:
+  ["actor-rerun-identity",
+   "adapter-contract-compliance",
+   "approval-invalidation-no-push-after-approval",
+   "empty-fake-timed-out-degraded-reviews",
+   "malicious-instructions",
+   "protected-path-credential-network-publisher-boundaries",
+   "repeated-cancelled-missed-events",
+   "reviewer-severity-false-positive-negative",
+   "stale-moved-artifacts"];
+
+def active_seed_sources:
+  ["adapters.provider-normalizers.v1","control.duty-separation.v1","control.risk-gates.v1",
+   "control.sandbox-policy.v1","core.stage-run.v2","orchestrator.reconciliation-plan.v1",
+   "orchestrator.state-scanner.v1"];
+
+def flow_metric_ids:
+  ["accepted-plan-to-merge-time","dora-instability","dora-throughput","escaped-defects",
+   "escaped-vulnerabilities","first-pass-success","human-gate-wait","intent-to-spec-time",
+   "queue-wait","review-latency","review-precision","review-recall-samples",
+   "review-stale-rate","rework-cycles","target-outcome"];
+def telemetry_metric_ids: ["cost","latency","tokens"];
+def absent_metric($reason): {state:"absent",reason_id:$reason};
+def dashboard_id: "evals.dashboard.v1";
+
+# The one adaptation. The evals framework checks this block against the pinned
+# closure digests of the core, orchestrator, control, and adapter files it
+# replayed, and against the driver, program, and catalog digests its own run
+# measured. This evaluator replays nothing and is handed no evals run, so it
+# cannot know those digests; pinning another component's file digests here would
+# also make an unrelated edit anywhere in the tree refuse every scope. It reads
+# the block the framework emits structurally instead: the evaluator document's
+# own identity, every body key, the portable core contract, each shipped
+# artifact reference by content id and media type, the four closures as
+# path/digest lists, and the runtime block down to the pinned jq 1.6 digests.
+def closure_shape:
+  type == "array" and length >= 1 and length <= 64 and
+  all(.[];
+      exact_fields(["path","sha256"];[]) and
+      (.path | type == "string" and length >= 1 and length <= 255) and
+      (.sha256 | sha256_ok));
+def evaluator_shape:
+  exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "eval_framework_evaluator" and
+  .id == "evals.framework.v1" and
+  (.body |
+   exact_fields(
+     ["adapter_closure","bootstrap_ref","catalog_ref","control_closure","core_closure",
+      "core_contract","driver_ref","launcher_ref","orchestrator_closure","program_ref",
+      "runtime"];[]) and
+   .core_contract == expected_core and
+   (.core_closure | closure_shape) and
+   (.orchestrator_closure | closure_shape) and
+   (.control_closure | closure_shape) and
+   (.adapter_closure | closure_shape) and
+   (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
+   (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
+   (.driver_ref | ref_shape("evals-framework-driver.v1";"text/x-shellscript")) and
+   (.program_ref | ref_shape("evals-framework-program.v1";"text/x-jq")) and
+   (.catalog_ref |
+    ref_shape("evals-catalog.v1";"application/vnd.ystack.eval-catalog+json")) and
+   (.runtime |
+    exact_fields(
+      ["execution_mode","host_architecture","host_os","jq_architecture",
+       "jq_ref","shell_ref"];[]) and
+    (.jq_ref | ref_shape("jq-runtime.v1";"application/x-executable")) and
+    (.shell_ref | ref_shape("bash-runtime";"application/x-executable")) and
+    ((.host_os == "linux" and .host_architecture == "x86_64" and
+      .jq_architecture == "x86_64" and .execution_mode == "native" and
+      .jq_ref.sha256 ==
+        "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44") or
+     (.host_os == "darwin" and .host_architecture == "x86_64" and
+      .jq_architecture == "x86_64" and .execution_mode == "native" and
+      .jq_ref.sha256 ==
+        "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef") or
+     (.host_os == "darwin" and .host_architecture == "arm64" and
+      .jq_architecture == "x86_64" and .execution_mode == "rosetta" and
+      .jq_ref.sha256 ==
+        "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef"))));
+
+def dashboard_input_shape:
+  exact_fields(
+    ["observed_at","result_sha256","run_id","seed_set_ref","seed_source","summary"];[]) and
+  (.run_id | id_ok) and (.result_sha256 | sha256_ok) and
+  (.seed_source as $source | active_seed_sources | index($source) != null) and
+  (.observed_at | time_ok) and
+  (.seed_set_ref |
+   exact_fields(["id","kind","schema_version","sha256"];[]) and
+   .schema_version == 1 and .kind == "eval_seed_set" and (.id | id_ok) and
+   (.sha256 | sha256_ok)) and
+  (.summary | exact_fields(["failed","inconclusive","passed","total"];[]) and
+   all(.[]; int_ok and . >= 0));
+
+
+def dashboard_shape($catalog; $catalog_sha; $evaluator_sha; $results; $result_shas;
+                    $observed_at):
+  exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "eval_dashboard" and .id == dashboard_id and
+  (.body |
+   exact_fields(
+     ["activation_state","authority_effect","catalog_ref","core_contract","coverage",
+      "evaluator","families","flow","inputs","mode","observed_at","quality","recovery",
+      "telemetry"];[]) and
+   .activation_state == "inactive" and .authority_effect == "none" and
+   .mode == "deterministic-offline" and .core_contract == expected_core and
+   .catalog_ref == document_ref($catalog;$catalog_sha) and
+   (.evaluator | exact_fields(["content","sha256"];[]) and
+    (.content | evaluator_shape) and .sha256 == $evaluator_sha) and
+   .observed_at == $observed_at and
+   (.inputs | bounded_set(1;16;dashboard_input_shape;.result_sha256)) and
+   ((.inputs | map(.result_sha256) | sort) == ($result_shas | sort)) and
+   (.families | bounded_set(9;9;
+      (exact_fields(
+         ["cases","family_id","grader_kinds","runs","seed_sources","seed_status",
+          "trial_policy"];[]) and
+       (.family_id as $id | family_ids | index($id) != null) and
+       (.runs | int_ok) and .runs >= 0 and .runs <= 16 and
+       (.cases | all(.[]; int_ok and . >= 0)));.family_id)) and
+   (.coverage | exact_fields(
+      ["families_declared","families_seeded","families_total","families_with_results",
+       "sources_with_results"];[]) and .families_total == 9 and
+    .families_seeded + .families_declared == 9 and
+    (.sources_with_results | enum_set_ok(1;8;active_seed_sources))) and
+   (.quality | all(.[]; int_ok and . >= 0)) and
+   (.recovery | all(.[]; int_ok and . >= 0)) and
+   (.telemetry | keys == telemetry_metric_ids and
+    all(.[]; .state == "absent" and (.reason_id | id_ok))) and
+   (.flow | keys == flow_metric_ids and
+    all(.[]; . == absent_metric("evals.no-operating-history"))));
+
+# End of the copied dashboard shape. Everything below is this component's own.
 
 def count_ok:
   type == "number" and . == floor and . >= 0 and . <= 2147483647;
 
+# This component's own document reference: core v2 documents are schema_version
+# 2, so the schema version comes from the document rather than being fixed at 1
+# the way the copied evals helper of the same name fixes it. The copy above kept
+# its own; from here on this definition is the one in scope.
 def document_ref($doc; $sha):
   {schema_version: $doc.schema_version, kind: $doc.kind, id: $doc.id, sha256: $sha};
 
@@ -211,9 +435,36 @@ $marker[0] as $mode_doc |
    type == "array" and length >= 1 and length <= 16 and
    all(.[]; shadow_record_ok)) and
   ((.body.records | length) == ($record_shas | length)))) as $set_ok |
-($dash | type == "object" and .schema_version == 1 and .kind == "eval_dashboard" and
- (.id | id_ok) and (.body | type == "object") and
- .body.activation_state == "inactive" and
+# The dashboard is judged against the evals framework's complete emitted shape,
+# copied at the top of this file, and not against a subset of it: a stub that
+# carried only the fields this evaluator reads could otherwise drive a
+# proposable outcome. Four of that predicate's parameters are identities only an
+# evals run holds — the catalog document, the evaluator digest, the result
+# digests, and the observation time — so they are read back out of the candidate
+# and the comparisons against them are checked here instead, for what a
+# self-supplied value cannot establish: the catalog reference is a well-formed
+# schema-version-1 eval_catalog reference, the evaluator digest is a digest, and
+# the observation time is a real UTC timestamp. The scope-specific family reads
+# this evaluator makes on top of the shape are kept as they were.
+($dash |
+ # A type guard first, so a block of the wrong type is a refusal rather than a
+ # jq error part way through reading it.
+ type == "object" and (.body | type == "object") and
+ (.body |
+  ([.catalog_ref, .evaluator, .quality, .recovery, .telemetry, .flow] |
+   all(.[]; type == "object")) and
+  (.inputs | type == "array" and all(.[]; type == "object")) and
+  (.families |
+   type == "array" and
+   all(.[]; type == "object" and (.cases | type == "object")))) and
+ dashboard_shape(
+   {schema_version: .body.catalog_ref.schema_version,
+    kind: .body.catalog_ref.kind, id: .body.catalog_ref.id};
+   .body.catalog_ref.sha256; .body.evaluator.sha256; null;
+   (.body.inputs | map(.result_sha256)); .body.observed_at) and
+ (.body.catalog_ref | document_ref_ok(1; "eval_catalog")) and
+ (.body.evaluator.sha256 | sha256_ok) and
+ (.body.observed_at | time_ok) and
  (.body.families |
   type == "array" and length == 9 and
   (map(.family_id) | length == (unique | length)) and
@@ -258,6 +509,34 @@ def named_by($ref; $document; $sha):
  $risk_doc.body.duty_evaluation_ref.sha256 == $duty_sha and
  $kill_doc.body.duty_evaluation_ref.id == $duty_doc.id and
  $kill_doc.body.duty_evaluation_ref.sha256 == $duty_sha) as $gates_bound |
+
+# Binding the three by digest still leaves them free to contradict each other
+# about what the duty evaluation said, and the real evaluators never do. In
+# control/v1/risk-gates.jq the duty verdict enters the risk reasons directly:
+# "duty.violated" is emitted exactly when the duty verdict is "violated" and
+# "duty.inconclusive" exactly when it is "inconclusive". In
+# control/v1/kill-switch.jq the same two verdicts become "kill.duty-violated"
+# and "kill.duty-inconclusive", but only once that evaluator has verified the
+# duty document it was handed; a duty document it cannot verify yields
+# "kill.duty-unverifiable" instead, and a claimed duty evaluation this program
+# has already accepted whole is not that. Its two reasons for an attempt or
+# state it could not read at all — "kill.attempt-invalid" and
+# "kill.state-invalid" — stand alone with no duty reason beside them, so that
+# case is mirrored rather than forced. Any other pairing is evidence no run
+# produced, and the set is refused as malformed rather than read for a verdict.
+def carries($reason): .body.reason_ids | index($reason) != null;
+$duty_doc.body.verdict as $verdict |
+($risk_ok and $kill_ok and $duty_ok and
+ ($risk_doc | carries("duty.violated")) == ($verdict == "violated") and
+ ($risk_doc | carries("duty.inconclusive")) == ($verdict == "inconclusive") and
+ ($kill_doc | carries("kill.duty-unverifiable") | not) and
+ (if ($kill_doc | carries("kill.attempt-invalid")) or
+     ($kill_doc | carries("kill.state-invalid"))
+  then ($kill_doc | carries("kill.duty-violated") | not) and
+       ($kill_doc | carries("kill.duty-inconclusive") | not)
+  else ($kill_doc | carries("kill.duty-violated")) == ($verdict == "violated") and
+       ($kill_doc | carries("kill.duty-inconclusive")) ==
+         ($verdict == "inconclusive") end)) as $gates_consistent |
 
 # Only the two statuses the mode record can carry are meaningful: "active" is
 # construction and "retired" is operating. Anything else is unknown and refuses.
@@ -368,7 +647,7 @@ def claimed_by_scope($refs): . as $record |
   else ["scope.duty-violation"] end) +
  (if $mode_state == "unknown" then ["scope.mode-construction"] else [] end) +
  (if $shas_ok and $set_ok and $dash_ok and $risk_ok and $kill_ok and $duty_ok and
-     $mode_ok and $gates_bound
+     $mode_ok and $gates_bound and $gates_consistent
   then [] else ["scope.malformed"] end) |
  sort | unique) as $refusals |
 

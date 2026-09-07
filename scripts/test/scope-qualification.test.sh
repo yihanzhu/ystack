@@ -155,15 +155,99 @@ qualified_identity='{
      record("shadow.docs-typo-fix.ci";"env.ci-linux-fixture";"no-change";
        "repo.fixture-target")]}}' >"$tmp/shadow-set.json"
 
+# The dashboard fixture is a whole eval dashboard in the shape
+# evals/v1/evals.jq emits, not only the parts this evaluator reads: the
+# qualification gate now checks the framework's complete emitted shape, so a
+# fixture carrying just the families would be refused as malformed. Every block
+# is here field for field — the portable core contract the framework pins, the
+# catalog and evaluator references, the run inputs, coverage, quality, recovery,
+# and the absent telemetry and flow metrics.
 "$jq_bin" -S -c -n '
   def family($id;$status;$total;$failed;$inconclusive):
     {family_id:$id,seed_status:$status,seed_sources:[],
      grader_kinds:["deterministic"],trial_policy:{kind:"single"},runs:1,
      cases:{total:$total,passed:($total - $failed - $inconclusive),
        failed:$failed,inconclusive:$inconclusive}};
+  def absent($reason): {state:"absent",reason_id:$reason};
+  def closure($path;$sha): [{path:$path,sha256:$sha}];
   {schema_version:1,kind:"eval_dashboard",id:"evals.dashboard.v1",
    body:{activation_state:"inactive",authority_effect:"none",
      mode:"deterministic-offline",
+     core_contract:{
+       generation_id_sha256:
+         "84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
+       package_ref:{content_id:"core-contract-package.v2",
+         media_type:"application/vnd.ystack.core-contract+json",
+         sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"},
+       semantic_identity:"core.contracts.v2"},
+     catalog_ref:{schema_version:1,kind:"eval_catalog",id:"evals.catalog.v1",
+       sha256:"1111111111111111111111111111111111111111111111111111111111111111"},
+     evaluator:{
+       sha256:"2222222222222222222222222222222222222222222222222222222222222222",
+       content:{schema_version:1,kind:"eval_framework_evaluator",
+         id:"evals.framework.v1",
+         body:{
+           core_contract:{
+             generation_id_sha256:
+               "84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
+             package_ref:{content_id:"core-contract-package.v2",
+               media_type:"application/vnd.ystack.core-contract+json",
+               sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"},
+             semantic_identity:"core.contracts.v2"},
+           core_closure:closure("core/v2/generation-registry.json";
+             "3333333333333333333333333333333333333333333333333333333333333333"),
+           orchestrator_closure:closure("orchestrator/v1/scan-state.sh";
+             "4444444444444444444444444444444444444444444444444444444444444444"),
+           control_closure:closure("control/v1/kill-switch.jq";
+             "5555555555555555555555555555555555555555555555555555555555555555"),
+           adapter_closure:closure("adapters/codex-native-reviewer/v1/normalize.jq";
+             "6666666666666666666666666666666666666666666666666666666666666666"),
+           bootstrap_ref:{content_id:"evals-framework-bootstrap.v1",
+             media_type:"text/x-shellscript",
+             sha256:"7777777777777777777777777777777777777777777777777777777777777777"},
+           launcher_ref:{content_id:"evals-framework-launcher.v1",
+             media_type:"text/x-shellscript",
+             sha256:"8888888888888888888888888888888888888888888888888888888888888888"},
+           driver_ref:{content_id:"evals-framework-driver.v1",
+             media_type:"text/x-shellscript",
+             sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
+           program_ref:{content_id:"evals-framework-program.v1",
+             media_type:"text/x-jq",
+             sha256:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+           catalog_ref:{content_id:"evals-catalog.v1",
+             media_type:"application/vnd.ystack.eval-catalog+json",
+             sha256:"1111111111111111111111111111111111111111111111111111111111111111"},
+           runtime:{host_os:"linux",host_architecture:"x86_64",
+             jq_architecture:"x86_64",execution_mode:"native",
+             jq_ref:{content_id:"jq-runtime.v1",
+               media_type:"application/x-executable",
+               sha256:"af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"},
+             shell_ref:{content_id:"bash-runtime",
+               media_type:"application/x-executable",
+               sha256:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}},
+     observed_at:"2026-09-05T00:00:00Z",
+     inputs:[{run_id:"evals.run.fixture",seed_source:"core.stage-run.v2",
+       result_sha256:"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+       observed_at:"2026-09-05T00:00:00Z",
+       seed_set_ref:{schema_version:1,kind:"eval_seed_set",id:"evals.seed-set.fixture",
+         sha256:"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+       summary:{total:34,passed:34,failed:0,inconclusive:0}}],
+     coverage:{families_total:9,families_seeded:7,families_declared:2,
+       families_with_results:7,
+       sources_with_results:["core.stage-run.v2"]},
+     quality:{total:34,passed:34,failed:0,inconclusive:0},
+     recovery:{stranded_recovered:0,cancelled_stayed_terminal:0,
+       repeats_redelivered_once:0,repeats_suppressed_after_acknowledgement:0,
+       retry_limit_enforced:0,events_refused:0},
+     telemetry:{cost:absent("evals.no-live-runs"),
+       latency:absent("evals.no-live-runs"),tokens:absent("evals.no-live-runs")},
+     flow:([
+       "accepted-plan-to-merge-time","dora-instability","dora-throughput",
+       "escaped-defects","escaped-vulnerabilities","first-pass-success",
+       "human-gate-wait","intent-to-spec-time","queue-wait","review-latency",
+       "review-precision","review-recall-samples","review-stale-rate",
+       "rework-cycles","target-outcome"] |
+       map({key:.,value:absent("evals.no-operating-history")}) | from_entries),
      families:[
        family("actor-rerun-identity";"seeded";4;0;0),
        family("adapter-contract-compliance";"seeded";4;0;0),
@@ -698,8 +782,34 @@ pass 'every required eval family must be seeded and free of failing or inconclus
 # another verdict is not a document either evaluator produces.
 for verdict in violated inconclusive; do
   case "$verdict" in
-    violated) kill_reason=kill.state-invalid; duty_reason=actual.capability-mismatch ;;
-    *) kill_reason=kill.duty-inconclusive; duty_reason=actual.capability-unclassified ;;
+    violated)
+      kill_reason=kill.state-invalid
+      duty_reason=actual.capability-mismatch
+      # The reasons the other two evaluators emit beside this duty verdict:
+      # control/v1/risk-gates.jq puts duty.violated among its violations, which
+      # makes its own verdict violated, and control/v1/kill-switch.jq puts
+      # kill.duty-violated among its violations, which makes its verdict
+      # violated too.
+      risk_verdict=violated
+      risk_reasons='["duty.violated"]'
+      kill_duty_verdict=violated
+      kill_duty_reasons='["kill.duty-violated"]'
+      # A violated duty therefore never stands alone: the risk gate reporting a
+      # violation is not routine, and the kill switch is not clear.
+      duty_expected='["scope.duty-violation","scope.kill-switch","scope.tier-not-routine"]'
+      ;;
+    *)
+      # kill.duty-inconclusive belongs to an inconclusive duty verdict, so a
+      # kill-switch case beside the satisfied duty fixture uses one of that
+      # evaluator's duty-independent unknowns instead.
+      kill_reason=kill.scope-missing.repository
+      duty_reason=actual.capability-unclassified
+      risk_verdict=inconclusive
+      risk_reasons='["decision.provenance-unqualified","duty.inconclusive"]'
+      kill_duty_verdict=inconclusive
+      kill_duty_reasons='["kill.duty-inconclusive"]'
+      duty_expected='["scope.duty-violation","scope.kill-switch"]'
+      ;;
   esac
   "$jq_bin" -S -c --arg verdict "$verdict" --arg reason "$kill_reason" \
     '.body.verdict = $verdict | .body.reason_ids = [$reason]' \
@@ -713,15 +823,22 @@ for verdict in violated inconclusive; do
     '.body.verdict = $verdict | .body.reason_ids = [$reason]' \
     "$tmp/duty.json" >"$tmp/duty-$verdict.json"
   # The risk and kill evaluations are recomputed over the mutated duty bytes, so
-  # they name its digest; the refusal under test is the duty verdict alone.
+  # they name its digest, and they carry the duty reasons their own evaluators
+  # emit for that verdict, so the three still agree with each other.
   duty_verdict_sha=$(sha256_path "$tmp/duty-$verdict.json")
-  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
+  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" --arg verdict "$risk_verdict" \
+    --argjson reasons "$risk_reasons" \
+    '.body.duty_evaluation_ref.sha256 = $sha | .body.verdict = $verdict |
+     .body.reason_ids = $reasons' \
     "$tmp/risk.json" >"$tmp/risk-duty-$verdict.json"
-  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
+  "$jq_bin" -S -c --arg sha "$duty_verdict_sha" --arg verdict "$kill_duty_verdict" \
+    --argjson reasons "$kill_duty_reasons" \
+    '.body.duty_evaluation_ref.sha256 = $sha | .body.verdict = $verdict |
+     .body.reason_ids = $reasons' \
     "$tmp/kill.json" >"$tmp/kill-duty-$verdict.json"
   scope_for_gates "$tmp/risk-duty-$verdict.json" "$tmp/kill-duty-$verdict.json" \
     "$tmp/duty-$verdict.json" "$tmp/scope-duty-$verdict.json"
-  expect_reasons "duty-$verdict" '["scope.duty-violation"]' \
+  expect_reasons "duty-$verdict" "$duty_expected" \
     "$tmp/scope-duty-$verdict.json" "${good[@]:1:2}" "$tmp/risk-duty-$verdict.json" \
     "$tmp/kill-duty-$verdict.json" "$tmp/duty-$verdict.json" "${good[@]:6}"
 done
@@ -781,6 +898,46 @@ run_validator "$tmp/scope-other-profile.json" ||
 expect_reasons scope-other-profile '["scope.malformed"]' \
   "$tmp/scope-other-profile.json" "${good[@]:1}"
 pass 'gate evidence counts only when the scope named it and the three agree'
+
+# Binding the three by digest is not enough: their contents have to agree about
+# what the duty evaluation said, because the real evaluators put the duty verdict
+# into their own reasons. A pair no run could have produced is malformed, and the
+# verdict reasons that follow from each document stand beside it.
+"$jq_bin" -S -c '.body.reason_ids = ["decision.actor-unbound"]' \
+  "$tmp/risk-duty-violated.json" >"$tmp/risk-duty-dropped.json"
+scope_for_gates "$tmp/risk-duty-dropped.json" "$tmp/kill-duty-violated.json" \
+  "$tmp/duty-violated.json" "$tmp/scope-risk-duty-dropped.json"
+expect_reasons risk-missing-duty-violated \
+  '["scope.duty-violation","scope.kill-switch","scope.malformed","scope.tier-not-routine"]' \
+  "$tmp/scope-risk-duty-dropped.json" "${good[@]:1:2}" "$tmp/risk-duty-dropped.json" \
+  "$tmp/kill-duty-violated.json" "$tmp/duty-violated.json" "${good[@]:6}"
+"$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["duty.violated"]' \
+  "$tmp/risk.json" >"$tmp/risk-claims-duty-violated.json"
+scope_for_gates "$tmp/risk-claims-duty-violated.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-risk-claims-duty-violated.json"
+expect_reasons risk-claims-duty-violated '["scope.malformed","scope.tier-not-routine"]' \
+  "$tmp/scope-risk-claims-duty-violated.json" "${good[@]:1:2}" \
+  "$tmp/risk-claims-duty-violated.json" "${good[@]:4}"
+# The same contradiction the other way round and without any verdict problem to
+# hide behind: an unknown the risk gate only emits for an inconclusive duty,
+# beside a duty evaluation that is satisfied.
+scope_for_gates "$tmp/risk-restated.json" "$tmp/kill.json" "$tmp/duty.json" \
+  "$tmp/scope-risk-claims-duty-inconclusive.json"
+expect_reasons risk-claims-duty-inconclusive '["scope.malformed"]' \
+  "$tmp/scope-risk-claims-duty-inconclusive.json" "${good[@]:1:2}" \
+  "$tmp/risk-restated.json" "${good[@]:4}"
+# kill.duty-unverifiable is what the kill-switch evaluator emits for a duty
+# document it could not verify, which a claimed and fully checked duty evaluation
+# is not.
+"$jq_bin" -S -c '.body.verdict = "inconclusive" |
+  .body.reason_ids = ["kill.duty-unverifiable"]' "$tmp/kill.json" \
+  >"$tmp/kill-duty-unverifiable.json"
+scope_for_gates "$tmp/risk.json" "$tmp/kill-duty-unverifiable.json" "$tmp/duty.json" \
+  "$tmp/scope-kill-duty-unverifiable.json"
+expect_reasons kill-duty-unverifiable '["scope.kill-switch","scope.malformed"]' \
+  "$tmp/scope-kill-duty-unverifiable.json" "${good[@]:1:3}" \
+  "$tmp/kill-duty-unverifiable.json" "${good[@]:5}"
+pass 'the three gate evaluations must agree with each other about the duty verdict'
 
 # A gate evaluation is accepted only in its own evaluator's complete output
 # shape, so a document that carries the envelope, the markers, and a verdict but
@@ -876,6 +1033,27 @@ expect_reasons malformed-dashboard \
 expect_reasons malformed-kill '["scope.kill-switch","scope.malformed"]' \
   "${good[@]:0:4}" "$tmp/kill-malformed.json" "${good[@]:5}"
 pass 'evidence that parses but does not hold its shape is refused as malformed'
+
+# The dashboard is judged against the evals framework's whole emitted shape, so a
+# document carrying only the blocks this evaluator reads is not a dashboard. One
+# of the framework's real top-level blocks missing, or one key more than it
+# emits, is malformed, and the eval reasons follow because a dashboard that is
+# not a dashboard grades nothing.
+for dashboard_case in 'del(.body.flow)' 'del(.body.telemetry)' \
+  'del(.body.evaluator)' 'del(.body.catalog_ref)' 'del(.body.coverage)' \
+  '.body.extra_block = {}' '.extra = true' \
+  '.body.core_contract.semantic_identity = "core.contracts.v1"' \
+  '.body.coverage.families_total = 8' \
+  '.body.observed_at = "2026-02-30T00:00:00Z"' \
+  '.body.evaluator.content.body.runtime.host_os = "plan9"' \
+  '.body.catalog_ref.kind = "eval_seed_set"'; do
+  "$jq_bin" -S -c "$dashboard_case" "$tmp/dashboard.json" \
+    >"$tmp/dashboard-shape.json"
+  expect_reasons "dashboard shape $dashboard_case" \
+    '["scope.eval-failing","scope.eval-family-unseeded","scope.malformed"]' \
+    "${good[@]:0:2}" "$tmp/dashboard-shape.json" "${good[@]:3}"
+done
+pass 'the dashboard is validated against the evals framework complete emitted shape'
 
 expect_evaluator_error evaluator-non-canonical E_CANONICAL "$tmp/pretty.json" \
   "${good[@]:1}"
