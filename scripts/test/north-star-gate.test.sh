@@ -1034,6 +1034,19 @@ JSON
   assert_contains "(24d) doctor (h) WARNs on invalid-JSON install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
 }
 
+# (24j) An UNREADABLE install-record.json (mode 000) is refused as malformed without aborting
+# the run: the size probe never reads the file, and the summary still prints.
+test_doctor_install_record_unreadable_warns_malformed() {
+  local repo; repo="$(make_target "install-record-unreadable")"
+  write_install_record_raw "$repo" <<'JSON'
+{"body":{"north_star":{"state":"placeholder-unset"}}}
+JSON
+  chmod 000 "$repo/.ystack/install-record.json"
+  local lines; lines="$(run_doctor_h_all "$repo")"
+  chmod 600 "$repo/.ystack/install-record.json"
+  assert_contains "(24j) doctor (h) WARNs on an UNREADABLE install-record.json (never crashes)" "not readable as a single well-formed JSON document" "$lines"
+}
+
 # (24f) A MULTI-ROOT file (two JSON texts back to back) is refused as malformed, mirroring
 # install.sh's own "exactly one JSON text" rule (jq -s length == 1).
 test_doctor_install_record_multi_root_warns_malformed() {
@@ -2529,6 +2542,7 @@ test_doctor_install_record_placeholder_unset_warns
 test_doctor_install_record_other_state_adds_nothing
 test_doctor_install_record_symlink_warns_malformed
 test_doctor_install_record_invalid_json_warns_malformed
+test_doctor_install_record_unreadable_warns_malformed
 test_doctor_install_record_multi_root_warns_malformed
 test_doctor_install_record_oversized_warns_malformed
 test_doctor_install_record_absent_adds_nothing

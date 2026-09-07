@@ -586,7 +586,13 @@ if [ "$ns_h_cwd_is_target" -eq 1 ] && [ -n "$toplevel" ]; then
       # an installer never writes one, so it was hand-placed or edited.
       ns_h_record_status="malformed"
     else
-      ns_h_record_bytes="$(wc -c <"$ns_h_record" 2>/dev/null | tr -d '[:space:]')"
+      # Size comes from stat, never from reading the file: an unreadable or huge
+      # record must not abort the run or be read before the 64 KiB cap applies.
+      # GNU stat first (on Linux `stat -f` is filesystem status and would succeed
+      # with the wrong answer); BSD stat has no -c and falls through cleanly.
+      ns_h_record_bytes="$( { /usr/bin/stat -c '%s' "$ns_h_record" 2>/dev/null ||
+        /usr/bin/stat -f '%z' "$ns_h_record" 2>/dev/null || :; } | tr -d '[:space:]')"
+      [ -r "$ns_h_record" ] || ns_h_record_bytes=""
       case "$ns_h_record_bytes" in
         ''|*[!0-9]*) ns_h_record_status="malformed" ;;
         *)
