@@ -357,6 +357,12 @@ scope/v1/scope-gates.jq
 scope/v1/evaluate-scope.sh
 scripts/test/scope-qualification.test.sh
 
+# Inactive review-fix loop planner
+loop/v1/plan-review-fix.sh
+loop/v1/review-fix-planner.jq
+loop/v1/review-fix-policy.json
+scripts/test/loop-review-fix-planner.test.sh
+
 # Inactive shadow reproduction slice
 shadow/v1/incident-record.jq
 shadow/v1/validate-incident.sh
