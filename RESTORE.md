@@ -858,6 +858,27 @@ fail-closed handling of malformed, moved, or edited inputs. The framework remain
 inactive and observation only. It does not run a candidate or adapter, invoke a
 model, use a credential or network, grant qualification, or activate a profile.
 
+Restore the eight paths listed under "Inactive deploy and rollback gates" in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/deploy-rollback-gates.test.sh
+```
+
+The proof checks the admissible path for each environment tier and each
+capability, the exact bytes of the admissible decision and a byte-identical
+repeat run, and every refusal: unknown tier, missing, stale, or wrong-tier
+authorization, an unverified or mismatched release, an unrehearsed rollback, an
+active kill switch, a duty violation, and a malformed bundle. Production is
+refused unless a named operator authorized it, whatever else passes. It also
+validates one well-formed document of every kind and refuses malformed,
+non-canonical, multi-root, oversized, too-deep, symlinked, stale, and moved
+input. The fake dormant deployment adapter returns only a refusal receipt.
+Nothing in this unit deploys, rolls back, or reads an environment; there is no
+deployment adapter here, and adding a real one is a post-transition,
+operator-gated change. It uses no credential or network, invokes no model, grants
+no authority or qualification, and activates no profile.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
