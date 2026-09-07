@@ -154,6 +154,28 @@ after the operating-mode transition. It reads `config/construction-mode.json`
 read-only and only ever compares it. Restoring these files grants no authority and
 performs no model, credential, network, provider, publish, forge, or target
 
+### Restore the inactive target packaging
+
+Restore the four paths listed under “Inactive target packaging” in
+[`ci/required-files.txt`](ci/required-files.txt), together with the profile
+assemblies, adapter payloads, and the portable contract validator restored above,
+then run:
+
+```sh
+bash scripts/test/target-packaging.test.sh
+```
+
+The proof builds a release manifest from the current commit, installs the default
+and alternative profiles into fresh temporary directories, validates each installed
+tree with its own installed `scripts/core-contract.sh`, proves a repeat install is
+byte-identical, and greps the installed trees for personal paths, credential
+patterns, and the shipped-default north-star marker. Restoring these files does not
+install anything: running the installer against a real target is a versioned
+operator action that stays disabled until the operator-merged operating-mode
+transition. The scripts read Git objects and write only into their own scratch and
+a caller-supplied empty directory; they use no credential or network, invoke no
+model, copy no personal configuration, and grant no authority or qualification.
+
 ### Restore the inactive review-fix loop planner
 
 Restore the four paths listed under “Inactive review-fix loop planner” in
@@ -852,6 +874,27 @@ grading (a wrong expectation fails; a model-only family stays inconclusive), and
 fail-closed handling of malformed, moved, or edited inputs. The framework remains
 inactive and observation only. It does not run a candidate or adapter, invoke a
 model, use a credential or network, grant qualification, or activate a profile.
+
+Restore the eight paths listed under "Inactive deploy and rollback gates" in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/deploy-rollback-gates.test.sh
+```
+
+The proof checks the admissible path for each environment tier and each
+capability, the exact bytes of the admissible decision and a byte-identical
+repeat run, and every refusal: unknown tier, missing, stale, or wrong-tier
+authorization, an unverified or mismatched release, an unrehearsed rollback, an
+active kill switch, a duty violation, and a malformed bundle. Production is
+refused unless a named operator authorized it, whatever else passes. It also
+validates one well-formed document of every kind and refuses malformed,
+non-canonical, multi-root, oversized, too-deep, symlinked, stale, and moved
+input. The fake dormant deployment adapter returns only a refusal receipt.
+Nothing in this unit deploys, rolls back, or reads an environment; there is no
+deployment adapter here, and adding a real one is a post-transition,
+operator-gated change. It uses no credential or network, invokes no model, grants
+no authority or qualification, and activates no profile.
 
 ---
 
