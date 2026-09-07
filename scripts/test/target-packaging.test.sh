@@ -174,7 +174,7 @@ north_star="$default_target/.ystack/north-star.md"
 ok 'the target gets an unset, target-owned north star with no marker and no approval history'
 
 for installed in "$default_target" "$alt_target" "$repeat_target"; do
-  ! /usr/bin/grep -raqE '/Users/|/home/[^/]+/|/root/|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default' \
+  ! /usr/bin/grep -raqE '/Users/|/home/[A-Za-z0-9._-]+|/root([^A-Za-z0-9._-]|$)|ghp_[A-Za-z0-9]{10}|github_pat_[A-Za-z0-9_]{10}|xox[abpr]-[A-Za-z0-9]{8}|sk-ant-|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]+PRIVATE KEY|ystack-shipped-default' \
     "$installed/.ystack" || fail "personal data or a credential pattern reached $installed"
   for absent in config manager .claude .github website templates routines reviewer work; do
     [ ! -e "$installed/.ystack/$absent" ] || fail "installed tree carries $absent"
@@ -431,6 +431,29 @@ expect_refusal E_RELATION 'a re-pinned manifest whose package differs from the b
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
   >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
 ok 'build-release validates each manifest and binds its package to the binding'
+# A reference that claims a tree but names a blob (or the reverse) is refused:
+# the object's kind and mode must be what the reference records.
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" >"$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
+  >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+"$jq" -S -c '.body.package_ref.object_type = "tree" | .body.package_ref.mode = "040000"' \
+  "$fixture/profiles/default/v1/manifests/github-actions-ci.json" >"$fixture/manifest.tmp"
+/bin/mv "$fixture/manifest.tmp" "$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+kind_manifest_sha=$(sha_file "$fixture/profiles/default/v1/manifests/github-actions-ci.json")
+"$jq" -S -c --arg sha "$kind_manifest_sha" '.body.bindings |= map(
+  if .manifest_ref.id == "adapter.github-actions-ci.v1"
+  then .package_ref.object_type = "tree" | .package_ref.mode = "040000" | .manifest_ref.sha256 = $sha else . end)' \
+  "$fixture/profiles/default/v1/profile.json" >"$fixture/profile.tmp"
+/bin/mv "$fixture/profile.tmp" "$fixture/profiles/default/v1/profile.json"
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
+/usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
+  commit -q -m 'packaging wrong-kind fixture'
+expect_refusal E_RELATION 'a tree reference that names a blob' \
+  "$fixture/packaging/v1/build-release.sh" build-release \
+  "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
+/usr/bin/git -C "$root" show "$commit:profiles/default/v1/manifests/github-actions-ci.json" \
+  >"$fixture/profiles/default/v1/manifests/github-actions-ci.json"
+ok 'build-release refuses a reference whose object kind or mode is not what it records'
 # The validator that judges the release is the one committed at the release
 # commit: a broken working copy of scripts/core-contract.sh changes nothing.
 /bin/cp "$fixture/scripts/core-contract.sh" "$tmp/core-contract.keep"
@@ -461,11 +484,12 @@ expect_refusal E_PROFILE 'a profile binding without a package ref' \
   "$(/usr/bin/git -C "$fixture" rev-parse HEAD)" profile.default.v1
 ok 'build-release refuses a profile that is not a complete, valid document'
 
-# Personal paths from any host must stay out of a target: a Linux home path in a
-# packaged, unpinned file is refused at install even though the release builds.
+# Personal paths from any host must stay out of a target: a bare Linux home
+# directory (no trailing slash) in a packaged, unpinned file is refused at install
+# even though the release builds.
 /usr/bin/git -C "$root" show "$commit:profiles/default/v1/profile.json" \
   >"$fixture/profiles/default/v1/profile.json"
-/usr/bin/printf '\n# scratch note: /home/alice/.config/token\n' >>"$fixture/scripts/core-contract.sh"
+/usr/bin/printf '\n# scratch note: HOME=/home/alice\n' >>"$fixture/scripts/core-contract.sh"
 /usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test add -A
 /usr/bin/git -C "$fixture" -c user.email=test@example.invalid -c user.name=test \
   commit -q -m 'packaging home-path fixture'

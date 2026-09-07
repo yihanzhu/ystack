@@ -765,6 +765,8 @@ Each manifest is also validated as a core document, and the package it offers mu
 
 Document validation runs the contract validator and core modules as committed at the release commit, extracted into private scratch, never the checkout's working copy, so a local edit or a checkout at another commit cannot change what a release accepts.
 
+Every package, config, and prompt reference is also checked for object kind and mode against the commit (a tree reference naming a blob, or a mode other than the one recorded, refuses the release), and the installer's home-directory denylist matches bare directories such as `HOME=/home/alice` or `/root`, not only paths with a trailing slash.
+
 ## Inactive review-fix loop planner
 
 `loop/v1/plan-review-fix.sh` is the deterministic planner for roadmap step 9, the

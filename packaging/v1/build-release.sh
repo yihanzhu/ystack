@@ -214,10 +214,13 @@ for requested in "$@"; do
     fi
     [ "$(repo_git rev-parse --verify --quiet "$commit:$ref_path" 2>/dev/null)" = "$ref_oid" ] ||
       emit_error E_RELATION
-    if [ "$ref_kind" = blob ]; then
-      [ "$(repo_git ls-tree --full-tree "$commit" -- "$ref_path" 2>/dev/null |
-           /usr/bin/cut -d' ' -f1)" = "$ref_mode" ] || emit_error E_RELATION
-    fi
+    # The object at the path must be the kind the reference claims (a tree ref
+    # naming a blob would install one file where a package was promised), and
+    # its mode must be the one recorded: 040000 for a tree, the blob's own mode.
+    [ "$(repo_git cat-file -t "$ref_oid" 2>/dev/null)" = "$ref_kind" ] || emit_error E_RELATION
+    [ "$(repo_git ls-tree --full-tree "$commit" -- "$ref_path" 2>/dev/null |
+         /usr/bin/cut -d' ' -f1)" = "$ref_mode" ] || emit_error E_RELATION
+    case "$ref_kind:$ref_mode" in blob:100644|blob:100755|tree:040000) ;; *) emit_error E_RELATION ;; esac
     [ "$ref_role" = package_ref ] || continue
     case "$ref_kind" in
       blob) record_path "$ref_path" "$requested" ;;
