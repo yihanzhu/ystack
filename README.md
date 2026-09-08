@@ -12,16 +12,16 @@ This repo is the **control plane** — it defines *how the team works*. Target p
 code normally lives in separate repos; ystack is intentionally its own target when
 the team is improving the control plane itself.
 
-The repo is in **construction mode** (`config/construction-mode.json`): the portable
-harness is being built ahead of use, so every component it already carries is
-**inactive** — repo-only source, contracts, and tests whose effects are
-`inactive-repo-only` until the operator-merged operating-mode transition. They are
-indexed under [Components (all inactive)](#components-all-inactive) below, with the
-full write-ups in [`docs/components.md`](docs/components.md).
-[`docs/transition.md`](docs/transition.md) is the operator-facing proposal for that
-transition: what it changes, what it unlocks, and what is still open;
+The repo ran in **construction mode** from its activation base through 2026-09-08
+(`config/construction-mode.json`, now `status: retired`, kept as the record of what the
+exception covered): the portable harness was built ahead of use, so every component it
+carries landed **inactive** — repo-only source, contracts, and tests. The operating-mode
+transition has happened; each component is still activated only by its own reviewed,
+operator-gated change, in the order [`docs/transition.md`](docs/transition.md) §4
+gives. Components are indexed under [Components (all inactive)](#components-all-inactive)
+below, with the full write-ups in [`docs/components.md`](docs/components.md);
 [`docs/transition-kit.md`](docs/transition-kit.md) holds the operator's recorded answers
-and the exact contents the transition PR copies from.
+and the exact contents this transition copied from.
 
 **ystack** — Yihan's stack for the AI-native SDLC: an autonomous coding team, gated by human judgment.
 

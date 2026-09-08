@@ -1,8 +1,9 @@
 # Operating-mode transition — the proposal
 
 This is the checklist and the exact proposed edits for ending construction mode. It
-is **not** the transition, and reading it changes nothing. Construction mode is still
-active; every component in this repo is still inactive.
+is **not** the transition, and reading it changes nothing. This transition was carried out by the pull request on branch
+`ystack/transition/retire-construction-mode`; construction mode is retired. Every
+component in this repo is still inactive until its own activating change.
 
 The transition itself is one pull request the **operator** writes and merges by hand.
 No agent may author it: `config/construction-mode.json`, `AGENTS.md`, `REVIEW.md`,

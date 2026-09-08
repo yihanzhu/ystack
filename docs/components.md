@@ -9,8 +9,9 @@ lives here.
 selected, resolved, qualified, installed, or activated. None of them grants authority
 or qualification, reads a credential, contacts a provider, invokes a model, publishes,
 merges, or touches a target. They are source, contracts, and focused tests — proof that
-a unit exists and holds its shape, not a running system. Activation happens only at the
-operator-merged operating-mode transition described in [`../ROADMAP.md`](../ROADMAP.md).
+a unit exists and holds its shape, not a running system. The operating-mode transition has happened (see [`transition.md`](transition.md)); a
+component leaves this inactive state only through its own reviewed, operator-gated change,
+and this page is updated when one does.
 
 **Convention for future construction PRs:** add your component's write-up *here*, in
 this file, and add *one row* to README's "Components (all inactive)" index pointing at
