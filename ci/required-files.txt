@@ -398,3 +398,4 @@ scripts/test/maintenance-loop.test.sh
 
 # Operating-mode transition proposal
 docs/transition.md
+docs/transition-kit.md
