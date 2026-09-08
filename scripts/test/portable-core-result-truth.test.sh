@@ -933,7 +933,7 @@ else guard_fail "fixture dependency metadata"
 fi
 
 if [ "$(git -C "$truth_root" hash-object config/construction-mode.json)" = \
-     "4f35b0ec232e584973071a8d2e90ee5971af6e79" ] &&
+     "5780647ab4048beff1b9accf7717c736fdc52702" ] &&
    [ "$(git -C "$truth_root" hash-object ROADMAP.md)" = \
      "4bb0fff1ee11c20441cc16182337f762300ac0f2" ] &&
    [ "$(git -C "$truth_root" hash-object NORTH_STAR.md)" = \

@@ -347,7 +347,16 @@ esac
 FAKE_GH
 chmod +x "$fake_bin/gh"
 
-cp "$test_root/config/construction-mode.json" "$fixtures/mode.json"
+# The live record is retired since the operating-mode transition. The gate is tested as it
+# behaved while construction mode was active, so the fixture restores that shape; the gate
+# itself refuses the retired record (its mode-blob and shape checks fail closed).
+jq '.status="active" | .completion="implementation-complete" | .effects="inactive-repo-only" |
+    .real_target_use="disabled" | .real_target_and_production_credentials="disabled" |
+    .release_install_activation="disabled" | .operating_transition_required=true |
+    .publisher="current-operator-authorized-codex-construction-session" |
+    .allowed_live_writes="same-repository-delivery-only" |
+    .delivery_credential="current-gh-operator-yihanzhu"' \
+  "$test_root/config/construction-mode.json" > "$fixtures/mode.json"
 cp "$test_root/ci/required-files.txt" "$fixtures/manifest.txt"
 cp "$fixtures/manifest.txt" "$fixtures/manifest-base.txt"
 grep -Fvx 'AGENTS.md' "$fixtures/manifest.txt" > "$fixtures/manifest-missing.txt"
