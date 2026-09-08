@@ -440,12 +440,12 @@ def failing_check_ok:
 # the markers, and an accepted outcome is not that. The slice encodes most of
 # the record's shape in bash-built JSON rather than in jq, so the exact-key
 # predicates below are written here and cited: the record body is built at
-# shadow/v1/reproduce.sh:434-474 and pinned again by that script's own
-# post-build self-check at 475-480; the environment evaluation section is built
-# at 249-254, the materialization section at 290-297 under the read-only
-# relations asserted at 283-288, and the check execution section at 342-346.
+# shadow/v1/reproduce.sh:455-500 and pinned again by that script's own
+# post-build self-check at 501-511; the environment evaluation section is built
+# at 270-275, the materialization section at 311-318 under the read-only
+# relations asserted at 305-310, and the check execution section at 363-367.
 # All line numbers are in shadow/v1/reproduce.sh at
-# 949e08ddbe01252b405191e7e5ad5cc12afb8f75 (origin/main).
+# 2e7aea09ee1d531a4fd5c4df80a71690230f0740.
 def shadow_ref_ok($content_id; $media_type):
   exact(["content_id","media_type","sha256"]) and
   .content_id == $content_id and .media_type == $media_type and
@@ -535,7 +535,7 @@ def check_block_ok:
 
 # The slice sets exactly one reason id per run, and each one fixes the outcome
 # and which sections that run left present or absent
-# (shadow/v1/reproduce.sh:227-347: the initial inconclusive/unlisted state, then
+# (shadow/v1/reproduce.sh:248-368: the initial inconclusive/unlisted state, then
 # the environment, materialization, and check stages in order, each reassigning
 # `reason` as it goes). Any other combination is one no run of the slice can
 # produce.
@@ -593,7 +593,8 @@ def shadow_record_ok:
    . as $body |
    exact(["activation_state","authority","check","deploy_authority","effects",
      "environment","evaluation_mode","git_revision_ref","incident_ref",
-     "materialization","observed_at","outcome","qualification","reason_id",
+     "materialization","observed_at","outcome","qualification",
+     "qualified_identity","qualified_identity_ref","reason_id",
      "shadow","target_repository_id","trace_ledger_ref"]) and
    .activation_state == "inactive" and .authority == "none" and
    .deploy_authority == "none" and .shadow == true and
@@ -612,6 +613,20 @@ def shadow_record_ok:
    (.trace_ledger_ref |
     shadow_ref_ok("shadow-trace-ledger";
       "application/vnd.ystack.telemetry-trace-ledger+json")) and
+   # The identity the slice ran under, and the digest it measured over that
+   # identity document's own canonical bytes. The eight keys are the ones
+   # workflow-scope.jq requires of a scope's `qualified_identity`; the field
+   # rules inside them are not repeated here, because a record counts as this
+   # scope's evidence only when its identity equals the scope's byte for byte,
+   # and the scope's identity has already been validated in full against those
+   # rules by the record validator.
+   (.qualified_identity |
+    exact(["adapter_config_refs","model_request","prompt_refs",
+      "resolved_profile_ref","skill_refs","stage_request_ref","target_revision",
+      "verification_instructions_ref"])) and
+   (.qualified_identity_ref |
+    shadow_ref_ok("shadow-qualified-identity";
+      "application/vnd.ystack.qualified-identity+json")) and
    (.environment |
     exact(["claim_ref","environment_id","evaluation","registry_ref"]) and
     (.environment_id | id_ok) and
@@ -794,10 +809,14 @@ $duty_doc.body.verdict as $verdict |
      environment_id: $record.body.environment.environment_id,
      outcome: $record.body.outcome,
      target_repository_id: $record.body.target_repository_id,
-     target_revision: $record.body.git_revision_ref}] |
+     target_revision: $record.body.git_revision_ref,
+     qualified_identity: $record.body.qualified_identity}] |
    sort_by(.sha256)
  else [] end) as $bound_records |
-($bound_records | map(del(.target_revision))) as $records |
+# The two binding fields are dropped from the reported evidence: they are how a
+# record is matched to this scope, not new facts about it, and the scope already
+# carries both.
+($bound_records | map(del(.qualified_identity, .target_revision))) as $records |
 
 # The scope names the shadow records it claims as its own, by id and by digest.
 # A supplied record counts only when one of those refs names it exactly, so a
@@ -813,12 +832,18 @@ def claimed_by_scope($refs): . as $record |
 ($refs |
  all(. as $ref |
      $records | any(.id == $ref.id and .sha256 == $ref.sha256))) as $refs_resolved |
-# Evidence counts only when it was gathered for this scope's own target: the
-# same repository, and the same revision the scope's recorded identity names.
-# A record from another revision is evidence about a different target version.
+# Evidence counts only when it was gathered for this scope's own target and
+# under this scope's own qualified identity: the same repository, the same
+# revision, and the same resolved profile, adapter configs, model request,
+# prompt and skill versions, stage request, and verification instructions the
+# scope records. A record from another revision is evidence about a different
+# target version, and a record from another identity is evidence about a
+# different scope; either way it does not qualify this one, and a required
+# environment left uncovered by the remainder is `scope.shadow-evidence-missing`.
 ($claimed |
  map(select(.target_repository_id == $s.target_repository_id and
-   .target_revision == $identity.target_revision))) as $mine |
+   .target_revision == $identity.target_revision and
+   .qualified_identity == $identity))) as $mine |
 
 # A glob is protected when it names, or could expand into, a path the roadmap's
 # high-risk list reserves. A wildcard in any directory segment could expand into

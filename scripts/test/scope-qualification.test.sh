@@ -152,9 +152,13 @@ qualified_identity='{
 expected_check_sha=8f434346648f6b96df89dda901c5176b10a6d83961dd3c2e6c66a9f0f95d4c9b
 observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752
 "$jq_bin" -S -c -n --argjson revision "$fixture_revision" \
+  --argjson identity "$qualified_identity" \
   --arg expected "$expected_check_sha" --arg observed "$observed_check_sha" '
   def digest($character): ($character * 64);
   def record($id;$environment;$outcome;$repository):
+    # Every record carries the qualified identity the run was performed under,
+    # the way shadow/v1/reproduce.sh records it, and binds the canonical bytes
+    # of that identity document by digest.
     ($revision | .repository_id = $repository) as $rev |
     (if $outcome == "reproduced" then "check.failed-at-revision"
      else "check.passed-at-revision" end) as $reason |
@@ -166,6 +170,10 @@ observed_check_sha=60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c
        outcome:$outcome,reason_id:$reason,
        observed_at:"2026-09-05T00:00:00Z",target_repository_id:$repository,
        git_revision_ref:$rev,
+       qualified_identity:$identity,
+       qualified_identity_ref:{content_id:"shadow-qualified-identity",
+         media_type:"application/vnd.ystack.qualified-identity+json",
+         sha256:digest("9")},
        incident_ref:{content_id:"shadow-incident-record",
          media_type:"application/vnd.ystack.shadow-incident-record+json",
          sha256:digest("a")},
@@ -1036,7 +1044,10 @@ expect_reasons kill-other-duty '["scope.malformed"]' \
   "resolved.other.v1"' "$tmp/scope.json" >"$tmp/scope-other-profile.json"
 run_validator "$tmp/scope-other-profile.json" ||
   fail 'a scope naming another resolved profile was refused as malformed'
-expect_reasons scope-other-profile '["scope.malformed"]' \
+# The identity is also what the shadow records are bound to, so a scope that
+# records another profile loses its shadow evidence as well as its gate binding.
+expect_reasons scope-other-profile \
+  '["scope.malformed","scope.shadow-evidence-missing"]' \
   "$tmp/scope-other-profile.json" "${good[@]:1}"
 pass 'gate evidence counts only when the scope named it and the three agree'
 
@@ -1137,6 +1148,25 @@ expect_reasons shadow-other-revision '["scope.shadow-evidence-missing"]' \
   "$tmp/scope-shadow-revision.json" "$tmp/shadow-other-revision.json" "${good[@]:2}"
 pass 'shadow evidence counts only at the target revision the scope records'
 
+# Qualification is attached to the whole recorded identity, not only to the
+# target revision. A record produced under a different model, profile, adapter
+# config, prompt, or skill version is evidence about a different scope, so it
+# does not cover the environment it names.
+"$jq_bin" -S -c '.body.records[0].body.qualified_identity.model_request.model_id =
+  "model.other"' "$tmp/shadow-set.json" >"$tmp/shadow-other-identity.json"
+scope_for_shadow "$tmp/shadow-other-identity.json" "$tmp/scope-other-identity.json"
+expect_reasons shadow-other-identity '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-other-identity.json" "$tmp/shadow-other-identity.json" "${good[@]:2}"
+# The same mismatch from the scope's side: change one identity field and the
+# scope has to earn its own evidence rather than inherit this one's.
+"$jq_bin" -S -c '.body.qualified_identity.model_request.model_id = "model.other"' \
+  "$tmp/scope.json" >"$tmp/scope-other-model.json"
+run_validator "$tmp/scope-other-model.json" ||
+  fail 'a scope naming another model was refused as malformed'
+expect_reasons scope-other-model '["scope.shadow-evidence-missing"]' \
+  "$tmp/scope-other-model.json" "${good[@]:1}"
+pass 'shadow evidence counts only under the qualified identity the scope records'
+
 "$jq_bin" -S -c '.status = "operating"' "$tmp/marker.json" >"$tmp/marker-stale.json"
 expect_reasons mode-stale-marker '["scope.mode-construction"]' "${good[@]:0:6}" \
   "$tmp/marker-stale.json"
@@ -1172,7 +1202,11 @@ for malformed_case in 'del(.body.records[0].body.shadow)' \
   '.body.records[0].body.replayed_from = "shadow.other"' \
   '.body.records[0].body.materialization =
      {state:"absent",reason_id:"materialization.not-attempted"}' \
-  '.body.records[0].body.qualification.reason_id = "shadow.qualified"'; do
+  '.body.records[0].body.qualification.reason_id = "shadow.qualified"' \
+  'del(.body.records[0].body.qualified_identity)' \
+  'del(.body.records[0].body.qualified_identity_ref)' \
+  '.body.records[0].body.qualified_identity.extra = true' \
+  '.body.records[0].body.qualified_identity_ref.content_id = "shadow-other"'; do
   "$jq_bin" -S -c "$malformed_case" "$tmp/shadow-set.json" >"$tmp/shadow-malformed.json"
   expect_reasons "malformed shadow $malformed_case" \
     '["scope.malformed","scope.shadow-evidence-missing","scope.shadow-inconclusive"]' \

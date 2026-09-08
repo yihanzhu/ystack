@@ -381,6 +381,7 @@ scripts/test/loop-review-fix-planner.test.sh
 
 # Inactive shadow reproduction slice
 shadow/v1/incident-record.jq
+shadow/v1/qualified-identity.jq
 shadow/v1/validate-incident.sh
 shadow/v1/reproduce.sh
 shadow/v1/shadow-environments.json

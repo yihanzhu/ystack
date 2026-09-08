@@ -58,24 +58,25 @@ check_disjoint() {
   return 0
 }
 
-[ "$#" -eq 12 ] && [ "$1" = reproduce ] || emit_error E_USAGE
+[ "$#" -eq 13 ] && [ "$1" = reproduce ] || emit_error E_USAGE
 shift
 incident=$1
 claim=$2
 policy_set=$3
 duty=$4
 materialization_input=$5
-source_git_dir=$6
-candidate_root=$7
-scratch_root=$8
-state_dir=$9
-closure_helper=${10}
-caller_jq=${11}
+identity=$6
+source_git_dir=$7
+candidate_root=$8
+scratch_root=$9
+state_dir=${10}
+closure_helper=${11}
+caller_jq=${12}
 for supplied in "$@"; do
   case "$supplied" in /*) ;; *) emit_error E_USAGE ;; esac
 done
 for regular in "$incident" "$claim" "$policy_set" "$duty" \
-  "$materialization_input" "$closure_helper" "$caller_jq"; do
+  "$materialization_input" "$identity" "$closure_helper" "$caller_jq"; do
   physical_regular "$regular" || emit_error E_RUNTIME
 done
 [ -x "$closure_helper" ] && [ -x "$caller_jq" ] || emit_error E_RUNTIME
@@ -99,12 +100,13 @@ self="$self_dir/${self##*/}"
 repo=$(CDPATH='' cd -P -- "$self_dir/../.." 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 [ "$self_dir" = "$repo/shadow/v1" ] || emit_error E_RUNTIME
 program="$self_dir/incident-record.jq"
+identity_program="$self_dir/qualified-identity.jq"
 registry="$self_dir/shadow-environments.json"
 sandbox_evaluator="$repo/control/v1/evaluate-sandbox.sh"
 trace_validator="$repo/telemetry/v1/validate-trace-ledger.sh"
 materializer="$repo/adapters/local-git-materializer/v1/materialize.sh"
-for component in "$self" "$program" "$registry" "$sandbox_evaluator" \
-  "$trace_validator" "$materializer"; do
+for component in "$self" "$program" "$identity_program" "$registry" \
+  "$sandbox_evaluator" "$trace_validator" "$materializer"; do
   physical_regular "$component" || emit_error E_RUNTIME
 done
 
@@ -154,10 +156,12 @@ snapshot_bounded "$incident" "$scratch/incident.json" 262144
 snapshot_bounded "$claim" "$scratch/claim.json" 1048576
 snapshot_bounded "$registry" "$scratch/registry.json" 262144
 snapshot_bounded "$materialization_input" "$scratch/materialize-input.json" 8388608
+snapshot_bounded "$identity" "$scratch/identity.json" 262144
 snapshot_bounded "$policy_set" "$scratch/policy-set.json" 1048576
 snapshot_bounded "$duty" "$scratch/duty.json" 1048576
 snapshot_bounded "$program" "$scratch/incident-record.jq" 262144
-for bounded in incident claim registry materialize-input; do
+snapshot_bounded "$identity_program" "$scratch/qualified-identity.jq" 262144
+for bounded in incident claim registry materialize-input identity; do
   canonical_json "$scratch/$bounded.json"
 done
 incident_sha=$(sha256_path "$scratch/incident.json") || emit_error E_RUNTIME
@@ -167,6 +171,9 @@ input_sha=$(sha256_path "$scratch/materialize-input.json") || emit_error E_RUNTI
 policy_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 duty_sha=$(sha256_path "$scratch/duty.json") || emit_error E_RUNTIME
 program_sha=$(sha256_path "$scratch/incident-record.jq") || emit_error E_RUNTIME
+identity_sha=$(sha256_path "$scratch/identity.json") || emit_error E_RUNTIME
+identity_program_sha=$(sha256_path "$scratch/qualified-identity.jq") ||
+  emit_error E_RUNTIME
 
 shape=$("$jq_bin" -r --arg operation shape --arg record_sha "$incident_sha" \
   -f "$scratch/incident-record.jq" "$scratch/incident.json" 2>/dev/null) ||
@@ -198,6 +205,20 @@ check_path=$("$jq_bin" -r '.body.failing_check.path // ""' "$scratch/incident.js
 expected_sha=$("$jq_bin" -r '.body.failing_check.expected_sha256 // ""' \
   "$scratch/incident.json") || emit_error E_RUNTIME
 
+# The identity this run was performed under. It is validated against the same
+# shape the workflow-scope record uses (copied into qualified-identity.jq), and
+# it must name this incident's own repository and revision: an identity from
+# another target version describes a run this record is not about.
+identity_shape=$("$jq_bin" -r --arg repository_id "$repository_id" \
+  --arg hash_algorithm "$hash_algorithm" --arg commit_id "$commit_id" \
+  -f "$scratch/qualified-identity.jq" "$scratch/identity.json" 2>/dev/null) ||
+  emit_error E_RUNTIME
+case "$identity_shape" in
+  '') ;;
+  E_SHAPE|E_RELATION) emit_error "$identity_shape" ;;
+  *) emit_error E_RUNTIME ;;
+esac
+
 environment_id=$("$jq_bin" -r '
   if type == "object" and (.id | type == "string") and
      (.id | test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
@@ -223,6 +244,16 @@ environment_id=$("$jq_bin" -r '
     select(.input_id == "input.producer-patch") | .content.data] == [""]) and
   .stage_request.content.body.operation.arguments.network_mode == "deny"
 ' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_READ_ONLY
+# The identity must describe this very run: its stage request and resolved
+# profile references are the ones the materialization input carries, by id and
+# digest, so a caller cannot record one profile's identity over another's run.
+"$jq_bin" -e --slurpfile identity "$scratch/identity.json" '
+  def pair_ref($pair):
+    {schema_version: $pair.content.schema_version, kind: $pair.content.kind,
+     id: $pair.content.id, sha256: $pair.sha256};
+  $identity[0].body.stage_request_ref == pair_ref(.stage_request) and
+  $identity[0].body.resolved_profile_ref == pair_ref(.resolved_profile)
+' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_RELATION
 
 outcome=inconclusive
 reason=environment.unlisted
@@ -436,8 +467,9 @@ record="$scratch/shadow-record.json"
   --arg reason "$reason" --arg observed_at "$observed_at" \
   --arg incident_sha "$incident_sha" --arg claim_sha "$claim_sha" \
   --arg registry_sha "$registry_sha" --arg environment "$environment_id" \
-  --arg ledger_sha "$ledger_sha" \
+  --arg ledger_sha "$ledger_sha" --arg identity_sha "$identity_sha" \
   --slurpfile incident "$scratch/incident.json" \
+  --slurpfile identity "$scratch/identity.json" \
   --argjson evaluation "$evaluation_section" \
   --argjson materialization "$materialization_section" \
   --argjson execution "$execution_section" '
@@ -455,6 +487,10 @@ record="$scratch/shadow-record.json"
      observed_at:$observed_at,
      target_repository_id:$incident[0].body.target_repository_id,
      git_revision_ref:$incident[0].body.git_revision_ref,
+     qualified_identity:$identity[0].body,
+     qualified_identity_ref:{content_id:"shadow-qualified-identity",
+       media_type:"application/vnd.ystack.qualified-identity+json",
+       sha256:$identity_sha},
      incident_ref:{content_id:"shadow-incident-record",
        media_type:"application/vnd.ystack.shadow-incident-record+json",
        sha256:$incident_sha},
@@ -472,11 +508,16 @@ record="$scratch/shadow-record.json"
        media_type:"application/vnd.ystack.telemetry-trace-ledger+json",
        sha256:$ledger_sha}}}
 ' >"$record" || emit_error E_RUNTIME
-"$jq_bin" -e --arg outcome "$outcome" '
+"$jq_bin" -e --arg outcome "$outcome" --arg identity_sha "$identity_sha" '
   .body.authority == "none" and .body.deploy_authority == "none" and
   .body.shadow == true and .body.activation_state == "inactive" and
   .body.qualification.state == "unavailable" and
-  (["inconclusive","no-change","reproduced"] | index($outcome) != null)
+  (["inconclusive","no-change","reproduced"] | index($outcome) != null) and
+  # The recorded identity is the validated one, bound by digest, and it is the
+  # identity of the revision this record says it ran at.
+  (.body.qualified_identity | type == "object") and
+  .body.qualified_identity_ref.sha256 == $identity_sha and
+  .body.qualified_identity.target_revision == .body.git_revision_ref
 ' "$record" >/dev/null 2>&1 || emit_error E_RELATION
 
 # Every caller-supplied input must still be the bytes this run snapshotted,
@@ -486,9 +527,11 @@ record="$scratch/shadow-record.json"
   [ "$(sha256_path "$claim")" = "$claim_sha" ] &&
   [ "$(sha256_path "$registry")" = "$registry_sha" ] &&
   [ "$(sha256_path "$materialization_input")" = "$input_sha" ] &&
+  [ "$(sha256_path "$identity")" = "$identity_sha" ] &&
   [ "$(sha256_path "$policy_set")" = "$policy_sha" ] &&
   [ "$(sha256_path "$duty")" = "$duty_sha" ] &&
   [ "$(sha256_path "$program")" = "$program_sha" ] &&
+  [ "$(sha256_path "$identity_program")" = "$identity_program_sha" ] &&
   [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] || emit_error E_RELATION
 /bin/cp "$record" "$state_dir/shadow-record.json" || emit_error E_RUNTIME
 /bin/cp "$ledger" "$state_dir/trace-ledger.json" || emit_error E_RUNTIME
