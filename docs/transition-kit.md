@@ -20,17 +20,19 @@ transition PR by hand. No agent edits `config/construction-mode.json`.
 | 4 | First unit to leave inactive status | The shadow slice's read-only self-host run on ystack itself (step 7). |
 | 5 | `allowed_live_writes` and `delivery_credential` | `"none"` and `"short-lived-publisher-identity"`. Writes widen only by step 8's first scope PR; the publisher identity is minted per stage and is never the operator's own login. |
 | 6 | Drop steps 8 or 12? | No. Both are merged. |
-| 7 | Re-review any construction PR under the full artifact chain? | No. Every PR after #188 through #258 merged with a clean cross-vendor review on its exact head and green CI. |
+| 7 | Re-review any construction PR under the full artifact chain? | No. Every PR after #188 through #258 merged with a clean independent Codex review (`gpt-5.5`) on its exact head and green CI. For the Codex-authored units that review was one-vendor, as `transition.md` §6 Q3 records; the transition PR is the first change under restored cross-vendor separation (answer 3). |
 | 8 | Frozen PR #183 and draft PR #146 | Close both without merging, each with a comment saying why: #183 is superseded by core v2 (`scripts/core-contract.sh`); #146 is the failure-modes record `ROADMAP.md` says must never merge. |
 | 9 | Owner of step 12's generated intents | The operator, until an adopter names a service owner. Intents stay documents, not issues, until then. |
 | 10 | Kill switch for the first enabled scope | `control/v1` kill-switch state set to stop, pulled by the operator through a PR to the kill-switch state. No agent identity may clear it. |
 
 ## 2. `config/construction-mode.json` — the complete new contents
 
-Eleven fields change; every other field keeps its current value (in particular all
-`*_blob` digests, so the PR must not touch `ROADMAP.md` or `NORTH_STAR.md`). The
-`frozen_pr_183_state` change assumes #183 is closed in the same operator action (answer 8);
-leave it `"OPEN"` if #183 is closed later.
+Ten fields change; every other field keeps its current value (in particular all
+`*_blob` digests, so the PR must not touch `ROADMAP.md` or `NORTH_STAR.md`).
+`frozen_pr_183_state` stays `"OPEN"`: `scripts/construction-publisher-gate.sh` requires
+#183 to be open, unchanged, and to match the record while the mode is active, so #183 is
+closed only after the transition merges (§6), and a retired record describes the state the
+freeze covered.
 
 | field | current | new |
 |---|---|---|
@@ -44,9 +46,8 @@ leave it `"OPEN"` if #183 is closed later.
 | `publisher` | `"current-operator-authorized-codex-construction-session"` | `"short-lived-publisher-identity"` |
 | `allowed_live_writes` | `"same-repository-delivery-only"` | `"none"` |
 | `delivery_credential` | `"current-gh-operator-yihanzhu"` | `"short-lived-publisher-identity"` |
-| `frozen_pr_183_state` | `"OPEN"` | `"CLOSED"` |
 
-Full file (keys sorted; `jq -S` of the current file with the eleven changes applied):
+Full file (keys sorted; `jq -S` of the current file with the ten changes applied):
 
 ```json
 {
@@ -91,7 +92,7 @@ Full file (keys sorted; `jq -S` of the current file with the eleven changes appl
     "round-3",
     "needs-human"
   ],
-  "frozen_pr_183_state": "CLOSED",
+  "frozen_pr_183_state": "OPEN",
   "manifest_policy": "required-entry-set-is-immutable; additions-allowed",
   "merge_method": "squash",
   "north_star_blob": "d2bbe82a8b2a1bb14fde1c50995f7ecec9b58013",
@@ -211,8 +212,10 @@ inactive units until each is activated.
 ```
 Title: Retire construction mode: the operating-mode transition
 
-Precondition: every row of docs/transition.md §1 reads merged. The last construction PR
-(#258) merged 2026-09-08; main was at bd31d4f when this PR was opened.
+Precondition: every row of docs/transition.md §1 reads merged. The last PR merged under
+construction mode is #<fill: highest-numbered PR merged before this one>; main was at
+<fill: base commit of this PR, 40 hex> when this PR was opened. Review evidence must name
+this PR's exact head and that base.
 
 Scope (docs/transition.md §3): the mode record, ruleset verification, and the three
 documentation passages that describe the mode as active. No component code, tests, or
@@ -220,7 +223,7 @@ ci/required-files.txt entries.
 
 Decision: TR-1 (issue #259), answers recorded in docs/transition-kit.md §1.
 
-Record: config/construction-mode.json — eleven fields changed exactly as
+Record: config/construction-mode.json — ten fields changed exactly as
 docs/transition-kit.md §2; verified with the diff command there.
 
 Ruleset: ystack-main-gate (21500323) re-read on <date>; matches post_transition_ruleset
@@ -235,7 +238,10 @@ on the exact head and base, required CI green, operator merges by hand.
 
 ## 6. After the merge, in order
 
-1. Close #183 and #146 with the reasons in answer 8.
+1. Close #183 and #146 with the reasons in answer 8. This is possible only now: while the
+   mode was active the publisher gate required #183 open and unchanged. The retired record
+   keeps `frozen_pr_183_state: "OPEN"` as the state the freeze covered; no update to it is
+   needed.
 2. Step 7, first live action: the shadow slice's read-only self-host run on ystack, as its
    own PR (Claude produces, Codex reviews, the operator merges). Its execution environment
    must first be listed in `shadow/v1/shadow-environments.json` by its own reviewed PR.
