@@ -130,10 +130,13 @@ updated main and write code there. That PR is the one using `Closes #263`.
 - **Truthfulness rail (AGENTS.md).** Nothing may claim proof it does not have.
   `proof_state: unproven` and the doc edits exist for that: after the change no file may
   imply this environment has been exercised.
-- **Construction mode.** The `AGENTS.md` overlay covers inactive Roadmap implementation
-  here, but this initiative already has an intake record, a merged G1 intent and this G2
-  spec, so run the full gates. It authorizes no real target, credential, or production
-  action, and none is needed: the registry stays `inactive`.
+- **Construction mode is retired.** PR #261 set `config/construction-mode.json` to
+  `status: retired`, and the `AGENTS.md` construction overlay applies only while that
+  record says `active` — so it does not apply here, and the normal rules govern this
+  initiative in full: the intake record, G1, this G2 spec with its accepted risk, the
+  high-risk plan-only PR, and operator merge. The registry stays
+  `activation_state: inactive`, and this change authorizes no real target, credential, or
+  production action.
 - **Constitution paths.** Nothing here touches `.github/**`, `.claude/**`, `AGENTS.md`,
   `CLAUDE.md`, `REVIEW.md`, or `ROADMAP.md`. If the work seems to need one, stop — that
   is a different initiative.
