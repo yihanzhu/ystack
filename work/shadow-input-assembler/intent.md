@@ -9,18 +9,22 @@ exact revision with no patch and no network. Today the only thing that builds on
 is a test fixture builder wired to fixture ids and a fixture target, so it can
 only describe the fixture. The operator wants step 7 of the roadmap, a real
 self-host shadow run, and this is the first thing in the way — the driver, the
-materializer, and the control policies exist, but no run can begin until two
-prerequisites land: this input, and a self-host execution environment listed in
-the committed registry by its own reviewed change (a sibling initiative).
+materializer, and the control policies exist, but no run can begin until three
+prerequisites land: this input; a self-host execution environment listed in the
+committed registry by its own reviewed change (a sibling initiative); and a
+qualified-identity document built from real references, which the self-host-run
+sibling produces and which must match this input's stage request and resolved
+profile.
 
 ## Proposed outcome
 
 ystack ships a supported way to assemble that input for any real repository
-revision from the real default profile. The input is read-only by construction:
-no patch content, network denied, no paths opened up. The same inputs always
-produce the same bytes, so a run can be re-checked later. Bad inputs are refused
-with a clear reason rather than producing something the driver rejects or, worse,
-quietly accepts.
+revision from the real default profile. The input is inert but protocol-valid:
+the patch content is empty, the network is denied, and the contract's paths and
+limits are the minimum the protocol accepts, while the empty patch is what
+guarantees nothing is changed. The same inputs always produce the same bytes, so
+a run can be re-checked later. Bad inputs are refused with a clear reason rather
+than producing something the driver rejects or, worse, quietly accepts.
 
 ## Affected users and systems
 
@@ -34,6 +38,8 @@ manifests, read as data. This repository first, and any target repository later.
   calls. Everything is read as data.
 - The output must pass the driver's read-only check and the materializer's own
   protocol, and be accepted by the core stage-request rules.
+- The output must expose or make derivable the exact stage-request and
+  resolved-profile identities the identity document binds to, so the two agree.
 - Neither the driver nor the materializer changes. This adds a producer of their
   existing input, nothing more.
 - Follow the component conventions: a focused test, a documentation section, an
