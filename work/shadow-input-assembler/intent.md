@@ -8,8 +8,10 @@ input: the profile, the resolved profile, the manifests, and a request for the
 exact revision with no patch and no network. Today the only thing that builds one
 is a test fixture builder wired to fixture ids and a fixture target, so it can
 only describe the fixture. The operator wants step 7 of the roadmap, a real
-self-host shadow run, and this is the first thing in the way: everything else the
-run needs is already in place, and it still cannot begin.
+self-host shadow run, and this is the first thing in the way — the driver, the
+materializer, and the control policies exist, but no run can begin until two
+prerequisites land: this input, and a self-host execution environment listed in
+the committed registry by its own reviewed change (a sibling initiative).
 
 ## Proposed outcome
 
