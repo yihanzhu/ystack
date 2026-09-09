@@ -74,8 +74,10 @@ path is already listed and no new file is added.
 scripts/test/portable-core-schema.test.sh` 0 failures, `bash scripts/check-rename.sh`
 clean, required CI green.
 
-**R10.** Size: well under 60 changed lines across four files. `review_size: standard`;
-no exception claimed.
+**R10.** Size: well under 60 changed lines across five files
+(`shadow/v1/shadow-environments.json`, `scripts/test/shadow-slice.test.sh`,
+`docs/components.md`, `docs/transition.md`, `docs/transition-kit.md`).
+`review_size: standard`; no exception claimed.
 
 ## Design
 
