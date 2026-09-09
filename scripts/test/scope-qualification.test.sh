@@ -643,7 +643,7 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
      reference_semantics:"identity-only",
      qualification:{state:"unavailable",
        reason_id:"scope.enablement-requires-operator-pr"},
-     operating_mode:{state:"construction",repository_marker:"matched",
+     operating_mode:{state:"operating",repository_marker:"matched",
        marker_ref:mode_ref},
      outcome:"proposable",reason_ids:["scope.proposable"],
      scope_ref:scope_ref,evidence:evidence,
@@ -654,9 +654,9 @@ record_1_sha=$(set_record_sha "$tmp/shadow-set.json" 1)
          push_allowed:false,
          qualification:{state:"unavailable",
            reason_id:"scope.enablement-requires-operator-pr"},
-         enablement:{state:"blocked",reason_id:"scope.mode-construction"},
+         enablement:{state:"blocked",reason_id:"scope.enablement-requires-operator-pr"},
          operator_action:"Enabling this scope is an independent operator-merged pull request after the operating-mode transition. This document only records what that pull request would add; it turns nothing on and grants no authority.",
-         operating_mode:"construction",
+         operating_mode:"operating",
          qualification_scope_ref:{purpose:"qualification",
            decision_record_ref:policy_ref,
            subject_ref:{type:"artifact",value:{type:"content",
@@ -685,9 +685,9 @@ pass 'a routine scope with complete evidence is proposable, byte for byte and on
 "$jq_bin" -e '
   .body.enabled == false and .body.proposal.document.body.enabled == false and
   .body.proposal.document.body.push_allowed == false and
-  .body.operating_mode.state == "construction" and
+  .body.operating_mode.state == "operating" and
   .body.proposal.document.body.enablement ==
-    {state:"blocked",reason_id:"scope.mode-construction"} and
+    {state:"blocked",reason_id:"scope.enablement-requires-operator-pr"} and
   ([.. | strings] | any(. == "enabled" or . == "qualified" or . == "active") | not) and
   ((.body | has("grant_ref") or has("activation")) | not)
 ' "$tmp/evaluation.json" >/dev/null || fail 'the proposal claims authority'
