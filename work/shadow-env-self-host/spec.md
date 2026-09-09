@@ -28,8 +28,10 @@ checkout, ystack's own scrubbed bare source repository.`; `evidence_scope`
 **R3.** The file stays exactly one canonical JSON text: `cmp` of the file against
 `jq -S -c . <file>` succeeds. On main it is a single line whose last byte is `0a`
 (verified) and that `cmp` passes; preserve both. `jq -S -c` emits the trailing newline
-itself, so writing its output is enough. `reproduce.sh`'s `canonical_json` and the
-test's `registry-canonical` check depend on this byte-exactly.
+itself, so writing its output is enough — and for the same reason R5's `cmp` of a
+`jq -S -c`-built expectation against the file is exact, with no newline fixup needed on
+either side. `reproduce.sh`'s `canonical_json` and the test's `registry-canonical`
+check depend on this byte-exactly.
 
 **R4.** `reproduce.sh` still accepts the registry. Its shape check (the `E_RELATION`
 jq near line 183) requires `schema_version == 1`, the kind, `activation_state ==
@@ -40,11 +42,22 @@ select(.environment_id == $id)] | length == 1`; the new id differs from the fixt
 id, so the fixture run still finds exactly one.
 
 **R5.** `scripts/test/shadow-slice.test.sh` (the `registry-contents` block, near lines
-322–328) pins the two-entry registry: `map(.environment_id) ==
-["env.local-macos-fixture","env.local-macos-ystack-self"]`, both `evidence_scope`
-values (`fixtures-only`, `self-host`) and both `proof_state` values (both `unproven`).
-Its `pass` message stops saying "exactly the one ... fixture environment" and states
-something true of two entries, including that neither is proven.
+322–328) pins the *complete* registry document, not a subset of its fields. Build the
+whole expected registry inside the test with `"$jq_bin" -S -c` (the same way that file
+already builds canonical fixtures) and compare it byte for byte against the committed
+`shadow/v1/shadow-environments.json` with `/usr/bin/cmp`, failing `registry-contents`
+on any difference. The expectation spells out everything: both entries, in order
+(`env.local-macos-fixture` then `env.local-macos-ystack-self`), each with all four
+keys and no others — `description`, `environment_id`, `evidence_scope`, `proof_state`
+— and the header fields `.body.activation_state` `inactive`, `.body.registry_version`
+`v1`, `.id` `shadow.environments.v1`, `.kind` `shadow_environment_registry`,
+`.schema_version` `1`. This *replaces* the partial id/scope/proof-state assertion:
+that one pinned only ids, scopes and proof states, so a wrong `description`, an extra
+key on an entry, or a changed header field would still have passed — unacceptable for
+an authorization file under the high-risk gate. Its `pass` message stops saying
+"exactly the one ... fixture environment" and states something true of two entries,
+including that neither is proven. Any later change to the registry must move this pin
+in the same PR — that is the point of it, not a burden to work around.
 
 **R6.** The five doc passages that say the registry has one entry are updated, with no
 other prose change. Confirm each by grepping `shadow-environments`; line numbers are
@@ -90,8 +103,10 @@ clean, required CI green.
    second), and `-c` plus jq's trailing newline reproduce today's byte shape. This was
    tried on a copy while drafting: the result is canonical, and R4's shape check and
    fixture lookup both pass on it. Still verify with R3's `cmp` before committing.
-2. **Test pin.** Update the `registry-contents` assertion and its pass message; the
-   test must fail before step 1 and pass after both.
+2. **Test pin.** Turn the `registry-contents` assertion into a full-document byte
+   comparison — the complete expected registry built in the test with `"$jq_bin" -S -c`
+   and `cmp`'d against the file, replacing the partial field checks — and update its
+   pass message; the test must fail before step 1 and pass after both.
 3. **Docs.** The five passages, nothing else.
 
 Do not touch `reproduce.sh`: the registry is data it reads, and its shape check and
