@@ -50,32 +50,44 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
 
 Estimate total: about 865 net lines.
 
-**Implementation PR figure — `review_size: accepted-exception`**, as the spec records it. One
-concern: one inactive component whose focused test must drive the real `reproduce.sh` end to end
-over fixture ground it has to build first. Range **610-840 net lines** — about 430 of component
-(jq plus shell), about 330 of test, and the documentation rows. **The estimate above no longer sits
-inside that range.** This round's physical-source check and its one-case-per-refusal-class cases
-add about 35 lines to the 830 an earlier draft estimated, so the honest figure is about 865 — just
-past the top. The range is the **spec's**, so widening it is the operator's call and not the
-coder's, and requirements 12 and 13 are what the added cases serve, so they are not the thing to
-trim to fit. Take the count when the test lands rather than at the end, and if it is over 840, stop
-there. Roughly 130 of the total is copied text this initiative did not write. The
-exception waives only the soft line signal in `AGENTS.md:102-106`; readability, tests, CI, review,
-the high-risk gate and operator merge are unchanged. **Above 840, stop and re-decide with the
-operator** rather than splitting: the component and its focused test are one concern, and
-requirement 17's entry is the first lines of the same script as requirement 15's predicates.
+**Implementation PR figure — this plan proposes `review_size: accepted-exception` at a widened
+range.** One concern, unchanged: one inactive component whose focused test must drive the real
+`reproduce.sh` end to end over fixture ground it has to build first.
+
+The spec recorded **610-840 net lines** — about 430 of component (jq plus shell), about 330 of
+test, and the documentation rows. The estimate above no longer sits inside that range, and the
+reason is the review rounds, not scope creep. Each round added a requirement that was asked for and
+checked: the physical-source check, the ten refusal-class negatives, the `E_LIMIT` padding
+fixtures, the clean entry, and the alias reset. Every one of those is real code and real test
+lines, so the honest figure is now about 865.
+
+So this plan proposes an evidence-based range of **700-1000 net lines** — the ~865 estimate above,
+plus or minus 15%, rounded. The `/plan-draft` skill lets a plan propose a size exception with one
+concern, the reason and a range, and the merge of this high-risk plan PR is that proposal's
+pre-code acceptance (operator decision OD-1 applies to merges). Once this PR merges, 700-1000 is
+the implementation PR's figure in place of the spec's 610-840. This plan does not amend the spec
+text.
+
+The exception waives only the soft line signal in `AGENTS.md:102-106`. Scope (still one concern),
+readability, tests, CI, review, the high-risk gate and operator merge are all unchanged, and it
+grants nothing to any other PR. Roughly 130 of the total is copied text this initiative did not
+write. Take the count when the test lands rather than once at the very end. Do not trim the
+refusal-class cases to fit — requirements 12 and 13 are what they serve. **Above 1000, stop and
+re-decide with the operator** rather than splitting: the component and its focused test are one
+concern, and requirement 17's entry is the first lines of the same script as requirement 15's
+predicates.
 
 **Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 724 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+file is 739 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
 PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
 unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
 proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
 order and success-path guarantee are each spelled out step by step because both are one line's
 position away from being wrong. Evidence-based
-range **615-833 net lines** — the measured count above, plus or minus 15%. This exception waives
+range **628-850 net lines** — the measured count above, plus or minus 15%. This exception waives
 only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
 CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
-figure is the 610-840 range recorded above.
+figure is the 700-1000 range proposed above.
 
 **What does not change.** `shadow/v1/reproduce.sh`, `adapters/local-git-materializer/v1/**`
 (`materialize.sh` and `protocol.jq` both), `core/v2/**`, `profiles/default/v1/**`,
@@ -557,11 +569,14 @@ about 31 lines in the first half of that file and 36 in the second. Three, made 
 `main` at `1b46de0`: the `canonical_json` 2.3 cites as `:144-153` is at `175-184`; the claim's
 1 MiB bound cited as `:156` is at `187`; the two `pair_ref` projections cited as `:250-256` and
 `:251-254` are at `286-292` and `287-290`. The numbers are the spec's, the contract, so correcting
-them is the operator's call rather than this plan's. Until that happens, **resolve every
-`reproduce.sh` citation by reading the working tree, not by trusting the number** — the way step
-0.6(b) resolves the materializer's anchors — and treat a citation that does not land as drift to
-raise, not a number to guess. `adapters/local-git-materializer/v1/materialize.sh` has not moved, so
-its numbers still land: every copied span, the `76-81` helper, and `:118`.
+them is the operator's call rather than this plan's. A later spec amendment may refresh the
+numbers, but it is not a precondition for starting implementation: the facts those citations point
+at — the checks, the caps, the projections — are unchanged, and only their line positions moved
+when PR #278 merged. Until that happens, **resolve every `reproduce.sh` citation by reading the
+working tree, not by trusting the number** — the way step 0.6(b) resolves the materializer's
+anchors — and treat a citation that does not land as drift to raise, not a number to guess.
+`adapters/local-git-materializer/v1/materialize.sh` has not moved, so its numbers still land:
+every copied span, the `76-81` helper, and `:118`.
 
 **`time_ok` module-path resolution.** The one new dependency on the core layout, and it fails in
 two directions: point it at the wrong directory and every good timestamp comes back `E_RUNTIME`;
@@ -711,9 +726,9 @@ commit is stale. `$t` is any scratch directory, `$m` is
 - `bash scripts/test/portable-core-schema.test.sh` — final line `failures: 0`, exit 0.
 - `bash scripts/check-rename.sh` — `check-rename: clean — no old names in tracked files.`
 - **Scope and size.** `git diff --stat main` lists exactly the seven files this plan names and
-  nothing else. Paste the net total, against the **610-840** range the spec records. Expect to
-  reach that line: the estimate in this plan is now about 865. Above 840, stop and re-decide with
-  the operator — do not trim the refusal-class cases to fit.
+  nothing else. Paste the net total, against the **700-1000** range this plan's merge accepts in
+  place of the spec's 610-840. The estimate here is about 865, so expect to land inside it. Above
+  1000, stop and re-decide with the operator — do not trim the refusal-class cases to fit.
 - **Output directory contract**, which is the spec's guarantee at lines 1159-1164 read back as
   two commands. After a successful run, `ls -a "$out"` shows exactly the seven documents and no
   `run_root` — the trap fired on that run's normal `EXIT` and spared them. After the `hooks/`
