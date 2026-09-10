@@ -10,13 +10,21 @@ takes 80 to 90 minutes. This splits that work across six parallel runners withou
 changing any of the existing suites, what the merge gate is called, or what it
 means. No suite is added; the sharding proof runs as a separate check.
 
-**Risk is `high`.** The change edits `.github/workflows/ci.yml` — a constitution path
-(`AGENTS.md`: agents never write `.github/**`) and the workflow behind the one
-required check the branch ruleset enforces. So a plan-only PR on
+**Risk is `high`.** The change touches two constitution paths —
+`.github/workflows/ci.yml` and `AGENTS.md` — which unattended agents never write
+(`AGENTS.md`, "Stage rules (autonomous lane)": the constitution paths are
+`.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`).
+`ci.yml` is also the workflow behind the one required check the branch ruleset
+enforces. So a plan-only PR on
 `ystack/plan/ci-test-shards` goes first, an independent reviewer reads it, the
 operator merges it, and only then does `ystack/impl/ci-test-shards` open. On that
-branch the operator commits the workflow file himself; agents prepare everything
-else. `review_size: standard`.
+branch the operator commits both of those files himself — the workflow and the
+`AGENTS.md` bullet of requirement 13. Agents prepare everything else: the runner,
+the proof script, the manifest line, and, for the two operator-owned files, the
+proposed patch text only — saved as a unified diff under `proposals/`
+(`proposals/<slug>-<short-title>.patch`, with the rationale in the PR body) exactly
+as `proposals/README.md` describes, never the commit itself.
+`review_size: standard`.
 
 ## Requirements
 
@@ -25,12 +33,17 @@ else. `review_size: standard`.
    the environment variable `YSTACK_TEST_SHARD=<index>/<count>`. If both are given,
    the flag wins and the variable is ignored silently.
 
-2. **No selector means today's behaviour, byte for byte.** With no `--shard` flag
-   and no `YSTACK_TEST_SHARD` set, the script discovers exactly the same suites by
-   the same rule, runs them in the same order, prints the same lines, ends with the
-   same final count line, and returns the same exit codes as today. There is no
-   carve-out and nothing new appears: the sharding proof in requirement 9 is not
-   named `*.test.sh`, so the unchanged discovery rule never sees it.
+2. **The argument-less run keeps today's behaviour, byte for byte.** The guarantee is
+   about the run with no arguments at all: no `--shard` flag, no `YSTACK_TEST_SHARD`
+   set, and no `--list`. That run discovers exactly the same suites by the same rule,
+   runs them in the same order, prints the same lines, ends with the same final count
+   line, and returns the same exit codes as today. There is no carve-out and nothing
+   new appears: the sharding proof in requirement 9 is not named `*.test.sh`, so the
+   unchanged discovery rule never sees it.
+
+   `--list` (requirement 6) is a new mode that only happens when the flag is given.
+   It lists and runs nothing, so it has no output to match against today's run, and
+   it changes nothing about the argument-less run — which never lists.
 
    Verified two ways, without diffing two 80-minute runs:
    - run `--list` with no selector and compare it to the discovery command in
@@ -68,14 +81,17 @@ else. `review_size: standard`.
    per line, in sorted order, and runs nothing. It combines with `--shard`; without
    one it lists every suite. It exits `0` when at least one suite is selected. It
    exists so the focused proof can check the partition without paying 80 minutes of
-   suite time.
+   suite time. This mode exists only when the flag is given, so requirement 2's
+   byte-for-byte guarantee does not cover it: `--list` with no shard lists every
+   suite and runs none, which is not the argument-less run.
 
-7. **Output when running.** Before the first suite the script prints
+7. **Output when running.** This requirement is about the running mode — `--list` not
+   given. Before the first suite the script prints
    `shard <i>/<n>: <m> of <N> test scripts selected`, where `m` is the number
    selected and `N` the number discovered. Each suite still prints its `==> <path>`
-   header. The run ends with `all <m> test scripts passed`. Without a selector the
-   runner prints nothing it does not print today: no `shard` line, no extra header,
-   no change to the closing count line — see requirement 2.
+   header. The run ends with `all <m> test scripts passed`. Running with no selector
+   and no `--list`, the runner prints nothing it does not print today: no `shard`
+   line, no extra header, no change to the closing count line — see requirement 2.
 
 8. **No vacuous pass.** If the selection is empty — which needs `count > N`, so it
    cannot happen at `count <= 16` with 62 suites, but must still be handled — the
@@ -86,8 +102,8 @@ else. `review_size: standard`.
 9. **Focused proof, outside the discovered suite set.** A new, executable
    `scripts/test/run-all-sharding.check.sh` proves by calling `--list`:
    - for `count` in 1, 2, 6 and 16: the shards are pairwise disjoint, no suite
-     appears twice, and their union sorted equals the no-argument listing;
-   - the no-argument listing equals `--shard 1/1 --list`;
+     appears twice, and their union sorted equals the `--list` output with no shard;
+   - the `--list` output with no shard equals `--shard 1/1 --list`;
    - each refusal in requirement 5 exits `2`, writes that exact usage line to stderr,
      prints nothing to stdout, and runs no suite;
    - the flag beats `YSTACK_TEST_SHARD` when both are set, and the variable alone
@@ -155,8 +171,9 @@ else. `review_size: standard`.
     which stay accurate and are not edited; README does not describe the test step.
     The one stale passage is the `AGENTS.md` "Stack & commands" CI bullet, which
     calls the workflow a structure check plus shellcheck; it gains a sentence naming
-    the three jobs and the shard flag. `AGENTS.md` is a constitution path, so the
-    operator commits that edit with the workflow.
+    the three jobs and the shard flag. `AGENTS.md` is a constitution path, so agents
+    only write the proposed sentence into the `proposals/` patch and the PR body; the
+    operator commits that edit himself, together with the workflow.
 
 14. **Wall time.** Target: under 25 minutes, measured by the PR's own CI run
     duration, which the operator records in the implementation PR body.
@@ -170,10 +187,17 @@ Order of work on `ystack/impl/ci-test-shards`:
    they are; the filter sits between discovery and the run loop.
 2. `scripts/test/run-all-sharding.check.sh`, plus its line appended at the end of
    `ci/required-files.txt`.
-3. Nothing else in `scripts/` or `docs/` changes.
-4. **Last commit, by the operator:** `.github/workflows/ci.yml` and the `AGENTS.md`
-   bullet. In the workflow, `checks` and each of the six `test` shards open with the
-   workflow's existing checkout step
+3. `proposals/ci-test-shards-shard-ci.patch` — the agents' proposed text for the two
+   operator-owned files in step 4, as one unified diff. Nothing else in `scripts/` or
+   `docs/` changes.
+4. **Both operator-owned files, in the operator's own last commit:**
+   `.github/workflows/ci.yml` and the `AGENTS.md` bullet of requirement 13. Agents
+   write neither file. What agents produce for them is patch text: one unified diff
+   saved as `proposals/ci-test-shards-shard-ci.patch`, covering both files, with the
+   rationale in the implementation PR body, per `proposals/README.md`. The operator
+   applies it (`git apply proposals/ci-test-shards-shard-ci.patch`) or types the
+   edits himself, and commits. In the workflow, `checks` and each of the six `test`
+   shards open with the workflow's existing checkout step
    (`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`), because a
    job's workspace starts empty; the aggregate `ci` job gets no checkout, since it
    only inspects `needs.*.result`.
@@ -181,7 +205,10 @@ Order of work on `ystack/impl/ci-test-shards`:
 Size estimate: about 70 net lines in the runner, 170 in the new proof script, 49 in
 the workflow (the three jobs, the checkout step in each job that needs one, and the
 one step that calls the proof), one manifest line and a sentence of docs — roughly
-291 net lines, inside the 300–400 budget, hence `review_size: standard`.
+291 net lines, inside the 300–400 budget, hence `review_size: standard`. The
+`proposals/` patch adds about 60 more lines, but they are the same workflow and
+`AGENTS.md` text written twice — once as patch text, once as the operator's commit —
+so they are read once, not twice.
 
 Expected wall time with six shards, over the 62 suites in sorted order. The only
 durations on record are the three in the accepted intake — `evals-dashboard` 835 s,
@@ -204,10 +231,14 @@ is why the shard count is a tunable.
 
 ## Areas of concern
 
-- **The workflow edit is operator-authored.** `.github/workflows/ci.yml` and
-  `AGENTS.md` are constitution paths. Agents write the runner, the test and the
-  manifest; the operator commits those two as the last commit on the implementation
-  branch. That is also why this spec is `risk: high`.
+- **Two files are operator-authored, not one.** `.github/workflows/ci.yml` and
+  `AGENTS.md` are both constitution paths, and requirement 13 needs an `AGENTS.md`
+  edit, so it is easy to read this initiative as "the workflow is the operator's, the
+  rest is ours" and land the docs bullet by mistake. Agents write the runner, the
+  proof script and the manifest line; for those two files they write only patch text
+  under `proposals/` plus the rationale in the PR body, and the operator commits both
+  as the last commit on the implementation branch. That is also why this spec is
+  `risk: high`.
 - **The sharding proof sits outside the suite set on purpose.** The accepted intent
   says "No change to which suites exist" and that the runner stays usable locally,
   unchanged, with no arguments. A new `*.test.sh` file would breach both: the
