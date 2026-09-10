@@ -8,7 +8,7 @@ drafted: 2026-09-09
 CI runs all 63 `scripts/test/*.test.sh` suites one after another in a single job and
 takes 80 to 90 minutes. This splits that work across six parallel runners without
 changing any of the existing suites, what the merge gate is called, or what it
-means. The only new suite is the focused sharding test in requirement 9.
+means. No suite is added; the sharding proof runs as a separate check.
 
 **Risk is `high`.** The change edits `.github/workflows/ci.yml` — a constitution path
 (`AGENTS.md`: agents never write `.github/**`) and the workflow behind the one
@@ -25,26 +25,23 @@ else. `review_size: standard`.
    the environment variable `YSTACK_TEST_SHARD=<index>/<count>`. If both are given,
    the flag wins and the variable is ignored silently.
 
-2. **No selector means today's behaviour for every suite that exists today.** With
-   no `--shard` flag and no `YSTACK_TEST_SHARD` set, the script discovers suites by
-   the same rule, runs them in the same order, prints the same lines for each of
-   them, and returns the same exit codes as today.
+2. **No selector means today's behaviour, byte for byte.** With no `--shard` flag
+   and no `YSTACK_TEST_SHARD` set, the script discovers exactly the same suites by
+   the same rule, runs them in the same order, prints the same lines, ends with the
+   same final count line, and returns the same exit codes as today. There is no
+   carve-out and nothing new appears: the sharding proof in requirement 9 is not
+   named `*.test.sh`, so the unchanged discovery rule never sees it.
 
-   This is not a promise that the whole output is byte-identical, because it cannot
-   be: requirement 9 adds `scripts/test/run-all-sharding.test.sh`, and the unchanged
-   discovery rule finds and runs it like any other suite. So exactly two things
-   differ from today's output — the new suite's own `==> <path>` header and its own
-   lines, in its sorted position, and the final count line, which reads
-   `all <N> test scripts passed` with `N` one higher. Nothing else may differ.
-
-   Verified two ways rather than by diffing the whole output:
+   Verified two ways, without diffing two 80-minute runs:
    - run `--list` with no selector and compare it to the discovery command in
      requirement 3, `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'`
      piped through `LC_ALL=C sort`, written out as repo-relative paths the same way.
      The two lists must be identical, so discovery and ordering are provably
      untouched;
-   - run one short existing suite through the script and check its lines are
-     unchanged.
+   - from a single no-argument run, compare its `==> <path>` headers, in order, and
+     its closing `all <N> test scripts passed` line against today's. That plus the
+     `--list` check pins discovery, order and count, so a full diff of two long runs
+     is not required.
 
 3. **Deterministic assignment.** Suites are discovered exactly as today —
    `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
@@ -70,18 +67,15 @@ else. `review_size: standard`.
 6. **Listing mode.** `--list` prints the selected suite paths, one repo-relative path
    per line, in sorted order, and runs nothing. It combines with `--shard`; without
    one it lists every suite. It exits `0` when at least one suite is selected. It
-   exists so the focused test can prove the partition without paying 80 minutes of
+   exists so the focused proof can check the partition without paying 80 minutes of
    suite time.
 
 7. **Output when running.** Before the first suite the script prints
    `shard <i>/<n>: <m> of <N> test scripts selected`, where `m` is the number
    selected and `N` the number discovered. Each suite still prints its `==> <path>`
    header. The run ends with `all <m> test scripts passed`. Without a selector the
-   runner prints no line of its own that it does not print today: no `shard` line,
-   and nothing else new. The one extra `==> <path>` header and the suite output
-   under it belong to the new suite from requirement 9, printed by the same loop
-   that prints every other suite's, and the count in the closing line rises by one
-   with it — see requirement 2.
+   runner prints nothing it does not print today: no `shard` line, no extra header,
+   no change to the closing count line — see requirement 2.
 
 8. **No vacuous pass.** If the selection is empty — which needs `count > N`, so it
    cannot happen at `count <= 16` with 63 suites, but must still be handled — the
@@ -89,8 +83,8 @@ else. `review_size: standard`.
    `1`. It never prints a passing line for zero suites. The existing "no
    `scripts/test/*.test.sh` files found" error keeps its current text and exit code.
 
-9. **Focused test.** A new, executable `scripts/test/run-all-sharding.test.sh` proves
-   by calling `--list`:
+9. **Focused proof, outside the discovered suite set.** A new, executable
+   `scripts/test/run-all-sharding.check.sh` proves by calling `--list`:
    - for `count` in 1, 2, 6 and 16: the shards are pairwise disjoint, no suite
      appears twice, and their union sorted equals the no-argument listing;
    - the no-argument listing equals `--shard 1/1 --list`;
@@ -99,14 +93,24 @@ else. `review_size: standard`.
    - the flag beats `YSTACK_TEST_SHARD` when both are set, and the variable alone
      selects the same set as the equivalent flag.
 
-   It runs in seconds because it never executes a suite. It is `shellcheck 0.11.0 -x
-   -S style` clean and is added to `ci/required-files.txt`.
+   Its name ends in `.check.sh`, not `.test.sh`, so the unchanged discovery rule in
+   requirement 3 never picks it up and the no-argument run stays byte-identical
+   (requirement 2). It is run explicitly instead, by the workflow's `checks` job, as
+   `bash scripts/test/run-all-sharding.check.sh`, in one step right after the
+   shellcheck step; the workflow edit is the operator's commit anyway. It runs in
+   seconds because it only calls `--list` and never executes a suite. It is
+   `shellcheck 0.11.0 -x -S style` clean — the sweep's `find . -name '*.sh'` already
+   covers it — and its path is appended at the end of `ci/required-files.txt`, which
+   also checks that it is executable.
 
 10. **Workflow shape.** `.github/workflows/ci.yml` keeps its `on:` triggers unchanged
     (`pull_request`, and `push` to `main`) and its `permissions` block, and gains
     three jobs:
-    - `checks` — the required-files check, the pinned-shellcheck step and the rename
-      gate, exactly as they read today.
+    - `checks` — the required-files check, the pinned-shellcheck step, then one new
+      `run:` step invoking the sharding proof of requirement 9
+      (`bash scripts/test/run-all-sharding.check.sh`), then the rename gate. The
+      three existing steps read exactly as they do today; that one step is the only
+      addition.
     - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6]}}`,
       checkout, then `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`.
       `fail-fast: false` so one red shard still lets the others report.
@@ -154,14 +158,16 @@ Order of work on `ystack/impl/ci-test-shards`:
 1. `scripts/test/run-all.sh` — argument parsing, `--list`, the round-robin filter,
    the new output line, the refusal paths. Discovery and the `GIT_*` defaults stay as
    they are; the filter sits between discovery and the run loop.
-2. `scripts/test/run-all-sharding.test.sh`, plus its line in `ci/required-files.txt`.
+2. `scripts/test/run-all-sharding.check.sh`, plus its line appended at the end of
+   `ci/required-files.txt`.
 3. Nothing else in `scripts/` or `docs/` changes.
 4. **Last commit, by the operator:** `.github/workflows/ci.yml` and the `AGENTS.md`
    bullet.
 
-Size estimate: about 70 net lines in the runner, 170 in the new test, 45 in the
-workflow, one manifest line and a sentence of docs — roughly 290 net lines, inside
-the 300–400 budget, hence `review_size: standard`.
+Size estimate: about 70 net lines in the runner, 170 in the new proof script, 48 in
+the workflow (the three jobs, including the one step that calls the proof), one
+manifest line and a sentence of docs — roughly 290 net lines, inside the 300–400
+budget, hence `review_size: standard`.
 
 Expected wall time with six shards, using the ten measured durations and a 34 s
 average for the rest: the heaviest shard is the one holding `evals-dashboard`, at
@@ -173,11 +179,10 @@ clears the target, but not by much — which is why the shard count is a tunable
 
 - Making any individual suite faster. `evals-dashboard` alone is about 14 minutes and
   is the real ceiling; it gets its own follow-up issue.
-- A merge queue. Any change to the branch ruleset. Any change to the existing
-  suites — none is removed, renamed, skipped, or reordered in meaning. The one
-  addition is the focused sharding test in requirement 9, which the unchanged
-  discovery rule picks up like any other suite. Duration-balanced or bin-packed
-  scheduling.
+- A merge queue. Any change to the branch ruleset. No change to which suites exist:
+  none is removed, renamed, skipped, or reordered in meaning, and none is added — the
+  sharding proof of requirement 9 is a `checks`-job script outside the discovered
+  suite set, by design. Duration-balanced or bin-packed scheduling.
 
 ## Areas of concern
 
@@ -185,6 +190,13 @@ clears the target, but not by much — which is why the shard count is a tunable
   `AGENTS.md` are constitution paths. Agents write the runner, the test and the
   manifest; the operator commits those two as the last commit on the implementation
   branch. That is also why this spec is `risk: high`.
+- **The sharding proof sits outside the suite set on purpose.** The accepted intent
+  says "No change to which suites exist" and that the runner stays usable locally,
+  unchanged, with no arguments. A new `*.test.sh` file would breach both: the
+  discovery rule would pick it up and the no-argument output would gain a header and
+  a higher count. Naming it `.check.sh` and calling it from the `checks` job honours
+  the intent exactly — and does not hide the proof, because `checks` is a dependency
+  of the aggregate `ci` job, so a red proof still turns the one required check red.
 - **The aggregate `ci` job must not be skippable.** An ordinary `needs:` job is
   *skipped* when a dependency fails, and a skipped required check leaves the gate
   ambiguous. `if: always()` plus explicit `needs.*.result` comparisons make it run
