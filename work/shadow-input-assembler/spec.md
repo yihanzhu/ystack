@@ -64,7 +64,11 @@ assertions that prove those two are the rest. The revision after that adds
 about ten more again: requirement 18's outputs are now staged under
 `run_root/stage/` and committed by `mv`, which is a `stage/` `mkdir`, a
 `.tmp`-and-`mv` per write, the commit loop with its recorded list, and the
-source-order assertions that prove the order. The range above still covers
+source-order assertions that prove the order. This revision adds barely any:
+moving the commit step's list-append above its `mv` reorders two lines rather
+than adding any, splitting requirement 10's jq result into an `E_USAGE` and an
+`E_RUNTIME` case is about four lines, and the one negative case that proves
+the split is about five more. The range above still covers
 all of them.
 
 The exception waives only the soft line signal. It does not widen scope beyond
@@ -81,14 +85,15 @@ budget of ~300-400 net lines applies to this spec PR as well, not only to the
 implementation it describes, and this file is far over that budget, so the
 overrun is recorded here rather than left unexplained. One concern: one
 component spec for an input assembler that carries security controls, whose
-thirteen review rounds each added a verified requirement (protocol-valid
+fourteen review rounds each added a verified requirement (protocol-valid
 inertness, byte-pinned default profile, hash algorithm, full repository-level
 source guards, clean entry, working-tree proofs, the alias reset, the
 `run_root` trap and the order it is installed in, the core's own timestamp
-rule, staged outputs committed by rename, and the `high` risk class those
-controls require).
-Evidence-based range: 1500 lines measured — the
-count is self-inclusive, the length of this file as committed — so 1275-1725
+rule and the `E_RUNTIME` case when that rule cannot run, staged outputs
+committed by rename and each destination recorded before its rename, and the
+`high` risk class those controls require).
+Evidence-based range: 1607 lines measured — the
+count is self-inclusive, the length of this file as committed — so 1366-1848
 net lines at that measurement +/-15%. This exception waives only the soft line
 signal for this artifact PR. It does not widen scope beyond the one concern,
 and it does not relax readability, review, CI, or operator merge. No content
@@ -315,9 +320,42 @@ lose the verified detail the rounds added.
     repository root, which is the `"$jq_bin" -L "$modules" …` load
     `evals/v1/evals-driver.sh:58` and `:161` already use — with `import
     "schema" as schema;` and `schema::time_ok` applied to that one string.
-    Anything but `true`, and any failure of the jq call itself, is `E_USAGE`.
     One rule with one home: if the core's notion of an instant ever changes,
     this check changes with it, because there is no second copy to drift.
+
+    **A `false` from the rule and a broken jq run are two different failures,
+    and they get two different error ids.** An earlier revision mapped both to
+    `E_USAGE` — "anything but `true`, and any failure of the jq call itself".
+    That is wrong about the second half. If jq cannot load the core modules,
+    cannot start, or dies for any other reason, the caller's timestamp has not
+    been judged at all, and reporting `E_USAGE` tells the caller to fix an
+    argument that may be perfectly good while the real fault — a missing or
+    unreadable `core/v2/generations/<generation>/modules` directory, a jq that
+    will not run — goes unnamed. It also contradicts requirement 12's own
+    taxonomy, which puts missing required files and failed commands under
+    `E_RUNTIME`.
+
+    So the two are told apart by how the check is run: **jq's exit status and
+    its standard output are captured separately**, and the decision reads
+    both. Exit status `0` with stdout exactly `true` — the rule ran and
+    accepted the argument — and the assembler proceeds. Exit status `0` with
+    stdout exactly `false` — the rule ran and refused the argument — and that,
+    and only that, is `E_USAGE`. Anything else is `E_RUNTIME`: a non-zero exit
+    for any reason, a jq that could not be started, modules that could not be
+    loaded, or an exit status of `0` with stdout that is neither `true` nor
+    `false`. The last case is in the `E_RUNTIME` bucket on purpose: an
+    unexpected output means the check itself is not behaving as this
+    requirement describes, which is not the caller's mistake either. jq's own
+    diagnostics go to standard error, so capturing stdout separately keeps a
+    module-load message from ever being mistaken for the rule's answer.
+
+    One mechanical note, because `set -e` is on: the call has to be written so
+    a non-zero jq exit is *observed* rather than ending the script on the
+    spot — the status captured on the command's own failure branch, the way
+    the shell allows in an assignment followed by `|| status=$?` — otherwise
+    the run dies before it can choose an id and the caller gets neither
+    `E_USAGE` nor `E_RUNTIME`. This is the one place in the component where a
+    non-zero exit is deliberately caught instead of being left to `set -e`.
 
     The check needs jq, so it cannot sit with the cheap string comparisons.
     It runs immediately after the pinned-jq check — before any input file is
@@ -334,8 +372,9 @@ lose the verified detail the rounds added.
     `packaging/v1/install.sh`. `E_USAGE`: wrong argument count or verb —
     both decided by requirement 17's copied entry, before anything else runs
     — relative path, bad repository id, a timestamp the core's `time_ok`
-    rejects — the wrong shape, or the right shape and not a real instant,
-    `2026-02-30T00:00:00Z` included (requirement 10) — or a commit id that is
+    ran and rejected — the wrong shape, or the right shape and not a real
+    instant, `2026-02-30T00:00:00Z` included (requirement 10); a `time_ok`
+    check that could not be run is `E_RUNTIME`, not this — or a commit id that is
     not lowercase hex of one of the two accepted widths, 40 or 64 — a width
     the repository has not been asked about yet. `E_TARGET`: the source Git
     directory is not a physical bare repository, it fails any of the
@@ -360,8 +399,13 @@ lose the verified detail the rounds added.
     `E_RUNTIME`: wrong jq
     digest or version, missing or symlinked required file — including the
     script's own path once requirement 17 has normalized it — failed command,
-    or the `0700` scratch directory requirement 15's copy writes into cannot
-    be made inside the output directory.
+    the `0700` scratch directory requirement 15's copy writes into cannot
+    be made inside the output directory, or requirement 10's `time_ok` check
+    not producing an answer at all: jq exiting non-zero, failing to start,
+    failing to load the core modules, or printing something that is neither
+    `true` nor `false`. A check that cannot run is a runtime fault of this
+    component, not a mistake by the caller, and it is filed with the other
+    missing files and failed commands rather than with the argument errors.
     `E_LIMIT`: an input file or the finished output exceeds its bound, the
     claim's bound being the driver's own 1 MiB. `E_PARSE`: an input is not
     exactly one JSON value, or carries a BOM. `E_CANONICAL`: it parses but is
@@ -552,6 +596,18 @@ lose the verified detail the rounds added.
     `2024-02-29T00:00:00Z`, a real leap day, and asserts the run assembles
     normally: the check refuses what the core refuses and nothing more.
 
+    **And a check that cannot run is not blamed on the caller.** The test
+    runs the assembler once more with a perfectly good timestamp against a
+    copy of the checkout whose `core/v2/generations/<generation>/modules`
+    directory has been made unreadable — `chmod 000`, restored afterwards —
+    so jq exits non-zero on the module load, and asserts `E_RUNTIME`, not
+    `E_USAGE`. That is the assertion that pins the split requirement 10
+    draws: `E_USAGE` is reserved for a `time_ok` that ran and answered
+    `false`, and everything else about that jq call is a runtime fault. If
+    the environment cannot make the directory unreadable — a test running as
+    root — the case points the module path at a directory that holds no
+    `schema.jq` instead, which fails the load the same way.
+
     **A refusal leaves the output directory empty.** The test runs the
     assembler against the `hooks/` negative repository — a refusal that fires
     after `run_root` has been created — and asserts two things about the
@@ -582,8 +638,12 @@ lose the verified detail the rounds added.
     `shadow/v1/assemble-materialization-input.sh`: every `mv` whose
     destination is the output directory appears on a later line than the last
     check, `validate-input` on the staged `input.json` included; the `mv` of
-    `input.json` is the last of those `mv`s; and each of them is followed by
-    the line that appends its destination to the trap's list. The runtime
+    `input.json` is the last of those `mv`s; and each destination's
+    list-append line appears on an **earlier** line than its own `mv` — the
+    record-before-rename order requirement 18 now fixes, asserted in the
+    direction it has to hold, because an append below the `mv` is precisely
+    the window that leaves a moved file unrecorded and therefore
+    uncleaned. The runtime
     half is the `hooks/` case just above, which also asserts that nothing
     from the staging step reached the output directory — a refusal that fires
     before the commit step leaves it empty, staged files and all. What no
@@ -1024,8 +1084,9 @@ lose the verified detail the rounds added.
     ahead of the `rm -rf` — so a trap that fires before the `mkdir` has run,
     or after the directory is already gone, does nothing rather than
     complaining about a path that is not there. `INT`, `TERM` and `HUP` are
-    trapped alongside `EXIT`: each removes `run_root` — and, if the commit
-    step below has begun, the paths it has already moved — resets its own
+    trapped alongside `EXIT`: each removes `run_root` — and every destination
+    the commit step below has recorded, whether or not that destination
+    exists — resets its own
     trap to
     default, and re-raises the signal, so the assembler dies of the signal it
     was sent with the right exit status rather than swallowing it, and the
@@ -1053,7 +1114,9 @@ lose the verified detail the rounds added.
     directory while any output is still being produced. **Commit.** Only
     after every output is complete and requirement 8's `validate-input`
     self-check has passed on the staged `input.json` is anything moved: each
-    staged file is `mv`d into the output directory, one at a time. `run_root`
+    staged file is `mv`d into the output directory, one at a time, with its
+    destination path recorded for the trap before its own `mv` runs.
+    `run_root`
     is inside the output directory (requirement 15), so `run_root/stage/` and
     the output directory are on the same filesystem and each `mv` is a
     `rename(2)` — a destination name that either is not there yet or names
@@ -1065,12 +1128,33 @@ lose the verified detail the rounds added.
     that is the document the driver consumes: until it appears, the output
     directory holds companion documents and no input, which a caller can see
     for what it is instead of a broken input the driver would try to read.
-    And the commit step is inside the trap's reach: each `mv` that succeeds
-    appends its destination path to a list the shell holds, and the trap — on
-    a refusal, on `INT`, `TERM` or `HUP`, and on any non-zero exit during the
-    commit step — removes every path on that list before it removes
-    `run_root`. A commit step that fails half-way therefore ends with the
-    output directory empty, exactly as a refusal before it would.
+    And the commit step is inside the trap's reach: it keeps a list of
+    destination paths, and the trap — on a refusal, on `INT`, `TERM` or
+    `HUP`, and on any non-zero exit during the commit step — removes every
+    path on that list that exists, before it removes `run_root`. A commit
+    step that fails half-way therefore ends with the output directory empty,
+    exactly as a refusal before it would.
+
+    **The recording comes before the rename, not after it.** An earlier
+    revision had each `mv` that succeeded append its destination to the list.
+    That leaves a window of exactly the kind this requirement exists to
+    close: `mv` and the append are two commands, so a signal arriving between
+    them — the same Ctrl-C, the same `TERM` from a wrapper — fires the trap
+    with a file already sitting in the output directory and its path not on
+    the list. The trap then cleans `run_root` and the destinations recorded
+    before it, leaves that one behind, and the caller's retry is refused
+    `E_WORKSPACE` for a leftover the trap was written to remove.
+
+    So the order is: append the destination path to the list, **then** `mv`
+    to it. Reversing the two costs nothing, because the list is a list of
+    *destinations to clean*, not a record of what happened, and the
+    destination path is known before the rename — the same reasoning that
+    puts the trap ahead of the `mkdir`. The one consequence is that the list
+    can name a path that was never created, because the `mv` was interrupted
+    or failed; that is why the trap removes every listed destination **that
+    exists** and skips the rest, so a listed-but-not-yet-moved path is a
+    harmless no-op rather than an error. Erring toward one extra name on the
+    list is safe; erring toward one missing name is the leftover.
 
     The guarantee to the caller, stated precisely. Any refusal, and any
     trapped signal, **before** the commit step leaves the output directory
@@ -1080,8 +1164,8 @@ lose the verified detail the rounds added.
     exactly the documents requirements 6, 8 and 9 name and nothing else.
     Requirement 13 proves the pre-commit case on a refusal that fires after
     `run_root` exists, proves the retry that follows works, and asserts the
-    trap-before-`mkdir` order and the checks-before-`mv` order where those
-    orders are written, in the source.
+    trap-before-`mkdir` order, the checks-before-`mv` order and the
+    record-before-`mv` order where those orders are written, in the source.
 
     The limits, named rather than implied. A `KILL`, a power loss, or a full
     disk mid-`rm` can still leave `run_root` behind, on any path out; no trap
@@ -1132,7 +1216,9 @@ Files, in the order they are written:
      aliases, and `PATH` and `LC_ALL` fixed.
    - Argument and workspace checks, the pinned-jq check, then requirement
      10's `time_ok` run on the timestamp argument — the first jq the component
-     runs, before any input file is opened — then reading and
+     runs, before any input file is opened, with its exit status and its
+     stdout captured separately so that `0` plus `false` is `E_USAGE` and a
+     jq that could not run the rule at all is `E_RUNTIME` — then reading and
      canonicalizing each input, the profile-id check and the eight digest
      comparisons against the pins, requirement 16's producer config digest
      check against the same pin, and the claim checks with the two values
@@ -1164,11 +1250,14 @@ Files, in the order they are written:
      `validate-input` self-check runs on the staged `input.json`. Nothing has
      touched the output directory yet. **Commit:** each staged file is `mv`d
      into the output directory — same filesystem, so a `rename(2)` — with
-     `input.json` moved last, and each destination appended to a list as it
-     lands. There is no removal step here: the trap installed before the
+     `input.json` moved last, and each destination **appended to a list on
+     the line above its own `mv`**, never below it, so no rename can land
+     outside the trap's reach. There is no removal step here: the trap
+     installed before the
      `mkdir` takes `run_root` away on this path and on every refusal path
-     alike, and on a failure during the commit step it removes the listed
-     destinations before it does, so the output directory ends up holding
+     alike, and on a failure during the commit step it removes every listed
+     destination that exists before it does — a listed path the `mv` never
+     reached is skipped — so the output directory ends up holding
      either all of those documents or nothing at all.
 
    The copied text is the largest single block in the file — about 90 lines of
@@ -1416,9 +1505,15 @@ change of process and not just a change of label.
   output directory only after all of it is written and self-checked, so the
   bytes the caller can see are always whole ones. What the shell cannot give
   is atomicity for the set: the commit step is one `rename(2)` per document,
-  so it is ordered with `input.json` last and the trap removes the
-  already-moved files from a list it keeps, which covers every refusal and
-  every catchable signal. What nothing covers is a `KILL`, a power loss, or a
+  so it is ordered with `input.json` last and the trap removes the committed
+  destinations from a list the step appends to **before** each rename rather
+  than after it, which covers every refusal and
+  every catchable signal. Appending after the rename — which an earlier
+  revision did — leaves a one-command window where a signal finds a file in
+  the output directory and no record of it to clean. It is the same class of
+  gap as installing the trap after the `mkdir`, and it is closed the same
+  way: record the name first, and let the trap skip a listed path that is
+  not there. What nothing covers is a `KILL`, a power loss, or a
   failure part-way through a removal: before the commit step that leaves a
   `run_root` behind, during it a set of companion documents with no
   `input.json`. In both cases the caller empties the directory or supplies
@@ -1498,3 +1593,15 @@ change of process and not just a change of label.
   form of that trade available here. There is nothing to keep in sync,
   because there is nothing copied: unlike requirements 3, 15 and 17, this
   check has no pin, no header and no byte comparison, and needs none.
+
+  Borrowing the core's rule does mean borrowing the ways its jq run can
+  fail, and that is where an earlier revision was careless: it mapped every
+  failure of that call — a modules directory that cannot be read included —
+  onto `E_USAGE`, which points the caller at an argument that may be
+  entirely correct while the real fault goes unnamed. Requirement 10 now
+  splits the two by reading jq's exit status and its stdout separately, so
+  only a rule that ran and answered `false` is the caller's mistake and
+  everything else is `E_RUNTIME`, where requirement 12 already files missing
+  files and failed commands. The point generalizes past the timestamp:
+  reusing someone else's rule means deciding what "the rule did not run"
+  reports, and the answer to that is never the caller.
