@@ -84,12 +84,15 @@ measured rather than guessed:
   `fcntl` that makes stderr non-blocking for the handler's one line, and that line becoming
   a single unchecked `write(2)` instead of a `write_all` call — the reordering that puts it
   after the kill and the reap costs nothing, being the same statements in a different
-  order (R2). This round adds ~2 more, to **~1097**: the `runtime-pgid:` line gets the same
+  order (R2). The round before this one added ~2 more, to **~1097**: the `runtime-pgid:`
+  line gets the same
   treatment, which is one `fcntl` to set `O_NONBLOCK` and a second to put the flags back
   (the parent keeps running, so it cannot leave them), and its `write_all` becomes a single
   unchecked `write(2)`. Moving it out of the blocked-signal region to after the
   `sigprocmask(SIG_SETMASK, …)` costs nothing, being the same statements in a different
-  order (R2).
+  order (R2). This round adds nothing here and the figure stays at **~1097**: both of its
+  findings are outside the C parent — the entry's signal design, and this artifact pull
+  request's own size record.
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -129,13 +132,22 @@ measured rather than guessed:
   ~5, to **~385**: the `run_created` guard — the `trap` line moving ahead of the `mkdir`,
   the guard inside both of its removal branches, and the `mkdir` becoming the one
   `run_created=$(/bin/mkdir -- "$run" && printf 1)` command with its
-  `[ -n "$run_created" ]` refusal (R1). The round before this one added nothing here and the
+  `[ -n "$run_created" ]` refusal (R1) — that command form is withdrawn this round, though
+  the guard itself survives in a different shape. The round before this one added nothing here and the
   figure stayed
   at ~385: each trap branch's `printf` moves to the end of the branch, after the
   forward and after the removal, which is the same statements in a different order (R1).
-  This round adds nothing here either and the figure stays at **~385**: its only
-  entry-side change is to a sentence in R2 that summarised the forwarded branch in the wrong
-  order, which is prose about the entry rather than a change to it (R1, R2).
+  The round before this one added nothing here either and the figure stayed at ~385: its
+  only
+  entry-side change was to a sentence in R2 that summarised the forwarded branch in the wrong
+  order, which is prose about the entry rather than a change to it (R1, R2). This round
+  adds ~10 more, to **~395**, and it is the first entry-side figure in several rounds that
+  moves because shipped statements move: the three signal traps shrink to one assignment
+  each, which is cheaper than the branch bodies they replace, but the `checkpoint`
+  function and its calls after the `mkdir`, after each pin check, after each compile and
+  after the copies, the `[ -e ]` pre-check, the three-case status test on the `mkdir`, and
+  the forward-then-wait moving out of a trap body and into the main flow around the `wait`
+  come to about ten lines more than what came out (R1).
 - **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -307,20 +319,41 @@ later — which is checked case by case in R10 rather than asserted in passing. 
 opposite order, plus `SIGPIPE` joining the resets it already performs. The round's third
 finding was DR-2, still pending with the operator. Nothing was made cheaper to compensate.
 
-This round adds ~2, all of it in the parent, and it finishes the round before this one's
-fix on the one
-line that was left out of it. ~2 in the parent: the `runtime-pgid:` line gets the same two
+The round before this one added ~2, all of it in the parent, and it finished the fix its
+own
+predecessor left
+incomplete on one line. ~2 in the parent: the `runtime-pgid:` line gets the same two
 `fcntl` calls and the same single unchecked `write(2)` the handler's line got, and it moves
 out of the blocked-signal region to after the `sigprocmask(SIG_SETMASK, …)` — a move that
 costs nothing, being the same statements in a different order. Nothing in the entry: the
-fix there is to a sentence in R2 that summarised the trap's forwarded branch in the wrong
+fix there was to a sentence in R2 that summarised the forwarded branch in the wrong
 order, and R1, which owns the branch, already stated the right one, so no shipped statement
-moves. Nothing in the test either, and that is checked rather than assumed: the one case
+moved. Nothing in the test either, and that was checked rather than assumed: the one case
 that reads the line reads it from a plain file, where a non-blocking write can neither block
-nor fail, so it keeps every assertion it had (R10). The sum of the four bullets is ~2422
-against the ~2420 the range is derived from, which is inside the rounding rather than a new
-figure, so the implementation range is unchanged. The round's third finding is DR-2, still
-pending with the operator. Nothing was made cheaper to compensate.
+nor fail, so it keeps every assertion it had (R10). That round's third finding is DR-2,
+still pending with the operator.
+
+This round adds ~10, all of it in the entry, from one of its two findings; the other costs
+no implementation
+lines at all. ~10 in the entry: the signal path is redesigned so the three
+`INT`/`TERM`/`HUP` traps only record the signal's name and the main flow acts on it at
+checkpoints, which nets out at about ten lines — the trap bodies lose the forward, the
+chmod, the removal, the write and the exit, and the main flow gains a `checkpoint`
+function with its calls after the `mkdir`, each pin check, each compile and the copies, an
+`[ -e ]` refusal ahead of the `mkdir`, a three-case test on the `mkdir`'s captured status
+in place of a command substitution, and the forward-then-wait around the `wait` on the
+parent (R1). The reason it is a change to shipped statements rather than prose is that the
+withdrawn design could lose its own guard: a group signal can kill the substitution's child
+after `mkdir` has created `.run` and before `printf` writes the `1`, leaving the directory
+on disk with the cleanup disarmed. Nothing in the C parent, which the finding does not
+touch, and nothing in the test either, and that is checked case by case rather than assumed
+— all three signal cases keep every assertion they had, because nothing observable changes
+(R10). The second finding is this artifact pull request's own size record, which is a
+statement about this document and changes no shipped file. The sum of the four bullets is
+~2432 against the ~2420 the range is derived from, which is inside the rounding rather than
+a new figure, so the implementation range is unchanged. The round's third finding is DR-2,
+still pending with the operator; this round does not touch it. Nothing was made cheaper to
+compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -336,8 +369,10 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 3409 lines. Accepted as one concern: one
+requests too, and this one exceeds it by about nine times: `wc -l
+work/resolver-trusted-parent/spec.md` is 3642 lines. Accepted as one concern — the
+launch boundary as a security control, the same one the waiver at the end of this section
+records: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -371,11 +406,17 @@ signal diagnostics moved after the killing and the cleanup and made best-effort,
 blocked stderr cannot hold up the termination they exist to describe, and this round the
 one diagnostic still left inside a blocked-signal region — the parent's `runtime-pgid:`
 line — moved out to after the unmask and made best-effort with it, so nothing that can
-block sits anywhere a forwarded signal cannot reach the handler).
-**Evidence-based range: 2898-3920 lines** — the measured 3409 lines plus or minus 15%. It was
-553 lines and 470-636 thirteen rounds ago, then 783, then 847, then 1012, then 1202, then
+block sits anywhere a forwarded signal cannot reach the handler, and this round the entry's
+signal traps cut down to recording the signal's name with the main flow acting at
+checkpoints, so the cleanup guard can no longer be lost to a group signal that kills the
+very command that was supposed to set it).
+**Evidence-based range for this spec pull request: 3096-4188 lines** — the measured
+3642 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+recorded again in the waiver at the end of this section; the implementation pull request's
+range is the separate figure above and the two are never compared. It was
+553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295; where each block of
+3295, then 3409; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -597,8 +638,8 @@ against the new order, none of them losing an assertion. The remaining ~17 are t
 accepted-concern list at the top and the re-derived size figures here and for the
 implementation. The third finding was DR-2, unchanged and still pending.
 
-This round is +114 net over one P1 and one P2, and both of them are the round before this
-one's two fixes applied to a place it missed. About 60 go to the `runtime-pgid:` line: R2's
+The round before this one was +114 net over one P1 and one P2, and both of them were its
+own predecessor's two fixes applied to a place they had missed. About 60 go to the `runtime-pgid:` line: R2's
 `pgid` bullet no longer claiming the line and the variable become true together, a new
 paragraph saying why nothing that can block belongs inside the blocked-signal region and
 what a blocked write in there would cost, and the line's own block rewritten around its
@@ -612,12 +653,50 @@ written before the forward and so contradicted both R1 and Design step 2, rewrit
 order R1 states with the reason it is last. The remaining ~49 are the accepted-concern list
 at the top and the re-derived size figures here and for the implementation, whose range does
 not move because the ~2 the parent gains is inside the rounding of the sum it is derived
-from. The third finding is DR-2, unchanged and still pending; this round does not touch it.
+from. That round's third finding was DR-2, unchanged and still pending.
 
-This waives only the soft line signal for this artifact pull request. It waives nothing
+This round is +233 net over two P2s, and neither is new ground: both say an earlier round
+recorded something it could not
+back up. About 153 go to the entry's signal handling. The command-substitution guard —
+`run_created=$(/bin/mkdir -- "$run" && printf 1)` — is withdrawn, because a signal
+delivered to the whole foreground process group can kill that substitution's child between
+the `mkdir` and the `printf`, leaving `.run` on disk with the guard empty and the cleanup
+deliberately skipped: the exact leak the guard exists to prevent. What replaces it is a
+split R1 now states in full — the three signal traps record the signal's name and do
+nothing else, the `EXIT` trap does the guarded cleanup and writes the one line last, and
+the main flow acts at `checkpoint` calls and at the wait on the parent — with the guard set
+from `/bin/mkdir`'s own captured status behind an `[ -e ]` pre-check, including the status
+above 128 that means the caller's signal killed `mkdir` after it had created the directory.
+The new design was measured on a Darwin `/bin/bash 3.2.57`, output quoted in R1, and the one
+thing that cannot be timed is marked as reasoning rather than measurement. Every observable
+stays where it was, which is what lets R10's three signal cases keep every assertion; the
+ripples are Design step 2's clause, R10's arming-order paragraph, its pre-parent case, its
+deferral and diagnostics paragraphs, the Copy-versus-adapt run-directory item, and the
+cleanup and signals bullets under Areas of concern. About 15 go to this pull request's own
+size record: the waiver at the end of the size section pointed at "the range above" when
+the nearest labelled range belongs to the implementation, so a reviewer could not check
+this artifact against an approved number. It now records the one concern and an
+evidence-based range for this spec pull request in the waiver itself, labelled as the spec
+PR's and separate from the implementation PR's, and the self-count paragraph above states
+the same two figures. The remaining 65 are the accepted-concern list at the top and the
+re-derived size figures here and for the implementation, whose range does not move because
+the ~10 the entry gains is inside the rounding of the sum it is derived from. The round's
+third finding is DR-2, unchanged and still pending; this round does not touch it.
+
+This waives only the soft line signal for this artifact pull request, and
+`work/README.md:71-73` requires the two things it is waived against to be recorded rather
+than inferred, so both are recorded here in the waiver itself. **The one concern is the
+launch boundary as a security control** — the single concern this whole spec has, named at
+the top of this section and carried by every requirement in it. **The evidence-based range
+for this spec pull request is 3096-4188 lines**, which is this file's measured
+3642 lines plus or minus 15%, the same two figures the self-count paragraph above
+states. That is the *spec* pull request's range and nothing else's: the
+2057-2783 changed lines derived at the top of this section belong to the *implementation*
+pull request, they measure a different artifact, and the two are never compared or summed.
+It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
 still apply, and an unexplained overrun beyond
-the range above still blocks review.
+the spec pull request's range above still blocks review.
 
 ## Requirements
 
@@ -632,105 +711,196 @@ the range above still blocks review.
   The entry passes the child's
   stdout and stderr through unchanged (it does not capture, buffer or rewrite them), and
   exits with the child's own exit status, or `128 + signal` when the child died on a
-  signal. Its `EXIT` trap removes the run directory; it also traps `INT`, `TERM` and
-  `HUP`, and on those, when a parent exists, it **forwards the same signal to the parent,
-  waits for the parent to exit, and only then** removes the run directory and exits
-  `128 + signal`. That order is the whole point: the parent, not the entry,
-  terminates the resolver's process group (R2), so the entry must never remove the run
-  directory while a resolver could still be running out of it. A bash `wait` returns as
-  soon as the trap fires, so the trap forwards the signal and then waits for the parent a
-  second time; the removal happens after that second wait returns. Because the trap runs
-  against a run
-  directory the entry has by then set to mode 0500 (below), the trap restores mode 0700
-  on the directory before removing it — harmlessly a no-op when the trap fires earlier
+  signal. Its `EXIT` trap removes the run directory. It also traps `INT`, `TERM` and
+  `HUP`, and those three traps do one thing only: they record the signal's name in an
+  `entry_signal` variable. Everything else happens in the main flow afterwards, at the
+  checkpoints set out below. When a parent exists the entry **forwards the same signal to
+  the parent, waits for the parent to exit, and only then** lets the `EXIT` trap remove the
+  run directory, and it exits `128 + signal`. That order is the whole point: the parent,
+  not the entry, terminates the resolver's process group (R2), so the entry must never
+  remove the run directory while a resolver could still be running out of it. A bash `wait`
+  interrupted by a trapped signal returns at once with `128 + signal` of its own rather
+  than the child's status, so the main flow forwards the signal and waits for the parent a
+  second time, and takes the parent's real status from that second wait; the removal
+  happens after it returns. Because the `EXIT` trap runs against a run
+  directory the entry has by then set to mode 0500 (below), it restores mode 0700
+  on the directory before removing it — harmlessly a no-op when the signal arrives earlier
   than that, while the directory is still 0700. Nothing shipped reads `scripts/test/`.
   The split follows the test today: the test
   script owns compilation, jq binding and platform choice
   (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
   the launch.
 
-  **The trap is installed before the parent exists, so it has two branches.** The trap goes
-  on ahead of the `mkdir` that creates the run directory, which is well before the pin checks,
-  the two compiles and the launch (the order is fixed below), so `INT`, `TERM` or `HUP` can
-  arrive at a moment when `.run` is on disk and there is no parent process to forward
-  anything to. That is not a narrow window: ten pin checks and two compiles run inside it.
-  So the entry records the parent's pid in a variable the instant it starts the parent, and
-  the trap reads that variable to choose between two things:
+  **The signal traps only record, and the main flow acts.** An earlier round of this spec
+  put the whole of the signal path inside the `INT`/`TERM`/`HUP` trap bodies — the forward,
+  the chmod, the removal and the exit — and armed the removal with a `run_created` guard
+  that a command substitution produced:
+  `run_created=$(/bin/mkdir -- "$run" && printf 1)`. That is withdrawn, because the guard
+  can be lost in exactly the window it exists to cover. When `INT`, `TERM` or `HUP` is
+  delivered to the whole foreground process group — which is what a `Ctrl-C` at a terminal
+  does — the substitution's own child can be killed after `/bin/mkdir` has created `.run`
+  and before `printf` has written its `1`. The substitution then yields the empty string,
+  the guard stays empty, the trap deliberately removes nothing, and the caller is left with
+  precisely the `.run` directory the guard was meant to cover. No ordering of statements
+  fixes that, because the loss happens inside a child process rather than in the shell.
 
-  - *No parent pid recorded.* Nothing was launched, so no resolver and no process group
-    exist and there is nothing to forward the signal to. The trap chmods the run
-    directory back to 0700 and removes it — or removes nothing at all, when the
-    `run_created` guard below is still empty because the `mkdir` has not completed — then
-    writes its one `entry-signal: <NAME> no-parent` line to the entry's own stderr (below),
-    and exits `128 + signal`. No child of the entry's
-    own is alive when that removal runs, and the reason is bash's own deferral rule rather
-    than anything about process groups. An earlier round of this spec said a compiler child
-    "was signalled too" because the caller's signal went to the whole foreground group,
-    which is only true of a signal a terminal generates; a plain `kill <entry pid>` reaches
-    the entry alone and leaves its children untouched, so that sentence was proving the
-    wrong thing. What actually holds is the rule the bash manual states under SIGNALS: if
-    bash is waiting for a command to complete and receives a signal for which a trap has
-    been set, the trap is not executed until the command completes. Every pre-parent child
-    the entry runs — each SHA-1 pipeline, the SHA-256 digest, both compiles, the jq and awk
-    copies — runs in the foreground, or inside a `$(...)` substitution the entry waits on,
-    so at the moment this branch runs the entry has no live child and the removal cannot
-    race one.
+  So the signal path is split in two. The three traps are one assignment each —
+  `entry_signal=INT`, `entry_signal=TERM`, `entry_signal=HUP` — and nothing else: no
+  forward, no chmod, no removal, no write, no exit. The `EXIT` trap does the cleanup, and
+  the main flow decides when to leave. That costs nothing in latency, and the reason is the
+  same bash rule the rest of this requirement rests on: while a foreground command runs, a
+  trapped signal is not delivered at all, so a trap body could never have acted sooner than
+  the statement that follows that command. Acting in the main flow immediately after each
+  command is therefore the same moment in time, reached from the one place where the
+  entry's own variables are consistent.
 
-    The cost of that is worth stating rather than hiding: the branch acts up to one step
-    late — at most one compile, the longest pre-parent step there is — so the entry keeps
-    working on something it is about to throw away. That latency is bounded by that one
-    step and is accepted; R10's pre-parent case waits for the entry with a timeout wide
-    enough to cover it rather than expecting an instant exit. The requirement the whole
-    argument rests on is stated explicitly so the plan cannot drift off it: **the entry
-    runs no pre-parent child in the background.** A plan that backgrounds one would have to
-    record its pid and terminate and reap it in this branch before removing anything, and
-    that is not this design.
+  **The `EXIT` trap, which is now the only thing that touches the disk.** It runs on every
+  exit path, signal or not, and does four things in this order: capture the status it was
+  entered with, because the `rm` and the `printf` below would otherwise overwrite `$?`;
+  then, **if `run_created` is set**, `chmod 0700` the run directory and remove it and
+  everything in it; then, **if `entry_signal` is set**, write the one `entry-signal:` line
+  described below to the entry's own stderr; then exit. The
+  `chmod` is a harmless no-op when the signal arrives before the mode pass, while the
+  directory is still 0700. With `run_created` unset the trap touches nothing on disk, which
+  is the normal case for a refusal that happens before the directory exists. With
+  `entry_signal` unset it writes nothing, which is every non-signal exit.
 
-    The terminal case is the other path to the same place: a `Ctrl-C` at a terminal signals
-    the whole foreground process group, so a running compile does get the signal too and
-    exits sooner, and the deferred trap still runs after it — earlier than in the `kill`
-    case, not differently. Either way, everything a compile writes is inside the directory
-    being removed and no resolver exists anywhere in the picture.
-  - *A parent pid recorded.* The trap forwards the same signal to the parent, waits for the
-    parent to exit, removes the run directory only after that wait returns, then writes
-    `entry-signal: <NAME> forwarded <pid>` to the entry's own stderr, and exits with
-    the parent's own status — which on a forwarded signal is the `128 + signal` the parent's
-    handler exits with (R2) — or, if the parent was killed rather than exiting, with
-    `128 + signal` for the signal that killed it.
+  The status it exits with is three cases and no more: `entry_status`, when the main flow
+  recorded one — which happens on exactly one path, the forwarded one below, where it is
+  the parent's own status; otherwise `128 + signal` for the recorded name, when
+  `entry_signal` is set; otherwise the status the trap was entered with, which is the
+  normal path and every `E_RUNTIME` refusal. Those three collapse to two numbers in
+  practice, because a parent that was forwarded a signal exits `128 + signal` itself (R2)
+  and a parent killed by that signal gives the shell the same number.
 
-  Both branches chmod 0700 before removing, and in both that `chmod` is a harmless no-op
-  when the signal arrives before the mode pass, while the directory is still 0700. In both
-  the chmod and the removal are inside the `run_created` guard below, so a trap that fires
-  before the run directory is the entry's own touches nothing on disk. Both
-  exit rather than re-raising the signal, which is a deliberate choice over the more
-  idiomatic reset-and-re-raise: an explicit `exit` makes the entry's status on a signal the
-  same number in every path through this requirement — `128 + signal`, the same rule the
+  **Creating the run directory, and setting the guard without a producer that can be
+  killed.** Three statements, in this order and no other.
+
+  1. **Refuse a pre-existing `.run` before anything is created.** `[ -e "$run" ]` is
+     `E_RUNTIME` — `-e` rather than `-d`, so a file or a symlink of that name refuses too.
+     This is what keeps the entry from ever adopting, or destroying, a directory that is
+     not its own: the refusal happens with `run_created` unset, and unset is the one state
+     in which the `EXIT` trap leaves the disk alone.
+  2. **Create it with a plain simple command and keep the status.** `/bin/mkdir -- "$run"`,
+     with no `-p`, and its exit status captured. Three cases follow, all decided in the
+     main flow:
+     - *Status 0.* The directory is the entry's own: `run_created=1`.
+     - *A status above 128, with `.run` now present.* `/bin/mkdir` was itself killed by the
+       caller's signal to the whole foreground group, after it had already created the
+       directory. The pre-check an instant earlier found no `.run`, so the directory is the
+       entry's own: `run_created=1`. `/bin/mkdir` exits 0 or 1 of its own accord, so a
+       status above 128 is the shell reporting a signal death and nothing else.
+     - *Any other non-zero status.* An `EEXIST` from a creator that raced the pre-check, a
+       permissions failure, anything else: `E_RUNTIME` with `run_created` left unset, so
+       the `EXIT` trap leaves that directory exactly where it found it.
+  3. **Only then create `tmp` and `home` inside `.run`** at mode 0700. A failure of either
+     is `E_RUNTIME`, and by then the guard is set, so the `EXIT` trap chmods back to 0700
+     and removes `.run` and everything in it on the way out.
+
+  One residual is named rather than hidden. A foreign process that creates an empty `.run`
+  in the same instant a terminal signal kills the entry's `/bin/mkdir` would have its
+  directory removed by the `EXIT` trap, because the second case above cannot tell it from a
+  directory `mkdir` created before it died. That needs a same-uid process writing into the
+  caller's mode-0700 output root during the microseconds of one `mkdir`, while a signal
+  lands, and it sits inside the same-uid assumption R5 already states; this spec treats it
+  no further. It is strictly smaller than the failure it replaces, which lost the guard on
+  the entry's *own* directory in that window rather than on somebody else's.
+
+  **The checkpoints.** One small function —
+  `checkpoint() { [ -z "$entry_signal" ] || exit; }` — is called wherever the entry would
+  otherwise start a fresh piece of work: immediately after the `mkdir` and its guard
+  assignment, after each of the ten pin checks, after each of the two compiles, after the
+  jq and awk copies, and immediately before the parent is launched. A bare `exit` there
+  hands control to the `EXIT` trap, which does the cleanup, writes the line and supplies
+  the status — `128 + signal` for the recorded name, because a checkpoint never records an
+  `entry_status`. That is the same number every path through this requirement produces.
+
+  **The wait on the parent is the last checkpoint, and it is the one that forwards.** The
+  entry records the parent's pid in `parent_pid` the instant it starts the parent, then
+  runs `wait "$parent_pid"`. That wait returns as soon as a trap fires, with `128 + signal`
+  of its own rather than the child's status, so the entry tests `entry_signal` after it: if
+  a name is recorded, the entry sends the same signal to the parent —
+  `kill -"$entry_signal" "$parent_pid"` — and waits a second time, and *that* wait's status
+  is the parent's own. The entry records it in `entry_status` and exits, and only then does
+  the `EXIT` trap remove
+  the run directory. Nothing is removed before that second wait returns, which is the
+  ordering the whole requirement exists for. On a forwarded signal the parent's own status
+  is the `128 + signal` its handler exits with (R2), and a parent killed rather than exiting
+  gives the shell the same number for the same signal, so the entry's status is
+  `128 + signal` here too.
+
+  **The two branches are `parent_pid` empty or not, and the main flow is what distinguishes
+  them.** The traps go on ahead of the `mkdir` that creates the run directory, which is
+  well before the pin checks, the two compiles and the launch (the order is fixed below),
+  so `INT`, `TERM` or `HUP` can arrive at a moment when `.run` is on disk and there is no
+  parent process to forward anything to. That is not a narrow window: ten pin checks and
+  two compiles run inside it. With no pid recorded, nothing was launched, so no resolver
+  and no process group exist and there is nothing to forward to; the entry reaches its next
+  checkpoint and exits `128 + signal`, and the `EXIT` trap removes the run directory — or
+  nothing at all, if `run_created` is still unset. With a pid recorded, the forward-then-wait
+  above runs instead. The `EXIT` trap reads `parent_pid` as well, but only to choose which
+  of the two words its one line carries; it takes no different action either way, and
+  `entry_status` is the only other thing the main flow hands it. The entry
+  sets `parent_pid` immediately after starting the parent and never clears it, so the
+  no-parent form cannot be written while a parent is alive.
+
+  Both paths exit rather than re-raising the signal, which is a deliberate choice over the
+  more idiomatic reset-and-re-raise: an explicit `exit` makes the entry's status on a signal
+  the same number in every path through this requirement — `128 + signal`, the same rule the
   normal path already uses for a child that died on a signal — and that number is what R10
-  asserts. The empty pid variable is the only thing that distinguishes the two branches; the
-  entry sets it immediately after starting the parent and never clears it, so the no-parent
-  branch cannot be taken by a trap that fires while a parent is alive.
+  asserts.
 
-  **The trap says which branch it took, on the entry's own stderr, so the branch is
+  No child of the entry's own is alive when the no-parent removal runs, and the reason is
+  bash's own deferral rule rather than anything about process groups. An earlier round of
+  this spec said a compiler child "was signalled too" because the caller's signal went to
+  the whole foreground group, which is only true of a signal a terminal generates; a plain
+  `kill <entry pid>` reaches the entry alone and leaves its children untouched, so that
+  sentence was proving the wrong thing. What actually holds is the rule the bash manual
+  states under SIGNALS: if bash is waiting for a command to complete and receives a signal
+  for which a trap has been set, the trap is not executed until the command completes.
+  Every pre-parent child the entry runs — each SHA-1 pipeline, the SHA-256 digest, both
+  compiles, the jq and awk copies — runs in the foreground, or inside a `$(...)`
+  substitution the entry waits on, so at the moment the checkpoint after that command runs
+  the entry has no live child and the removal cannot race one.
+
+  The cost of that is worth stating rather than hiding: the entry acts up to one step late
+  — at most one compile, the longest pre-parent step there is — so it keeps working on
+  something it is about to throw away. That latency is bounded by that one step and is
+  accepted; R10's pre-parent case waits for the entry with a timeout wide enough to cover
+  it rather than expecting an instant exit. The requirement the whole argument rests on is
+  stated explicitly so the plan cannot drift off it: **the entry runs no pre-parent child in
+  the background.** A plan that backgrounds one would have to record its pid and terminate
+  and reap it at the checkpoint before anything is removed, and that is not this design.
+
+  The terminal case is the other path to the same place: a `Ctrl-C` at a terminal signals
+  the whole foreground process group, so a running compile does get the signal too and
+  exits sooner, and the deferred trap still records after it and the next checkpoint still
+  acts — earlier than in the `kill` case, not differently. Either way, everything a compile
+  writes is inside the directory being removed and no resolver exists anywhere in the
+  picture.
+
+  **The entry says which branch it took, on its own stderr, so the branch is
   observable rather than inferred from what it left behind.** Both branches end with the run
   directory gone, and "gone" is not enough to tell them apart: an empty output directory is
   equally consistent with no parent ever existing and with a parent that started and had not
-  yet created its sandbox. So the trap writes exactly one line, and only on the three
-  signals — the `EXIT` path writes nothing:
+  yet created its sandbox. So the `EXIT` trap writes exactly one line, and only when
+  `entry_signal` is set — an exit with no signal behind it writes nothing:
 
   ```
   entry-signal: <NAME> no-parent
   entry-signal: <NAME> forwarded <pid>
   ```
 
-  `<NAME>` is `INT`, `TERM` or `HUP` — the name of the signal that fired the trap, not its
-  number. The no-parent branch writes the first form; the parent branch writes the second
-  with the pid it forwarded to. The line goes out with `printf` to the entry's own stderr,
-  never buffered anywhere else — the same channel the parent's `runtime-pgid:` line uses
-  (R2) — and it is the **last** thing each branch does before its `exit 128 + signal`,
-  after the forward and the wait in one branch and after the chmod and the removal in both.
+  `<NAME>` is `INT`, `TERM` or `HUP` — the name the trap recorded in `entry_signal`, not
+  its number. The no-parent branch writes the first form; the parent branch writes the
+  second with the pid it forwarded to. The line goes out with `printf` to the entry's own
+  stderr, never buffered anywhere else — the same channel the parent's `runtime-pgid:` line
+  uses (R2) — and it is the **last** thing the `EXIT` trap does before its own final
+  `exit`, after the forward and the second wait that the main flow has already completed
+  and after the chmod and the removal.
   That ordering is deliberate and it is the same rule the parent's handler follows: bash's
   `printf` writes to whatever descriptor the caller gave the entry as stderr, and a write
-  to a full pipe blocks, so a line written first could hang the trap with the parent still
+  to a full pipe blocks, so a line written first could hang the entry with the parent still
   alive and the run directory still on disk. Written last, a hung write can only delay the
   exit status; it can never delay the cleanup or the forward. Nothing is lost for the test
   that asserts the line, because R10 reads it from a plain file in the test's own scratch,
@@ -883,11 +1053,12 @@ the range above still blocks review.
   path is the only write root.** The entry's positional arguments are
   `<jq> <output directory> <request> <repository map>`, and the run directory for this
   invocation is `<output>/.run`: created with a plain `/bin/mkdir` — no `-p`, so an
-  existing `.run` is an `EEXIST` refused with `E_RUNTIME` rather than a directory the entry
-  adopts — at mode 0700, owned by the current uid, with a `tmp` subdirectory at mode 0700
-  inside it for the compiler's scratch files, and removed by the trap — which is installed
-  ahead of that `mkdir` rather than with it, for the reason given below — before the entry
-  exits. It is deliberately **not** `mktemp -d` under the caller's `TMPDIR`, which is what
+  existing `.run` is refused with `E_RUNTIME` rather than adopted, by an `[ -e ]` check
+  ahead of the `mkdir` and by the `mkdir`'s own `EEXIST` behind it — at mode 0700, owned by
+  the current uid, with a `tmp` subdirectory at mode 0700
+  inside it for the compiler's scratch files, and removed by the `EXIT` trap — which is
+  installed ahead of that `mkdir` rather than with it, for the reason given below — before
+  the entry exits. It is deliberately **not** `mktemp -d` under the caller's `TMPDIR`, which is what
   an earlier round of this spec said: a run directory there is a second write root, and the
   intent allows exactly one — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36`). The name is fixed rather than random
@@ -929,13 +1100,16 @@ the range above still blocks review.
   not there is not a refusal; it is a quiet fallback, and what the tool does instead —
   fail obscurely, or write somewhere the spec has just promised it will not — is the
   toolchain's choice rather than the entry's. So the order is fixed here, and every later
-  section uses it: validate the output root; install the trap; create `<output>/.run` and
+  section uses it: validate the output root; install the traps; refuse a pre-existing
+  `.run`; create `<output>/.run` and
   then its `tmp` and `home` subdirectories at mode 0700; run the pin checks; run the two
-  compiles; empty and remove `tmp` and `home` and tighten the modes; launch the parent. The
+  compiles; empty and remove `tmp` and `home` and tighten the modes; launch the parent —
+  with a `checkpoint` call after the `mkdir`, after each pin check, after each compile,
+  after the copies and immediately before the launch (above). The
   only refusals that happen before anything is written are the output-root validations
   above. Every refusal after them — the pin checks included — happens with `.run` already on
-  disk, which is why the trap is installed ahead of the `mkdir` rather than after the pins,
-  and why R10 counts a pin-check refusal as cleanup evidence rather than as a
+  disk, which is why the traps are installed ahead of the `mkdir` rather than after the
+  pins, and why R10 counts a pin-check refusal as cleanup evidence rather than as a
   nothing-was-created case.
 
   **The cleanup trap is armed the instant `.run` can exist, which means before the `mkdir`
@@ -948,45 +1122,58 @@ the range above still blocks review.
   and the three signals still carry their default disposition. The entry would then refuse
   or die with a `.run` directory it created itself and no `EXIT` or signal path to remove
   it — the one outcome the trap exists to prevent, in the one window where the trap was
-  missing. So the order inside this step is three statements, in this order and no other.
+  missing. So the four statements of this step run in this order and no other: install the
+  traps, refuse a pre-existing `.run`, create the directory and set the guard from its
+  status, create `tmp` and `home`. The three creation statements and the guard rules are
+  specified above with the signal design they belong to; what this step adds is why the
+  `trap` line comes first.
 
-  1. **Install the `EXIT`/`INT`/`TERM`/`HUP` trap, before anything creates `.run`.** The
-     removal inside it is guarded by a variable — `run_created` — that is empty until the
-     directory is known to be the entry's own, so an armed trap that fires before or during
-     the `mkdir` removes nothing. That guard is not a detail: without it the trap would
-     delete a pre-existing `.run` that the entry refused rather than adopted, which turns a
-     refusal into a destructive act on a directory the entry does not own the contents of.
-     Nothing before this statement has written anything — the output-root validations above
-     are a `stat`, a glob and a `cd -P` — so a signal that lands earlier still finds the
-     default disposition and still leaves nothing behind.
-  2. **Create the directory and set the guard in one simple command**:
-     `run_created=$(/bin/mkdir -- "$run" && printf 1)`. The two are one statement rather
-     than two for a reason that decides the whole finding: bash defers a trapped signal
-     while a foreground command runs and executes the trap only after that command — its
-     assignment included — has completed, so there is no instant at which the trap can
-     observe a created directory with an empty guard. The refusal is then
-     `[ -n "$run_created" ] || <E_RUNTIME>`; `mkdir` has no `-p`, so an existing `.run` is
-     an `EEXIST` that leaves `run_created` empty and the command's status non-zero, refused
-     rather than adopted, and the trap correctly leaves that directory where it found it.
-  3. **Only then create `tmp` and `home` inside `.run`** at mode 0700. A failure of either
-     is `E_RUNTIME`, and by then the trap is armed with the guard set, so it chmods back to
-     0700 and removes `.run` and everything in it on the way out. Pins, compiles, tighten
-     and launch follow in the order above, unchanged.
+  **Install the `EXIT`/`INT`/`TERM`/`HUP` traps before anything creates `.run`.** The
+  removal is inside the `EXIT` trap, guarded by `run_created`, which is unset until the
+  directory is known to be the entry's own, so a trap armed before or during the `mkdir`
+  removes nothing. That guard is not a detail: without it the `EXIT` trap would delete a
+  pre-existing `.run` that the entry refused rather than adopted, which turns a refusal into
+  a destructive act on a directory whose contents the entry does not own. Nothing before
+  the `trap` line has written anything — the output-root validations above are a `stat`, a
+  glob and a `cd -P` — so a signal that lands earlier still finds the default disposition
+  and still leaves nothing behind. Pins, compiles, tighten and launch follow in the order
+  above, unchanged, each with its `checkpoint` after it.
 
-  The deferral rule step 2 rests on is the same rule the no-parent branch above rests on —
-  stated in the bash manual under SIGNALS — and it was measured before being written here
-  rather than assumed. A script that traps `TERM`, runs `f=$(sleep 3 && printf 1)`, and is
-  sent `TERM` one second into the sleep prints `trap sees f=1`: the trap ran after the
-  assignment, with the guard already set, not between the command and the assignment. A
-  companion check on the real command shows the rest: the status is available afterwards,
-  and a `mkdir` onto an existing directory leaves the variable empty and the status
-  non-zero, so the `[ -n "$run_created" ]` refusal and a `$?` test say the same thing. That was
-  measured on `GNU bash, version 3.2.57(1)-release`, the `/bin/bash` a Darwin machine
-  ships; the rule is bash's documented behaviour rather than one version's accident, and
-  the plan re-runs the same two-line check against the Linux CI image's own `/bin/bash`
-  while writing this step, because that is the other `/bin/bash` the entry ever runs
-  under. R10 does not turn any of this into a test case, for the reason its cleanup block
-  gives.
+  The design was measured before being written here rather than assumed, on
+  `GNU bash, version 3.2.57(1)-release`, the `/bin/bash` a Darwin machine ships. A script
+  built exactly as this step describes — recording traps, an `EXIT` trap guarded by
+  `run_created`, a `[ -e ]` pre-check, a creating command whose status is captured, then
+  `checkpoint` — was run in its own process group and sent `TERM` while the creating
+  command was still running, so the command was killed rather than completing:
+
+  ```
+  entry status=143
+  Terminated: 15
+  mkdir-status=143 run-exists=yes
+  run_created=[1] entry_signal=[TERM]
+  entry-signal: TERM no-parent
+  --- output dir contents:
+  (count: 0)
+  ```
+
+  (The status prints first because the script's stderr was redirected to a file the
+  harness reads back after the entry has exited.)
+
+  The directory existed, the producer was dead, the main flow adopted it from the status
+  and the `[ -e ]` pre-check, and the `EXIT` trap removed it — the case the withdrawn
+  command-substitution guard lost. The same script sent a plain `kill` to the entry alone
+  reports `mkdir-status=0` and cleans up identically, which is the deferral rule: the trap
+  did not run until the foreground command completed. A pre-existing `.run` holding a
+  foreign file refuses with `run_created` unset and the file is still there afterwards, and
+  a racing creator — `mkdir` returning status 1 on an existing directory — refuses the same
+  way, so the two destructive mistakes are both closed. What is *not* measured is the one
+  thing that cannot be timed: a `kill -TERM` landing on a real `/bin/mkdir` between the
+  `mkdirat` it makes and its own exit. The stand-in above makes that window reachable; that
+  `/bin/mkdir` itself would report `128 + signal` there is reasoning from bash's documented
+  status rule and from `mkdir` exiting 0 or 1 of its own accord, not a measurement. The
+  plan re-runs the same script against the Linux CI image's own `/bin/bash` while writing
+  this step, because that is the other `/bin/bash` the entry ever runs under. R10 does not
+  turn any of this into a test case, for the reason its cleanup block gives.
 
   Two of the output-root checks above need a mechanism worth naming. Emptiness is a glob,
   not a command:
@@ -1236,8 +1423,8 @@ the range above still blocks review.
   limit paths (`kill(-child, SIGKILL)` at `:491`, then `kill(child, SIGKILL)` at `:492`,
   reaped at `:493-494`). So a `TERM` to the launcher kills the launcher on the default
   disposition and leaves the resolver's whole process group running, orphaned. That is
-  harmless in a test that runs to completion; in the shipped path it means an entry trap
-  that kills only its direct child would delete the run directory — the compiled helper,
+  harmless in a test that runs to completion; in the shipped path it means an entry that
+  killed only its direct child would delete the run directory — the compiled helper,
   the jq copy, the awk copy — from under a live resolver.
 
   So the shipped parent adds handlers for `INT`, `TERM` and `HUP` that send `SIGTERM` to
@@ -1288,8 +1475,8 @@ the range above still blocks review.
   `TERM` or `HUP` delivered in that gap therefore sees `pgid == 0` and `pre_child == 0`,
   takes the nothing-to-kill branch, writes `parent-signal: <NAME> no-runtime` and
   `_exit(128 + signal)` — leaving the child it has just forked running, and, when that
-  child is the resolver, leaving it running while the entry's trap sees the parent gone and
-  removes `.run` from under it. That is the exact failure this requirement exists to
+  child is the resolver, leaving it running while the entry's wait returns on a parent that
+  is gone and its `EXIT` trap removes `.run` from under it. That is the exact failure this requirement exists to
   prevent, reached through a window a few instructions wide.
 
   The window is closed by blocking, because no ordering of statements can close it. Before
@@ -1368,7 +1555,7 @@ the range above still blocks review.
   cases it then writes its one `parent-signal:` line (below) and `_exit(128 + signal)` — in
   that order, killing and reaping before writing anything, for the reason the line's own
   block gives — and that status is the same one the group branch already produced and the
-  same number the entry's trap reports (R1).
+  same number the entry reports (R1).
 
   **The handler never calls `kill(0, …)` or `kill(-0, …)`, and the reason is the whole point
   of the branch.** Both forms signal the caller's own process group, which in the shipped
@@ -2549,7 +2736,7 @@ the range above still blocks review.
      scratch cleanup asserted in the same place.
 
   **A fifth case was considered and is not written, and the reason is said out loud.** The
-  order R1 now fixes arms the trap before the `mkdir` so that a failure of the `tmp` or
+  order R1 now fixes arms the traps before the `mkdir` so that a failure of the `tmp` or
   `home` creation, or a signal landing while `.run` exists and nothing is registered to
   remove it, still cleans up. The case that would prove it directly is one where `.run` is
   created and `tmp` cannot be, and there is no deterministic way to build that from
@@ -2560,11 +2747,16 @@ the range above still blocks review.
   into the microseconds between the two `mkdir` calls, which is a flaky test dressed as a
   deterministic one. A test-only hook inside the entry is the thing this spec refuses
   everywhere else. So the arming order is covered the way R2's mask window is: by reading,
-  with the plan quoting the three statements in order — `trap`, then
-  `run_created=$(/bin/mkdir -- "$run" && printf 1)`, then the two subdirectories — and the
-  reviewer checking that no statement between them can create `.run` without the guard.
+  with the plan quoting the four statements in order — the `trap` lines, then the `[ -e ]`
+  refusal, then `/bin/mkdir -- "$run"` with the guard set from its captured status, then
+  the two subdirectories — and the
+  reviewer checking that no statement between them can create `.run` without the guard,
+  and that no signal trap body does anything but record a name. The status rule is part of
+  what is read: a status above 128 with `.run` present sets the guard, because the producer
+  was killed after it had created the directory (R1).
   What the four cases above still carry is everything downstream of that: case 2 proves
-  the trap is armed and removes a `.run` that holds `tmp` and `home` and no compiled file,
+  the `EXIT` trap is armed and removes a `.run` that holds `tmp` and `home` and no compiled
+  file,
   and the pre-parent signal case below proves a signal arriving with `.run` on disk and no
   parent takes the branch that removes it.
 
@@ -2641,11 +2833,12 @@ the range above still blocks review.
   runs, and the mid-run path is exercised on every platform the test runs on.
 
   **A signal that arrives before the parent exists is tested as its own case, because the
-  trap's other branch is reachable.** The trap is installed ahead of the `mkdir` that
+  entry's other branch is reachable.** The traps are installed ahead of the `mkdir` that
   creates `.run`, and both are ahead of the pin checks and the two compiles (R1), so there
   is a real window in which
-  the entry has a run directory and no parent, and the branch that handles it — chmod,
-  remove, one `entry-signal:` line, exit `128 + signal`, nothing forwarded to anybody —
+  the entry has a run directory and no parent, and the branch that handles it — the trap
+  records the name, the next checkpoint exits `128 + signal`, and the `EXIT` trap chmods,
+  removes and writes one `entry-signal:` line, with nothing forwarded to anybody —
   has no coverage from the mid-run case above. So the test runs the same real resolution in
   the background a second time, with the entry's stderr redirected into a plain file in the
   test's own scratch, polls the output directory for the `.run` entry with a bounded number
@@ -2657,7 +2850,7 @@ the range above still blocks review.
 
   **Four assertions, and the first two are what make it a test of the branch.** One: the
   entry's stderr holds exactly one `entry-signal:` line, and that line is
-  `entry-signal: TERM no-parent` (R1) — the trap saying, in the one process that knows, that
+  `entry-signal: TERM no-parent` (R1) — the entry saying, in the one process that knows, that
   it took the no-parent branch. Two: no `runtime-pgid:` line was written at all, which is the
   separate and stronger statement that the parent never got as far as forking a resolver
   (R2). Three: the exit status is `143`, which is `128 + SIGTERM`. Four: the output directory
@@ -2671,14 +2864,15 @@ the range above still blocks review.
   fails with the landed-too-late message below rather than passing on a side effect.
 
   **The test waits for the entry with a bounded timeout rather than expecting it to exit at
-  once.** The trap is deferred: bash runs it only after the foreground child the entry is
-  currently waiting on completes (R1), and at the moment the signal lands that child may be
+  once.** The signal is deferred: bash runs the recording trap only after the foreground
+  child the entry is currently waiting on completes, and the checkpoint that acts on the
+  recorded name comes after that (R1); at the moment the signal lands that child may be
   a compile. So the timeout has to exceed one compile on a slow machine — the plan measures
   that step and sets the number from the measurement rather than guessing it — and the
   timeout expiring is a failure, not a skip. The test reads the stderr file after the entry
   has exited, which is the one place this case is simpler than the mid-run one: there is
-  nothing to read mid-run here, because the line it asserts is written by the trap on the way
-  out, so no live read, FIFO or `tail -f` is needed.
+  nothing to read mid-run here, because the line it asserts is written by the `EXIT` trap on
+  the way out, so no live read, FIFO or `tail -f` is needed.
 
   The remedy for landing outside the window is unchanged, and it is not the same as the
   mid-run case's, because this failure means the poll was too *late* rather than the fixture
@@ -2757,9 +2951,12 @@ the range above still blocks review.
   branch the handler takes once it runs.
 
   **The same is true of the diagnostics moving after the cleanup, and each of the three
-  cases was checked rather than assumed.** R2's handler and R1's trap now write their
+  cases was checked rather than assumed.** R2's handler and R1's `EXIT` trap write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
-  the assertions above are worth re-reading in that order. The mid-run case does not read
+  the assertions above are worth re-reading in that order. This round's redesign of the
+  entry's signal path — traps that only record, a main flow that acts at checkpoints (R1) —
+  changes none of the three either: it moves where each step is written, not which steps
+  run, in what order, or what any of them leaves observable. The mid-run case does not read
   either line — it reads the `runtime-pgid:` line, which is still written on the normal path
   before the poll loop. That line did move: out of the blocked-signal region, to after the
   mask restore, and onto the same best-effort non-blocking write (R2). The case is
@@ -2769,10 +2966,10 @@ the range above still blocks review.
   assertions are about a dead group, a gone run directory and a status of `143`, all of
   which the new order reaches sooner rather than later. The pre-parent case still finds
   exactly one
-  `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the trap writes
-  that line after the chmod and the removal and still before its `exit`, and the case
+  `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the `EXIT` trap
+  writes that line after the chmod and the removal and still before its `exit`, and the case
   already reads the file only after the entry has exited; the plain file it reads is also
-  why the trap's last-position write cannot hang here at all (R1). The stopped-parent case
+  why that last-position write cannot hang here at all (R1). The stopped-parent case
   still finds `parent-signal: TERM no-runtime`, because that branch kills nothing and
   reaps nothing, so "after the killing" is immediately, and its sentinel assertion is
   about what the handler did not signal rather than about when it wrote. No assertion is
@@ -2980,34 +3177,46 @@ Order, each step checkable before the next:
    `(cd -P … && pwd)` equal to the argument), owned by the current uid, mode exactly 0700
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
    (R1);
-   then install the `EXIT`/`INT`/`TERM`/`HUP` trap **before** anything creates the run
-   directory, its removal guarded by a `run_created` variable that stays empty until the
-   directory is the entry's own; then create the run directory `<output>/.run` at mode
-   0700 and set that guard in one simple command,
-   `run_created=$(/bin/mkdir -- "$run" && printf 1)` — a plain `/bin/mkdir` with no `-p`,
-   so an existing `.run` is an `EEXIST` that leaves the guard empty and is refused rather
-   than adopted, and one statement rather than two because bash cannot run the deferred
-   trap between the `mkdir` and its assignment (R1, measured); then create the 0700 `tmp`
+   then install the `EXIT`/`INT`/`TERM`/`HUP` traps **before** anything creates the run
+   directory, the three signal traps recording the signal's name in `entry_signal` and
+   doing nothing else, and the `EXIT` trap's removal guarded by a `run_created` variable
+   that stays unset until the directory is the entry's own; then refuse a pre-existing
+   `.run` with `[ -e ]`; then create the run directory `<output>/.run` at mode 0700 with a
+   plain `/bin/mkdir -- "$run"`, no `-p`, and set the guard from its captured status in the
+   main flow — set on status 0, set also on a status above 128 with `.run` present, because
+   `/bin/mkdir` exits 0 or 1 of its own accord so anything higher is the shell reporting
+   that the caller's group signal killed it after it had created the directory, and left
+   unset on any other non-zero status, which is `E_RUNTIME` (R1, measured); then create the
+   0700 `tmp`
    and `home` subdirectories inside it for compiler scratch and the compiler's `HOME`,
    a failure of either refusing `E_RUNTIME` into the trap that is by then already armed.
-   That trap
-   removes the whole run directory whenever the guard is set (the trap chmods the directory
+   That `EXIT` trap captures the status it was entered with, then
+   removes the whole run directory whenever the guard is set (chmodding the directory
    back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
-   unlinked; on the three signals it has two branches, chosen on whether a parent pid has
-   been recorded yet. With a parent, it forwards the signal, waits for the parent to exit,
-   removes nothing until that wait returns because the parent is what terminates the
-   resolver's process group, and exits with the parent's status; without one, no group exists
-   and there is nothing to forward to, so it removes the run directory — or nothing at all,
-   if the guard is still empty — and exits
-   `128 + signal`. Each branch `printf`s one line to the entry's own stderr naming the
-   branch it is in — `entry-signal: <NAME> forwarded <pid>` or
-   `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — as its
-   **last** step before that exit, after the forward and after the removal, because bash's
+   unlinked), then writes one line to the entry's own stderr when `entry_signal` is set,
+   then exits with `entry_status` if the main flow recorded one, else `128 + signal` if a
+   signal was recorded, else the captured status. The main flow is what acts on a recorded
+   signal, at
+   a `checkpoint` — `[ -z "$entry_signal" ] || exit` — placed after the `mkdir`, after each
+   pin check, after each compile, after the copies and immediately before the launch, and
+   again around the wait on the parent. The two branches are `parent_pid` empty or not.
+   With a parent, the first `wait` returns on the trap with `128 + signal` of its own, the
+   entry forwards the same signal with `kill -"$entry_signal"`, waits a second time for the
+   parent's real status, records it in `entry_status` and only then exits, so nothing is
+   removed until that second wait
+   returns because the parent is what terminates the
+   resolver's process group; without one, no group exists
+   and there is nothing to forward to, so the checkpoint exits
+   `128 + signal` and the `EXIT` trap removes the run directory — or nothing at all,
+   if the guard is still unset. The line the `EXIT` trap writes names the branch —
+   `entry-signal: <NAME> forwarded <pid>` or
+   `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — and it is
+   the **last** step before the final exit, after the forward and after the removal, because bash's
    `printf` to a blocked pipe can hang and a diagnostic must not be able to delay the
    cleanup or the forward (R1). No child of the entry's own is alive to race that removal because
    bash defers a trapped signal until the foreground command it is waiting on finishes,
-   which also means the branch can run up to one compile late — R1, R2);
+   which also means the checkpoint can be reached up to one compile late — R1, R2;
    **then the pin check** — verify the jq passed as an argument
    against this
    platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify the blob
@@ -3170,10 +3379,10 @@ intent says for this change. Only after the operator's merge does
   path is exercised on every run, and it takes that group from the parent's own
   `runtime-pgid` line rather than from the process table, so it cannot freeze some digest
   tool's group and read the result as success; a run that finishes before the freeze lands
-  fails the test rather than passing on a weaker claim. The second test drives the trap's
+  fails the test rather than passing on a weaker claim. The second test drives the entry's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
-  appears, and it asserts that branch by the `entry-signal: TERM no-parent` line the trap
+  appears, and it asserts that branch by the `entry-signal: TERM no-parent` line the entry
   writes rather than by an empty output directory, which cannot tell that branch from a
   parent that had only just started. The third covers the window between those two, which is
   the one this round found open: a parent that is alive and has not yet forked the resolver,
@@ -3185,7 +3394,8 @@ intent says for this change. Only after the operator's merge does
   `waitpid`, on a second signal during termination, on an already-reaped child, on a
   group whose members are stopped when the handler fires, and on a signal that reaches the
   entry while a compile is still running and no parent pid has been recorded — where bash
-  defers the trap until that compile finishes (R1), which is what keeps the removal off a
+  defers the signal until that compile finishes and the entry's next checkpoint is what
+  acts on it (R1), which is what keeps the removal off a
   live child and what the test's wait timeout has to be wide enough to absorb. The pre-fork
   window inside the parent is no longer one of the plan's open questions: R2 states the two
   `volatile sig_atomic_t` variables, the three branches and the prohibition on
@@ -3207,14 +3417,30 @@ intent says for this change. Only after the operator's merge does
   the very path that exists to guarantee cleanup (R1, R2). The plan should treat "the
   diagnostic never delays termination" as a rule of this component rather than a detail: the
   handler's line goes out with one non-blocking `write(2)` whose failure is ignored, and the
-  trap's `printf` is the last statement before its `exit`.
+  entry's `printf` is the last statement of its `EXIT` trap, before that trap's own `exit`.
+
+  One more thing about the entry's side belongs here, because it is this round's change and
+  it is a withdrawal rather than an addition. The entry's `INT`/`TERM`/`HUP` traps no longer
+  do anything but record the signal's name; the forward, the cleanup, the diagnostic and
+  the exit all happen in the main flow and in the `EXIT` trap (R1). The design that was
+  withdrawn armed the cleanup from a command substitution —
+  `run_created=$(/bin/mkdir -- "$run" && printf 1)` — and a signal to the whole foreground
+  process group can kill that substitution's child after `mkdir` has created `.run` and
+  before `printf` writes the `1`, which left the guard empty and the directory on disk: the
+  exact leak the guard existed to prevent. Nothing observable changed with the redesign —
+  same exit statuses, same removal, same one line last — which is what makes it safe to
+  make at spec stage, and the plan should treat "no trap body does anything but record"
+  as a rule of the entry rather than a style preference.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
   the leftovers slightly annoying to delete by hand. What the trap does now
   cover, which an earlier round of this spec left open, is the moment `.run` comes into
-  existence: the trap is installed before the `mkdir` rather than with it, and the `mkdir`
-  and the guard that arms the removal are one command, so there is no ordering in which a
+  existence: the traps are installed before the `mkdir` rather than with it, the entry
+  refuses a pre-existing `.run` before it creates anything, and the guard that arms the
+  removal is set in the main flow from the `mkdir`'s own status — including a status above
+  128, which means the caller's group signal killed `mkdir` after it had created the
+  directory. So there is no ordering in which a
   failed `tmp` or `home` creation, or a signal arriving just after `.run` appears, finds
   the directory on disk and nothing registered to remove it (R1). `SIGKILL` on the entry cannot be
   forwarded either, so in that case the parent keeps running and its own handlers never
@@ -3335,7 +3561,14 @@ intent says for this change. Only after the operator's merge does
   `git hash-object` (R1); and the run directory is the fixed
   `<output>/.run` inside the caller's output directory, where the test script and
   `shadow/v1/reproduce.sh:94-142` both use `mktemp -d` under the caller's `TMPDIR`, which
-  would be a second write root (R1, R7). Three are older: the pin checks,
+  would be a second write root (R1, R7) — and that item grows this round rather than a
+  ninth being added, because the run directory's whole lifecycle is one deviation from the
+  same lines: `reproduce.sh` cleans up inside its `EXIT`/`HUP`/`INT`/`TERM` trap bodies,
+  where the entry's three signal traps only record the signal's name, its `EXIT` trap does
+  the cleanup under a `run_created` guard, and the main flow does the forwarding and the
+  leaving at `checkpoint` calls, with the guard set from `/bin/mkdir`'s own status behind
+  an `[ -e ]` refusal rather than from a command substitution a group signal can kill
+  mid-way (R1). Three are older: the pin checks,
   both compiles and the parent launch run under `/usr/bin/env -i` with a named variable
   list, where the test and `reproduce.sh` run all of it under whatever the caller had; the
   output root is validated — real directory, caller-owned, mode 0700, empty — before
