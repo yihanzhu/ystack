@@ -18,10 +18,10 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1985-2685 changed lines** (implementation). The derivation,
+**Evidence-based range: 2036-2754 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
-- **C parent ~1050 lines** = ~605 copied verbatim + ~445 new. The test launcher is 702
+- **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
   copies is nearly all of it. Block by block: the includes, platform shims and the four
   limit constants, lines 1-43 (43 lines); the eight small helpers `set_limit` through
@@ -48,7 +48,9 @@ measured rather than guessed:
   against the run directory the parent was handed, R5), the regular-non-symlink check on
   the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
-  (~45), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and a
+  (~70 — the group sequence itself is ~45, and the two `volatile sig_atomic_t` variables,
+  the `pre_child` branch, the zero-`pgid` guard and the one `parent-signal:` line each
+  branch writes are ~25 more), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and a
   `write_all` (~5, R2), closing inherited descriptors above 2 (~15), the fd-relative
   creation of the four
   sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
@@ -60,17 +62,19 @@ measured rather than guessed:
   `open`/`close` bookkeeping goes away, R5), the git blob id computed rather than asked
   for (~20 — the `blob <size>\0` header built from its own `fstat`, the pipe into the
   platform's SHA-1 tool, and the hex compare, R1), and the usage
-  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~440
+  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~470
   is how the parent computes digests: delegating to the platform's SHA-256 and SHA-1 tools
   at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
-  plan decides that, and it is the one thing that could push the C file past ~1160. The
+  plan decides that, and it is the one thing that could push the C file past ~1185. The
   round before this one moved this figure by the ~35 just named — the supervisor's reads
   moving onto the
   descriptors it already holds, and the blob id being computed in C rather than delegated
   to `git hash-object`. The round before it moved nothing here, and the one before that
-  added the ~20 for the fd-relative creation. The round before this one added the ~5 for the
-  `runtime-pgid` line and nothing else, and this round adds nothing here at all.
+  added the ~20 for the fd-relative creation. The round before that added the ~5 for the
+  `runtime-pgid` line and nothing else, the round before this one added nothing here at all,
+  and this round adds the ~25 just named in the handler bullet above: the two
+  `sig_atomic_t` variables, the `pre_child` branch and the `parent-signal:` line (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -103,8 +107,10 @@ measured rather than guessed:
   trap's second branch — the parent-pid variable it tests, and the chmod, remove and
   `128 + signal` exit for a signal that arrives while `.run` exists and no parent does
   (R1). This round adds ~5 more, to **~380**: the one `printf` line each trap branch writes
-  to the entry's own stderr, with the signal name and the branch word it carries (R1).
-- **Focused test ~845 lines.** For scale, the existing resolution test is 746 lines and
+  to the entry's own stderr, with the signal name and the branch word it carries (R1). This
+  round adds nothing here at all: the entry's forwarded branch is unchanged, and the new
+  handling is all on the parent's side of it (R2).
+- **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -123,10 +129,13 @@ measured rather than guessed:
   directory tree rather than naming a long path), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
-  two signal cases — the mid-run one with its live read of the entry's stderr for the
-  parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), and the
+  three signal cases — the mid-run one with its live read of the entry's stderr for the
+  parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), the
   pre-parent one that signals as soon as `.run` appears and asserts the trap's own
-  `entry-signal:` line, with a bounded wait for the deferred trap (~30) — the cleanup assertions
+  `entry-signal:` line, with a bounded wait for the deferred trap (~30), and the
+  stopped-parent one that drives the parent directly, sends `STOP`/`TERM`/`CONT`, asserts
+  the `parent-signal: TERM no-runtime` line and a surviving sentinel in the test's own
+  process group, and retries a bounded twenty times (~35) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
   directory rather than one emptiness test), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
@@ -140,10 +149,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2335 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 nine rounds ago, then 1560-2120, then 1580-2130, then
+Those sum to about 2395 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 ten rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
-1972-2668, and the
+1972-2668, then 1985-2685, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -217,7 +226,8 @@ a line in a file rather than on a process, and the fallback goes away), the Darw
 command-word grep becoming three documented sweeps with a `compgen -b`/`compgen -k`
 exclusion set derived at run time (~10). Nothing was made cheaper to compensate.
 
-This round adds ~15, in the entry and the test only. ~5 in the entry: the one `printf` line
+The round before this one added ~15, in the entry and the test only. ~5 in the entry: the
+one `printf` line
 each trap branch writes to the entry's own stderr, naming the signal and the branch (R1).
 ~10 in the test: the pre-parent signal case redirecting the entry's stderr to a file,
 asserting exactly one `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, and
@@ -227,6 +237,21 @@ other change — correcting why the no-parent branch cannot race a live compiler
 foreground-group signalling to bash's deferral of a trapped signal — costs no
 implementation lines, because the entry it describes already ran every pre-parent child in
 the foreground. What it does add is a stated requirement that it keep doing so.
+
+This round adds ~60, in the parent and the test, and all of it comes from the second of its
+two findings. ~25 in the parent: the signal handler's two `volatile sig_atomic_t`
+variables, the assignment of each at the right moment, the `pre_child` branch with its own
+`SIGTERM`-then-`SIGKILL` and reap, the guard that keeps a zero `pgid` away from
+`kill(-pgid, …)`, and the one `parent-signal:` line each branch writes with the copied
+`write_all` (R2). ~35 in the test: the third signal case, which builds a run directory the
+group-2 way, starts the parent and stops it immediately, sends `TERM` then `CONT`, starts a
+sentinel process in its own group and asserts it survives, distinguishes the two
+non-proving outcomes by their own messages, and retries a bounded twenty times (R10).
+Nothing moved in the entry, whose forwarded branch is unchanged. The first finding — the
+Darwin write residual narrowing to the runtime's own `git` under DR-2 — costs no
+implementation lines at all: it changes what this spec claims and what the Darwin operator
+run measures, not what any shipped file does, which is the whole reason it is a residual
+rather than a fix. Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -243,7 +268,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 2636 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 2933 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -261,13 +286,16 @@ the `xcrun` shim out of the shipped path — no `git`, and the CommandLineTools 
 place of `/usr/bin/cc` — the trap's branch for a signal that arrives before
 any parent exists, the resolver's process group reported by the parent rather than inferred
 from the process table, the Darwin cache assertion that no longer skips the case it exists
-to catch, a command-word grep with a mechanism a test can actually be written from, and
-this round that pre-parent trap branch made observable on the entry's own stderr so its
+to catch, a command-word grep with a mechanism a test can actually be written from, that
+pre-parent trap branch made observable on the entry's own stderr so its
 test asserts the branch instead of an empty directory, with the deferral rule that keeps
-its removal off a live child stated correctly for the first time).
-**Evidence-based range: 2241-3031 lines** — the measured 2636 lines plus or minus 15%. It was
-553 lines and 470-636 ten rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
-then 1764, then 1955, then 2245, then 2512;
+its removal off a live child stated correctly for the first time, and this round the
+Darwin write claim narrowed to the one residual that belongs to the unchanged runtime's
+own `git`, with DR-2 pending on it, beside the parent's signal handler specified for the
+window before a runtime process group exists).
+**Evidence-based range: 2493-3373 lines** — the measured 2933 lines plus or minus 15%. It was
+553 lines and 470-636 eleven rounds ago, then 783, then 847, then 1012, then 1202, then
+1503, then 1764, then 1955, then 2245, then 2512, then 2636;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -392,7 +420,8 @@ the cheapest to fix: R7's opening sentence still promised a named Darwin residua
 that the round before it had removed from the rest of the requirement, and the fix was to
 delete the promise.
 
-This round is +124 net over one P2, and it is a correction to the round just described
+The round before this one was +124 net over one P2, and it was a correction to the round
+just described
 rather than new ground: the pre-parent signal case that round added does not actually prove
 the branch it names. About 35 go to the mechanism — R1's no-parent bullet losing the claim
 that a compiler child "was signalled too" because the caller's signal reached the whole
@@ -411,6 +440,36 @@ side effect, the plain statement that an empty output directory cannot tell "no 
 from "parent just started", and the bounded wait the deferred trap forces on the test. The
 remaining ~20 are ripples: the signals concern under Areas of concern, and the re-derived
 size figures here and for the implementation.
+
+This round is +297 net over one P1 and one P2, and the two are unrelated except in
+being places where an earlier round claimed more than it had. About 90 go to the Darwin
+write residual: R7's claim narrowed to name exactly what it covers — everything this
+initiative adds, on both platforms, and the unchanged runtime on Linux — its Darwin
+paragraph rewritten around the runtime's own `/usr/bin/git`
+(`scripts/lib/profile-resolution.sh:313-323` and `:711-714`) reaching the `xcrun` shim
+where the parent cannot redirect it, the deviation from
+`work/resolver-trusted-parent/intent.md:36` stated plainly with DR-2 named as pending and
+its two refused-case alternatives given a sentence each, R1's "what this buys" paragraph
+losing the word "unconditionally", and a new Areas-of-concern bullet for the residual
+itself. About 45 go to R10's Darwin measurement, which stops asserting an unchanged
+`xcrun_db` across a run that launches the runtime and becomes an operator recipe instead —
+two before-and-after records, one permitted difference, any other new or modified file a
+failure — with the strong unchanged-cache assertion moving to the half that compiles with
+no runtime behind it, and with the plain statement that a primed cache may show no write,
+which is why the claim is narrowed rather than reported clean. About 85 go to the parent's
+handler before a runtime group exists: R2's new block with its two `volatile sig_atomic_t`
+variables, its three branches, its refusal to ever call `kill(0, …)` or `kill(-0, …)` and
+why, its `parent-signal:` line reconciled against the same four conventions the
+`runtime-pgid:` line was, and the entry-side consequence; plus Design step 1's handler
+clause carrying the same variables and branches. About 55 go to R10's third signal case —
+the stop-immediately sequence, the sentinel in the test's own group, the two outcomes that
+are failures rather than passes, and the bounded twenty attempts with the honest reason the
+retry exists. The remaining ~25 are ripples: the signals concern under Areas of concern
+going from two tests to three, the platform-matrix concern handing the Darwin question to
+the new residual bullet, R9's documentation line naming the second stderr form, the
+Copy-versus-adapt handler item growing rather than a tenth deviation being added, eight
+sentences that said "the shipped path" where they meant "either shipped file", and the
+re-derived size figures here and for the implementation.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -656,8 +715,8 @@ the range above still blocks review.
   `resolver/v1/trusted-launch.c` and compares them against blob ids pinned as constants in
   the entry, the way the runtime pins its own dependencies
   (`scripts/lib/profile-resolution.sh:7-10,711-717`). It computes them rather than running
-  `git hash-object`, for a reason the Darwin toolchain paragraphs below set out: no `git`
-  runs in the shipped path at all. In the same pass it pins the whole
+  `git hash-object`, for a reason the Darwin toolchain paragraphs below set out: neither
+  shipped file runs `git` at all. In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
   library it sources, the resolver jq program, and the five jq modules the core contract
   imports. Pinning the whole set is the entry's job alone; the parent later re-checks only
@@ -759,7 +818,7 @@ the range above still blocks review.
   accepts it, because it keeps most intermediates off disk altogether; it is not required
   and the entry must work without it.
 
-  **The blob id is computed, not asked for, so no `git` runs in the shipped path.** A git
+  **The blob id is computed, not asked for, so neither shipped file runs `git`.** A git
   blob id is a SHA-1 over a short header and the file bytes — `blob <size>\0`, then the
   content — and nothing about it needs git to be installed. So both shipped files compute
   it. The size comes from the platform's `stat` format in the entry (`-c '%s'` on Linux,
@@ -904,16 +963,18 @@ the range above still blocks review.
   put the shim back in the path, and with it the write R7 no longer admits. This is a new
   refusal reason on Darwin and a new documented prerequisite (R9).
 
-  **What this buys: the one-write-root claim holds on both platforms, with nothing
-  appended.** Taking the shim out of the compile is only half of it, because `/usr/bin/git`
-  is that same single inode — ten `git hash-object` pin checks would have reached the same
-  cache the compiles used to. That is why the blob ids are computed instead (above), and
-  why no `git` runs in the shipped path at all. With the shim gone from both jobs R7 states
-  its claim unconditionally rather than carrying a Darwin residual. Linux CI still cannot
-  exercise any of this: the Darwin compile line, the refusal when the tools are absent, and
-  the untouched cache are confirmed only when someone runs the focused test on a Darwin
-  machine. R10 asserts the untouched cache there, and the platform note and the plan both
-  say the other two are operator-confirmed.
+  **What this buys: the one-write-root claim holds for everything this initiative adds, on
+  both platforms.** Taking the shim out of the compile is only half of it, because
+  `/usr/bin/git` is that same single inode — ten `git hash-object` pin checks would have
+  reached the same cache the compiles used to. That is why the blob ids are computed
+  instead (above), and why neither the entry nor the parent runs `git` at all. What it does
+  not buy is the runtime: the runtime runs `/usr/bin/git` for itself, this spec leaves the
+  runtime unchanged, and on Darwin that is the one write outside the caller's output path
+  that remains. R7 states that residual in full and DR-2 asks the operator to accept it.
+  Linux CI still cannot exercise any of this: the Darwin compile line, the refusal when the
+  tools are absent, and the cache measurement are confirmed only when someone runs the
+  focused test on a Darwin machine. R10 gives the operator the recipe for that measurement,
+  and the platform note and the plan both say the other two are operator-confirmed.
 
   The entry then copies in the bound jq and the platform's awk, and then — only after both
   compiles have finished — empties and removes the `tmp` and `home` subdirectories and
@@ -983,6 +1044,87 @@ the range above still blocks review.
   that knows the group id. The entry's part is to forward the
   signal and wait (R1); it never terminates the group itself and never removes the run
   directory before the parent has exited.
+
+  **The handler has to work before any runtime process group exists, and that window is
+  most of the parent's life.** The entry records the parent's pid the instant it starts the
+  parent and forwards from that moment on (R1), but the parent does not fork the resolver
+  first: it runs its own pre-resolver work ahead of the `fork` — the blob-id pins for the
+  three files of the parent-pinned subset, the jq SHA-256 digest and the `jq-1.6`
+  `--version` probe (R5, R7) — and every R5 refusal happens in that same stretch. So a
+  forwarded `TERM` can reach a parent that has no child process group at all. Written as
+  `kill(-pgid, SIGTERM)` with nothing guarding it, that handler would signal whatever
+  `-pgid` happened to name, and with `pgid` unset or zero that is not the resolver: it is
+  the caller's own process group. The requirement is therefore stated as two variables and
+  three branches rather than left to the plan.
+
+  - `pgid` is a `volatile sig_atomic_t` initialised to `0` and assigned immediately after
+    the `fork` (`portable-profile-resolution-launcher.c:432`) and the parent-side
+    `setpgid(child, child)` (`:450`), and before the `runtime-pgid:` line below — so the
+    line and the variable become true together, and a reader who has seen the line knows the
+    handler will take the group branch.
+  - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
+    child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
+    jq `--version` probe. It is set immediately after that child's `fork` and before the
+    `waitpid` on it, and cleared back to `0` once the `waitpid` returns, so at most one pid
+    is ever live in it and it is `0` whenever no pre-resolver child exists.
+
+  The handler then chooses on those two, in this order. If `pgid != 0`, it runs the group
+  sequence exactly as above: `kill(-pgid, SIGTERM)`, a brief wait, `kill(-pgid, SIGKILL)`,
+  reap. Else if `pre_child != 0`, it signals that **one** pid and no group —
+  `kill(pre_child, SIGTERM)`, a brief wait, `kill(pre_child, SIGKILL)`, reap — because a
+  digest tool or a `jq --version` is a single short-lived process with no group of its own
+  worth naming. Else there is nothing to kill, and the handler kills nothing. In all three
+  cases it then `_exit(128 + signal)`, which is the same status the group branch already
+  produced and the same number the entry's trap reports (R1).
+
+  **The handler never calls `kill(0, …)` or `kill(-0, …)`, and the reason is the whole point
+  of the branch.** Both forms signal the caller's own process group, which in the shipped
+  path is the operator's shell or the loop that invoked the entry, and in R10 is the test
+  itself — so an implementation that let a zero `pgid` fall through to `kill(-pgid, …)`
+  would, at best, kill the test that was checking it and, at worst, take down the caller's
+  session. There is no case in this requirement where signalling the parent's own group is
+  the right thing to do. The handlers are installed as the **first statements of `main`**,
+  before any pin work, any digest and any argument checking, so the window in which a
+  signal still finds the default disposition is as small as a process start rather than as
+  long as a pin pass; R10 says what the test does about that window and why it cannot be
+  narrowed further for a test's benefit.
+
+  **The handler says which branch it took, on the parent's own stderr, mirroring the entry's
+  `entry-signal:` line.** Before it kills anything, the handler writes exactly one line with
+  the copied `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) —
+  not a buffered `fprintf`, for the same reason the `runtime-pgid:` line below is not one:
+
+  ```
+  parent-signal: <NAME> group <pgid>
+  parent-signal: <NAME> no-runtime
+  ```
+
+  `<NAME>` is `INT`, `TERM` or `HUP` — the name, not the number, exactly as the entry's line
+  carries it. The group form is written when `pgid != 0` and names the group it is about to
+  terminate; the `no-runtime` form is written in both of the other two branches, because
+  what a reader needs to know is that no resolver group existed, not which pre-resolver tool
+  happened to be running. Four conventions were checked against it, the way the
+  `runtime-pgid:` line was. The copied `sanitized_error` (`:118-165`) validates the *child's*
+  captured `child.stderr` bytes and never reads what the parent wrote to its own stderr, so
+  this line sits outside it. R10's group-2 refusal cases still see exactly one `E_*` line and
+  nothing else on the parent's stderr: every R5 refusal happens before the `fork`, and this
+  line is written only when a signal actually fires, which no refusal case does. R6's
+  byte-identical claim is about stdout, where this line does not appear. And R10's
+  command-word allowlist is untouched, because `write_all` is C and starts no process. On
+  the pass-through side it is the same distinction the entry's line already relies on: this
+  is the parent's own line on the parent's own stderr, not a byte added to or removed from
+  anything a child wrote, and the entry relays it unchanged like every other `E_*` line
+  (R1).
+
+  **The entry side does not change, and the two lines compose.** The entry's forwarded
+  branch is exactly as R1 states it: write `entry-signal: <NAME> forwarded <pid>`, forward
+  the signal, wait for the parent, remove the run directory after that wait returns, exit
+  with the parent's status. What this block adds is that a forward landing in the pre-fork
+  window now ends cleanly rather than ambiguously: the parent writes
+  `parent-signal: TERM no-runtime`, kills at most its own one pre-resolver child, and exits
+  `143`, so the entry's wait returns that status and the caller sees the entry's
+  `entry-signal: TERM forwarded <pid>` line beside the parent's `no-runtime` line and an
+  exit of `143`. Nothing is left running and no group anywhere was signalled.
 
   **The parent names the resolver's process group on stderr, so nothing downstream has to
   guess which child is which.** The parent runs children before the resolver — the
@@ -1232,7 +1374,7 @@ the range above still blocks review.
   that each one exists and is not a symlink. So the residual is exact: bypass the entry
   and the modules are unpinned. R10 states it in those terms rather than implying the
   parent covers the set. The focused test asserts every pinned constant equals the working
-  tree's `git hash-object` output — the test may run git, the shipped path may not (R1) —
+  tree's `git hash-object` output — the test may run git, the shipped files may not (R1) —
   so an edit that forgets a pin fails CI rather than
   shipping.
 
@@ -1326,9 +1468,12 @@ the range above still blocks review.
   the test launcher has no counterpart for (R2), so a `cmp` of the two stderrs would fail on
   a line that carries no profile bytes.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
-  credential, and **exactly one write root: the output path the caller named** — on every
-  supported platform, with no residual and nothing appended for any of them. That is
-  what the intent asks for — "no writes outside the caller's own output"
+  credential, and **exactly one write root: the output path the caller named** — for
+  everything this initiative adds, on every supported platform, and for the unchanged
+  runtime on Linux, where R10 asserts it mechanically in CI. On Darwin the runtime's own
+  `git` calls leave one known write outside that root; the Darwin paragraph below states it
+  exactly and DR-2 is the decision request that asks the operator to accept it. The one
+  root is what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
   root. Inside the one root there are two write areas, named exactly:
@@ -1365,7 +1510,9 @@ the range above still blocks review.
   `.run` sitting beside its `HOME` and `TMPDIR` tells it nothing it was not already told.
   What stops it writing there is the 0500 modes, and those are unchanged.
 
-  Nothing outside the caller's output path is written. Not the caller's `TMPDIR`, which the
+  Nothing this initiative adds writes outside the caller's output path — not the entry, not
+  the compiler it runs, not the parent, not the compiled helper, not the jq and awk copies.
+  Not the caller's `TMPDIR`, which the
   shipped path no longer uses as a write location at all: the run directory moved inside
   the output root for exactly that reason, and the compile line sets the compiler's own
   `TMPDIR` inward for the same one. Not the caller's home directory, which that same line
@@ -1374,24 +1521,50 @@ the range above still blocks review.
   working tree, not a cache, not a
   dotfile, not a temporary file anywhere else on the filesystem.
 
-  **No exception on Darwin either, and an earlier round of this spec was wrong to allow
-  one.** That round admitted a residual: `/usr/bin/cc` and `/usr/bin/git` on Darwin are one
-  and the same `xcrun` shim, and the shim writes a tool-lookup cache — a single `xcrun_db`
-  file in the per-user temp directory the platform reports, not in the `TMPDIR` the compile
-  line sets. The cache is real and R1 carries the measurements. What was wrong was the
-  conclusion, because the intent forbids exactly this write
-  (`work/resolver-trusted-parent/intent.md:36` — no writes outside the caller's own
-  output), and a component that writes outside it does not satisfy G1 by explaining itself
-  in a paragraph. So the shim came out of the path instead of the claim being narrowed: on
-  Darwin the compiler is the CommandLineTools clang invoked directly, which execs its own
-  linker and never the shim, and the git blob ids are computed from a size and the
-  platform's SHA-1 tool so that no `git` runs at all (R1, both measured). The claim
-  therefore stands as written, on both platforms, with nothing appended to it: no shim is
-  invoked anywhere in the shipped path, so no cache write happens and there is nothing to
-  exempt, and the shipped
-  path writes nothing outside the caller's output path. Linux CI is still where R10 asserts
-  it mechanically, and the Darwin run is still operator-run; what the operator confirms
-  there is now the claim itself rather than an exception to it.
+  **On Darwin one write outside that root remains, and it belongs to the unchanged runtime
+  rather than to anything this initiative adds.** Part of this was already settled and
+  stands. `/usr/bin/cc` and `/usr/bin/git` on Darwin are one and the same `xcrun` shim, and
+  the shim writes a tool-lookup cache — a single `xcrun_db` file in the per-user temp
+  directory the platform reports, not in the `TMPDIR` the compile line sets. An earlier
+  round admitted that as a residual of the *entry*, and the round after it removed the
+  cause instead of narrowing the claim: on Darwin the compiler is the CommandLineTools
+  clang invoked directly, which execs its own linker and never the shim, and the blob ids
+  are computed from a size and the platform's SHA-1 tool so that neither the entry nor the
+  parent runs `git` at all (R1, both measured). All of that is still true.
+
+  What that round missed is the one process in the picture it does not get to write.
+  **The resolver runtime runs `/usr/bin/git` itself**, and this spec does not change the
+  runtime — that is a constraint of the intent rather than a choice it made
+  (`work/resolver-trusted-parent/intent.md:32-33`, "the resolver runtime and its rules do
+  not change. This adds the missing parent, not a new resolver behaviour"). The runtime
+  runs it for every repository read, under the hardened wrapper that execs
+  `/usr/bin/git --git-dir=…` (`scripts/lib/profile-resolution.sh:313-323`), and again for
+  the four blob pins it checks for itself at load time (`:711-714`) — the same reads the
+  read list below already attributes to the library. On Darwin every one of those calls is
+  the shim, and the shim can write `xcrun_db` in the per-user temp directory. The parent
+  builds the runtime's environment from empty and controls every variable in it (R3), so it
+  can point the runtime's `HOME` and `TMPDIR` wherever it likes — but the cache is not in
+  `TMPDIR`, which is exactly what R1's measurement establishes, so no environment the
+  parent can hand the runtime prevents a fixed-path shim from writing its own cache.
+  Nothing short of changing the runtime's git path closes it, and changing the runtime is
+  the one thing this initiative may not do.
+
+  So the claim is narrowed, and the narrowing is exact rather than a hedge. For everything
+  this initiative adds — the entry, the compiler it runs, the compiled parent, the compiled
+  helper, and the jq and awk copies — the single write root holds on both platforms, and
+  for the runtime it holds on Linux, where R10 asserts it mechanically in CI. On Darwin the
+  one known write outside the caller's output path is the shim's `xcrun_db` under the
+  per-user temp directory, attributable to the runtime's own `git`. That is the whole of the
+  residual: one file, mode 0600, in a per-user directory, written by a process this spec
+  leaves alone. It is a deviation from `work/resolver-trusted-parent/intent.md:36`, and
+  **DR-2 is the decision request that asks the operator to accept it — pending as this spec
+  is written** (posted on intake `#271`). The Darwin operator run measures exactly this and
+  nothing wider (R10). If DR-2 is refused the spec is rewritten rather than patched, and the
+  two alternatives are one sentence each: widen E to move the runtime off `/usr/bin/git` on
+  Darwin, which touches the pinned runtime and every blob pin that names it and so opens a
+  new risk surface in the middle of a high-risk initiative; or drop the Darwin claim
+  altogether, which makes the shipped path Linux-only and costs two of the three platforms
+  in the matrix.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -1500,12 +1673,16 @@ the range above still blocks review.
        explicit `-isysroot` and refuses when the Command Line Tools are absent; Linux keeps
        `/usr/bin/cc`, where it is a real compiler (R1). This is a named deviation from the
        test.
-     - **No `git`, anywhere in the shipped path.** The pin checks compute the git blob id
+     - **No `git` in either shipped file.** The pin checks compute the git blob id
        themselves — `blob <size>\0` plus the file bytes, through the platform's SHA-1 tool
        — rather than running `git hash-object` (R1). On Darwin `/usr/bin/git` is the same
-       shim inode as `/usr/bin/cc`, so keeping it would have kept the cache write this
-       requirement's claim no longer admits; on Linux it is a large dependency for nine
-       bytes of header and a hash. The focused test still runs git, to assert the computed
+       shim inode as `/usr/bin/cc`, so keeping it would have added ten shim invocations and
+       a cache write of this initiative's own on top of the one the runtime already makes;
+       on Linux it is a large dependency for nine
+       bytes of header and a hash. The runtime still runs `/usr/bin/git` for itself, which
+       is where the Darwin residual above comes from; what this deviation removes is the
+       entry's and the parent's own use of it. The focused test still runs git, to assert
+       the computed
        ids match `git hash-object` (R10). This is a named deviation from both the test
        script and `shadow/v1/reproduce.sh`.
      - **The SHA-256 tool is chosen per platform, at a fixed path, and never searched
@@ -1630,7 +1807,10 @@ the range above still blocks review.
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
   `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). It also states that a
-  successful launch prints one informational `runtime-pgid: <n>` line on stderr (R2), so
+  successful launch prints one informational `runtime-pgid: <n>` line on stderr, and that an
+  interrupted one prints one `parent-signal: <NAME> group <pgid>` or
+  `parent-signal: <NAME> no-runtime` line beside the entry's own `entry-signal:` line (R2),
+  so
   output on stderr is not by itself a failure signal — the exit status is the result. Both new
   files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
   resolver spec itself is not edited.
@@ -1903,27 +2083,42 @@ the range above still blocks review.
      both exit 0, their stdouts are byte-identical, the marker string appears in neither
      run's output, and the watched `TMPDIR` and `HOME` are untouched afterwards — which is
      the same fact R7's one-write-root claim makes about the compile step, asserted here
-     rather than stated. **On Darwin the case asserts one thing more, and it is an
-     assertion now rather than a note.** An earlier round of this spec had it carry a
-     caveat: the `xcrun` shim's lookup cache is not in the `TMPDIR` the test watches but in
-     the platform's per-user temp directory, so the watched directories could come back
-     clean while a write had happened elsewhere. The shipped path no longer runs the shim
-     (R1), which turns that caveat into something checkable — so on Darwin the test asserts
-     that the state of `xcrun_db` in the per-user temp directory (the directory
-     `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports) is the same after the run as before
-     it, and does the same around the pin checks, which no longer run `git` either.
-     **Absent is a state, not a reason to skip**, and an earlier round of this spec had that
-     backwards: it skipped the assertion when the file did not exist, which is exactly the
-     case where something creating it would be the write this spec no longer admits — a skip
-     there turns the strongest evidence available into no evidence at all. So the test reads
-     one of two states before the run: the file is absent, or it is present with a size, an
-     mtime and a SHA-1 of its bytes. It then requires the same state afterwards — absent
-     stays absent, and present stays byte-identical in all three values. Either starting
-     state passes; a transition in either direction fails, and so does any change to a file
-     that was already there. There is no skip on Darwin. The assertion is Darwin-only
-     because Linux has no such file and no shim that would write one, and there the general
-     one-write-root claim covers it; Darwin now proves the specific write that used to be
-     excused. What this
+     rather than stated. **On Darwin the case measures one thing more, and it measures
+     exactly the narrowed claim rather than a wider one.** The narrowing is R7's: everything
+     this initiative adds writes only inside the output path, while the unchanged runtime's
+     own `/usr/bin/git` is the Darwin `xcrun` shim and can write its `xcrun_db` cache in the
+     per-user temp directory, which is the residual DR-2 asks the operator to accept. An
+     earlier round of this spec asserted that `xcrun_db` came back *unchanged* across a full
+     entry run, and that assertion is wrong for this half, because this half runs a real
+     resolution and the runtime behind it runs git. So the recipe is a difference, not an
+     equality, and it is written out here because the operator runs it by hand:
+
+     - Before the run, record two things in the per-user temp directory — the directory
+       `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports: the state of `xcrun_db` itself,
+       which is either *absent* or *present with a size, an mtime and a SHA-1 of its bytes*
+       (**absent is a state, not a reason to skip** — a skip there would throw away the
+       strongest evidence available), and a listing of the whole directory with each entry's
+       name, size and mtime.
+     - Run the resolution. Then record both again.
+     - The case passes when the only difference between the two listings is `xcrun_db` —
+       created where it was absent, or changed in any of size, mtime and digest where it was
+       present — and nothing else in the directory is new or modified. **Any other new or
+       modified file is a failure**, and so is any change anywhere else the case already
+       watches: the caller's `TMPDIR` and `HOME` must still be untouched.
+     - The same recipe runs around the entry's own pre-launch steps, where the claim is
+       still the strong one: the pin checks and both compiles run no `git` and no shim
+       (R1), so across those `xcrun_db` must come back in the state it started in, absent
+       included. Half 2 below is where that is measured without a runtime behind it.
+
+     **A cache already primed on the operator's machine may show no write at all**, because
+     the shim writes only when its lookup misses, and the same run on a cold cache would
+     write. That is precisely why the claim is narrowed rather than reported as "measured
+     clean": a clean measurement here is evidence about one machine's cache state, not about
+     the shipped path, and treating it as the latter is the mistake the earlier round made.
+     What the recipe does prove is the part that matters — that the write, when it happens,
+     is that one file and nothing else. The recipe is Darwin-only because Linux has no such
+     file and no shim that would write one, and there the one-write-root claim covers the
+     runtime too and CI asserts it. What this
      half cannot do is compare the built binaries:
      the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
@@ -1937,7 +2132,13 @@ the range above still blocks review.
      same fixed compiler path for the platform and an environment that is identical by
      construction, and the
      only difference is the `-o` destination, which a compile without `-g` does not record
-     in its output. Alongside it the test runs one control compile of the same source under
+     in its output. **This is where the strong Darwin cache assertion lives**, because there
+     is no runtime behind these compiles and therefore no git anywhere in them: on Darwin the
+     test records `xcrun_db`'s state before the two compiles and requires the identical state
+     after — absent stays absent, present stays byte-identical in size, mtime and digest —
+     with no skip either way. A change here means the shim got back into the compile line,
+     which is the one thing R1 says must not happen. Alongside it the test runs one control
+     compile of the same source under
      the polluted environment *without* the `env -i` prefix, and requires that one to fail
      or to carry the marker — the fixture has to be shown to be poisonous, or the digest
      equality above proves nothing. If a toolchain turns up where the two digests differ for
@@ -2118,17 +2319,62 @@ the range above still blocks review.
   because the branch under test is the same one in every case and the claim is about what it
   says and what it leaves behind.
 
+  **A third signal case drives the parent directly, for the window in which the parent
+  itself has no runtime group yet.** The two cases above are both about the entry. Neither
+  reaches R2's `no-runtime` branch: the mid-run case signals after `runtime-pgid:` has been
+  read, so `pgid` is set, and the pre-parent case never starts a parent at all. The branch
+  in between — a parent that is running, has installed its handlers, and has not yet forked
+  the resolver because it is still doing blob and jq checks (R2) — needs the parent on its
+  own, so this case is written in the group-2 style with a run directory the test builds by
+  hand.
+
+  The sequence is three signals and it is deterministic by construction. The test starts the
+  parent in the background and **immediately** sends it `kill -STOP`, so it cannot make
+  progress past process start; then `kill -TERM`, which stays pending on a stopped process;
+  then `kill -CONT`, which is what lets the installed handler run. Alongside the parent, and
+  before any of that, the test starts a sentinel `sleep` in the **same process group as the
+  parent** — the test's own group, which is what a plain background child joins.
+
+  Three assertions. One: the parent's exit status is `143`, which is `128 + SIGTERM`. Two:
+  its stderr holds `parent-signal: TERM no-runtime` and **no** `runtime-pgid:` line — the
+  first says the handler ran and took the branch, the second says there was no resolver
+  group for it to take the other one. Three: the sentinel `sleep` is still alive afterwards,
+  which is the assertion that actually earns the case — it fails if the handler ever reached
+  the caller's process group, whether through a zero `pgid` or a literal `kill(-0, …)`, and
+  it fails loudly because the group in question is the test's own (R2).
+
+  **Two outcomes are not proof, and they are handled differently.** If a `runtime-pgid:`
+  line appears, the `SIGSTOP` landed too late: the parent got all the way through its checks
+  and forked before the stop took effect, so the attempt exercised the group branch and not
+  this one. That is a failure with exactly that message — never a pass, because the group
+  branch already has its own case. If the parent died with no `parent-signal:` line at all,
+  the `SIGTERM` was delivered before the handlers were installed and the default disposition
+  killed it — the process-start window R2 keeps as small as it can. That is not a failure of
+  the shipped code, so the test **retries the whole attempt**, bounded to a stated number of
+  attempts: twenty, written into the test rather than left open, and if none of the twenty
+  produces the line the case fails. Which of the two outcomes ended each attempt is printed,
+  so a run that fails says whether the stop was landing late or the signal early.
+
+  Say plainly what the retry costs and why it is the right trade: it is the honest price of a
+  window the shipped code must not widen for a test's convenience. Making the case
+  first-time deterministic would mean a pause, an environment variable or a test-only argv
+  mode inside a security wrapper, which is the thing this spec refuses everywhere else, and
+  the window itself cannot be shortened below a process start because the handlers are
+  already the first statements of `main` (R2). **One success proves the branch**, and the
+  branch is the same one every attempt aims at, so twenty attempts is a scheduling
+  allowance, not twenty different tests.
+
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, the three constants of the parent-pinned
   subset. **And it asserts the computed id equals `git hash-object` for every one of those
-  files.** The shipped path no longer runs git; it builds the blob id from a size and a
+  files.** Neither shipped file runs git any more; each builds the blob id from a size and a
   SHA-1 (R1), and the only thing keeping that construction honest is checking it against
   the tool it replaces. So for each pinned file the test computes the id the way the entry
   does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
-  agree — three values, not two. The test may run git freely: it is not the shipped path,
-  and the allowlist grep below covers the shipped files only.
+  agree — three values, not two. The test may run git freely: it is not a shipped file, and
+  the allowlist grep below covers the two shipped files only.
 
   **The read allowlist is a grep, not a promise, it covers external command words only, and
   the mechanism is settled here rather than left to the plan.** The list it checks against is
@@ -2199,7 +2445,7 @@ the range above still blocks review.
 
   **The sixteen words do not move this round; the mechanism above is what moved.** Three
   changes came with the round before it, all from the same two findings. `/usr/bin/git`
-  **left the list**, because the shipped path computes blob ids instead of running
+  **left the list**, because the two shipped files compute blob ids instead of running
   `git hash-object`. The Darwin compiler joined as
   `/Library/Developer/CommandLineTools/usr/bin/clang`, the first time the
   grep had to look outside `/usr/bin` and `/bin`. And `/bin/cat` and `/usr/bin/sha1sum`
@@ -2265,7 +2511,18 @@ Order, each step checkable before the next:
    runtime's own repository-root rule, `resolver/v1/profile-resolve-runtime.sh:9-10`), and
    the `INT`/`TERM`/`HUP` handlers that terminate the child's process group with
    `kill(-pgid, SIGTERM)` then `kill(-pgid, SIGKILL)`, reap, and exit `128 + signal` (R2).
-   One further line has no counterpart either: the single `runtime-pgid: <n>` written
+   Those handlers are installed as the first statements of `main`, before any pin or digest
+   work, and they carry the two `volatile sig_atomic_t` variables R2 specifies — `pgid`,
+   `0` until it is assigned right after the `fork` (`:432`) and the parent-side `setpgid`
+   (`:450`) and before the `runtime-pgid:` line, and `pre_child`, the pid of the
+   pre-resolver child currently being waited on (a SHA-1 tool, the SHA-256 tool, the jq
+   `--version` probe), set before its `waitpid` and cleared after — with three branches on
+   them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
+   only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
+   `kill(-0, …)` in any of them. Each branch first writes one line with the copied
+   `write_all` (`:164`) — `parent-signal: <NAME> group <pgid>` or
+   `parent-signal: <NAME> no-runtime` — which is what R10's stopped-parent case asserts
+   (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
    straight to stderr with the copied `write_all` (`:164`) immediately after the `fork`
    (`:432`) and the parent-side `setpgid` (`:450`) and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
@@ -2463,7 +2720,8 @@ intent says for this change. Only after the operator's merge does
   at all — so it gets none of the benefit of the "copy what is already proved" argument
   the rest of the parent rests on, and it fails in the worst direction either way: a
   resolver left running under a deleted run directory, or a group killed that should not
-  have been. Its tests are at least deterministic, and there are two of them now. R10 stops
+  have been. Its tests are at least deterministic, and there are three of them now, one per
+  branch that exists. R10 stops
   the resolver's process group with `SIGSTOP` before signalling the entry, so the mid-run
   path is exercised on every run, and it takes that group from the parent's own
   `runtime-pgid` line rather than from the process table, so it cannot freeze some digest
@@ -2473,13 +2731,22 @@ intent says for this change. Only after the operator's merge does
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
   appears, and it asserts that branch by the `entry-signal: TERM no-parent` line the trap
   writes rather than by an empty output directory, which cannot tell that branch from a
-  parent that had only just started. The plan
+  parent that had only just started. The third covers the window between those two, which is
+  the one this round found open: a parent that is alive and has not yet forked the resolver,
+  so its `pgid` is still zero. That is the most dangerous of the three to get wrong, because
+  a handler that let a zero `pgid` reach `kill(-pgid, …)` would signal the caller's own
+  process group rather than a resolver's, and the case asserts against exactly that with a
+  sentinel process in the test's own group that has to survive (R2, R10). The plan
   should treat this as the highest-risk new code here and say what it does on `EINTR` in
   `waitpid`, on a second signal during termination, on an already-reaped child, on a
   group whose members are stopped when the handler fires, and on a signal that reaches the
   entry while a compile is still running and no parent pid has been recorded — where bash
   defers the trap until that compile finishes (R1), which is what keeps the removal off a
-  live child and what the test's wait timeout has to be wide enough to absorb.
+  live child and what the test's wait timeout has to be wide enough to absorb. The pre-fork
+  window inside the parent is no longer one of the plan's open questions: R2 states the two
+  `volatile sig_atomic_t` variables, the three branches and the prohibition on
+  `kill(0, …)`/`kill(-0, …)` outright, because that is not a detail an implementation should
+  be left to invent.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
@@ -2552,7 +2819,12 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2); the four sandbox entries `home`,
+  handlers with process-group termination are new (R2) — and this round that item grows
+  rather than a tenth being added, because it is the same deviation: the handlers carry two
+  `volatile sig_atomic_t` variables, three branches on them, a prohibition on
+  `kill(0, …)`/`kill(-0, …)`, and one `parent-signal:` line each branch writes, where the
+  launcher installs no handler at all and so has nothing to grow from; the four sandbox
+  entries `home`,
   `tmp`, `child.stdout` and `child.stderr`
   are created with `mkdirat` and `openat` relative to the output-directory descriptor the
   parent checked, where the launcher builds all four by path with `mkdir` (`:645-647`) and
@@ -2581,7 +2853,8 @@ intent says for this change. Only after the operator's merge does
   `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) and both of those Darwin
   paths are the `xcrun` shim, because a caller-chosen compiler
   would be a caller-chosen trust base and a shim writes outside the output root (R1, R7);
-  no `git` runs at all, the ten blob-id pins being computed from a `stat` size and the
+  the entry runs no `git` at all, the ten blob-id pins being computed from a `stat` size
+  and the
   platform's SHA-1 tool where the test and `reproduce.sh` would reach for
   `git hash-object` (R1); and the run directory is the fixed
   `<output>/.run` inside the caller's output directory, where the test script and
@@ -2616,15 +2889,39 @@ intent says for this change. Only after the operator's merge does
   round's, and they are why the Darwin question earlier rounds carried is now closed rather
   than open. That question was first whether `/usr/bin/cc` could find its SDK under the
   `env -i` compile line, and then whether the `xcrun` shim's cache write could be prevented
-  at all. The answer to both is that the shim is not run: Darwin compiles with
+  at all. The answer to both, for the files this initiative adds, is that the shim is not
+  run: Darwin compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` and an explicit `-isysroot`, which
-  execs its own linker and leaves `xcrun_db` untouched, and no `git` runs anywhere in the
-  shipped path (R1, both measured on a Darwin 27 machine). What replaces the question is a
+  execs its own linker and leaves `xcrun_db` untouched, and neither the entry nor the parent
+  runs `git` anywhere (R1, both measured on a Darwin 27 machine). What replaces the question
+  is a
   prerequisite and a refusal: Darwin needs the Command Line Tools installed, and the entry
-  exits `E_RUNTIME` naming the missing path when they are not. Linux CI cannot exercise any
-  of that — not the Darwin compile line, not the refusal, not the untouched cache — so
-  those three are confirmed only on an operator's Darwin run. That is the honest gap this
-  concern now carries, in place of the write residual it used to.
+  exits `E_RUNTIME` naming the missing path when they are not. The question does stay open
+  for one process the initiative does not write — the runtime, which runs `/usr/bin/git`
+  itself — and that is the residual in the bullet below rather than a gap in this one.
+  Linux CI cannot exercise any of the Darwin side — not the compile line, not the refusal,
+  not the cache measurement — so those three are confirmed only on an operator's Darwin run.
+  That is the honest gap this concern carries.
+- **One accepted residual on Darwin: the runtime's own git writes outside the output root,
+  and DR-2 is pending.** This is the only place the single-write-root claim does not hold,
+  and it is worth stating as a concern rather than only as a requirement clause. The
+  resolver runtime runs `/usr/bin/git` for every repository read
+  (`scripts/lib/profile-resolution.sh:313-323`) and for the four blob pins it checks at load
+  time (`:711-714`). On Darwin that path is the `xcrun` shim, which can write its `xcrun_db`
+  cache into the per-user temp directory — outside the caller's output path, and outside
+  anywhere the parent can redirect, because the cache is not in `TMPDIR` (R1, measured). The
+  parent controls the runtime's whole environment (R3) and still cannot prevent it. The
+  residual belongs to the runtime and not to the parent, and the runtime is exactly what
+  this initiative may not change (`work/resolver-trusted-parent/intent.md:32-33`), so it
+  cannot be closed from where this spec stands. It is a deviation from
+  `work/resolver-trusted-parent/intent.md:36`, and **DR-2 on intake `#271` asks the operator
+  to accept it; it is pending.** The spec is written under the recommended option — accept,
+  name it, and measure exactly it in the Darwin operator run (R10). The two alternatives, if
+  the operator refuses, are to widen E and move the runtime off `/usr/bin/git` on Darwin, or
+  to drop the Darwin claim and ship Linux-only; either one rewrites this spec rather than
+  amending it. The follow-up that would close the residual without either — moving the
+  runtime's git invocation off the fixed shim path — belongs to a later intake and is not
+  promised here.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
   (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
