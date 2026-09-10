@@ -1,6 +1,6 @@
 ---
 intent-blob: 61218c3c9b3554f4a86c58fd3a7311d9e818f3b6
-risk: routine
+risk: high
 drafted: 2026-09-09
 ---
 
@@ -19,17 +19,30 @@ own high-risk initiative. The only launcher today is the one in `scripts/test/`,
 so today the only resolved profiles that exist are test-produced. This spec says
 so plainly rather than implying otherwise.
 
+**Risk: `high`.** The intake proposed `routine`, and so did an earlier draft of
+this spec; this spec supersedes both. What changed is not the scope of the
+component but what the component turned out to contain. It carries the
+materializer's source-purity predicates verbatim (requirement 15), a clean
+shell entry that makes those predicates mean what they say (requirement 17),
+byte pins that decide whether the profile really is the shipped default
+(requirements 3 and 16), and read-only guards the driver reads back
+(requirement 4). Those are security controls, so `REVIEW.md:105-108` makes
+`risk: routine` a blocking misclassification and this spec takes the stronger
+gate instead. DR-1 option 2 still stands — the assembler resolves nothing and
+needs no trusted parent — and the risk class did not rise because of that. It
+rose because of what the assembler itself now holds.
+
 **Implementation PR size (the component and its test).**
 `review_size: accepted-exception`. One concern: one inactive component whose
 focused test must drive the real `reproduce.sh` end to end with the existing
 fixture environment (the shadow slice test itself is 622 lines for the same
-reason). Range: 595-825 net lines — about 425 lines of component (shell plus
-jq), about 320 lines of test, and the documentation rows. The evidence is the
+reason). Range: 610-840 net lines — about 430 lines of component (shell plus
+jq), about 330 lines of test, and the documentation rows. The evidence is the
 nearest thing in the repository: `scripts/test/shadow-slice.test.sh` is 622
 lines, because a test that runs the driver has to build a bare repository, a
 profile set, and a claim before the driver can run once. This test builds that
 same fixture ground and then runs the driver again on the assembled input, so
-it lands in the same band, and the component itself is the ~425 lines above.
+it lands in the same band, and the component itself is the ~430 lines above.
 
 The range moved up from 450-650, and then by about another 30 lines, for one
 reason, and it is a reason that argues for the exception rather than against
@@ -41,9 +54,14 @@ the negative sources that prove both in the test. That is text this initiative
 did not write and must not edit. Shortening it would mean re-implementing a
 predicate the whole point of which is that it is not re-implemented.
 
+This revision adds about 15 more lines, and they are the same kind of thing:
+requirement 17's marker-branch alias reset is two lines, requirement 18's
+`run_root` trap is about four, and the two tests that prove them are the rest.
+
 The exception waives only the soft line signal. It does not widen scope beyond
-the one concern, and it does not relax readability, tests, CI, review, or
-operator merge. The component and its focused test land together, which is the
+the one concern, and it does not relax readability, tests, CI, review, the
+high-risk gate, or operator merge. The component and its focused test land
+together, which is the
 repository convention; splitting them would ship a component with no proof and
 a test with nothing to prove. Requirement 17's clean entry is not a second
 concern either: it is the first lines of the same script, and requirement 15's
@@ -53,11 +71,13 @@ predicates do not mean what they say without it, so the two cannot ship apart.
 budget of ~300-400 net lines applies to this spec PR as well, not only to the
 implementation it describes, and this file is far over that budget, so the
 overrun is recorded here rather than left unexplained. One concern: one
-component spec for a security-adjacent input assembler whose ten review rounds
-each added a verified requirement (protocol-valid inertness, byte-pinned
-default profile, hash algorithm, full repository-level source guards, clean
-entry, working-tree proofs). Evidence-based range: 1041 lines measured — the
-count is self-inclusive, the length of this file as committed — so 885-1197
+component spec for an input assembler that carries security controls, whose
+eleven review rounds each added a verified requirement (protocol-valid
+inertness, byte-pinned default profile, hash algorithm, full repository-level
+source guards, clean entry, working-tree proofs, the alias reset, the
+`run_root` trap, and the `high` risk class those controls require).
+Evidence-based range: 1286 lines measured — the
+count is self-inclusive, the length of this file as committed — so 1093-1479
 net lines at that measurement +/-15%. This exception waives only the soft line
 signal for this artifact PR. It does not widen scope beyond the one concern,
 and it does not relax readability, review, CI, or operator merge. No content
@@ -274,7 +294,9 @@ lose the verified detail the rounds added.
     output, and everything the copy refuses about the source repository is
     `E_TARGET`. `E_WORKSPACE`: the
     output directory is not an empty physical
-    `0700` directory, or it overlaps another argument. `E_RUNTIME`: wrong jq
+    `0700` directory, or it overlaps another argument — and requirement 18 is
+    what keeps a previously refused run from being the reason it is not empty.
+    `E_RUNTIME`: wrong jq
     digest or version, missing or symlinked required file — including the
     script's own path once requirement 17 has normalized it — failed command,
     or the `0700` scratch directory requirement 15's copy writes into cannot
@@ -343,9 +365,11 @@ lose the verified detail the rounds added.
     second algorithm reuses the same fixture ground, so it adds a repository
     and an assertion block, not a second test.
 
-    The assertions below carry this revision's three findings — how the copy
-    is proven, the commit-size guard, and the clean entry — plus the guards an
-    earlier draft missed and the producer config digest.
+    The assertions below carry the previous revision's three findings — how
+    the copy is proven, the commit-size guard, and the clean entry — plus the
+    guards an earlier draft missed and the producer config digest. This
+    revision adds two more: the alias reset on the marker branch, and the
+    `run_root` cleanup requirement 18 now guarantees.
 
     **The copy is a copy, and
     it is compared against the working tree.** The test extracts the copied
@@ -398,12 +422,12 @@ lose the verified detail the rounds added.
     the working tree.
 
     **Requirement 17's entry is proven as an adaptation, not a copy.** Because
-    it carries three named deviations, byte equality is the wrong test. The
+    it carries four named deviations, byte equality is the wrong test. The
     test instead diffs the assembler's entry against the working tree's
     `materialize.sh:4-13` and `:22-29` and asserts every hunk in that diff is
-    one of the three deviations requirement 17 names — the marker word and
-    verb, the argument count, and the script-path normalization — and nothing
-    else.
+    one of the four deviations requirement 17 names — the marker word and
+    verb, the argument count, the script-path normalization, and the marker
+    branch's two `builtin` alias-reset lines — and nothing else.
 
     **The guards an earlier draft missed actually fire.** Four negative source
     repositories, each otherwise a clean copy of the `sha1` fixture: one with a
@@ -423,16 +447,46 @@ lose the verified detail the rounds added.
     rather than passing, and once against the good `sha1` fixture, which must
     still assemble bytes identical to the clean run. The first shows
     requirement 17's scrub closes the bypass; the second shows it takes
-    nothing the assembler needs. Both are run as `/bin/bash
-    <path-to-assembler> assemble …` as well as directly, because the
-    `#!/bin/bash -p` shebang does not apply to the first form and only the
-    scrub and re-exec cover it.
+    nothing the assembler needs. Both are run through the supported shebang
+    invocation and, again, as `/bin/bash <path-to-assembler> assemble …` —
+    the non-privileged public-verb form requirement 17 names as hardened
+    rather than supported — because `-p` does not apply to that second form
+    and only the scrub and re-exec cover it.
+
+    **An alias cannot silence the copy either.** The test invokes the
+    assembler once more against the `hooks/` negative repository with
+    `BASH_ENV` pointing at a file that runs `shopt -s expand_aliases; alias
+    find=:`, through a **supported** invocation, and asserts the impure
+    fixture is still refused `E_TARGET`. It runs the same environment against
+    the good `sha1` fixture and asserts identical bytes. Under the supported
+    forms this holds for a reason worth writing down: a privileged bash
+    started from the `#!/bin/bash -p` shebang ignores `BASH_ENV` outright,
+    and the re-exec'd child comes up under `env -i` with no `BASH_ENV` to
+    read, so there is no alias to expand in either.
+
+    **Negative knowledge: no test claims the unsupported direct-marker path
+    is safe.** Nothing in this suite invokes `/bin/bash <script>
+    __assemble_clean …` and asserts a refusal, and no assertion should be
+    read as covering that path. Requirement 17's alias reset removes the one
+    bypass that path is known to have, and the spec puts the path outside the
+    supported forms; neither of those is a test result, and a later reader
+    looking for one will not find it because there is none to find.
 
     **The producer config digest is bound.** A
     resolved profile identical to the good one except that the producer
     binding's `config_source.value.value_sha256` is changed — its
     `value.source` left alone, so the core rules still pass it — must come
     back `E_PROFILE`.
+
+    **A refusal leaves the output directory empty.** The test runs the
+    assembler against the `hooks/` negative repository — a refusal that fires
+    after `run_root` has been created — and asserts two things about the
+    output directory afterwards: it still exists, and it holds nothing at
+    all, `run_root` included. Then it runs the assembler again with the same
+    output directory and the good `sha1` fixture, and asserts that run
+    assembles normally rather than failing `E_WORKSPACE`. That second half is
+    the point of requirement 18: the guarantee is not tidiness, it is that a
+    caller can retry.
 
     **Shellcheck.** `shellcheck -x -S style` at the pinned 0.11.0 passes on
     both new shell files, with no new `shellcheck disable` directive in
@@ -566,9 +620,11 @@ lose the verified detail the rounds added.
     Four names are bound just above the copy so its body needs no editing:
 
     - `run_root` — a `0700` scratch directory the assembler creates **inside
-      the caller's output directory**, and removes before it finishes, so the
-      output directory ends up holding only the documents requirements 6, 8
-      and 9 name. It is inside the output directory rather than under
+      the caller's output directory**, and removes through the `EXIT` trap
+      requirement 18 installs the moment it is created, so the output
+      directory ends up holding only the documents requirements 6, 8
+      and 9 name — on every path out, not only the successful one. It is
+      inside the output directory rather than under
       `mktemp`'s `${TMPDIR:-/tmp}` for a plain reason: requirement 17's clean
       entry passes through `PATH` and `LC_ALL` only, so there is no inherited
       `TMPDIR` to read, and the output directory is the one writable place the
@@ -648,7 +704,11 @@ lose the verified detail the rounds added.
     retaking the copy. Requirement 17's clean entry is shared the same way:
     both components copy `materialize.sh:4-13` and `:22-29`, each with its own
     named deviations, so the scrub block is byte-identical between them and
-    the arity, marker and script-path lines are not.
+    the arity, marker and script-path lines are not. The marker-branch alias
+    reset is on the not-shared side too: it is this component's own two lines,
+    outside the copied text, and the byte-identity requirement does not reach
+    it. If the driver adds the same two lines, it does so in its own change
+    and for its own reasons, not because this spec obliges it.
 16. **The resolved profile's config bindings are bound to the pins too.**
     Requirement 3 pins the bytes of the eight shipped documents, but that only
     fixes what the caller's **profile directory** holds. The resolved profile
@@ -721,9 +781,9 @@ lose the verified detail the rounds added.
     `BASHOPTS` and `CDPATH`. `-p` alone is not the fix — it is bypassed
     entirely when the file is run as `bash assemble-materialization-input.sh`
     — which is why the scrub and the re-exec are copied too, and why
-    requirement 13 tests both invocations.
+    requirement 13 exercises that form as well as the supported ones.
 
-    Three deviations from the materializer's bytes, and nothing beyond these:
+    Four deviations from the materializer's bytes, and nothing beyond these:
 
     - **the marker word and verb** — `assemble` where it says `materialize`,
       and `__assemble_clean` where it says `__materialize_clean`;
@@ -737,7 +797,39 @@ lose the verified detail the rounds added.
       `$(pwd -P)` and then requires the result to be an existing non-symlink
       regular file or `E_RUNTIME`, the way `shadow/v1/reproduce.sh:94-96`
       already does, so a bad script path is reported in this component's error
-      vocabulary instead of by bash's own failed-`exec` message.
+      vocabulary instead of by bash's own failed-`exec` message;
+    - **the marker branch resets aliases** — the first two lines of the marker
+      branch, before anything else in it, are `builtin unalias -a` and
+      `builtin shopt -u expand_aliases`. The materializer has no such lines;
+      this component adds them, and the reason is that the copied scrub does
+      not cover aliases. The scrub unsets inherited functions and exported
+      names, and an alias is neither. A caller who runs `/bin/bash <script>
+      __assemble_clean …` directly with `BASH_ENV` set to `shopt -s
+      expand_aliases; alias find=:` gets a bash that reads `BASH_ENV`,
+      expands aliases, and lands on the marker branch — which by design does
+      not re-exec, because it is the branch the re-exec arrives on. Without
+      the reset, requirement 15's three bare `find` calls would run the
+      caller's alias and report "nothing found": the same bypass requirement
+      17 exists to close, reached by another door. Two builtins close it.
+      `builtin` prefixes both, so a shell function of either name cannot
+      intercept the reset. The two lines sit at the top of the marker branch
+      rather than lower down because bash expands aliases as it reads each
+      command, so the reset has to run before the shell parses the rest of the
+      file — in particular before `source_pure` is defined. It does, because
+      every function of the real work is defined below the branch.
+
+      **Only those two, and here is why nothing else.** No `set +o posix` and
+      no other option or state reset is added, because nothing has been shown
+      to need one. `posix` mode does not change how bash resolves a command
+      name, and `SHELLOPTS` and `BASHOPTS` cannot reach the re-exec'd child at
+      all, because `env -i` drops them. A reset that guards nothing is worse
+      than no reset: it reads as a guarantee and is not one.
+
+      **The reset is defence in depth, not the guarantee.** An alias can name
+      `builtin` itself, and alias expansion happens before builtin lookup, so
+      a caller set on poisoning a direct marker invocation can still poison
+      the reset. What actually settles that case is the supported-forms
+      statement below: a direct marker invocation is not a supported form.
 
     `set -euo pipefail`, `emit_error` and `umask 077` are the assembler's own
     lines, not deviations. They sit between and after the two copied blocks in
@@ -749,8 +841,34 @@ lose the verified detail the rounds added.
     re-exec is the first thing after the arity check — before any external
     command, before the pinned-jq check, before any input file is opened, and
     before requirement 15's copy. The scrub runs in both entries, the public
-    one and the marker one, so calling the marker form directly gains a caller
-    nothing.
+    one and the marker one, and on the marker one the alias reset above runs
+    too.
+
+    **Two supported invocations, and the marker form is not one of them.**
+    A caller runs the assembler either by executing the file, so its
+    `#!/bin/bash -p` shebang is what starts bash, or as `env -i
+    PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <script> assemble …`. Those two
+    are the supported forms, the same two the sibling spec (PR #268) names for
+    the driver, and the documentation section says so. **Invoking the marker
+    verb directly — `/bin/bash <script> __assemble_clean …` — is outside the
+    supported forms**, and this spec makes no safety claim about it. The
+    marker exists so the re-exec has somewhere to arrive; it is not a public
+    entry point. The reason to say this out loud rather than rely on the
+    reset is that the marker branch is the one branch that cannot re-exec, so
+    everything the re-exec buys — an environment built from nothing — is
+    absent there by construction. The alias reset removes the one concrete
+    bypass found so far; it does not turn that branch into a supported
+    entry, and nobody should read it as doing so.
+
+    One form is neither supported nor claimed unsafe, and it is worth
+    separating: `/bin/bash <script> assemble …`, the public verb under a
+    non-privileged bash. That is not a supported invocation either, but it
+    does pass through the scrub and the re-exec like every other public-verb
+    entry, so requirement 13 keeps exercising it and it keeps having to
+    refuse what the supported forms refuse. That is hardening, not a third
+    supported form. The difference from the marker case is exactly the
+    re-exec: the public verb always has one, and the marker branch never
+    does.
 
     **Environment pass-through is `PATH` and `LC_ALL`, and nothing else** —
     exactly what the materializer passes. The assembler needs no `TMPDIR`:
@@ -769,6 +887,42 @@ lose the verified detail the rounds added.
     today carrying only one file-level `disable=SC2016` (`:2`), and that one is
     for its embedded jq program text, not for this entry, so it is not copied
     and nothing replaces it.
+18. **Every path out leaves the output directory as the caller supplied it.**
+    Requirement 1 requires the output directory to be empty, and requirement
+    15 puts `run_root` inside it. Put those together and there is a hole: if
+    `run_root` is removed only where the run succeeds, then any refusal that
+    fires after it exists — every source-purity refusal, the size check, the
+    `validate-input` self-check, a failed command — leaves the output
+    directory non-empty. The caller's
+    natural next move is to fix the input and retry with the same directory,
+    and that retry is refused `E_WORKSPACE` for a mess the previous attempt
+    left. The refusal is then about the assembler's own leftovers rather than
+    about anything the caller did, which is the worst kind of error message.
+
+    So the removal is not a step at the end. **The assembler installs an
+    `EXIT` trap that removes `run_root` immediately after creating it** — the
+    trap is installed in the same breath as the `mkdir`, so there is no window
+    in which the directory exists untrapped. `INT`, `TERM` and `HUP` are
+    trapped as well: each removes `run_root`, resets its own trap to default,
+    and re-raises the signal, so the assembler dies of the signal it was sent
+    with the right exit status rather than swallowing it, and the `EXIT` trap
+    does not run twice on a directory that is already gone.
+
+    The guarantee to the caller is one sentence: the output directory ends up
+    either empty, exactly as it was supplied, or holding only the documents
+    requirements 6, 8 and 9 name — and the two limits below are the only ways
+    out of those two states. Requirement 13 proves it on a refusal that fires
+    after `run_root` exists, and proves the retry that follows works.
+
+    Two limits, named rather than implied. A `KILL`, a power loss, or a full
+    disk mid-`rm` can still leave `run_root` behind; no trap covers those, and
+    the caller's remedy is to empty the directory or supply another one.
+    And the trap covers `run_root` only — the documents written on the success
+    path are outputs, not scratch, and are not removed. Every *check* runs
+    before the writes, which are the last step, so no refusal this spec names
+    can leave a half-written output beside `run_root`; a write that fails
+    part-way through for a reason outside the checks, a full disk again, is
+    the same named limit and not a refusal.
 
 ## Design
 
@@ -801,16 +955,20 @@ Files, in the order they are written:
      `#!/bin/bash -p`, then the copied scrub (`materialize.sh:4-13`) at the
      very top of the file, then `set -euo pipefail`, `emit_error` and `umask
      077`, then the copied arity check, script-path handling and re-exec
-     (`:22-29`) with the three named deviations. Everything below runs in a
-     process with no imported functions, no inherited exported variables, and
-     `PATH` and `LC_ALL` fixed.
+     (`:22-29`) with the four named deviations — the fourth being the two
+     `builtin` alias-reset lines that open the marker branch, above every
+     other line in it. Everything below runs in a
+     process with no imported functions, no inherited exported variables, no
+     aliases, and `PATH` and `LC_ALL` fixed.
    - Argument and workspace checks, the pinned-jq check, reading and
      canonicalizing each input, the profile-id check and the eight digest
      comparisons against the pins, requirement 16's producer config digest
      check against the same pin, and the claim checks with the two values
      derived from the claim (its `id` and the SHA-256 of its bytes).
    - The Git work under the protective environment: `run_root` created `0700`
-     inside the output directory, the `git_env` array and `git_dir` helper,
+     inside the output directory **and trapped in the same breath**
+     (requirement 18 — `EXIT` removes it, `INT`/`TERM`/`HUP` remove it and
+     re-raise), the `git_env` array and `git_dir` helper,
      and the verbatim `source_pure` copy of requirement 15 — spans 271-332,
      333-347 and 348-360, in materializer order — under its
      header. The commit's existence, type and size are decided inside that
@@ -825,24 +983,50 @@ Files, in the order they are written:
      its content: that check is the materializer's, by the boundary
      requirement 15 states.
    - The size check, then the writes: `input.json`, `stage-request-ref.json`,
-     `resolved-profile-ref.json`, and the decision-record texts. Then
-     `run_root` is removed, so the output directory holds only those
-     documents.
+     `resolved-profile-ref.json`, and the decision-record texts. There is no
+     removal step here: the `EXIT` trap installed with the `mkdir` takes
+     `run_root` away on this path and on every refusal path alike, so the
+     output directory holds only those documents — or, if the run refused,
+     nothing at all.
 
    The copied text is the largest single block in the file — about 90 lines of
    predicate plus its header, the four name bindings and the subshell wrapper,
    and 18 more for the clean entry, so roughly 130 lines that were not written
-   here and are not to be edited here.
+   here and are not to be edited here. The alias reset and the trap are the
+   assembler's own six or so lines, not part of that block.
 3. `scripts/test/shadow-assembler.test.sh` — the proof in requirement 13.
 4. `docs/components.md` — an "Inactive shadow materialization input assembler"
    section that states plainly where resolved profiles come from today, next to
-   the existing resolver trusted-parent note.
+   the existing resolver trusted-parent note. It also names the **two
+   supported invocations** requirement 17 fixes — executing the file so its
+   `#!/bin/bash -p` shebang starts bash, or `env -i PATH=/usr/bin:/bin
+   LC_ALL=C /bin/bash -p <script> assemble …` — and says that invoking the
+   `__assemble_clean` marker verb directly is not one of them and carries no
+   safety claim. An operator reading the documentation should not have to
+   open the script to learn which two ways of running it are the ones this
+   spec is about.
 5. `README.md` one index row, `RESTORE.md` one restore block, and the three new
    paths appended at the end of `ci/required-files.txt`.
 
 Nothing runs at build or install time. The component stays inactive: it is a
 program an operator can run, and running it writes files into a directory the
 operator supplies. It reads no network, no credential, and no model.
+
+**The gate this work goes through.** Because the risk class is `high`, the
+weaker routine path is not available and this initiative takes the high-risk
+one instead. The plan is drafted on `ystack/plan/shadow-input-assembler` as a
+**plan-only PR** — every non-merge commit on that branch changes only
+`work/shadow-input-assembler/plan.md`. That PR needs an **independent review**
+by someone who is not its author and **green CI**, and then the **operator
+merges it**; nothing here accepts itself. Only after that merge is
+`ystack/impl/shadow-input-assembler` created from updated `main` and the first
+line of code written. The merged default OID at that point is recorded as
+`plan-base`, and if `main` moves before the first code commit the plan is
+re-reviewed against the new base and reaffirmed on the intake issue rather
+than assumed still accepted. The implementation PR is reviewed and merged by
+the operator on the same terms. This is the sequence `work/README.md` sets out
+for high-risk work, written down here so the change of risk class carries a
+change of process and not just a change of label.
 
 ## Out of scope
 
@@ -862,10 +1046,17 @@ operator supplies. It reads no network, no credential, and no model.
   touch the profile itself — but from here on a change to that profile also
   moves the pins, in that change's own pull request.
 - Strengthening or relaxing the source-purity predicates requirement 15
-  copies, or the clean entry requirement 17 copies. They are copied, not
-  authored here, and they are taken as they stand rather than improved on. If
-  one of them is wrong it is wrong in `materialize.sh` and is fixed there, and
-  the copies then move with it.
+  copies, or the copied bytes of the clean entry requirement 17 copies. They
+  are copied, not authored here, and they are taken as they stand rather than
+  improved on. If one of them is wrong it is wrong in `materialize.sh` and is
+  fixed there, and the copies then move with it. Requirement 17's four named
+  deviations are the exception that proves the rule: the marker-branch alias
+  reset is two lines this component adds *around* the copied text, not inside
+  it, and it is declared as a deviation precisely so it is not mistaken for an
+  edit to the copy. The materializer's own marker branch has the same shape
+  and the same gap, and this spec does not touch it — `materialize.sh` stays
+  as it is, that gap is the materializer's to close in its own change, and
+  nothing here is licence to improve the copy.
 - Mirroring the materializer's tree-content scan (`scan_tree`,
   `materialize.sh:386-452`) or the object-closure walk it rides on. Symlinks,
   submodules, invalid path names and closure size caps stay the
@@ -881,11 +1072,30 @@ operator supplies. It reads no network, no credential, and no model.
   on 2026-09-09. The issue is a message bus; the merged intent says only "from
   the real default profile" and left the resolution question open, so the intent
   meaning is unchanged and this does not return through G1.
-- **Risk stays `routine`.** No security control, workflow, identity or auth path,
-  migration, deployment, or architecture changes. The driver, the materializer,
-  the core modules, and the profile are untouched; this adds one producer of an
-  existing input plus a test and documentation, and nothing it writes is
-  activated by anything.
+- **Risk is `high`, and it did not start that way.** The intake proposed
+  `routine`, and earlier drafts of this spec agreed. That was right about the
+  scope and wrong about the contents. Nothing about what this initiative
+  touches has changed — the driver, the materializer, the core modules and
+  the profile are still untouched, and the component is still inactive — but
+  what the component now holds is a set of security controls: the
+  materializer's source-purity predicates, copied verbatim, which decide
+  whether a source repository is a plain bare repository at all
+  (requirement 15); a clean shell entry whose whole job is to stop a caller's
+  environment from making those predicates lie, now including the alias reset
+  on the marker branch (requirement 17); byte pins that decide whether the
+  profile really is the shipped default, and so what provenance the output can
+  honestly claim (requirements 3 and 16); and the read-only guards the driver
+  reads back to prove the run writes nothing (requirement 4). A mistake in any
+  one of them does not produce a broken component that fails loudly. It
+  produces a component that still emits a valid-looking input while a rail is
+  weaker than it reads — an impure source accepted, a look-alike profile
+  passed off as the default, a bypass left open. `REVIEW.md:105-108` says that
+  when the scope touches a security control, `risk: routine` is a blocking
+  misclassification, so this spec classifies it `high` and takes the stronger
+  gate the Design describes. Worth being exact about the cause: DR-1 option 2
+  still stands, the assembler resolves nothing and has no trusted parent, and
+  the class did not rise because of resolution. It rose because of what the
+  assembler itself now contains.
 - **The input is only as trustworthy as the resolved profile handed to it.** The
   assembler proves the supplied resolved profile is internally consistent with
   the profile and manifests; it cannot prove a trusted resolver produced it.
@@ -962,7 +1172,7 @@ operator supplies. It reads no network, no credential, and no model.
   shared lines rather than retaking the copy from the materializer, so there
   is one text with two homes and not two texts.
 - **A fixed `PATH` was not enough, because Bash resolves functions first.**
-  This is the one finding in this revision that changes what the component
+  This was the previous revision's one finding that changed what the component
   actually refuses rather than what it says. The copied predicates call
   `find`, `head`, `wc`, `tr`, `rm` and `grep`; most of those calls are
   absolute, but three `find` calls are bare (`materialize.sh:327`, `331`,
@@ -977,6 +1187,41 @@ operator supplies. It reads no network, no credential, and no model.
   and a good fixture still assembles identical bytes. The residual is the one
   the copy always has: if the materializer's entry is ever weakened, this
   entry is weakened with it, which is why the test compares them.
+- **And an alias is the same bypass through a third door.** The scrub unsets
+  inherited functions and exported names. An alias is neither, so the scrub
+  leaves it in place — and `BASH_ENV` can carry both the alias and the `shopt
+  -s expand_aliases` that makes a non-interactive shell honour it. On the two
+  supported invocations there is nothing to exploit: a privileged bash
+  started from the shebang ignores `BASH_ENV`, and the re-exec'd child comes
+  up under `env -i` with none set. The exposed case is the one nobody should
+  be using, `/bin/bash <script> __assemble_clean …` run directly, where the
+  marker branch by construction does not re-exec and the aliases would reach
+  requirement 15's three bare `find` calls intact. This revision answers it
+  twice over, and the two answers are different in kind. Requirement 17 adds
+  two `builtin` lines at the top of the marker branch, which removes the
+  concrete bypass; and the spec states plainly that a direct marker
+  invocation is outside the supported forms, which is what actually settles
+  the question, because the reset itself can be defeated by an alias on
+  `builtin`. Requirement 13 proves the supported side and says, as negative
+  knowledge, that it proves nothing about the unsupported one. The honest
+  summary is that the marker branch is a private entry with one known hole
+  closed, not a hardened entry — and the reason to write that down is so a
+  later reader does not promote it to a public one on the strength of two
+  reassuring-looking lines.
+- **Scratch inside the output directory needed a trap, and the trap has
+  limits.** Putting `run_root` inside the caller's output directory is the
+  right call for the reason requirement 15 gives — it is the one writable
+  place the assembler owns without reading an environment variable — but it
+  made the assembler's scratch and the caller's workspace the same directory,
+  and a refusal that left the scratch behind turned the caller's obvious next
+  move, retrying in the same directory, into an `E_WORKSPACE` about the
+  assembler's own leftovers. Requirement 18 fixes that with a trap installed
+  at creation rather than a removal step at the end, and requirement 13
+  proves the retry. What the trap cannot cover is a `KILL`, a power loss, or a
+  failure part-way through the removal itself; in those cases the directory
+  keeps a `run_root` and the caller empties it or supplies another. That is a
+  smaller and much more visible failure than the one it replaces, and naming
+  it is better than implying the guarantee is absolute.
 - **The copy header records provenance; the test proves currency.** These are
   two different jobs and an earlier revision conflated them, which is how it
   ended up asserting the copy against a commit CI cannot read (a
