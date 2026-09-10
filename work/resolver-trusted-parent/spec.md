@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 2053-2777 changed lines** (implementation). The derivation,
+**Evidence-based range: 2057-2783 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -75,10 +75,15 @@ measured rather than guessed:
   `runtime-pgid` line and nothing else, the round before this one added nothing here at all,
   the round before this one added the ~25 named in the handler bullet above: the two
   `sig_atomic_t` variables, the `pre_child` branch and the `parent-signal:` line (R2).
-  This round adds ~15 more, to **~1090**: the signal set built once, and the
+  The round before this one added ~15 more, to ~1090: the signal set built once, and the
   `sigprocmask(SIG_BLOCK, …)`/`sigprocmask(SIG_SETMASK, …)` pair around each fork the
-  parent performs — the resolver's and each pre-resolver child's — plus the child's mask
-  restore and its three `SIG_DFL` resets before `execve` (R2).
+  parent performs — the resolver's and each pre-resolver child's — plus the child's
+  `SIG_DFL` resets and the mask restore after them, before `execve` (R2). This round adds
+  ~5 more, to **~1095**: the `SIGPIPE` disposition set beside the three handlers, the
+  `fcntl` that makes stderr non-blocking for the handler's one line, and that line becoming
+  a single unchecked `write(2)` instead of a `write_all` call — the reordering that puts it
+  after the kill and the reap costs nothing, being the same statements in a different
+  order (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -113,11 +118,14 @@ measured rather than guessed:
   (R1). This round adds ~5 more, to **~380**: the one `printf` line each trap branch writes
   to the entry's own stderr, with the signal name and the branch word it carries (R1). The
   round before this one added nothing here at all: the entry's forwarded branch was
-  unchanged and the new handling was all on the parent's side of it (R2). This round adds
+  unchanged and the new handling was all on the parent's side of it (R2). The round before
+  this one added
   ~5, to **~385**: the `run_created` guard — the `trap` line moving ahead of the `mkdir`,
   the guard inside both of its removal branches, and the `mkdir` becoming the one
   `run_created=$(/bin/mkdir -- "$run" && printf 1)` command with its
-  `[ -n "$run_created" ]` refusal (R1).
+  `[ -n "$run_created" ]` refusal (R1). This round adds nothing here and the figure stays
+  at **~385**: each trap branch's `printf` moves to the end of the branch, after the
+  forward and after the removal, which is the same statements in a different order (R1).
 - **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -157,10 +165,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2415 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 eleven rounds ago, then 1560-2120, then 1580-2130, then
+Those sum to about 2420 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
-1972-2668, then 1985-2685, then 2036-2754, and the
+1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -262,11 +270,12 @@ implementation lines at all: it changes what this spec claims and what the Darwi
 run measures, not what any shipped file does, which is the whole reason it is a residual
 rather than a fix. Nothing was made cheaper to compensate.
 
-This round adds ~20, in the parent and the entry, and nothing in the test, because neither
+The round before this one added ~20, in the parent and the entry, and nothing in the test,
+because neither
 of its two fixes has a proof a test can run. ~15 in the parent: the three-signal set, the
 `sigprocmask(SIG_BLOCK, …)` before each fork it performs and the matching
 `sigprocmask(SIG_SETMASK, …)` after the pid assignment and the `runtime-pgid:` line, and
-the child's mask restore and three `SIG_DFL` resets before `execve` (R2). ~5 in the entry:
+the child's `SIG_DFL` resets and the mask restore after them (R2). ~5 in the entry:
 the `trap` line moving ahead of the `mkdir`, the `run_created` guard inside both removal
 branches, and the `mkdir` written as one command with its assignment and its emptiness
 refusal (R1). Nothing in the test, and that is a claim rather than an omission: the
@@ -275,6 +284,17 @@ reasons R10 states in each place, and inventing a case that lands in neither win
 pass by missing it. The round's other finding is the DR-2 decision, which is pending with
 the operator rather than settled here and adds nothing anywhere until it is answered.
 Nothing was made cheaper to compensate.
+
+This round adds ~5, all of it in the parent, and both of its fixes are mostly reorderings
+rather than new code. ~5 in the parent: the `SIGPIPE` disposition set beside the three
+handlers, the `fcntl` that makes stderr non-blocking for the handler's one line, and that
+line becoming a single unchecked `write(2)` in place of a `write_all` call. Nothing in the
+entry, whose trap writes the same `printf` in a later position, and nothing in the test,
+whose three signal cases keep every assertion they had — the lines are still written, only
+later — which is checked case by case in R10 rather than asserted in passing. The child's
+`SIG_DFL`-before-unblock order costs nothing either: it is the same two calls in the
+opposite order, plus `SIGPIPE` joining the resets it already performs. The round's third
+finding is DR-2, still pending with the operator. Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -291,7 +311,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 3168 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 3295 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -315,14 +335,17 @@ test asserts the branch instead of an empty directory, with the deferral rule th
 its removal off a live child stated correctly for the first time, the
 Darwin write claim narrowed to the one residual that belongs to the unchanged runtime's
 own `git`, with DR-2 pending on it, beside the parent's signal handler specified for the
-window before a runtime process group exists, and this round the three signals blocked
+window before a runtime process group exists, the three signals blocked
 across every fork the parent performs and its publication, so no handler can run in the
 instant when a child exists and its pid does not, beside the entry's cleanup trap armed
 before the `mkdir` rather than with it, guarded so it never removes a `.run` that is not
-its own).
-**Evidence-based range: 2693-3643 lines** — the measured 3168 lines plus or minus 15%. It was
-553 lines and 470-636 twelve rounds ago, then 783, then 847, then 1012, then 1202, then
-1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933;
+its own, and this round the forked child resetting the three dispositions before it
+unblocks the mask, so an inherited handler can never run in the wrong process, beside both
+signal diagnostics moved after the killing and the cleanup and made best-effort, so a
+blocked stderr cannot hold up the termination they exist to describe).
+**Evidence-based range: 2801-3789 lines** — the measured 3295 lines plus or minus 15%. It was
+553 lines and 470-636 thirteen rounds ago, then 783, then 847, then 1012, then 1202, then
+1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -499,11 +522,12 @@ Copy-versus-adapt handler item growing rather than a tenth deviation being added
 sentences that said "the shipped path" where they meant "either shipped file", and the
 re-derived size figures here and for the implementation.
 
-This round is +235 net over two P1 findings and one P2, and only two of the three are
-settled here. About 70 go to the parent's fork-and-publish window: R2's new block on why
+The round before this one was +235 net over two P1 findings and one P2, and only two of
+the three were
+settled there. About 70 go to the parent's fork-and-publish window: R2's new block on why
 two variables are not enough on their own, the blocked-signal region around every fork
 with the exact order of `setpgid`, the pid assignment, the `runtime-pgid:` line and the
-unmask inside it, the child's mask restore and its three `SIG_DFL` resets with their two
+unmask inside it, the child's three `SIG_DFL` resets and its mask restore with their two
 different reasons stated separately rather than merged, the honest note on why the
 `pre_child` clear needs no mask of its own, Design step 1's handler clause carrying the
 same sequence, the Copy-versus-adapt handler item growing again rather than a tenth
@@ -521,9 +545,28 @@ fifth case considered and deliberately not written, with the two reasons no dete
 fixture for it exists, and cleanup case 2's order corrected. The remaining ~65 are
 ripples: the accepted-concern list at the top, the pre-parent signal case's opening
 sentence, and the re-derived size figures here and for the implementation.
-The third finding is DR-2 on intake `#271`, which is the operator's decision rather than
-this round's to fix; the residual bullet below still reads pending and this round does not
-touch it.
+The third finding was DR-2 on intake `#271`, which is the operator's decision rather than
+a round's to fix; the residual bullet below still reads pending and this round does not
+touch it either.
+
+This round is +127 net over one P1 and one P2, and both are orderings inside the signal
+path rather than new mechanisms. About 40 go to the child's side of the fork: R2's
+child paragraph rewritten so the three dispositions are reset to `SIG_DFL` while the
+signals are still blocked and the mask is restored last, with the one-sentence reason —
+a pending signal unblocked first would run the parent's handler inside the child and kill
+groups and `_exit` from the wrong process — plus `SIGPIPE` joining those resets because
+the parent now leaves it ignored, and the same order carried into Design step 1, R10's
+read-and-check sequence, the Copy-versus-adapt handler item and the signals bullet under
+Areas of concern. About 70 go to the diagnostics never blocking termination: R2's
+handler writing its `parent-signal:` line after the kill and the reap with stderr made
+non-blocking, one unchecked `write(2)` instead of `write_all`, and `SIGPIPE` set to
+`SIG_IGN` with the reason it is the disposition and not the mask; R1's trap writing its
+`entry-signal:` line last in both branches, with the bash-`printf`-can-hang reason and the
+plain file R10 reads it from; both branch bullets and Design step 2 reordered; and R10's
+new paragraph checking the mid-run, pre-parent and stopped-parent cases one at a time
+against the new order, none of them losing an assertion. The remaining ~17 are the
+accepted-concern list at the top and the re-derived size figures here and for the
+implementation. The third finding is DR-2, unchanged and still pending.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -569,11 +612,11 @@ the range above still blocks review.
   the trap reads that variable to choose between two things:
 
   - *No parent pid recorded.* Nothing was launched, so no resolver and no process group
-    exist and there is nothing to forward the signal to. The trap writes its one
-    `entry-signal: <NAME> no-parent` line to the entry's own stderr (below), chmods the run
+    exist and there is nothing to forward the signal to. The trap chmods the run
     directory back to 0700 and removes it — or removes nothing at all, when the
-    `run_created` guard below is still empty because the `mkdir` has not completed — and
-    exits `128 + signal`. No child of the entry's
+    `run_created` guard below is still empty because the `mkdir` has not completed — then
+    writes its one `entry-signal: <NAME> no-parent` line to the entry's own stderr (below),
+    and exits `128 + signal`. No child of the entry's
     own is alive when that removal runs, and the reason is bash's own deferral rule rather
     than anything about process groups. An earlier round of this spec said a compiler child
     "was signalled too" because the caller's signal went to the whole foreground group,
@@ -602,9 +645,9 @@ the range above still blocks review.
     exits sooner, and the deferred trap still runs after it — earlier than in the `kill`
     case, not differently. Either way, everything a compile writes is inside the directory
     being removed and no resolver exists anywhere in the picture.
-  - *A parent pid recorded.* The trap writes `entry-signal: <NAME> forwarded <pid>` to the
-    entry's own stderr, forwards the same signal to the parent, waits for the
-    parent to exit, removes the run directory only after that wait returns, and exits with
+  - *A parent pid recorded.* The trap forwards the same signal to the parent, waits for the
+    parent to exit, removes the run directory only after that wait returns, then writes
+    `entry-signal: <NAME> forwarded <pid>` to the entry's own stderr, and exits with
     the parent's own status — which on a forwarded signal is the `128 + signal` the parent's
     handler exits with (R2) — or, if the parent was killed rather than exiting, with
     `128 + signal` for the signal that killed it.
@@ -635,11 +678,17 @@ the range above still blocks review.
 
   `<NAME>` is `INT`, `TERM` or `HUP` — the name of the signal that fired the trap, not its
   number. The no-parent branch writes the first form; the parent branch writes the second
-  with the pid it is forwarding to. The line goes out with `printf` to the entry's own
-  stderr before any cleanup runs, never buffered anywhere else — the same discipline and the
-  same channel the parent's `runtime-pgid:` line uses, for the same reason (R2): it is on
-  the descriptor at the moment the decision is made, so a reader watching stderr sees which
-  branch ran. It does not conflict with this requirement's claim that the entry passes the
+  with the pid it forwarded to. The line goes out with `printf` to the entry's own stderr,
+  never buffered anywhere else — the same channel the parent's `runtime-pgid:` line uses
+  (R2) — and it is the **last** thing each branch does before its `exit 128 + signal`,
+  after the forward and the wait in one branch and after the chmod and the removal in both.
+  That ordering is deliberate and it is the same rule the parent's handler follows: bash's
+  `printf` writes to whatever descriptor the caller gave the entry as stderr, and a write
+  to a full pipe blocks, so a line written first could hang the trap with the parent still
+  alive and the run directory still on disk. Written last, a hung write can only delay the
+  exit status; it can never delay the cleanup or the forward. Nothing is lost for the test
+  that asserts the line, because R10 reads it from a plain file in the test's own scratch,
+  where a write cannot block. It does not conflict with this requirement's claim that the entry passes the
   child's stdout and stderr through unchanged: this is the entry's own line on the entry's
   own stderr, not a byte added to or removed from anything a child wrote — exactly the
   distinction the parent's line already relies on. R10's command-word allowlist is
@@ -1206,9 +1255,20 @@ the range above still blocks review.
   and takes the branch that kills the child that exists. The forked-but-unpublished state
   is never observable by a handler, because no handler runs while it holds.
 
-  In the child, after `fork` and before `execve`, the mask is restored with
-  `sigprocmask(SIG_SETMASK, &saved, NULL)` and the three dispositions are reset to
-  `SIG_DFL`. Both are needed, for two different reasons, and the plan should carry both
+  **In the child, after `fork` and before `execve`, both the dispositions and the mask are
+  put back — and the order between them is fixed: dispositions first, while the three
+  signals are still blocked, and the mask last.** Concretely: with the inherited block
+  still in place, the child calls `sigaction` (or `signal`) on `SIGINT`, `SIGTERM` and
+  `SIGHUP` with `SIG_DFL`, and it resets `SIGPIPE` to `SIG_DFL` with them, because the
+  parent leaves that one at `SIG_IGN` (below) and `SIG_IGN` **is** inherited across `exec`
+  — not a disposition the resolver should start with; only then does it call
+  `sigprocmask(SIG_SETMASK, &saved, NULL)`. The reason the order is stated rather than left
+  to the plan is one sentence long: a signal that is already pending on the child would, if
+  the mask were restored first, run the *parent's* inherited handler inside the child — and
+  that handler kills process groups and `_exit`s, from the wrong process. With the resets
+  first there is nothing left of the parent's handler for a newly unblocked signal to reach.
+
+  Both halves are needed, for two different reasons, and the plan should carry both
   reasons rather than one. The mask **is** inherited across `exec`, so a child that kept
   the parent's block would start the resolver with `SIGTERM` blocked and would ignore the
   parent's own `kill(-pgid, SIGTERM)` until something unblocked it — turning the first
@@ -1217,7 +1277,11 @@ the range above still blocks review.
   not about the resolver at all; they are about the handful of statements the child runs
   between `fork` and `execve` — `setpgid(0, 0)`, the two `dup2` calls, the two `close`
   calls and `apply_child_limits` (`:440-443`) — during which an inherited handler would
-  otherwise run the parent's group sequence from inside the child.
+  otherwise run the parent's group sequence from inside the child. Resetting under the
+  block is what makes that second reason hold across the whole window rather than most of
+  it: with the resets first, there is no instant between `fork` and `execve` in which the
+  child can both take one of the three signals and still have the parent's handler
+  installed.
 
   After the `waitpid` on a pre-resolver child returns, `pre_child` is cleared back to `0`
   with no mask around the clear, and that is deliberate rather than an omission. The worst
@@ -1236,8 +1300,10 @@ the range above still blocks review.
   `kill(pre_child, SIGTERM)`, a brief wait, `kill(pre_child, SIGKILL)`, reap — because a
   digest tool or a `jq --version` is a single short-lived process with no group of its own
   worth naming. Else there is nothing to kill, and the handler kills nothing. In all three
-  cases it then `_exit(128 + signal)`, which is the same status the group branch already
-  produced and the same number the entry's trap reports (R1).
+  cases it then writes its one `parent-signal:` line (below) and `_exit(128 + signal)` — in
+  that order, killing and reaping before writing anything, for the reason the line's own
+  block gives — and that status is the same one the group branch already produced and the
+  same number the entry's trap reports (R1).
 
   **The handler never calls `kill(0, …)` or `kill(-0, …)`, and the reason is the whole point
   of the branch.** Both forms signal the caller's own process group, which in the shipped
@@ -1252,9 +1318,32 @@ the range above still blocks review.
   narrowed further for a test's benefit.
 
   **The handler says which branch it took, on the parent's own stderr, mirroring the entry's
-  `entry-signal:` line.** Before it kills anything, the handler writes exactly one line with
-  the copied `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) —
-  not a buffered `fprintf`, for the same reason the `runtime-pgid:` line below is not one:
+  `entry-signal:` line — and it says it after the killing is done, not before.** An earlier
+  round of this spec had the handler write first, which put a write that can block ahead of
+  the only work the handler exists to do: stderr may be a pipe nobody is draining, or any
+  other descriptor whose write blocks, and a handler that diagnosed first would then hang
+  with the resolver group still alive and the entry still waiting on it. Since this whole
+  path exists to guarantee cleanup on `INT`, `TERM` and `HUP`, the diagnostic is the least
+  important thing in it and goes last: branch, kill, reap, write, `_exit`.
+
+  **The line is best-effort, and what that means is stated rather than left to the plan.**
+  The handler puts stderr into non-blocking mode for that one write —
+  `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` inside the handler, with no restore
+  afterwards because `_exit(128 + signal)` follows immediately — and it emits the line with
+  a **single `write(2)` call**, not the copied
+  `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) the
+  `runtime-pgid:` line uses, because `write_all` loops until the whole buffer is out and on
+  a non-blocking full pipe that loop is a spin rather than a write. A short write, an
+  `EAGAIN` or an `EPIPE` is ignored — no check of the return value and no retry — so a
+  truncated line, or no line at all, is an accepted outcome where a hung termination is
+  not. `SIGPIPE` is **ignored**, not blocked: the parent sets it to `SIG_IGN` in the same
+  first statements of `main` that install the three handlers, so a write to a closed stderr
+  returns `EPIPE` to a handler that already ignores errors instead of killing the parent
+  in the middle of terminating a group. Blocking it instead would only defer the kill — a
+  blocked `SIGPIPE` stays pending and is delivered the moment anything restores a mask,
+  including the child's own mask restore above — which is why the disposition and not the
+  mask is the right tool here. It is still not a buffered `fprintf`, for the same reason
+  the `runtime-pgid:` line below is not one:
 
   ```
   parent-signal: <NAME> group <pgid>
@@ -1262,8 +1351,8 @@ the range above still blocks review.
   ```
 
   `<NAME>` is `INT`, `TERM` or `HUP` — the name, not the number, exactly as the entry's line
-  carries it. The group form is written when `pgid != 0` and names the group it is about to
-  terminate; the `no-runtime` form is written in both of the other two branches, because
+  carries it. The group form is written when `pgid != 0` and names the group it has just
+  terminated; the `no-runtime` form is written in both of the other two branches, because
   what a reader needs to know is that no resolver group existed, not which pre-resolver tool
   happened to be running. Four conventions were checked against it, the way the
   `runtime-pgid:` line was. The copied `sanitized_error` (`:118-165`) validates the *child's*
@@ -1272,7 +1361,7 @@ the range above still blocks review.
   nothing else on the parent's stderr: every R5 refusal happens before the `fork`, and this
   line is written only when a signal actually fires, which no refusal case does. R6's
   byte-identical claim is about stdout, where this line does not appear. And R10's
-  command-word allowlist is untouched, because `write_all` is C and starts no process. On
+  command-word allowlist is untouched, because a `write(2)` is C and starts no process. On
   the pass-through side it is the same distinction the entry's line already relies on: this
   is the parent's own line on the parent's own stderr, not a byte added to or removed from
   anything a child wrote, and the entry relays it unchanged like every other `E_*` line
@@ -1282,8 +1371,8 @@ the range above still blocks review.
   branch is exactly as R1 states it: write `entry-signal: <NAME> forwarded <pid>`, forward
   the signal, wait for the parent, remove the run directory after that wait returns, exit
   with the parent's status. What this block adds is that a forward landing in the pre-fork
-  window now ends cleanly rather than ambiguously: the parent writes
-  `parent-signal: TERM no-runtime`, kills at most its own one pre-resolver child, and exits
+  window now ends cleanly rather than ambiguously: the parent kills at most its own one
+  pre-resolver child, then writes `parent-signal: TERM no-runtime`, and exits
   `143`, so the entry's wait returns that status and the caller sees the entry's
   `entry-signal: TERM forwarded <pid>` line beside the parent's `no-runtime` line and an
   exit of `143`. Nothing is left running and no group anywhere was signalled.
@@ -2457,8 +2546,8 @@ the range above still blocks review.
   trap's other branch is reachable.** The trap is installed ahead of the `mkdir` that
   creates `.run`, and both are ahead of the pin checks and the two compiles (R1), so there
   is a real window in which
-  the entry has a run directory and no parent, and the branch that handles it — one
-  `entry-signal:` line, chmod, remove, exit `128 + signal`, nothing forwarded to anybody —
+  the entry has a run directory and no parent, and the branch that handles it — chmod,
+  remove, one `entry-signal:` line, exit `128 + signal`, nothing forwarded to anybody —
   has no coverage from the mid-run case above. So the test runs the same real resolution in
   the background a second time, with the entry's stderr redirected into a plain file in the
   test's own scratch, polls the output directory for the `.run` entry with a bounded number
@@ -2559,11 +2648,29 @@ the range above still blocks review.
   honestly: the plan quotes the sequence for every fork the parent performs —
   `sigprocmask(SIG_BLOCK, …)`, `fork`, `setpgid`, the `pgid` or `pre_child` assignment,
   the `runtime-pgid:` line, `sigprocmask(SIG_SETMASK, …)`, and on the child's side the
-  mask restore and the three `SIG_DFL` resets before `execve` — and the reviewer checks
+  `SIG_DFL` resets first and the mask restore after them, before `execve` — and the
+  reviewer checks
   that every fork in the file sits inside one such region. The three signal cases above
   are unchanged by the mask and must still pass exactly as written, which is the other
   half of the check: the mask changes *when* a pending signal is delivered, never which
   branch the handler takes once it runs.
+
+  **The same is true of the diagnostics moving after the cleanup, and each of the three
+  cases was checked rather than assumed.** R2's handler and R1's trap now write their
+  `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
+  the assertions above are worth re-reading in that order. The mid-run case does not read
+  either line — it reads the `runtime-pgid:` line, which is written on the normal path
+  before the poll loop and is untouched — and its three assertions are about a dead group,
+  a gone run directory and a status of `143`, all of which the new order reaches sooner
+  rather than later. The pre-parent case still finds exactly one
+  `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the trap writes
+  that line after the chmod and the removal and still before its `exit`, and the case
+  already reads the file only after the entry has exited; the plain file it reads is also
+  why the trap's last-position write cannot hang here at all (R1). The stopped-parent case
+  still finds `parent-signal: TERM no-runtime`, because that branch kills nothing and
+  reaps nothing, so "after the killing" is immediately, and its sentinel assertion is
+  about what the handler did not signal rather than about when it wrote. No assertion is
+  dropped or weakened; only the order the prose describes changes.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -2725,13 +2832,18 @@ Order, each step checkable before the next:
    `sigprocmask(SIG_BLOCK, &three, &saved)` before it and
    `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid`,
    assigned `pgid` or `pre_child` and written the `runtime-pgid:` line, so no handler ever
-   runs between a `fork` and the publication of what it returned; the child restores the
-   same mask and resets the three dispositions to `SIG_DFL` before `execve`, the first
-   because the mask is inherited across `exec` and the second because the child runs C
-   code before it (R2). Each branch first writes one line with the copied
-   `write_all` (`:164`) — `parent-signal: <NAME> group <pgid>` or
-   `parent-signal: <NAME> no-runtime` — which is what R10's stopped-parent case asserts
-   (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
+   runs between a `fork` and the publication of what it returned; on the child's side the
+   three dispositions are reset to `SIG_DFL` **first, while the three are still blocked**,
+   with `SIGPIPE` reset beside them, and the same mask is restored only after that — the
+   resets because the child runs C code before `execve` and a pending signal unblocked
+   ahead of them would run the parent's handler inside the child, the mask restore because
+   the mask is inherited across `exec` (R2). Each branch ends by writing one line —
+   `parent-signal: <NAME> group <pgid>` or `parent-signal: <NAME> no-runtime`, which is
+   what R10's stopped-parent case asserts — **after** it has killed and reaped, not before,
+   with stderr put into non-blocking mode and a single `write(2)` rather than the copied
+   `write_all` (`:164`), a short write or `EAGAIN`/`EPIPE` ignored, and `SIGPIPE` set to
+   `SIG_IGN` among the same first statements of `main`, so a blocking or closed stderr can
+   never hold up the termination this path exists to guarantee (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
    straight to stderr with the copied `write_all` (`:164`) immediately after the `fork`
    (`:432`) and the parent-side `setpgid` (`:450`) and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
@@ -2771,15 +2883,17 @@ Order, each step checkable before the next:
    back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
    unlinked; on the three signals it has two branches, chosen on whether a parent pid has
-   been recorded yet, and each of them first `printf`s one line to the entry's own stderr
-   naming the branch it is in — `entry-signal: <NAME> forwarded <pid>` or
-   `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — then,
-   with a parent, it forwards the signal, waits for the parent to exit,
+   been recorded yet. With a parent, it forwards the signal, waits for the parent to exit,
    removes nothing until that wait returns because the parent is what terminates the
    resolver's process group, and exits with the parent's status; without one, no group exists
    and there is nothing to forward to, so it removes the run directory — or nothing at all,
    if the guard is still empty — and exits
-   `128 + signal`, and no child of the entry's own is alive to race that removal because
+   `128 + signal`. Each branch `printf`s one line to the entry's own stderr naming the
+   branch it is in — `entry-signal: <NAME> forwarded <pid>` or
+   `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — as its
+   **last** step before that exit, after the forward and after the removal, because bash's
+   `printf` to a blocked pipe can hang and a diagnostic must not be able to delay the
+   cleanup or the forward (R1). No child of the entry's own is alive to race that removal because
    bash defers a trapped signal until the foreground command it is waiting on finishes,
    which also means the branch can run up to one compile late — R1, R2);
    **then the pin check** — verify the jq passed as an argument
@@ -2967,11 +3081,21 @@ intent says for this change. Only after the operator's merge does
   be left to invent, and neither is the window this round found inside it: a signal that
   lands between a `fork` and the assignment that publishes its pid would take the
   no-runtime branch and exit with the child it just forked still running, so R2 blocks
-  `INT`, `TERM` and `HUP` across every fork the parent performs and its publication and
-  restores the mask in the child before `execve`. That fix is the one thing in this bullet
+  `INT`, `TERM` and `HUP` across every fork the parent performs and its publication, and in
+  the child resets the three dispositions to `SIG_DFL` before it restores the mask — that
+  order, because unblocking first would let a pending signal run the parent's handler
+  inside the child and kill groups from the wrong process. That fix is the one thing in this bullet
   with no test behind it — the window is a few instructions wide and nothing can put a
   signal in it on demand — so its coverage is a sequence the plan quotes and the reviewer
-  reads, which R10 states in those words rather than implying a case exists.
+  reads, which R10 states in those words rather than implying a case exists. One more
+  ordering belongs in this bullet, and it points the other way: the two diagnostic lines
+  this path writes — the parent's `parent-signal:` and the entry's `entry-signal:` — are
+  written **after** the killing and the cleanup rather than before, and best-effort, because
+  stderr may be a pipe nobody is draining and a blocking write ahead of the kill would hang
+  the very path that exists to guarantee cleanup (R1, R2). The plan should treat "the
+  diagnostic never delays termination" as a rule of this component rather than a detail: the
+  handler's line goes out with one non-blocking `write(2)` whose failure is ignored, and the
+  trap's `printf` is the last statement before its `exit`.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
@@ -3052,10 +3176,13 @@ intent says for this change. Only after the operator's merge does
   handlers with process-group termination are new (R2) — and that item grows again this
   round rather than a tenth being added, because it is all the same deviation: the handlers
   carry two `volatile sig_atomic_t` variables, three branches on them, a prohibition on
-  `kill(0, …)`/`kill(-0, …)`, one `parent-signal:` line each branch writes, and now a
+  `kill(0, …)`/`kill(-0, …)`, one `parent-signal:` line each branch writes — written last,
+  after the kill and the reap, with stderr made non-blocking for a single `write(2)` whose
+  short write or `EAGAIN`/`EPIPE` is ignored, and `SIGPIPE` left at `SIG_IGN` from the
+  first statements of `main`, so the diagnostic can never hold up the termination — and a
   `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
   `sigprocmask(SIG_SETMASK, …)` after the pid assignment and the `runtime-pgid:` line,
-  plus the child's own mask restore and three `SIG_DFL` resets before `execve` — where the
+  plus the child's own `SIG_DFL` resets before that restore rather than after it — where the
   launcher forks at `:432` with no mask at all and contains no `sigprocmask`, no
   `sigaction` and no `signal()` anywhere in its 702 lines (verified: none of the three
   names appears in the file), so there is no handler and no mask discipline to grow from; the four sandbox
