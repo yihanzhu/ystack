@@ -18,10 +18,10 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1790-2420 changed lines** (implementation). The derivation,
+**Evidence-based range: 1836-2484 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
-- **C parent ~990 lines** = ~605 copied verbatim + ~385 new. The test launcher is 702
+- **C parent ~1010 lines** = ~605 copied verbatim + ~405 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
   copies is nearly all of it. Block by block: the includes, platform shims and the four
   limit constants, lines 1-43 (43 lines); the eight small helpers `set_limit` through
@@ -48,16 +48,20 @@ measured rather than guessed:
   against the run directory the parent was handed, R5), the regular-non-symlink check on
   the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
-  (~45), closing inherited descriptors above 2 (~15), and the usage
-  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~385
+  (~45), closing inherited descriptors above 2 (~15), the fd-relative creation of the four
+  sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
+  two `open` calls is nearly free, and the cost is carrying the output-directory descriptor
+  into `supervise` and out of `main`: the signature, the call site, the ownership of the
+  close, and the error paths, R5), and the usage
+  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~405
   is how the parent computes digests: delegating to the platform's SHA-256 tool and
   `git hash-object` at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
-  plan decides that, and it is the one thing that could push the C file past ~1100. This
-  round adds nothing to this figure: the parent already checked the output directory's
-  owner, mode and single `.run` entry, and the not-a-symlink fact it now also states comes
-  free with the `O_DIRECTORY|O_NOFOLLOW` open it already does.
-- **Entry shell ~320 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+  plan decides that, and it is the one thing that could push the C file past ~1120. This
+  round moves this figure by the ~20 just named. The round before it moved nothing here,
+  because its findings only stated what the copied code already did; creating the sandbox
+  relative to a checked descriptor is a change to what the shipped parent does.
+- **Entry shell ~335 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
@@ -68,19 +72,26 @@ measured rather than guessed:
   environment every command it runs is given, and run-as-child plus wait plus signal
   forwarding plus `128 + signal`, each step with its own `E_RUNTIME` exit. The output
   directory it now takes as an argument, and the `PATH_MAX` guard it runs on that argument
-  before making `<output>/.run` (R1), are ~15 of the total. This round takes the entry from
-  ~270 to **~320**: ~35 for validating the output root before writing into it — the `cd -P`
+  before making `<output>/.run` (R1), are ~15 of the total. The round before this one took
+  the entry from
+  ~270 to ~320: ~35 for validating the output root before writing into it — the `cd -P`
   comparison, the `/usr/bin/stat` owner-and-mode read with its per-platform format, the
   `dotglob nullglob` emptiness glob, and an `E_RUNTIME` exit for each (R1) — and ~15 for the
   `env -i` prefixes on the pin checks, both compiles and the parent launch, plus the `home`
-  subdirectory the compile line's `HOME` needs and its removal beside `tmp`.
-- **Focused test ~735 lines.** For scale, the existing resolution test is 746 lines and
+  subdirectory the compile line's `HOME` needs and its removal beside `tmp`. This round adds
+  ~15 more, to **~335**: ~10 for the builtin scrub, which is the ten copied lines of
+  `materialize.sh:4-13` and nothing else, and ~5 for the re-exec — the argument-count and
+  marker-word discrimination, the `${BASH_SOURCE[0]}` absolute check, and the `exec` line
+  itself (R1). Moving the pin checks after the run directory costs nothing: the same
+  statements in a different order.
+- **Focused test ~755 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
   that were there plus this round's five output-root cases at ~55, each of them also
   asserting the target was never written to), the entry-driven loader-variable pollution run
-  with its marker library (~20), the polluted-compiler-environment block — poisoned-header
+  with its marker library (~25 — the library, the two runs, and the at-most-one-line count
+  assertion over the marker file), the polluted-compiler-environment block — poisoned-header
   fixture, two entry runs, two hand-built compiles whose digests are compared, and the
   control compile that proves the fixture poisonous (~35), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
@@ -90,8 +101,8 @@ measured rather than guessed:
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
   signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
   `SIGSTOP` freeze (~35), the cleanup assertions
-  (~70 — each of the three cases now asserts the exact entry set of the output directory,
-  not one emptiness test), the pin-constant assertions over ten pins (~25), the
+  (~85 — four cases now rather than three, each asserting the exact entry set of the output
+  directory rather than one emptiness test), the pin-constant assertions over ten pins (~25), the
   command-word allowlist grep
   plus the downloader and `git`-subcommand grep (~30),
   exit-status assertions (~15), harness
@@ -99,9 +110,9 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2105 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 four rounds ago, then 1560-2120, then 1580-2130, then
-1650-2240, and the
+Those sum to about 2160 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 five rounds ago, then 1560-2120, then 1580-2130, then
+1650-2240, then 1790-2420, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -110,7 +121,7 @@ test). The round before this one moved ~15 net lines, all of them in the test: t
 unsupported-platform case left the runtime list for code review
 (−10), the overlong-value case grew a near-`PATH_MAX` directory fixture (+10), and the
 downloader grep became a full command-word allowlist grep plus a `git`-subcommand
-assertion (+15). This round adds ~90, all of it from the second of its two findings —
+assertion (+15). The round after that added ~90, all of it from the second of its two findings —
 moving the run directory inside the caller's output root, which is a change to what the
 shipped files do and so does cost implementation lines: ~20 in the parent (the
 output-directory check becomes a `readdir` plus a `realpath` comparison), ~15 in the entry
@@ -120,14 +131,25 @@ entry set three times). The first finding — the process-table reads in R7 — 
 here, because it only states what the copied supervisor already does. Nothing was made
 cheaper to compensate.
 
-This round adds ~160, all of it in the entry and the test, from three findings that share
-one shape — a check or a scrub that was in the wrong process. ~50 in the entry: validating
-the output root before writing into it, and running the pin checks, both compiles and the
-parent launch under `/usr/bin/env -i` with a named variable list. ~110 in the test: five
-output-root refusals in group 1, the loader-variable pollution moved from the parent's
-caller to the entry's, and the polluted-compiler-environment block with its poisoned header
-and its control compile. Nothing in the C parent moved, for the reason its bullet gives, and
-again nothing was made cheaper to compensate.
+The round before this one added ~160, all of it in the entry and the test, from three
+findings that share one shape — a check or a scrub that was in the wrong process. ~50 in
+the entry: validating the output root before writing into it, and running the pin
+checks, both compiles and the parent launch under `/usr/bin/env -i` with a named
+variable list. ~110 in the test: five output-root refusals in group 1, the
+loader-variable pollution moved from the parent's caller to the entry's, and the
+polluted-compiler-environment block with its poisoned header and its control compile.
+Nothing in the C parent moved, for the reason its bullet gave, and again nothing was
+made cheaper to compensate.
+
+This round adds ~55, spread across all three files, from three findings that all say the
+same thing about *when* something happens rather than whether it happens. ~20 in the C
+parent: creating the four sandbox entries relative to the checked output-directory
+descriptor, whose real cost is carrying that descriptor into `supervise`. ~15 in the entry:
+the copied builtin scrub and the empty-environment re-exec ahead of every external command
+— the reorder that puts the run directory before the pin checks is free, being the same
+statements in a different order. ~20 in the test: the count assertion on the marker file,
+and a fourth cleanup case now that a pin-check refusal happens with `.run` on disk. Nothing
+was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -143,17 +165,20 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by about four times: `wc -l
-work/resolver-trusted-parent/spec.md` is 1503 lines. Accepted as one concern: one
+requests too, and this one exceeds it by about five times: `wc -l
+work/resolver-trusted-parent/spec.md` is 1764 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
 termination on signals, per-check direct-parent coverage, an exact executable allowlist,
-the parent's host process-table reads, a single write root, and this round a validated
-output root, loader variables tested at the boundary that can defend them, and a scrubbed
-compiler environment).
-**Evidence-based range: 1278-1728 lines** — the measured 1503 lines plus or minus 15%. It was
-553 lines and 470-636 five rounds ago, then 783, then 847, then 1012, then 1202; where each
+the parent's host process-table reads, a single write root, a validated
+output root, loader variables tested at the boundary that can defend them, a scrubbed
+compiler environment, and this round the scrub moving ahead of every external command, the
+scratch directories moving ahead of the pin checks, and the parent's sandbox writes moving
+onto the descriptor it checked).
+**Evidence-based range: 1499-2029 lines** — the measured 1764 lines plus or minus 15%. It was
+553 lines and 470-636 six rounds ago, then 783, then 847, then 1012, then 1202, then 1503;
+where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
@@ -161,19 +186,20 @@ set with its
 evidence and deciding the pins (R5), about 40 restructuring R10's refusals into
 owner-labelled groups with one line per case, about 25 on the signal decision in R2 and
 its test, and the rest spread over R1, R7, the Design steps, three Areas-of-concern
-bullets and the re-derived size figures. The 64 lines of the previous round were its two
+bullets and the re-derived size figures. The 64 lines of the round after it were its two
 findings: about 27 stating pin ownership once and naming the parent-pinned subset with
 its residual (R5, echoed in R1, R7 and R10), about 28 replacing the signal test's
 fallback with the `SIGSTOP` freeze and its failure case (R10, echoed in R2 and Areas of
 concern), and the remaining handful in re-derived size figures.
-The 165 lines of the round before this one were its three findings: about 55 replacing
+The 165 lines of the round after that were its three findings: about 55 replacing
 R7's seven-tool read list with the exact command enumeration per
 shipped file and the path-policy choices behind it, about 30 explaining why the
 overlong-value case aims at the output path (R10, echoed in R5), about 25 on the
 unsupported-platform refusal becoming code-review coverage (R10, echoed in R8, Design
 step 2 and Areas of concern), about 11 turning the read list into R10's command-word
 grep, and the rest in the Copy-versus-adapt deviation list and re-derived figures.
-The 190 lines of this round are its two findings, split unevenly. About 45 go to R7's new
+The 190 lines of the round after that, in turn, were its two findings, split
+unevenly. About 45 go to R7's new
 third read item, which names the copied supervisor's `/proc` and `libproc` reads per
 platform with their line numbers, says they take no file content, and says the coverage is
 code review of the copied block — echoed in R10's grep paragraph and in Areas of concern.
@@ -184,7 +210,8 @@ check order it now fixes, three more R10 cases, the whole cleanup block, the sig
 final assertion, Design steps 1 and 2, two Areas-of-concern bullets, the Copy-versus-adapt
 list, and the implementation size figures — which moved for the first time in three
 rounds, because unlike the recent findings this one changes what the shipped files do.
-This round is +301 net, its largest yet, over three findings that all say the same thing in
+The round before this one was +301 net, the largest yet, over three findings that all say
+the same thing in
 different places: a check or a scrub was sitting in the wrong process. About 70 go to the
 entry validating the output root before it writes there — R1's validate-first paragraphs
 with the `cd -P`, `stat` and glob mechanisms, R5's paragraph on why the same rule now sits
@@ -201,6 +228,22 @@ R10's grep (`/usr/bin/env`, `/usr/bin/stat`) with the two extra deviation bullet
 explain them, a fourth per-platform table in three places, Design steps 1 and 2 reordered,
 two more entries in the Copy-versus-adapt list, and `home` appearing everywhere `tmp`
 already did.
+
+This round is +261 net over three findings that are all corrections to the previous round
+rather than new ground — each one says a defence it added is in the right place but at the
+wrong moment. About 105 go to the loader scrub: R1's three new paragraphs on why an
+`env -i` prefix cannot protect the `env` that carries it, the verbatim builtin scrub and
+the adapted re-exec with its two named deviations, the residual that the entry's own first
+process is uncovered, and the rewritten boundary note under Areas of concern. About 55 go
+to the parent creating its sandbox with `mkdirat` and `openat` on the descriptor it
+checked — R5's two new paragraphs with the race they close and the path residual they do
+not, plus R7's collision paragraph and Design step 1. About 35 go to the scratch
+directories moving ahead of the pin checks: R1's order paragraph and Design step 2's
+reordering, with the reason stated once. About 45 are the re-derived size figures, here and
+for the implementation. The remaining ~20 are ripples: R10's marker assertion becoming a
+count, its cleanup list going from three cases to four with the group-1 pin cases
+reclassified, R3's parenthetical on `mkdirat`, and two more entries in the
+Copy-versus-adapt list.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -236,6 +279,71 @@ the range above still blocks review.
   script owns compilation, jq binding and platform choice
   (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
   the launch.
+
+  **The entry's first statements scrub its environment with builtins, and then it re-execs
+  itself with an empty one. Only after that does it run any external command.** An earlier
+  round of this spec put `/usr/bin/env -i` in front of the pin checks, both compiles and
+  the parent launch and stopped there, which is not early enough for a reason worth stating
+  plainly: `/usr/bin/env` is itself an external process, so the loader honours the caller's
+  `LD_PRELOAD` and `LD_LIBRARY_PATH` on the way to running `env` — the very command that
+  was supposed to remove them. Nor is `env` the first external command in that order.
+  `/usr/bin/uname` runs for the platform case, `/usr/bin/stat` for the output root's owner
+  and mode, and in the order an earlier round used `/usr/bin/git` and `/usr/bin/cc` ran too,
+  every one of them an absolute path executed while the caller's loader variables were
+  still in the entry's own environment and therefore inherited.
+
+  So the entry begins with a scrub that forks nothing, copied verbatim from the
+  materializer's clean entry (`adapters/local-git-materializer/v1/materialize.sh:4-13`):
+  `builtin unset -f` over every name `builtin compgen -A function` reports, then
+  `builtin unset` over every name `builtin compgen -e` reports except `PATH`, then
+  `PATH=/usr/bin:/bin`, `LC_ALL=C` and `export PATH LC_ALL`. Builtins only — no `env`, no
+  `uname`, no subprocess of any kind — so there is no window in which an external command
+  runs under a caller-set variable. The shebang comes over with it, `#!/bin/bash -p`
+  (`materialize.sh:1`), because privileged mode is what stops bash from sourcing `BASH_ENV`
+  before the scrub's first line.
+
+  A scrub in the current shell does not undo what the current shell's own loader already
+  did, so the entry then re-execs itself under an empty environment, adapting the
+  materializer's re-exec (`:22-29`):
+
+  ```
+  exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+    /bin/bash "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"
+  ```
+
+  Two named deviations from the copied lines, and nothing else. The marker word is
+  `__resolve_profile_clean` in place of `__materialize_clean` (`:25,29`). And the arity
+  differs: the materializer's caller-facing shape carries a leading subcommand word, so
+  both of its invocations are eight arguments and `$1` alone tells them apart (`:22,25,29`),
+  while the entry's caller-facing shape is `<jq> <output directory> <request>
+  <repository map>` (below) — four arguments with no subcommand word — so the entry tells
+  them apart by count and word together: five arguments whose first is the marker word is
+  the clean path, exactly four arguments is the dirty path and re-execs, and anything else
+  is `E_USAGE`. That keeps the materializer's two properties intact — a caller cannot enter
+  the clean path, because it would have to supply the marker word, and the re-exec cannot
+  re-enter the dirty one, because it always supplies it. Everything else is the same:
+  `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
+  re-exec is an `exec`, so no extra process is left behind. The literal
+  `PATH=/usr/bin:/bin` above is not a third deviation: the materializer writes
+  `PATH="${PATH:-/usr/bin:/bin}"` there (`:26`), and the scrub has just set `PATH` to
+  exactly that value, so the two are the same line with the indirection spelled out.
+  Every step this spec describes after this point — the platform case, the output-root
+  validation, the pin checks, the compiles, the mode pass, the launch — runs in that second
+  process, which was started with an empty environment.
+
+  **The residual, stated plainly: the entry's own first process is not covered by any of
+  this.** The caller started that process, so its loader read the caller's `LD_PRELOAD` and
+  `LD_LIBRARY_PATH` and mapped whatever they named before the entry's first line ran. The
+  injected code has already run by then; the builtin scrub keeps it from spreading to
+  anything the entry starts, and it is not a way to unrun it. So the entry must itself be
+  started by a trusted process — the operator's own shell, or the trusted lane — exactly as
+  the parent must, and for exactly the same reason. R10's marker-library test is written to
+  claim no more than that: it asserts that nothing below the entry's first process records
+  the marker, and it does not assert that the first process is clean. The `/usr/bin/env -i`
+  prefixes on the pin checks, the compiles and the parent launch stay where they are even
+  though the re-exec has already emptied the environment, because each of them names the
+  variables that command is meant to have rather than trusting a scrub upstream to have
+  been complete.
 
   The entry takes the jq 1.6 binary as a positional argument, exactly as
   `shadow/v1/reproduce.sh` takes it (`shadow/v1/reproduce.sh:74` binds `caller_jq` from
@@ -305,6 +413,23 @@ the range above still blocks review.
   is empty. Ownership is checked before mode, so a directory belonging to somebody else
   refuses on ownership even when its mode is also wrong. Only after all of that does the
   entry create `<output>/.run`.
+
+  **And the scratch directories come before the pin checks, not after.** An earlier round of
+  this spec ran the pin checks under the
+  `env -i … TMPDIR=<output>/.run/tmp HOME=<output>/.run/home` line quoted below and created
+  `.run` only afterwards, so neither of those two directories existed when the first
+  `git hash-object` was told to use them. A `TMPDIR` or a `HOME` naming a directory that is
+  not there is not a refusal; it is a quiet fallback, and what the tool does instead —
+  fail obscurely, or write somewhere the spec has just promised it will not — is the
+  toolchain's choice rather than the entry's. So the order is fixed here, and every later
+  section uses it: validate the output root; create `<output>/.run` and its `tmp` and `home`
+  subdirectories at mode 0700 and install the trap; run the pin checks; run the two
+  compiles; empty and remove `tmp` and `home` and tighten the modes; launch the parent. The
+  only refusals that happen before anything is written are the output-root validations
+  above. Every refusal after them — the pin checks included — happens with `.run` already on
+  disk, which is why the trap is installed with the `mkdir` rather than after the pins, and
+  why R10 counts a pin-check refusal as cleanup evidence rather than as a
+  nothing-was-created case.
 
   Two of those checks need a mechanism worth naming. Emptiness is a glob, not a command:
   `shopt -s dotglob nullglob` and then a glob of `<output>/*` into an array that must have
@@ -405,11 +530,15 @@ the range above still blocks review.
   **The parent is launched under an explicit empty environment as well** —
   `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C` and nothing more. That is stronger than the
   named clearing of `LD_*`, `DYLD_*`, `BASH_ENV` and `ENV` an earlier round asked for, and
-  it is the only place the loader-variable claim can be made at all: those variables are
-  read by the dynamic loader and acted on before the parent's `main` is entered, so no code
-  the parent contains can defend against them and only the process that starts it can (R10,
-  and the boundary note under Areas of concern). The parent needs no `HOME` and no `TMPDIR`
-  of its own: it builds the resolver's environment from empty (R3), and its own two helper
+  it is the only place the loader-variable claim can be made about the parent at all: those
+  variables are read by the dynamic loader and acted on before the parent's `main` is
+  entered, so no code the parent contains can defend against them and only the process that
+  starts it can (R10, and the boundary note under Areas of concern). By the time this line
+  runs, the environment it is emptying is already the scrubbed one the re-exec above
+  produced; the `-i` is here because this command's environment should be named where it is
+  launched, not because anything is expected to be left in it. The parent needs no `HOME`
+  and no `TMPDIR` of its own: it builds the resolver's environment from empty (R3), and its
+  own two helper
   commands — `git hash-object` and the SHA-256 tool — each read a named file and write to
   stdout.
 - **R2 — the launch is copied, not reinvented.** The parent `execve`s the fixed path
@@ -446,8 +575,10 @@ the range above still blocks review.
   directory before the parent has exited.
 - **R3 — the environment is built from empty, with exactly this allowlist.** From
   `portable-profile-resolution-launcher.c:645-690`, and nothing else:
-  `HOME=<sandbox>/home` and `TMPDIR=<sandbox>/tmp` (both created by the parent, mode
-  0700, `:645-647`), `LC_ALL=C`, `PATH=<dir of the bound jq>:/usr/bin:/bin` (`:662-677`),
+  `HOME=<sandbox>/home` and `TMPDIR=<sandbox>/tmp` (both created by the parent at mode
+  0700 — with `mkdirat` relative to the output-directory descriptor it checked rather than
+  the copied `mkdir` at `:645-647`, R5), `LC_ALL=C`,
+  `PATH=<dir of the bound jq>:/usr/bin:/bin` (`:662-677`),
   `YSTACK_RESOLVER_TRUSTED=1`, `YSTACK_RESOLVER_HELPER=<absolute helper>`,
   `YSTACK_RESOLVER_JQ=<absolute jq>` (`:678-680`), `GIT_TERMINAL_PROMPT=0` (`:681`), and
   on Darwin only `MallocNanoZone=0` (`:682-685`). The two test variables
@@ -485,8 +616,9 @@ the range above still blocks review.
   left to the plan: the length guard on the output path (`:641`) runs before any of it, so
   an overlong output path is refused without the parent looking for `.run` at all — R10's
   overlong case depends on that order — and the whole output-directory check runs before
-  the parent creates `home` and `tmp` there (`:645-647`), so a refused run leaves the
-  output directory exactly as it found it.
+  the parent creates `home` and `tmp` there (`:645-647`, which the parent replaces with
+  `mkdirat` on the descriptor that check opened, below), so a refused run leaves the output
+  directory exactly as it found it.
 
   **The parent's version of the output-directory rule is a re-check, not the only check.**
   The entry refuses the same output root — absolute, a real directory with no symlink
@@ -500,6 +632,40 @@ the range above still blocks review.
   that `.run` is the only entry, and that it is the run directory the parent was handed. A
   caller who drives the parent directly gets only this pass; that is why group 2 proves the
   parent's copy and group 1 proves the entry's, separately (R10).
+
+  **The parent creates its sandbox relative to the descriptor it checked, not by path.**
+  The `fstat` pass above buys less than it looks like it does if what follows goes back to
+  names, and in the copied launcher it does: `home` and `tmp` are built with `snprintf` and
+  `mkdir(2)` (`portable-profile-resolution-launcher.c:645-647`), and `child.stdout` and
+  `child.stderr` with `open(2)` (`:413-421`), all four by path. In the window between the
+  parent's `fstat` on the output directory and those four creations, a same-uid process can
+  rename that directory away and leave a symlink to somewhere else under the same name, and
+  every one of the four then follows the name to the new object. The `O_NOFOLLOW` already on
+  the two `open` calls does not help here: it refuses a symlink at the last component,
+  `child.stdout`, and says nothing about a symlink in the directory component above it.
+
+  So the parent keeps the descriptor it opened with `O_DIRECTORY|O_NOFOLLOW` and did its
+  `fstat` on, and creates all four entries relative to that descriptor:
+  `mkdirat(dirfd, "home", 0700)` and `mkdirat(dirfd, "tmp", 0700)` in place of the two
+  `mkdir` calls, and `openat(dirfd, "child.stdout", O_WRONLY | O_CREAT | O_EXCL |
+  O_CLOEXEC | O_NOFOLLOW, 0600)` and the same for `child.stderr` in place of the two `open`
+  calls. The names are then single components with no directory part, so there is no path
+  left to re-resolve — the object written to is the object that was checked. Two
+  consequences to carry into the plan: the descriptor stays open for the life of the
+  supervisor, so it is passed into the copied `supervise` (`:400-532`), which is the one
+  signature change this forces; and the four entries are still refusals rather than
+  overwrites on collision, because `mkdirat` and `O_CREAT|O_EXCL` fail on an existing name
+  exactly as the calls they replace did. This is a named deviation from the copied source
+  and is listed under Copy versus adapt.
+
+  **Stated residual — the child still receives paths.** `HOME=<output>/home` and
+  `TMPDIR=<output>/tmp` are strings in the environment the parent builds (R3), and the
+  runtime resolves them by name like any other program. So the fd-relative creation closes
+  the race on the parent's own four writes and not on the resolver's later use of those two
+  directories. Closing that one would mean the runtime accepting descriptors instead of
+  paths — a change to `scripts/lib/profile-resolution.sh` and to the launch contract this
+  initiative does not touch, the same shape as the helper residual below. It is recorded
+  here, not promised.
 
   **The entry pins the loaded set, not just the entry point.** Pinning the runtime file alone
   buys almost nothing, because the runtime is a dozen lines of binding and then a
@@ -662,10 +828,12 @@ the range above still blocks review.
      then streamed to the parent's stdout, which the entry passes through unchanged (R6).
 
   The four sandbox names — `home`, `tmp`, `child.stdout`, `child.stderr` — cannot collide
-  with `.run`: none of them begins with a dot, and the parent creates each one with
-  `mkdir(2)` (`:645-647`) or `open(2)` carrying `O_CREAT|O_EXCL|O_NOFOLLOW`
-  (`:418-421`), every one of which fails on an existing entry rather than reusing it. So a
-  name collision here could only ever be a refusal, never a silent overwrite of something
+  with `.run`: none of them begins with a dot, and the parent creates each one relative to
+  the output-directory descriptor it has already checked, with `mkdirat(2)` and with
+  `openat(2)` carrying `O_CREAT|O_EXCL|O_NOFOLLOW` — a named deviation from the copied
+  `mkdir(2)` at `:645-647` and `open(2)` at `:413-421`, which build the same four by path
+  (R5). Every one of those four calls fails on an existing entry rather than reusing it, so
+  a name collision here could only ever be a refusal, never a silent overwrite of something
   the entry put there.
 
   One thing the move does not widen: the launched resolver can reach the run directory
@@ -731,21 +899,28 @@ the range above still blocks review.
      digest pin; `/usr/bin/git`, for `hash-object` on the ten pinned files;
      `/bin/mkdir`, for the run directory `<output>/.run` and the `tmp` and `home`
      subdirectories inside
-     it; `/usr/bin/env`, which prefixes every pin check, both compiles and the parent launch
-     with `-i` and an explicit variable list (R1); the compiler `/usr/bin/cc`; `/bin/cp`,
+     it; `/usr/bin/env`, which is the entry's *first* external command — it performs the
+     re-exec into an empty environment — and afterwards prefixes every pin check, both
+     compiles and the parent launch with `-i` and an explicit variable list (R1); the
+     compiler `/usr/bin/cc`; `/bin/cp`,
      for the jq and awk copies; `/usr/bin/awk`,
      read only in order to be copied in, because the runtime needs awk on its `PATH`;
      `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
      `/bin/chmod`, for the 0500 pass and the trap's 0700 restore; `/bin/rm`, for the `tmp`
-     subdirectory and the run directory; `/bin/bash`, which is its own interpreter and the
-     Darwin awk shim's; the bound jq, for the `--version` probe; and the compiled parent
-     inside the run directory, which it runs as its child.
+     subdirectory and the run directory; `/bin/bash`, which is its own interpreter, the
+     target of its own re-exec (R1), and the Darwin awk shim's interpreter; the bound jq,
+     for the `--version` probe; and the compiled parent
+     inside the run directory, which it runs as its child. The order matters as much as the
+     list: `/usr/bin/env` runs before `/usr/bin/uname`, and the builtin scrub ahead of it
+     runs no command at all (R1), so every entry in this list except `env` itself is
+     executed from an environment the entry wrote.
 
      *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
      argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); `/usr/bin/git`,
      for `hash-object` on the parent-pinned subset; the same per-platform SHA-256 tool,
      for the jq digest; and the bound jq, for its own `--version` probe. Nothing else. The
-     sandbox `home` and `tmp` directories come from `mkdir(2)` (`:645-647`), not from
+     sandbox `home` and `tmp` directories come from `mkdirat(2)` on the descriptor the
+     parent checked (R5), not from `mkdir(2)` on a path (`:645-647`) and not from
      `/bin/mkdir`, and every mode and ownership check is an `fstat` on a descriptor the
      parent opened, not a call to `/usr/bin/stat`.
 
@@ -784,15 +959,20 @@ the range above still blocks review.
        Nothing else is `stat`ed by either shipped file — the parent's every mode and
        ownership check is an `fstat` on a descriptor it opened, never `/usr/bin/stat` on a
        path it will later hand on by name.
-     - **Every compiler invocation, every pin check and the parent launch go through
-       `/usr/bin/env -i`.** The test script and `shadow/v1/reproduce.sh` compile under
-       whatever environment the caller happened to have. The entry does not, and the reason
-       is two-sided: `CPATH`, `C_INCLUDE_PATH`, `LIBRARY_PATH`, `SDKROOT`, `DEVELOPER_DIR`
-       and `MACOSX_DEPLOYMENT_TARGET` steer `/usr/bin/cc` even with `$CC` ignored, and
-       `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` are acted on by the parent's own loader
-       before its `main` is entered. Both are handled the same way — by naming the whole
-       environment rather than clearing the part somebody remembered (R1). This is a named
-       deviation from the test.
+     - **The environment is scrubbed by builtins and re-exec'd empty before any of these
+       commands runs, and every compiler invocation, every pin check and the parent launch
+       still go through `/usr/bin/env -i`.** The test script and `shadow/v1/reproduce.sh`
+       compile under whatever environment the caller happened to have. The entry does not,
+       and the reason is two-sided: `CPATH`, `C_INCLUDE_PATH`, `LIBRARY_PATH`, `SDKROOT`,
+       `DEVELOPER_DIR` and `MACOSX_DEPLOYMENT_TARGET` steer `/usr/bin/cc` even with `$CC`
+       ignored, and `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` are acted on by the loader of
+       every process here — the parent's, before its `main` is entered, and equally
+       `env`'s, `uname`'s, `stat`'s, `git`'s and `cc`'s. Both are handled the same way — by
+       naming the whole environment rather than clearing the part somebody remembered — and
+       the scrub is first because an `env -i` prefix cannot protect the `env` that carries
+       it (R1). This is a named deviation from the test, and the scrub and re-exec are
+       copied verbatim and adapted from
+       `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`.
 
      That is the whole list, and R10 turns it into a checked invariant rather than prose:
      the focused test greps both shipped files for every command word and fails if any
@@ -904,7 +1084,12 @@ the range above still blocks review.
   Each of those five asserts more than the `E_RUNTIME` line and the non-zero exit: it
   asserts the target was never written to — no `.run` in it, and its entry set exactly what
   the test put there — because the whole point of moving the check into the entry is that
-  the refusal comes before the writes. Every case here and in
+  the refusal comes before the writes. Those five are the only cases in the test that can
+  assert that. The pin-check cases listed above them run the other way round: the run
+  directory is created before the pins are checked (R1), so each of them asserts the
+  refusal and, afterwards, that the trap removed `.run` — and the wrong-digest jq case among
+  them is where the cleanup list below states those assertions in full, as its case 2.
+  Every case here and in
   group 2 that needs an edited
   repository file edits a copy of the repository tree and points the entry or the parent
   at the copy; the test never modifies the working tree.
@@ -1047,22 +1232,36 @@ the range above still blocks review.
   parent started directly with them set has *already run the injected code*, and the test
   would be asserting that the injected library chose not to change the output — after
   running it. Nothing the parent contains can change that. So loader variables move one
-  process outwards, to the only place that can defend against them. The entry starts the
-  parent under `/usr/bin/env -i` with an environment it wrote itself (R1), so the entry is
+  process outwards, to the only place that can defend against them. The entry scrubs its
+  environment with builtins and re-execs itself under `/usr/bin/env -i` before it runs
+  anything else, and later starts the parent the same way (R1), so the entry is
   what the test pollutes: it runs a full resolution through the shipped entry twice, once
   from a clean caller environment and once with `LD_PRELOAD`, `LD_LIBRARY_PATH`,
   `DYLD_INSERT_LIBRARIES` and `DYLD_LIBRARY_PATH` set, and asserts the two stdouts are
-  byte-identical and both exits are 0. The values name a real, harmless library the test
-  builds, whose constructor appends its own `argv[0]` to a marker file in the test's
-  scratch, so the assertion has teeth rather than resting on the run merely succeeding: the
-  marker file may name the entry's own `/bin/bash`, which is expected and is the boundary
-  being described, and it must name nothing below it — no `trusted-launch`, no second
-  `bash` running the runtime, no `jq`. On Darwin the file may be empty instead, because the
+  byte-identical and both exits are 0.
+
+  The values name a real, harmless library the test builds, whose constructor appends one
+  line to a marker file in the test's scratch for every process it is loaded into — its own
+  `argv[0]` and its pid — so the assertion has teeth rather than resting on the run merely
+  succeeding. **The assertion is on the count: the marker file holds at most one line.**
+  That one line, if present, names `/bin/bash` and is the entry's own first process, the
+  one the caller started, whose loader ran before the entry's first statement. Nothing after
+  it may appear — not the `/bin/bash` the re-exec starts, not `/usr/bin/env`,
+  `/usr/bin/uname`, `/usr/bin/stat`, `/usr/bin/git` or `/usr/bin/cc`, not
+  `trusted-launch`, not the second `bash` running the runtime, not `jq`. Counting is what
+  makes this checkable: the re-exec'd bash has the same `argv[0]` as the first one, so no
+  assertion about names can tell them apart, while a second line can only mean that
+  something below the first process still had a loader variable. It is also what gives the
+  test its bite — under the order an earlier round of this spec used, `uname`, `stat`, the
+  ten `git hash-object` runs and both `cc` runs would each have added a line.
+  On Darwin the file may be empty instead, because the
   platform strips insertion variables for system binaries like `/bin/bash`; the assertion
-  is "nothing below the entry" either way, which holds in both cases. Beyond the entry
+  is "at most one line, and nothing below the entry's first process" either way, which
+  holds in both cases. And it is exactly the claim R1 makes and no more: the test does not
+  assert that the first process is clean, because it is not. Beyond the entry
   there is nothing left to test, and the boundary note says so: the entry's own loader does
   run under the caller's environment, so the strong claim holds only when the process that
-  starts the parent is trusted — the entry when used as designed (Areas of concern).
+  starts the entry is trusted — the operator's shell or the trusted lane (Areas of concern).
 
   Third, on Linux CI
   only, the test reads `/proc/<child pid>/environ` of the launched runtime while it runs
@@ -1114,13 +1313,21 @@ the range above still blocks review.
   the caller's `TMPDIR` is not a write location any more, so every cleanup assertion is
   about the output directory: the test gives the entry a fresh empty mode-0700 output
   directory of its own and asserts exactly what that directory holds once the entry
-  returns. Which refusal is used matters. The wrong-digest jq refusal fires during the pin
-  check, before the run directory has been created at all, so it proves only that the entry
-  never created one — not that the trap removes one. It stays in the test as a pin-check
-  case and is not cited as cleanup evidence anywhere. Three cases carry the cleanup claim,
-  and in all three the first assertion is that no `.run` entry remains; two of them are
-  refusal cases the list above already includes, and the cleanup claim adds the
-  output-directory assertions to them:
+  returns. Which refusal is used matters, and the check order R1 fixes changes the answer
+  from what an earlier round of this spec said. Under that order the pin checks ran before
+  `.run` was created, so a wrong-digest refusal proved only that the entry had created
+  nothing — not that the trap removes anything — and the case was explicitly not cited as
+  cleanup evidence. The run directory and its `tmp` and `home` subdirectories are now
+  created *before* the pin checks, because the pin checks run under the `env -i` line that
+  points `TMPDIR` and `HOME` inside them (R1), so a wrong-digest pin refusal now fires with
+  `.run` on disk and the trap already installed. It is therefore a cleanup case, and the
+  strongest one available for a refusal the *entry* owns.
+
+  The refusals that still happen before any write are exactly the output-root validations —
+  the five group-1 cases above, which assert the target was never written to — and nothing
+  else. **Four cases carry the cleanup claim**, and in all four the first assertion is that
+  no `.run` entry remains; three of them are refusal cases the lists above already include,
+  and the cleanup claim adds the output-directory assertions to them:
 
   1. *A successful resolution.* The run directory existed, was tightened to 0500, and is
      gone afterwards — which also proves the trap's `chmod 0700` is there, because without
@@ -1132,7 +1339,16 @@ the range above still blocks review.
      scratch under it on exit (`scripts/lib/profile-resolution.sh:688-692`). It makes no
      claim about `home` being empty, because nothing in this initiative's control governs
      what a future git might drop into a `HOME` it was handed.
-  2. *A refusal by the parent, after the run directory and the trap both exist.* The test
+  2. *A refusal by the entry, at the pin check.* The wrong-digest jq case from group 1. The
+     entry has by then validated the output root, created `.run` with its `tmp` and `home`
+     subdirectories at 0700 and installed the trap, and refuses before either compile. The
+     trap therefore fires against a run directory that exists, is still 0700, and holds two
+     subdirectories and no compiled file — the one shape none of the other three cases
+     reaches. The output directory is asserted **completely empty** afterwards: no `.run`,
+     and nothing else either, because the parent never ran and so never created its
+     sandbox. This case is also what proves the trap covers the pin checks at all, which is
+     only true because of the order R1 fixes.
+  3. *A refusal by the parent, after the run directory and the trap both exist.* The test
      hands the entry a runtime file copied to mode 0755 instead of 0644, so the entry
      checks every pin, compiles both binaries, removes `tmp` and `home`, tightens
      everything to 0500 and launches, and the parent refuses on the runtime-mode check it owns (R5). The trap
@@ -1140,7 +1356,7 @@ the range above still blocks review.
      directory is asserted **completely empty** afterwards — no `.run`, and no `home`,
      `tmp` or `child.*` either, because every refusal check the parent makes runs before it
      creates its sandbox there (R5).
-  3. *A refusal by the runtime, deeper still.* A malformed request document, which the
+  4. *A refusal by the runtime, deeper still.* A malformed request document, which the
      parent accepts as a canonical regular file and passes through and the runtime refuses.
      The child exits non-zero only after the resolver has run and created its own scratch
      under the sandbox, and the output directory afterwards holds the same four sandbox
@@ -1150,8 +1366,9 @@ the range above still blocks review.
 
   No entry output is needed for any of this, and the entry is not asked to print its run
   directory path — which is no longer worth asking for, since it is always `<output>/.run`.
-  The test also asserts the entry's exit status is 0 in case 1 and equals
-  the child's own non-zero status in cases 2 and 3.
+  The test also asserts the entry's exit status is 0 in case 1, the entry's own non-zero
+  `E_RUNTIME` status in case 2, where no child ever ran, and the child's own non-zero
+  status in cases 3 and 4.
 
   **A signal mid-run is tested, and the test is deterministic because it freezes the
   resolver before signalling.** R2's group termination has no other proof, so the signal
@@ -1232,10 +1449,15 @@ Order, each step checkable before the next:
    `.run` entry and requires it to be the run directory the parent was handed — which
    re-checks on an opened descriptor what the entry already refused by path (R1, R5) — and
    the check order R5 fixes (length guard, then the output directory, then the sandbox
-   `mkdir`) — checks that the test script performs today or cannot perform at all.
+   creation) — checks that the test script performs today or cannot perform at all.
    Every mode and ownership check is done with `fstat` on a descriptor
    the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
-   on a path it will later hand on by name. Two blocks here have no counterpart in the
+   on a path it will later hand on by name; and the sandbox's four entries — `home`, `tmp`,
+   `child.stdout`, `child.stderr` — are created with `mkdirat` and `openat` relative to the
+   output-directory descriptor the check opened, in place of the copied `mkdir` at
+   `:645-647` and `open` at `:413-421`, which build them by path (R5). That descriptor is
+   passed into the copied `supervise` (`:400-532`) and stays open for its life, which is
+   the one signature change the deviation forces. Two blocks here have no counterpart in the
    copied source and are written fresh: the blob-id pins for the three loaded files the
    parent re-checks (the runtime, `scripts/lib/profile-resolution.sh` and
    `resolver/v1/profile-resolution.jq`, all located from the runtime path with the
@@ -1243,7 +1465,14 @@ Order, each step checkable before the next:
    the `INT`/`TERM`/`HUP` handlers that terminate the child's process group with
    `kill(-pgid, SIGTERM)` then `kill(-pgid, SIGKILL)`, reap, and exit `128 + signal` (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
-   `E_RUNTIME` before the next: resolve the repository root from its own `BASH_SOURCE`
+   `E_RUNTIME` before the next. **Scrub, then re-exec, before any external command** — the
+   builtins-only scrub copied verbatim from
+   `adapters/local-git-materializer/v1/materialize.sh:4-13` under the same `#!/bin/bash -p`
+   shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash
+   "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
+   marker word and the arity only, with the clean path refusing unless its first argument is
+   the marker word (R1). Everything below runs in that second process. Then: resolve the
+   repository root from its own `BASH_SOURCE`
    the way the runtime does (`resolver/v1/profile-resolve-runtime.sh:4-16`); refuse an
    unsupported platform, from a `case` over `/usr/bin/uname -s` and `-m` with one arm per
    supported tuple and a refusing `*)` arm, which is the branch R10 covers by review
@@ -1252,13 +1481,7 @@ Order, each step checkable before the next:
    must fit), a real directory with no symlink component (`[ -d ]`, `[ ! -L ]`,
    `(cd -P … && pwd)` equal to the argument), owned by the current uid, mode exactly 0700
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
-   (R1); **pin check** — verify the jq passed as an argument
-   against this
-   platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify with
-   `git hash-object` the blob ids of both C sources and of the eight loaded files R5 lists
-   as entry-pinned, against the pinned constants, the way the
-   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`), every
-   one of those commands run under the `env -i` line R1 quotes;
+   (R1);
    then create the run directory `<output>/.run` at mode 0700 with a plain `/bin/mkdir`,
    which refuses an existing one, plus 0700 `tmp` and `home` subdirectories
    inside it for compiler scratch and the compiler's `HOME`, and install the
@@ -1268,6 +1491,16 @@ Order, each step checkable before the next:
    unlinked; on the three signals it first forwards the signal to the parent and waits for
    the parent to exit, and removes nothing until that wait returns, because the parent is
    what terminates the resolver's process group — R2);
+   **then the pin check** — verify the jq passed as an argument
+   against this
+   platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify with
+   `git hash-object` the blob ids of both C sources and of the eight loaded files R5 lists
+   as entry-pinned, against the pinned constants, the way the
+   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`), every
+   one of those commands run under the `env -i` line R1 quotes, which is why this step
+   comes after the run directory and not before it: that line points `TMPDIR` and `HOME`
+   at `<output>/.run/tmp` and `<output>/.run/home`, and both have to exist (R1). A refusal
+   here is cleaned up by the trap installed above, which R10 asserts;
    **compile** — both C files from those pinned sources into the run directory with the
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
    (`portable-profile-resolution.test.sh:146-149`), invoking the fixed `/usr/bin/cc` on
@@ -1439,23 +1672,40 @@ intent says for this change. Only after the operator's merge does
   boundary already, and no code the parent contains can change it: the injected library has
   already run. Only the process that starts the parent can defend against that, which is
   what the entry does by starting it under `/usr/bin/env -i` with an environment it wrote
-  itself (R1), rather than by clearing the variables somebody remembered to name. So the
-  claim, in the words the plan must use: **the parent must be started by a trusted process
-  — the entry when used as designed, or the operator's own shell for the step-7 run — and a
-  parent invoked directly from a hostile environment has no loader-variable defence at
-  all.** R10 tests it at exactly that boundary and nowhere else: loader variables are
+  itself (R1), rather than by clearing the variables somebody remembered to name.
+
+  **The same argument applies one process further out, and that is the limit of it.** An
+  `env -i` prefix cannot protect the `env` that carries it, and `env` was not even the first
+  external command in an earlier round of this order — `uname`, `stat`, `git` and `cc` ran
+  ahead of it, each one an external process started under whatever the caller had. So the
+  entry scrubs its own environment with builtins first, forking nothing
+  (`adapters/local-git-materializer/v1/materialize.sh:4-13`), and then re-execs itself under
+  an empty environment (`:22-29`), so that every command it runs after that point starts
+  from an environment it wrote (R1). What is left over is the entry's *own first process*:
+  the caller started it, its loader read the caller's variables, and any injected library
+  has already run by the time the scrub's first line executes. The scrub stops that from
+  spreading; it cannot unrun it.
+
+  So the claim, in the words the plan must use: **the parent must be started by a trusted
+  process — the entry when used as designed, or the operator's own shell for the step-7 run
+  — and the entry must itself be started by a trusted process for the same reason, because
+  its first process has no loader-variable defence either. A parent, or an entry, invoked
+  from a hostile environment has none at all.** R10 tests it at exactly that boundary and
+  nowhere else: loader variables are
   polluted in the caller of the *entry*, never in the caller of the parent, because the
   direct-parent version of that test would run the injected code and then assert about the
-  result. The entry's own loader is unprotected in the same way — it runs under the caller's
-  environment — so the entry is the first trusted process, not a shield in front of an
-  untrusted one.
+  result. Its marker file may hold one line for that first process and must hold no more, so
+  the test asserts what the scrub and the re-exec actually buy and does not assert that the
+  first process is clean. The entry is the first trusted process, not a shield in front of
+  an untrusted one.
 - **Copy versus adapt.** The test launcher is 702 lines, and far less of it is test
   scaffolding than a glance suggests: only the argv modes at `:547-631` and the two
   test-variable lines at `:686-689` are test-only, so the parent copies roughly 605 lines
   of it (see the size derivation above). Copying the supervisor verbatim keeps the proven
   behaviour but carries code written for a test harness; adapting risks a subtle
   divergence in exactly the code that enforces the limits. The plan should list every
-  deviation line by line. Six are already known: the mode-0644 check moves from the test
+  deviation line by line. Seven are already known in the parent: the mode-0644 check moves
+  from the test
   into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
   the helper's run-directory and mode-0500 checks are new code with no counterpart in
@@ -1463,8 +1713,13 @@ intent says for this change. Only after the operator's merge does
   for the runtime, `scripts/lib/profile-resolution.sh` and
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
-  slash (`portable-profile-resolution-launcher.c:636`); and the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2). Six more
+  slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
+  handlers with process-group termination are new (R2); and — this round's only change to
+  the C file — the four sandbox entries `home`, `tmp`, `child.stdout` and `child.stderr`
+  are created with `mkdirat` and `openat` relative to the output-directory descriptor the
+  parent checked, where the launcher builds all four by path with `mkdir` (`:645-647`) and
+  `open` (`:413-421`), which carries the descriptor into `supervise` (`:400-532`) as a
+  signature change (R5). Seven more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
   (`portable-profile-resolution.test.sh:130-143`); the compiler is the fixed
@@ -1473,13 +1728,19 @@ intent says for this change. Only after the operator's merge does
   would be a caller-chosen trust base (R7); and the run directory is the fixed
   `<output>/.run` inside the caller's output directory, where the test script and
   `shadow/v1/reproduce.sh:94-142` both use `mktemp -d` under the caller's `TMPDIR`, which
-  would be a second write root (R1, R7). The last three are this round's: the pin checks,
+  would be a second write root (R1, R7). Three were the previous round's: the pin checks,
   both compiles and the parent launch run under `/usr/bin/env -i` with a named variable
   list, where the test and `reproduce.sh` run all of it under whatever the caller had; the
   output root is validated — real directory, caller-owned, mode 0700, empty — before
   anything is written into it, where the test script leaves those facts to the launcher; and
   `/usr/bin/stat` is run once for the owner and mode of that directory, a command neither
-  copied file runs.
+  copied file runs. The seventh is this round's, and it is the one item in this whole list
+  that is a copy rather than new code — just from a third file: the entry opens with the
+  builtins-only environment scrub and the empty-environment re-exec taken from
+  `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`, deviating from *those*
+  lines only in the marker word and the arity (R1), where the test script and
+  `reproduce.sh` scrub nothing at all and run every command under the caller's own
+  environment.
 - **Platform matrix.** Three tuples, but CI runs one. The other two are proved only when
   someone runs the test there, and the parent's Darwin memory bound is polled rather than
   enforced by the kernel (`portable-profile-resolution-launcher.c:381-386,390-392`). The
