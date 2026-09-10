@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1560-2120 changed lines** (implementation). The derivation,
+**Evidence-based range: 1580-2130 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~970 lines** = ~605 copied verbatim + ~365 new. The test launcher is 702
@@ -60,27 +60,35 @@ measured rather than guessed:
   copy, the `tmp` subdirectory, the `chmod 0500` pass, the
   `LD_*`/`DYLD_*`/`BASH_ENV`/`ENV` clearing, and run-as-child plus wait plus signal
   forwarding plus `128 + signal`, each step with its own `E_RUNTIME` exit.
-- **Focused test ~555 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~570 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now close to both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
-  resolutions plus `cmp` (~30), six entry-level refusals in group 1 (~70), a shared
+  resolutions plus `cmp` (~30), five entry-level refusals in group 1 (~60), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the sixteen
-  group-2 cases on top of it (~120), the group-3 runtime refusal (~10), the R3 polluted
+  group-2 cases on top of it (~130, the overlong-value case now building a near-`PATH_MAX`
+  directory tree rather than naming a long path), the group-3 runtime refusal (~10),
+  the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
   signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
   `SIGSTOP` freeze (~35), the cleanup assertions
-  (~50), the pin-constant assertions over ten pins (~25), the downloader grep (~15),
+  (~50), the pin-constant assertions over ten pins (~25), the command-word allowlist grep
+  plus the downloader and `git`-subcommand grep (~30),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 1840 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 in the previous round, and the growth is itemised above
-rather than absorbed: ~90 more in the parent (the two extra blob pins, the request and map
-check, the signal handlers), ~25 more in the entry (eight more pins), and ~155 more in the
-test (thirteen more direct-parent cases, the R3 environment proof, the signal test).
-Nothing was made cheaper to compensate.
+Those sum to about 1855 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 two rounds ago, then 1560-2120, and the growth is itemised
+above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
+and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
+more in the test (thirteen more direct-parent cases, the R3 environment proof, the signal
+test). This round moves ~15 net lines, all of them in the test and all of them from the
+three findings: the unsupported-platform case leaves the runtime list for code review
+(−10), the overlong-value case grows a near-`PATH_MAX` directory fixture (+10), and the
+downloader grep becomes a full command-word allowlist grep plus a `git`-subcommand
+assertion (+15). No implementation code changed size, because none of the three findings
+changed what the shipped files do. Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -97,23 +105,34 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by more than double: `wc -l
-work/resolver-trusted-parent/spec.md` is 847 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 1012 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
-compiler temporaries, narrowed read claims, and this round the full pinned load set,
-process-group termination on signals, and per-check direct-parent coverage).
-**Evidence-based range: 720-974 lines** — the measured 847 lines plus or minus 15%. It was
-553 lines and 470-636 two rounds ago, then 783; where each block of growth went is worth
-naming so it can be checked rather than taken on trust. The 230 lines of the previous
-round were its three findings: about 65 enumerating the runtime's loaded set with its
+compiler temporaries, narrowed read claims, the full pinned load set, process-group
+termination on signals, per-check direct-parent coverage, and this round an exact
+executable allowlist and two claims moved from untestable runtime cases to code review).
+**Evidence-based range: 860-1164 lines** — the measured 1012 lines plus or minus 15%. It was
+553 lines and 470-636 three rounds ago, then 783, then 847; where each block of growth
+went is worth naming so it can be checked rather than taken on trust. The 230 lines of
+the round before last were its three findings: about 65 enumerating the runtime's loaded
+set with its
 evidence and deciding the pins (R5), about 40 restructuring R10's refusals into
 owner-labelled groups with one line per case, about 25 on the signal decision in R2 and
 its test, and the rest spread over R1, R7, the Design steps, three Areas-of-concern
-bullets and the re-derived size figures. The 64 lines of this round are the two reviewer
+bullets and the re-derived size figures. The 64 lines of the previous round were its two
 findings: about 27 stating pin ownership once and naming the parent-pinned subset with
 its residual (R5, echoed in R1, R7 and R10), about 28 replacing the signal test's
 fallback with the `SIGSTOP` freeze and its failure case (R10, echoed in R2 and Areas of
-concern), and the remaining handful in these re-derived size figures.
+concern), and the remaining handful in re-derived size figures.
+The 165 lines of this round are its three findings, and this one is mostly one of them:
+about 55 replacing R7's seven-tool read list with the exact twelve-command enumeration per
+shipped file and the four path-policy choices behind it, about 30 explaining why the
+overlong-value case now aims at the output path (R10, echoed in R5), about 25 on the
+unsupported-platform refusal becoming code-review coverage (R10, echoed in R8, Design
+step 2 and Areas of concern), about 11 turning the read list into R10's command-word
+grep, and the rest in the Copy-versus-adapt deviation list and these re-derived figures.
+Two of the three findings shrink what the spec claims rather than adding requirements; the
+lines are the cost of saying precisely what is no longer claimed.
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
 still apply, and an unexplained overrun beyond
@@ -264,7 +283,9 @@ the range above still blocks review.
   (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
   `shadow/v1/reproduce.sh:113-118`); the helper fails the run-directory checks below;
   any allowlisted value is not an absolute
-  regular path or is too long for the buffer (`:641-676`); the request or repository-map
+  regular path, or is too long for the fixed buffer it is copied into (`:641`, `:662-665`
+  — a guard that is reachable for the output path and, for the reason R10 gives,
+  unreachable for the jq path); the request or repository-map
   argument is not an absolute regular non-symlink file — the copied launcher checks only
   the leading slash on those two (`portable-profile-resolution-launcher.c:636`), so this
   is new code; or the caller's output directory
@@ -448,16 +469,72 @@ the range above still blocks review.
      the three that form the parent-pinned subset read again by the parent to be hashed
      (and the runtime file among those three also mode-checked), the
      remaining four hashed by the library itself at run time (`:711-714`), and all of them
-     bar the registry then read by the resolver under the bound `/bin/bash`; the jq binary
-     supplied as an argument and its
-     awk sibling under `/usr/bin` (both digest- or existence-checked, then copied into
-     the run directory); the C compiler and the system tools the two files invoke by
-     fixed path under `/usr/bin:/bin` — `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
-     `/bin/chmod`, `/usr/bin/git` for `hash-object`, and the platform's SHA-256 tool;
-     the request file and the repository-map file named on the command line; and the
-     entry's own run directory. That is the whole list. Neither file reads a
-     configuration file, a dotfile, a cache, a credential store, or any path derived
-     from caller environment.
+     bar the registry then read by the resolver under the bound `/bin/bash`; the request
+     file and the repository-map file named on the command line; the jq binary supplied as
+     an argument; the caller's output directory; and the entry's own run directory.
+
+     **The executables, listed exactly.** The previous round's list was short enough to be
+     wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
+     `/bin/chmod`, `/usr/bin/git` and the SHA-256 tool — and left out four the spec's own
+     steps need: `/usr/bin/uname` for the platform case, `/usr/bin/mktemp` for the run
+     directory, `/bin/rm` for the cleanup, and `/usr/bin/printf` for the `E_*` lines. It
+     also left `/usr/bin/awk` ambiguous, mentioning it as a file to copy without saying
+     whether anything runs it. Twelve command words is the true count. Every external
+     command either file runs, with the fixed absolute path it runs it by:
+
+     *The entry, `resolver/v1/resolve-profile.sh`* — `/usr/bin/uname` (`-s` and `-m`, for
+     the platform case); the platform's SHA-256 tool, `/usr/bin/shasum -a 256` on Darwin
+     and `/usr/bin/sha256sum` on Linux, chosen in the same `case` that chooses the jq
+     digest pin; `/usr/bin/git`, for `hash-object` on the ten pinned files;
+     `/usr/bin/mktemp`, for the run directory; `/bin/mkdir`, for the `tmp` subdirectory;
+     the compiler `/usr/bin/cc`; `/bin/cp`, for the jq and awk copies; `/usr/bin/awk`,
+     read only in order to be copied in, because the runtime needs awk on its `PATH`;
+     `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
+     `/bin/chmod`, for the 0500 pass and the trap's 0700 restore; `/bin/rm`, for the `tmp`
+     subdirectory and the run directory; `/bin/bash`, which is its own interpreter and the
+     Darwin awk shim's; the bound jq, for the `--version` probe; and the compiled parent
+     inside the run directory, which it runs as its child.
+
+     *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
+     argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); `/usr/bin/git`,
+     for `hash-object` on the parent-pinned subset; the same per-platform SHA-256 tool,
+     for the jq digest; and the bound jq, for its own `--version` probe. Nothing else. The
+     sandbox `home` and `tmp` directories come from `mkdir(2)` (`:645-647`), not from
+     `/bin/mkdir`, and every mode and ownership check is an `fstat` on a descriptor the
+     parent opened, not a call to `/usr/bin/stat`.
+
+     Four choices inside that list are named because each is a place the shipped path
+     deliberately differs from the code it copies:
+
+     - **The compiler is `/usr/bin/cc`, a fixed path on both platforms, and `$CC` is not
+       honoured.** The test script uses `${CC:-/usr/bin/cc}` on Linux and
+       `${CC:-/usr/bin/clang}` on Darwin
+       (`scripts/test/portable-profile-resolution.test.sh:95,102`, invoked at `:146-149`).
+       A caller-chosen compiler is a caller-chosen trust base, so the entry drops the
+       override. `/usr/bin/cc` exists on both platforms, and on Darwin it is the same
+       Xcode shim as `/usr/bin/clang`. This is a named deviation from the test.
+     - **The SHA-256 tool is chosen per platform, at a fixed path, and never searched
+       for.** The test script's `sha256_file` searches `PATH` with `command -v sha256sum`
+       (`:31-37`), which the shipped path must not do, and
+       `shadow/v1/reproduce.sh:18` uses `/usr/bin/shasum -a 256` on both platforms, which
+       is right on Darwin but not guaranteed on Linux, where `/usr/bin/sha256sum` is the
+       native tool and `/usr/bin/shasum` ships only with perl. Hence the pair above.
+     - **No `awk` process is spawned to read a digest.** `reproduce.sh:18` pipes the
+       SHA-256 tool through `/usr/bin/awk '{print $1}'`; the entry takes the first field
+       with a bash parameter expansion and the parent parses it in C, so awk is on this
+       list only as the file copied in for the runtime's benefit.
+     - **No `find` and no `stat`.** The 0500 pass names the four files it tightens — the
+       compiled parent, the compiled helper, the jq copy, the awk copy — instead of
+       discovering them, which is the same fact as the run directory holding exactly those
+       four and no subdirectory at launch (R1). So neither tool is on the list.
+
+     That is the whole list, and R10 turns it into a checked invariant rather than prose:
+     the focused test greps both shipped files for every command word and fails if any
+     absolute executable path outside this list appears. Neither file reads a
+     configuration file, a dotfile, a cache, a credential store, or any path derived from
+     caller environment. What the compiler reads from its own installation — headers, the
+     assembler, the linker — is outside this list and outside the claim; the compiler is
+     trusted unverified, as Areas of concern says.
 
   No network is true by construction, not by
   policy: neither shipped file contains a downloader, and every input the shipped path
@@ -471,7 +548,9 @@ the range above still blocks review.
   roots (`:323`). The spec adds no claim beyond restating them.
 - **R8 — platforms.** Supported: `Darwin:arm64`, `Darwin:x86_64`, `Linux:x86_64` — the
   same set the test and `shadow/v1/reproduce.sh:113-116` support, with the same two
-  pinned jq digests. Anything else refuses with `E_RUNTIME` before doing work.
+  pinned jq digests. Anything else refuses with `E_RUNTIME` before doing work — a refusal
+  proved by reading the entry's platform `case`, not by a runtime test case, for the
+  reason R10 states.
 - **R9 — documentation and manifest.** `docs/components.md:33-39` stops saying the test
   is the only shipped launcher and names the two new files, says this spec supersedes the
   accepted resolver spec's "a production trusted parent is not implemented" sentence
@@ -490,11 +569,36 @@ the range above still blocks review.
   **Group 1 — entry-owned refusals**, driven through the shipped entry: a jq whose SHA-256
   does not match the platform pin; an edited `resolver/v1/nofollow-snapshot.c` whose blob
   id no longer matches its pin; an edited `scripts/lib/profile-resolution.sh` and an
-  edited `resolver/v1/profile-resolution.jq`, same thing; an edited jq module under the
-  generation's `modules/` directory, which the entry pins and the parent does not (R5);
-  and an unsupported platform. Every case here and in group 2 that needs an edited
+  edited `resolver/v1/profile-resolution.jq`, same thing; and an edited jq module under
+  the generation's `modules/` directory, which the entry pins and the parent does not
+  (R5). Every case here and in group 2 that needs an edited
   repository file edits a copy of the repository tree and points the entry or the parent
   at the copy; the test never modifies the working tree.
+
+  **The unsupported-platform refusal is not in that list: it is proved by reading the
+  code, not by running it.** The previous round listed it as a sixth group-1 case, where
+  it was untestable. The entry reads the platform from the fixed path `/usr/bin/uname`
+  with no override — the shape is
+  `case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in Linux:x86_64) … ;;`
+  `Darwin:x86_64|Darwin:arm64) … ;; *) E_RUNTIME ;; esac`, mirroring
+  `scripts/test/portable-profile-resolution.test.sh:90-107` and
+  `shadow/v1/reproduce.sh:113-118` — so there is no input CI can supply that drives the
+  `*)` arm on a machine CI runs on, and shadowing `uname` on `PATH` would prove nothing
+  about a script that never consults `PATH`. Making the arm reachable would mean adding a
+  test-only platform override to the security wrapper, and a shipped override is a
+  permanent way to tell the entry it is on a platform it is not — a worse trade than
+  leaving the branch untested. So the coverage is code review, and the review has two
+  things to check. First that `case`: two matching arms that between them name exactly the
+  three tuples R8 supports — `Linux:x86_64` alone, and `Darwin:x86_64|Darwin:arm64`
+  sharing one arm because they share one jq digest — and a `*)` arm that refuses with
+  `E_RUNTIME` before any pin check, any compile and any `mktemp -d`. Second the negative
+  fact that makes the refusal total: those same three tuples, and no others, are the whole
+  of every per-platform table in the entry — the jq digest pin (two digests, three
+  tuples), the SHA-256 tool choice, the awk branch — so an unrecognised platform has no
+  digest, no hashing tool and no awk branch to fall through to even if the `*)` arm were
+  deleted. Anyone reviewing the `case` should read those tables in the same pass; all four
+  must agree on the same three tuples. R8 says the same, and neither the test nor this
+  spec claims a runtime case for it.
 
   **Group 2 — parent-owned refusals, each proved by invoking `trusted-launch` directly**,
   bypassing the entry. This group carries the weight: the entry refuses a bad jq before
@@ -518,9 +622,11 @@ the range above still blocks review.
     launcher checks only the leading slash on those two arguments
     (`portable-profile-resolution-launcher.c:636`) and the regular-non-symlink check on
     them is new code;
-  - an allowlisted path value too long for the buffer: a bound jq whose path exceeds
-    `PATH_MAX`, refused by the copied code at
-    `portable-profile-resolution-launcher.c:662-665`;
+  - an allowlisted path value too long for the fixed buffer it is copied into, aimed at
+    the one value where that guard is reachable: an output path longer than
+    `PATH_MAX - 16` and shorter than `PATH_MAX`, refused by the copied guard at
+    `portable-profile-resolution-launcher.c:641` — see the note below on why it is not
+    aimed at the jq path;
   - a compiled parent binary in the run directory whose mode is not 0500;
   - a helper outside the run directory it was given, a helper whose mode is not 0500, and
     a run directory whose mode is not 0500;
@@ -529,6 +635,33 @@ the range above still blocks review.
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
   if a check is ever quietly left to the entry. Those cases, and no others, are what "the
   parent's R5 refusals are proved" means here; the spec claims nothing wider.
+
+  **Why the overlong case aims at the output path and not at the jq path.** The previous
+  round aimed it at a bound jq whose path exceeds `PATH_MAX`, and that case cannot fire.
+  `main` validates `regular_absolute(argv[4], 1)` at
+  `portable-profile-resolution-launcher.c:636`, which `lstat`s the path; a path longer
+  than `PATH_MAX` fails that `lstat` with `ENAMETOOLONG`, so the argument is refused as
+  not a regular file at `:635-638` and the `strlen(argv[4]) >= sizeof(tool_path)` guard at
+  `:662-665` is never reached. That guard stays in the parent — it is copied code, it
+  costs nothing, and it is the right thing to have if the check order ever changes — but
+  it is defence in depth, proved by reading the code, not by a runtime case.
+
+  The output path is the reachable one. It is the argument that replaces
+  `YSTACK_TEST_SANDBOX` (`:640-644`, Design step 1), and the copied guard on it is
+  `strlen(sandbox) > PATH_MAX - 16` (`:641`) — a threshold sixteen bytes *below*
+  `PATH_MAX`, because the parent then builds `<output>/home` and `<output>/tmp` into
+  `char home[PATH_MAX]` and `char temp[PATH_MAX]` with `snprintf`
+  (`:537-538,645-647`), and those derived names are not opened before the guard runs. So
+  there is a real window: a directory whose absolute path is longer than `PATH_MAX - 16`
+  and shorter than `PATH_MAX` is a perfectly openable, empty, caller-owned mode-0700
+  directory that passes every semantic check the parent makes on it, and is refused by the
+  length guard alone. The order of the guard against the empty-and-0700 check does not
+  matter for this case, precisely because such a directory passes that check. The test
+  builds one — nested directories sized from the platform's `getconf PATH_MAX /`, 1024 on
+  Darwin and 4096 on Linux, each component well inside `NAME_MAX` — hands it to the parent
+  as the output path, and asserts the parent's `E_RUNTIME` line and a non-zero exit. If a
+  platform will not let the test create such a directory, that is a test failure with a
+  message saying so, not a skip.
 
   What group 2 also shows, by omission, is the residual R5 states: a caller who reaches the
   parent directly has only the parent-pinned subset — files 1, 2 and 3 — so there is no
@@ -628,9 +761,21 @@ the range above still blocks review.
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, the three constants of the parent-pinned
-  subset — and greps both
-  shipped files for any downloader — `curl`, `wget`,
-  `nc`, `git fetch`, `git clone` — and fails if one appears. It is shellcheck-clean,
+  subset.
+
+  **The read allowlist is a grep, not a promise.** The test greps both shipped files for
+  every command word — every absolute path under `/usr/bin` or `/bin` and every bare
+  command name — and fails unless each one appears in R7's list: `/bin/bash`,
+  `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/usr/bin/uname`, `/usr/bin/mktemp`,
+  `/usr/bin/git`, `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/cc`, and the platform pair
+  `/usr/bin/shasum` and `/usr/bin/sha256sum`. Anything else — a new tool, a bare name that
+  would be resolved through `PATH`, a `${CC:-…}` style override — fails CI, which is what
+  makes R7's list an invariant rather than a paragraph someone has to keep true by hand.
+  The downloader grep that was already here stays alongside it, because the allowlist
+  cannot replace all of it: `curl`, `wget` and `nc` would fail the allowlist as
+  unlisted commands, but `/usr/bin/git` is on the list, so `git fetch` and `git clone`
+  need their own assertion that no subcommand other than `hash-object` appears. The test
+  is shellcheck-clean,
   leaves the schema guard at zero failures, and passes
   `scripts/test/v2-check-rename.test.sh`.
 
@@ -658,7 +803,10 @@ Order, each step checkable before the next:
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
    `E_RUNTIME` before the next: resolve the repository root from its own `BASH_SOURCE`
    the way the runtime does (`resolver/v1/profile-resolve-runtime.sh:4-16`); refuse an
-   unsupported platform; **pin check** — verify the jq passed as an argument against this
+   unsupported platform, from a `case` over `/usr/bin/uname -s` and `-m` with one arm per
+   supported tuple and a refusing `*)` arm, which is the branch R10 covers by review
+   rather than by a test case; **pin check** — verify the jq passed as an argument
+   against this
    platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify with
    `git hash-object` the blob ids of both C sources and of the eight loaded files R5 lists
    as entry-pinned, against the pinned constants, the way the
@@ -672,7 +820,8 @@ Order, each step checkable before the next:
    what terminates the resolver's process group — R2);
    **compile** — both C files from those pinned sources into the run directory with the
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
-   (`portable-profile-resolution.test.sh:146-149`), each compile carrying
+   (`portable-profile-resolution.test.sh:146-149`), invoking the fixed `/usr/bin/cc` on
+   both platforms rather than the test's `${CC:-…}` (`:95,102`; R7), each compile carrying
    `TMPDIR=<run dir>/tmp` and an `-o` path inside the run directory, plus `-pipe` where
    the compiler accepts it, so no compiler intermediate is written outside the run
    directory; then copy in jq and the platform's awk the way the test does (`:130-143`);
@@ -743,10 +892,17 @@ intent says for this change. Only after the operator's merge does
   wrong answer; it produces an answer that looks right without the boundary behind it.
 - **What the proof covers after this lands, exactly.** The shipped parent's output equals
   the test launcher's output for the default profile request, and the refusals enumerated
-  in R10's three groups fire — those cases, not "every R5 refusal" in the abstract. That
-  is all. There is no third-party audit, no fuzzing, no formal argument that
-  the allowlist is complete, and no launch-evidence record — nothing this produces is
-  live-qualified (`work/portable-profile-resolution/spec.md:264-271`).
+  in R10's three groups fire — those cases, not "every R5 refusal" in the abstract. Two
+  refusals are deliberately outside the runtime list and rest on code review instead, and
+  R10 says so in both places rather than letting the group lists imply coverage they do
+  not have: the unsupported-platform refusal, which no CI input can drive because the
+  entry reads `/usr/bin/uname` at a fixed path, and the jq-path length guard at
+  `portable-profile-resolution-launcher.c:662-665`, which an earlier `lstat` makes
+  unreachable. That is all. There is no third-party audit, no fuzzing, no formal argument
+  that the allowlist is complete, and no launch-evidence record — nothing this produces is
+  live-qualified (`work/portable-profile-resolution/spec.md:264-271`). The read allowlist
+  is the one claim here with a mechanical check behind it: R10's command-word grep fails
+  CI on any executable path outside R7's list.
 - **Network: none, and the cost of that.** The shipped path cannot reach the network
   because neither file has anything that would — the jq binary arrives as an argument and
   everything else is committed. The cost lands on the caller, who must fetch and verify
@@ -829,13 +985,22 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); and the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2). A seventh,
-  smaller one is in the entry rather than the parent: the run directory's files are 0500,
+  handlers with process-group termination are new (R2). Two more, smaller,
+  are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
-  (`portable-profile-resolution.test.sh:130-143`).
+  (`portable-profile-resolution.test.sh:130-143`); and the compiler is the fixed
+  `/usr/bin/cc` on both platforms with no `$CC` override, where the test honours
+  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) — a caller-chosen compiler
+  would be a caller-chosen trust base (R7).
 - **Platform matrix.** Three tuples, but CI runs one. The other two are proved only when
   someone runs the test there, and the parent's Darwin memory bound is polled rather than
-  enforced by the kernel (`portable-profile-resolution-launcher.c:381-386,390-392`).
+  enforced by the kernel (`portable-profile-resolution-launcher.c:381-386,390-392`). The
+  fourth case — a platform that is none of the three — has no runtime coverage on any
+  machine, because the entry reads `/usr/bin/uname` at a fixed path and nothing a test can
+  set changes the answer. R10 makes that a code-review item rather than adding a test-only
+  platform override to the security wrapper, and the plan should treat the `case` and the
+  per-platform tables (jq digests, SHA-256 tool, awk branch) as one thing to read
+  together: all four must agree on the same three tuples.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
   (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
