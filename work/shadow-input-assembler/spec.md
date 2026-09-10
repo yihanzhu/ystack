@@ -19,6 +19,7 @@ own high-risk initiative. The only launcher today is the one in `scripts/test/`,
 so today the only resolved profiles that exist are test-produced. This spec says
 so plainly rather than implying otherwise.
 
+**Implementation PR size (the component and its test).**
 `review_size: accepted-exception`. One concern: one inactive component whose
 focused test must drive the real `reproduce.sh` end to end with the existing
 fixture environment (the shadow slice test itself is 622 lines for the same
@@ -47,6 +48,22 @@ repository convention; splitting them would ship a component with no proof and
 a test with nothing to prove. Requirement 17's clean entry is not a second
 concern either: it is the first lines of the same script, and requirement 15's
 predicates do not mean what they say without it, so the two cannot ship apart.
+
+**This artifact PR's own size (the spec file).** The `AGENTS.md:102-106` soft
+budget of ~300-400 net lines applies to this spec PR as well, not only to the
+implementation it describes, and this file is far over that budget, so the
+overrun is recorded here rather than left unexplained. One concern: one
+component spec for a security-adjacent input assembler whose ten review rounds
+each added a verified requirement (protocol-valid inertness, byte-pinned
+default profile, hash algorithm, full repository-level source guards, clean
+entry, working-tree proofs). Evidence-based range: 1041 lines measured — the
+count is self-inclusive, the length of this file as committed — so 885-1197
+net lines at that measurement +/-15%. This exception waives only the soft line
+signal for this artifact PR. It does not widen scope beyond the one concern,
+and it does not relax readability, review, CI, or operator merge. No content
+is trimmed to fit: each of those lines carries a requirement or a rationale
+that a review round verified, and deleting them to hit a line count would
+lose the verified detail the rounds added.
 
 ## Requirements
 
