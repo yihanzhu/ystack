@@ -23,14 +23,15 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
   pair, resolved-profile pair, the four decision-record scope refs, stage request, then the input
   wrapper (~130); requirement 3's id and digest checks plus requirement 16's `config_source` walk
   (~40); the two `pair_ref` projections (~15).
-- **`shadow/v1/assemble-materialization-input.sh`** (~230, new). The copied clean entry with its
-  header and the assembler's own `set`/`emit_error`/`umask` lines (~30); argument, workspace and
-  pinned-jq checks (~45); requirement 10's `time_ok` call with its split status handling (~15);
-  reading and canonicalizing the five inputs (~25); the `run_root` path, trap and `mkdir` plus the
-  `git_env`/`git_dir`/`source_algorithm`/`source_commit` bindings (~20); `source_pure` with the
-  three verbatim spans and the copy header (~95); the algorithm and root-tree reads, the size
-  check, the stage step and the commit step (~30). Roughly 130 of those are copied lines that must
-  not be edited here.
+- **`shadow/v1/assemble-materialization-input.sh`** (~240, new). The copied clean entry with its
+  header and the assembler's own `set`/`emit_error`/`umask` lines (~30); step 2.2's seven ordered
+  argument, workspace and pinned-jq checks (~50); requirement 10's `time_ok` call with its split
+  status handling (~15); reading and canonicalizing the five inputs (~25); the `run_root` path,
+  the trap with its `committed` guard, the flag and destination-list initialization, the `mkdir`,
+  and the `git_env`/`git_dir`/`source_algorithm`/`source_commit` bindings (~22); `source_pure`
+  with the three verbatim spans and the copy header (~95); the algorithm and root-tree reads, the
+  size check, the stage step, and the commit step with its closing `committed=yes` (~33). Roughly
+  130 of those are copied lines that must not be edited here.
 - **`scripts/test/shadow-assembler.test.sh`** (~330, new). jq bootstrap and scaffolding (~40);
   the `sha1` and `sha256` fixture repositories (~30); the resolved profile built over the shipped
   documents (~45); the positive assertion groups including the driver run (~70); the negative
@@ -44,7 +45,7 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
   appended at the **end** of the file after today's last line `docs/transition-kit.md`
   (requirement 14).
 
-Estimate total: about 820 net lines.
+Estimate total: about 830 net lines.
 
 **Implementation PR figure — `review_size: accepted-exception`**, as the spec records it. One
 concern: one inactive component whose focused test must drive the real `reproduce.sh` end to end
@@ -57,11 +58,13 @@ operator** rather than splitting: the component and its focused test are one con
 requirement 17's entry is the first lines of the same script as requirement 15's predicates.
 
 **Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 477 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+file is 587 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
 PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
 unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
-proof instructions carry exact line ranges and commands for a 1600-line spec. Evidence-based
-range **405-549 net lines** — the measured count above, plus or minus 15%. This exception waives
+proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
+order and success-path guarantee are each spelled out step by step because both are one line's
+position away from being wrong. Evidence-based
+range **499-675 net lines** — the measured count above, plus or minus 15%. This exception waives
 only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
 CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
 figure is the 610-840 range recorded above.
@@ -117,7 +120,11 @@ equals the claim's `.id` and `fingerprint_sha256` equals the SHA-256 of the clai
 the two `pair_ref` documents equal what `shadow/v1/reproduce.sh:250-256` compares; and both
 algorithms are covered — `target_revision.hash_algorithm` and the commit and tree id widths
 follow the repository in each case, and a 40-hex commit id offered to the `sha256` repository is
-`E_TARGET`.
+`E_TARGET`. Then the success half of requirement 18's guarantee, which is the runtime proof of
+2.7's flag: after the successful run the output directory holds **exactly** the seven documents
+and no `run_root`. Assert the listing, not just that `input.json` exists — a trap that deletes
+what it committed leaves a directory that is empty rather than wrong, and only a full listing
+catches that.
 
 0.5 **The negative cases**, one per refusal in requirement 12, plus the four negative source
 repositories requirement 13 names, each otherwise a clean copy of the `sha1` fixture: a disallowed
@@ -133,7 +140,13 @@ with no `schema.jq` if the test runs as root) → `E_RUNTIME`; the claim of the 
 out-of-charset claim id and the non-canonical claim; a `profile.json` whose id is not
 `profile.default.v1`; the self-consistent look-alike profile set that reuses the id but differs in
 bytes → `E_PROFILE`; and the resolved profile whose producer `config_source.value.value_sha256` is
-swapped while `value.source` is left alone → `E_PROFILE`. Also the refuse-then-retry pair: after
+swapped while `value.source` is left alone → `E_PROFILE`. Then the pair that pins 2.2's order,
+written as a pair on purpose because either one alone passes under the wrong order: a **relative**
+`<jq-binary>` path → `E_USAGE`, and a jq at an absolute path that looks right and whose SHA-256
+does not match the platform pin → `E_RUNTIME`. Add the same pairing for the other cheap checks
+whose argument is refused while some later `E_RUNTIME` condition is also true in the same run — a
+bad repository id and a malformed commit id, each offered alongside an unreadable modules
+directory, still `E_USAGE`. Also the refuse-then-retry pair: after
 the `hooks/` refusal the output directory exists and holds nothing at all, and a rerun into it
 with the good fixture assembles normally rather than failing `E_WORKSPACE`. Add no case that
 invokes `__assemble_clean` directly, and write the negative-knowledge sentence requirement 13 asks
@@ -152,8 +165,10 @@ times — and never read a past commit: a default-depth `actions/checkout`
 (c) **The orders**: in `shadow/v1/assemble-materialization-input.sh`, the `trap` lines naming
 `run_root` are on earlier lines than the `mkdir` that creates it; every `mv` whose destination is
 the output directory is on a later line than the last check including the staged `validate-input`;
-the `mv` of `input.json` is the last of those; and each destination's list-append is on an
-**earlier** line than its own `mv`.
+the `mv` of `input.json` is the last of those; each destination's list-append is on an
+**earlier** line than its own `mv`; and the `committed=yes` assignment appears exactly once, on a
+**later** line than the `mv` of `input.json`, with the trap body's removal of listed destinations
+guarded by that flag while its `rm -rf` of `run_root` is not.
 
 0.7 **The driver run.** Feed the assembled `sha1` input to `shadow/v1/reproduce.sh` with the
 fixture environment, policy set, duty and the same claim file, using the thirteen-argument
@@ -237,10 +252,46 @@ if it has merged, take the scrub bytes from there rather than retaking the copy,
 components hold one text and not two. Use the same `# copy-begin`/`# copy-end` marker convention,
 since step 0.6(b) extracts by it.
 
-2.2 **Argument and workspace checks, in the spec's order.** Nine positional arguments per
-requirement 1. Pinned jq first — the platform digest table and identity check
-`shadow/v1/reproduce.sh:113-118` and `:141-142` use. Then requirement 10's `time_ok` on the
-timestamp argument, before any input file is opened: resolve the modules directory the way
+2.2 **Argument and workspace checks first, then the pinned jq, then `time_ok`.** Nine positional
+arguments per requirement 1, checked in seven steps in this order — the order the spec gives at
+lines 1217-1219. The order is the point, not a preference: every cheap check below decides
+`E_USAGE`, and each has to answer before the component does anything that can only fail as
+`E_RUNTIME` or `E_WORKSPACE`. A relative `<jq-binary>`, a bad repository id, a malformed commit id
+or a misshapen timestamp is `E_USAGE` under requirement 12, and it cannot be if a digest check has
+already refused the same run as `E_RUNTIME`.
+
+(1) **Arity and verb**, decided by 2.1's copied entry before anything else runs.
+
+(2) **Every path argument absolute.** `<source-git-dir>`, `<profile-dir>`,
+`<resolved-profile-file>`, `<jq-binary>`, `<output-dir>` and `<environment-claim-file>`, each
+matched against `/*` in the shell — a `case` or `[[ ]]` pattern, no external command, nothing
+opened, stat'ed or executed. A relative `<jq-binary>` is `E_USAGE` here and never reaches step
+(7). Existence and non-symlinkness of those paths are **not** checked here: requirement 12 files a
+missing or symlinked required file under `E_RUNTIME`, so those tests sit with step (7).
+
+(3) **The repository id** against `\A[a-z0-9][a-z0-9._:-]{0,127}\z`.
+
+(4) **The commit id** as lowercase hex of 40 or 64 characters. Width against algorithm is not
+decided here, because the repository has not been asked yet; the later mismatch against
+`git rev-parse --show-object-format` inside requirement 15's copy is `E_TARGET`, not this.
+
+(5) **The timestamp's shape only** — `YYYY-MM-DDTHH:MM:SSZ`, a pure-shell pattern match, no jq —
+`E_USAGE`. This is a gate ahead of the rule, not the rule: requirement 10 says the shape alone is
+not enough, and step (7)'s `time_ok` still decides whether a well-shaped timestamp is a real
+instant. The gate earns its place by making a mistyped timestamp `E_USAGE` even on a run where jq
+is the thing that is wrong.
+
+(6) **The output directory**, as an existing, empty, physical `0700` directory disjoint from the
+source repository and the profile directory — `E_WORKSPACE`, requirement 1's own shape.
+
+(7) **Only now the pinned-jq checks** — the platform digest table and the `jq-1.6` identity check
+`shadow/v1/reproduce.sh:113-118` and `:141-142` use — plus the existence and non-symlink checks of
+the remaining supplied paths and of the component's own required files, all `E_RUNTIME`. **Nothing
+above this step hashes or executes `$jq_bin`.** Steps (1)-(6) are shell pattern matches and, in
+(6), file tests on the output directory alone, so the jq binary is read for the first time here.
+
+Then requirement 10's `time_ok` on the timestamp argument, immediately after the pinned-jq check
+and before any input file is opened: resolve the modules directory the way
 `materialize.sh:60-69` does (read `PORTABLE_CORE_GENERATION` out of `scripts/core-contract.sh:207`
 with `sed`, check the shape, check the generation is in `core/v2/generation-registry.json`, then
 `core/v2/generations/$generation/modules`), from a repository root resolved from the script's own
@@ -250,9 +301,11 @@ the load shape `evals/v1/evals-driver.sh:58` and `:161` already use. Capture the
 stdout **separately**, on the command's own failure branch (`|| status=$?`) so `set -e` does not
 end the run: status 0 with stdout exactly `true` proceeds, status 0 with stdout exactly `false`
 is `E_USAGE`, and everything else — non-zero exit, jq that would not start, modules that would
-not load, stdout that is neither word — is `E_RUNTIME`. Then the path checks (absolute, physical,
-non-symlink, disjoint), the repository id charset, the commit-id width as lowercase hex of 40 or
-64, and the output directory as an existing empty physical `0700` directory.
+not load, stdout that is neither word — is `E_RUNTIME`. A timestamp that got past step (5) and
+fails here is `E_USAGE` for the calendar reason, `2026-02-30T00:00:00Z` included.
+
+Only after all of that: the profile, resolved-profile and claim document checks in 2.3, and only
+after those the source repository in 2.4-2.6.
 
 2.3 **Read and canonicalize the five inputs.** Follow `shadow/v1/reproduce.sh:144-153`'s
 `canonical_json` shape — BOM check, one JSON value, `jq -S -c` compared with `cmp` — and its
@@ -266,9 +319,19 @@ two derived values — the claim's `id` and the SHA-256 of its bytes, the digest
 **install the trap**, and only then `mkdir -m 0700` it — that order, because `trap` and `mkdir`
 are two commands and a signal between them leaves a directory nothing is watching. The trap body
 is guarded with `[ -n "${run_root:-}" ] && [ -d "$run_root" ]` ahead of its `rm -rf`. `INT`, `TERM`
-and `HUP` are trapped beside `EXIT`; each removes every recorded commit destination that exists,
-then `run_root`, then resets its own trap and re-raises, the shape
-`shadow/v1/reproduce.sh:124-127` uses. Then bind the four names the copy needs, just above it:
+and `HUP` are trapped beside `EXIT`, and the body consults a flag: it removes every recorded
+commit destination that exists **only when `committed` is not `yes`**, and it removes `run_root`
+in **every** case; the three signal traps then reset their own trap and re-raise, the shape
+`shadow/v1/reproduce.sh:124-127` uses. Initialize `committed=no` and an empty destination list
+beside the trap, above the `mkdir`, so the guard reads the same on every path out.
+
+The flag is what stops the trap from deleting the outputs the run just committed. Without it the
+normal `EXIT` fires after the last `mv` on a **successful** run and removes all seven documents,
+which contradicts the spec's guarantee at lines 1159-1164: a run that reaches the end of the
+commit step leaves exactly the documents requirements 6, 8 and 9 name and nothing else. 2.7 says
+where the flag is set and why that spot is the only correct one.
+
+Then bind the four names the copy needs, just above it:
 `git_env` copied from `materialize.sh:265-269` including the `core.hooksPath` pin and the explicit
 `HOME`/`TMPDIR`; `git_dir` comes with span 271-332; `source_algorithm` from the caller's commit-id
 width, `sha1` for 40 and `sha256` for 64 — bound from the argument, not the repository, which is
@@ -298,15 +361,35 @@ something over the driver's 8 MiB cap (`shadow/v1/reproduce.sh:158`). **Stage:**
 `input.json`, the call `materialize.sh:167-168` makes, with `$protocol` being
 `<repo>/adapters/local-git-materializer/v1/protocol.jq` checked for existence and non-symlinkness
 alongside the other required files the way `shadow/v1/reproduce.sh:103-111` checks its own.
-Nothing has touched the output directory yet. **Commit:** for each staged file, append its destination path to the trap's list on the line
-**above** its own `mv`, then `mv` it into the output directory, with `input.json` last. No removal
-step at the end — the trap owns `run_root` on every path.
+Nothing has touched the output directory yet.
+
+**Commit:** for each staged file, append its destination path to the trap's list on the line
+**above** its own `mv`, then `mv` it into the output directory, with `input.json` last. Then,
+**after that last `mv` returns and before the script reaches its normal exit**, set
+`committed=yes` and empty the destination list. The whole order in one line: append destination →
+`mv`, repeated, `input.json` last → `committed=yes`, list cleared → `exit 0`. No removal step at
+the end — the trap owns `run_root` on every path, flag or no flag.
+
+That spot is the only correct one. Set the flag earlier and a failure inside the commit step
+leaves a partial set behind that the trap will not clean; set it after the exit path has begun and
+the `EXIT` trap has already run with `committed=no` and taken the seven documents with it. What
+the two together buy is the spec's guarantee at lines 1159-1164, stated as a check anyone can run:
+**after a successful run the output directory holds exactly the seven documents and no
+`run_root`; after any refusal, and after any trapped signal, it is empty.** The one remaining
+window is between the last `mv` and `committed=yes`, and it is the safe one — a signal there
+removes the committed outputs and leaves the directory empty, which is a refusal-shaped result the
+caller can retry into, not a partial set. Only a `KILL` or a power loss can leave a partial set,
+the limit the spec names and no trap covers.
 
 2.8 **Refusal ids** exactly as requirement 12 lists them, and no new id. Three that are easy to
 get wrong: everything the copy refuses about the source repository is `E_TARGET`, the oversized
 commit object included even though the copied line says `E_SOURCE_LIMIT`; `E_LIMIT` is for the
 caller's own files and the finished output; and a `time_ok` that ran and answered `false` is
-`E_USAGE` while one that could not run is `E_RUNTIME`.
+`E_USAGE` while one that could not run is `E_RUNTIME`. A fourth, which is an ordering fault rather
+than a mapping one: an id that is correct in the table and reported second is still the wrong id,
+so every `E_USAGE` condition in 2.2 steps (1)-(5) has to be decided before the `E_WORKSPACE` and
+`E_RUNTIME` conditions that could refuse the same run first. That is why 2.2 is written as a
+numbered order rather than a list of checks.
 
 ### Step 3 — documentation, index, restore and manifest (requirement 14)
 
@@ -368,11 +451,22 @@ two generation directories under `core/v2/generations/` today and the wrapper sa
 selected. Step 0.5's unreadable-modules case proves the `E_RUNTIME` half.
 
 **The stage/commit ordering regresses by edit, not by accident.** Nothing at runtime can inject a
-failure between the staging step and the commit step, so requirement 18's orders are only ever
-proved in the source (step 0.6(c)) — exactly the kind of thing a later well-meaning edit undoes
-by moving the `mkdir` above the `trap` or the list-append below its `mv`. Keep the three
-assertions, and keep them named as source-order assertions so a reader does not mistake them for
-runtime proofs.
+failure between the staging step and the commit step, so most of requirement 18's orders are only
+ever proved in the source (step 0.6(c)) — exactly the kind of thing a later well-meaning edit
+undoes by moving the `mkdir` above the `trap`, or the list-append below its `mv`. Keep all five
+clauses of 0.6(c), and keep them named as source-order assertions so a reader does not mistake
+them for runtime proofs. The `committed` flag is the exception that also fails loudly at runtime: drop it
+as apparently dead code and the very next successful run comes back with an empty output
+directory, which step 0.4's full listing catches. Every other order in that list fails silently,
+which is why they are asserted at all.
+
+**The `EXIT` trap fires on success too, and that is the fault to design against.** The trap's
+whole purpose is cleaning up after a refusal, so it is natural to write its body as if only
+refusals reach it — and then the seven documents a good run just committed are deleted by the
+normal exit, with no error id and an empty directory as the only evidence. The `committed` flag in
+2.4 and its placement in 2.7 are the answer, and the reason both steps spell out the ordering
+rather than leaving it to the implementer: the correct code and the broken code differ by one
+line's position.
 
 **What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 10 ]`
 before the dispatch, and the marker form is also ten words. A relative path is refused in the
@@ -391,8 +485,13 @@ an environment read to move it; the trap plus the staging step is the answer.
   config, hooks, `packed-refs` and commit-size checks out.
 - Copying `scan_tree` too: it needs the object-closure walk, which is most of the materializer,
   and no tree-content condition can make this run write anything — empty patch, network denied.
-- A shape-only timestamp check in shell: it takes `2026-02-30T00:00:00Z` and returns `E_RELATION`
-  from the self-check at the very end, blaming the component for the caller's typo.
+- A shape-only timestamp check in shell **instead of** `time_ok`: it takes `2026-02-30T00:00:00Z`
+  and returns `E_RELATION` from the self-check at the very end, blaming the component for the
+  caller's typo. Step 2.2(5)'s shape gate is not that alternative — it runs before jq and
+  `time_ok` still runs after it, so the calendar answer is still the core's and
+  `2026-02-30T00:00:00Z` is still refused by the core's rule rather than by a pattern written
+  here. What the gate adds is only that a misshapen timestamp is `E_USAGE` on a run where jq
+  itself is broken.
 - Mapping every failure of the `time_ok` jq call to `E_USAGE`: it blames an argument that may be
   perfectly good and leaves a missing modules directory unnamed.
 - Resolving the profile here, or calling `scripts/test/`'s launcher: DR-1 option 2 on issue #262
@@ -416,8 +515,9 @@ commit is stale. `$t` is any scratch directory, `$m` is
   `shadow assembler: <N> focused checks passed` and nothing else printed. That one line covers
   every group in step 0: both algorithms, the four negative sources, the exported-function and
   `BASH_ENV` cases in both invocation forms, the two timestamp cases, the unreadable-modules case,
-  the look-alike profile set, the swapped producer-config digest, the refuse-then-retry pair, and
-  the copy, pin-liveness and source-order assertions.
+  the look-alike profile set, the swapped producer-config digest, the relative-jq and
+  wrong-digest-jq pair, the refuse-then-retry pair, the success-path directory listing, and the
+  copy, pin-liveness and source-order assertions.
 - **The driver accepts the input.** Inside that run: `shadow/v1/reproduce.sh` on the assembled
   `sha1` input with the fixture environment, policy set, duty and the same claim file produces a
   `shadow_reproduction_record` whose `.body.outcome` is **not** `inconclusive`. Paste the outcome
@@ -458,8 +558,15 @@ commit is stale. `$t` is any scratch directory, `$m` is
   Run this once PR #278 has merged; if it has not, say so and say which bytes were taken from
   `materialize.sh` instead.
 - **Source order.** Paste the line numbers: the `trap` lines naming `run_root` before the `mkdir`;
-  every output-directory `mv` after the staged `validate-input`; `input.json`'s `mv` last; and
-  each list-append above its own `mv`.
+  every output-directory `mv` after the staged `validate-input`; `input.json`'s `mv` last; each
+  list-append above its own `mv`; and the single `committed=yes` assignment after `input.json`'s
+  `mv`, with the trap's destination removal guarded by that flag and its `run_root` removal not.
+- **Usage checks before jq.** Paste the line numbers showing 2.2 steps (1)-(6) — the `/*` pattern
+  match on each path argument, the repository-id charset, the commit-id width, the timestamp shape
+  and the output-directory checks — all on **earlier** lines than the first line that reads
+  `$jq_bin` (its digest computation and its first execution). Then the two runs:
+  `assemble … ../relative/jq …` prints `E_USAGE`, and the same call with an absolute jq whose
+  digest is wrong prints `E_RUNTIME`.
 - **Shellcheck.** Under **0.11.0** (paste `shellcheck --version`):
   `shellcheck -x -S style shadow/v1/assemble-materialization-input.sh
   scripts/test/shadow-assembler.test.sh` — no findings, exit 0; and
@@ -470,8 +577,11 @@ commit is stale. `$t` is any scratch directory, `$m` is
 - **Scope and size.** `git diff --stat main` lists exactly the seven files this plan names and
   nothing else, with a net total inside **610-840**. Paste the total. Above 840, stop and
   re-decide with the operator.
-- **Output directory contract.** After a successful run, `ls -a "$out"` shows exactly the seven
-  documents and no `run_root`. After the `hooks/` refusal, `ls -a "$out"` shows nothing at all,
-  and the retry into that same directory with the good fixture assembles normally.
+- **Output directory contract**, which is the spec's guarantee at lines 1159-1164 read back as
+  two commands. After a successful run, `ls -a "$out"` shows exactly the seven documents and no
+  `run_root` — the trap fired on that run's normal `EXIT` and spared them. After the `hooks/`
+  refusal, `ls -a "$out"` shows nothing at all, and the retry into that same directory with the
+  good fixture assembles normally. Paste both listings; an empty listing on the successful run is
+  the `committed` flag missing or set in the wrong place.
 - **The copy's environment.** `env -i PATH=/usr/bin:/bin command -v find head wc tr rm grep git`
   resolves every one under `/usr/bin` or `/bin`.
