@@ -50,8 +50,8 @@ measured rather than guessed:
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
   (~70 — the group sequence itself is ~45, and the two `volatile sig_atomic_t` variables,
   the `pre_child` branch, the zero-`pgid` guard and the one `parent-signal:` line each
-  branch writes are ~25 more), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and a
-  `write_all` (~5, R2), closing inherited descriptors above 2 (~15), the fd-relative
+  branch writes are ~25 more), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and one
+  stderr write (~5, R2), closing inherited descriptors above 2 (~15), the fd-relative
   creation of the four
   sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
   two `open` calls is nearly free, and the cost is carrying the output-directory descriptor
@@ -78,11 +78,17 @@ measured rather than guessed:
   The round before this one added ~15 more, to ~1090: the signal set built once, and the
   `sigprocmask(SIG_BLOCK, …)`/`sigprocmask(SIG_SETMASK, …)` pair around each fork the
   parent performs — the resolver's and each pre-resolver child's — plus the child's
-  `SIG_DFL` resets and the mask restore after them, before `execve` (R2). This round adds
-  ~5 more, to **~1095**: the `SIGPIPE` disposition set beside the three handlers, the
+  `SIG_DFL` resets and the mask restore after them, before `execve` (R2). The round before
+  this one added
+  ~5 more, to ~1095: the `SIGPIPE` disposition set beside the three handlers, the
   `fcntl` that makes stderr non-blocking for the handler's one line, and that line becoming
   a single unchecked `write(2)` instead of a `write_all` call — the reordering that puts it
   after the kill and the reap costs nothing, being the same statements in a different
+  order (R2). This round adds ~2 more, to **~1097**: the `runtime-pgid:` line gets the same
+  treatment, which is one `fcntl` to set `O_NONBLOCK` and a second to put the flags back
+  (the parent keeps running, so it cannot leave them), and its `write_all` becomes a single
+  unchecked `write(2)`. Moving it out of the blocked-signal region to after the
+  `sigprocmask(SIG_SETMASK, …)` costs nothing, being the same statements in a different
   order (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
@@ -123,9 +129,13 @@ measured rather than guessed:
   ~5, to **~385**: the `run_created` guard — the `trap` line moving ahead of the `mkdir`,
   the guard inside both of its removal branches, and the `mkdir` becoming the one
   `run_created=$(/bin/mkdir -- "$run" && printf 1)` command with its
-  `[ -n "$run_created" ]` refusal (R1). This round adds nothing here and the figure stays
-  at **~385**: each trap branch's `printf` moves to the end of the branch, after the
+  `[ -n "$run_created" ]` refusal (R1). The round before this one added nothing here and the
+  figure stayed
+  at ~385: each trap branch's `printf` moves to the end of the branch, after the
   forward and after the removal, which is the same statements in a different order (R1).
+  This round adds nothing here either and the figure stays at **~385**: its only
+  entry-side change is to a sentence in R2 that summarised the forwarded branch in the wrong
+  order, which is prose about the entry rather than a change to it (R1, R2).
 - **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -285,7 +295,8 @@ pass by missing it. The round's other finding is the DR-2 decision, which is pen
 the operator rather than settled here and adds nothing anywhere until it is answered.
 Nothing was made cheaper to compensate.
 
-This round adds ~5, all of it in the parent, and both of its fixes are mostly reorderings
+The round before this one added ~5, all of it in the parent, and both of its fixes were
+mostly reorderings
 rather than new code. ~5 in the parent: the `SIGPIPE` disposition set beside the three
 handlers, the `fcntl` that makes stderr non-blocking for the handler's one line, and that
 line becoming a single unchecked `write(2)` in place of a `write_all` call. Nothing in the
@@ -294,7 +305,22 @@ whose three signal cases keep every assertion they had — the lines are still w
 later — which is checked case by case in R10 rather than asserted in passing. The child's
 `SIG_DFL`-before-unblock order costs nothing either: it is the same two calls in the
 opposite order, plus `SIGPIPE` joining the resets it already performs. The round's third
-finding is DR-2, still pending with the operator. Nothing was made cheaper to compensate.
+finding was DR-2, still pending with the operator. Nothing was made cheaper to compensate.
+
+This round adds ~2, all of it in the parent, and it finishes the round before this one's
+fix on the one
+line that was left out of it. ~2 in the parent: the `runtime-pgid:` line gets the same two
+`fcntl` calls and the same single unchecked `write(2)` the handler's line got, and it moves
+out of the blocked-signal region to after the `sigprocmask(SIG_SETMASK, …)` — a move that
+costs nothing, being the same statements in a different order. Nothing in the entry: the
+fix there is to a sentence in R2 that summarised the trap's forwarded branch in the wrong
+order, and R1, which owns the branch, already stated the right one, so no shipped statement
+moves. Nothing in the test either, and that is checked rather than assumed: the one case
+that reads the line reads it from a plain file, where a non-blocking write can neither block
+nor fail, so it keeps every assertion it had (R10). The sum of the four bullets is ~2422
+against the ~2420 the range is derived from, which is inside the rounding rather than a new
+figure, so the implementation range is unchanged. The round's third finding is DR-2, still
+pending with the operator. Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -311,7 +337,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 3295 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 3409 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -339,15 +365,17 @@ window before a runtime process group exists, the three signals blocked
 across every fork the parent performs and its publication, so no handler can run in the
 instant when a child exists and its pid does not, beside the entry's cleanup trap armed
 before the `mkdir` rather than with it, guarded so it never removes a `.run` that is not
-its own, and this round the forked child resetting the three dispositions before it
+its own, the forked child resetting the three dispositions before it
 unblocks the mask, so an inherited handler can never run in the wrong process, beside both
 signal diagnostics moved after the killing and the cleanup and made best-effort, so a
-blocked stderr cannot hold up the termination they exist to describe).
-**Evidence-based range: 2801-3789 lines** — the measured 3295 lines plus or minus 15%. It was
+blocked stderr cannot hold up the termination they exist to describe, and this round the
+one diagnostic still left inside a blocked-signal region — the parent's `runtime-pgid:`
+line — moved out to after the unmask and made best-effort with it, so nothing that can
+block sits anywhere a forwarded signal cannot reach the handler).
+**Evidence-based range: 2898-3920 lines** — the measured 3409 lines plus or minus 15%. It was
 553 lines and 470-636 thirteen rounds ago, then 783, then 847, then 1012, then 1202, then
-1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168;
-where each
-block of
+1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
+3295; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -549,7 +577,8 @@ The third finding was DR-2 on intake `#271`, which is the operator's decision ra
 a round's to fix; the residual bullet below still reads pending and this round does not
 touch it either.
 
-This round is +127 net over one P1 and one P2, and both are orderings inside the signal
+The round before this one was +127 net over one P1 and one P2, and both were orderings
+inside the signal
 path rather than new mechanisms. About 40 go to the child's side of the fork: R2's
 child paragraph rewritten so the three dispositions are reset to `SIG_DFL` while the
 signals are still blocked and the mask is restored last, with the one-sentence reason —
@@ -566,7 +595,24 @@ plain file R10 reads it from; both branch bullets and Design step 2 reordered; a
 new paragraph checking the mid-run, pre-parent and stopped-parent cases one at a time
 against the new order, none of them losing an assertion. The remaining ~17 are the
 accepted-concern list at the top and the re-derived size figures here and for the
-implementation. The third finding is DR-2, unchanged and still pending.
+implementation. The third finding was DR-2, unchanged and still pending.
+
+This round is +114 net over one P1 and one P2, and both of them are the round before this
+one's two fixes applied to a place it missed. About 60 go to the `runtime-pgid:` line: R2's
+`pgid` bullet no longer claiming the line and the variable become true together, a new
+paragraph saying why nothing that can block belongs inside the blocked-signal region and
+what a blocked write in there would cost, and the line's own block rewritten around its
+position after the unmask, the same non-blocking single `write(2)` the handler's line uses
+with the two `fcntl` calls the parent needs because it keeps running, and a paragraph saying
+plainly what best-effort costs a reader; plus that order and mechanism carried into Design
+step 1, R10's read-and-check sequence, R10's mid-run case and its diagnostics paragraph, the
+Copy-versus-adapt handler and `runtime-pgid` items, and R7's documentation line. About 5 go
+to the forwarded branch: R2's one-sentence summary of it, which had the `entry-signal:` line
+written before the forward and so contradicted both R1 and Design step 2, rewritten to the
+order R1 states with the reason it is last. The remaining ~49 are the accepted-concern list
+at the top and the re-derived size figures here and for the implementation, whose range does
+not move because the ~2 the parent gains is inside the rounding of the sum it is derived
+from. The third finding is DR-2, unchanged and still pending; this round does not touch it.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -1219,10 +1265,15 @@ the range above still blocks review.
 
   - `pgid` is a `volatile sig_atomic_t` initialised to `0` and assigned in the parent
     immediately after the `fork` (`portable-profile-resolution-launcher.c:432`) and the
-    parent-side `setpgid(child, child)` (`:450`), and before the `runtime-pgid:` line
-    below — all of it inside the blocked-signal region the next block specifies, so the
-    line and the variable become true together, neither can be observed half-done, and a
-    reader who has seen the line knows the handler will take the group branch.
+    parent-side `setpgid(child, child)` (`:450`) — and those three statements are the whole
+    of the blocked-signal region the next block specifies. Nothing else goes in there, and
+    the `runtime-pgid:` line below in particular is written after the mask is restored
+    rather than inside the region with them. So the line and the variable are not published
+    in the same instant, and they do not need to be: what a reader needs from them is the
+    order, and the order holds either way. The variable is set before the line goes out, so
+    a reader who has seen the line knows the handler will take the group branch, and a
+    handler that runs in the gap between the restore and the line still finds `pgid` set and
+    kills the group.
   - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
     child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
     jq `--version` probe. It is set in the parent immediately after that child's `fork`,
@@ -1249,11 +1300,25 @@ the range above still blocks review.
   `sigprocmask(SIG_BLOCK, &three, &saved)`, keeping the previous mask in `saved`. In the
   parent after `fork` returns, in this order: `setpgid(child, child)` (`:450`, the
   resolver's fork only); assign `pgid = child` for the resolver or `pre_child = child` for
-  a pre-resolver child; write the `runtime-pgid:` line (the resolver's fork only); then
-  `sigprocmask(SIG_SETMASK, &saved, NULL)`. A signal that arrived while the three were
-  blocked is delivered at that last call, when the handler already reads the published id
-  and takes the branch that kills the child that exists. The forked-but-unpublished state
-  is never observable by a handler, because no handler runs while it holds.
+  a pre-resolver child; then `sigprocmask(SIG_SETMASK, &saved, NULL)`. A signal that
+  arrived while the three were blocked is delivered at that restore, when the handler
+  already reads the published id and takes the branch that kills the child that exists.
+  The forked-but-unpublished state is never observable by a handler, because no handler
+  runs while it holds.
+
+  **Nothing else belongs inside that region, and the `runtime-pgid:` line in particular is
+  written after the restore rather than before it.** An earlier round of this spec put the
+  line inside the block, between the `pgid` assignment and the unmask, which read tidily —
+  the variable and the line becoming true in the same breath — and it was wrong for the same
+  reason the handler's own line goes last: a write to stderr can block. If stderr is a pipe
+  nobody is draining, or is full at that moment, that write waits with `INT`, `TERM` and
+  `HUP` still blocked, so a forwarded `TERM` cannot run the handler at all — and the
+  resolver group keeps running while the entry waits on a parent stuck in a diagnostic and
+  `.run` stays on disk. That is the same failure the whole requirement exists to prevent,
+  reached this time through the one statement in the region that has no business being
+  there. So the order is `fork`, `setpgid`, assign, restore, **then** write; the write is
+  also best-effort rather than blocking, in the way the line's own block below states; and
+  the region is left holding only statements that cannot block.
 
   **In the child, after `fork` and before `execve`, both the dispositions and the mask are
   put back — and the order between them is fixed: dispositions first, while the three
@@ -1331,9 +1396,10 @@ the range above still blocks review.
   `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` inside the handler, with no restore
   afterwards because `_exit(128 + signal)` follows immediately — and it emits the line with
   a **single `write(2)` call**, not the copied
-  `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) the
-  `runtime-pgid:` line uses, because `write_all` loops until the whole buffer is out and on
-  a non-blocking full pipe that loop is a spin rather than a write. A short write, an
+  `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) the copied
+  file uses for every stderr write of its own, because `write_all` loops until the whole
+  buffer is out and on a non-blocking full pipe that loop is a spin rather than a write.
+  A short write, an
   `EAGAIN` or an `EPIPE` is ignored — no check of the return value and no retry — so a
   truncated line, or no line at all, is an accepted outcome where a hung termination is
   not. `SIGPIPE` is **ignored**, not blocked: the parent sets it to `SIG_IGN` in the same
@@ -1368,9 +1434,13 @@ the range above still blocks review.
   (R1).
 
   **The entry side does not change, and the two lines compose.** The entry's forwarded
-  branch is exactly as R1 states it: write `entry-signal: <NAME> forwarded <pid>`, forward
-  the signal, wait for the parent, remove the run directory after that wait returns, exit
-  with the parent's status. What this block adds is that a forward landing in the pre-fork
+  branch is exactly as R1 states it: forward the signal to the parent, wait for the parent
+  to exit, chmod the run directory back to 0700, remove it, and only then write
+  `entry-signal: <NAME> forwarded <pid>` before exiting with the parent's status. The
+  diagnostic is last there for the same reason it is last here: bash's `printf` to a stderr
+  nobody is draining can block, and a line written first could hold up the forward the
+  parent is waiting for and the cleanup it exists to describe (R1). What this block adds is
+  that a forward landing in the pre-fork
   window now ends cleanly rather than ambiguously: the parent kills at most its own one
   pre-resolver child, then writes `parent-signal: TERM no-runtime`, and exits
   `143`, so the entry's wait returns that status and the caller sees the entry's
@@ -1382,11 +1452,13 @@ the range above still blocks review.
   platform's SHA-1 tool for each blob-id pin, its SHA-256 tool for the jq digest, and the
   bound jq for the `--version` probe (R7) — so "the parent's child" does not identify the
   runtime, and anything picking a process by parentage could pick a digest tool instead.
-  Rather than have a reader infer it, the parent reports it. Immediately after the `fork`
-  (`portable-profile-resolution-launcher.c:432`) and the `setpgid(child, child)` the copied
-  supervisor already does from the parent side (`:450`), after the `pgid` assignment and
-  still inside the blocked-signal region all three of those sit in, and before it enters
-  the poll loop, the parent writes exactly one line to its own stderr:
+  Rather than have a reader infer it, the parent reports it. After the `fork`
+  (`portable-profile-resolution-launcher.c:432`), the `setpgid(child, child)` the copied
+  supervisor already does from the parent side (`:450`), the `pgid` assignment, and the
+  `sigprocmask(SIG_SETMASK, &saved, NULL)` that ends the blocked-signal region those three
+  sit in — **outside** that region, deliberately, for the reason the region's own block
+  gives above — and before it enters the poll loop, the parent writes exactly one line to
+  its own stderr:
 
   ```
   runtime-pgid: <n>
@@ -1395,12 +1467,33 @@ the range above still blocks review.
   `<n>` is the child's pid in decimal, which is also the process group id: the child makes
   itself a group leader with `setpgid(0, 0)` (`:440`) and the parent sets the same thing from
   its side (`:450`), so the group id equals the child pid whichever of those two calls won
-  the race, and it is a number the parent already holds. The write is a `snprintf` into a
-  small buffer and then a direct `write_all(STDERR_FILENO, …)`, the helper the copied file
-  already uses for its own stderr writes (`:164`), not a buffered `fprintf` — so the line is
-  on the descriptor before the poll loop starts, and a reader watching stderr sees it while
-  the resolution is still running. This is a named deviation from the copied launcher, which
-  prints nothing there.
+  the race, and it is a number the parent already holds.
+
+  **The write is made the same way the handler's `parent-signal:` line is made, and for the
+  same reason.** It is a `snprintf` into a small buffer and then a **single `write(2)`**
+  with stderr in non-blocking mode for it: `fcntl(STDERR_FILENO, F_GETFL, 0)` to read the
+  flags, `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` before the write, and the saved
+  flags put back with a second `F_SETFL` after it — two `fcntl` calls here where the handler
+  needs only one, because the parent goes on to supervise a whole resolution on that same
+  descriptor while the handler `_exit`s immediately after its own line. A short write, an
+  `EAGAIN` or an `EPIPE` is ignored: no check of the return value and no retry. `SIGPIPE` is
+  already `SIG_IGN` from the first statements of `main` (above), so a closed stderr returns
+  `EPIPE` to code that ignores it rather than killing the parent. It is neither the copied
+  `write_all(STDERR_FILENO, …)` (`:164`) — which loops until the whole buffer is out, and on
+  a non-blocking full pipe that loop is a spin rather than a write — nor a buffered
+  `fprintf`, so the line is on the descriptor before the poll loop starts and a reader
+  watching stderr sees it while the resolution is still running.
+
+  **Say plainly what that costs.** Because the write is best-effort, a caller draining
+  stderr through a pipe that happens to be full at that moment can get a truncated line, or
+  no line at all. That is accepted, and it is accepted because nothing in the shipped path
+  depends on the line: it is a courtesy for whoever is reading stderr, the exit status is
+  still the result (R9), and no check, branch or cleanup in either shipped file ever reads it
+  back. The one thing that does read it is R10's mid-run signal case, which redirects the
+  entry's stderr into a plain file in the test's own scratch — a regular file, where a write
+  can neither block nor return `EAGAIN` — so that case is unaffected by the line being
+  best-effort, and R10 says so where it describes the read. This is a named deviation from
+  the copied launcher, which prints nothing there.
 
   **Why stderr, and what it does and does not disturb.** Stderr is already the parent's
   diagnostic channel: every `E_*` refusal line goes there (R5), and the entry passes it
@@ -2059,7 +2152,8 @@ the range above still blocks review.
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
   `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). It also states that a
-  successful launch prints one informational `runtime-pgid: <n>` line on stderr, and that an
+  successful launch prints one informational `runtime-pgid: <n>` line on stderr — best-effort,
+  so a caller whose stderr is a pipe it is not draining may not see it (R2) — and that an
   interrupted one prints one `parent-signal: <NAME> group <pgid>` or
   `parent-signal: <NAME> no-runtime` line beside the entry's own `entry-signal:` line (R2),
   so
@@ -2502,7 +2596,11 @@ the range above still blocks review.
   Capturing the entry's stderr to a file and polling the file is enough, for two reasons
   stated in the requirements it depends on: the parent writes the line unbuffered before it
   enters the poll loop (R2), and the entry passes stderr through unchanged rather than
-  capturing or buffering it (R1). A FIFO the test creates and reads, or a `tail -f` on the
+  capturing or buffering it (R1). That the line is a best-effort non-blocking write a full
+  pipe could lose (R2) is exactly why this case redirects stderr into a plain file rather
+  than reading it through a pipe: on a regular file the write can neither block nor return
+  `EAGAIN`, so the line this poll waits for is always written. A FIFO the test creates and
+  reads, or a `tail -f` on the
   redirected file, would do the same job; the plan may use any of the three, and the plain
   file is the simplest because it needs no reader process to start or clean up. What it must
   not do is wait for the entry to finish before reading, since the whole point is to read
@@ -2647,10 +2745,13 @@ the range above still blocks review.
   the window, which is worse than having no case. The coverage is therefore stated
   honestly: the plan quotes the sequence for every fork the parent performs —
   `sigprocmask(SIG_BLOCK, …)`, `fork`, `setpgid`, the `pgid` or `pre_child` assignment,
-  the `runtime-pgid:` line, `sigprocmask(SIG_SETMASK, …)`, and on the child's side the
-  `SIG_DFL` resets first and the mask restore after them, before `execve` — and the
+  `sigprocmask(SIG_SETMASK, …)`, and then, outside the region, the `runtime-pgid:` line;
+  with on the child's side the `SIG_DFL` resets first and the mask restore after them,
+  before `execve` — and the
   reviewer checks
-  that every fork in the file sits inside one such region. The three signal cases above
+  that every fork in the file sits inside one such region, and that nothing which can
+  block — the `runtime-pgid:` write above all — sits inside one with it (R2). The three
+  signal cases above
   are unchanged by the mask and must still pass exactly as written, which is the other
   half of the check: the mask changes *when* a pending signal is delivered, never which
   branch the handler takes once it runs.
@@ -2659,10 +2760,15 @@ the range above still blocks review.
   cases was checked rather than assumed.** R2's handler and R1's trap now write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
   the assertions above are worth re-reading in that order. The mid-run case does not read
-  either line — it reads the `runtime-pgid:` line, which is written on the normal path
-  before the poll loop and is untouched — and its three assertions are about a dead group,
-  a gone run directory and a status of `143`, all of which the new order reaches sooner
-  rather than later. The pre-parent case still finds exactly one
+  either line — it reads the `runtime-pgid:` line, which is still written on the normal path
+  before the poll loop. That line did move: out of the blocked-signal region, to after the
+  mask restore, and onto the same best-effort non-blocking write (R2). The case is
+  unaffected by both halves of that, and neither is taken on trust — the line is written
+  before the poll loop exactly as it was, so the poll still finds it, and the case reads it
+  from a plain file where a non-blocking write can neither block nor fail. Its three
+  assertions are about a dead group, a gone run directory and a status of `143`, all of
+  which the new order reaches sooner rather than later. The pre-parent case still finds
+  exactly one
   `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the trap writes
   that line after the chmod and the removal and still before its `exit`, and the case
   already reads the file only after the entry has exited; the plain file it reads is also
@@ -2822,7 +2928,7 @@ Order, each step checkable before the next:
    Those handlers are installed as the first statements of `main`, before any pin or digest
    work, and they carry the two `volatile sig_atomic_t` variables R2 specifies — `pgid`,
    `0` until it is assigned right after the `fork` (`:432`) and the parent-side `setpgid`
-   (`:450`) and before the `runtime-pgid:` line, and `pre_child`, the pid of the
+   (`:450`), and `pre_child`, the pid of the
    pre-resolver child currently being waited on (a SHA-1 tool, the SHA-256 tool, the jq
    `--version` probe), set before its `waitpid` and cleared after — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
@@ -2830,9 +2936,12 @@ Order, each step checkable before the next:
    `kill(-0, …)` in any of them. Every `fork` the parent performs — the resolver's
    (`:432`) and each pre-resolver child's — is wrapped in
    `sigprocmask(SIG_BLOCK, &three, &saved)` before it and
-   `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid`,
-   assigned `pgid` or `pre_child` and written the `runtime-pgid:` line, so no handler ever
-   runs between a `fork` and the publication of what it returned; on the child's side the
+   `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid` and
+   assigned `pgid` or `pre_child`, so no handler ever
+   runs between a `fork` and the publication of what it returned — and nothing else goes
+   inside that region, the `runtime-pgid:` line being written after the restore rather than
+   in there, because a stderr write that blocks with the three signals blocked would stop
+   the handler running at all; on the child's side the
    three dispositions are reset to `SIG_DFL` **first, while the three are still blocked**,
    with `SIGPIPE` reset beside them, and the same mask is restored only after that — the
    resets because the child runs C code before `execve` and a pending signal unblocked
@@ -2844,8 +2953,11 @@ Order, each step checkable before the next:
    `write_all` (`:164`), a short write or `EAGAIN`/`EPIPE` ignored, and `SIGPIPE` set to
    `SIG_IGN` among the same first statements of `main`, so a blocking or closed stderr can
    never hold up the termination this path exists to guarantee (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
-   straight to stderr with the copied `write_all` (`:164`) immediately after the `fork`
-   (`:432`) and the parent-side `setpgid` (`:450`) and before the poll loop, so a reader can
+   straight to stderr after the `fork` (`:432`), the parent-side `setpgid` (`:450`), the
+   `pgid` assignment and the mask restore — **outside** the blocked-signal region, and
+   best-effort in the same way the handler's line is, with stderr made non-blocking for one
+   `write(2)` and the saved flags put back by a second `fcntl` afterwards, and a short write
+   or `EAGAIN`/`EPIPE` ignored — and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
    `E_RUNTIME` before the next. **Scrub, then re-exec, before any external command** — the
@@ -3181,7 +3293,8 @@ intent says for this change. Only after the operator's merge does
   short write or `EAGAIN`/`EPIPE` is ignored, and `SIGPIPE` left at `SIG_IGN` from the
   first statements of `main`, so the diagnostic can never hold up the termination — and a
   `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
-  `sigprocmask(SIG_SETMASK, …)` after the pid assignment and the `runtime-pgid:` line,
+  `sigprocmask(SIG_SETMASK, …)` after the pid assignment and nothing else inside the region
+  with them — the `runtime-pgid:` line is written after that restore, not in there —
   plus the child's own `SIG_DFL` resets before that restore rather than after it — where the
   launcher forks at `:432` with no mask at all and contains no `sigprocmask`, no
   `sigaction` and no `signal()` anywhere in its 702 lines (verified: none of the three
@@ -3202,8 +3315,9 @@ intent says for this change. Only after the operator's merge does
   the C file — the parent-pinned subset's blob ids are computed from an `fstat` size and
   the platform's SHA-1 tool, where nothing in the launcher pins anything and the obvious
   shortcut would have been `git hash-object` (R1, R7). The ninth is this round's only change
-  to the C file: the one `runtime-pgid: <n>` line the parent writes to its own stderr
-  immediately after the fork, where the launcher writes nothing there and leaves the
+  to the C file: the one `runtime-pgid: <n>` line the parent writes to its own stderr after
+  the fork and after the mask restore, best-effort with the same non-blocking single
+  `write(2)` the handler's line uses, where the launcher writes nothing there and leaves the
   resolver's process group unnamed, so anything downstream had to work it out from the
   process table (R2). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
