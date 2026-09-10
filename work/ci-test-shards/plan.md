@@ -98,10 +98,11 @@ workflow that calls them are one concern.
 4. The coder pushes one commit adding `scripts/test/zz-red.test.sh`. Call that head
    `HR`, and record the red run against it (Step 6).
 5. The coder pushes a plain commit deleting that file and waits for green — never an
-   amend, never a force-push.
-6. That green head is the final head, `HF`. Both identity pairs are recorded in the
-   PR body there: the `scripts/test` tree ids for `H0` and `HF`, and the `ci.yml`
-   blob ids for `HR` and `HF`.
+   amend, never a force-push. Call that head `HD`.
+6. If nothing else needs fixing, `HD` is the final head, `HF`. The identity records go
+   in the PR body there: the `scripts/test` tree ids for `H0` and `HF` (R2), and for
+   the red run (R11) the one-line `HR`→`HD` delete, the `scripts/test` tree ids for
+   `HD` and `HF`, and the `ci.yml` blob ids for `HR` and `HF`.
 7. Review happens at `HF`, and the PR is squash-merged. Commits 4 and 5 cancel out,
    so the red suite never reaches `main`.
 
@@ -219,15 +220,24 @@ it is right. Assertions, in order:
    matrix — fails the assertion, printing both values it read. R9's assertion list does
    not name this one; it is an addition to that list, not a change to it, and the
    invariant it guards is R10's (`work/ci-test-shards/spec.md:158-160`).
-   If no `--shard` run line is present, the assertion prints
-   `workflow is still serial: no --shard run line in ci.yml` and passes. **That pass
-   is not a hidden skip.** It happens on exactly one head, `H0`, where the workflow
-   genuinely has no sharded step yet and there is no equality to check — the operator's
-   commit has not landed. From that commit onward the run line exists, so the
-   assertion is live at `HR` and at `HF`: the head the red proof runs on, the head
-   review reads, and the head that merges. The PR body records both outcomes — the
-   serial line at `H0` and the equality at `HF` — so the moment it becomes live is
-   visible in the evidence rather than assumed.
+   If no `--shard` run line is present, what that means depends on where the script is
+   running, so the script asks. Observe first that the old workflow never invokes this
+   script at all: its four steps are fixed, and the `Sharding proof` step arrives only
+   with the operator's sharded workflow. So under GitHub Actions the only thing that
+   can have started this script is the sharded workflow, and a serial `ci.yml` there
+   means the `--shard` run line was removed. The rule follows. When `GITHUB_ACTIONS`
+   is set — GitHub sets it to `true` — a missing `--shard` run line **fails** the
+   assertion, printing
+   `no --shard run line in ci.yml: the sharded test run line was removed`. When it is
+   not set the run is local — Step 0's pre-fix run, and the coder's runs while
+   building — and the serial case prints
+   `workflow is still serial: no --shard run line in ci.yml` and passes.
+   **That env check is not a hidden switch.** The branch that passes is unreachable
+   under CI, so no CI run can take it and no workflow shape can slip through the
+   `checks` job unenforced; and the two outcomes are recorded separately in the PR
+   body — the local serial line from the coder's run before the operator's commit, and
+   the CI equality line from the first sharded run (Proof items 1 and 13). The moment
+   the assertion becomes live is visible in the evidence rather than assumed.
 
 **Every runner call is bounded.** Once Step 1 lands, the precondition passes and the
 assertions above do invoke the runner. Each of those calls goes through a wall-clock
@@ -495,8 +505,9 @@ two ordinary commits on the implementation branch:
    aggregate `ci` **red, not skipped**. The run's URL and the job list — `gh pr
    checks` output, or a screenshot of it — go in the PR body, beside the duration
    measurement.
-3. Push a second commit that deletes the file. A plain new commit: never an amend,
-   never a force-push. Wait for the run to go green again.
+3. Push a second commit that deletes the file, and nothing else. A plain new commit:
+   never an amend, never a force-push. Call that head `HD`, and wait for the run to go
+   green again.
 
 The PR is squash-merged, so both commits collapse into the one squashed commit and
 neither the failing suite nor its deletion reaches `main`. A red intermediate head is
@@ -504,27 +515,46 @@ expected here and is not a failure of the PR: review and the `merge-ready` decis
 are made at the final green head, with the recorded red run sitting in the body as the
 evidence.
 
-**The red run is bound to the final head the same way, by blob identity.** Call the
-add commit `HR` — the head the red run actually ran on, named in the PR body beside
-the run's URL and the `gh pr checks` job list. `HR` is superseded before merge, so the
-evidence has to be tied to what ships. What the run proves is the aggregate gate's
-behaviour, and that behaviour depends on exactly one file:
-`.github/workflows/ci.yml`. Nothing else in the tree decides whether `ci` runs when a
-shard fails or what it compares. So at the final head the coder records, in the PR
-body, the real output of both of
+**The red run is bound to the final head the same way, by content — but by two files,
+not one.** Call the add commit `HR`, the head the red run actually ran on, named in the
+PR body beside the run's URL and the `gh pr checks` job list; `HD` is the delete commit
+right after it. `HR` is superseded before merge, so the evidence has to be tied to what
+ships. Two files decide the outcome this run demonstrates.
+`.github/workflows/ci.yml` decides whether `ci` runs when a shard fails and what it
+compares. And `scripts/test/run-all.sh` decides whether a failing suite makes its
+shard's job fail at all: the runner has to let that suite's non-zero status out, or
+`test (3)` goes green and the gate is never even asked. R11's promise that a green `ci`
+means every suite passed rests on that exit-code propagation as much as on the gate
+(`work/ci-test-shards/spec.md:168-173`), so a review fix to the runner would make this
+proof stale even with the workflow untouched.
 
+`HR` itself carries the throwaway suite, so its `scripts/test` tree can never equal
+`HF`'s. Bind through `HD` instead. At the final head the coder records, in the PR body,
+the real output of all of
+
+    git diff --name-status HR HD
+    git rev-parse HD:scripts/test
+    git rev-parse HF:scripts/test
     git rev-parse HR:.github/workflows/ci.yml
     git rev-parse HF:.github/workflows/ci.yml
 
-and the two blob ids must be identical. Blobs are content-addressed, so identical ids
-mean the gate that went red at `HR` is byte-for-byte the gate shipping at `HF`. If the
-workflow changes after `HR` — a review fix to the `if: always()` block, say — the red
-proof is stale and is redone: another add-then-delete pair on top of the new workflow,
-with a new `HR` and a new pair of blob ids.
+and three things must hold. The diff must be exactly one line, the deletion of
+`scripts/test/zz-red.test.sh` — so the delete commit took the red suite out and touched
+nothing else. The two tree ids must be identical, which makes the runner and all 62
+suites at the final head the same bytes that were running when `test (3)` went red. The
+two blob ids must be identical, which makes the gate that reported red byte-for-byte
+the gate that ships. Trees and blobs are content-addressed, so identical ids are
+identical bytes.
 
-So the final review reads both identity pairs out of the PR body — the `scripts/test`
-tree ids for R2, these `ci.yml` blob ids for R11 — not just the two run URLs. A pasted
-run with no matching identity pair is stale proof, and the round is not clean.
+If any commit after `HD` touches `scripts/test` or `.github/workflows/ci.yml` — a
+review fix to the runner is the likely one, a fix to the `if: always()` block the
+other — the records are stale and the proof is redone: another add-then-delete pair on
+top of that fix, with a new `HR` and `HD` and a fresh set of ids.
+
+So the final review reads all of these out of the PR body — the `scripts/test` tree ids
+for R2, and for R11 the one-line delete, the `HD`/`HF` tree ids and the `HR`/`HF` blob
+ids — not just the two run URLs. A pasted run with any of its identity records missing
+or unequal is stale proof, and the round is not clean.
 
 There is a cheaper complement, worth doing first, that is **not** a substitute: read
 the `ci` job in the workflow file on the branch and confirm by eye that it carries
@@ -544,7 +574,8 @@ run whatsoever and there is nothing to watch go red. The spec's *intent* — del
 fail one shard, see the one required check go red rather than skipped, and keep that
 failure off `main` — is met exactly. Only the mechanism changes: two ordinary commits
 on the single implementation PR, add then delete, squash-merged, with the red run
-bound to the final head by the `ci.yml` blob id (Step 6, Proof item 14).
+bound to the final head by the `ci.yml` blob id and the `scripts/test` tree id
+(Step 6, Proof item 14).
 
 That correction has one knock-on wording change, recorded here for the same reason.
 The spec says the operator commits the two constitution-path files "as the last commit
@@ -575,8 +606,12 @@ not edited — it is the accepted contract, and this plan does not rewrite its t
   branch runs nothing and proves nothing — which is why the spec's "scratch branch"
   wording is corrected here (Deviations from the spec). The red run therefore sits on
   a head that is superseded before merge, so it is not left as old proof on a new
-  commit: it is bound to the final head by the `ci.yml` blob id. Same blob, same gate,
-  so the recorded red run is proof of the gate that ships (Step 6, Proof item 14).
+  commit: it is bound to the final head by the `ci.yml` blob id *and* by the
+  `scripts/test` tree id, the latter taken across the delete commit because the red
+  head carries the throwaway suite. The gate decides whether `ci` goes red when a shard
+  fails; the runner decides whether the failing suite made that shard's job fail in the
+  first place. Both have to be the shipping bytes for the recorded red run to prove
+  anything, so a review fix to either one means redoing it (Step 6, Proof item 14).
 - **One open PR for this slug, the whole way through.** Both awkward proofs — the
   no-argument run and the red shard — run inside the single implementation PR rather
   than a second one, because re-runs update the existing open PR and two PRs must
@@ -598,7 +633,12 @@ not edited — it is the accepted contract, and this plan does not rewrite its t
   `scripts/test/run-all-sharding.check.sh` reads `.github/workflows/ci.yml` and fails
   unless the matrix list is exactly `1..N` in order for the same `N` the run line
   passes (Step 0). The proof script is agent-authored and already runs in the `checks`
-  job, and `checks` is a `needs:` of `ci`, so the assertion gates every head. Pointing
+  job, and `checks` is a `needs:` of `ci`, so the assertion gates every head. It also
+  refuses to be sidestepped by deleting the run line: a serial `ci.yml` is an accepted
+  answer only when `GITHUB_ACTIONS` is unset, that is on a local run before the
+  operator's commit. Under CI the assertion fails, because the old workflow never calls
+  this script — so a serial workflow seen from inside the sharded one can only mean the
+  run line was removed (Step 0, assertion 8). Pointing
   it at a constitution path is fine: agents may not *write* `.github/**`, but nothing
   stops them reading it (`AGENTS.md:383-386`), and the proof script writes nothing.
   Rejected: leaving the equality to review, or filing it as a follow-up issue. The
@@ -705,9 +745,11 @@ pre-fix run can no longer be produced here, so it is never left for later.
    `scripts/test/run-all.sh`.
    **Then, after Step 1.** The same command → one line per assertion, final line
    `sharding proof: all checks passed`, exit `0`, a few seconds. The workflow is still
-   today's single serial job at this point, so assertion 8 prints
+   today's single serial job at this point, and this is a local run with
+   `GITHUB_ACTIONS` unset, so assertion 8 prints
    `workflow is still serial: no --shard run line in ci.yml` and passes; item 13 is
-   where it has an equality to check.
+   where it has an equality to check. Copy that serial line into the PR body — it is
+   the only place it legitimately appears.
    Both go in the PR body, the recorded refusal beside the green run.
 2. **Discovery and ordering are untouched (R2, R3).**
 
@@ -790,10 +832,11 @@ pre-fix run can no longer be produced here, so it is never left for later.
     target under 25 minutes. This is also the first run where assertion 8 of the proof
     script has something to compare: the `Sharding proof` step in `checks` now sees the
     `--shard ${{ matrix.shard }}/6` run line and asserts the `shard:` list is exactly
-    `1..6` in order. Paste both lines in the PR body — the
-    `workflow is still serial` line from the `H0` run of item 1, and this run's
-    equality line — so the assertion is on record as live at the head that merges and
-    not merely present in the file.
+    `1..6` in order. Paste both lines in the PR body — the local
+    `workflow is still serial` line from item 1's post-Step-1 run, and this run's
+    equality line from CI — so the assertion is on record as live at the head that
+    merges and not merely present in the file. Under CI there is no third outcome: a
+    serial workflow here would fail the step rather than print the serial line.
 14. **A failing shard turns `ci` red — on this PR, then removed again (R11).** This
     needs the new workflow, so it cannot be done before Step 6. It needs a PR run:
     `ci.yml` runs on `pull_request` and on `push` to `main` only, so a push to any
@@ -805,11 +848,18 @@ pre-fix run can no longer be produced here, so it is never left for later.
     green, and `ci` **red, not skipped**. Record that run's URL, the commit it ran on
     (`HR`) and its job list (`gh pr checks` output) in the PR body, then push a second
     commit deleting the file and wait for green — a plain commit, never an amend or a
-    force-push. `HR` is superseded before merge, so bind it: at the final head also
-    record the real output of `git rev-parse HR:.github/workflows/ci.yml` and
+    force-push; call that head `HD`. `HR` is superseded before merge, so bind it by
+    both files the outcome depends on, the gate and the runner. At the final head also
+    record the real output of `git diff --name-status HR HD` — exactly one line, the
+    deletion of `scripts/test/zz-red.test.sh` — of `git rev-parse HD:scripts/test`
+    against `git rev-parse HF:scripts/test`, and of
+    `git rev-parse HR:.github/workflows/ci.yml` against
     `git rev-parse HF:.github/workflows/ci.yml`. Identical blob ids mean the gate that
-    went red is byte-for-byte the gate that ships; if the workflow changed after `HR`,
-    redo the add-then-delete pair on top of it. The squash merge keeps both commits
+    went red is byte-for-byte the gate that ships; identical tree ids mean the runner
+    that turned the failing suite into a failed shard job is the one that ships. If any
+    commit after `HD` touches `scripts/test` or the workflow, redo the add-then-delete
+    pair on top of that fix. The squash merge keeps both commits
     off `main`, and the `merge-ready` decision is made at the final green head, where
-    review checks both identity pairs — item 12's tree ids and these blob ids. Step 6
-    has the full procedure. This is the direct proof of the first risk above.
+    review checks every one of these records — item 12's tree ids for R2, and the
+    delete diff, the tree pair and the blob pair for R11. Step 6 has the full
+    procedure. This is the direct proof of the first risk above.
