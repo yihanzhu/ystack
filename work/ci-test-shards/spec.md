@@ -5,7 +5,7 @@ drafted: 2026-09-09
 ---
 # Spec: ci-test-shards
 
-CI runs all 63 `scripts/test/*.test.sh` suites one after another in a single job and
+CI runs all 62 `scripts/test/*.test.sh` suites one after another in a single job and
 takes 80 to 90 minutes. This splits that work across six parallel runners without
 changing any of the existing suites, what the merge gate is called, or what it
 means. No suite is added; the sharding proof runs as a separate check.
@@ -39,16 +39,16 @@ else. `review_size: standard`.
      The two lists must be identical, so discovery and ordering are provably
      untouched;
    - from a single no-argument run, compare its `==> <path>` headers, in order, and
-     its closing `all <N> test scripts passed` line against today's. That plus the
-     `--list` check pins discovery, order and count, so a full diff of two long runs
-     is not required.
+     its closing `all <N> test scripts passed` line against today's — today that is
+     62 suites and `all 62 test scripts passed`. That plus the `--list` check pins
+     discovery, order and count, so a full diff of two long runs is not required.
 
 3. **Deterministic assignment.** Suites are discovered exactly as today —
    `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
    `LC_ALL=C sort` — and the sharding filters that list afterwards. Suite `k`
    (0-based, in that sorted order) belongs to shard `(k mod count) + 1`: round-robin
    by index. For every `count` from 1 to 16 the shards are disjoint and their union
-   is the whole list, so each suite runs exactly once per CI run.
+   is the whole list — 62 suites today — so each suite runs exactly once per CI run.
 
 4. **Index, not duration.** Assignment never reads a measured duration. The
    durations we have are one local measurement of 56 suites and they drift with the
@@ -78,7 +78,7 @@ else. `review_size: standard`.
    no change to the closing count line — see requirement 2.
 
 8. **No vacuous pass.** If the selection is empty — which needs `count > N`, so it
-   cannot happen at `count <= 16` with 63 suites, but must still be handled — the
+   cannot happen at `count <= 16` with 62 suites, but must still be handled — the
    script prints `error: shard <i>/<n> selected no test scripts` to stderr and exits
    `1`. It never prints a passing line for zero suites. The existing "no
    `scripts/test/*.test.sh` files found" error keeps its current text and exit code.
@@ -105,19 +105,29 @@ else. `review_size: standard`.
 
 10. **Workflow shape.** `.github/workflows/ci.yml` keeps its `on:` triggers unchanged
     (`pull_request`, and `push` to `main`) and its `permissions` block, and gains
-    three jobs:
-    - `checks` — the required-files check, the pinned-shellcheck step, then one new
-      `run:` step invoking the sharding proof of requirement 9
-      (`bash scripts/test/run-all-sharding.check.sh`), then the rename gate. The
-      three existing steps read exactly as they do today; that one step is the only
-      addition.
-    - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6]}}`,
-      checkout, then `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`.
+    three jobs. Every job that touches a repository file begins with the very
+    checkout step the workflow uses today, copied unchanged:
+
+        - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    Each GitHub Actions job starts with an empty workspace, and a checkout in one job
+    does not populate another, so this step is repeated per job rather than shared:
+    - `checks` — that checkout step first, then the required-files check, the
+      pinned-shellcheck step, then one new `run:` step invoking the sharding proof of
+      requirement 9 (`bash scripts/test/run-all-sharding.check.sh`), then the rename
+      gate. All four of those read the repository, so without the checkout the very
+      first one cannot find `ci/required-files.txt` and the required check goes red.
+      The checkout and the three existing gate steps read exactly as they do today;
+      the proof step is the only addition.
+    - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6]}}`, that
+      same checkout step, then
+      `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`.
       `fail-fast: false` so one red shard still lets the others report.
     - `ci` — `needs: [checks, test]`, `if: always()`, and one step that fails unless
-      `needs.checks.result == 'success' && needs.test.result == 'success'`. For a
-      matrix job `needs.test.result` is `success` only when every shard succeeded, so
-      a failed, cancelled or skipped shard turns `ci` red.
+      `needs.checks.result == 'success' && needs.test.result == 'success'`. This job
+      needs no checkout: it reads only `needs.*.result` and opens no repository file.
+      For a matrix job `needs.test.result` is `success` only when every shard
+      succeeded, so a failed, cancelled or skipped shard turns `ci` red.
 
 11. **The required check keeps its name and meaning.** The ruleset
     (`post_transition_ruleset` in `config/construction-mode.json`: single
@@ -162,18 +172,26 @@ Order of work on `ystack/impl/ci-test-shards`:
    `ci/required-files.txt`.
 3. Nothing else in `scripts/` or `docs/` changes.
 4. **Last commit, by the operator:** `.github/workflows/ci.yml` and the `AGENTS.md`
-   bullet.
+   bullet. In the workflow, `checks` and each of the six `test` shards open with the
+   workflow's existing checkout step
+   (`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`), because a
+   job's workspace starts empty; the aggregate `ci` job gets no checkout, since it
+   only inspects `needs.*.result`.
 
-Size estimate: about 70 net lines in the runner, 170 in the new proof script, 48 in
-the workflow (the three jobs, including the one step that calls the proof), one
-manifest line and a sentence of docs — roughly 290 net lines, inside the 300–400
-budget, hence `review_size: standard`.
+Size estimate: about 70 net lines in the runner, 170 in the new proof script, 49 in
+the workflow (the three jobs, the checkout step in each job that needs one, and the
+one step that calls the proof), one manifest line and a sentence of docs — roughly
+291 net lines, inside the 300–400 budget, hence `review_size: standard`.
 
-Expected wall time with six shards, using the ten measured durations and a 34 s
-average for the rest: the heaviest shard is the one holding `evals-dashboard`, at
-about 21.7 minutes; the others land between 8 and 20. Add a minute or two for
-checkout and the shellcheck bootstrap and a run finishes around 23 minutes. That
-clears the target, but not by much — which is why the shard count is a tunable.
+Expected wall time with six shards, over the 62 suites in sorted order. The only
+durations on record are the three in the accepted intake — `evals-dashboard` 835 s,
+`portable-adapter-contracts` 485 s, `evals-approvals` 443 s — so every other suite is
+counted at 57 s, which is what the 4769 s local run over 56 suites averages once
+those three are removed. On that basis the heaviest shard is the one holding
+`evals-dashboard` (shard 5 over today's 62 names), at about 22.5 minutes; the others
+land between 9 and 18. Add a minute or two for checkout and the shellcheck bootstrap
+and a run finishes around 24 minutes. That clears the target, but only just — which
+is why the shard count is a tunable.
 
 ## Out of scope
 
@@ -208,18 +226,21 @@ clears the target, but not by much — which is why the shard count is a tunable
 - **Shard membership moves when suites are added or renamed.** Round-robin over a
   sorted list means one new file reshuffles everything after it, so the heaviest
   shard's load drifts. Correctness is unaffected; only the estimate is.
-- **Setup runs seven times** — checkout on each of the six shards plus `checks`, and
-  the shellcheck download in `checks`. A minute or two of duplicated work per run,
-  paid to buy back an hour. Acceptable.
-- **The margin is thin.** 23 minutes against a 25-minute target, on an estimate built
+- **Setup runs seven times.** Seven of the eight jobs check the repository out: each
+  of the six `test` shards and `checks`. The aggregate `ci` job is the one that does
+  not, because it reads only `needs.*.result`, so the count is seven and not eight.
+  Add the shellcheck download in `checks` and that is a minute or two of duplicated
+  work per run, paid to buy back an hour. Acceptable.
+- **The margin is thin.** 24 minutes against a 25-minute target, on an estimate built
   from one local measurement of 56 suites. If the real run lands over, the answer is
   a higher shard count, not a change to the rule.
 
 ## Answers to the intent's open questions
 
-- **How many parallel shards?** Six. Four leaves a 32-minute shard and misses the
-  target; eight only reaches about 19 minutes, because `evals-dashboard` dominates,
-  and costs a third more runner minutes for two minutes of wall time.
+- **How many parallel shards?** Six. On the same 62-suite estimate, four leaves a
+  28-minute shard and misses the target; eight only reaches about 21 minutes, because
+  the three slow suites dominate at any count, and it costs a third more runner
+  minutes for barely a minute of wall time.
 - **Balanced by measured duration or by index?** By index — see requirement 4.
 - **Does the slowest suite get a follow-up?** Yes, separately. `evals-dashboard` at
   about 14 minutes is the floor no shard count can beat. Out of scope here.
