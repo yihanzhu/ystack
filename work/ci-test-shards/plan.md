@@ -297,10 +297,37 @@ complete and the PR is openable with the operator's two files still missing.
 not a preference.** The branch head still carries today's single serial `ci` job, so
 the PR's first CI run is the old shape and it runs `bash scripts/test/run-all.sh`
 with no argument. That is the only place the no-argument run happens end to end, and
-R2's byte-for-byte guarantee rests on it: its
-log must show 62 `==> ` headers and end `all 62 test scripts passed`. Record three
-things from that run in the PR body — the run's URL, the `ci` job's status, and its
-wall-clock time.
+R2's byte-for-byte guarantee rests on it: its log must show 62 `==> ` headers and end
+`all 62 test scripts passed`. Record four
+things from that run in the PR body — the run's URL, the commit it ran on (call it
+`H0`; `AGENTS.md:409-411` requires every pasted proof to name its commit), the `ci`
+job's status, and its wall-clock time.
+
+**That run can never happen on the final head, so it is bound to the final head by
+content instead.** Step 6 adds the operator's two files and the red-shard pair, so the
+final head `HF` is a later commit than `H0` — and at `HF` the workflow is sharded, so
+a no-argument CI run is not producible there at all. What the run proves under R2 is
+discovery, order and count: the `==> ` headers and the `all 62 test scripts passed`
+line. Those depend on nothing but the runner and the set of suite files — that is, on
+the tree `scripts/test`. So the binding is a tree identity. At `HF` the coder records,
+in the PR body, the real output of both of
+
+    git rev-parse H0:scripts/test
+    git rev-parse HF:scripts/test
+
+and the two tree ids must be byte-identical. Git trees are content-addressed, so
+identical ids mean the runner and all 62 suites are the same bytes at both heads, and
+the recorded discovery, order and count would come out the same at `HF`. The
+operator's `ci.yml` and `AGENTS.md` commits touch nothing under `scripts/test`. The
+red-shard add-and-delete pair adds a file and then removes it, which returns the tree
+to the same id, so it does not break the binding either. Whether every suite still
+*passes* at `HF` is not left to the earlier run: that is exactly what the final head's
+own green sharded run shows.
+
+R2's other verification — `--list` compared against the raw discovery command — needs
+no binding, because it re-runs on every head. It is assertion 1 of
+`scripts/test/run-all-sharding.check.sh` (Step 0), and the `Sharding proof` step in the
+`checks` job runs that script on every push to the branch, `HF` included.
 
 Step 6 does not begin until that evidence is in the PR body. The manager reads it
 there first.
@@ -318,16 +345,34 @@ Three extra runs and two more operator turns for evidence Step 5 gets for free. 
 is why the manager checks this ordering before posting Step 6 at all, rather than
 treating it as something to repair afterwards.
 
+**Second precondition, checked at the end rather than the start: the binding still
+holds.** At the final head the two `scripts/test` tree ids from Step 5 must still
+match. If anything under `scripts/test` changed after `H0` — a review fix to the
+runner, a new suite, a tweak to the proof script — then the no-argument evidence is
+old proof on a new commit, which this repo treats as stale (`AGENTS.md:409-411`), and
+a fresh run is required before review. Two ways to get one, both on this branch and
+both the operator's: the revert-and-re-apply above, which buys one more old-shape CI
+run; or he runs `bash scripts/test/run-all.sh` with no arguments locally at the final
+head and pastes the 62 `==> ` headers and the `all 62 test scripts passed` line,
+naming that commit. Either way the tree-id pair is re-recorded against the new run's
+head. That local serial run is the one place in this plan where anybody runs the
+80-90 minute suite by hand, it is the operator's to run because it is 80-90 minutes of
+someone's machine, and it happens only if the binding broke. No agent runs it.
+
 The operator runs `git apply proposals/ci-test-shards-shard-ci.patch`, reviews the two
 files, commits and pushes them as the last commit on `ystack/impl/ci-test-shards`.
 Only after that does CI exercise the new shape. He records the run's wall-clock
 duration in the PR body; the target is under 25 minutes (R14).
 
-**Then, once that run is green, the red-shard proof of the first risk below.** It
-needs a pull request run: `ci.yml`'s `on:` is `pull_request` and `push` to `main` only
-(lines 3-6, checked against the file), so pushing any other branch starts no run at
-all — there is nothing to watch go red. So it runs on **this** PR, the one open PR for
-this slug, as two ordinary commits on the implementation branch:
+**Then, once that run is green, the red-shard proof of the first risk below.** The
+spec asks for this one on a scratch branch — requirement 11 at
+`work/ci-test-shards/spec.md:168-173`, repeated in the risk note at `:311-313`. That
+is infeasible as written and this plan corrects it openly; Deviations from the spec
+below states the correction and how it is re-accepted. The reason: it needs a pull
+request run. `ci.yml`'s `on:` is `pull_request` and `push` to `main` only (lines 3-6,
+checked against the file), so pushing a scratch branch starts no run at all — there is
+nothing to watch go red. So it runs on **this** PR, the one open PR for this slug, as
+two ordinary commits on the implementation branch:
 
 1. From the implementation head — the operator's workflow commit, with its own CI
    green — the coder pushes one commit adding a single file,
@@ -354,11 +399,51 @@ expected here and is not a failure of the PR: review and the `merge-ready` decis
 are made at the final green head, with the recorded red run sitting in the body as the
 evidence.
 
+**The red run is bound to the final head the same way, by blob identity.** Call the
+add commit `HR` — the head the red run actually ran on, named in the PR body beside
+the run's URL and the `gh pr checks` job list. `HR` is superseded before merge, so the
+evidence has to be tied to what ships. What the run proves is the aggregate gate's
+behaviour, and that behaviour depends on exactly one file:
+`.github/workflows/ci.yml`. Nothing else in the tree decides whether `ci` runs when a
+shard fails or what it compares. So at the final head the coder records, in the PR
+body, the real output of both of
+
+    git rev-parse HR:.github/workflows/ci.yml
+    git rev-parse HF:.github/workflows/ci.yml
+
+and the two blob ids must be identical. Blobs are content-addressed, so identical ids
+mean the gate that went red at `HR` is byte-for-byte the gate shipping at `HF`. If the
+workflow changes after `HR` — a review fix to the `if: always()` block, say — the red
+proof is stale and is redone: another add-then-delete pair on top of the new workflow,
+with a new `HR` and a new pair of blob ids.
+
+So the final review reads both identity pairs out of the PR body — the `scripts/test`
+tree ids for R2, these `ci.yml` blob ids for R11 — not just the two run URLs. A pasted
+run with no matching identity pair is stale proof, and the round is not clean.
+
 There is a cheaper complement, worth doing first, that is **not** a substitute: read
 the `ci` job in the workflow file on the branch and confirm by eye that it carries
 `if: always()` and compares `needs.checks.result` and `needs.test.result` against
 `success` explicitly. That is review of the text, not proof of the behaviour. Only a
 real run shows GitHub actually reporting `ci` red.
+
+## Deviations from the spec
+
+One, stated openly rather than done quietly. Requirement 11
+(`work/ci-test-shards/spec.md:168-173`) says the aggregate gate is verified "by
+failing one shard on a scratch branch", and the risk note at `:311-313` repeats it.
+That mechanism cannot work: `ci.yml`'s triggers are `pull_request` and `push` to
+`main` only (`.github/workflows/ci.yml:3-6`), so a scratch branch starts no workflow
+run whatsoever and there is nothing to watch go red. The spec's *intent* — deliberately
+fail one shard, see the one required check go red rather than skipped, and keep that
+failure off `main` — is met exactly. Only the mechanism changes: two ordinary commits
+on the single implementation PR, add then delete, squash-merged, with the red run
+bound to the final head by the `ci.yml` blob id (Step 6, Proof item 14).
+
+The correction is submitted through this gate. Accepting this plan accepts the
+corrected proof strategy; yshifu records the correction on the intake issue when this
+plan merges, so the spec's wording is not silently overridden. The spec file itself is
+not edited — it is the accepted contract, and this plan does not rewrite its text.
 
 ## Risks
 
@@ -371,7 +456,11 @@ real run shows GitHub actually reporting `ci` red.
   making one shard fail on the implementation PR itself, on a commit that is deleted
   again before merge (Step 6, Proof last item). It has to be a PR run: the workflow's
   `on:` triggers are `pull_request` and `push` to `main` only, so pushing any other
-  branch runs nothing and proves nothing.
+  branch runs nothing and proves nothing — which is why the spec's "scratch branch"
+  wording is corrected here (Deviations from the spec). The red run therefore sits on
+  a head that is superseded before merge, so it is not left as old proof on a new
+  commit: it is bound to the final head by the `ci.yml` blob id. Same blob, same gate,
+  so the recorded red run is proof of the gate that ships (Step 6, Proof item 14).
 - **One open PR for this slug, the whole way through.** Both awkward proofs — the
   no-argument run and the red shard — run inside the single implementation PR rather
   than a second one, because re-runs update the existing open PR and two PRs must
@@ -435,9 +524,9 @@ real run shows GitHub actually reporting `ci` red.
   byte-identical, so the branch is green — just still 80-90 minutes, and without the
   sharding proof, which the old workflow has no step for. Run that proof locally
   (Step 5). After Step 6 the new shape takes over.
-  That first old-shape run is the **only** full no-argument run this work gets:
-  afterwards every run on the branch is sharded, and this plan tells nobody to run the
-  serial suite locally. So pushing the five agent-authored files and opening the PR
+  That first old-shape run is the **only** full no-argument run this work gets from
+  CI: afterwards every run on the branch is sharded, and no agent runs the serial
+  suite locally. So pushing the five agent-authored files and opening the PR
   before the operator's commit is a hard precondition (Step 5, Proof item 12), and the
   manager reads the recorded run in the PR body before posting the operator's step. A
   PR whose first CI run was already sharded has no running-mode evidence, and the only
@@ -445,6 +534,12 @@ real run shows GitHub actually reporting `ci` red.
   this same branch, one run finishes under the old shape and is recorded, then he
   re-applies it. That cost is why the ordering is checked before Step 6 is posted
   rather than repaired after.
+  That run is also, necessarily, on an earlier head than the one that merges, so it is
+  bound to the final head by the `scripts/test` tree id rather than left as old proof
+  on a new commit (Step 5, Proof item 12). If that pair ever differs, the evidence is
+  stale and a fresh no-argument run is taken before review — the same
+  revert-and-re-apply, or the operator running the serial suite locally at the final
+  head.
 - **Shard membership drifts.** Round-robin over a sorted list means adding or renaming
   one suite reshuffles everything after it, so the heaviest shard moves. Correctness
   is unaffected — the partition property holds for any count from 1 to 16 — only the
@@ -461,11 +556,13 @@ real run shows GitHub actually reporting `ci` red.
 
 ## Proof
 
-Run from the repository root on `ystack/impl/ci-test-shards`. Do **not** run
+Run from the repository root on `ystack/impl/ci-test-shards`. Agents do **not** run
 `bash scripts/test/run-all.sh` with no arguments locally — that is the 80-90 minute
 serial suite, and CI runs it for free on the PR's first run, under the unchanged
 workflow, before the operator's commit exists. That run is required, not incidental
-(Step 5), and item 12 below is where it is recorded. It is R2's second verification.
+(Step 5), and item 12 below is where it is recorded, named by commit, and bound to the
+final head by tree identity. It is R2's second verification. The single exception is
+the operator's fallback in Step 6, taken only if that binding breaks.
 
 **The order of this list is binding and follows Order of work.** Item 1's first run
 happens in Step 0, against the unchanged `scripts/test/run-all.sh`, before Step 1
@@ -523,27 +620,42 @@ pre-fix run can no longer be produced here, so it is never left for later.
     `ci/required-files.txt`, `RESTORE.md`,
     `proposals/ci-test-shards-shard-ci.patch` — and exactly seven after it, adding
     `.github/workflows/ci.yml` and `AGENTS.md`.
-12. **The full no-argument run, before any sharding (R2).** Required, and it happens
-    once: on the implementation PR's first CI run, under the unchanged workflow, with
-    the operator's commit not yet pushed (Step 5). Expect the old single `ci` job
-    green, its log showing 62 `==> ` headers and ending
-    `all 62 test scripts passed`. Record the run's URL, the `ci` job's status and its
-    wall-clock time in the PR body. Step 6 does not start until that is in the PR
-    body; if it was missed, the only recovery is the expensive revert-and-re-apply on
-    this same branch, described in Step 6.
+12. **The full no-argument run, bound to the final head (R2).** Required, and it
+    happens once: on the implementation PR's first CI run, under the unchanged
+    workflow, with the operator's commit not yet pushed (Step 5). Expect the old
+    single `ci` job green, its log showing 62 `==> ` headers and ending
+    `all 62 test scripts passed`. Record the run's URL, the commit it ran on (`H0`),
+    the `ci` job's status and its wall-clock time in the PR body. It cannot be re-run
+    at the final head, because the final head is sharded, so also record there the
+    real output of `git rev-parse H0:scripts/test` and
+    `git rev-parse HF:scripts/test`. The two tree ids must be identical — that is what
+    makes the earlier run current proof of the shipping tree instead of old proof on a
+    new commit. If they differ, the run is redone at the new head before review: the
+    revert-and-re-apply of Step 6, or the operator runs
+    `bash scripts/test/run-all.sh` with no arguments locally at the final head and
+    pastes the 62 headers and the count line, naming that commit. Step 6 does not
+    start until the run and `H0` are in the PR body; if the recording was missed
+    entirely, the only recovery is that same expensive path, described in Step 6.
 13. **The gate keeps its name and meaning (R11, R14).** On the PR after Step 6, the
     check list reads `ci`, `checks`, and `test (1)` through `test (6)`; `ci` is green
     and is still the one required check. The operator records that run's wall-clock
     duration in the PR body; target under 25 minutes.
-14. **A failing shard turns `ci` red — on this PR, then removed again.** This needs
-    the new workflow, so it cannot be done before Step 6. It needs a PR run: `ci.yml`
-    runs on `pull_request` and on `push` to `main` only, so a push to any other branch
-    starts nothing. So the coder pushes one commit to the implementation branch adding
-    `scripts/test/zz-red.test.sh` (`#!/usr/bin/env bash`, then `exit 1`) — it sorts
-    last, so it lands in shard 3. Expect `test (3)` red, the other five shards green
-    (`fail-fast: false`), `checks` green, and `ci` **red, not skipped**. Record that
-    run's URL and its job list (`gh pr checks` output) in the PR body, then push a
-    second commit deleting the file and wait for green — a plain commit, never an
-    amend or a force-push. The squash merge keeps both commits off `main`, and the
-    `merge-ready` decision is made at the final green head. Step 6 has the full
-    procedure. This is the direct proof of the first risk above.
+14. **A failing shard turns `ci` red — on this PR, then removed again (R11).** This
+    needs the new workflow, so it cannot be done before Step 6. It needs a PR run:
+    `ci.yml` runs on `pull_request` and on `push` to `main` only, so a push to any
+    other branch starts nothing — which is why the spec's "scratch branch" wording is
+    corrected here (Deviations from the spec). So the coder pushes one commit to the
+    implementation branch adding `scripts/test/zz-red.test.sh`
+    (`#!/usr/bin/env bash`, then `exit 1`) — it sorts last, so it lands in shard 3.
+    Expect `test (3)` red, the other five shards green (`fail-fast: false`), `checks`
+    green, and `ci` **red, not skipped**. Record that run's URL, the commit it ran on
+    (`HR`) and its job list (`gh pr checks` output) in the PR body, then push a second
+    commit deleting the file and wait for green — a plain commit, never an amend or a
+    force-push. `HR` is superseded before merge, so bind it: at the final head also
+    record the real output of `git rev-parse HR:.github/workflows/ci.yml` and
+    `git rev-parse HF:.github/workflows/ci.yml`. Identical blob ids mean the gate that
+    went red is byte-for-byte the gate that ships; if the workflow changed after `HR`,
+    redo the add-then-delete pair on top of it. The squash merge keeps both commits
+    off `main`, and the `merge-ready` decision is made at the final green head, where
+    review checks both identity pairs — item 12's tree ids and these blob ids. Step 6
+    has the full procedure. This is the direct proof of the first risk above.
