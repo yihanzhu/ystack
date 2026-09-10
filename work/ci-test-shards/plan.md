@@ -281,12 +281,31 @@ matrix list and the `/6` in the run line are the same number.
 The rationale paragraph for these two files goes in the implementation PR body, per
 `proposals/README.md`.
 
-### Step 5 — prove the agent-authored half
+### Step 5 — prove the agent-authored half, then push and open the PR
 
 Run everything in Proof below that does not need the new workflow. Steps 0-4 are then
 complete and the PR is openable with the operator's two files still missing.
 
+**Push and open the PR here, before the operator's commit. That order is required,
+not a preference.** The branch head still carries today's single serial `ci` job, so
+the PR's first CI run is the old shape and it runs `bash scripts/test/run-all.sh`
+with no argument. That is the only place the no-argument run happens end to end, and
+R2's byte-for-byte guarantee rests on it: its
+log must show 62 `==> ` headers and end `all 62 test scripts passed`. Record three
+things from that run in the PR body — the run's URL, the `ci` job's status, and its
+wall-clock time.
+
+Step 6 does not begin until that evidence is in the PR body. The manager reads it
+there first.
+
 ### Step 6 — the operator's commit, then the red-shard proof
+
+**Precondition: Step 5's no-argument run is green and recorded in the PR body.** Once
+the operator's commit lands, every run on this branch is sharded, so that evidence can
+no longer be produced here. If the workflow commit lands first and no such run
+happened, the running-mode proof is missing and the PR cannot merge until a
+no-argument run is produced on a scratch draft PR built from the pre-workflow commit —
+the same mechanism as the red-shard proof below — and recorded the same way.
 
 The operator runs `git apply proposals/ci-test-shards-shard-ci.patch`, reviews the two
 files, commits and pushes them as the last commit on `ystack/impl/ci-test-shards`.
@@ -318,11 +337,16 @@ request, so it uses a throwaway **draft** one:
    aggregate `ci` **red, not skipped**.
 5. Close the PR without merging, and delete the branch.
 
-This scratch PR is **exempt from the artifact chain**. It has no intent, spec or plan
-of its own and needs none, because it is never merged and exists only as evidence. It
-must **not** be labelled `merge-ready`, and nobody merges it. The evidence — the PR's
-job list with its statuses, as a screenshot or as `gh pr checks` output — is pasted
-into the implementation PR body, beside the duration measurement.
+This scratch PR belongs to **this same intake**, like every other PR here. Its body
+carries the non-closing `Tracks #269` link, exactly as the intent, spec and plan PRs
+do, so the intake stays open. It is therefore not a new kind of PR and needs no
+process exception: this plan, once accepted, is the record that authorizes opening it,
+and the step above is where it is named. It is opened as a **draft**, is never
+labelled `merge-ready`, is never merged, and is closed as soon as the evidence is
+recorded — the merge gates (review, `ci`, labels) govern merges, and this PR is never
+a merge candidate. The evidence — the PR's job list with its statuses, as a screenshot
+or as `gh pr checks` output — is pasted into the implementation PR body, beside the
+duration measurement.
 
 There is a cheaper complement, worth doing first, that is **not** a substitute: read
 the `ci` job in the workflow file on the branch and confirm by eye that it carries
@@ -390,7 +414,7 @@ the draft PR shows GitHub actually reporting `ci` red.
   While the step exists, `checks` is a `needs:` of `ci`, so a red proof is a red gate.
   Rejected: naming it `*.test.sh`, which would add a 63rd suite, change the
   no-argument output and count, and breach both R2 and the accepted intent.
-- **The two operator files arrive last, and the branch is not broken meanwhile.**
+- **The two operator files arrive last, and that order is a requirement.**
   Before Step 6, a `pull_request` run uses the workflow file on the branch head —
   which is still today's single serial `ci` job. So the PR's first CI run is the old
   shape: it runs the required-files check (now including the new manifest line),
@@ -399,6 +423,14 @@ the draft PR shows GitHub actually reporting `ci` red.
   byte-identical, so the branch is green — just still 80-90 minutes, and without the
   sharding proof, which the old workflow has no step for. Run that proof locally
   (Step 5). After Step 6 the new shape takes over.
+  That first old-shape run is the **only** full no-argument run this work gets:
+  afterwards every run on the branch is sharded, and this plan tells nobody to run the
+  serial suite locally. So pushing the five agent-authored files and opening the PR
+  before the operator's commit is a hard precondition (Step 5, Proof item 12), and the
+  manager reads the recorded run in the PR body before posting the operator's step. A
+  PR whose first CI run was already sharded has no running-mode evidence and cannot
+  merge until a no-argument run is produced on a scratch draft PR built from the
+  pre-workflow commit — the same mechanism as the red-shard proof.
 - **Shard membership drifts.** Round-robin over a sorted list means adding or renaming
   one suite reshuffles everything after it, so the heaviest shard moves. Correctness
   is unaffected — the partition property holds for any count from 1 to 16 — only the
@@ -417,9 +449,9 @@ the draft PR shows GitHub actually reporting `ci` red.
 
 Run from the repository root on `ystack/impl/ci-test-shards`. Do **not** run
 `bash scripts/test/run-all.sh` with no arguments locally — that is the 80-90 minute
-serial suite, and CI runs it for free on the branch's first push (see the
-operator-files risk above), where its log must show 62 `==> ` headers and end
-`all 62 test scripts passed`. That is R2's second verification.
+serial suite, and CI runs it for free on the PR's first run, under the unchanged
+workflow, before the operator's commit exists. That run is required, not incidental
+(Step 5), and item 12 below is where it is recorded. It is R2's second verification.
 
 1. **The focused proof (R1, R3, R5, R6, R9).**
    `bash scripts/test/run-all-sharding.check.sh` → one line per assertion, final line
@@ -469,11 +501,19 @@ operator-files risk above), where its log must show 62 `==> ` headers and end
     `ci/required-files.txt`, `RESTORE.md`,
     `proposals/ci-test-shards-shard-ci.patch` — and exactly seven after it, adding
     `.github/workflows/ci.yml` and `AGENTS.md`.
-12. **The gate keeps its name and meaning (R11, R14).** On the PR after Step 6, the
+12. **The full no-argument run, before any sharding (R2).** Required, and it happens
+    once: on the implementation PR's first CI run, under the unchanged workflow, with
+    the operator's commit not yet pushed (Step 5). Expect the old single `ci` job
+    green, its log showing 62 `==> ` headers and ending
+    `all 62 test scripts passed`. Record the run's URL, the `ci` job's status and its
+    wall-clock time in the PR body. Step 6 does not start until that is in the PR
+    body; if it was missed, produce the same run on a scratch draft PR built from the
+    pre-workflow commit, the way item 14 works.
+13. **The gate keeps its name and meaning (R11, R14).** On the PR after Step 6, the
     check list reads `ci`, `checks`, and `test (1)` through `test (6)`; `ci` is green
     and is still the one required check. The operator records that run's wall-clock
     duration in the PR body; target under 25 minutes.
-13. **A failing shard turns `ci` red — operator-run, on a throwaway draft PR.** This
+14. **A failing shard turns `ci` red — operator-run, on a throwaway draft PR.** This
     needs the new workflow, so it cannot be done before Step 6, and it must not land
     on the implementation branch. Pushing a scratch branch is not enough on its own:
     `ci.yml` runs on `pull_request` and on `push` to `main` only, so such a push
@@ -483,6 +523,7 @@ operator-files risk above), where its log must show 62 `==> ` headers and end
     last, so it lands in shard 3. Expect `test (3)` red, the other five shards green
     (`fail-fast: false`), `checks` green, and `ci` **red, not skipped**. Then close
     the PR without merging and delete the branch. Step 6 has the full procedure: the
-    PR is exempt from the artifact chain, is never labelled `merge-ready`, and its job
-    list goes in the implementation PR body. This is the direct proof of the first
-    risk above.
+    PR tracks this same intake with a non-closing `Tracks #269` link, is opened as a
+    draft, is never labelled `merge-ready`, is closed once the evidence is recorded,
+    and its job list goes in the implementation PR body. This is the direct proof of
+    the first risk above.
