@@ -12,12 +12,14 @@ resolved outside a test run. The resolver does not change. The parent copies wha
 that today live in the test script rather than in the launcher, and produces the same
 bytes for the same request.
 
-`review_size: accepted-exception`. One concern: this is a single security-boundary
-component whose only honest proof runs the real resolver twice and compares the
-output.
+**Implementation `review_size: accepted-exception`** — this figure and the derivation
+under it are the *implementation* pull request's exception, not this spec pull request's
+(that one is recorded separately at the end of this section). One concern: this is a
+single security-boundary component whose only honest proof runs the real resolver twice
+and compares the output.
 
-**Evidence-based range: 1350-1800 changed lines.** The derivation, measured rather than
-guessed:
+**Evidence-based range: 1350-1800 changed lines** (implementation). The derivation,
+measured rather than guessed:
 
 - **C parent ~880 lines** = ~605 copied verbatim + ~275 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
@@ -74,6 +76,17 @@ binary with no shipped way to launch it, and would need a throwaway harness in t
 pull request duplicating the entry's pin-compile-tighten sequence, so it raises the total
 reviewed lines instead of lowering them. The size is the honest cost of proving one
 boundary once.
+
+**Size exception for this spec pull request (the artifact PR, not the implementation).**
+The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
+requests too, and this one exceeds it: `wc -l work/resolver-trusted-parent/spec.md` is
+553 lines. Accepted as one concern: one high-risk security-boundary spec whose review
+rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
+compiler temporaries, narrowed read claims). **Evidence-based range: 470-636 lines** —
+the measured 553 lines plus or minus 15%. This waives only the soft line signal for this
+artifact pull request. It waives nothing else: one concern per PR, readability, the
+review itself, CI, and operator merge all still apply, and an unexplained overrun beyond
+the range above still blocks review.
 
 ## Requirements
 
