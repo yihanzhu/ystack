@@ -19,9 +19,10 @@ Order of work below: the proof script comes before the runner, per Step 0.
 
 **Agent-authored, on `ystack/impl/ci-test-shards`:**
 
-- **`scripts/test/run-all-sharding.check.sh`** (new, ~185, mode `0755`). The focused
-  proof of R9. Its name ends `.check.sh`, never `.test.sh`. Written and run first,
-  against the unchanged runner (Step 0).
+- **`scripts/test/run-all-sharding.check.sh`** (new, ~230, mode `0755`). The focused
+  proof of R9, plus the shard-count equality assertion that guards R10. Its name ends
+  `.check.sh`, never `.test.sh`. Written and run first, against the unchanged runner
+  (Step 0).
 - **`scripts/test/run-all.sh`** (~70 net; the file is 21 lines today, about 90 after).
   Argument and environment parsing, the `--list` mode, the round-robin filter, the
   new selection line, the refusal paths. Discovery (line 15) and the four `GIT_*`
@@ -76,8 +77,8 @@ is the numbered list at the top of Order of work.
 
 ### Review size
 
-`review_size: standard`, no exception claimed. Distinct content to read is about 309
-net lines: 70 in the runner, 185 in the proof script, 49 in the workflow, one manifest
+`review_size: standard`, no exception claimed. Distinct content to read is about 354
+net lines: 70 in the runner, 230 in the proof script, 49 in the workflow, one manifest
 line, four lines of docs. The `proposals/` patch adds ~60 more lines on disk, but they
 are the workflow and `AGENTS.md` text a second time, so they are read once. That fits
 the ~300-400 budget in `AGENTS.md` > PR rules. If the real diff lands over 400, stop
@@ -155,22 +156,78 @@ it is right. Assertions, in order:
 
 1. `--list` with no selector equals the raw list, line for line.
 2. `--shard 1/1 --list` equals `--list` with no selector.
-3. The partition sweep. A loop `for n in $(seq 1 16)`, and inside it
-   `for i in $(seq 1 "$n")`: collect `--shard $i/$n --list` into a per-shard file.
-   Then assert every selected path appears in the raw list; that the concatenation of
-   the `n` shards has no duplicate line (`sort` and `sort -u` of it are equal, which
-   is exactly pairwise disjointness plus no repeat inside a shard); and that the
-   sorted concatenation equals the raw list. 136 index/count pairs, written as the
-   two loops, not sixteen spelled-out cases.
-4. Every refusal of R5. For each bad value — `0/4`, `5/4`, `a/b`, `1/0`, `1/17`, `1`,
-   `/4`, `4/`, the empty string, a value with no slash — and for `--shard` with no
-   value after it: exit status is `2`, stderr is exactly the one usage line, stdout is
-   empty, and no suite ran. Run each twice, once as the flag and once as
-   `YSTACK_TEST_SHARD`.
-5. `YSTACK_TEST_SHARD=2/6 ... --shard 1/6 --list` equals `--shard 1/6 --list`: the
-   flag wins and the variable is ignored silently.
-6. `YSTACK_TEST_SHARD=3/6 ... --list` equals `--shard 3/6 --list`: the variable alone
+3. **Exact membership and order, shard by shard.** A loop `for n in $(seq 1 16)`, and
+   inside it `for i in $(seq 1 "$n")`. For each pair the script builds the *expected*
+   list for that shard from the raw list, applying R3's rule itself — suite `k`,
+   0-based in the raw list's sorted order, belongs to shard `(k % n) + 1`
+   (`work/ci-test-shards/spec.md:62-63`, quoted verbatim: "Suite `k` (0-based, in that
+   sorted order) belongs to shard `(k mod count) + 1`") — which over a file of the raw
+   list is one line:
+
+       awk -v i="$i" -v n="$n" '((NR - 1) % n) + 1 == i' raw.txt > expected.txt
+
+   Then it collects `--shard $i/$n --list` into `actual.txt` and asserts
+   `cmp -s expected.txt actual.txt`. `cmp` compares bytes in sequence, so this pins
+   the exact membership *and* the order, not just the set. On a mismatch the assertion
+   prints the shard and the first differing line from each file.
+   This is the assertion that catches a wrong rule. Union-and-disjoint checks alone
+   cannot: a runner that shifted every shard by one, or handed out six contiguous
+   chunks, still produces a complete disjoint partition and would pass them while
+   violating R3.
+4. The union and disjointness checks R9 names, over the same 136 index/count pairs in
+   the same two loops: every selected path appears in the raw list; the concatenation
+   of the `n` shards has no duplicate line (`sort` and `sort -u` of it are equal, which
+   is exactly pairwise disjointness plus no repeat inside a shard); and the sorted
+   concatenation equals the raw list. These are now *implied* by assertion 3 — an
+   exact per-shard match for every index of every count leaves no room for a gap or a
+   repeat — and they are kept anyway, for two reasons: R9 asks for them by name
+   (`work/ci-test-shards/spec.md:115-121`), and they are the assertion whose failure
+   message says "a suite went unrun" in one line, which is the thing a reader of a red
+   CI log wants first. They cost one `sort` per count.
+5. Every refusal of R5. For each bad value — `0/4`, `5/4`, `9/6`, `a/b`, `1/0`,
+   `1/17`, `1`, `/4`, `4/`, the empty string, a value with no slash — and for
+   `--shard` with no value after it: exit status is `2`, stderr is exactly the one
+   usage line, stdout is empty, and no suite ran (no `==> ` header). Run each twice,
+   once as the flag and once as `YSTACK_TEST_SHARD` — R5's last sentence applies the
+   same rule to the variable (`work/ci-test-shards/spec.md:79`). `9/6` is added to the
+   spec's list as the out-of-range analogue of `5/4`, because assertion 6 reuses it.
+6. **The flag wins, and the variable is never read.** Three cases, each compared line
+   for line against plain `--shard 1/6 --list`, and each expected to print that
+   flag-selected list and exit `0`:
+
+       YSTACK_TEST_SHARD=2/6 bash scripts/test/run-all.sh --shard 1/6 --list
+       YSTACK_TEST_SHARD=a/b bash scripts/test/run-all.sh --shard 1/6 --list
+       YSTACK_TEST_SHARD=9/6 bash scripts/test/run-all.sh --shard 1/6 --list
+
+   The well-formed first case only shows the flag is *preferred*. The two malformed
+   ones — a value with no numbers, and a well-shaped value out of range — are what show
+   the flag path does not read or validate the variable at all, which is what R1's
+   "the flag wins and the variable is ignored silently" requires
+   (`work/ci-test-shards/spec.md:32-35`). An implementation that validated the
+   environment before looking at the flag would pass the first case and refuse these
+   two. Assertion 5 has just proved those same two values *do* refuse when the flag is
+   absent, so the pair pins the precedence in both directions rather than one.
+7. `YSTACK_TEST_SHARD=3/6 ... --list` equals `--shard 3/6 --list`: the variable alone
    selects the same set.
+8. **The workflow's shard count equals its matrix (R10).** The script reads
+   `.github/workflows/ci.yml` — reading a constitution path is allowed, only writing
+   one is not (`AGENTS.md:383-386`) — and looks for the run line
+   `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/<N>`. If that line is
+   present, then the `shard:` matrix list must be present too, its entries must be
+   exactly `1, 2, ... N` in that order, and `N` must equal how many entries there are.
+   Any mismatch — a short or long list, a gap, a reordering, a different `N`, a missing
+   matrix — fails the assertion, printing both values it read. R9's assertion list does
+   not name this one; it is an addition to that list, not a change to it, and the
+   invariant it guards is R10's (`work/ci-test-shards/spec.md:158-160`).
+   If no `--shard` run line is present, the assertion prints
+   `workflow is still serial: no --shard run line in ci.yml` and passes. **That pass
+   is not a hidden skip.** It happens on exactly one head, `H0`, where the workflow
+   genuinely has no sharded step yet and there is no equality to check — the operator's
+   commit has not landed. From that commit onward the run line exists, so the
+   assertion is live at `HR` and at `HF`: the head the red proof runs on, the head
+   review reads, and the head that merges. The PR body records both outcomes — the
+   serial line at `H0` and the equality at `HF` — so the moment it becomes live is
+   visible in the evidence rather than assumed.
 
 **Every runner call is bounded.** Once Step 1 lands, the precondition passes and the
 assertions above do invoke the runner. Each of those calls goes through a wall-clock
@@ -189,8 +246,9 @@ again, this proof goes red in a minute instead of hanging the job for an hour.
 
 It ends by printing a count of assertions passed and a final line
 `sharding proof: all checks passed`, and exits `0`. It runs in seconds: about 170
-`--list` invocations of a 90-line script plus one `find`, and `--list` executes no
-suite. Keep it `shellcheck -x -S style` clean at 0.11.0 — the workflow's
+`--list` and refusal invocations of a 90-line script, one `find`, 136 one-line `awk`
+runs over a 62-line file, and one read of `.github/workflows/ci.yml` — and `--list`
+executes no suite. Keep it `shellcheck -x -S style` clean at 0.11.0 — the workflow's
 `find . -name '*.sh'` sweep already covers it.
 
 ### Step 1 — `scripts/test/run-all.sh` (R1, R2, R3, R5, R6, R7, R8)
@@ -206,8 +264,12 @@ what keeps R2 safe — nothing new can be silently accepted.)
 
 Read the environment as *set*, not as non-empty: `[ "${YSTACK_TEST_SHARD+x}" = x ]`.
 `YSTACK_TEST_SHARD=""` is therefore a given-but-empty value and refuses per R5, while
-an unset variable is the argument-less run of R2. If the flag is given, the variable
-is not read at all.
+an unset variable is the argument-less run of R2. **If the flag is given, the variable
+is neither read nor validated** — the flag branch must not look at its shape, its range
+or its existence. So `YSTACK_TEST_SHARD=a/b ... --shard 1/6` selects shard 1 of 6 and
+refuses nothing, even though that same value alone refuses. Validating the environment
+first and the flag second is the natural way to write this and it is wrong: it turns
+R1's "ignored silently" into a refusal (Step 0, assertion 6).
 
 **Validation.** The value must match `^[1-9][0-9]*/[1-9][0-9]*$` — this alone rejects
 `0/4`, `1/0`, `a/b`, `1`, `/4`, `4/`, the empty string and anything without a slash,
@@ -322,7 +384,9 @@ three are copied byte-for-byte into `checks`. The checkout step is repeated in
 very first step cannot find `ci/required-files.txt`. The aggregate job gets no
 checkout — it opens no repository file. The aggregate job keeps the bare id `ci` and
 is given no `name:` key, so the check it reports is still literally `ci`. And the `6`
-in the matrix list and the `/6` in the run line are the same number.
+in the matrix list and the `/6` in the run line are the same number — asserted by the
+proof script from the operator's commit onward, not left to the reader's eye (Step 0,
+assertion 8).
 
 The rationale paragraph for these two files goes in the implementation PR body, per
 `proposals/README.md`.
@@ -525,14 +589,22 @@ not edited — it is the accepted contract, and this plan does not rewrite its t
   is untouched. Getting this wrong blocks merges rather than passing them falsely —
   strict mode would wait forever for a check that never reports — but it would waste
   a review round, so read the check names on the PR (Proof).
-- **Six appears twice and must stay equal.** The matrix list and the `/6` in the run
-  line are independent text. If they ever disagree — matrix `[1..6]` against
-  `--shard .../8` — two shards' worth of suites silently never run and `ci` still
-  goes green. That is the one false-green in this design. Review is the only guard
-  today: the proof script sweeps every count from 1 to 16 but cannot see the workflow.
-  Rejected: having the proof script grep `ci.yml` for the matrix and the `/N` and
-  assert they match. It is a second concern and it points an agent-owned script at a
-  constitution path; better as its own follow-up issue than smuggled in here.
+- **Six appears twice and must stay equal, so it is machine-checked.** The matrix list
+  and the `/6` in the run line are independent text. If they ever disagree — matrix
+  `[1..6]` against `--shard .../8` — all six jobs can pass while shards 7 and 8 never
+  run, and `ci` goes green although not every suite passed. That is the one false-green
+  in this design, and it is exactly what a green required check is supposed to rule
+  out, so it is not left to review: assertion 8 of
+  `scripts/test/run-all-sharding.check.sh` reads `.github/workflows/ci.yml` and fails
+  unless the matrix list is exactly `1..N` in order for the same `N` the run line
+  passes (Step 0). The proof script is agent-authored and already runs in the `checks`
+  job, and `checks` is a `needs:` of `ci`, so the assertion gates every head. Pointing
+  it at a constitution path is fine: agents may not *write* `.github/**`, but nothing
+  stops them reading it (`AGENTS.md:383-386`), and the proof script writes nothing.
+  Rejected: leaving the equality to review, or filing it as a follow-up issue. The
+  invariant is the whole reason a green sharded `ci` can be trusted, a follow-up would
+  ship the false-green in the meantime, and the check is fifteen lines in a script this
+  PR is already adding.
 - **`--list` against today's runner would silently run the whole suite.** Today's
   `run-all.sh` parses nothing — no `case`, no `"$@"` — so `--list` is not refused, it
   is ignored, and the script falls through to the serial 80-90 minute run. This is
@@ -632,7 +704,10 @@ pre-fix run can no longer be produced here, so it is never left for later.
    something, so record the line, the status and the timing before touching
    `scripts/test/run-all.sh`.
    **Then, after Step 1.** The same command → one line per assertion, final line
-   `sharding proof: all checks passed`, exit `0`, a few seconds.
+   `sharding proof: all checks passed`, exit `0`, a few seconds. The workflow is still
+   today's single serial job at this point, so assertion 8 prints
+   `workflow is still serial: no --shard run line in ci.yml` and passes; item 13 is
+   where it has an equality to check.
    Both go in the PR body, the recorded refusal beside the green run.
 2. **Discovery and ordering are untouched (R2, R3).**
 
@@ -642,15 +717,34 @@ pre-fix run can no longer be produced here, so it is never left for later.
                 | LC_ALL=C sort | sed "s|^$root/||")
 
    → no output, exit `0`. And `bash scripts/test/run-all.sh --list | wc -l` → `62`.
-3. **Refusals (R5).** `bash scripts/test/run-all.sh --shard 0/4; echo $?` → the single
-   usage line on stderr, nothing on stdout, `2`. Repeat for `5/4`, `a/b`, `1/0`,
-   `1/17`, `1`, `/4`, `4/`, `''`, a value with no slash, and a bare `--shard` with
-   nothing after it; then repeat all of them as `YSTACK_TEST_SHARD=<value>
-   bash scripts/test/run-all.sh`. Item 1 asserts every one of these automatically.
-4. **Selection and partition, by hand (R3, R7).**
+3. **Refusals, and the flag beating a malformed variable (R1, R5).**
+   `bash scripts/test/run-all.sh --shard 0/4; echo $?` → the single usage line on
+   stderr, nothing on stdout, `2`. Repeat for `5/4`, `9/6`, `a/b`, `1/0`, `1/17`, `1`,
+   `/4`, `4/`, `''`, a value with no slash, and a bare `--shard` with nothing after it;
+   then repeat all of them as `YSTACK_TEST_SHARD=<value> bash
+   scripts/test/run-all.sh`. Then the other direction — the same two bad values with
+   the flag also given:
+
+       diff <(YSTACK_TEST_SHARD=a/b bash scripts/test/run-all.sh --shard 1/6 --list) \
+            <(bash scripts/test/run-all.sh --shard 1/6 --list)
+       diff <(YSTACK_TEST_SHARD=9/6 bash scripts/test/run-all.sh --shard 1/6 --list) \
+            <(bash scripts/test/run-all.sh --shard 1/6 --list)
+
+   → no output, exit `0` both times: the flag wins and the variable is not validated.
+   Item 1 asserts every one of these automatically.
+4. **Selection, membership and partition, by hand (R3, R7).**
    `bash scripts/test/run-all.sh --shard 1/6 --list | wc -l` → `11`;
    `--shard 3/6` → `10`. Today's split over 62 suites is 11, 11, 10, 10, 10, 10.
-   `bash scripts/test/run-all.sh --shard 1/1 --list | wc -l` → `62`.
+   `bash scripts/test/run-all.sh --shard 1/1 --list | wc -l` → `62`. And the round-robin
+   rule itself, spot-checked on one shard the way assertion 3 checks all 136:
+
+       diff <(bash scripts/test/run-all.sh --shard 3/6 --list) \
+            <(bash scripts/test/run-all.sh --list | awk '((NR - 1) % 6) + 1 == 3')
+
+   → no output, exit `0`. Counts alone would not catch a shifted or chunked
+   assignment; this compares the paths in order. By hand it is fair to build the
+   expected side from `--list`, because item 2 has already pinned `--list` against the
+   raw `find`; assertion 3 uses its own raw list instead, as R9 requires.
 5. **The three pins still pass (R12).** Run each and expect exit `0`:
    `bash scripts/test/portable-core-result-facts.test.sh`,
    `bash scripts/test/portable-core-stage-request.test.sh`,
@@ -689,10 +783,17 @@ pre-fix run can no longer be produced here, so it is never left for later.
     pastes the 62 headers and the count line, naming that commit. Step 6 does not
     start until the run and `H0` are in the PR body; if the recording was missed
     entirely, the only recovery is that same expensive path, described in Step 6.
-13. **The gate keeps its name and meaning (R11, R14).** On the PR after Step 6, the
-    check list reads `ci`, `checks`, and `test (1)` through `test (6)`; `ci` is green
-    and is still the one required check. The operator records that run's wall-clock
-    duration in the PR body; target under 25 minutes.
+13. **The gate keeps its name and meaning (R11, R14), and the shard count is checked
+    against the matrix (R10).** On the PR after Step 6, the check list reads `ci`,
+    `checks`, and `test (1)` through `test (6)`; `ci` is green and is still the one
+    required check. The operator records that run's wall-clock duration in the PR body;
+    target under 25 minutes. This is also the first run where assertion 8 of the proof
+    script has something to compare: the `Sharding proof` step in `checks` now sees the
+    `--shard ${{ matrix.shard }}/6` run line and asserts the `shard:` list is exactly
+    `1..6` in order. Paste both lines in the PR body — the
+    `workflow is still serial` line from the `H0` run of item 1, and this run's
+    equality line — so the assertion is on record as live at the head that merges and
+    not merely present in the file.
 14. **A failing shard turns `ci` red — on this PR, then removed again (R11).** This
     needs the new workflow, so it cannot be done before Step 6. It needs a PR run:
     `ci.yml` runs on `pull_request` and on `push` to `main` only, so a push to any
