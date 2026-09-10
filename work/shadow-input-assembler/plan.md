@@ -46,15 +46,25 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
 
 Estimate total: about 820 net lines.
 
-**`review_size: accepted-exception`**, as the spec records it. One concern: one inactive component
-whose focused test must drive the real `reproduce.sh` end to end over fixture ground it has to
-build first. Range **610-840 net lines** — about 430 of component (jq plus shell), about 330 of
-test, and the documentation rows. The estimate above sits inside that range, near its top because
-~130 lines are copied text this initiative did not write. The exception waives only the soft line
-signal in `AGENTS.md:102-106`; readability, tests, CI, review, the high-risk gate and operator
-merge are unchanged. **Above 840, stop and re-decide with the operator** rather than splitting:
-the component and its focused test are one concern, and requirement 17's entry is the first lines
-of the same script as requirement 15's predicates.
+**Implementation PR figure — `review_size: accepted-exception`**, as the spec records it. One
+concern: one inactive component whose focused test must drive the real `reproduce.sh` end to end
+over fixture ground it has to build first. Range **610-840 net lines** — about 430 of component
+(jq plus shell), about 330 of test, and the documentation rows. The estimate above sits inside
+that range, near its top because ~130 lines are copied text this initiative did not write. The
+exception waives only the soft line signal in `AGENTS.md:102-106`; readability, tests, CI, review,
+the high-risk gate and operator merge are unchanged. **Above 840, stop and re-decide with the
+operator** rather than splitting: the component and its focused test are one concern, and
+requirement 17's entry is the first lines of the same script as requirement 15's predicates.
+
+**Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
+file is 477 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
+unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
+proof instructions carry exact line ranges and commands for a 1600-line spec. Evidence-based
+range **405-549 net lines** — the measured count above, plus or minus 15%. This exception waives
+only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
+CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
+figure is the 610-840 range recorded above.
 
 **What does not change.** `shadow/v1/reproduce.sh`, `adapters/local-git-materializer/v1/**`
 (`materialize.sh` and `protocol.jq` both), `core/v2/**`, `profiles/default/v1/**`,
