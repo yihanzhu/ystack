@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1972-2668 changed lines** (implementation). The derivation,
+**Evidence-based range: 1985-2685 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1050 lines** = ~605 copied verbatim + ~445 new. The test launcher is 702
@@ -69,9 +69,9 @@ measured rather than guessed:
   moving onto the
   descriptors it already holds, and the blob id being computed in C rather than delegated
   to `git hash-object`. The round before it moved nothing here, and the one before that
-  added the ~20 for the fd-relative creation. This round adds the ~5 for the
-  `runtime-pgid` line and nothing else.
-- **Entry shell ~375 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+  added the ~20 for the fd-relative creation. The round before this one added the ~5 for the
+  `runtime-pgid` line and nothing else, and this round adds nothing here at all.
+- **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
@@ -98,11 +98,13 @@ measured rather than guessed:
   statements in a different order. The round after that added ~10 more, to ~345: the marker
   branch's re-run of that scrub, which is the same ten lines again plus the two alias-reset
   builtins (R1). The round after *that* added ~20 more, to ~365: the computed blob-id
-  construction and the Darwin compiler arm (R1). This round adds ~10 more, to **~375**: the
+  construction and the Darwin compiler arm (R1). The round after that added ~10 more, to
+  ~375: the
   trap's second branch — the parent-pid variable it tests, and the chmod, remove and
   `128 + signal` exit for a signal that arrives while `.run` exists and no parent does
-  (R1).
-- **Focused test ~835 lines.** For scale, the existing resolution test is 746 lines and
+  (R1). This round adds ~5 more, to **~380**: the one `printf` line each trap branch writes
+  to the entry's own stderr, with the signal name and the branch word it carries (R1).
+- **Focused test ~845 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -123,7 +125,8 @@ measured rather than guessed:
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
   two signal cases — the mid-run one with its live read of the entry's stderr for the
   parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), and the
-  pre-parent one that signals as soon as `.run` appears (~20) — the cleanup assertions
+  pre-parent one that signals as soon as `.run` appears and asserts the trap's own
+  `entry-signal:` line, with a bounded wait for the deferred trap (~30) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
   directory rather than one emptiness test), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
@@ -137,9 +140,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2320 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 eight rounds ago, then 1560-2120, then 1580-2130, then
-1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, and the
+Those sum to about 2335 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 nine rounds ago, then 1560-2120, then 1580-2130, then
+1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
+1972-2668, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -201,7 +205,8 @@ the Darwin `xcrun_db` before-and-after check that replaced a note. Nothing was m
 cheaper to compensate — dropping `git hash-object` costs lines rather than saving them,
 which is the honest trade for the claim it buys back.
 
-This round adds ~55, and it moves all three files, though only just in the parent's case.
+The round before this one added ~55, and it moved all three files, though only just in the
+parent's case.
 ~5 in the parent: the one `runtime-pgid: <n>` line written after the fork, which is a
 `snprintf` and a `write_all` (R2). ~10 in the entry: the trap's second branch and the
 parent-pid variable that selects it (R1). ~40 in the test: a new signal case that signals
@@ -211,6 +216,17 @@ a line in a file rather than on a process, and the fallback goes away), the Darw
 `xcrun_db` assertion recording size, mtime and digest and skipping nothing (~5), and the
 command-word grep becoming three documented sweeps with a `compgen -b`/`compgen -k`
 exclusion set derived at run time (~10). Nothing was made cheaper to compensate.
+
+This round adds ~15, in the entry and the test only. ~5 in the entry: the one `printf` line
+each trap branch writes to the entry's own stderr, naming the signal and the branch (R1).
+~10 in the test: the pre-parent signal case redirecting the entry's stderr to a file,
+asserting exactly one `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, and
+waiting for the entry with a bounded timeout instead of expecting an immediate exit (R10).
+Nothing moved in the C parent, and nothing was made cheaper to compensate: the round's
+other change — correcting why the no-parent branch cannot race a live compiler child, from
+foreground-group signalling to bash's deferral of a trapped signal — costs no
+implementation lines, because the entry it describes already ran every pre-parent child in
+the foreground. What it does add is a stated requirement that it keep doing so.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -227,7 +243,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 2512 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 2636 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -242,13 +258,16 @@ residual with the same-uid assumption it needs, the marker branch re-running the
 scrub, the parent's reads of the child's output moving onto the same
 descriptors it created, the Darwin write claim restored unconditionally by taking
 the `xcrun` shim out of the shipped path — no `git`, and the CommandLineTools clang in
-place of `/usr/bin/cc` — and this round the trap's branch for a signal that arrives before
+place of `/usr/bin/cc` — the trap's branch for a signal that arrives before
 any parent exists, the resolver's process group reported by the parent rather than inferred
 from the process table, the Darwin cache assertion that no longer skips the case it exists
-to catch, and a command-word grep with a mechanism a test can actually be written from).
-**Evidence-based range: 2135-2889 lines** — the measured 2512 lines plus or minus 15%. It was
-553 lines and 470-636 nine rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
-then 1764, then 1955, then 2245;
+to catch, a command-word grep with a mechanism a test can actually be written from, and
+this round that pre-parent trap branch made observable on the entry's own stderr so its
+test asserts the branch instead of an empty directory, with the deferral rule that keeps
+its removal off a live child stated correctly for the first time).
+**Evidence-based range: 2241-3031 lines** — the measured 2636 lines plus or minus 15%. It was
+553 lines and 470-636 ten rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
+then 1764, then 1955, then 2245, then 2512;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -355,7 +374,7 @@ turning a question into a prerequisite. The remaining ~40 are ripples: Design st
 the `stat` deviation bullet, R10's marker list, R7's executables count, and the re-derived
 size figures here and for the implementation.
 
-This round is +267 net over five findings, four of them P2 and one P3, and all five are
+The round before this one was +267 net over five findings, four of them P2 and one P3, and all five are
 corrections to what earlier rounds wrote rather than new ground. About 65 go to the
 resolver's process group being reported instead of inferred: R2's two new paragraphs on the
 `runtime-pgid` line and on the four stderr conventions it was checked against, R10's
@@ -372,6 +391,26 @@ figures, here and for the implementation. One of the five cost negative lines an
 the cheapest to fix: R7's opening sentence still promised a named Darwin residual
 that the round before it had removed from the rest of the requirement, and the fix was to
 delete the promise.
+
+This round is +124 net over one P2, and it is a correction to the round just described
+rather than new ground: the pre-parent signal case that round added does not actually prove
+the branch it names. About 35 go to the mechanism — R1's no-parent bullet losing the claim
+that a compiler child "was signalled too" because the caller's signal reached the whole
+foreground group, which is only true at a terminal, and gaining the rule bash's manual
+states instead: a trapped signal is deferred until the foreground command completes, so
+every pre-parent child has already exited by the time the branch runs. The honest cost of
+that rule is stated beside it — the branch acts up to one compile late — along with the
+requirement it depends on, that the entry background no pre-parent child, and the terminal
+case as the other path to the same place. About 30 go to making the branch observable:
+R1's new block on the one `entry-signal: <NAME> no-parent` / `forwarded <pid>` line each
+branch writes to the entry's own stderr, why stderr and why that is not a violation of the
+pass-through claim, and Design step 2's trap clause carrying the same line. About 40 go to
+R10's rewritten pre-parent case: four assertions in place of three, the stderr line and the
+absent `runtime-pgid:` line as the two that make it a test of the branch rather than of a
+side effect, the plain statement that an empty output directory cannot tell "no parent"
+from "parent just started", and the bounded wait the deferred trap forces on the test. The
+remaining ~20 are ripples: the signals concern under Areas of concern, and the re-derived
+size figures here and for the implementation.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -417,13 +456,39 @@ the range above still blocks review.
   the trap reads that variable to choose between two things:
 
   - *No parent pid recorded.* Nothing was launched, so no resolver and no process group
-    exist and there is nothing to forward the signal to. The trap chmods the run directory
-    back to 0700, removes it, and exits `128 + signal`. A compiler child of the entry's own
-    may still be running when this happens — the caller's signal went to the whole
-    foreground group, so it was signalled too — and removing the run directory under it is
-    harmless, because everything that compile writes is inside the directory being removed
-    and no resolver exists anywhere in the picture.
-  - *A parent pid recorded.* The trap forwards the same signal to the parent, waits for the
+    exist and there is nothing to forward the signal to. The trap writes its one
+    `entry-signal: <NAME> no-parent` line to the entry's own stderr (below), chmods the run
+    directory back to 0700, removes it, and exits `128 + signal`. No child of the entry's
+    own is alive when that removal runs, and the reason is bash's own deferral rule rather
+    than anything about process groups. An earlier round of this spec said a compiler child
+    "was signalled too" because the caller's signal went to the whole foreground group,
+    which is only true of a signal a terminal generates; a plain `kill <entry pid>` reaches
+    the entry alone and leaves its children untouched, so that sentence was proving the
+    wrong thing. What actually holds is the rule the bash manual states under SIGNALS: if
+    bash is waiting for a command to complete and receives a signal for which a trap has
+    been set, the trap is not executed until the command completes. Every pre-parent child
+    the entry runs — each SHA-1 pipeline, the SHA-256 digest, both compiles, the jq and awk
+    copies — runs in the foreground, or inside a `$(...)` substitution the entry waits on,
+    so at the moment this branch runs the entry has no live child and the removal cannot
+    race one.
+
+    The cost of that is worth stating rather than hiding: the branch acts up to one step
+    late — at most one compile, the longest pre-parent step there is — so the entry keeps
+    working on something it is about to throw away. That latency is bounded by that one
+    step and is accepted; R10's pre-parent case waits for the entry with a timeout wide
+    enough to cover it rather than expecting an instant exit. The requirement the whole
+    argument rests on is stated explicitly so the plan cannot drift off it: **the entry
+    runs no pre-parent child in the background.** A plan that backgrounds one would have to
+    record its pid and terminate and reap it in this branch before removing anything, and
+    that is not this design.
+
+    The terminal case is the other path to the same place: a `Ctrl-C` at a terminal signals
+    the whole foreground process group, so a running compile does get the signal too and
+    exits sooner, and the deferred trap still runs after it — earlier than in the `kill`
+    case, not differently. Either way, everything a compile writes is inside the directory
+    being removed and no resolver exists anywhere in the picture.
+  - *A parent pid recorded.* The trap writes `entry-signal: <NAME> forwarded <pid>` to the
+    entry's own stderr, forwards the same signal to the parent, waits for the
     parent to exit, removes the run directory only after that wait returns, and exits with
     the parent's own status — which on a forwarded signal is the `128 + signal` the parent's
     handler exits with (R2) — or, if the parent was killed rather than exiting, with
@@ -438,6 +503,32 @@ the range above still blocks review.
   asserts. The empty pid variable is the only thing that distinguishes the two branches; the
   entry sets it immediately after starting the parent and never clears it, so the no-parent
   branch cannot be taken by a trap that fires while a parent is alive.
+
+  **The trap says which branch it took, on the entry's own stderr, so the branch is
+  observable rather than inferred from what it left behind.** Both branches end with the run
+  directory gone, and "gone" is not enough to tell them apart: an empty output directory is
+  equally consistent with no parent ever existing and with a parent that started and had not
+  yet created its sandbox. So the trap writes exactly one line, and only on the three
+  signals — the `EXIT` path writes nothing:
+
+  ```
+  entry-signal: <NAME> no-parent
+  entry-signal: <NAME> forwarded <pid>
+  ```
+
+  `<NAME>` is `INT`, `TERM` or `HUP` — the name of the signal that fired the trap, not its
+  number. The no-parent branch writes the first form; the parent branch writes the second
+  with the pid it is forwarding to. The line goes out with `printf` to the entry's own
+  stderr before any cleanup runs, never buffered anywhere else — the same discipline and the
+  same channel the parent's `runtime-pgid:` line uses, for the same reason (R2): it is on
+  the descriptor at the moment the decision is made, so a reader watching stderr sees which
+  branch ran. It does not conflict with this requirement's claim that the entry passes the
+  child's stdout and stderr through unchanged: this is the entry's own line on the entry's
+  own stderr, not a byte added to or removed from anything a child wrote — exactly the
+  distinction the parent's line already relies on. R10's command-word allowlist is
+  unaffected, because `printf` is a bash builtin and pass 2 of that grep drops the builtins
+  by name from `compgen -b`. R10's pre-parent case asserts this line, and that assertion is
+  the case.
 
   **The entry's first statements scrub its environment with builtins, and then it re-execs
   itself with an empty one. Only after that does it run any external command.** An earlier
@@ -1981,27 +2072,51 @@ the range above still blocks review.
   **A signal that arrives before the parent exists is tested as its own case, because the
   trap's other branch is reachable.** The trap is installed with the `mkdir` that creates
   `.run`, ahead of the pin checks and both compiles (R1), so there is a real window in which
-  the entry has a run directory and no parent, and the branch that handles it — chmod,
-  remove, exit `128 + signal`, nothing forwarded to anybody — has no coverage from the
-  mid-run case above. So the test runs the same real resolution in the background a second
-  time, polls the output directory for the `.run` entry with a bounded number of short waits,
+  the entry has a run directory and no parent, and the branch that handles it — one
+  `entry-signal:` line, chmod, remove, exit `128 + signal`, nothing forwarded to anybody —
+  has no coverage from the mid-run case above. So the test runs the same real resolution in
+  the background a second time, with the entry's stderr redirected into a plain file in the
+  test's own scratch, polls the output directory for the `.run` entry with a bounded number
+  of short waits — 10 ms each, say —
   and sends `SIGTERM` to the entry as soon as it appears. Polling for the directory rather
   than for a process is what makes this land in the window without slowing anything down:
   `.run` is created before the first pin check, and ten pin checks and two compiles run after
-  it. Three assertions: the entry's exit status is `143`; the output directory holds no
-  `.run` entry; and it is **completely empty** — which is also how the test knows the signal
-  landed in the window it was aiming at. The request in this fixture is a valid one, so a
-  parent that had started would have passed its checks and created its `home`, `tmp`,
-  `child.stdout` and `child.stderr` in the output directory before the signal could reach
-  it. A non-empty output directory is therefore a failure, and its message says the signal
-  landed after the parent started rather than before it. The fix belongs to the plan and is
-  not the same as the mid-run case's, because this failure means the poll was too *late*
-  rather than the fixture too short: a shorter poll interval, or a wider pre-parent window —
-  the ten pin checks and both compiles are already in it — and never a skip. What the case
+  it.
+
+  **Four assertions, and the first two are what make it a test of the branch.** One: the
+  entry's stderr holds exactly one `entry-signal:` line, and that line is
+  `entry-signal: TERM no-parent` (R1) — the trap saying, in the one process that knows, that
+  it took the no-parent branch. Two: no `runtime-pgid:` line was written at all, which is the
+  separate and stronger statement that the parent never got as far as forking a resolver
+  (R2). Three: the exit status is `143`, which is `128 + SIGTERM`. Four: the output directory
+  is **completely empty** — no `.run`, and nothing else either. An earlier round of this
+  spec asserted only the last two, and that was not enough: an empty output
+  directory cannot tell "no parent existed" from "a parent started and had not created its
+  sandbox yet", because the second leaves nothing in the directory to see either, so the
+  case could pass without ever entering the branch it exists to cover. Only the stderr line
+  separates them. If the parent did start, that line reads `forwarded <pid>` instead — and
+  if it got as far as forking, the `runtime-pgid:` assertion fails beside it — and the case
+  fails with the landed-too-late message below rather than passing on a side effect.
+
+  **The test waits for the entry with a bounded timeout rather than expecting it to exit at
+  once.** The trap is deferred: bash runs it only after the foreground child the entry is
+  currently waiting on completes (R1), and at the moment the signal lands that child may be
+  a compile. So the timeout has to exceed one compile on a slow machine — the plan measures
+  that step and sets the number from the measurement rather than guessing it — and the
+  timeout expiring is a failure, not a skip. The test reads the stderr file after the entry
+  has exited, which is the one place this case is simpler than the mid-run one: there is
+  nothing to read mid-run here, because the line it asserts is written by the trap on the way
+  out, so no live read, FIFO or `tail -f` is needed.
+
+  The remedy for landing outside the window is unchanged, and it is not the same as the
+  mid-run case's, because this failure means the poll was too *late* rather than the fixture
+  too short: a shorter poll interval, or a wider pre-parent window —
+  the ten pin checks and both compiles are already in it — decided in the plan, and never a
+  skip. What the case
   deliberately does not assert is *which* step the signal interrupted —
   a pin check, either compile, or the mode pass, whichever the machine happened to be on —
   because the branch under test is the same one in every case and the claim is about what it
-  leaves behind.
+  says and what it leaves behind.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -2182,11 +2297,16 @@ Order, each step checkable before the next:
    removes the whole run directory (the trap chmods the directory back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
    unlinked; on the three signals it has two branches, chosen on whether a parent pid has
-   been recorded yet — with a parent, it forwards the signal, waits for the parent to exit,
+   been recorded yet, and each of them first `printf`s one line to the entry's own stderr
+   naming the branch it is in — `entry-signal: <NAME> forwarded <pid>` or
+   `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — then,
+   with a parent, it forwards the signal, waits for the parent to exit,
    removes nothing until that wait returns because the parent is what terminates the
    resolver's process group, and exits with the parent's status; without one, no group exists
    and there is nothing to forward to, so it removes the run directory and exits
-   `128 + signal` — R1, R2);
+   `128 + signal`, and no child of the entry's own is alive to race that removal because
+   bash defers a trapped signal until the foreground command it is waiting on finishes,
+   which also means the branch can run up to one compile late — R1, R2);
    **then the pin check** — verify the jq passed as an argument
    against this
    platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify the blob
@@ -2351,11 +2471,15 @@ intent says for this change. Only after the operator's merge does
   fails the test rather than passing on a weaker claim. The second test drives the trap's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
-  appears. The plan
+  appears, and it asserts that branch by the `entry-signal: TERM no-parent` line the trap
+  writes rather than by an empty output directory, which cannot tell that branch from a
+  parent that had only just started. The plan
   should treat this as the highest-risk new code here and say what it does on `EINTR` in
   `waitpid`, on a second signal during termination, on an already-reaped child, on a
   group whose members are stopped when the handler fires, and on a signal that reaches the
-  entry while a compile is still running and no parent pid has been recorded.
+  entry while a compile is still running and no parent pid has been recorded — where bash
+  defers the trap until that compile finishes (R1), which is what keeps the removal off a
+  live child and what the test's wait timeout has to be wide enough to absorb.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
