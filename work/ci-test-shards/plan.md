@@ -93,7 +93,10 @@ usage line
     usage: run-all.sh [--shard <index>/<count>] [--list] (1 <= index <= count <= 16)
 
 matched with `grep -Fq` so its `<`, `>` and parens stay literal, and a `--list` case
-label (`--list)`). If either is absent it prints
+label (`--list)`). That second pattern begins with `--`, so it is passed as
+`grep -Fq -e '--list)'` — the `-e` form works on both BSD and GNU grep. Without the
+`-e`, grep reads the pattern as an option instead, and the precondition would keep
+refusing even after Step 1 lands. If either is absent it prints
 
     error: run-all.sh does not implement --shard/--list yet
 
