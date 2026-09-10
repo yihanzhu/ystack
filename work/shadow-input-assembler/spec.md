@@ -22,22 +22,22 @@ so plainly rather than implying otherwise.
 `review_size: accepted-exception`. One concern: one inactive component whose
 focused test must drive the real `reproduce.sh` end to end with the existing
 fixture environment (the shadow slice test itself is 622 lines for the same
-reason). Range: 550-780 net lines — about 385 lines of component (shell plus
-jq), about 290 lines of test, and the documentation rows. The evidence is the
+reason). Range: 565-795 net lines — about 395 lines of component (shell plus
+jq), about 295 lines of test, and the documentation rows. The evidence is the
 nearest thing in the repository: `scripts/test/shadow-slice.test.sh` is 622
 lines, because a test that runs the driver has to build a bare repository, a
 profile set, and a claim before the driver can run once. This test builds that
 same fixture ground and then runs the driver again on the assembled input, so
-it lands in the same band, and the component itself is the ~385 lines above.
+it lands in the same band, and the component itself is the ~395 lines above.
 
 The range moved up from 450-650 for one reason, and it is a reason that
 argues for the exception rather than against it: requirement 15 copies the
-materializer's complete source-purity predicates verbatim, about 85 lines
-including the header, the three name bindings and the subshell wrapper, plus
-the assertion and the two negative sources that prove it in the test. That is
-text this initiative did not write and must not edit. Shortening it would mean
-re-implementing a predicate the whole point of which is that it is not
-re-implemented.
+materializer's repository-level source-purity predicates verbatim, about 100
+lines including the header, the three name bindings and the subshell wrapper,
+plus the assertion and the three negative sources that prove it in the test.
+That is text this initiative did not write and must not edit. Shortening it
+would mean re-implementing a predicate the whole point of which is that it is
+not re-implemented.
 
 The exception waives only the soft line signal. It does not widen scope beyond
 the one concern, and it does not relax readability, tests, CI, review, or
@@ -53,9 +53,10 @@ a test with nothing to prove.
    <output-dir> <environment-claim-file>`. The claim is appended, so the first
    eight keep their positions. The repository id matches
    `\A[a-z0-9][a-z0-9._:-]{0,127}\z`; the source Git directory is a physical
-   bare repository that passes **every one of the materializer's source
-   guards, copied verbatim** — requirement 15, not the subset an earlier draft
-   listed here — and **its hash algorithm is read from the repository, not
+   bare repository that passes **every repository-level source guard the
+   materializer applies, copied verbatim** — requirement 15, which also says
+   plainly which materializer check is *not* mirrored here and why — and
+   **its hash algorithm is read from the repository, not
    assumed**: `git rev-parse --show-object-format` under the same protective
    environment the driver and the materializer use (`--no-replace-objects`,
    `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, no system or global
@@ -235,7 +236,9 @@ a test with nothing to prove.
     directory is not a physical bare repository, it fails any of the
     materializer source guards requirement 15 copies — including the two an
     earlier draft left out, a config key outside the seven-name allow-list and
-    a hook that is not a `*.sample` — it does not report a hash
+    a hook that is not a `*.sample`, and the third span this revision adds, a
+    `packed-refs` file that carries a `refs/replace/` line or is over 1 MiB —
+    it does not report a hash
     algorithm of `sha1` or `sha256`, the commit id's width does not match the
     algorithm it does report, or the commit is not in it. The materializer's
     own `E_SOURCE_*` ids stay in the materializer: a copied predicate that
@@ -314,17 +317,20 @@ a test with nothing to prove.
     The test extracts the copied spans from
     `shadow/v1/assemble-materialization-input.sh`, between the copy header and
     its end marker, and compares them byte for byte with
-    `adapters/local-git-materializer/v1/materialize.sh` lines 271-332 and
-    348-354 at the commit the header names, reading those bytes with `git
+    `adapters/local-git-materializer/v1/materialize.sh` lines 271-332,
+    333-347, and 348-354 at the commit the header names, reading those bytes
+    with `git
     show <commit>:adapters/local-git-materializer/v1/materialize.sh` rather
     than from the working tree, so the assertion means what it says even
     while the materializer is being edited in the same branch. A reflow, an
-    edit, or a drifted line range fails CI. **The two guards an earlier draft
-    missed actually fire.** Two negative source repositories, each otherwise
-    a clean copy of the `sha1` fixture: one with a disallowed config key set
-    (`remote.origin.url`), one with a non-`*.sample` file in `hooks/`. Both
-    must come back `E_TARGET`, and the second must do so before the assembler
-    has looked up the commit. **The producer config digest is bound.** A
+    edit, or a drifted line range fails CI. **The three guards an earlier
+    draft missed actually fire.** Three negative source repositories, each
+    otherwise a clean copy of the `sha1` fixture: one with a disallowed
+    config key set (`remote.origin.url`), one with a non-`*.sample` file in
+    `hooks/`, and one whose `packed-refs` file carries a
+    `refs/replace/<commit>` line. All three must come back `E_TARGET`; the
+    second and third must do so before the assembler has looked up the
+    commit. **The producer config digest is bound.** A
     resolved profile identical to the good one except that the producer
     binding's `config_source.value.value_sha256` is changed — its
     `value.source` left alone, so the core rules still pass it — must come
@@ -338,25 +344,56 @@ a test with nothing to prove.
 14. **Component conventions.** A `docs/components.md` section, one README index
     row pointing at it, a `RESTORE.md` restore block naming the test, and the new
     paths appended at the **end** of `ci/required-files.txt`.
-15. **Every one of the materializer's source guards runs here, copied
-    verbatim.** The assembler must never hand the driver an input the
-    materializer will then refuse. An earlier draft mirrored only part of what
-    the materializer demands of a source repository: the protective
-    environment, and the alternates, grafts, replace-refs, shallow, and
-    worktree checks. The materializer demands two more things. The source
+15. **Every repository-level source guard the materializer applies runs here,
+    copied verbatim.** Here is the exact guarantee, and its exact boundary.
+    **The assembler refuses every *repository-level* condition the
+    materializer refuses** — the filesystem inventory, the config allow-list,
+    bareness, the structural absences, hooks, the object format, and the
+    `packed-refs` scan for replace refs — **plus commit existence and commit
+    format.** **It does not re-check *tree content*** — symlinks, submodules,
+    invalid path names, and the closure size caps the materializer's tree scan
+    enforces (`scan_tree` at `materialize.sh:386-452`, used at `:456-465`,
+    `E_SOURCE_TREE`, and the closure walk at `:463-465`). Those stay the
+    materializer's job. When one of them trips, the driver reports
+    `materialization.refused`, which is a documented, honest outcome rather
+    than a surprise.
+
+    The line is drawn there because of cost against the goal. The tree scan is
+    not a predicate that can be lifted out: it needs the full object-closure
+    walk the materializer performs — enumerating every tree and blob reachable
+    from the root tree, under the same byte, entry and tree caps — so
+    duplicating it would mean copying most of the materializer into this
+    component, and then carrying that copy for the life of both. What the
+    copying buys is smaller than it looks: none of the tree-content conditions
+    can make the run write anything. The input carries an empty patch and
+    `network_mode: deny`, and the materializer refuses the source before it
+    materializes it, so a symlink or an oversized closure costs a refused run,
+    not a side effect. The repository-level guards are different in kind —
+    they are short, self-contained predicates that decide whether the source
+    directory is a plain bare repository at all — so they are cheap to carry
+    and they are carried.
+
+    An earlier draft mirrored only part of even the repository-level set: the
+    protective environment, and the alternates, grafts, replace-refs, shallow,
+    and worktree checks. The materializer demands three more things. The source
     repository's config file may contain nothing beyond seven names —
     `core.repositoryformatversion`, `core.filemode`, `core.bare`,
     `core.logallrefupdates`, `core.ignorecase`, `core.precomposeunicode`,
-    `extensions.objectformat` (`materialize.sh:301-323`, `E_SOURCE_CONFIG`) —
-    and its `hooks/` directory may hold no file that is not a `*.sample`
-    (`:348-351`, `E_SOURCE_HOOK`). A source that trips either one passes
-    everything the earlier draft listed, gets an input built for it, and then
-    comes back `materialization.refused` from the driver: a wasted run, and a
-    confusing one, because nothing the assembler said would explain it.
+    `extensions.objectformat` (`materialize.sh:301-323`, `E_SOURCE_CONFIG`);
+    its `hooks/` directory may hold no file that is not a `*.sample`
+    (`:348-351`, `E_SOURCE_HOOK`); and its `packed-refs` file, if it exists,
+    must be a regular file, at most 1 MiB, and free of any `refs/replace/`
+    line (`:333-347`, `E_SOURCE_GIT` and `E_SOURCE_LIMIT`) — the packed
+    counterpart of the `refs/replace` directory check the earlier draft did
+    mirror. A source that trips any of the three passes everything the earlier
+    draft listed, gets an input built for it, and then comes back
+    `materialization.refused` from the driver: a wasted run, and a confusing
+    one, because nothing the assembler said would explain it.
 
-    So the assembler runs the materializer's **complete** source-purity
-    predicates, not a subset and not a paraphrase. They are two contiguous
-    spans of `adapters/local-git-materializer/v1/materialize.sh`:
+    So the assembler runs the materializer's **complete** repository-level
+    source-purity predicates, not a subset and not a paraphrase. They are
+    three contiguous spans of
+    `adapters/local-git-materializer/v1/materialize.sh`:
 
     - **271-332** — the `git_dir` helper (271-275); the bounded filesystem
       inventory (277-299), which requires every entry under the directory to
@@ -367,6 +404,11 @@ a test with nothing to prove.
       absences (326-332) — no `commondir`, no `shallow`, no entry under
       `worktrees`, no `info/grafts`, no `objects/info/alternates`, no
       `refs/replace` directory, and no `*.promisor` pack.
+    - **333-347** — the `packed-refs` scan: if `packed-refs` exists it must be
+      a regular file and not a symlink (335), it is snapshotted into
+      `run_root` under a 1 MiB bound (336-342), and the snapshot must contain
+      no `^<40 or 64 hex> refs/replace/` line (343-346). This span is the one
+      this revision adds; see below for why the driver does not carry it.
     - **348-354** — no hook that is not a `*.sample` (348-351); and `rev-parse
       --show-object-format` equal to `$source_algorithm` (352-354).
 
@@ -378,8 +420,10 @@ a test with nothing to prove.
     adapters/local-git-materializer/v1/materialize.sh at
     a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync.`,
     followed by one sentence saying why it is a copy — the assembler must
-    refuse exactly what the materializer refuses, so the two can never
-    disagree about what a plain source repository is. That commit is the one
+    refuse exactly what the materializer refuses *about the repository
+    itself*, so the two can never disagree about what a plain source
+    repository is. All three spans sit under the one header. That commit is
+    the one
     `materialize.sh` last changed at; if it moves before this lands, the
     header names the new one and the copy is retaken from it.
 
@@ -390,8 +434,9 @@ a test with nothing to prove.
 
     - `run_root` — a fresh `0700` scratch directory the assembler makes for
       itself, disjoint from the output directory and from every argument. The
-      copied lines write only `source-filesystem`, `source-config.snapshot`
-      and `source-config` there, and delete the first themselves.
+      copied lines write only `source-filesystem`, `source-config.snapshot`,
+      `source-config` and — from the third span — `packed-refs` there, and
+      delete the first themselves.
     - `git_env` and `git_dir` — the assembler's own protective environment,
       which also carries the materializer's hook pin
       (`materialize.sh:265-269`: `GIT_CONFIG_COUNT=1`,
@@ -407,25 +452,38 @@ a test with nothing to prove.
 
     The copy runs inside a subshell function that shadows `emit_error` with an
     immediate non-zero exit — `source_pure() ( emit_error() { exit 1; };
-    <verbatim span 271-332>; <verbatim span 348-354>; exit 0 )` — so the
-    predicates keep their exact text while a failure comes back as a return
-    code the assembler can name. Any failure is `E_TARGET`.
+    <verbatim span 271-332>; <verbatim span 333-347>; <verbatim span
+    348-354>; exit 0 )` — so the predicates keep their exact text while a
+    failure comes back as a return code the assembler can name. The three
+    spans are placed in their materializer order, which is also the order
+    they depend on: 333-347 reads `$source_git_dir` and writes into
+    `$run_root`, both already bound. Any failure is `E_TARGET`, whichever
+    `E_SOURCE_*` id the copied line would have emitted in the materializer.
 
-    `materialize.sh:333-347`, the `packed-refs` scan for `refs/replace/`
-    lines, is not copied, for the reason the sibling spec gives and one of
-    this component's own: a replace ref cannot change which object the reads
-    resolve, because they run with `--no-replace-objects` and
-    `GIT_NO_REPLACE_OBJECTS=1`; and the copy has to be the same two spans the
-    driver copies, or the two are not byte-identical.
+    **The driver's copy is two spans; this one is three.** The sibling spec
+    `work/shadow-env-self-host/spec.md` (PR #268) requires the driver to carry
+    271-332 and 348-354, and deliberately excludes 333-347: the driver's own
+    reads cannot be moved by a replace ref, because the root-commit binding it
+    checks runs under `--no-replace-objects` and `GIT_NO_REPLACE_OBJECTS=1`,
+    so for the driver that span guards nothing. The assembler is in a
+    different position. It is the component whose whole job is to refuse a
+    source the materializer would refuse, and the materializer does run
+    333-347 — so leaving it out here would put back exactly the gap
+    requirement 15 exists to close. The assembler therefore carries all three
+    spans. Its copy of 333-347 is copied from the materializer, verbatim,
+    under the same header as the other two, and a failure inside it is
+    `E_TARGET` like the rest.
 
-    **The same copy is required of the driver by the sibling spec
-    `work/shadow-env-self-host/spec.md` (PR #268), which specifies these same
-    two spans.** The two copies must be byte-identical to each other, and both
-    must carry the header. They are copies of one span at one commit, so any
-    difference between them is a defect in one of them, and requirement 13's
-    test asserts the copied span equals the materializer's at the cited
-    commit. Whichever pull request lands second inherits the other's bytes
-    rather than retaking the copy.
+    So **the byte-identity requirement between the two components applies to
+    the two shared spans only** — 271-332 and 348-354. Those two must be
+    byte-identical in the driver and in the assembler, and both must carry
+    the header. They are copies of one text at one commit, so any difference
+    between them is a defect in one of them. The third span, 333-347, has one
+    home rather than two: it is checked only against the materializer.
+    Requirement 13's test asserts all three copied spans equal the
+    materializer's at the cited commit. Whichever pull request lands second
+    inherits the other's bytes for the two shared spans rather than retaking
+    the copy.
 16. **The resolved profile's config bindings are bound to the pins too.**
     Requirement 3 pins the bytes of the eight shipped documents, but that only
     fixes what the caller's **profile directory** holds. The resolved profile
@@ -498,15 +556,18 @@ Files, in the order they are written:
    claim checks and the two values derived from it (its `id` and the SHA-256
    of its bytes), then the Git work under the protective environment: the
    scratch `run_root`, the `git_env` array and `git_dir` helper, the
-   verbatim `source_pure` copy of requirement 15 under its header, and only
+   verbatim `source_pure` copy of requirement 15 — all three spans, in
+   materializer order — under its header, and only
    after it returns clean, the commit lookup and the root tree id. The
    algorithm the copy checked against the caller's commit-id width is the one
    `rev-parse --show-object-format` reported inside the copy, and it is passed
-   through to the jq program. Then the size check, then the writes:
+   through to the jq program. Nothing here re-reads the commit's tree to
+   inspect its content: that check is the materializer's, by the boundary
+   requirement 15 states. Then the size check, then the writes:
    `input.json`, `stage-request-ref.json`, `resolved-profile-ref.json`, and
-   the decision-record texts. The copied span is the largest single block in
-   the file — about 70 lines of copied text plus its header, the three name
-   bindings, and the subshell wrapper, so roughly 85 lines that were not
+   the decision-record texts. The copied spans are the largest single block in
+   the file — about 85 lines of copied text plus its header, the three name
+   bindings, and the subshell wrapper, so roughly 100 lines that were not
    written here and are not to be edited here.
 3. `scripts/test/shadow-assembler.test.sh` — the proof in requirement 13.
 4. `docs/components.md` — an "Inactive shadow materialization input assembler"
@@ -538,8 +599,14 @@ operator supplies. It reads no network, no credential, and no model.
   moves the pins, in that change's own pull request.
 - Strengthening or relaxing the source-purity predicates requirement 15
   copies. They are copied, not authored here. If one of them is wrong it is
-  wrong in `materialize.sh` and is fixed there, and both copies then move with
+  wrong in `materialize.sh` and is fixed there, and the copies then move with
   it.
+- Mirroring the materializer's tree-content scan (`scan_tree`,
+  `materialize.sh:386-452`) or the object-closure walk it rides on. Symlinks,
+  submodules, invalid path names and closure size caps stay the
+  materializer's checks; requirement 15 states that boundary, and a source
+  that trips one of them comes back `materialization.refused` from the
+  driver.
 
 ## Areas of concern
 
@@ -609,20 +676,44 @@ operator supplies. It reads no network, no credential, and no model.
   coercion — and that refusal is not written here either. It is
   `materialize.sh:352-354`, inside requirement 15's copy, running against a
   `source_algorithm` bound from the caller's commit-id width.
-- **The source guards are a copy, and a copy shared with another initiative.**
-  Requirement 15 puts about 70 lines of `materialize.sh` inside this
-  component, and the sibling spec puts the same 70 lines inside the driver.
-  Three things can drift instead of one: the materializer, the driver's copy,
-  and this copy. That is the price of the alternative being worse — a
+- **The source guards are a copy, and part of that copy is shared with
+  another initiative.** Requirement 15 puts about 85 lines of `materialize.sh`
+  inside this component, and the sibling spec puts 70 of those same lines —
+  the two shared spans — inside the driver; the third span, the `packed-refs`
+  scan, lives here only. Three things can drift instead of one: the
+  materializer, the driver's copy, and this copy. That is the price of the
+  alternative being worse — a
   paraphrase drifts silently, while a copy drifts loudly, because
   requirement 13's test compares the bytes against the materializer at the
   cited commit and fails CI the moment they differ. It is the same
   keep-in-sync discipline the profile pins use, and the same one
   `loop/v1/review-fix-planner.jq:1-3` states. The residual risk is that the
   two copies land in different pull requests and someone edits one of them
-  in place; whichever lands second should take the other's bytes rather than
-  retaking the copy from the materializer, so there is one text with two
-  homes and not two texts.
+  in place; whichever lands second should take the other's bytes for the two
+  shared spans rather than retaking the copy from the materializer, so there
+  is one text with two homes and not two texts.
+- **Tree content is not checked here, and that is a deliberate residual.**
+  The guarantee requirement 15 makes stops at the repository level. A source
+  repository can pass every guard the assembler copies and still be refused
+  by the materializer's tree scan — a symlink or submodule entry in the
+  commit's tree, a path name `safe_repo_path` rejects, or a closure past the
+  16 MiB / 65536-entry / 1024-tree caps (`materialize.sh:386-452`, used at
+  `:456-465`) or the 256 MiB import bound (`:461-465`). When that happens the
+  operator gets `materialization.refused` from the driver rather than a
+  refusal from the assembler, so the wasted-run cost requirement 15 removes
+  for repository-level impurity is not removed for these. The trade is
+  deliberate: mirroring the tree scan means mirroring the object-closure walk
+  it rides on, which is most of the materializer, and none of these
+  conditions can make a run write anything — the patch is empty and the
+  network is denied, so the worst outcome is a refused run that names its own
+  reason. If the wasted runs ever become a real cost, the fix is not a second
+  copy of the scan here but a cheap pre-flight in the materializer itself,
+  which both components already call the same way. This narrows the intent's
+  own words — "bad inputs are refused with a clear reason rather than
+  producing something the driver rejects" — to what this component can
+  honestly promise: bad *repositories* are refused here with a clear reason;
+  bad *tree content* is refused by the materializer, and the driver's
+  `materialization.refused` is that clear reason, one step later.
 - **Requirement 16 binds the config claim, not every claim.** The resolved
   profile makes a source claim for each binding's manifest, package, prompt,
   skills and tools as well as its config. Only the config claim can be tied
