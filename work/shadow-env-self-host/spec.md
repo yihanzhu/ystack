@@ -129,11 +129,12 @@ materializer's bytes, and nothing beyond these:
 - **the argument count** — `13`, not `8`, and the exec forwards `"$2"` … `"${13}"`,
   twelve paths after the marker;
 - **the shebang** — the driver's `#!/bin/bash` becomes `#!/bin/bash -p`
-  (`materialize.sh:1`), which is part of this entry: started through its shebang, a
-  privileged bash imports no function from the environment and ignores `BASH_ENV`,
-  `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH`. `-p` alone is not the fix — it is
-  bypassed entirely when the file is run as `bash reproduce.sh` — which is why the
-  scrub and the re-exec are copied too, and why R15d tests both invocations;
+  (`materialize.sh:1`), which is part of this entry and not decoration beside the scrub:
+  it is the half of the control the scrub cannot be, because `BASH_ENV` is read *before*
+  the script's first line and no text inside the file can get in front of that. The
+  scrub and re-exec close what `-p` leaves open — an exported variable that is not a
+  startup hook, and a caller-chosen `PATH` — and are not a substitute for it. See
+  "Supported invocations" below;
 - **the script path** — the materializer refuses a relative `${BASH_SOURCE[0]}` with
   `E_USAGE`; the driver instead normalizes it against `$(pwd -P)`, exactly as
   `reproduce.sh:94-95` already does, and then requires the result to be an existing
@@ -161,6 +162,32 @@ R8's copied spans, before R9's root lookup, and before the sandbox evaluation at
 imported functions, no inherited exported variables, and `PATH=/usr/bin:/bin`
 `LC_ALL=C` fixed. The scrub runs in both entries — the public one and the marker one —
 so invoking the marker form directly gains a caller nothing.
+
+**Supported invocations.** The clean entry protects two ways of starting the driver, and
+exactly two:
+
+- **executing the file** — `"$reproducer" reproduce …` — started through its own
+  `#!/bin/bash -p` line, so `-p` is in force before the script's first byte is read:
+  `$BASH_ENV` and `$ENV` unprocessed, no function imported from the environment,
+  `SHELLOPTS`, `BASHOPTS` and `CDPATH` ignored. Every caller in the suite already starts
+  it this way (`run_case` at `scripts/test/shadow-slice.test.sh:338-340`, and `565-569`
+  and `571-577`).
+- **`/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p "$reproducer" reproduce
+  …`** — an emptied environment *and* `-p` on the command line: what the driver's
+  re-exec does to itself (R7's copy of `materialize.sh:26-27`), and the form for any
+  wrapper that must name the interpreter.
+
+**And one invocation outside the boundary, stated rather than papered over.** A plain
+`bash reproduce.sh` under a hostile `BASH_ENV` is **not** covered and this spec does not
+claim it is: bash runs `$BASH_ENV` before the script's first line, so that code — a
+`trap` it installs, say, which can then fire *during* the copied scrub — has already run
+by the time the scrub exists. Only `-p` or an emptied environment changes that ordering,
+and by then it is the caller's choice. It is the ordinary property of any interpreter
+invocation that discards the script's own flags (`sh reproduce.sh`, `bash -x
+reproduce.sh`, the same); the driver is not setuid and cannot refuse it.
+`materialize.sh` carries the identical limit through the identical shebang and documents
+it nowhere — checked while drafting, neither its comments nor `docs/components.md`
+mentions `BASH_ENV`, `-p` or a supported invocation form — so R20 writes it down here.
 
 **The 13-argument contract is unchanged from the caller's view.** Callers still write
 `reproduce` plus twelve absolute paths, and `[ "$#" -eq 13 ]` stays exactly as written
@@ -492,12 +519,23 @@ sections, with the unmutated fixture claim and incident:
     against `$tmp/source.git`, still gives `reproduced` / `check.failed-at-revision`:
     the clean entry must not break a good run;
   - one more invocation of the impure copy written out directly as
-    `/bin/bash "$reproducer" reproduce …` with the function still exported, shaped like
-    the existing direct invocations at `shadow-slice.test.sh:565-577` (capture the
-    status and stderr; no new helper), asserting the same `environment.unlisted` record.
-    This third one is the assertion that earns its place: run that way the
-    `#!/bin/bash -p` shebang is bypassed entirely, so only the scrub and the re-exec
-    can be what refuses it.
+    `/bin/bash -p "$reproducer" reproduce …` with the function still exported, shaped
+    like the existing direct invocations at `shadow-slice.test.sh:565-577` (capture the
+    status and stderr; no new helper), asserting the same `environment.unlisted`
+    record. `-p` is on the command line because this is one of R7's two supported
+    invocations and the supported form carries it. What it adds over the first
+    assertion: the refusal does not depend on the shebang being what set `-p`.
+
+  And one thing R15d deliberately does **not** assert: no case runs the driver as `bash
+  "$reproducer"` under a hostile `BASH_ENV`, and nothing claims it is refused. It is not
+  covered (`BASH_ENV` runs before the driver's first line, R7), and a test written to
+  pass on it would only prove the `BASH_ENV` the test itself chose was harmless; R7's
+  "Supported invocations" and R20's docs passage carry the limit instead. Checked while
+  drafting: every existing invocation executes the file (`run_case` at
+  `scripts/test/shadow-slice.test.sh:338-340`, plus `565-569` and `571-577`), so no case
+  needs switching to `bash -p`, and the text guard at `shadow-slice.test.sh:612-620`
+  greps the driver for forge, network and git-write words, none of which the clean entry
+  introduces, so it is unaffected.
 
   With R8's copy in place but without R7, the first and third fail: the exported `find`
   silences the same worktrees, promisor-pack and hook predicates R15c's planted binary
@@ -611,8 +649,9 @@ defense behind the driver's copy. `ci/required-files.txt` is unchanged: the regi
 path is already listed and no new file is added.
 
 **R20.** The doc passages that count the entries, plus the two describing what the
-driver enforces, are updated, with no other prose change. Confirm each by grepping
-`shadow-environments`; line numbers are indicative.
+driver enforces, are updated, and one short new passage names the driver's supported
+invocations. No other prose change. Confirm each by grepping `shadow-environments`;
+line numbers are indicative.
 - `docs/components.md` ~1194 — "starts with exactly one entry" becomes two, named with
   scope and proof state, and states both bindings: an entry authorizes an environment
   for one target repository id *and* one source repository, named by its root commit.
@@ -628,6 +667,13 @@ driver enforces, are updated, with no other prose change. Confirm each by greppi
   self-host environment is now listed and the external-target one is not.
 - `docs/transition-kit.md` ~247 — "must first be listed" becomes "is now listed", the
   run itself still gated.
+- `docs/components.md`, in the shadow driver's own section — one added passage of two or
+  three sentences, the only addition rather than an edit: the supported invocations
+  are executing the file (its `#!/bin/bash -p` shebang) and `/usr/bin/env -i
+  PATH=/usr/bin:/bin LC_ALL=C
+  /bin/bash -p <driver> reproduce …`; `bash <driver>` is not supported, because bash
+  processes `$BASH_ENV` before the driver's first line and the scrub cannot get in front
+  of that. Claim nothing more: the unsupported form is neither detected nor refused.
 
 **R21.** Proof: shellcheck 0.11.0 `-x -S style` clean on both edited shell files
 (`shadow/v1/reproduce.sh`, `scripts/test/shadow-slice.test.sh`), `bash
@@ -636,21 +682,54 @@ scripts/test/scope-qualification.test.sh` 0 failures, `bash
 scripts/test/portable-core-schema.test.sh` 0 failures, `bash scripts/check-rename.sh`
 clean, required CI green — shellcheck included on the new shebang and the clean-entry
 block, with no new `shellcheck disable` directive added to the file. Additionally, the
-copies are proven to be copies. For R8's
-two predicate spans, that is byte equality: extracted from `reproduce.sh` between the
-copy header and its end marker, they compare equal to `materialize.sh:271-332` and
-`348-354` at the cited commit. For R7's clean entry, which is adapted rather than
-byte-identical, show a diff against `materialize.sh:4-13` and `22-29` at the same commit
-and check that every hunk in it is one of the six deviations R7 names — the marker word
-and verb, the argument count, the `-p` shebang, the script-path normalization, the
-omitted `set -euo pipefail`, and where the dispatch sits — and nothing else. Show both
-comparisons in the PR body. The all-pass includes R18's two calls — the tightened guard
-accepts `reproduce.sh` as shipped and refuses the `--local` mutation of it — R15c's
-second assertion, that the planted `find` was never executed, and R15d's three
-assertions, of which the `/bin/bash "$reproducer"` one is the only proof that the scrub
-and re-exec work where the `-p` shebang does not apply.
+copies are proven to be copies.
 
-**R22.** Size: about 300–320 changed lines across the same six files
+**Every copy proof compares against the working tree, never against a commit.** The
+comparison side is `adapters/local-git-materializer/v1/materialize.sh` **as it stands in
+the checkout**, at the ranges this spec states, each span located by its first and last
+line's content rather than by line number alone so a shift above cannot silently compare
+the wrong bytes. Reason: CI checks out at the default depth, so a proof phrased as `git
+show <old commit>:adapters/…/materialize.sh` cannot resolve the object and fails for a
+reason unrelated to the copy. The provenance commit stays
+recorded in R8's copy header; it is just not what the proof reads, and a span that has
+drifted from it is drift to resolve before merge.
+
+So: for R8's two predicate spans the proof is byte equality — extracted from
+`reproduce.sh` between the copy header and its end marker, they compare equal to the
+working tree's `materialize.sh:271-332` and `348-354`. For R7's clean entry, adapted
+rather than byte-identical, show a diff against the working tree's `materialize.sh:4-13`
+and `22-29` and check that every hunk is one of the six deviations R7 names — the marker
+word and verb, the argument count, the `-p` shebang, the script-path normalization, the
+omitted `set -euo pipefail`, and where the dispatch sits — and nothing else. Show both
+comparisons in the PR body, naming the ranges read. The all-pass includes R18's two
+calls — the tightened guard accepts `reproduce.sh` as shipped and refuses the `--local`
+mutation of it — R15c's second assertion, that the planted `find` was never executed,
+and R15d's three assertions, of which the `/bin/bash -p "$reproducer"` one is the proof
+that the scrub and re-exec hold when the interpreter is named on the command line
+instead of reached through the file's shebang.
+
+**R22.** Size, in two parts.
+
+**This artifact PR — an accepted one-concern size exception.** This PR is the spec file,
+about a thousand lines, over the ~300–400 net-line soft budget `AGENTS.md:102-106`
+applies to every PR, and recorded as the exact exception that rule provides for:
+
+- **Concern (one).** One high-risk security-control spec whose eleven review rounds each
+  added a verified requirement: the registry bindings (R1–R6), source purity (R8), the
+  fixed `PATH` and the function-and-startup-hook scrub that fixed `PATH` alone did not
+  (R7), and the status checks (R9, R18, R21).
+- **Evidence-based range: 900–1050 lines.** Accumulated review, not draft slack: each
+  round's requirement is written down with its reason, and Areas of concern logs one per
+  closed finding. Past 1050, stop and re-decide with the operator.
+- **What it waives, and only this.** The soft *line-count signal* on this artifact PR —
+  not the one-concern rule, readability, review depth, CI, or the high-risk path; a
+  reviewer may still call the prose unclear, redundant or wrong, and that blocks as
+  always. No requirement or closed finding is cut to move the number.
+
+**The implementation PR is a separate, much smaller figure, unchanged** — the paragraph
+below is the implementation's estimate, not the artifact PR's.
+
+Size: about 300–320 changed lines across the same six files
 (`shadow/v1/shadow-environments.json`, `shadow/v1/reproduce.sh`,
 `scripts/test/shadow-slice.test.sh`, `docs/components.md`, `docs/transition.md`,
 `docs/transition-kit.md`). The earlier estimate was ~150, then 275–295; R8's copy and
@@ -658,14 +737,14 @@ its name bindings add about 75 lines to the driver, R15's five cases plus R16's 
 about 60 to the test, R18's tightened config guard with its mutation call about 10 more,
 R7's clean entry about 20 to the driver (the two copied blocks, the copy header, and the
 script-path normalization), and R9's status capture about 5. That is inside the
-~300–400 net-line soft budget in `AGENTS.md:103`, at the low end of it, so
-`review_size: standard` still stands and no exception is claimed. Two of the three
-biggest blocks — R7's entry and R8's spans — are copies of reviewed code a reviewer
-checks by diffing against the original rather than by reading them as new logic, which
-is faster than the line count suggests. If the implementation lands above 400 lines,
-stop and re-decide the size with the operator rather than splitting the gate across
-PRs — the clean entry and the four driver edits are one concern and must not ship
-apart.
+~300–400 net-line soft budget in `AGENTS.md:103`, at the low end of it, so for the
+implementation PR `review_size: standard` still stands and no exception is claimed. Two
+of the three biggest blocks — R7's entry and R8's spans — are copies of reviewed code a
+reviewer checks by diffing against the original rather than by reading them as new
+logic, which is faster than the line count suggests. If the implementation lands above
+400 lines, stop and re-decide the size with the operator rather than splitting the gate
+across PRs — the clean entry and the four driver edits are one concern and must not
+ship apart.
 
 ## Design
 
@@ -687,10 +766,13 @@ In this order, because each step is checkable by the one after it.
    `#!/bin/bash -p`, and copy `materialize.sh:22-29` over the existing arity line
    (`reproduce.sh:61`), with the marker `__reproduce_clean`, thirteen arguments, the
    relative-path normalization from `reproduce.sh:94-95` in place of the materializer's
-   `E_USAGE`, and without `materialize.sh:15`'s `set -euo pipefail`. Put the copy header
-   on it, naming both line ranges at the cited commit. Do this on its own and run the
-   suite: everything must still pass with no other change, which is what says the entry
-   cost the driver nothing. Only then paste into the file anything that depends on it.
+   `E_USAGE`, and without `materialize.sh:15`'s `set -euo pipefail`. Copy from the
+   working tree's `materialize.sh` and put the copy header on it, naming both ranges and
+   the provenance commit — the header records the commit, R21's proof reads the working
+   tree. The shebang change and its invocation boundary (R7, R20) belong here. Do this
+   on its own and run the suite: everything must still pass with no other change, which
+   is what says the entry cost the driver nothing. Only then paste in anything that
+   depends on it.
 3. **Driver, four small edits on top of the clean entry, nothing else.** Extend the
    `E_RELATION` shape jq (`shadow/v1/reproduce.sh:182-188`) with R5's two string
    checks. Hoist the `git_env=(…)` array (today at
@@ -853,6 +935,12 @@ updated main and write code there. That PR is the one using `Closes #263`.
   on the same entry convention, so a reviewer reads one pattern in two files and a
   future copy between them stays honest. The cost is a re-exec per run and one
   inherited variable given up (`TMPDIR`, see R7); both are cheap for a gate.
+- **The scrub cannot cover what runs before line 1, so the spec names the boundary — the
+  sixth finding.** An earlier revision implied the scrub plus re-exec made the driver
+  safe under any invocation, citing a `/bin/bash "$reproducer"` case as proof. It is
+  not: `BASH_ENV` runs before the script's first line, so no code inside the file can
+  precede it. The fix is the invocation contract (R7, R15d, R20). Lesson: an untestable
+  limit gets documented, not covered by a test that only proves its own input harmless.
 - **Reading only stdout is half a check.** The root lookup asks git a question and
   compares the answer, and an earlier revision of R9 compared the text alone. Under
   `set -uo pipefail` with no `-e`, a git that fails says so only in its exit status, and
@@ -874,9 +962,12 @@ updated main and write code there. That PR is the one using `Closes #263`.
 - **A copy can rot, so it is a copy and says so.** Re-implementing the predicates would
   have let the gate and the adapter drift into two different ideas of a plain
   repository, which is how a bypass comes back. The verbatim copy with the
-  `qualified-identity.jq` header, and R21's requirement to prove the bytes match the
-  cited commit in the PR, make drift visible instead of silent. It is still a real
-  maintenance cost, accepted for the same reason `qualified-identity.jq` accepted it.
+  `qualified-identity.jq` header, and R21's requirement to show in the PR that the
+  bytes match the working tree's `materialize.sh` at the stated ranges, make drift
+  visible instead of silent. The proof reads the working tree because CI's default-depth
+  checkout cannot resolve an old commit's blob, and a proof that cannot run proves
+  nothing. Still a real maintenance cost, accepted for the same reason
+  `qualified-identity.jq` accepted it.
 - **Why the root commit is a verified identity, once the source is plain.** The driver
   computes it with git from the object bytes in the directory it was handed, starting
   from the incident's own commit — not from any field a caller wrote. Commit ids are
@@ -933,7 +1024,9 @@ updated main and write code there. That PR is the one using `Closes #263`.
   enforcement and adds the first commands it runs against a caller-supplied directory.
   `work/README.md` classes security controls as high risk, so widening that list is
   high risk however small the diff — hence the plan-only PR, independent review, and
-  operator merge. Do not re-argue it as routine on size grounds. What it widens: a
+  operator merge. Do not re-argue it as routine on size grounds — and that runs both
+  ways: R22's size exception for this artifact PR waives the line signal only, and
+  changes nothing about the risk class or the review this needs. What it widens: a
   read-only shadow run against ystack's own source, the intended step-7 unblock, but a
   real widening of the driver's allowed execution surface and the first entry that is
   not fixture-only. The three bindings — the documents' repository id, the source's
