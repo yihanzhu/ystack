@@ -78,13 +78,13 @@ concern, and requirement 17's entry is the first lines of the same script as req
 predicates.
 
 **Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 739 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+file is 812 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
 PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
 unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
 proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
 order and success-path guarantee are each spelled out step by step because both are one line's
 position away from being wrong. Evidence-based
-range **628-850 net lines** — the measured count above, plus or minus 15%. This exception waives
+range **690-930 net lines** — the measured count above, plus or minus 15%. This exception waives
 only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
 CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
 figure is the 700-1000 range proposed above.
@@ -106,12 +106,29 @@ not pass at the end of this step. Run it once and paste the single `FAIL:` line 
 `fail` helper exits on the first failure, the way `scripts/test/shadow-slice.test.sh:19` does, so
 one run names one case.
 
-0.1 **Scaffolding.** Copy the pinned-jq bootstrap from `scripts/test/shadow-slice.test.sh:1-56` —
-the platform case with the two release digests, the shared cache under
+0.1 **Scaffolding.** Copy the pinned-jq bootstrap from `scripts/test/shadow-slice.test.sh`
+**lines 1 and 3-56 — not line 2** — the platform case with the two release digests, the shared
+cache under
 `${TMPDIR:-/tmp}/ystack-portable-core-jq16`, the `curl` fetch with a digest check, the copy into
 `$tmp/bin/jq` at 0555, and the `jq-1.6` identity assertion. Take `git_clean` from lines 70-79 and
 `fail`/`pass`/`sha_file` from lines 19-23 unchanged. Step 0.7's driver run also needs the
 `object-closure` helper compiled the way lines 52-55 compile it.
+
+Line 2 of that file is `# shellcheck disable=SC2016`, a file-level directive, and copying it would
+contradict the zero-directive proof this plan's Proof section asserts for
+`scripts/test/shadow-assembler.test.sh` — a copy is exactly how such a directive arrives without
+anyone deciding to add one. So take line 1 (the shebang) and then lines 3-56, or copy 1-56 and
+delete line 2 as the next edit; either way the committed file has no line 2 of the original and
+`grep -c 'shellcheck disable'` on it is `0`. Nothing replaces it, because the test does not need
+it: SC2016 fires on a single-quoted argument containing `$` when shellcheck cannot see that the
+command is jq, and step 2.9 says how this test avoids that everywhere — every jq program that
+needs a `$name` binding is written into a `$tmp/*.jq` file with a **quoted heredoc** (`<<'EOF'`),
+which shellcheck does not read as shell expansion, and passed with `-f`, which is a path and not
+program text; the one call that would otherwise carry program text inline, requirement 10's
+`time_ok`, takes its value on **stdin** with `-R` so its program has no `$` at all. The lines
+copied here — the platform case, the fetch, the digest check, the helpers — carry no
+single-quoted `$` of their own, which is why the directive is unnecessary rather than merely
+unwanted.
 
 0.2 **Two fixture repositories.** Build the `sha1` bare repository the way
 `scripts/test/shadow-slice.test.sh:81-98` does (`git_clean init -q --bare --object-format=sha1`,
@@ -193,11 +210,46 @@ reading the whole file.
   claim's `snapshot_bounded` bound before it is parsed, so its shape does not matter. (b) The
   finished output over the driver's 8 MiB cap: pad the supplied **resolved profile**, which is the
   one caller-supplied document whose entire content is embedded in `input.json`
-  (`scripts/test/local-git-materializer-fixtures.sh:170`), by repeating shape-valid
-  `skill_sources`/`tool_sources` entries under distinct ids with `config_source: {state:"absent"}`
-  — absent, so requirement 16 has nothing to check and the refusal is the size check's and not
-  its — until the finished document would cross 8388608 bytes. That is the only lever the test has
-  on the output size: everything else in the seven documents is pinned bytes or fixed text.
+  (`scripts/test/local-git-materializer-fixtures.sh:170`). Pad it in a field that is genuinely
+  free-form, which rules out the obvious one: extra `skill_sources` or `tool_sources` entries are
+  refused before the size check ever runs, because the projection rule compares those against the
+  pinned binding whole — `skill_sources` by source key against `skill_refs`
+  (`profile_graph.jq:214-215`) and `tool_sources` against `requested_tools`
+  (`:216`, `:191-204`) — and the default profile's bindings request none. Use instead the one
+  string in each source claim that nothing pins: a `source_value_ref` whose `value_format` is
+  `canonical-json` must name a **blob** (`schema.jq:373`), and a blob cannot sit at
+  `location.kind: "root"` (`:290`), so every such claim carries a
+  `location: {kind:"path", value:<repository path>}` — and that path's only check is
+  `repo_path_ok` (`:205-210`): non-empty, no control characters, no backslash, no empty or
+  `.`/`..` segment, **and no maximum length**. A resolved profile has seven of those paths as
+  mandatory fields — `body.profile_source.source.location.value` and each of the six bindings'
+  `manifest_source.source.location.value` — and the graph rules read those two claims by digest
+  only, never by source: `manifest_source` is compared to the binding and to the manifest through
+  `value_sha256` alone (`profile_graph.jq:210` and `:277`), and `profile_source` through
+  `value_sha256` against `profile_ref.sha256` (`:221`, `:284`), while `package_source` is the one
+  compared whole (`:211`). The one rule that does read the path is `source_claims_agree`
+  (`:178-183`), and it only asks that claims sharing a source key agree on format and digest — a
+  padded path is its own key, so it lands in a group of one and the rule is satisfied. So the
+  padded document keeps every digest, id, key and binding exactly
+  as the good fixture has them and differs only in one path string made long — a single segment of
+  `p`, no slashes needed. Better still, pad the subject path of `selection_ref` or
+  `repository_context_ref` instead: those are scope refs the assembler copies unchanged into the
+  stage request (1.6) and the request is required to match them
+  (`stage_request.jq:298-299`), so every padded byte lands in `input.json` **twice** and about
+  4.2 MB of padding crosses the cap with room to spare rather than needing a byte-exact fit.
+
+  Two things make that case honest rather than a trick, and both are worth checking before writing
+  it. The padded document is **fully valid, only too big**: `profile_set_ok` applies no
+  string-length limit anywhere, and the driver's own acceptance test does not either — `input_ok`
+  (`protocol.jq:198-207`) calls neither `parsed_limits_ok` nor `schema_layer_ok`, so nothing on
+  the driver's path would refuse an 8192-byte-plus path. The size is the only thing wrong with it,
+  which is exactly what a case for the output cap has to show. And it has room to work only
+  because 2.3 bounds the resolved-profile file at the driver's own 8 MiB rather than at something
+  tighter; bound that file at 1 MiB and no legitimate resolved profile can make the finished
+  output cross 8388608, and this case would be unconstructible again. Do **not** tidy this up by
+  adding `parsed_limits_ok` to the resolved-profile checks: the spec asks for `profile_set_ok` and
+  nothing more (requirement 3), and a limit the driver does not apply would refuse inputs the
+  driver accepts.
 - `E_PARSE` — **new, two cases**, the two conditions the canonicalizer names: a
   `<resolved-profile-file>` holding two JSON values rather than one (`printf '{}{}'`), and a claim
   file that is the good claim's bytes with a UTF-8 BOM prepended.
@@ -376,7 +428,13 @@ after those the source repository in 2.4-2.6.
 
 2.3 **Read and canonicalize the five inputs.** Follow `shadow/v1/reproduce.sh:144-153`'s
 `canonical_json` shape — BOM check, one JSON value, `jq -S -c` compared with `cmp` — and its
-`snapshot_bounded` bounds, the claim at the driver's own 1 MiB (`:156`). Then the profile-id check
+`snapshot_bounded` bounds, the claim at the driver's own 1 MiB (`:156`). The spec fixes only that
+one bound, so this plan fixes the rest: the eight profile-directory documents at 1 MiB each, the
+same figure, and the **resolved-profile file at the driver's own 8 MiB** (`8388608`,
+`shadow/v1/reproduce.sh:158`). The resolved profile is the one input embedded whole in a document
+the driver caps at 8 MiB, so a tighter bound here would refuse resolved profiles the driver would
+have accepted, and it would also make 2.7's size check unreachable — 0.5's `E_LIMIT` case (b)
+says why that matters. Then the profile-id check
 and the eight digest comparisons, requirement 16's producer-config check, and the claim checks:
 `kind` exactly `execution_environment_claim`, `id` in the core id charset (`:222-228`), and the
 two derived values — the claim's `id` and the SHA-256 of its bytes, the digest `:168` takes as
@@ -439,7 +497,12 @@ commit's tree content — that boundary is requirement 15's. There is no separat
 type or size check: `:355-360` inside the copy decides all three.
 
 2.7 **Size check, then stage, then commit** (requirement 18). Refuse `E_LIMIT` rather than emit
-something over the driver's 8 MiB cap (`shadow/v1/reproduce.sh:158`). **Stage:** `mkdir` a
+something over the driver's 8 MiB cap (`shadow/v1/reproduce.sh:158`). Say where the measurement
+happens, because 0.5's `E_LIMIT` case (b) is the only thing that exercises it: the finished
+`input.json` is built inside `run_root` first, its byte size is read there and compared with
+`8388608` — the same comparison `snapshot_bounded` makes, so put the two figures side by side in
+one place a reviewer can find — and only a document that passes goes on to the staging step.
+Nothing over the cap is ever written into `stage/` or the output directory. **Stage:** `mkdir` a
 `stage/` under `run_root` and write `input.json`, `stage-request-ref.json`,
 `resolved-profile-ref.json` and the four decision-record texts there, each as
 `> <name>.tmp && mv <name>.tmp <name>` inside that directory; then run
@@ -501,7 +564,9 @@ separately, and `-e` would turn `false` into exit 1 and destroy that distinction
 The same rule governs the test file, where it costs more. Every sibling test in the repository
 carries the file-level `SC2016` instead of avoiding it — `scripts/test/shadow-slice.test.sh:2`,
 and 19 findings appear under it if that line is removed — so copying a sibling's jq call style is
-exactly what breaks this rule. Write the fixture programs that need `$name` bindings into
+exactly what breaks this rule. The other way it breaks is by copying that very line, which is why
+0.1 takes the bootstrap as lines 1 and 3-56 and leaves line 2 behind. Write the fixture programs
+that need `$name` bindings into
 `$tmp/*.jq` with a quoted heredoc (`<<'EOF'`) and pass them with `-f`: shellcheck does not read `$`
 inside a heredoc as a shell expansion, so no directive is needed. This is a real path and not a
 hope — a mock assembler holding all the copied spans plus the stdin `time_ok` call and the `-f`
@@ -648,8 +713,12 @@ Run all of this on the final implementation commit and say which commit; old pro
 commit is stale. `$t` is any scratch directory, `$m` is
 `adapters/local-git-materializer/v1/materialize.sh`.
 
-- `bash scripts/test/shadow-assembler.test.sh` — all pass, last line
-  `shadow assembler: <N> focused checks passed` and nothing else printed. That one line covers
+- `bash scripts/test/shadow-assembler.test.sh` — all pass, exit 0. The run prints one
+  `ok <n> - <case>` line per check, because that is what the `pass` helper copied in step 0.1
+  does (`scripts/test/shadow-slice.test.sh:21`), and then the final summary line
+  `shadow assembler: <N> focused checks passed`; nothing else, and **no `FAIL:` line** — the
+  `fail` helper prints that one and exits non-zero, so its absence together with exit 0 is the
+  pass. `<N>` equals the number of `ok` lines. Those checks cover
   every group in step 0: both algorithms, the four negative sources, the symlinked source, the
   exported-function and
   `BASH_ENV` cases in both invocation forms, the two timestamp cases, the unreadable-modules case,
@@ -658,7 +727,9 @@ commit is stale. `$t` is any scratch directory, `$m` is
   directory listing, and the copy, pin-liveness and source-order assertions.
 - **One case per refusal class.** Paste the id each case produced, one line per class in
   requirement 12: `E_USAGE`, `E_TARGET`, `E_WORKSPACE`, `E_RUNTIME`, `E_LIMIT` twice (the padded
-  claim, and the resolved profile padded until the output would cross 8 MiB), `E_PARSE` twice (two
+  claim, and the resolved profile whose padded source path pushes the finished output over
+  8388608 — paste that document's own size beside the output's, to show it was under its own 8 MiB
+  input bound and the refusal was the output check's), `E_PARSE` twice (two
   JSON values, and the BOM), `E_CANONICAL`, `E_SHAPE`, `E_PROFILE`, `E_RELATION`. Then say the one
   half with no runtime case — the finished input failing `validate-input` — and name the review
   that covers it, so the gap is on the record rather than read as an omission.
@@ -722,7 +793,9 @@ commit is stale. `$t` is any scratch directory, `$m` is
   `grep -c 'shellcheck disable' shadow/v1/assemble-materialization-input.sh` and the same on
   `scripts/test/shadow-assembler.test.sh` — **`0` for both.** Not `1`, and not a file-level
   `SC2016`: the spec allows no new directive in either file (lines 654-656 and 1052-1056), and 2.9
-  says how the jq calls are written to earn that. A `1` here is a finding, not a pass.
+  says how the jq calls are written to earn that. A `1` here is a finding, not a pass — and the
+  most likely `1` is `shadow-slice.test.sh:2` riding along with 0.1's bootstrap copy, so check the
+  top of the test file by eye as well.
 - `bash scripts/test/portable-core-schema.test.sh` — final line `failures: 0`, exit 0.
 - `bash scripts/check-rename.sh` — `check-rename: clean — no old names in tracked files.`
 - **Scope and size.** `git diff --stat main` lists exactly the seven files this plan names and
