@@ -286,12 +286,49 @@ The rationale paragraph for these two files goes in the implementation PR body, 
 Run everything in Proof below that does not need the new workflow. Steps 0-4 are then
 complete and the PR is openable with the operator's two files still missing.
 
-### Step 6 — the operator's commit
+### Step 6 — the operator's commit, then the red-shard proof
 
 The operator runs `git apply proposals/ci-test-shards-shard-ci.patch`, reviews the two
 files, commits and pushes them as the last commit on `ystack/impl/ci-test-shards`.
 Only after that does CI exercise the new shape. He records the run's wall-clock
 duration in the PR body; the target is under 25 minutes (R14).
+
+**Then, once that run is green, the red-shard proof of the first risk below.** A plain
+scratch-branch push cannot do this. `ci.yml`'s `on:` is `pull_request` and `push` to
+`main` only (lines 3-6, checked against the file), so pushing a `scratch/...` branch
+starts no run at all — there is nothing to watch go red. The proof needs a pull
+request, so it uses a throwaway **draft** one:
+
+1. From the implementation head — the operator's workflow commit, with its own CI
+   green — create the branch `scratch/ci-test-shards-red-shard`.
+2. Add one throwaway commit, and nothing else: a new file
+   `scripts/test/zz-red.test.sh` holding two lines, `#!/usr/bin/env bash` and
+   `exit 1`. It is a real `*.test.sh` file, so the runner discovers it like any
+   other, and `zz-` sorts last under `LC_ALL=C` — no other name in `scripts/test`
+   begins with `z`. That makes it element 63 of 63: 0-based index 62, and
+   `(62 % 6) + 1 = 3`. So it lands in **shard 3**, predictably, and exactly one shard
+   fails. The shebang is not decoration: without it the pinned shellcheck sweep in
+   `checks` reports SC2148 and `checks` goes red too, which would blur the one thing
+   this proves. Adding a 63rd suite also shifts the split to 11, 11, 11, 10, 10, 10;
+   that is expected and changes nothing but the counts in the logs.
+3. Open a **draft** PR against `main` titled
+   `scratch: prove ci goes red on one failing shard (do not merge)`.
+4. Wait for the run and record four things: `test (3)` red; the other five `test`
+   jobs green, which is `fail-fast: false` doing its job; `checks` green; and the
+   aggregate `ci` **red, not skipped**.
+5. Close the PR without merging, and delete the branch.
+
+This scratch PR is **exempt from the artifact chain**. It has no intent, spec or plan
+of its own and needs none, because it is never merged and exists only as evidence. It
+must **not** be labelled `merge-ready`, and nobody merges it. The evidence — the PR's
+job list with its statuses, as a screenshot or as `gh pr checks` output — is pasted
+into the implementation PR body, beside the duration measurement.
+
+There is a cheaper complement, worth doing first, that is **not** a substitute: read
+the `ci` job in the workflow file on the branch and confirm by eye that it carries
+`if: always()` and compares `needs.checks.result` and `needs.test.result` against
+`success` explicitly. That is review of the text, not proof of the behaviour. Only
+the draft PR shows GitHub actually reporting `ci` red.
 
 ## Risks
 
@@ -301,7 +338,9 @@ duration in the PR body; the target is under 25 minutes (R14).
   job run regardless, and the explicit `needs.*.result != 'success'` comparisons turn
   failed, cancelled *and* skipped dependencies into a red `ci`. For a matrix job
   `needs.test.result` is `success` only when all six shards succeeded. Proved by
-  deliberately failing one shard on a scratch branch (Proof, last item).
+  making one shard fail on a throwaway draft PR (Step 6, Proof last item). It has to
+  be a PR: the workflow's `on:` triggers are `pull_request` and `push` to `main` only,
+  so pushing a scratch branch runs nothing and proves nothing.
 - **Job naming versus the required check name.** The ruleset requires one check named
   exactly `ci`. A job's check name is its `name:` if present, else its id, so the
   aggregate job must keep the id `ci` and no `name:` key. `checks` and
@@ -434,9 +473,16 @@ operator-files risk above), where its log must show 62 `==> ` headers and end
     check list reads `ci`, `checks`, and `test (1)` through `test (6)`; `ci` is green
     and is still the one required check. The operator records that run's wall-clock
     duration in the PR body; target under 25 minutes.
-13. **A failing shard turns `ci` red — operator-run.** This needs the new workflow, so
-    it cannot be done before Step 6, and it must not land on the implementation
-    branch. On a scratch branch off the implementation head, add a line that exits
-    non-zero to one suite in shard 3, push, and confirm `test (3)` is red, the other
-    five shards still report (`fail-fast: false`), and `ci` is **red, not skipped**.
-    Then delete the scratch branch. This is the direct proof of the first risk above.
+13. **A failing shard turns `ci` red — operator-run, on a throwaway draft PR.** This
+    needs the new workflow, so it cannot be done before Step 6, and it must not land
+    on the implementation branch. Pushing a scratch branch is not enough on its own:
+    `ci.yml` runs on `pull_request` and on `push` to `main` only, so such a push
+    starts no run. Instead the operator opens a **draft** PR against `main` from
+    `scratch/ci-test-shards-red-shard`, whose single throwaway commit adds
+    `scripts/test/zz-red.test.sh` (`#!/usr/bin/env bash`, then `exit 1`) — it sorts
+    last, so it lands in shard 3. Expect `test (3)` red, the other five shards green
+    (`fail-fast: false`), `checks` green, and `ci` **red, not skipped**. Then close
+    the PR without merging and delete the branch. Step 6 has the full procedure: the
+    PR is exempt from the artifact chain, is never labelled `merge-ready`, and its job
+    list goes in the implementation PR body. This is the direct proof of the first
+    risk above.
