@@ -62,8 +62,9 @@ What is **not** proven, and should not be described as if it were:
 
 - **Nothing has ever run against a real target.** Every run in this repo used
   fixtures or this repo's own Git objects. `real_target_use` is `disabled`, and
-  `shadow/v1/shadow-environments.json` (PR #251, merged) lists exactly one execution
-  environment, `env.local-macos-fixture`, marked `fixtures-only` and `unproven`.
+  `shadow/v1/shadow-environments.json` (PR #251, and the self-host registration
+  since) lists two execution environments, `env.local-macos-fixture` and
+  `env.local-macos-ystack-self`, both marked `unproven`.
 - **Two of the nine required eval families have no seeds.** `evals/v1/eval-catalog.json`
   records `malicious-instructions` and `reviewer-severity-false-positive-negative` as
   `seed_status: declared` with a multi-trial policy and no seed sources. Both need
@@ -182,6 +183,7 @@ names, with no ystack-specific state copied in. Neither substitutes for the othe
 `ROADMAP.md` requires both. Each execution environment must be added to
 `shadow/v1/shadow-environments.json` by its own reviewed PR before a run may use it;
 the driver refuses an environment that is not listed, and no run may add itself.
+The self-host environment is now listed; the external-target one is not.
 `no-change` and `inconclusive` remain honest outcomes.
 
 **Step 5, the live parts.** Authorized model trials can finally seed the two declared

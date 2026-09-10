@@ -277,6 +277,28 @@ mutate() {
   "$jq_bin" -S -c "$filter" "$source" > "$target"
   /usr/bin/printf '%s\n' "$target"
 }
+# Refuses any `git config` use in a shell script text other than the one
+# read-only, bounded-snapshot listing the driver's copied source-purity
+# predicate brings in from materialize.sh:314-315. Text-level, not
+# behavioral: it is the guard for a file that has no mutation harness.
+config_guard_ok() {
+  local path=$1 hits config_line
+  hits=$(/usr/bin/grep -c 'git config' "$path" 2>/dev/null) || hits=0
+  [ "$hits" -eq 1 ] || return 1
+  config_line=$(/usr/bin/grep 'git config' "$path")
+  case "$config_line" in
+    *--global*|*--system*|*--local*|*--worktree*) return 1 ;;
+  esac
+  case "$config_line" in
+    *--add*|*--replace-all*|*--unset-all*|*--unset*|*--edit*| \
+    *--rename-section*|*--remove-section*) return 1 ;;
+  esac
+  case "$config_line" in
+    *'--file "$source_config_snapshot"'*) ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
 expect_incident_error() {
   local name=$1 expected=$2 input=$3 status=0
   "$validator" validate "$input" > "$tmp/$name.out" 2> "$tmp/$name.err" || status=$?
@@ -319,14 +341,25 @@ status=0
 pass 'the incident validator fails closed on every malformed record'
 
 /usr/bin/cmp -s "$registry" <("$jq_bin" -S -c . "$registry") || fail registry-canonical
-"$jq_bin" -e '
-  .schema_version == 1 and .kind == "shadow_environment_registry" and
-  .body.activation_state == "inactive" and
-  (.body.environments | map(.environment_id)) == ["env.local-macos-fixture"] and
-  (.body.environments[0].evidence_scope) == "fixtures-only" and
-  (.body.environments[0].proof_state) == "unproven"
-' "$registry" >/dev/null || fail registry-contents
-pass 'the environment registry lists exactly the one proven-nowhere fixture environment'
+fixture_root=$(git_clean --git-dir="$tmp/source.git" rev-list --max-parents=0 "$failing_commit")
+"$jq_bin" -S -c -n --arg fixture_root "$fixture_root" \
+  --arg fixture_description \
+    'Local developer macOS checkout, fixture repositories only.' \
+  --arg self_description \
+    "Operator's local macOS checkout, ystack's own scrubbed bare source repository." \
+  '{schema_version:1,kind:"shadow_environment_registry",id:"shadow.environments.v1",
+    body:{activation_state:"inactive",registry_version:"v1",
+      environments:[
+        {description:$fixture_description,environment_id:"env.local-macos-fixture",
+         evidence_scope:"fixtures-only",proof_state:"unproven",
+         source_root_commit:$fixture_root,target_repository_id:"fixture.target"},
+        {description:$self_description,environment_id:"env.local-macos-ystack-self",
+         evidence_scope:"self-host",proof_state:"unproven",
+         source_root_commit:"7908b159c0a2d24ce6ccdde6ee0f501acc483e75",
+         target_repository_id:"repo.ystack"}]}}' \
+  > "$tmp/expected-registry.json"
+/usr/bin/cmp -s "$registry" "$tmp/expected-registry.json" || fail registry-contents
+pass 'the environment registry lists two environments, each bound to a target repository and a source root commit'
 
 run_case() {
   local name=$1 incident_input=$2 materialization=$3
@@ -442,6 +475,119 @@ expect_outcome unlisted-environment inconclusive environment.unlisted \
 ' "$RUN_ROOT/out.json" >/dev/null || fail unlisted-detail
 pass 'an environment outside the registry never runs and stays inconclusive'
 
+# (a) A listed id bound to a different repository than the incident names is
+# not this incident's entry: the lookup binds on both fields, not the id alone.
+expect_outcome id-bound-elsewhere inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" \
+  "$(mutate "$claim" claim-id-bound-elsewhere \
+    '.id = "env.local-macos-ystack-self"')"
+"$jq_bin" -e '
+  .body.environment.evaluation == {state:"absent",reason_id:"environment.unlisted"} and
+  .body.materialization.state == "absent" and .body.check.execution.state == "absent"
+' "$RUN_ROOT/out.json" >/dev/null || fail id-bound-elsewhere-detail
+pass 'a listed id bound to another repository does not authorize this incident'
+
+# (b) A source repository whose history is not the fixture's cannot report the
+# fixture's root commit, so the run stops at the binding, not at materialization.
+/bin/mkdir -m 700 "$tmp/foreign.git"
+git_clean init -q --bare --object-format=sha1 "$tmp/foreign.git"
+foreign_empty_tree=$(/usr/bin/printf '' | git_clean --git-dir="$tmp/foreign.git" mktree)
+foreign_root=$(/usr/bin/printf '%s\n' 'foreign root' |
+  git_clean --git-dir="$tmp/foreign.git" commit-tree "$foreign_empty_tree")
+git_clean --git-dir="$tmp/foreign.git" update-ref refs/heads/main "$foreign_root"
+expect_outcome foreign-repository-history inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/foreign.git"
+"$jq_bin" -e '
+  .body.environment.evaluation == {state:"absent",reason_id:"environment.unlisted"} and
+  .body.materialization.state == "absent" and .body.check.execution.state == "absent"
+' "$RUN_ROOT/out.json" >/dev/null || fail foreign-repository-history-detail
+pass 'a repository whose history is not the fixtures still reports environment.unlisted, not materialization.refused'
+
+# (c) An alternates file makes an object-store-less copy answer the fixture's
+# root out of a store outside the directory the driver was handed.
+/bin/cp -R "$tmp/source.git" "$tmp/alternates.git"
+/bin/rm -rf "$tmp/alternates.git/objects"
+/bin/mkdir -m 700 "$tmp/alternates.git/objects" "$tmp/alternates.git/objects/info" \
+  "$tmp/alternates.git/objects/pack"
+/usr/bin/printf '%s\n' "$tmp/source.git/objects" \
+  > "$tmp/alternates.git/objects/info/alternates"
+expect_outcome impure-source-alternates inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/alternates.git"
+"$jq_bin" -e '
+  .body.environment.evaluation == {state:"absent",reason_id:"environment.unlisted"} and
+  .body.materialization.state == "absent" and .body.check.execution.state == "absent"
+' "$RUN_ROOT/out.json" >/dev/null || fail impure-source-alternates-detail
+pass 'a source directory that answers through objects/info/alternates is refused before materialization'
+
+# (d) A commondir file does the same thing by another route.
+/bin/cp -R "$tmp/source.git" "$tmp/commondir.git"
+/bin/rm -rf "$tmp/commondir.git/objects"
+/usr/bin/printf '%s\n' "$tmp/source.git" > "$tmp/commondir.git/commondir"
+expect_outcome impure-source-commondir inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/commondir.git"
+"$jq_bin" -e '
+  .body.environment.evaluation == {state:"absent",reason_id:"environment.unlisted"} and
+  .body.materialization.state == "absent" and .body.check.execution.state == "absent"
+' "$RUN_ROOT/out.json" >/dev/null || fail impure-source-commondir-detail
+pass 'a source directory that answers through commondir is refused before materialization'
+
+# (e) A planted `find` first on PATH must never run: the clean entry fixes
+# PATH before anything in the copy resolves a bare command word.
+/bin/mkdir -m 700 "$tmp/poison"
+/usr/bin/printf '#!/bin/sh\n: > "%s/poison-marker"\nexit 0\n' "$tmp" \
+  > "$tmp/poison/find"
+/bin/chmod 0755 "$tmp/poison/find"
+saved_path=$PATH
+PATH="$tmp/poison:$PATH"
+expect_outcome poisoned-path-find inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/alternates.git"
+PATH=$saved_path
+[ ! -e "$tmp/poison-marker" ] || fail poisoned-find-executed
+pass 'a find binary planted on the callers PATH is never executed by the copied predicates'
+
+# (f) An exported `find` function reaches the same bare word before PATH is
+# even consulted, and cannot be stopped by fixing PATH alone.
+# shellcheck disable=SC2329 # invoked indirectly, by name, inside the driver subprocess
+find() { :; }
+export -f find
+expect_outcome exported-find-impure-source inconclusive environment.unlisted \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/alternates.git"
+expect_outcome exported-find-positive-still-works reproduced \
+  check.failed-at-revision "$failing_incident" \
+  "$tmp/fixture-failing/read-only-input.json"
+/bin/mkdir -m 700 "$tmp/exported-find-direct" "$tmp/exported-find-direct/candidate" \
+  "$tmp/exported-find-direct/scratch" "$tmp/exported-find-direct/state"
+status=0
+/bin/bash -p "$reproducer" reproduce "$failing_incident" "$claim" "$policy_set" \
+  "$duty" "$tmp/fixture-failing/read-only-input.json" "$failing_identity" \
+  "$tmp/alternates.git" "$tmp/exported-find-direct/candidate" \
+  "$tmp/exported-find-direct/scratch" "$tmp/exported-find-direct/state" \
+  "$closure_helper" "$jq_bin" > "$tmp/exported-find-direct/out.json" \
+  2> "$tmp/exported-find-direct/err" || status=$?
+[ "$status" -eq 0 ] && [ ! -s "$tmp/exported-find-direct/err" ] ||
+  fail exported-find-direct
+"$jq_bin" -e '
+  .body.outcome == "inconclusive" and .body.reason_id == "environment.unlisted" and
+  .body.environment.evaluation == {state:"absent",reason_id:"environment.unlisted"} and
+  .body.materialization.state == "absent" and .body.check.execution.state == "absent"
+' "$tmp/exported-find-direct/out.json" >/dev/null || fail exported-find-direct-detail
+unset -f find
+pass 'an exported find function cannot silence the copied purity predicates, direct invocation included'
+
+# (g) The clean entry drops a caller TMPDIR instead of forwarding it: a good
+# run must not depend on it.
+saved_tmpdir=${TMPDIR-}
+TMPDIR="$tmp/no-such-tmpdir"
+expect_outcome tmpdir-not-inherited reproduced check.failed-at-revision \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json"
+if [ -n "$saved_tmpdir" ]; then TMPDIR=$saved_tmpdir; else unset TMPDIR; fi
+pass 'the clean entry does not forward a caller TMPDIR into the run'
+
 expect_outcome unsatisfied-environment inconclusive environment.not-satisfied \
   "$failing_incident" "$tmp/fixture-failing/read-only-input.json" \
   "$(mutate "$claim" claim-incomplete '.body.declaration_status = "incomplete"')"
@@ -473,11 +619,13 @@ expect_outcome named-check inconclusive check.not-runnable \
   "$tmp/fixture-failing/read-only-input.json"
 pass 'a named deterministic check has no runner here and is inconclusive'
 
-/bin/mkdir -m 700 "$tmp/gone.git"
-git_clean init -q --bare --object-format=sha1 "$tmp/gone.git"
-expect_outcome missing-revision inconclusive materialization.refused \
-  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" "$tmp/gone.git"
-pass 'a source repository without the incident revision cannot materialize'
+/bin/cp -R "$tmp/source.git" "$tmp/replace-ref.git"
+/usr/bin/printf '%s refs/replace/%s\n' "$passing_commit" "$failing_commit" \
+  > "$tmp/replace-ref.git/packed-refs"
+expect_outcome replace-ref-source inconclusive materialization.refused \
+  "$failing_incident" "$tmp/fixture-failing/read-only-input.json" "$claim" \
+  "$tmp/replace-ref.git"
+pass 'a source repository carrying a replace ref passes the gate but the materializer still refuses it'
 
 expect_outcome missing-path inconclusive check.unreadable \
   "$(mutate "$failing_incident" incident-missing-path \
@@ -611,12 +759,26 @@ pass 'the source repository and the component files are never written'
 
 if /usr/bin/grep -Eq '(^|[^[:alnum:]_.-])(gh|glab|curl|wget|ssh|codex|claude)([^[:alnum:]_.-]|$)' \
      "$reproducer" ||
-   /usr/bin/grep -Eq 'git +(push|commit|apply|update-ref|fetch|clone|init|config)' \
+   /usr/bin/grep -Eq 'git +(push|commit|apply|update-ref|fetch|clone|init)' \
      "$reproducer" ||
    /usr/bin/grep -Eq 'pull_request|api\.github|https?://' "$reproducer"; then
   fail forge-or-network-command
 fi
 /usr/bin/grep -Fq 'cat-file' "$reproducer" || fail unexpected-git-use
 pass 'the driver reads Git objects only and calls no forge, network, or model tool'
+
+# The `config` verb dropped above is checked precisely instead: the driver's
+# one `git config` use must be the copied read-only, bounded-snapshot listing
+# from materialize.sh:314-315, exactly once, never a write and never the
+# repository's own config.
+config_guard_ok "$reproducer" || fail config-guard-refuses-reproducer
+/bin/cp "$reproducer" "$tmp/config-guard-mutant.sh"
+/usr/bin/printf '%s\n' \
+  'git config --local core.hooksPath "$scratch/hooks"' \
+  >> "$tmp/config-guard-mutant.sh"
+if config_guard_ok "$tmp/config-guard-mutant.sh"; then
+  fail config-guard-permissive
+fi
+pass 'the driver reads git config only from its own bounded snapshot copy and never writes'
 
 /usr/bin/printf 'shadow slice: %s focused checks passed\n' "$passes"

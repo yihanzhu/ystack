@@ -1191,22 +1191,36 @@ text in a regular, non-symlink file inside a fixed size. Validating a record
 creates no issue, no change request, and no deploy authority.
 
 `shadow/v1/shadow-environments.json` is the committed list of execution
-environments a shadow run may use. It starts with exactly one entry,
-`env.local-macos-fixture`, marked `fixtures-only` and `unproven`. Adding an
-environment is a reviewed change to that file; no run may add one.
+environments a shadow run may use. It lists two entries today:
+`env.local-macos-fixture` (`fixtures-only`, `unproven`) and
+`env.local-macos-ystack-self` (`self-host`, `unproven`). Each entry binds one
+target repository id and one source repository, named by that repository's own
+root commit. Adding an environment is a reviewed change to that file; no run
+may add one.
 
 `shadow/v1/reproduce.sh` is the driver. It takes one incident record, one
 execution-environment claim, the control policy set and duty evaluation that
 claim binds, one materialization input, one qualified-identity document, a local
 source Git directory, and three caller-owned directories (candidate, scratch,
-state). It refuses to run unless
-the claim's document id is listed in the environment file **and** the real
-sandbox-policy evaluator (`control/v1/evaluate-sandbox.sh`) returns `satisfied`
-for it. It then materializes the incident's exact revision through the local Git
-materializer with an empty producer patch — a materialization input that carries
-any patch bytes, or that asks for network, is refused outright — so the candidate
-commit is the incident commit and nothing is changed. It reads the named blob out
-of that candidate repository and compares its SHA-256 with the expected one.
+state). It refuses to run unless the claim's document id is listed in the
+environment file, bound there to this incident's own target repository id, and
+the source Git directory it was handed is a plain repository — no alternates,
+no `commondir`, nothing pointing outside it — whose root commit is that entry's
+own, **and** the real sandbox-policy evaluator
+(`control/v1/evaluate-sandbox.sh`) returns `satisfied` for it. It then
+materializes the incident's exact revision through the local Git materializer
+with an empty producer patch — a materialization input that carries any patch
+bytes, or that asks for network, is refused outright — so the candidate commit
+is the incident commit and nothing is changed. It reads the named blob out of
+that candidate repository and compares its SHA-256 with the expected one.
+
+The driver supports exactly two invocations: executing the file, through its
+own `#!/bin/bash -p` shebang, and `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C
+/bin/bash -p <driver> reproduce …` — an emptied environment and `-p` on the
+command line, the form its own clean re-exec uses on itself. `bash <driver>` is
+not supported: bash processes `$BASH_ENV` before the driver's first line, and
+no scrub inside the file can get in front of that. The unsupported form is
+neither detected nor refused.
 
 The run emits one **shadow record** whose outcome is exactly one of `reproduced`
 (the check still fails there), `no-change` (the check passes there, so the
@@ -1244,10 +1258,11 @@ change request, and no forge or network call; the only Git it runs is reading
 objects. All timestamps come from the incident record, never the clock, so two
 runs of the same inputs produce byte-identical output.
 
-This is the fixture proof only. The self-host proof and the external-target
-proof happen after the operator-merged operating-mode transition, and each new
-execution environment is a separate reviewed addition to
-`shadow/v1/shadow-environments.json` with its own evidence.
+This is the fixture proof only. The self-host environment is now listed in
+`shadow/v1/shadow-environments.json`, but still `unproven`; its proof is a
+later step. The self-host proof and the external-target proof happen after the
+operator-merged operating-mode transition, and each new execution environment
+is a separate reviewed addition to that file with its own evidence.
 
 Run the focused test with `bash scripts/test/shadow-slice.test.sh`.
 
