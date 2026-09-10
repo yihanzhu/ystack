@@ -18,10 +18,10 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1866-2524 changed lines** (implementation). The derivation,
+**Evidence-based range: 1925-2605 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
-- **C parent ~1010 lines** = ~605 copied verbatim + ~405 new. The test launcher is 702
+- **C parent ~1045 lines** = ~605 copied verbatim + ~440 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
   copies is nearly all of it. Block by block: the includes, platform shims and the four
   limit constants, lines 1-43 (43 lines); the eight small helpers `set_limit` through
@@ -52,22 +52,29 @@ measured rather than guessed:
   sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
   two `open` calls is nearly free, and the cost is carrying the output-directory descriptor
   into `supervise` and out of `main`: the signature, the call site, the ownership of the
-  close, and the error paths, R5), and the usage
-  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~405
-  is how the parent computes digests: delegating to the platform's SHA-256 tool and
-  `git hash-object` at fixed paths sits at the low end, while a SHA-256 implementation
+  close, and the error paths, R5), the same move on the supervisor's reads back
+  (~15 — `empty_regular_file` becomes an `fstat` on the kept descriptor, `stream_file` and
+  `sanitized_error` take an `int` instead of a path and gain an `lseek`, and their
+  `open`/`close` bookkeeping goes away, R5), the git blob id computed rather than asked
+  for (~20 — the `blob <size>\0` header built from its own `fstat`, the pipe into the
+  platform's SHA-1 tool, and the hex compare, R1), and the usage
+  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~440
+  is how the parent computes digests: delegating to the platform's SHA-256 and SHA-1 tools
+  at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
-  plan decides that, and it is the one thing that could push the C file past ~1120. This
-  round moves this figure by the ~20 just named. The round before it moved nothing here,
-  because its findings only stated what the copied code already did; creating the sandbox
-  relative to a checked descriptor is a change to what the shipped parent does.
-- **Entry shell ~345 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+  plan decides that, and it is the one thing that could push the C file past ~1155. This
+  round moves this figure by the ~35 just named — the supervisor's reads moving onto the
+  descriptors it already holds, and the blob id being computed in C rather than delegated
+  to `git hash-object`. The round before it moved nothing here, and the one before that
+  added the ~20 for the fd-relative creation.
+- **Entry shell ~365 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
-  about 50 lines. The entry adds ten `git hash-object` blob pins — two C sources plus the
-  eight loaded files R5 lists (~25 more than two pins would be, since the constants and
-  the loop over them are the whole cost) — two compiles, the awk
+  about 50 lines. The entry adds ten computed blob-id pins — two C sources plus the
+  eight loaded files R5 lists (~40 more than two pins would be: the constants and the loop
+  over them are most of it, plus ~15 for computing each id from a `stat` size and the
+  platform's SHA-1 tool rather than calling `git hash-object`, R1) — two compiles, the awk
   copy, the `tmp` subdirectory, the `chmod 0500` pass, the explicit
   environment every command it runs is given, and run-as-child plus wait plus signal
   forwarding plus `128 + signal`, each step with its own `E_RUNTIME` exit. The output
@@ -87,7 +94,7 @@ measured rather than guessed:
   statements in a different order. This round adds ~10 more, to **~345**: the marker
   branch's re-run of that scrub, which is the same ten lines again plus the two alias-reset
   builtins (R1).
-- **Focused test ~780 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~795 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -98,8 +105,8 @@ measured rather than guessed:
   exported-function fixture and its marker-file assertion (~15), the
   polluted-compiler-environment block — poisoned-header
   fixture, two entry runs, two hand-built compiles whose digests are compared, and the
-  control compile that proves the fixture poisonous (~45, of which ~10 is this round's
-  Darwin note and the narrowed write assertion beside it), a shared
+  control compile that proves the fixture poisonous (~50, of which ~15 is the Darwin
+  `xcrun_db` before-and-after assertion that replaced an earlier round's note, R1), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
   group-2 cases on top of it (~140, the overlong-value case now building a near-`PATH_MAX`
   directory tree rather than naming a long path), the group-3 runtime refusal (~10),
@@ -108,17 +115,20 @@ measured rather than guessed:
   signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
   `SIGSTOP` freeze (~35), the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
-  directory rather than one emptiness test), the pin-constant assertions over ten pins (~25), the
+  directory rather than one emptiness test), the pin-constant assertions over ten pins
+  (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
+  and the pinned constant all agree, R1), the
   command-word allowlist grep
-  plus the downloader and `git`-subcommand grep (~30),
+  plus the downloader grep, which no longer needs a `git`-subcommand assertion now that
+  `git` is off the allowlist (~30),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2195 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 six rounds ago, then 1560-2120, then 1580-2130, then
-1650-2240, then 1790-2420, then 1836-2484, and the
+Those sum to about 2265 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 seven rounds ago, then 1560-2120, then 1580-2130, then
+1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -158,12 +168,26 @@ statements in a different order. ~20 in the test: the count assertion on the mar
 and a fourth cleanup case now that a pin-check refusal happens with `.run` on disk. Nothing
 was made cheaper to compensate.
 
-This round adds ~35, in the entry and the test only. ~10 in the entry: the marker branch
+The round before this one added ~35, in the entry and the test only. ~10 in the entry:
+the marker branch
 re-running the scrub with its two alias-reset builtins. ~25 in the test: the forged
 clean-marker case, and the Darwin note with the narrowed write assertion beside it. Nothing
-moves in the C parent, because the other two findings this round settles cost no
-implementation lines — one corrects what this spec says about the Darwin toolchain's own
-cache, and the other states a residual the parent cannot close from where it stands.
+moved in the C parent, because the other two findings that round settled cost no
+implementation lines — one corrected what this spec says about the Darwin toolchain's own
+cache, and the other stated a residual the parent cannot close from where it stands.
+
+This round adds ~70, and unlike that one it moves the C parent, because both of its
+findings change what shipped code does. ~35 in the parent: the supervisor's three
+path-based reads of `child.stdout` and `child.stderr` moving onto the descriptors it
+already holds (~15), and the parent-pinned subset's blob ids being computed from an
+`fstat` size and the platform's SHA-1 tool instead of delegated to `git hash-object`
+(~20). ~20 in the entry: the same computed-blob-id construction with its `stat` size and
+its `cat` pipe (~15), and the Darwin compiler arm gaining a path, an `-isysroot` and a
+refusal when the Command Line Tools are absent (~5). ~15 in the test: the three-way
+assertion that each computed id equals both `git hash-object` and the pinned constant, and
+the Darwin `xcrun_db` before-and-after check that replaced a note. Nothing was made
+cheaper to compensate — dropping `git hash-object` costs lines rather than saving them,
+which is the honest trade for the claim it buys back.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -179,8 +203,8 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by about five times: `wc -l
-work/resolver-trusted-parent/spec.md` is 1955 lines. Accepted as one concern: one
+requests too, and this one exceeds it by about six times: `wc -l
+work/resolver-trusted-parent/spec.md` is 2245 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -189,13 +213,16 @@ the parent's host process-table reads, a single write root, a validated
 output root, loader variables tested at the boundary that can defend them, a scrubbed
 compiler environment, the scrub moving ahead of every external command, the
 scratch directories moving ahead of the pin checks, the parent's sandbox writes moving
-onto the descriptor it checked, and this round a narrowed write claim on Darwin where the
+onto the descriptor it checked, a narrowed write claim on Darwin where the
 toolchain shim writes a cache the entry cannot redirect, the `.run` swap stated as a
-residual with the same-uid assumption it needs, and the marker branch re-running the
-scrub).
-**Evidence-based range: 1662-2248 lines** — the measured 1955 lines plus or minus 15%. It was
-553 lines and 470-636 seven rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
-then 1764;
+residual with the same-uid assumption it needs, the marker branch re-running the
+scrub, and this round the parent's reads of the child's output moving onto the same
+descriptors it created, and the Darwin write claim restored unconditionally by taking
+the `xcrun` shim out of the shipped path — no `git`, and the CommandLineTools clang in
+place of `/usr/bin/cc`).
+**Evidence-based range: 1908-2582 lines** — the measured 2245 lines plus or minus 15%. It was
+553 lines and 470-636 eight rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
+then 1764, then 1955;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -264,7 +291,8 @@ count, its cleanup list going from three cases to four with the group-1 pin case
 reclassified, R3's parenthetical on `mkdirat`, and two more entries in the
 Copy-versus-adapt list.
 
-This round is +191 net over three findings that are corrections of a different kind: two
+The round before this one was +191 net over three findings that were corrections of a
+different kind: two
 of them narrow a claim this spec was making too strongly, and the third closes a door it
 had described as locked. About 65 go to the Darwin toolchain cache — R1's measured
 paragraphs on where `xcrun_db` actually lives, why the documented `xcrun_nocache` control
@@ -279,6 +307,27 @@ unsupported-form statement, the one sentence on why a nonce would be theatre, an
 forged-marker case. The remaining ~25 are ripples: Design step 2, R9's documentation line,
 the Copy-versus-adapt list, and the re-derived size figures here and for the
 implementation.
+
+This round is +290 net over two findings, both of them corrections to what the round
+just described settled. The first says the fd-relative sandbox creation was half a fix:
+the copied supervisor reads `child.stdout` and `child.stderr` back by path after the child
+exits — `empty_regular_file`, `stream_file` and `sanitized_error`, across five call sites
+— so the race the creation move closed was still open at the point where the bytes are
+trusted. About 70 go to that: R5's three new paragraphs on the path-based readers, what
+replaces them and what is fd-bound afterwards, plus Design step 1, the Copy-versus-adapt
+entry absorbing the reads into the existing deviation rather than adding a second one, and
+the parent's size line. The second says the Darwin write residual the previous round
+accepted contradicts the intent's own constraint
+(`work/resolver-trusted-parent/intent.md:36`), and that the fix is to take the `xcrun` shim
+out of the shipped path rather than to send the claim back through G1. About 180 go to
+that: R1's rewritten Darwin block with the CommandLineTools clang probe, the
+computed-blob-id construction beside it, R7's restored one-write-root claim with its two
+rewritten command lists and its two new deviation bullets, R9's Darwin prerequisite, R10's
+allowlist grep losing `/usr/bin/git` and gaining three words, R10's three-way pin
+assertion and its `xcrun_db` before-and-after check, and the platform-matrix concern
+turning a question into a prerequisite. The remaining ~40 are ripples: Design step 2,
+the `stat` deviation bullet, R10's marker list, R7's executables count, and the re-derived
+size figures here and for the implementation.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -437,10 +486,12 @@ the range above still blocks review.
 
   The entry also owns helper provenance, because the parent only ever receives a path
   (`portable-profile-resolution-launcher.c:632-636,679`). Before compiling, the entry
-  checks `git hash-object resolver/v1/nofollow-snapshot.c` and
-  `git hash-object resolver/v1/trusted-launch.c` against blob ids pinned as constants in
+  computes the git blob ids of `resolver/v1/nofollow-snapshot.c` and
+  `resolver/v1/trusted-launch.c` and compares them against blob ids pinned as constants in
   the entry, the way the runtime pins its own dependencies
-  (`scripts/lib/profile-resolution.sh:7-10,711-717`). In the same pass it pins the whole
+  (`scripts/lib/profile-resolution.sh:7-10,711-717`). It computes them rather than running
+  `git hash-object`, for a reason the Darwin toolchain paragraphs below set out: no `git`
+  runs in the shipped path at all. In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
   library it sources, the resolver jq program, and the five jq modules the core contract
   imports. Pinning the whole set is the entry's job alone; the parent later re-checks only
@@ -495,7 +546,7 @@ the range above still blocks review.
   this spec ran the pin checks under the
   `env -i … TMPDIR=<output>/.run/tmp HOME=<output>/.run/home` line quoted below and created
   `.run` only afterwards, so neither of those two directories existed when the first
-  `git hash-object` was told to use them. A `TMPDIR` or a `HOME` naming a directory that is
+  pin check was told to use them. A `TMPDIR` or a `HOME` naming a directory that is
   not there is not a refusal; it is a quiet fallback, and what the tool does instead —
   fail obscurely, or write somewhere the spec has just promised it will not — is the
   toolchain's choice rather than the entry's. So the order is fixed here, and every later
@@ -542,8 +593,44 @@ the range above still blocks review.
   accepts it, because it keeps most intermediates off disk altogether; it is not required
   and the entry must work without it.
 
+  **The blob id is computed, not asked for, so no `git` runs in the shipped path.** A git
+  blob id is a SHA-1 over a short header and the file bytes — `blob <size>\0`, then the
+  content — and nothing about it needs git to be installed. So both shipped files compute
+  it. The size comes from the platform's `stat` format in the entry (`-c '%s'` on Linux,
+  `-f '%z'` on Darwin, the same `case` that already chooses the owner-and-mode format) and
+  from `fstat` in the parent, which needs no `stat` process at all. The digest comes from
+  the platform's SHA-1 tool at a fixed path — `/usr/bin/sha1sum` on Linux,
+  `/usr/bin/shasum -a 1` on Darwin — the same pairing, and the same `case`, as the SHA-256
+  tool the jq digest already uses. The entry's construction, verbatim:
+
+  ```
+  /usr/bin/printf 'blob %d\0' "$size" | /bin/cat - "$file" | <sha1 tool>
+  ```
+
+  and the blob id is the first field of that output, taken with a bash parameter expansion
+  the way the SHA-256 digest already is. The parent does the same thing without `cat` or
+  `printf`: it has the size from its own `fstat` and writes the header and then the file
+  bytes to the tool's stdin itself.
+
+  Reading the file twice — once for its size, once for its bytes — is safe here, and the
+  reason is worth stating rather than assuming. If the two reads disagree, the computed id
+  cannot match the pinned constant, because the size is inside the hashed header. The only
+  outcome of a mid-check swap is therefore a refusal, never a pin that passes on the wrong
+  bytes. The construction fails closed.
+
+  Why compute it instead of running the tool built for it: `git hash-object` means a git
+  subprocess, and on Darwin `/usr/bin/git` is the Apple toolchain shim, which writes a
+  cache outside the caller's output path (below). Dropping git is what lets R7 keep its
+  one-write-root claim with no platform exception, and it removes the largest dependency in
+  the entry's trust base for a job that is nine bytes of header and a hash. `/usr/bin/git`
+  is therefore not a command word either shipped file contains, and R10's allowlist grep
+  enforces that. The focused test still runs git — it asserts the computed id equals
+  `git hash-object`'s answer for every pinned file, which is what keeps this construction
+  honest (R10).
+
   **The pin checks and both compiles run under an explicit, otherwise empty environment.**
-  Ignoring `$CC` is not enough. `/usr/bin/cc` reads a dozen variables the caller controls,
+  Ignoring `$CC` is not enough. Every C compiler here reads a dozen variables the caller
+  controls,
   and several of them change what actually gets compiled: `CPATH` and `C_INCLUDE_PATH` add
   include directories searched *before* the system ones, so a caller can put their own
   `stdio.h` ahead of the real one; `LIBRARY_PATH` does the same for the link; `SDKROOT`,
@@ -554,68 +641,113 @@ the range above still blocks review.
   is the same line with the other source and another `-o` name:
 
   ```
+  # Linux
   /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
     TMPDIR=<output>/.run/tmp HOME=<output>/.run/home \
     /usr/bin/cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    -o <output>/.run/trusted-launch <repo>/resolver/v1/trusted-launch.c
+
+  # Darwin
+  /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+    TMPDIR=<output>/.run/tmp HOME=<output>/.run/home \
+    /Library/Developer/CommandLineTools/usr/bin/clang \
+    -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+    -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
     -o <output>/.run/trusted-launch <repo>/resolver/v1/trusted-launch.c
   ```
 
   `-pipe` is appended to that line wherever the compiler accepts it. Four variables and no
   others: `PATH` because the compiler execs its own assembler and linker, `LC_ALL=C` so
   diagnostics are stable, `TMPDIR` so intermediates stay inside the one write root, and
-  `HOME` so nothing the toolchain does reaches the caller's real home directory. `HOME`
+  `HOME` so nothing the toolchain does reaches the caller's real home directory. `TMPDIR`
+  is not decorative: run the Darwin line above with it unset and `clang -v` shows the
+  `-cc1` stage writing its object file into the per-user temp directory, which is exactly
+  the write the entry exists to prevent. `HOME`
   needs a directory to point at, so the entry creates `<output>/.run/home` at mode 0700
-  beside `tmp`, and removes both before the mode pass. The `git hash-object` pin checks run
-  under the same line (with `/usr/bin/git` in place of the compiler), for the same reason:
+  beside `tmp`, and removes both before the mode pass. The pin checks run
+  under the same line (with the SHA-1 pipeline in place of the compiler), for the same
+  reason:
   a caller-set `HOME` or `TMPDIR` should not reach anything the entry runs.
   `/usr/bin/env` is therefore a command word the entry runs, and R7's list says so.
 
-  **Darwin's `cc` and the SDK.** `/usr/bin/cc` on Darwin is the `xcrun` shim, so the fair
-  question is whether it can still find an SDK with an empty environment. It can: with
-  `DEVELOPER_DIR` unset, `xcrun` takes the developer directory from the persistent
-  `xcode-select` setting on disk rather than from the environment, and with `SDKROOT` unset
-  it takes the active toolchain's default SDK. So the spec requires that
-  line on both platforms, with no SDK variable passed. The honest gap: CI is Linux-only (R8,
-  Areas of concern), so nothing in CI exercises that reasoning, and it is confirmed only
-  when someone runs the focused test on a Darwin machine. If a Darwin toolchain turns out to
-  need one, the fix is one named variable added to the line in the same per-platform `case`
-  — `DEVELOPER_DIR`, or `SDKROOT` — set by the entry to a value it computed itself and never
-  passed through from the caller. The plan records that as the one thing to check on the
-  first Darwin run.
+  **Darwin's compiler is the CommandLineTools clang, and no `xcrun` shim runs at all.**
+  `/usr/bin/cc` on Darwin is the `xcrun` shim, and the shim is the problem rather than the
+  SDK: before running the real tool it writes a tool-lookup cache in a place the entry
+  cannot name or redirect, which is a write outside the caller's output path and would cost
+  R7 its single-write-root claim. An earlier round of this spec accepted that as a Darwin
+  residual. It does not have to be accepted, because the shim does not have to be run. What
+  follows was measured on a Darwin 27 machine rather than argued.
 
-  **The same shim writes a cache the entry cannot redirect, and that narrows the
-  one-write-root claim on Darwin.** An earlier round of this spec said the shim's lookup
-  cache "lives under `TMPDIR`, which the line above already points inside the run
-  directory". That is wrong, and what replaces it was measured on a Darwin 27 machine
-  rather than argued. The cache is a single file, `xcrun_db`, in the *per-user temp
-  directory* — the one `confstr(_CS_DARWIN_USER_TEMP_DIR)` reports,
-  `/var/folders/<...>/T/`, mode 0600 — and the `TMPDIR` in the environment does not move
-  it: run `/usr/bin/xcrun --find <tool>` under `env -i PATH=/usr/bin:/bin TMPDIR=<scratch>`
-  for a tool name the cache did not already hold, and the file under `/var/folders` grows
-  while the scratch directory stays empty.
+  First, what the cache is, since that earlier round had it wrong twice over. It is a
+  single file, `xcrun_db`, in the *per-user temp directory* — the one
+  `confstr(_CS_DARWIN_USER_TEMP_DIR)` reports, `/var/folders/<...>/T/`, mode 0600 — and the
+  `TMPDIR` in the compile line does not move it: run `/usr/bin/xcrun --find <tool>` under
+  `env -i PATH=/usr/bin:/bin TMPDIR=<scratch>` for a tool name the cache did not already
+  hold, and the file under `/var/folders` grows while the scratch directory stays empty.
+  The documented control does not help either. `xcrun(1)` has `-n, --no-cache` with the
+  environment equivalent `xcrun_nocache`, and the environment form is the one to reach for,
+  because the manual page says the command-line options cannot be used when the shim stands
+  in for another tool — but `--no-cache` is documented as causing "the cache entry to be
+  refreshed", and that is what it does: a warm-cache compile through `/usr/bin/cc` wrote
+  nothing to `xcrun_db`, while the same compile with `xcrun_nocache=1` grew the file on
+  every run. Setting it would turn an occasional write into a guaranteed one.
 
-  Two more facts from the same probe, both load-bearing. There is a documented no-cache
-  control, and it makes things worse rather than better: `xcrun(1)` has `-n, --no-cache`
-  with the environment equivalent `xcrun_nocache`, and the environment form is the one to
-  reach for here, because the manual page says the command-line options cannot be used when
-  the shim stands in for another tool. But `--no-cache` is documented as causing "the cache
-  entry to be refreshed", and that is exactly what it does: a warm-cache compile through
-  `/usr/bin/cc` wrote nothing to `xcrun_db`, while the same compile with `xcrun_nocache=1`
-  grew that file on every run. Requiring it would turn an occasional write into a
-  guaranteed one, so the entry does not set it. And `/usr/bin/git` is not merely a similar
-  shim, it is the same one: `/usr/bin/cc`, `/usr/bin/git` and `/usr/bin/clang` are a single
-  inode with dozens of links on that machine, so the ten `git hash-object` pin checks reach
-  the same cache the two compiles do.
+  Second, and this is the way out: there is a real compiler beside the shim, and it can be
+  invoked directly.
 
-  So the claim is narrowed rather than defended. **On Darwin the Apple toolchain shim may
-  write its lookup cache under the per-user temp directory — or `/tmp`, where that is what
-  the platform reports — before the real tool runs.** That is a write outside the caller's
-  output path, in a file the entry does not name, cannot redirect and does not control; it
-  is recorded here and in R7 as a residual of the platform's toolchain instead of being
-  papered over. Linux is the proof platform for the one-write-root claim: there is no shim
-  there, `/usr/bin/cc` and `/usr/bin/git` are the real tools, and Linux CI is where R10
-  asserts the claim mechanically. The Darwin run is operator-run with the residual noted,
-  and the plan says so in these words.
+  - `/usr/bin/cc`, `/usr/bin/clang` and `/usr/bin/ld` are all one file. `ls -li` reports
+    the same inode for all three, with dozens of links, and `file` reports a universal
+    binary of three architectures. That single file is the shim, and `/usr/bin/git` is the
+    same inode again.
+  - `/Library/Developer/CommandLineTools/usr/bin/clang` is a different file and a real
+    compiler: a distinct inode, and `file` reports `Mach-O 64-bit executable arm64` — one
+    native architecture, not the shim's three.
+  - Invoked under `env -i` it compiles and links a trivial C file, and `xcrun_db` is
+    untouched across the run: same mtime, same size, same SHA-1 before and after.
+    `clang -v` shows why — it execs `/Library/Developer/CommandLineTools/usr/bin/ld`, its
+    own linker, by absolute path and at its own distinct inode, never `/usr/bin/ld`. No
+    shim appears anywhere in the process tree, so there is nothing to write the cache.
+  - One condition, and it is not optional: it needs `-isysroot`. Without it the link fails
+    with `ld: library 'System' not found`, because locating the SDK is precisely the job
+    the shim was doing. With
+    `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk` the compile succeeds
+    and the resulting binary runs.
+
+  So on Darwin the compiler is the fixed path
+  `/Library/Developer/CommandLineTools/usr/bin/clang`, and the compile line carries the
+  fixed `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`. Both are named by
+  the entry and neither is ever taken from the caller: `SDKROOT` and `DEVELOPER_DIR` are
+  still absent from the environment, and now nothing in the process tree would read them if
+  they were there. On Linux the compiler stays `/usr/bin/cc`, where it is a real compiler,
+  and there is no `-isysroot`. The compiler path and the flag join the per-platform `case`
+  beside the jq digest and the `stat` formats.
+
+  A note on the SDK path, because it is a symlink:
+  `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk` points at the versioned directory
+  the installer maintains (`MacOSX27.0.sdk` on the probed machine). The entry names the
+  stable unversioned path so the line survives a tools update, and checks it for existence
+  only. It is under `/Library` and root-owned; a caller who can write there has already
+  won, and no mode check the entry could add would change that.
+
+  **If the Command Line Tools are absent the entry refuses, and does not fall back.** When
+  `/Library/Developer/CommandLineTools/usr/bin/clang` is missing or not executable, or the
+  SDK directory is not there, the entry exits `E_RUNTIME` with a message naming the missing
+  path and saying the Command Line Tools are the prerequisite. `xcode-select --install` is
+  the documented way to get them, and installing them is the operator's job, not the
+  entry's. Falling back to `/usr/bin/cc` is the one thing that must not happen: it would
+  put the shim back in the path, and with it the write R7 no longer admits. This is a new
+  refusal reason on Darwin and a new documented prerequisite (R9).
+
+  **What this buys: the one-write-root claim holds on both platforms, with nothing
+  appended.** Taking the shim out of the compile is only half of it, because `/usr/bin/git`
+  is that same single inode — ten `git hash-object` pin checks would have reached the same
+  cache the compiles used to. That is why the blob ids are computed instead (above), and
+  why no `git` runs in the shipped path at all. With the shim gone from both jobs R7 states
+  its claim unconditionally rather than carrying a Darwin residual. Linux CI still cannot
+  exercise any of this: the Darwin compile line, the refusal when the tools are absent, and
+  the untouched cache are confirmed only when someone runs the focused test on a Darwin
+  machine. R10 asserts the untouched cache there, and the platform note and the plan both
+  say the other two are operator-confirmed.
 
   The entry then copies in the bound jq and the platform's awk, and then — only after both
   compiles have finished — empties and removes the `tmp` and `home` subdirectories and
@@ -649,7 +781,9 @@ the range above still blocks review.
   launched, not because anything is expected to be left in it. The parent needs no `HOME`
   and no `TMPDIR` of its own: it builds the resolver's environment from empty (R3), and its
   own two helper
-  commands — `git hash-object` and the SHA-256 tool — each read a named file and write to
+  commands — the platform's SHA-1 tool, which it feeds the `blob <size>\0` header and then
+  the file bytes for a blob-id pin, and the platform's SHA-256 tool, for the jq digest —
+  each write a digest to
   stdout.
 - **R2 — the launch is copied, not reinvented.** The parent `execve`s the fixed path
   `/bin/bash` with argv `{"/bin/bash", <runtime>, "resolve", <request>, <map>}`
@@ -757,16 +891,63 @@ the range above still blocks review.
   So the parent keeps the descriptor it opened with `O_DIRECTORY|O_NOFOLLOW` and did its
   `fstat` on, and creates all four entries relative to that descriptor:
   `mkdirat(dirfd, "home", 0700)` and `mkdirat(dirfd, "tmp", 0700)` in place of the two
-  `mkdir` calls, and `openat(dirfd, "child.stdout", O_WRONLY | O_CREAT | O_EXCL |
+  `mkdir` calls, and `openat(dirfd, "child.stdout", O_RDWR | O_CREAT | O_EXCL |
   O_CLOEXEC | O_NOFOLLOW, 0600)` and the same for `child.stderr` in place of the two `open`
-  calls. The names are then single components with no directory part, so there is no path
-  left to re-resolve — the object written to is the object that was checked. Two
+  calls — `O_RDWR` where the copied code has `O_WRONLY`, for the reason the paragraphs
+  after this one give. The names are then single components resolved against the checked descriptor
+  rather than against the caller's string, so the directory the four entries appear in is
+  the directory that was checked. Two
   consequences to carry into the plan: the descriptor stays open for the life of the
   supervisor, so it is passed into the copied `supervise` (`:400-532`), which is the one
   signature change this forces; and the four entries are still refusals rather than
   overwrites on collision, because `mkdirat` and `O_CREAT|O_EXCL` fail on an existing name
-  exactly as the calls they replace did. This is a named deviation from the copied source
-  and is listed under Copy versus adapt.
+  exactly as the calls they replace did.
+
+  **Creating those two files fd-relative is only half of the fix, because the copied
+  supervisor reads them back by path.** After the child exits it goes back to the two path
+  strings it built with `snprintf`, and it does so in three different places:
+  `empty_regular_file` `lstat`s the name again
+  (`portable-profile-resolution-launcher.c:112-116`, called on `stderr_path` and
+  `stdout_path` at `:505,518,522,526`); `stream_file` re-`open`s the name to copy the
+  resolved profile to the parent's stdout (`:84-86`, called as
+  `stream_file(stdout_path, STDOUT_FILENO)` at `:506`); and `sanitized_error` re-`open`s
+  the name to read the child's `E_*` line (`:118-120`, called as
+  `sanitized_error(stderr_path)` at `:518`). Every one of those is a fresh resolution of
+  `<output>/child.stdout` or `<output>/child.stderr` through a directory component the
+  parent has no claim on any more — the same race the creation move just closed, reopened
+  at the point where the bytes are actually trusted, which is the worse of the two places
+  to have it. The `O_NOFOLLOW` on those two `open` calls and the `S_ISREG` tests do not
+  help: they judge whatever object the name resolves to now, not the object the parent
+  created.
+
+  So the parent keeps the two descriptors it created with `openat(..., O_CREAT | O_EXCL |
+  O_NOFOLLOW)` and does all three jobs on those descriptors, never re-opening by name. The
+  emptiness test becomes an `fstat` on the kept descriptor — `S_ISREG` and `st_size == 0`
+  off one `struct stat`, which proves strictly more than the copied `lstat` did, since a
+  descriptor cannot be a dangling symlink. Reading the two files back becomes
+  `lseek(fd, 0, SEEK_SET)` followed by the copied `read` loop on that descriptor:
+  `stream_file` and `sanitized_error` lose their `const char *path` parameter, take an
+  `int` instead, and lose their own `open` and `close` bookkeeping with it — the supervisor
+  owns those two descriptors from `openat` to the end of the run. One consequence to carry
+  into the plan and not discover during it: the two descriptors are the write ends the
+  child inherited, opened `O_WRONLY` today and positioned at end of file, so they become
+  `O_RDWR` for the parent to read back through them at all. That is the one widening this
+  forces, and it is named here because it is a mode change on files the child also writes.
+
+  **What is fd-bound after this, stated exactly.** The parent's four sandbox creations, its
+  emptiness tests, its stdout streaming and its error-line read are all either relative to
+  or directly on descriptors it opened and checked itself, and no path string is resolved a
+  second time anywhere between the output-directory `fstat` and the end of the run. What
+  stays path-free for a different reason is the child's own writing: it writes stdout and
+  stderr through descriptors 1 and 2 that it inherited across `execve`, which is a
+  descriptor handoff already and never names a file. What remains genuinely path-bound is
+  not the parent's doing — `HOME=<output>/home` and `TMPDIR=<output>/tmp` are strings the
+  resolver resolves by name, which is the residual stated next.
+
+  The creations and the reads are one named deviation from the copied source, not two, and
+  Copy versus adapt lists them as one item: it is a single move from names to descriptors
+  applied to every place the copied supervisor touches those four entries. Splitting them
+  is how the first version of this deviation came out half-done.
 
   **Stated residual — the child still receives paths.** `HOME=<output>/home` and
   `TMPDIR=<output>/tmp` are strings in the environment the parent builds (R3), and the
@@ -820,8 +1001,8 @@ the range above still blocks review.
   So the set has two owners, and which one owns what is stated once here and used in
   those words everywhere else in this spec. **The entry pins the git blob id of every
   file in that set** — 1, 2, 3, the five modules of 8, and its own two C sources — as
-  constants carrying the same `# pinned at <commit>` header, checked with
-  `/usr/bin/git hash-object` before any compile, a mismatch being `E_RUNTIME` before the
+  constants carrying the same `# pinned at <commit>` header, checked before any compile
+  against a blob id the entry computes itself (R1), a mismatch being `E_RUNTIME` before the
   compile. **The parent
   re-pins exactly files 1, 2 and 3, and nothing else; call those three the parent-pinned
   subset.** All three are reachable from the runtime path the parent is handed, using the
@@ -843,7 +1024,8 @@ the range above still blocks review.
   that each one exists and is not a symlink. So the residual is exact: bypass the entry
   and the modules are unpinned. R10 states it in those terms rather than implying the
   parent covers the set. The focused test asserts every pinned constant equals the working
-  tree's `git hash-object` output, so an edit that forgets a pin fails CI rather than
+  tree's `git hash-object` output — the test may run git, the shipped path may not (R1) —
+  so an edit that forgets a pin fails CI rather than
   shipping.
 
   What this buys, plainly: the trusted set is explicit and finite. Go through the entry
@@ -982,18 +1164,22 @@ the range above still blocks review.
   working tree, not a cache, not a
   dotfile, not a temporary file anywhere else on the filesystem.
 
-  **One exception, on Darwin only, and it belongs to the platform rather than to the
-  entry.** There `/usr/bin/cc` and `/usr/bin/git` are one and the same `xcrun` shim, and
-  the shim may write its tool-lookup cache — a single `xcrun_db` file in the per-user temp
-  directory the platform reports, not in the `TMPDIR` the compile line sets — before the
-  real tool runs. That is measured rather than assumed, and R1 carries the probe and the
-  numbers, including that the documented `xcrun_nocache` control refreshes the file instead
-  of suppressing it, which is why the entry does not set it. So the honest claim in full:
-  the shipped path writes nothing outside the caller's output path, except that on Darwin
-  the Apple toolchain shim may touch its own lookup cache under the per-user temp directory,
-  which is outside the entry's control. Linux, where both tools are real binaries and no
-  shim runs, is the proof platform — R10 asserts the claim there — and the Darwin run is
-  operator-run with this residual noted.
+  **No exception on Darwin either, and an earlier round of this spec was wrong to allow
+  one.** That round admitted a residual: `/usr/bin/cc` and `/usr/bin/git` on Darwin are one
+  and the same `xcrun` shim, and the shim writes a tool-lookup cache — a single `xcrun_db`
+  file in the per-user temp directory the platform reports, not in the `TMPDIR` the compile
+  line sets. The cache is real and R1 carries the measurements. What was wrong was the
+  conclusion, because the intent forbids exactly this write
+  (`work/resolver-trusted-parent/intent.md:36` — no writes outside the caller's own
+  output), and a component that writes outside it does not satisfy G1 by explaining itself
+  in a paragraph. So the shim came out of the path instead of the claim being narrowed: on
+  Darwin the compiler is the CommandLineTools clang invoked directly, which execs its own
+  linker and never the shim, and the git blob ids are computed from a size and the
+  platform's SHA-1 tool so that no `git` runs at all (R1, both measured). The claim
+  therefore stands as written, on both platforms, with nothing appended to it — the shipped
+  path writes nothing outside the caller's output path. Linux CI is still where R10 asserts
+  it mechanically, and the Darwin run is still operator-run; what the operator confirms
+  there is now the claim itself rather than an exception to it.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -1029,24 +1215,41 @@ the range above still blocks review.
      also left `/usr/bin/awk` ambiguous, mentioning it as a file to copy without saying
      whether anything runs it. That correction made the count twelve; the round after it
      eleven, when the run directory became the fixed `<output>/.run` made with `/bin/mkdir`
-     and `/usr/bin/mktemp` stopped being run at all (R1); this round it is **thirteen**,
-     because the entry now runs `/usr/bin/env` — to build the explicit environment its pin
+     and `/usr/bin/mktemp` stopped being run at all (R1); then thirteen, when the entry
+     gained `/usr/bin/env` — to build the explicit environment its pin
      checks, its two compiles and the parent launch all run under — and `/usr/bin/stat`, to
-     read the output root's owner and mode before writing anything there. Every external
+     read the output root's owner and mode before writing anything there. **This round the
+     list moves in both directions**, which is a first: `/usr/bin/git` leaves it, because
+     the blob ids are computed rather than asked for; `/bin/cat` and the platform's SHA-1
+     tool join it as that computation's two new commands; and the compiler becomes a
+     per-platform pair rather than a single path, since Darwin runs
+     `/Library/Developer/CommandLineTools/usr/bin/clang` where `/usr/bin/cc` would be the
+     `xcrun` shim (R1). Counted the way R10's grep counts — one word per distinct absolute
+     path, so both compilers and all three digest tools count separately — that is
+     **sixteen command words**, and R10 lists the same sixteen, so the two can be checked
+     against each other rather than drifting. Every external
      command either file runs, with the fixed absolute path it runs it by:
 
      *The entry, `resolver/v1/resolve-profile.sh`* — `/usr/bin/uname` (`-s` and `-m`, for
-     the platform case); `/usr/bin/stat`, once, for the owner and mode of the caller's
+     the platform case); `/usr/bin/stat`, for two jobs and no others: the owner and mode of
+     the caller's
      output root (`-c '%u %a'` on Linux, `-f '%u %Lp'` on Darwin, chosen in the same `case`,
-     R1); the platform's SHA-256 tool, `/usr/bin/shasum -a 256` on Darwin
+     R1), and the byte size of each pinned file, which the blob-id header needs
+     (`-c '%s'` and `-f '%z'`, same `case`); the platform's SHA-256 tool,
+     `/usr/bin/shasum -a 256` on Darwin
      and `/usr/bin/sha256sum` on Linux, chosen in the same `case` that chooses the jq
-     digest pin; `/usr/bin/git`, for `hash-object` on the ten pinned files;
+     digest pin; the platform's SHA-1 tool, `/usr/bin/shasum -a 1` on Darwin and
+     `/usr/bin/sha1sum` on Linux, chosen in the same `case`, for the ten computed blob-id
+     pins; `/bin/cat`, which joins the `blob <size>\0` header to the file bytes on the way
+     into that tool (R1) and is run for nothing else;
      `/bin/mkdir`, for the run directory `<output>/.run` and the `tmp` and `home`
      subdirectories inside
      it; `/usr/bin/env`, which is the entry's *first* external command — it performs the
      re-exec into an empty environment — and afterwards prefixes every pin check, both
      compiles and the parent launch with `-i` and an explicit variable list (R1); the
-     compiler `/usr/bin/cc`; `/bin/cp`,
+     compiler, which is `/usr/bin/cc` on Linux and
+     `/Library/Developer/CommandLineTools/usr/bin/clang` on Darwin, where `/usr/bin/cc`
+     would be the `xcrun` shim (R1); `/bin/cp`,
      for the jq and awk copies; `/usr/bin/awk`,
      read only in order to be copied in, because the runtime needs awk on its `PATH`;
      `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
@@ -1060,8 +1263,11 @@ the range above still blocks review.
      executed from an environment the entry wrote.
 
      *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
-     argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); `/usr/bin/git`,
-     for `hash-object` on the parent-pinned subset; the same per-platform SHA-256 tool,
+     argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); the same
+     per-platform SHA-1 tool, for the computed blob ids of the parent-pinned subset — and
+     it needs neither `stat` nor `cat` for that, having the size from its own `fstat` and
+     writing the header and the bytes to the tool's stdin itself; the same per-platform
+     SHA-256 tool,
      for the jq digest; and the bound jq, for its own `--version` probe. Nothing else. The
      sandbox `home` and `tmp` directories come from `mkdirat(2)` on the descriptor the
      parent checked (R5), not from `mkdir(2)` on a path (`:645-647`) and not from
@@ -1071,13 +1277,25 @@ the range above still blocks review.
      Seven choices inside that list are named because each is a place the shipped path
      deliberately differs from the code it copies:
 
-     - **The compiler is `/usr/bin/cc`, a fixed path on both platforms, and `$CC` is not
+     - **The compiler is a fixed path chosen per platform, and `$CC` is not
        honoured.** The test script uses `${CC:-/usr/bin/cc}` on Linux and
        `${CC:-/usr/bin/clang}` on Darwin
        (`scripts/test/portable-profile-resolution.test.sh:95,102`, invoked at `:146-149`).
        A caller-chosen compiler is a caller-chosen trust base, so the entry drops the
-       override. `/usr/bin/cc` exists on both platforms, and on Darwin it is the same
-       Xcode shim as `/usr/bin/clang`. This is a named deviation from the test.
+       override — and it drops both of the test's Darwin choices with it, because
+       `/usr/bin/cc` and `/usr/bin/clang` there are a single inode and both are the `xcrun`
+       shim. Darwin runs `/Library/Developer/CommandLineTools/usr/bin/clang` with an
+       explicit `-isysroot` and refuses when the Command Line Tools are absent; Linux keeps
+       `/usr/bin/cc`, where it is a real compiler (R1). This is a named deviation from the
+       test.
+     - **No `git`, anywhere in the shipped path.** The pin checks compute the git blob id
+       themselves — `blob <size>\0` plus the file bytes, through the platform's SHA-1 tool
+       — rather than running `git hash-object` (R1). On Darwin `/usr/bin/git` is the same
+       shim inode as `/usr/bin/cc`, so keeping it would have kept the cache write this
+       requirement's claim no longer admits; on Linux it is a large dependency for nine
+       bytes of header and a hash. The focused test still runs git, to assert the computed
+       ids match `git hash-object` (R10). This is a named deviation from both the test
+       script and `shadow/v1/reproduce.sh`.
      - **The SHA-256 tool is chosen per platform, at a fixed path, and never searched
        for.** The test script's `sha256_file` searches `PATH` with `command -v sha256sum`
        (`:31-37`), which the shipped path must not do, and
@@ -1094,24 +1312,31 @@ the range above still blocks review.
        listed. A random name buys nothing in a directory the parent already requires to be
        caller-owned, mode 0700 and otherwise empty, and a fixed name is what lets the
        parent check that the run directory it was handed is that entry.
-     - **No `find`, and `stat` on exactly one path.** The 0500 pass names the four files it
+     - **No `find`, and `stat` for exactly two jobs.** The 0500 pass names the four files it
        tightens — the compiled parent, the compiled helper, the jq copy, the awk copy —
        instead of discovering them, which is the same fact as the run directory holding
        exactly those four and no subdirectory at launch (R1), so `/usr/bin/find` is neither
-       run nor listed. `/usr/bin/stat` is listed, for one job only: the owner and mode of
-       the caller's output root, read once before the entry writes anything there (R1).
+       run nor listed. `/usr/bin/stat` is listed, and the entry runs it for two things: the
+       owner and mode of the caller's output root, read once before the entry writes
+       anything there, and the byte size of each pinned file, which the blob-id header
+       needs (R1). The second one reads a path the SHA-1 tool then reads again, and that is
+       safe for the reason R1 gives — the size is inside the hashed header, so two reads
+       that disagree produce a refusal rather than a passing pin.
        Nothing else is `stat`ed by either shipped file — the parent's every mode and
        ownership check is an `fstat` on a descriptor it opened, never `/usr/bin/stat` on a
-       path it will later hand on by name.
+       path it will later hand on by name, and the parent takes its blob sizes from `fstat`
+       rather than running `stat` at all.
      - **The environment is scrubbed by builtins and re-exec'd empty before any of these
        commands runs, and every compiler invocation, every pin check and the parent launch
        still go through `/usr/bin/env -i`.** The test script and `shadow/v1/reproduce.sh`
        compile under whatever environment the caller happened to have. The entry does not,
        and the reason is two-sided: `CPATH`, `C_INCLUDE_PATH`, `LIBRARY_PATH`, `SDKROOT`,
-       `DEVELOPER_DIR` and `MACOSX_DEPLOYMENT_TARGET` steer `/usr/bin/cc` even with `$CC`
+       `DEVELOPER_DIR` and `MACOSX_DEPLOYMENT_TARGET` steer any C compiler here even with
+       `$CC`
        ignored, and `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` are acted on by the loader of
        every process here — the parent's, before its `main` is entered, and equally
-       `env`'s, `uname`'s, `stat`'s, `git`'s and `cc`'s. Both are handled the same way — by
+       `env`'s, `uname`'s, `stat`'s, `cat`'s, the SHA tools' and the compiler's. Both are
+       handled the same way — by
        naming the whole environment rather than clearing the part somebody remembered — and
        the scrub is first because an `env -i` prefix cannot protect the `env` that carries
        it (R1). This is a named deviation from the test, and the scrub and re-exec are
@@ -1189,7 +1414,10 @@ the range above still blocks review.
   (`work/portable-profile-resolution/spec.md:256-257`), and repeats what the proof does and
   does not cover. `README.md:252` gets the updated resolver row. `RESTORE.md:43-46` counts
   the resolver files correctly. The entry's documentation states the two supported
-  invocation forms and says the marker word is not a public entry point (R1). Both new
+  invocation forms, says the marker word is not a public entry point, and names the Darwin
+  prerequisite: the Command Line Tools must be installed, because the entry compiles with
+  `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
+  `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). Both new
   files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
   resolver spec itself is not edited.
 - **R10 — the focused test.** `scripts/test/resolver-trusted-launch.test.sh` provisions
@@ -1259,11 +1487,13 @@ the range above still blocks review.
   `E_RUNTIME` before any pin check, any compile and any run directory. Second the negative
   fact that makes the refusal total: those same three tuples, and no others, are the whole
   of every per-platform table in the entry — the jq digest pin (two digests, three
-  tuples), the SHA-256 tool choice, the `/usr/bin/stat` format choice (R1), the awk branch —
+  tuples), the SHA-256 tool choice, the SHA-1 tool choice, the compiler path with its
+  `-isysroot`, the two `/usr/bin/stat` format choices (R1), the awk branch —
   so an unrecognised platform has no
-  digest, no hashing tool, no `stat` format and no awk branch to fall through to even if the
+  digest, no hashing tool of either width, no compiler, no `stat` format and no awk branch
+  to fall through to even if the
   `*)` arm were deleted. Anyone reviewing the `case` should read those tables in the same
-  pass; all five must agree on the same three tuples. R8 says the same, and neither the test
+  pass; all seven must agree on the same three tuples. R8 says the same, and neither the test
   nor this
   spec claims a runtime case for it.
 
@@ -1393,13 +1623,13 @@ the range above still blocks review.
   That one line, if present, names `/bin/bash` and is the entry's own first process, the
   one the caller started, whose loader ran before the entry's first statement. Nothing after
   it may appear — not the `/bin/bash` the re-exec starts, not `/usr/bin/env`,
-  `/usr/bin/uname`, `/usr/bin/stat`, `/usr/bin/git` or `/usr/bin/cc`, not
+  `/usr/bin/uname`, `/usr/bin/stat`, `/bin/cat`, the SHA tools or the compiler, not
   `trusted-launch`, not the second `bash` running the runtime, not `jq`. Counting is what
   makes this checkable: the re-exec'd bash has the same `argv[0]` as the first one, so no
   assertion about names can tell them apart, while a second line can only mean that
   something below the first process still had a loader variable. It is also what gives the
   test its bite — under the order an earlier round of this spec used, `uname`, `stat`, the
-  ten `git hash-object` runs and both `cc` runs would each have added a line.
+  ten pin checks and both compiles would each have added a line.
   On Darwin the file may be empty instead, because the
   platform strips insertion variables for system binaries like `/bin/bash`; the assertion
   is "at most one line, and nothing below the entry's first process" either way, which
@@ -1455,13 +1685,18 @@ the range above still blocks review.
      both exit 0, their stdouts are byte-identical, the marker string appears in neither
      run's output, and the watched `TMPDIR` and `HOME` are untouched afterwards — which is
      the same fact R7's one-write-root claim makes about the compile step, asserted here
-     rather than stated. On Darwin that assertion still passes and is worth less than it
-     looks, so the case carries a note rather than a stronger claim: the toolchain shim's
-     lookup cache is not in the `TMPDIR` the test watches but in the platform's per-user
-     temp directory (R1, R7), which the test asserts nothing about because the entry cannot
-     control it. The note names Linux as the platform that proves the one-write-root claim —
-     no shim there, both tools real binaries — and records the Darwin write as a known
-     residual instead of a failure. What this half cannot do is compare the built binaries:
+     rather than stated. **On Darwin the case asserts one thing more, and it is an
+     assertion now rather than a note.** An earlier round of this spec had it carry a
+     caveat: the `xcrun` shim's lookup cache is not in the `TMPDIR` the test watches but in
+     the platform's per-user temp directory, so the watched directories could come back
+     clean while a write had happened elsewhere. The shipped path no longer runs the shim
+     (R1), which turns that caveat into something checkable — so on Darwin the test records
+     `xcrun_db`'s mtime and size in the per-user temp directory before the run and requires
+     both unchanged after it, and does the same around the pin checks, which no longer run
+     `git` either. The assertion is skipped when that file does not exist, which is itself
+     the desired state. Linux still carries the general one-write-root claim, having never
+     had a shim; Darwin now proves the specific write that used to be excused. What this
+     half cannot do is compare the built binaries:
      the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
      the binaries would be a debug mode in a security wrapper — a worse thing to ship than a
@@ -1471,7 +1706,8 @@ the range above still blocks review.
      compile line of R1 into it twice — once from a clean caller environment, once from the
      polluted one — then compares the two binaries' SHA-256 digests, which must be equal.
      They should be: both compiles use the same pinned sources, the same fixed flags, the
-     same fixed `/usr/bin/cc` and an environment that is identical by construction, and the
+     same fixed compiler path for the platform and an environment that is identical by
+     construction, and the
      only difference is the `-o` destination, which a compile without `-g` does not record
      in its output. Alongside it the test runs one control compile of the same source under
      the polluted environment *without* the `env -i` prefix, and requires that one to fail
@@ -1580,18 +1816,36 @@ the range above still blocks review.
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, the three constants of the parent-pinned
-  subset.
+  subset. **And it asserts the computed id equals `git hash-object` for every one of those
+  files.** The shipped path no longer runs git; it builds the blob id from a size and a
+  SHA-1 (R1), and the only thing keeping that construction honest is checking it against
+  the tool it replaces. So for each pinned file the test computes the id the way the entry
+  does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
+  agree — three values, not two. The test may run git freely: it is not the shipped path,
+  and the allowlist grep below covers the shipped files only.
 
   **The read allowlist is a grep, not a promise, and it covers command words only.** The
   test greps both shipped files for
-  every command word — every absolute path under `/usr/bin` or `/bin` and every bare
+  every command word — every absolute path under `/usr/bin`, `/bin` or
+  `/Library/Developer/CommandLineTools/usr/bin`, and every bare
   command name — and fails unless each one appears in R7's list: `/bin/bash`,
-  `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/usr/bin/uname`,
-  `/usr/bin/git`, `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/cc`, `/usr/bin/env`,
-  `/usr/bin/stat`, and the platform pair
-  `/usr/bin/shasum` and `/usr/bin/sha256sum` — thirteen command words. `/usr/bin/env` and
-  `/usr/bin/stat` join the list this round (the explicit compile and launch environment, and
-  the output-root owner and mode check, R1); `/usr/bin/mktemp` left it the round before,
+  `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/bin/cat`, `/usr/bin/uname`,
+  `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/env`,
+  `/usr/bin/stat`, the compiler pair `/usr/bin/cc` and
+  `/Library/Developer/CommandLineTools/usr/bin/clang`, and the three digest tools
+  `/usr/bin/shasum`, `/usr/bin/sha256sum` and `/usr/bin/sha1sum` — sixteen command words.
+  Three changes this round, all from the same two findings. `/usr/bin/git` **leaves the
+  list**, because the shipped path computes blob ids instead of running `git hash-object`.
+  The Darwin compiler joins it as
+  `/Library/Developer/CommandLineTools/usr/bin/clang`, which is also the first time the
+  grep has to look outside `/usr/bin` and `/bin` — the plan should not miss that, since a
+  grep that only knows those two prefixes would silently pass a shipped file that had
+  grown a third one. And `/bin/cat` and `/usr/bin/sha1sum` join as the blob-id
+  construction's two new tools (R1).
+  `/usr/bin/env` and
+  `/usr/bin/stat` joined the round before (the explicit compile and launch environment, and
+  the output-root owner and mode check, R1); `/usr/bin/mktemp` left it the round before
+  that,
   when the run directory became `<output>/.run`, and `/usr/bin/find` was never on it.
   Anything else — a new tool, a bare name that
   would be resolved through `PATH`, a `${CC:-…}` style override — fails CI, which is what
@@ -1599,10 +1853,13 @@ the range above still blocks review.
   What it cannot make an invariant is the third read claim in R7: the supervisor's
   process-table reads are `opendir`, `fopen`, `proc_listallpids` and `proc_pidinfo`, not
   command words, so no grep sees them and they rest on code review of the copied block.
-  The downloader grep that was already here stays alongside it, because the allowlist
-  cannot replace all of it: `curl`, `wget` and `nc` would fail the allowlist as
-  unlisted commands, but `/usr/bin/git` is on the list, so `git fetch` and `git clone`
-  need their own assertion that no subcommand other than `hash-object` appears. The test
+  The downloader grep that was already here gets simpler rather than staying alongside it.
+  It existed because `/usr/bin/git` was on the allowlist: `curl`, `wget` and `nc` failed
+  the allowlist as unlisted commands, but `git fetch` and `git clone` needed their own
+  assertion that no subcommand other than `hash-object` appeared. With git off the list
+  entirely, `git` fails the allowlist exactly as the three downloaders do, and the
+  subcommand assertion goes away — one fewer invariant to keep true by hand, and a
+  stronger claim than the one it replaces. The test
   is shellcheck-clean,
   leaves the schema guard at zero failures, and passes
   `scripts/test/v2-check-rename.test.sh`.
@@ -1630,7 +1887,14 @@ Order, each step checkable before the next:
    output-directory descriptor the check opened, in place of the copied `mkdir` at
    `:645-647` and `open` at `:413-421`, which build them by path (R5). That descriptor is
    passed into the copied `supervise` (`:400-532`) and stays open for its life, which is
-   the one signature change the deviation forces. Two blocks here have no counterpart in the
+   the one signature change the deviation forces. The same move applies to the
+   supervisor's reads back: `empty_regular_file` becomes an `fstat` on the kept
+   `child.stdout` or `child.stderr` descriptor rather than an `lstat` on the path
+   (`:112-116`, called at `:505,518,522,526`), and `stream_file` (`:84-86`, called at
+   `:506`) and `sanitized_error` (`:118-120`, called at `:518`) take an `int` descriptor in
+   place of their `const char *path`, `lseek` it to zero and keep the copied `read` loop,
+   losing their own `open`/`close` bookkeeping; the two descriptors are opened `O_RDWR`
+   rather than `O_WRONLY` so the parent can read back through them (R5). Two blocks here have no counterpart in the
    copied source and are written fresh: the blob-id pins for the three loaded files the
    parent re-checks (the runtime, `scripts/lib/profile-resolution.sh` and
    `resolver/v1/profile-resolution.jq`, all located from the runtime path with the
@@ -1669,9 +1933,10 @@ Order, each step checkable before the next:
    what terminates the resolver's process group — R2);
    **then the pin check** — verify the jq passed as an argument
    against this
-   platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify with
-   `git hash-object` the blob ids of both C sources and of the eight loaded files R5 lists
-   as entry-pinned, against the pinned constants, the way the
+   platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify the blob
+   ids of both C sources and of the eight loaded files R5 lists
+   as entry-pinned against the pinned constants, each id computed from the file's `stat`
+   size and the platform's SHA-1 tool rather than by running `git hash-object` (R1), the way the
    runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`), every
    one of those commands run under the `env -i` line R1 quotes, which is why this step
    comes after the run directory and not before it: that line points `TMPDIR` and `HOME`
@@ -1679,8 +1944,12 @@ Order, each step checkable before the next:
    here is cleaned up by the trap installed above, which R10 asserts;
    **compile** — both C files from those pinned sources into the run directory with the
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
-   (`portable-profile-resolution.test.sh:146-149`), invoking the fixed `/usr/bin/cc` on
-   both platforms rather than the test's `${CC:-…}` (`:95,102`; R7), each compile run under
+   (`portable-profile-resolution.test.sh:146-149`), invoking the platform's fixed compiler
+   rather than the test's `${CC:-…}` (`:95,102`; R7) — `/usr/bin/cc` on Linux, and on
+   Darwin `/Library/Developer/CommandLineTools/usr/bin/clang` with the fixed
+   `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, refusing `E_RUNTIME`
+   when the Command Line Tools are absent rather than falling back to the `xcrun` shim at
+   `/usr/bin/cc` (R1) — each compile run under
    the `env -i` line quoted verbatim in R1 — `PATH`, `LC_ALL`, `TMPDIR=<output>/.run/tmp`,
    `HOME=<output>/.run/home` and nothing else — with an `-o` path inside the run directory,
    plus `-pipe` where
@@ -1887,7 +2156,7 @@ intent says for this change. Only after the operator's merge does
   of it (see the size derivation above). Copying the supervisor verbatim keeps the proven
   behaviour but carries code written for a test harness; adapting risks a subtle
   divergence in exactly the code that enforces the limits. The plan should list every
-  deviation line by line. Seven are already known in the parent: the mode-0644 check moves
+  deviation line by line. Eight are already known in the parent: the mode-0644 check moves
   from the test
   into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
@@ -1897,27 +2166,43 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2); and — this round's only change to
-  the C file — the four sandbox entries `home`, `tmp`, `child.stdout` and `child.stderr`
+  handlers with process-group termination are new (R2); the four sandbox entries `home`,
+  `tmp`, `child.stdout` and `child.stderr`
   are created with `mkdirat` and `openat` relative to the output-directory descriptor the
   parent checked, where the launcher builds all four by path with `mkdir` (`:645-647`) and
   `open` (`:413-421`), which carries the descriptor into `supervise` (`:400-532`) as a
-  signature change (R5). Seven more
+  signature change — *and*, extending that same deviation this round, the supervisor's
+  reads back move onto those descriptors too: `empty_regular_file` becomes an `fstat`,
+  `stream_file` and `sanitized_error` take a descriptor in place of a path and gain an
+  `lseek`, and the two files are opened `O_RDWR` instead of `O_WRONLY`, where the launcher
+  re-opens both by path at `:505-506,518,522,526` (R5). That counts as one item on purpose:
+  it is a single move from names to descriptors, and splitting the creations from the reads
+  is how it came out half-done the first time. The eighth is this round's other change to
+  the C file — the parent-pinned subset's blob ids are computed from an `fstat` size and
+  the platform's SHA-1 tool, where nothing in the launcher pins anything and the obvious
+  shortcut would have been `git hash-object` (R1, R7). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
-  (`portable-profile-resolution.test.sh:130-143`); the compiler is the fixed
-  `/usr/bin/cc` on both platforms with no `$CC` override, where the test honours
-  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) — a caller-chosen compiler
-  would be a caller-chosen trust base (R7); and the run directory is the fixed
+  (`portable-profile-resolution.test.sh:130-143`); the compiler is a fixed path chosen per
+  platform with no `$CC` override — `/usr/bin/cc` on Linux, and on Darwin
+  `/Library/Developer/CommandLineTools/usr/bin/clang` with an explicit `-isysroot` — where
+  the test honours
+  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) and both of those Darwin
+  paths are the `xcrun` shim, because a caller-chosen compiler
+  would be a caller-chosen trust base and a shim writes outside the output root (R1, R7);
+  no `git` runs at all, the ten blob-id pins being computed from a `stat` size and the
+  platform's SHA-1 tool where the test and `reproduce.sh` would reach for
+  `git hash-object` (R1); and the run directory is the fixed
   `<output>/.run` inside the caller's output directory, where the test script and
   `shadow/v1/reproduce.sh:94-142` both use `mktemp -d` under the caller's `TMPDIR`, which
-  would be a second write root (R1, R7). Three were the previous round's: the pin checks,
+  would be a second write root (R1, R7). Three are older: the pin checks,
   both compiles and the parent launch run under `/usr/bin/env -i` with a named variable
   list, where the test and `reproduce.sh` run all of it under whatever the caller had; the
   output root is validated — real directory, caller-owned, mode 0700, empty — before
   anything is written into it, where the test script leaves those facts to the launcher; and
-  `/usr/bin/stat` is run once for the owner and mode of that directory, a command neither
-  copied file runs. The seventh is this round's, and it is the one item in this whole list
+  `/usr/bin/stat` is run for the owner and mode of that directory and for the pinned
+  files' sizes, a command neither
+  copied file runs. The eighth is the one item in this whole list
   that is a copy rather than new code — just from a third file: the entry opens with the
   builtins-only environment scrub and the empty-environment re-exec taken from
   `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`, deviating from *those*
@@ -1933,17 +2218,22 @@ intent says for this change. Only after the operator's merge does
   machine, because the entry reads `/usr/bin/uname` at a fixed path and nothing a test can
   set changes the answer. R10 makes that a code-review item rather than adding a test-only
   platform override to the security wrapper, and the plan should treat the `case` and the
-  per-platform tables (jq digests, SHA-256 tool, `/usr/bin/stat` format, awk branch) as one
+  per-platform tables (jq digests, SHA-256 tool, SHA-1 tool, compiler path with its
+  `-isysroot`, the two `/usr/bin/stat` formats, awk branch) as one
   thing to read
-  together: all five must agree on the same three tuples. The Darwin-only question one round
-  added to that list is whether `/usr/bin/cc` finds its SDK under the `env -i` compile
-  line (R1); Linux CI cannot answer it. This round adds a Darwin fact rather than a
-  question, and it is settled rather than open: `/usr/bin/cc` and `/usr/bin/git` there are
-  one `xcrun` shim, and the shim writes its lookup cache in the platform's per-user temp
-  directory, which no environment variable the entry sets redirects and the documented
-  `xcrun_nocache` control makes more frequent rather than stopping. R1 has the measurements
-  and R7 carries the narrowed write claim; Linux is where that claim is proved, and the
-  Darwin run is operator-run with the residual noted.
+  together: all seven must agree on the same three tuples. Two of those tables are this
+  round's, and they are why the Darwin question earlier rounds carried is now closed rather
+  than open. That question was first whether `/usr/bin/cc` could find its SDK under the
+  `env -i` compile line, and then whether the `xcrun` shim's cache write could be prevented
+  at all. The answer to both is that the shim is not run: Darwin compiles with
+  `/Library/Developer/CommandLineTools/usr/bin/clang` and an explicit `-isysroot`, which
+  execs its own linker and leaves `xcrun_db` untouched, and no `git` runs anywhere in the
+  shipped path (R1, both measured on a Darwin 27 machine). What replaces the question is a
+  prerequisite and a refusal: Darwin needs the Command Line Tools installed, and the entry
+  exits `E_RUNTIME` naming the missing path when they are not. Linux CI cannot exercise any
+  of that — not the Darwin compile line, not the refusal, not the untouched cache — so
+  those three are confirmed only on an operator's Darwin run. That is the honest gap this
+  concern now carries, in place of the write residual it used to.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
   (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
