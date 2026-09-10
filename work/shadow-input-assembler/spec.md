@@ -60,8 +60,12 @@ requirement 17's marker-branch alias reset is two lines, requirement 18's
 The revision after it adds about ten more of the same kind: requirement 10's
 `time_ok` run on the timestamp argument is one jq call and its refusal,
 requirement 18's trap gains a guard and a fixed order, and the three
-assertions that prove those two are the rest. The range above still covers
-both.
+assertions that prove those two are the rest. The revision after that adds
+about ten more again: requirement 18's outputs are now staged under
+`run_root/stage/` and committed by `mv`, which is a `stage/` `mkdir`, a
+`.tmp`-and-`mv` per write, the commit loop with its recorded list, and the
+source-order assertions that prove the order. The range above still covers
+all of them.
 
 The exception waives only the soft line signal. It does not widen scope beyond
 the one concern, and it does not relax readability, tests, CI, review, the
@@ -77,13 +81,14 @@ budget of ~300-400 net lines applies to this spec PR as well, not only to the
 implementation it describes, and this file is far over that budget, so the
 overrun is recorded here rather than left unexplained. One concern: one
 component spec for an input assembler that carries security controls, whose
-twelve review rounds each added a verified requirement (protocol-valid
+thirteen review rounds each added a verified requirement (protocol-valid
 inertness, byte-pinned default profile, hash algorithm, full repository-level
 source guards, clean entry, working-tree proofs, the alias reset, the
 `run_root` trap and the order it is installed in, the core's own timestamp
-rule, and the `high` risk class those controls require).
-Evidence-based range: 1395 lines measured — the
-count is self-inclusive, the length of this file as committed — so 1186-1604
+rule, staged outputs committed by rename, and the `high` risk class those
+controls require).
+Evidence-based range: 1500 lines measured — the
+count is self-inclusive, the length of this file as committed — so 1275-1725
 net lines at that measurement +/-15%. This exception waives only the soft line
 signal for this artifact PR. It does not widen scope beyond the one concern,
 and it does not relax readability, review, CI, or operator merge. No content
@@ -216,8 +221,9 @@ lose the verified detail the rounds added.
    arguments, and the test proves they still are.
    The core also requires caller-owned scope refs — `finish-condition`,
    `verification-instructions`, `output-contract`, and `policy` — so the
-   assembler writes each of those fixed decision-record texts into the output
-   directory and records its real SHA-256, with `scope_sha256` equal to
+   assembler produces each of those fixed decision-record texts as an output
+   — staged and committed the way requirement 18 fixes, like every other
+   output — and records its real SHA-256, with `scope_sha256` equal to
    `decision_record_ref.sha256` (the convention `evals/v1/framework.jq:36`
    already uses). `selection_ref` and `repository_context_ref` are copied
    unchanged from the resolved profile, because
@@ -428,7 +434,8 @@ lose the verified detail the rounds added.
     revision adds two more: the alias reset on the marker branch, and the
     `run_root` cleanup requirement 18 now guarantees. The revision after it
     adds the timestamp rule of requirement 10 and the source order of
-    requirement 18's trap.
+    requirement 18's trap, and the one after that adds the staged writes and
+    the commit-by-`rename` order requirement 18 now fixes.
 
     **The copy is a copy, and
     it is compared against the working tree.** The test extracts the copied
@@ -563,6 +570,26 @@ lose the verified detail the rounds added.
     is a source-order assertion, not a runtime one, and it is named as such —
     it catches the ordering being undone by a later edit, which is the
     realistic way this regresses.
+
+    **A refusal after staging leaves the output directory empty too, and this
+    one is proved in the source as well.** There is no seam to inject a
+    failure between the staging step and the commit step: every check runs
+    before the first `mv`, so making one fail after staging would need a
+    test-only hook in the assembler, and this spec does not add one — a hook
+    that exists only for the test is a second entry into the script, which
+    requirement 17 spends its whole length narrowing. So the test asserts
+    the ordering where it is written. In
+    `shadow/v1/assemble-materialization-input.sh`: every `mv` whose
+    destination is the output directory appears on a later line than the last
+    check, `validate-input` on the staged `input.json` included; the `mv` of
+    `input.json` is the last of those `mv`s; and each of them is followed by
+    the line that appends its destination to the trap's list. The runtime
+    half is the `hooks/` case just above, which also asserts that nothing
+    from the staging step reached the output directory — a refusal that fires
+    before the commit step leaves it empty, staged files and all. What no
+    assertion here covers is a `KILL` or a power loss part-way through the
+    commit step; requirement 18 names that as the one residual, and naming it
+    is all the test can do about it.
 
     **Shellcheck.** `shellcheck -x -S style` at the pinned 0.11.0 passes on
     both new shell files, with no new `shellcheck disable` directive in
@@ -709,7 +736,11 @@ lose the verified detail the rounds added.
       directory, which is exactly what `run_root` needs to be. The copied
       lines write only `source-filesystem`, `source-config.snapshot`,
       `source-config` and — from the second span — `packed-refs` there, and
-      delete the first themselves.
+      delete the first themselves. The assembler's own `stage/` subdirectory
+      lives there too, holding each finished output until requirement 18's
+      commit step moves it out; being under `run_root` is what makes that
+      move a same-filesystem `rename(2)`, and what makes an abandoned staging
+      step disappear with everything else the trap removes.
     - `git_env` and `git_dir` — the assembler's own protective environment,
       which also carries the materializer's hook pin
       (`materialize.sh:265-269`: `GIT_CONFIG_COUNT=1`,
@@ -993,27 +1024,75 @@ lose the verified detail the rounds added.
     ahead of the `rm -rf` — so a trap that fires before the `mkdir` has run,
     or after the directory is already gone, does nothing rather than
     complaining about a path that is not there. `INT`, `TERM` and `HUP` are
-    trapped alongside `EXIT`: each removes `run_root`, resets its own trap to
+    trapped alongside `EXIT`: each removes `run_root` — and, if the commit
+    step below has begun, the paths it has already moved — resets its own
+    trap to
     default, and re-raises the signal, so the assembler dies of the signal it
     was sent with the right exit status rather than swallowing it, and the
     `EXIT` trap does not run twice on a directory that is already gone.
 
-    The guarantee to the caller is one sentence: the output directory ends up
-    either empty, exactly as it was supplied, or holding only the documents
-    requirements 6, 8 and 9 name — and the two limits below are the only ways
-    out of those two states. Requirement 13 proves it on a refusal that fires
-    after `run_root` exists, proves the retry that follows works, and asserts
-    the trap-before-`mkdir` order where that order is written, in the source.
+    **The outputs are staged, then committed.** An earlier revision said the
+    trap covers `run_root` only, and that every *check* runs before the
+    writes, so no refusal could leave a half-written output. That was true of
+    refusals and false of everything else. The writes went straight into the
+    output directory, one file at a time, so a signal arriving mid-write — or
+    a write that failed part-way through for a reason no check covers, a full
+    disk — left a truncated `input.json`, or a subset of the documents, sitting
+    there. The trap removed `run_root` and nothing else, so those bytes
+    stayed, the directory was no longer empty, and the caller's retry came
+    back `E_WORKSPACE`. That is the same hole this requirement exists to
+    close, reached through the writes instead of through the scratch
+    directory, and it contradicted the retry guarantee above.
 
-    Two limits, named rather than implied. A `KILL`, a power loss, or a full
-    disk mid-`rm` can still leave `run_root` behind; no trap covers those, and
-    the caller's remedy is to empty the directory or supply another one.
-    And the trap covers `run_root` only — the documents written on the success
-    path are outputs, not scratch, and are not removed. Every *check* runs
-    before the writes, which are the last step, so no refusal this spec names
-    can leave a half-written output beside `run_root`; a write that fails
-    part-way through for a reason outside the checks, a full disk again, is
-    the same named limit and not a refusal.
+    So the writes happen in two steps. **Stage.** Every output — `input.json`,
+    the two `pair_ref` documents of requirement 9, and the four
+    decision-record texts of requirement 6 — is written under
+    `run_root/stage/` first, each one as `> <name>.tmp && mv <name>.tmp
+    <name>` within that directory, which is as near to a flush-then-rename as
+    bash gets without a helper binary. Nothing is written into the output
+    directory while any output is still being produced. **Commit.** Only
+    after every output is complete and requirement 8's `validate-input`
+    self-check has passed on the staged `input.json` is anything moved: each
+    staged file is `mv`d into the output directory, one at a time. `run_root`
+    is inside the output directory (requirement 15), so `run_root/stage/` and
+    the output directory are on the same filesystem and each `mv` is a
+    `rename(2)` — a destination name that either is not there yet or names
+    the whole file, never a partial one.
+
+    One `mv` per output is not one atomic step for the set, and this spec says
+    so rather than implying a guarantee the shell cannot give. Two things
+    shrink the residual. The commit step moves `input.json` **last**, because
+    that is the document the driver consumes: until it appears, the output
+    directory holds companion documents and no input, which a caller can see
+    for what it is instead of a broken input the driver would try to read.
+    And the commit step is inside the trap's reach: each `mv` that succeeds
+    appends its destination path to a list the shell holds, and the trap — on
+    a refusal, on `INT`, `TERM` or `HUP`, and on any non-zero exit during the
+    commit step — removes every path on that list before it removes
+    `run_root`. A commit step that fails half-way therefore ends with the
+    output directory empty, exactly as a refusal before it would.
+
+    The guarantee to the caller, stated precisely. Any refusal, and any
+    trapped signal, **before** the commit step leaves the output directory
+    exactly as it was supplied — empty. A failure **during** the commit step
+    is cleaned by the trap from the recorded list, so it leaves the output
+    directory empty too. A run that reaches the end of the commit step leaves
+    exactly the documents requirements 6, 8 and 9 name and nothing else.
+    Requirement 13 proves the pre-commit case on a refusal that fires after
+    `run_root` exists, proves the retry that follows works, and asserts the
+    trap-before-`mkdir` order and the checks-before-`mv` order where those
+    orders are written, in the source.
+
+    The limits, named rather than implied. A `KILL`, a power loss, or a full
+    disk mid-`rm` can still leave `run_root` behind, on any path out; no trap
+    covers those, and the caller's remedy is to empty the directory or supply
+    another one. A `KILL` or a power loss **during the commit step** is the
+    one case that can leave a partial set of outputs in the directory: with
+    the shell gone there is nothing left to run the trap or read the list.
+    Because `input.json` moves last, a partial set is one missing the input
+    rather than one holding a broken input, and the remedy is the same. No
+    signal the trap can catch, and no failure of a check or of a write,
+    reaches that state.
 
 ## Design
 
@@ -1077,12 +1156,20 @@ Files, in the order they are written:
      to the jq program. Nothing here re-reads the commit's tree to inspect
      its content: that check is the materializer's, by the boundary
      requirement 15 states.
-   - The size check, then the writes: `input.json`, `stage-request-ref.json`,
-     `resolved-profile-ref.json`, and the decision-record texts. There is no
-     removal step here: the `EXIT` trap installed before the `mkdir` takes
-     `run_root` away on this path and on every refusal path alike, so the
-     output directory holds only those documents — or, if the run refused,
-     nothing at all.
+   - The size check, then the writes, in the two steps requirement 18 fixes.
+     **Stage:** `input.json`, `stage-request-ref.json`,
+     `resolved-profile-ref.json` and the four decision-record texts are
+     written under `run_root/stage/`, each through `> <name>.tmp && mv
+     <name>.tmp <name>` inside that directory, and then requirement 8's
+     `validate-input` self-check runs on the staged `input.json`. Nothing has
+     touched the output directory yet. **Commit:** each staged file is `mv`d
+     into the output directory — same filesystem, so a `rename(2)` — with
+     `input.json` moved last, and each destination appended to a list as it
+     lands. There is no removal step here: the trap installed before the
+     `mkdir` takes `run_root` away on this path and on every refusal path
+     alike, and on a failure during the commit step it removes the listed
+     destinations before it does, so the output directory ends up holding
+     either all of those documents or nothing at all.
 
    The copied text is the largest single block in the file — about 90 lines of
    predicate plus its header, the four name bindings and the subshell wrapper,
@@ -1315,11 +1402,29 @@ change of process and not just a change of label.
   directory is created, not at creation, because `trap` and `mkdir` are two
   commands and a signal between them would leave exactly the leftover the
   trap exists to prevent. Requirement 13
-  proves the retry. What the trap cannot cover is a `KILL`, a power loss, or a
-  failure part-way through the removal itself; in those cases the directory
-  keeps a `run_root` and the caller empties it or supplies another. That is a
-  smaller and much more visible failure than the one it replaces, and naming
-  it is better than implying the guarantee is absolute.
+  proves the retry.
+
+  The trap alone was not enough, because the outputs were not scratch. An
+  earlier revision let the final writes go straight into the output
+  directory and argued that every check ran before them, so no refusal could
+  leave a half-written file. True of refusals, and beside the point: a signal
+  arriving mid-write, or a write that failed for a reason no check covers,
+  left a truncated `input.json` or a subset of the documents in a directory
+  the trap does not clean, and the caller's retry came back `E_WORKSPACE` —
+  the very failure the trap was added to remove. Requirement 18 now stages
+  every output under `run_root/stage/` and commits the set by `mv` into the
+  output directory only after all of it is written and self-checked, so the
+  bytes the caller can see are always whole ones. What the shell cannot give
+  is atomicity for the set: the commit step is one `rename(2)` per document,
+  so it is ordered with `input.json` last and the trap removes the
+  already-moved files from a list it keeps, which covers every refusal and
+  every catchable signal. What nothing covers is a `KILL`, a power loss, or a
+  failure part-way through a removal: before the commit step that leaves a
+  `run_root` behind, during it a set of companion documents with no
+  `input.json`. In both cases the caller empties the directory or supplies
+  another. Those are smaller and much more visible failures than the ones
+  they replace, and naming them is better than implying the guarantee is
+  absolute.
 - **The copy header records provenance; the test proves currency.** These are
   two different jobs and an earlier revision conflated them, which is how it
   ended up asserting the copy against a commit CI cannot read (a
