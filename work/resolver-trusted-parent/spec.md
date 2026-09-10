@@ -1,5 +1,5 @@
 ---
-intent-blob: 0fd28feb8f1de6ce71ccb90e2fce69056ec2ab32
+intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f
 risk: high
 drafted: 2026-09-09
 ---
@@ -90,9 +90,13 @@ measured rather than guessed:
   (the parent keeps running, so it cannot leave them), and its `write_all` becomes a single
   unchecked `write(2)`. Moving it out of the blocked-signal region to after the
   `sigprocmask(SIG_SETMASK, …)` costs nothing, being the same statements in a different
-  order (R2). This round adds nothing here and the figure stays at **~1097**: both of its
-  findings are outside the C parent — the entry's signal design, and this artifact pull
-  request's own size record.
+  order (R2). The round before this one added nothing here and the figure stayed at ~1097:
+  both of its
+  findings were outside the C parent — the entry's signal design, and this artifact pull
+  request's own size record. This round adds ~2 more, to **~1099**: the `umask(077)` call
+  among the first statements of `main`, which the copied launcher does not have, so the
+  `home` and `tmp` the parent creates are 0700 and its two capture files 0600 whatever
+  umask the caller left behind (R5).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -147,8 +151,11 @@ measured rather than guessed:
   function and its calls after the `mkdir`, after each pin check, after each compile and
   after the copies, the `[ -e ]` pre-check, the three-case status test on the `mkdir`, and
   the forward-then-wait moving out of a trap body and into the main flow around the `wait`
-  come to about ten lines more than what came out (R1).
-- **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
+  come to about ten lines more than what came out (R1). This round adds ~2 more, to
+  **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there and
+  copied from the same file (`materialize.sh:31`), plus the comment that says why a scrub
+  of variables does not cover a process attribute (R1).
+- **Focused test ~895 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -175,7 +182,10 @@ measured rather than guessed:
   the `parent-signal: TERM no-runtime` line and a surviving sentinel in the test's own
   process group, and retries a bounded twenty times (~35) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
-  directory rather than one emptiness test), the pin-constant assertions over ten pins
+  directory rather than one emptiness test), the two-umask case (~15 — a `umask 000` run
+  and a `umask 777` run, the background poll that reads `.run`, `tmp` and `home` while
+  `home` exists, its bounded retry, and the `umask 000` direct-parent invocation that reads
+  the parent's four sandbox modes), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
   and the pinned constant all agree, R1), the
   command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
@@ -303,8 +313,9 @@ branches, and the `mkdir` written as one command with its assignment and its emp
 refusal (R1). Nothing in the test, and that is a claim rather than an omission: the
 fork-and-publish window and the trap-arming order are both proved by reading, for the
 reasons R10 states in each place, and inventing a case that lands in neither window would
-pass by missing it. The round's other finding is the DR-2 decision, which is pending with
-the operator rather than settled here and adds nothing anywhere until it is answered.
+pass by missing it. The round's other finding was the DR-2 decision, which was the
+operator's to make rather than that round's to settle and added nothing anywhere until it
+was answered.
 Nothing was made cheaper to compensate.
 
 The round before this one added ~5, all of it in the parent, and both of its fixes were
@@ -317,7 +328,7 @@ whose three signal cases keep every assertion they had — the lines are still w
 later — which is checked case by case in R10 rather than asserted in passing. The child's
 `SIG_DFL`-before-unblock order costs nothing either: it is the same two calls in the
 opposite order, plus `SIGPIPE` joining the resets it already performs. The round's third
-finding was DR-2, still pending with the operator. Nothing was made cheaper to compensate.
+finding was DR-2, then still open with the operator. Nothing was made cheaper to compensate.
 
 The round before this one added ~2, all of it in the parent, and it finished the fix its
 own
@@ -330,10 +341,11 @@ fix there was to a sentence in R2 that summarised the forwarded branch in the wr
 order, and R1, which owns the branch, already stated the right one, so no shipped statement
 moved. Nothing in the test either, and that was checked rather than assumed: the one case
 that reads the line reads it from a plain file, where a non-blocking write can neither block
-nor fail, so it keeps every assertion it had (R10). That round's third finding is DR-2,
-still pending with the operator.
+nor fail, so it keeps every assertion it had (R10). That round's third finding was DR-2,
+then still open with the operator.
 
-This round adds ~10, all of it in the entry, from one of its two findings; the other costs
+The round before this one added ~10, all of it in the entry, from one of its two findings;
+the other cost
 no implementation
 lines at all. ~10 in the entry: the signal path is redesigned so the three
 `INT`/`TERM`/`HUP` traps only record the signal's name and the main flow acts on it at
@@ -348,12 +360,29 @@ after `mkdir` has created `.run` and before `printf` writes the `1`, leaving the
 on disk with the cleanup disarmed. Nothing in the C parent, which the finding does not
 touch, and nothing in the test either, and that is checked case by case rather than assumed
 — all three signal cases keep every assertion they had, because nothing observable changes
-(R10). The second finding is this artifact pull request's own size record, which is a
-statement about this document and changes no shipped file. The sum of the four bullets is
+(R10). The second finding was this artifact pull request's own size record, which is a
+statement about this document and changes no shipped file. The sum of the four bullets was
 ~2432 against the ~2420 the range is derived from, which is inside the rounding rather than
-a new figure, so the implementation range is unchanged. The round's third finding is DR-2,
-still pending with the operator; this round does not touch it. Nothing was made cheaper to
+a new figure, so the implementation range was unchanged. That round's third finding was DR-2,
+then still open with the operator; it did not touch it. Nothing was made cheaper to
 compensate.
+
+This round adds ~19, and for once it touches all three files from a single finding. ~2 in
+the C parent: `umask(077)` among the first statements of `main`, so the `mkdirat` and
+`openat` modes the parent asks for are the modes that appear on its four sandbox entries
+(R5). ~2 in the entry: `umask 077` in the marker branch beside the scrub it already re-runs
+there, copied from `materialize.sh:31`, because a scrub that resets variables, functions
+and aliases does not reset a process attribute and neither does an `env -i` re-exec (R1).
+~15 in the test: the two-umask case — the entry run under `umask 000` and the one under
+`umask 777`, the background poll that reads `.run`, `tmp` and `home` while `home` still
+exists, the bounded retry that poll needs, and the direct-parent invocation under
+`umask 000` that reads the parent's own four modes (R10). The round's other finding costs
+no implementation lines at all, in the way the Darwin residual never has: DR-2 was decided
+by the operator on 2026-09-10 and carried into the chain by intent pull request `#282`, so
+what changes is the intent this spec pins and the way R7 and the residual bullet describe
+the deviation — not what any shipped file does. The sum of the four bullets is ~2451
+against the ~2420 the range is derived from, which is inside the rounding rather than a new
+figure, so the implementation range is unchanged. Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -369,8 +398,8 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by about nine times: `wc -l
-work/resolver-trusted-parent/spec.md` is 3642 lines. Accepted as one concern — the
+requests too, and this one exceeds it by about ten times: `wc -l
+work/resolver-trusted-parent/spec.md` is 3866 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -395,7 +424,7 @@ pre-parent trap branch made observable on the entry's own stderr so its
 test asserts the branch instead of an empty directory, with the deferral rule that keeps
 its removal off a live child stated correctly for the first time, the
 Darwin write claim narrowed to the one residual that belongs to the unchanged runtime's
-own `git`, with DR-2 pending on it, beside the parent's signal handler specified for the
+own `git`, with DR-2 raised on it, beside the parent's signal handler specified for the
 window before a runtime process group exists, the three signals blocked
 across every fork the parent performs and its publication, so no handler can run in the
 instant when a child exists and its pid does not, beside the entry's cleanup trap armed
@@ -406,17 +435,21 @@ signal diagnostics moved after the killing and the cleanup and made best-effort,
 blocked stderr cannot hold up the termination they exist to describe, and this round the
 one diagnostic still left inside a blocked-signal region — the parent's `runtime-pgid:`
 line — moved out to after the unmask and made best-effort with it, so nothing that can
-block sits anywhere a forwarded signal cannot reach the handler, and this round the entry's
+block sits anywhere a forwarded signal cannot reach the handler, the entry's
 signal traps cut down to recording the signal's name with the main flow acting at
 checkpoints, so the cleanup guard can no longer be lost to a group signal that kills the
-very command that was supposed to set it).
-**Evidence-based range for this spec pull request: 3096-4188 lines** — the measured
-3642 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+very command that was supposed to set it, and this round DR-2 answered and written into
+the intent this spec pins, so the one deviation from the write-root constraint is carried
+by the accepted artifact rather than by a spec waiting on a decision, beside a known umask
+set before anything is created, so the modes every other requirement states are the modes
+that appear whatever umask the caller left behind).
+**Evidence-based range for this spec pull request: 3286-4446 lines** — the measured
+3866 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409; where each block of
+3295, then 3409, then 3642; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -568,7 +601,7 @@ initiative adds, on both platforms, and the unchanged runtime on Linux — its D
 paragraph rewritten around the runtime's own `/usr/bin/git`
 (`scripts/lib/profile-resolution.sh:313-323` and `:711-714`) reaching the `xcrun` shim
 where the parent cannot redirect it, the deviation from
-`work/resolver-trusted-parent/intent.md:36` stated plainly with DR-2 named as pending and
+`work/resolver-trusted-parent/intent.md:36` stated plainly with DR-2 named as open and
 its two refused-case alternatives given a sentence each, R1's "what this buys" paragraph
 losing the word "unconditionally", and a new Areas-of-concern bullet for the residual
 itself. About 45 go to R10's Darwin measurement, which stops asserting an unchanged
@@ -614,9 +647,8 @@ fifth case considered and deliberately not written, with the two reasons no dete
 fixture for it exists, and cleanup case 2's order corrected. The remaining ~65 are
 ripples: the accepted-concern list at the top, the pre-parent signal case's opening
 sentence, and the re-derived size figures here and for the implementation.
-The third finding was DR-2 on intake `#271`, which is the operator's decision rather than
-a round's to fix; the residual bullet below still reads pending and this round does not
-touch it either.
+The third finding was DR-2 on intake `#271`, which was the operator's decision rather than
+a round's to fix; that round did not touch it either.
 
 The round before this one was +127 net over one P1 and one P2, and both were orderings
 inside the signal
@@ -636,7 +668,7 @@ plain file R10 reads it from; both branch bullets and Design step 2 reordered; a
 new paragraph checking the mid-run, pre-parent and stopped-parent cases one at a time
 against the new order, none of them losing an assertion. The remaining ~17 are the
 accepted-concern list at the top and the re-derived size figures here and for the
-implementation. The third finding was DR-2, unchanged and still pending.
+implementation. The third finding was DR-2, unchanged and then still open.
 
 The round before this one was +114 net over one P1 and one P2, and both of them were its
 own predecessor's two fixes applied to a place they had missed. About 60 go to the `runtime-pgid:` line: R2's
@@ -653,9 +685,10 @@ written before the forward and so contradicted both R1 and Design step 2, rewrit
 order R1 states with the reason it is last. The remaining ~49 are the accepted-concern list
 at the top and the re-derived size figures here and for the implementation, whose range does
 not move because the ~2 the parent gains is inside the rounding of the sum it is derived
-from. That round's third finding was DR-2, unchanged and still pending.
+from. That round's third finding was DR-2, unchanged and then still open.
 
-This round is +233 net over two P2s, and neither is new ground: both say an earlier round
+The round before this one was +233 net over two P2s, and neither was new ground: both said
+an earlier round
 recorded something it could not
 back up. About 153 go to the entry's signal handling. The command-substitution guard —
 `run_created=$(/bin/mkdir -- "$run" && printf 1)` — is withdrawn, because a signal
@@ -680,16 +713,46 @@ evidence-based range for this spec pull request in the waiver itself, labelled a
 PR's and separate from the implementation PR's, and the self-count paragraph above states
 the same two figures. The remaining 65 are the accepted-concern list at the top and the
 re-derived size figures here and for the implementation, whose range does not move because
-the ~10 the entry gains is inside the rounding of the sum it is derived from. The round's
-third finding is DR-2, unchanged and still pending; this round does not touch it.
+the ~10 the entry gains is inside the rounding of the sum it is derived from. That round's
+third finding was DR-2, unchanged and then still open; it did not touch it.
+
+This round is +224 net over one P1 and one P2, and the P1 is the one finding
+this spec has carried
+unanswered for five rounds. About 45 go to DR-2, which the operator decided on
+2026-09-10, choosing option (a): the residual is accepted, named, and measured exactly. The
+decision reaches this artifact the only way an intake decision can reach a spec after G1 —
+through the intent, by amendment — so intent pull request `#282` amends the write-root
+constraint to name the Darwin residual as the one accepted exception, and this spec re-pins
+to that amended intent, `intent-blob:
+eaa322c405502cc0ca7c453814ca0f005f11b48f` in place of `0fd28feb…`, which is the only
+frontmatter change this round makes. R7's Darwin block stops asking and starts recording:
+it quotes the amended constraint in full so a reader can see the intent and the spec agree
+sentence by sentence, and the two refused-case alternatives it used to hold open become one
+sentence of history. The Areas-of-concern bullet becomes an accepted, intent-recorded
+residual rather than an open question, Out of scope gains the follow-up the amended
+constraint names in its own last sentence, R1's "what this buys" paragraph and R10's Darwin
+recipe say "accepted" where they said "asks", and every round-history sentence that
+reported DR-2 as pending is put into the past tense it now belongs in. About
+116 go to the umask: R1's new paragraph on why the builtin scrub and the
+`env -i` re-exec leave a process attribute untouched and what a caller's `umask 000` or
+`umask 777` does to a run tree whose modes are `mkdir` requests, the three-statement
+creation block and Design step 2 saying where 0700 actually comes from, R5's new paragraph
+on the parent's own `umask(077)` with the launcher's missing call and the test harness's
+`umask 077` that hid it, R3's parenthetical, R7's two command lists noting that `umask` is
+a builtin and forks nothing, Design step 1's clause, the tenth parent deviation and the
+widened entry copy in Copy versus adapt, and R10's two-umask case with the poll it borrows
+from the pre-parent signal case. The remaining 63 are the accepted-concern
+list at the top and the re-derived size figures here and for the implementation, whose
+range does not move because the ~19 the three files gain is inside the rounding of the sum
+it is derived from.
 
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 3096-4188 lines**, which is this file's measured
-3642 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 3286-4446 lines**, which is this file's measured
+3866 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2057-2783 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -774,7 +837,9 @@ the spec pull request's range above still blocks review.
   and a parent killed by that signal gives the shell the same number.
 
   **Creating the run directory, and setting the guard without a producer that can be
-  killed.** Three statements, in this order and no other.
+  killed.** Three statements, in this order and no other. All three run under the
+  `umask 077` the entry set among its first builtins (above), which is what makes the modes
+  below the modes that actually appear on disk.
 
   1. **Refuse a pre-existing `.run` before anything is created.** `[ -e "$run" ]` is
      `E_RUNTIME` — `-e` rather than `-d`, so a file or a symlink of that name refuses too.
@@ -782,7 +847,10 @@ the spec pull request's range above still blocks review.
      not its own: the refusal happens with `run_created` unset, and unset is the one state
      in which the `EXIT` trap leaves the disk alone.
   2. **Create it with a plain simple command and keep the status.** `/bin/mkdir -- "$run"`,
-     with no `-p`, and its exit status captured. Three cases follow, all decided in the
+     with no `-p`, no `-m` and its exit status captured. It lands at exactly 0700 because
+     of the umask, not because the command asks for a mode: `mkdir` requests 0777 and
+     `umask 077` takes the group and other bits away, which is why no `chmod` follows it.
+     Three cases follow, all decided in the
      main flow:
      - *Status 0.* The directory is the entry's own: `run_created=1`.
      - *A status above 128, with `.run` now present.* `/bin/mkdir` was itself killed by the
@@ -793,7 +861,8 @@ the spec pull request's range above still blocks review.
      - *Any other non-zero status.* An `EEXIST` from a creator that raced the pre-check, a
        permissions failure, anything else: `E_RUNTIME` with `run_created` left unset, so
        the `EXIT` trap leaves that directory exactly where it found it.
-  3. **Only then create `tmp` and `home` inside `.run`** at mode 0700. A failure of either
+  3. **Only then create `tmp` and `home` inside `.run`** at mode 0700, by the same umask
+     and with no `chmod` of their own. A failure of either
      is `E_RUNTIME`, and by then the guard is set, so the `EXIT` trap chmods back to 0700
      and removes `.run` and everything in it on the way out.
 
@@ -984,6 +1053,31 @@ the spec pull request's range above still blocks review.
   cannot intercept the reset. The sibling specs treat this the same way — #268 and #273 both
   add the alias reset to their own marker branch for the same reason — and the plan should
   keep the three files' wording in step.
+
+  **Then `umask 077`, as the last of the entry's first builtins and before anything at all
+  is created.** The scrub above resets variables, functions and aliases; it does not reset
+  the process umask, which is not a variable and is inherited across `exec` like any other
+  process attribute, so the `env -i` re-exec does not clear it either. That matters because
+  every mode this requirement states is a mode a `mkdir` *requests*, and the umask is what
+  the kernel subtracts from it. Left alone it breaks the run tree in two opposite
+  directions. A permissive caller umask — `umask 000` is the ordinary case, and it costs
+  nothing to arrange — makes `/bin/mkdir -- "$run"` create `.run` at 0777 and the `tmp` and
+  `home` subdirectories at 0777 with it, so a directory this spec requires to be 0700 is
+  world-writable for the whole compile, which is exactly the window in which the compiled
+  binaries are written and before the 0500 pass tightens anything. A restrictive one —
+  `umask 777` is the extreme, but anything with the owner bits set does it — makes the same
+  `mkdir` create a directory the entry cannot then enter or write, so the very next step
+  fails and, worse, the `EXIT` trap's removal of a directory it cannot traverse fails with
+  it. Setting `umask 077` once removes both: `/bin/mkdir -- "$run"` under it yields exactly
+  0700 with no separate `chmod`, and the same holds for the `tmp` and `home` subdirectories
+  and for every file the entry creates afterwards. The line is copied, not invented — the
+  materializer's clean branch sets the same umask in the same position
+  (`adapters/local-git-materializer/v1/materialize.sh:31`), immediately after its own scrub
+  and before its first creation — and `umask` is a bash builtin, so it forks nothing and
+  keeps its place among the statements that run before the first external command. R10
+  asserts the result rather than the line: the mode assertions on the run tree already
+  check for 0700, and one case runs the entry with the caller's umask set to `000` and then
+  to `777` and requires 0700 both times.
 
   **And the direct marker invocation is unsupported, which is the part that actually settles
   it.** There are two supported ways to run the entry: execute the file, so its
@@ -1362,7 +1456,9 @@ the spec pull request's range above still blocks review.
   instead (above), and why neither the entry nor the parent runs `git` at all. What it does
   not buy is the runtime: the runtime runs `/usr/bin/git` for itself, this spec leaves the
   runtime unchanged, and on Darwin that is the one write outside the caller's output path
-  that remains. R7 states that residual in full and DR-2 asks the operator to accept it.
+  that remains. R7 states that residual in full, and DR-2 accepted it: the operator decided
+  it on 2026-09-10, and the intent now names it as the one accepted exception to its
+  write-root constraint (`work/resolver-trusted-parent/intent.md:36-45`, quoted in R7).
   Linux CI still cannot exercise any of this: the Darwin compile line, the refusal when the
   tools are absent, and the cache measurement are confirmed only when someone runs the
   focused test on a Darwin machine. R10 gives the operator the recipe for that measurement,
@@ -1703,7 +1799,9 @@ the spec pull request's range above still blocks review.
   `portable-profile-resolution-launcher.c:645-690`, and nothing else:
   `HOME=<sandbox>/home` and `TMPDIR=<sandbox>/tmp` (both created by the parent at mode
   0700 — with `mkdirat` relative to the output-directory descriptor it checked rather than
-  the copied `mkdir` at `:645-647`, R5), `LC_ALL=C`,
+  the copied `mkdir` at `:645-647`, and under the `umask(077)` the parent sets among the
+  first statements of `main`, which is what makes 0700 the mode that appears rather than
+  the mode that was asked for, R5), `LC_ALL=C`,
   `PATH=<dir of the bound jq>:/usr/bin:/bin` (`:662-677`),
   `YSTACK_RESOLVER_TRUSTED=1`, `YSTACK_RESOLVER_HELPER=<absolute helper>`,
   `YSTACK_RESOLVER_JQ=<absolute jq>` (`:678-680`), `GIT_TERMINAL_PROMPT=0` (`:681`), and
@@ -1784,6 +1882,26 @@ the spec pull request's range above still blocks review.
   signature change this forces; and the four entries are still refusals rather than
   overwrites on collision, because `mkdirat` and `O_CREAT|O_EXCL` fail on an existing name
   exactly as the calls they replace did.
+
+  **And the parent calls `umask(077)` as one of the first statements of `main`, for the
+  same reason the entry does.** A mode argument to `mkdirat` or `openat` is a request, and
+  the kernel subtracts the process umask from it, so `mkdirat(dirfd, "home", 0700)` gives
+  0700 only when the umask allows it. The parent inherits its umask from whatever started
+  it, and nothing between the caller and `main` resets it: the environment the entry builds
+  for the launch (R3) names variables, and a umask is not a variable — it survives `execve`
+  like the process's other attributes. Under a permissive caller umask the four sandbox
+  entries would appear at 0777 and 0666 instead of 0700 and 0600, in a directory the parent
+  has just certified as caller-owned and 0700; under a restrictive one they would appear
+  unusable and the run would fail late instead of not at all. The copied launcher has no
+  `umask` call anywhere in its 702 lines (verified: the name does not appear in the file),
+  which is safe there only because the test script sets `umask 077` for the whole suite
+  before it ever runs the launcher (`portable-profile-resolution.test.sh:5`) — a property
+  of the harness, not of the launcher, and exactly the kind of thing that must not be left
+  behind in the harness when the code ships. So this is a named deviation from the copied
+  file: one call, before any check and before any creation, with no `chmod` or `fchmod`
+  anywhere after it. The entry sets the same umask (R1), so in the normal path the parent
+  inherits 077 and sets it again; the call is there for the caller who drives the parent
+  directly, which is the same caller every other check in this requirement exists for.
 
   **Creating those two files fd-relative is only half of the fix, because the copied
   supervisor reads them back by path.** After the child exits it goes back to the two path
@@ -2004,9 +2122,10 @@ the spec pull request's range above still blocks review.
   everything this initiative adds, on every supported platform, and for the unchanged
   runtime on Linux, where R10 asserts it mechanically in CI. On Darwin the runtime's own
   `git` calls leave one known write outside that root; the Darwin paragraph below states it
-  exactly and DR-2 is the decision request that asks the operator to accept it. The one
+  exactly, DR-2 accepted it on 2026-09-10, and the intent now names it as the one accepted
+  exception to its own constraint. The one
   root is what the intent asks for — "no writes outside the caller's own output"
-  (`work/resolver-trusted-parent/intent.md:36`) — and an earlier round of this spec did not
+  (`work/resolver-trusted-parent/intent.md:36-45`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
   root. Inside the one root there are two write areas, named exactly:
 
@@ -2088,15 +2207,38 @@ the spec pull request's range above still blocks review.
   one known write outside the caller's output path is the shim's `xcrun_db` under the
   per-user temp directory, attributable to the runtime's own `git`. That is the whole of the
   residual: one file, mode 0600, in a per-user directory, written by a process this spec
-  leaves alone. It is a deviation from `work/resolver-trusted-parent/intent.md:36`, and
-  **DR-2 is the decision request that asks the operator to accept it — pending as this spec
-  is written** (posted on intake `#271`). The Darwin operator run measures exactly this and
-  nothing wider (R10). If DR-2 is refused the spec is rewritten rather than patched, and the
-  two alternatives are one sentence each: widen E to move the runtime off `/usr/bin/git` on
-  Darwin, which touches the pinned runtime and every blob pin that names it and so opens a
-  new risk surface in the middle of a high-risk initiative; or drop the Darwin claim
-  altogether, which makes the shipped path Linux-only and costs two of the three platforms
-  in the matrix.
+  leaves alone.
+
+  **That residual is no longer a deviation the spec is carrying on its own: it is an
+  accepted exception the intent now names.** The operator decided DR-2 on 2026-09-10,
+  choosing option (a) — accept the residual, name it, and measure exactly it — and the
+  decision was carried into the chain by intent pull request `#282`, which amends the
+  intent's write-root constraint and changes nothing else. This spec pins that amended
+  intent: the `intent-blob` in the frontmatter is
+  `eaa322c405502cc0ca7c453814ca0f005f11b48f`. The amended constraint reads, in full
+  (`work/resolver-trusted-parent/intent.md:36-45`):
+
+  > No network, no credentials, no writes outside the caller's own output. One
+  > accepted exception, decided as DR-2 on #271: on Darwin the resolver runtime,
+  > which this initiative leaves unchanged, itself runs `/usr/bin/git`
+  > (`scripts/lib/profile-resolution.sh:313-323` and `:711-714`), and that binary is
+  > the xcrun shim, which may write its `xcrun_db` cache in the per-user temp
+  > directory outside the caller's output. That write belongs to the unchanged
+  > runtime, not to the parent this initiative adds; the parent, the entry, the
+  > compiler, the helper and the copies write only inside the caller's output on
+  > both platforms, and on Linux the runtime does too. A later intake may move the
+  > runtime off `/usr/bin/git` on Darwin.
+
+  Read that beside the two paragraphs above and the intent and this spec say the same
+  thing in the same shape: one file, written by the unchanged runtime's own `git`, on
+  Darwin only, with everything this initiative adds inside the caller's output on both
+  platforms. The Darwin operator run measures exactly this and nothing wider (R10). The two
+  alternatives an earlier round of this spec held open against a refusal — widening E to
+  move the runtime off `/usr/bin/git` on Darwin, or dropping the Darwin claim and shipping
+  Linux-only — are history rather than live options, and neither is carried further here.
+  The follow-up that would close the residual for good is the one the amended constraint
+  itself names: a later intake moving the runtime off `/usr/bin/git` on Darwin. It is
+  recorded under Out of scope and is not promised here.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -2177,7 +2319,10 @@ the spec pull request's range above still blocks review.
      inside the run directory, which it runs as its child. The order matters as much as the
      list: `/usr/bin/env` runs before `/usr/bin/uname`, and the builtin scrub ahead of it
      runs no command at all (R1), so every entry in this list except `env` itself is
-     executed from an environment the entry wrote.
+     executed from an environment the entry wrote. `umask` is not on the list and does not
+     belong on it: it is a bash builtin, like `printf`, `[`, `cd` and `pwd` elsewhere in
+     this requirement, so the `umask 077` the entry sets beside its scrub (R1) forks
+     nothing and R10's command-word grep drops it by name from `compgen -b`.
 
      *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
      argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); the same
@@ -2188,7 +2333,8 @@ the spec pull request's range above still blocks review.
      for the jq digest; and the bound jq, for its own `--version` probe. Nothing else. The
      sandbox `home` and `tmp` directories come from `mkdirat(2)` on the descriptor the
      parent checked (R5), not from `mkdir(2)` on a path (`:645-647`) and not from
-     `/bin/mkdir`, and every mode and ownership check is an `fstat` on a descriptor the
+     `/bin/mkdir`, at the mode they ask for because of the parent's own `umask(077)` (R5);
+     and every mode and ownership check is an `fstat` on a descriptor the
      parent opened, not a call to `/usr/bin/stat`.
 
      Seven choices inside that list are named because each is a place the shipped path
@@ -2620,7 +2766,8 @@ the spec pull request's range above still blocks review.
      exactly the narrowed claim rather than a wider one.** The narrowing is R7's: everything
      this initiative adds writes only inside the output path, while the unchanged runtime's
      own `/usr/bin/git` is the Darwin `xcrun` shim and can write its `xcrun_db` cache in the
-     per-user temp directory, which is the residual DR-2 asks the operator to accept. An
+     per-user temp directory, which is the residual DR-2 accepted and the intent now
+     records (R7). An
      earlier round of this spec asserted that `xcrun_db` came back *unchanged* across a full
      entry run, and that assertion is wrong for this half, because this half runs a real
      resolution and the runtime behind it runs git. So the recipe is a difference, not an
@@ -2765,6 +2912,46 @@ the spec pull request's range above still blocks review.
   The test also asserts the entry's exit status is 0 in case 1, the entry's own non-zero
   `E_RUNTIME` status in case 2, where no child ever ran, and the child's own non-zero
   status in cases 3 and 4.
+
+  **The caller's umask cannot change the run tree's modes, and one case proves it from
+  both ends.** Every mode this test already checks — `.run` and its `tmp` and `home` at
+  0700 in cleanup case 2, the four files and the directory at 0500 in cleanup case 1 and in
+  the group-2 fixtures, the parent's sandbox `home` and `tmp` at 0700 in cleanup cases 1
+  and 4 — is a mode that only appears if the process asking for it has a umask that permits
+  it, and nothing in the environment scrub resets a umask (R1, R5). So the test runs the
+  entry twice more, in a subshell that sets the caller's umask first:
+
+  - *With `umask 000`.* The run completes and exits 0, and the assertions of cleanup case
+    1 all hold. The entry's own tree is read while it still exists, with the mechanism the
+    pre-parent signal case already uses: the test polls the output directory in the
+    background until `<output>/.run/home` appears, and reads the modes of `.run`, `.run/tmp`
+    and `.run/home` at that moment. `home` is the right thing to poll on because it is
+    created immediately after `.run` and removed before the 0500 pass, so its presence is
+    exactly the window in which the run directory is still 0700 (R1) — and the window is
+    two C compiles wide, not a few instructions. All three must read exactly 0700. Without
+    the entry's own `umask 077` all three would read 0777, which is what makes this an
+    assertion rather than a formality. If the poll misses the window the case retries the
+    run, bounded the way the stopped-parent case is, and a case that never catches it fails
+    with a message saying so rather than passing quietly.
+  - *With `umask 777`.* The same run and the same three reads, with the same answer: 0700,
+    and exit status 0. This is the half that proves the entry *set* its own umask rather
+    than inheriting a convenient one. Under an inherited 777 the `mkdir` would produce a
+    directory the entry cannot enter, so the very next step — creating `tmp` inside it —
+    would fail and the run would refuse `E_RUNTIME` long before it reached a compile. A run
+    that completes at all under `umask 777` is only possible because the umask was replaced.
+
+  Both halves also assert the parent's side, since the parent is launched from that same
+  process and inherits from it: after each successful run the output directory's `home` and
+  `tmp` are 0700 and `child.stdout` and `child.stderr` are 0600, whichever umask the caller
+  set. That is the entry's umask being inherited rather than the parent's own being proved,
+  so the parent's `umask(077)` (R5) gets its own reading in group 2, where the test invokes
+  the parent directly and can therefore set the caller's umask on it: the group-2 fixture
+  builder runs one of its successful direct-parent invocations under `umask 000` and
+  asserts the same four modes. The whole case is cheap — two umasks, one entry run each,
+  one direct-parent run, and mode reads the test already does elsewhere — and it is the
+  only place in R10 that would notice a shipped file losing its `umask` line, because every
+  other mode assertion runs under a suite that sets `umask 077` for itself the way
+  `portable-profile-resolution.test.sh:5` does.
 
   **A signal mid-run is tested, and the test is deterministic because it freezes the
   resolver before signalling.** R2's group termination has no other proof, so the signal
@@ -2998,7 +3185,8 @@ the spec pull request's range above still blocks review.
   An earlier round of this spec described the sweep as "every absolute path under
   `/usr/bin`, `/bin` or `/Library/Developer/CommandLineTools/usr/bin`, and every bare command
   name", which is not something a test can be written from. Taken literally it fails on `cd`,
-  `printf` and `[`, which are bash builtins the entry uses and not external commands at all,
+  `printf`, `umask` and `[`, which are bash builtins the entry uses and not external
+  commands at all,
   and it misses an absolute path under a fourth prefix. The invariant is about what these two
   files **execute**, so the grep has to separate three things: an absolute path that names an
   executable, a builtin or reserved word that starts no process, and an absolute path that is
@@ -3103,7 +3291,12 @@ Order, each step checkable before the next:
    creation) — checks that the test script performs today or cannot perform at all.
    Every mode and ownership check is done with `fstat` on a descriptor
    the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
-   on a path it will later hand on by name; and the sandbox's four entries — `home`, `tmp`,
+   on a path it will later hand on by name; `umask(077)` is called among the first
+   statements of `main`, before any check and before any creation, where the copied
+   launcher has no `umask` call at all and relies on the test harness setting one
+   (`portable-profile-resolution.test.sh:5`), so the modes below are the modes that appear
+   rather than the modes that were asked for (R5); and the sandbox's four entries —
+   `home`, `tmp`,
    `child.stdout`, `child.stderr` — are created with `mkdirat` and `openat` relative to the
    output-directory descriptor the check opened, in place of the copied `mkdir` at
    `:645-647` and `open` at `:413-421`, which build them by path (R5). That descriptor is
@@ -3164,7 +3357,9 @@ Order, each step checkable before the next:
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
    marker word, the arity, and the scrub the marker branch re-runs as its own first
    statements — the same builtin scrub plus `builtin unalias -a` and `builtin shopt -u
-   expand_aliases` — with the clean path refusing unless its first argument is the marker
+   expand_aliases`, and `umask 077` last among them, copied from `materialize.sh:31`
+   because the scrub resets variables and not the process umask (R1) — with the clean path
+   refusing unless its first argument is the marker
    word (R1), and the direct marker invocation documented as unsupported. Everything below
    runs in that second process. Then: resolve the
    repository root from its own `BASH_SOURCE`
@@ -3182,14 +3377,16 @@ Order, each step checkable before the next:
    doing nothing else, and the `EXIT` trap's removal guarded by a `run_created` variable
    that stays unset until the directory is the entry's own; then refuse a pre-existing
    `.run` with `[ -e ]`; then create the run directory `<output>/.run` at mode 0700 with a
-   plain `/bin/mkdir -- "$run"`, no `-p`, and set the guard from its captured status in the
+   plain `/bin/mkdir -- "$run"`, no `-p` and no `-m` — 0700 comes from the umask set above,
+   not from the command — and set the guard from its captured status in the
    main flow — set on status 0, set also on a status above 128 with `.run` present, because
    `/bin/mkdir` exits 0 or 1 of its own accord so anything higher is the shell reporting
    that the caller's group signal killed it after it had created the directory, and left
    unset on any other non-zero status, which is `E_RUNTIME` (R1, measured); then create the
    0700 `tmp`
    and `home` subdirectories inside it for compiler scratch and the compiler's `HOME`,
-   a failure of either refusing `E_RUNTIME` into the trap that is by then already armed.
+   at 0700 by that same umask, a failure of either refusing `E_RUNTIME` into the trap that
+   is by then already armed.
    That `EXIT` trap captures the status it was entered with, then
    removes the whole run directory whenever the guard is set (chmodding the directory
    back to 0700 first,
@@ -3305,6 +3502,17 @@ intent says for this change. Only after the operator's merge does
   same. That is a change to the runtime and to the resolver's launch contract, both listed
   above as untouched, so it belongs to a separate initiative. This spec records it as the
   recommended next step and promises nothing about it.
+- **Moving the runtime off `/usr/bin/git` on Darwin — the follow-up the amended intent
+  itself names, not done here.** It is the only thing that would close the accepted
+  residual R7 states: the runtime runs `/usr/bin/git` for every repository read and for
+  its own blob pins (`scripts/lib/profile-resolution.sh:313-323`, `:711-714`), that path
+  is the `xcrun` shim on Darwin, and the shim writes its cache where no environment the
+  parent builds can redirect it. Every route to closing it changes the runtime, which the
+  first bullet above puts out of scope and the intent puts out of scope for this
+  initiative (`work/resolver-trusted-parent/intent.md:32-33`). The amended write-root
+  constraint says the same in its last sentence — "A later intake may move the runtime off
+  `/usr/bin/git` on Darwin" (`:44-45`) — and *may* is the right word: this spec records
+  the follow-up and promises nothing about it.
 
 ## Areas of concern
 
@@ -3501,7 +3709,7 @@ intent says for this change. Only after the operator's merge does
   of it (see the size derivation above). Copying the supervisor verbatim keeps the proven
   behaviour but carries code written for a test harness; adapting risks a subtle
   divergence in exactly the code that enforces the limits. The plan should list every
-  deviation line by line. Nine are already known in the parent: the mode-0644 check moves
+  deviation line by line. Ten are already known in the parent: the mode-0644 check moves
   from the test
   into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
@@ -3545,7 +3753,13 @@ intent says for this change. Only after the operator's merge does
   the fork and after the mask restore, best-effort with the same non-blocking single
   `write(2)` the handler's line uses, where the launcher writes nothing there and leaves the
   resolver's process group unnamed, so anything downstream had to work it out from the
-  process table (R2). Eight more
+  process table (R2). The tenth is this round's only change to the C file: `umask(077)`
+  among the first statements of `main`, where the launcher has no `umask` call anywhere in
+  its 702 lines (verified: the name does not appear in the file) because the test script
+  sets one for the whole suite before running it
+  (`portable-profile-resolution.test.sh:5`) — a property of the harness that does not ship
+  with the code, so the parent sets its own and the modes it asks `mkdirat` and `openat`
+  for are the modes that appear (R5). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
   (`portable-profile-resolution.test.sh:130-143`); the compiler is a fixed path chosen per
@@ -3577,10 +3791,13 @@ intent says for this change. Only after the operator's merge does
   files' sizes, a command neither
   copied file runs. The eighth is the one item in this whole list
   that is a copy rather than new code — just from a third file: the entry opens with the
-  builtins-only environment scrub and the empty-environment re-exec taken from
-  `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`, deviating from *those*
+  builtins-only environment scrub, the empty-environment re-exec and the `umask 077` that
+  follows them taken from
+  `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29,31`, deviating from *those*
   lines in the marker word, the arity, and the scrub the marker branch re-runs as its own
-  first statements with two alias-reset lines the copied bytes do not have (R1), where the
+  first statements with two alias-reset lines the copied bytes do not have (R1) — the umask
+  is copied unchanged, in the same position relative to the scrub and ahead of the first
+  thing created — where the
   test script and
   `reproduce.sh` scrub nothing at all and run every command under the caller's own
   environment.
@@ -3612,7 +3829,8 @@ intent says for this change. Only after the operator's merge does
   not the cache measurement — so those three are confirmed only on an operator's Darwin run.
   That is the honest gap this concern carries.
 - **One accepted residual on Darwin: the runtime's own git writes outside the output root,
-  and DR-2 is pending.** This is the only place the single-write-root claim does not hold,
+  and the intent now records it as the one accepted exception.** This is the only place the
+  single-write-root claim does not hold,
   and it is worth stating as a concern rather than only as a requirement clause. The
   resolver runtime runs `/usr/bin/git` for every repository read
   (`scripts/lib/profile-resolution.sh:313-323`) and for the four blob pins it checks at load
@@ -3622,15 +3840,21 @@ intent says for this change. Only after the operator's merge does
   parent controls the runtime's whole environment (R3) and still cannot prevent it. The
   residual belongs to the runtime and not to the parent, and the runtime is exactly what
   this initiative may not change (`work/resolver-trusted-parent/intent.md:32-33`), so it
-  cannot be closed from where this spec stands. It is a deviation from
-  `work/resolver-trusted-parent/intent.md:36`, and **DR-2 on intake `#271` asks the operator
-  to accept it; it is pending.** The spec is written under the recommended option — accept,
-  name it, and measure exactly it in the Darwin operator run (R10). The two alternatives, if
-  the operator refuses, are to widen E and move the runtime off `/usr/bin/git` on Darwin, or
-  to drop the Darwin claim and ship Linux-only; either one rewrites this spec rather than
-  amending it. The follow-up that would close the residual without either — moving the
-  runtime's git invocation off the fixed shim path — belongs to a later intake and is not
-  promised here.
+  cannot be closed from where this spec stands. **The operator decided DR-2 on intake
+  `#271` on 2026-09-10, choosing option (a): accept the residual, name it, and measure
+  exactly it in the Darwin operator run (R10).** The decision is carried into the chain by
+  intent pull request `#282`, which amends the intent's write-root constraint to name this
+  residual as the one accepted exception and changes nothing else, and this spec pins that
+  amended intent (`intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f`). So this is an
+  accepted, intent-recorded residual rather than an open question: it is a concern the plan
+  and the reviewer should keep in view, not a decision anyone is still waiting on. R7 quotes
+  the amended constraint verbatim beside its own statement of the residual, so the two can
+  be read against each other. The two alternatives an earlier round held open against a
+  refusal — widening E to move the runtime off `/usr/bin/git` on Darwin, or dropping the
+  Darwin claim and shipping Linux-only — are history and are not carried further. The
+  follow-up that would close the residual for good is the one the amended constraint itself
+  names — a later intake moving the runtime's git invocation off the fixed shim path — and
+  it is not promised here.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
   (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
