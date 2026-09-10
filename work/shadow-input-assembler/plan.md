@@ -78,13 +78,13 @@ concern, and requirement 17's entry is the first lines of the same script as req
 predicates.
 
 **Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 812 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+file is 837 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
 PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
 unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
 proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
 order and success-path guarantee are each spelled out step by step because both are one line's
 position away from being wrong. Evidence-based
-range **690-930 net lines** — the measured count above, plus or minus 15%. This exception waives
+range **710-960 net lines** — the measured count above, plus or minus 15%. This exception waives
 only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
 CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
 figure is the 700-1000 range proposed above.
@@ -205,11 +205,20 @@ reading the whole file.
   not empty. This is the class the refuse-then-retry pair asserts the *absence* of; it needs a case
   that produces it too, or nothing proves 2.2(6) can say it at all.
 - `E_RUNTIME` — the unreadable modules directory and the wrong-digest absolute jq, both above.
+  The symlinked `<source-git-dir>` is **not** one of these; it is an `E_TARGET` case, because the
+  source directory is not among the paths whose file tests step (7) defers.
 - `E_LIMIT` — **new, two cases, one per half of the class.** (a) The caller's own file: a copy of
-  the fixture claim padded past 1 MiB by a valid JSON string field of a million `x`, refused at the
-  claim's `snapshot_bounded` bound before it is parsed, so its shape does not matter. (b) The
-  finished output over the driver's 8 MiB cap: pad the supplied **resolved profile**, which is the
-  one caller-supplied document whose entire content is embedded in `input.json`
+  the fixture claim with one added valid JSON string field, padded so the file is definitely over
+  the 1 MiB bound. **A million `x` is not enough**: the bound is 1048576 bytes and a million is
+  1000000, so a padding of exactly that size can leave the file under the bound and the case then
+  passes for the wrong reason. Measure instead — `pad = 1048576 - <current file size> + 4096`
+  bytes of `x`, the formula written out in the test — or skip the arithmetic and use 1,100,000
+  bytes of padding, which clears 1048576 whatever the claim's own size is. Either way **assert the
+  padded file's size is greater than 1048576** (`wc -c`) before feeding it to the assembler, so
+  the case cannot silently stop testing what it is for. Expected: `E_LIMIT` from the claim's
+  `snapshot_bounded` bound, refused before the file is parsed, so its shape does not matter.
+  (b) The finished output over the driver's 8 MiB cap: pad the supplied **resolved profile**,
+  which is the one caller-supplied document whose entire content is embedded in `input.json`
   (`scripts/test/local-git-materializer-fixtures.sh:170`). Pad it in a field that is genuinely
   free-form, which rules out the obvious one: extra `skill_sources` or `tool_sources` entries are
   refused before the size check ever runs, because the projection rule compares those against the
@@ -385,8 +394,15 @@ already refused the same run as `E_RUNTIME`.
 `<resolved-profile-file>`, `<jq-binary>`, `<output-dir>` and `<environment-claim-file>`, each
 matched against `/*` in the shell — a `case` or `[[ ]]` pattern, no external command, nothing
 opened, stat'ed or executed. A relative `<jq-binary>` is `E_USAGE` here and never reaches step
-(7). Existence and non-symlinkness of those paths are **not** checked here: requirement 12 files a
-missing or symlinked required file under `E_RUNTIME`, so those tests sit with step (7).
+(7). Existence and non-symlinkness are **not** checked here, and where they are checked differs by
+argument. The **file** arguments — the profile directory's eight documents, the resolved profile,
+the claim and the jq binary — defer to step (7), because requirement 12 files a missing or
+symlinked required file under `E_RUNTIME`. `<source-git-dir>` is **excluded** from that bucket:
+whether it is a physical directory is decided by 2.4's own explicit
+`physical_dir "$source_git_dir" || emit_error E_TARGET`, on the line above the `source_pure` call,
+because requirement 12 and the spec (line 380) put a source that is not a physical bare repository
+under `E_TARGET` and not `E_RUNTIME`. `<output-dir>` belongs to neither: step (6) decides it, as
+`E_WORKSPACE`.
 
 (3) **The repository id** against `\A[a-z0-9][a-z0-9._:-]{0,127}\z`.
 
@@ -405,9 +421,11 @@ source repository and the profile directory — `E_WORKSPACE`, requirement 1's o
 
 (7) **Only now the pinned-jq checks** — the platform digest table and the `jq-1.6` identity check
 `shadow/v1/reproduce.sh:113-118` and `:141-142` use — plus the existence and non-symlink checks of
-the remaining supplied paths and of the component's own required files, all `E_RUNTIME`. **Nothing
-above this step hashes or executes `$jq_bin`.** Steps (1)-(6) are shell pattern matches and, in
-(6), file tests on the output directory alone, so the jq binary is read for the first time here.
+the remaining supplied **file** paths (the profile documents, the resolved profile, the claim and
+the jq binary — not `<source-git-dir>`, which 2.4 decides as `E_TARGET`) and of the component's
+own required files, all `E_RUNTIME`. **Nothing above this step hashes or executes `$jq_bin`.**
+Steps (1)-(6) are shell pattern matches and, in (6), file tests on the output directory alone, so
+the jq binary is read for the first time here.
 
 Then requirement 10's `time_ok` on the timestamp argument, immediately after the pinned-jq check
 and before any input file is opened: resolve the modules directory the way
@@ -485,8 +503,12 @@ both callers: 2.2(6)'s physical check on the output directory calls the same fun
 <333-347>; <348-360>; exit 0 )`, the three spans in materializer order, all under one copy header
 naming `adapters/local-git-materializer/v1/materialize.sh` at
 `a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main)` plus one sentence saying why it is a
-copy — the header shape `shadow/v1/qualified-identity.jq:8-13` uses. Take 271-332 from PR #278's
-`reproduce.sh` copy if that has merged, and 333-347 and 355-360 from `materialize.sh`. Any
+copy — the header shape `shadow/v1/qualified-identity.jq:8-13` uses. The third span is **348-360
+in full** — the hooks check, the object-format check and the commit-size check — taken under one
+`# copy-begin materialize.sh:348-360` marker, which is what step 0.6(b) extracts and compares.
+Where the bytes come from is a separate question from what the span is: take 271-332 and the
+348-354 prefix from PR #278's `reproduce.sh` copy if that has merged, and the rest — 333-347 and
+the remainder of 348-360 — from `materialize.sh`. Any
 non-zero return is `E_TARGET`, whichever `E_SOURCE_*` id the copied line names. Do not edit a
 byte inside the markers; if the anchors in step 0.6(b) do not land on 271, 333 and 348, that is
 drift in `materialize.sh` to resolve with the operator before merging, not a number to adjust.
@@ -530,11 +552,13 @@ removes the committed outputs and leaves the directory empty, which is a refusal
 caller can retry into, not a partial set. Only a `KILL` or a power loss can leave a partial set,
 the limit the spec names and no trap covers.
 
-2.8 **Refusal ids** exactly as requirement 12 lists them, and no new id. Three that are easy to
+2.8 **Refusal ids** exactly as requirement 12 lists them, and no new id. Four that are easy to
 get wrong: everything the copy refuses about the source repository is `E_TARGET`, the oversized
-commit object included even though the copied line says `E_SOURCE_LIMIT`; `E_LIMIT` is for the
+commit object included even though the copied line says `E_SOURCE_LIMIT`; a `<source-git-dir>`
+that is not a physical directory is `E_TARGET` too, decided by 2.4's own check and **not** by
+step (7)'s `E_RUNTIME` file tests, which the source directory is not among; `E_LIMIT` is for the
 caller's own files and the finished output; and a `time_ok` that ran and answered `false` is
-`E_USAGE` while one that could not run is `E_RUNTIME`. A fourth, which is an ordering fault rather
+`E_USAGE` while one that could not run is `E_RUNTIME`. A fifth, which is an ordering fault rather
 than a mapping one: an id that is correct in the table and reported second is still the wrong id,
 so every `E_USAGE` condition in 2.2 steps (1)-(5) has to be decided before the `E_WORKSPACE` and
 `E_RUNTIME` conditions that could refuse the same run first. That is why 2.2 is written as a
@@ -727,7 +751,8 @@ commit is stale. `$t` is any scratch directory, `$m` is
   directory listing, and the copy, pin-liveness and source-order assertions.
 - **One case per refusal class.** Paste the id each case produced, one line per class in
   requirement 12: `E_USAGE`, `E_TARGET`, `E_WORKSPACE`, `E_RUNTIME`, `E_LIMIT` twice (the padded
-  claim, and the resolved profile whose padded source path pushes the finished output over
+  claim — paste its `wc -c`, which has to be above 1048576, or the case proves nothing; and the
+  resolved profile whose padded source path pushes the finished output over
   8388608 — paste that document's own size beside the output's, to show it was under its own 8 MiB
   input bound and the refusal was the output check's), `E_PARSE` twice (two
   JSON values, and the BOM), `E_CANONICAL`, `E_SHAPE`, `E_PROFILE`, `E_RELATION`. Then say the one
