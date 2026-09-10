@@ -21,7 +21,7 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
   Argument and environment parsing, the `--list` mode, the round-robin filter, the
   new selection line, the refusal paths. Discovery (line 15) and the four `GIT_*`
   defaults (lines 5-8) are untouched.
-- **`scripts/test/run-all-sharding.check.sh`** (new, ~170, mode `0755`). The focused
+- **`scripts/test/run-all-sharding.check.sh`** (new, ~185, mode `0755`). The focused
   proof of R9. Its name ends `.check.sh`, never `.test.sh`.
 - **`ci/required-files.txt`** (+1). One line appended at the very end, after today's
   last line 401 (`docs/transition-kit.md`), becoming line 402.
@@ -61,8 +61,8 @@ initiative is `risk: high`.
 
 ### Review size
 
-`review_size: standard`, no exception claimed. Distinct content to read is about 294
-net lines: 70 in the runner, 170 in the proof script, 49 in the workflow, one manifest
+`review_size: standard`, no exception claimed. Distinct content to read is about 309
+net lines: 70 in the runner, 185 in the proof script, 49 in the workflow, one manifest
 line, four lines of docs. The `proposals/` patch adds ~60 more lines on disk, but they
 are the workflow and `AGENTS.md` text a second time, so they are read once. That fits
 the ~300-400 budget in `AGENTS.md` > PR rules. If the real diff lands over 400, stop
@@ -74,9 +74,29 @@ workflow that calls them are one concern.
 ### Step 0 — the proof script first (R9)
 
 Write `scripts/test/run-all-sharding.check.sh` before touching the runner. Run it
-once against today's unchanged runner and write down which assertions fail — they all
-should, because no `--list` flag exists yet. That failing run is what proves the
-script tests something. Then Step 1 turns it green.
+once against today's unchanged runner and write down what it reports — it must refuse
+at once, because no `--shard`/`--list` support exists yet. That refusing run is what
+proves the script tests something. Then Step 1 turns it green.
+
+**The first check is static, and it runs before the runner is invoked at all.**
+Today's `run-all.sh` takes no arguments and never inspects `"$@"` — checked against
+the file — so an unknown argument is not rejected, it is discarded. A
+`run-all.sh --list` today would therefore not fail; it would start the full serial
+suite and sit there for 80-90 minutes. So the script opens by grepping
+`scripts/test/run-all.sh` for two fixed strings only Step 1 can put there: the exact
+usage line
+
+    usage: run-all.sh [--shard <index>/<count>] [--list] (1 <= index <= count <= 16)
+
+matched with `grep -Fq` so its `<`, `>` and parens stay literal, and a `--list` case
+label (`--list)`). If either is absent it prints
+
+    error: run-all.sh does not implement --shard/--list yet
+
+to stderr, runs nothing, and exits `2`. Step 0's recorded failure is exactly that
+refusal — one line, under a second, no suite. **No invocation of `run-all.sh --list`
+is made anywhere before Step 1 lands**: not by this script, not by hand, not in Proof
+below.
 
 Shape: `#!/usr/bin/env bash`, `set -euo pipefail`, resolve `root` the same way
 `run-all.sh:4` does, one `mktemp -d` with a `trap` cleanup, and a small
@@ -108,6 +128,21 @@ it is right. Assertions, in order:
    flag wins and the variable is ignored silently.
 6. `YSTACK_TEST_SHARD=3/6 ... --list` equals `--shard 3/6 --list`: the variable alone
    selects the same set.
+
+**Every runner call is bounded.** Once Step 1 lands, the precondition passes and the
+assertions above do invoke the runner. Each of those calls goes through a wall-clock
+bound, using the form this repo already uses for exactly this — macOS has no
+`timeout` or `gtimeout`, and `scripts/lib/` holds no shared helper, so it is the perl
+`alarm` idiom of `scripts/test/control-sandbox-policy.test.sh:114` and
+`scripts/test/deploy-rollback-gates.test.sh:187`:
+
+    /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$root/scripts/test/run-all.sh" --list
+
+A `--list` run executes no suite and returns in well under a second, so 60 seconds is
+pure headroom. SIGALRM makes the exit status `142`, and the script treats any timeout
+as a failed assertion reading `run-all.sh --list did not return within 60s (the
+runner started a suite)`. If some later change ever makes `--list` execute suites
+again, this proof goes red in a minute instead of hanging the job for an hour.
 
 It ends by printing a count of assertions passed and a final line
 `sharding proof: all checks passed`, and exits `0`. It runs in seconds: about 170
@@ -282,6 +317,18 @@ duration in the PR body; the target is under 25 minutes (R14).
   Rejected: having the proof script grep `ci.yml` for the matrix and the `/N` and
   assert they match. It is a second concern and it points an agent-owned script at a
   constitution path; better as its own follow-up issue than smuggled in here.
+- **`--list` against today's runner would silently run the whole suite.** Today's
+  `run-all.sh` parses nothing — no `case`, no `"$@"` — so `--list` is not refused, it
+  is ignored, and the script falls through to the serial 80-90 minute run. This is
+  the failure mode that makes Step 0's ordering delicate: a proof script that simply
+  began asserting would look hung rather than failing, and on a CI runner it would
+  spend the whole job budget before anyone learned anything. Two guards, both in
+  Step 0: the static precondition, which refuses on the file's own text before any
+  invocation, so the pre-Step-1 run is instant; and the perl `alarm` bound on every
+  runner call afterwards, which turns "the runner started a suite" into a red
+  assertion in 60 seconds rather than a hang. Rejected: writing the proof script
+  against the finished runner and only then recording a failure, which is the
+  ordering R9 exists to forbid — the script has to fail before the fix exists.
 - **The shellcheck bootstrap runs once, not seven times.** It stays in `checks` only.
   Checked before writing this: no suite invokes the `shellcheck` binary — all ~60
   mentions across `scripts/test/*.test.sh` are `# shellcheck` directives — so the
@@ -338,6 +385,12 @@ operator-files risk above), where its log must show 62 `==> ` headers and end
 1. **The focused proof (R1, R3, R5, R6, R9).**
    `bash scripts/test/run-all-sharding.check.sh` → one line per assertion, final line
    `sharding proof: all checks passed`, exit `0`, a few seconds.
+   The fast-fail half is evidence too, and it is recorded once in Step 0 before the
+   runner is touched: that same command against today's runner prints
+   `error: run-all.sh does not implement --shard/--list yet` to stderr, exits `2` in
+   under a second, and its output contains no `==> ` header — that last part is what
+   shows no suite ran. Paste that line, the status and the timing in the PR body
+   beside the green run.
 2. **Discovery and ordering are untouched (R2, R3).**
 
        root=$(pwd -P)
