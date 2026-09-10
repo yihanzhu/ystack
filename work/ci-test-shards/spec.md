@@ -24,10 +24,26 @@ else. `review_size: standard`.
    the environment variable `YSTACK_TEST_SHARD=<index>/<count>`. If both are given,
    the flag wins and the variable is ignored silently.
 
-2. **No selector means today's behaviour.** With no `--shard` flag and no
-   `YSTACK_TEST_SHARD` set, the script runs every suite, prints the same lines in the
-   same order, and returns the same exit codes as today. Verified by running it with
-   no arguments and diffing against the current output.
+2. **No selector means today's behaviour for every suite that exists today.** With
+   no `--shard` flag and no `YSTACK_TEST_SHARD` set, the script discovers suites by
+   the same rule, runs them in the same order, prints the same lines for each of
+   them, and returns the same exit codes as today.
+
+   This is not a promise that the whole output is byte-identical, because it cannot
+   be: requirement 9 adds `scripts/test/run-all-sharding.test.sh`, and the unchanged
+   discovery rule finds and runs it like any other suite. So exactly two things
+   differ from today's output — the new suite's own `==> <path>` header and its own
+   lines, in its sorted position, and the final count line, which reads
+   `all <N> test scripts passed` with `N` one higher. Nothing else may differ.
+
+   Verified two ways rather than by diffing the whole output:
+   - run `--list` with no selector and compare it to the discovery command in
+     requirement 3, `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'`
+     piped through `LC_ALL=C sort`, written out as repo-relative paths the same way.
+     The two lists must be identical, so discovery and ordering are provably
+     untouched;
+   - run one short existing suite through the script and check its lines are
+     unchanged.
 
 3. **Deterministic assignment.** Suites are discovered exactly as today —
    `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
@@ -59,8 +75,12 @@ else. `review_size: standard`.
 7. **Output when running.** Before the first suite the script prints
    `shard <i>/<n>: <m> of <N> test scripts selected`, where `m` is the number
    selected and `N` the number discovered. Each suite still prints its `==> <path>`
-   header. The run ends with `all <m> test scripts passed`. Without a selector,
-   neither that line nor any other new line appears (requirement 2).
+   header. The run ends with `all <m> test scripts passed`. Without a selector the
+   runner prints no line of its own that it does not print today: no `shard` line,
+   and nothing else new. The one extra `==> <path>` header and the suite output
+   under it belong to the new suite from requirement 9, printed by the same loop
+   that prints every other suite's, and the count in the closing line rises by one
+   with it — see requirement 2.
 
 8. **No vacuous pass.** If the selection is empty — which needs `count > N`, so it
    cannot happen at `count <= 16` with 63 suites, but must still be handled — the
