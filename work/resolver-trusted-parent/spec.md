@@ -18,10 +18,10 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1925-2605 changed lines** (implementation). The derivation,
+**Evidence-based range: 1972-2668 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
-- **C parent ~1045 lines** = ~605 copied verbatim + ~440 new. The test launcher is 702
+- **C parent ~1050 lines** = ~605 copied verbatim + ~445 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
   copies is nearly all of it. Block by block: the includes, platform shims and the four
   limit constants, lines 1-43 (43 lines); the eight small helpers `set_limit` through
@@ -48,7 +48,9 @@ measured rather than guessed:
   against the run directory the parent was handed, R5), the regular-non-symlink check on
   the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
-  (~45), closing inherited descriptors above 2 (~15), the fd-relative creation of the four
+  (~45), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and a
+  `write_all` (~5, R2), closing inherited descriptors above 2 (~15), the fd-relative
+  creation of the four
   sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
   two `open` calls is nearly free, and the cost is carrying the output-directory descriptor
   into `supervise` and out of `main`: the signature, the call site, the ownership of the
@@ -62,12 +64,14 @@ measured rather than guessed:
   is how the parent computes digests: delegating to the platform's SHA-256 and SHA-1 tools
   at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
-  plan decides that, and it is the one thing that could push the C file past ~1155. This
-  round moves this figure by the ~35 just named — the supervisor's reads moving onto the
+  plan decides that, and it is the one thing that could push the C file past ~1160. The
+  round before this one moved this figure by the ~35 just named — the supervisor's reads
+  moving onto the
   descriptors it already holds, and the blob id being computed in C rather than delegated
   to `git hash-object`. The round before it moved nothing here, and the one before that
-  added the ~20 for the fd-relative creation.
-- **Entry shell ~365 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+  added the ~20 for the fd-relative creation. This round adds the ~5 for the
+  `runtime-pgid` line and nothing else.
+- **Entry shell ~375 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
@@ -91,10 +95,14 @@ measured rather than guessed:
   `materialize.sh:4-13` and nothing else, and ~5 for the re-exec — the argument-count and
   marker-word discrimination, the `${BASH_SOURCE[0]}` absolute check, and the `exec` line
   itself (R1). Moving the pin checks after the run directory costs nothing: the same
-  statements in a different order. This round adds ~10 more, to **~345**: the marker
+  statements in a different order. The round after that added ~10 more, to ~345: the marker
   branch's re-run of that scrub, which is the same ten lines again plus the two alias-reset
-  builtins (R1).
-- **Focused test ~795 lines.** For scale, the existing resolution test is 746 lines and
+  builtins (R1). The round after *that* added ~20 more, to ~365: the computed blob-id
+  construction and the Darwin compiler arm (R1). This round adds ~10 more, to **~375**: the
+  trap's second branch — the parent-pid variable it tests, and the chmod, remove and
+  `128 + signal` exit for a signal that arrives while `.run` exists and no parent does
+  (R1).
+- **Focused test ~835 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -105,30 +113,33 @@ measured rather than guessed:
   exported-function fixture and its marker-file assertion (~15), the
   polluted-compiler-environment block — poisoned-header
   fixture, two entry runs, two hand-built compiles whose digests are compared, and the
-  control compile that proves the fixture poisonous (~50, of which ~15 is the Darwin
-  `xcrun_db` before-and-after assertion that replaced an earlier round's note, R1), a shared
+  control compile that proves the fixture poisonous (~55, of which ~20 is the Darwin
+  `xcrun_db` before-and-after assertion — the state recorded as absent, or as a size, an
+  mtime and a digest, with no skip either way, R1), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
   group-2 cases on top of it (~140, the overlong-value case now building a near-`PATH_MAX`
   directory tree rather than naming a long path), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
-  signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
-  `SIGSTOP` freeze (~35), the cleanup assertions
+  two signal cases — the mid-run one with its live read of the entry's stderr for the
+  parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), and the
+  pre-parent one that signals as soon as `.run` appears (~20) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
   directory rather than one emptiness test), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
   and the pinned constant all agree, R1), the
-  command-word allowlist grep
+  command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
+  exclusion sets derived at run time,
   plus the downloader grep, which no longer needs a `git`-subcommand assertion now that
-  `git` is off the allowlist (~30),
+  `git` is off the allowlist (~40),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2265 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 seven rounds ago, then 1560-2120, then 1580-2130, then
-1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, and the
+Those sum to about 2320 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 eight rounds ago, then 1560-2120, then 1580-2130, then
+1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -176,8 +187,9 @@ moved in the C parent, because the other two findings that round settled cost no
 implementation lines — one corrected what this spec says about the Darwin toolchain's own
 cache, and the other stated a residual the parent cannot close from where it stands.
 
-This round adds ~70, and unlike that one it moves the C parent, because both of its
-findings change what shipped code does. ~35 in the parent: the supervisor's three
+The round before this one added ~70, and unlike the round before it, it moved the C parent,
+because both of its findings changed what shipped code does. ~35 in the parent: the
+supervisor's three
 path-based reads of `child.stdout` and `child.stderr` moving onto the descriptors it
 already holds (~15), and the parent-pinned subset's blob ids being computed from an
 `fstat` size and the platform's SHA-1 tool instead of delegated to `git hash-object`
@@ -188,6 +200,17 @@ assertion that each computed id equals both `git hash-object` and the pinned con
 the Darwin `xcrun_db` before-and-after check that replaced a note. Nothing was made
 cheaper to compensate — dropping `git hash-object` costs lines rather than saving them,
 which is the honest trade for the claim it buys back.
+
+This round adds ~55, and it moves all three files, though only just in the parent's case.
+~5 in the parent: the one `runtime-pgid: <n>` line written after the fork, which is a
+`snprintf` and a `write_all` (R2). ~10 in the entry: the trap's second branch and the
+parent-pid variable that selects it (R1). ~40 in the test: a new signal case that signals
+the entry as soon as `.run` appears (~20), the mid-run signal case trading its `pgrep -P`
+chain and its `ps` fallback for a live read of the entry's stderr (~5 net — the poll is on
+a line in a file rather than on a process, and the fallback goes away), the Darwin
+`xcrun_db` assertion recording size, mtime and digest and skipping nothing (~5), and the
+command-word grep becoming three documented sweeps with a `compgen -b`/`compgen -k`
+exclusion set derived at run time (~10). Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -203,8 +226,8 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by about six times: `wc -l
-work/resolver-trusted-parent/spec.md` is 2245 lines. Accepted as one concern: one
+requests too, and this one exceeds it by about seven times: `wc -l
+work/resolver-trusted-parent/spec.md` is 2512 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -216,13 +239,16 @@ scratch directories moving ahead of the pin checks, the parent's sandbox writes 
 onto the descriptor it checked, a narrowed write claim on Darwin where the
 toolchain shim writes a cache the entry cannot redirect, the `.run` swap stated as a
 residual with the same-uid assumption it needs, the marker branch re-running the
-scrub, and this round the parent's reads of the child's output moving onto the same
-descriptors it created, and the Darwin write claim restored unconditionally by taking
+scrub, the parent's reads of the child's output moving onto the same
+descriptors it created, the Darwin write claim restored unconditionally by taking
 the `xcrun` shim out of the shipped path — no `git`, and the CommandLineTools clang in
-place of `/usr/bin/cc`).
-**Evidence-based range: 1908-2582 lines** — the measured 2245 lines plus or minus 15%. It was
-553 lines and 470-636 eight rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
-then 1764, then 1955;
+place of `/usr/bin/cc` — and this round the trap's branch for a signal that arrives before
+any parent exists, the resolver's process group reported by the parent rather than inferred
+from the process table, the Darwin cache assertion that no longer skips the case it exists
+to catch, and a command-word grep with a mechanism a test can actually be written from).
+**Evidence-based range: 2135-2889 lines** — the measured 2512 lines plus or minus 15%. It was
+553 lines and 470-636 nine rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
+then 1764, then 1955, then 2245;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -308,8 +334,8 @@ forged-marker case. The remaining ~25 are ripples: Design step 2, R9's documenta
 the Copy-versus-adapt list, and the re-derived size figures here and for the
 implementation.
 
-This round is +290 net over two findings, both of them corrections to what the round
-just described settled. The first says the fd-relative sandbox creation was half a fix:
+The round before this one was +290 net over two findings, both of them corrections to what
+the round just described settled. The first says the fd-relative sandbox creation was half a fix:
 the copied supervisor reads `child.stdout` and `child.stderr` back by path after the child
 exits — `empty_regular_file`, `stream_file` and `sanitized_error`, across five call sites
 — so the race the creation move closed was still open at the point where the bytes are
@@ -328,6 +354,24 @@ assertion and its `xcrun_db` before-and-after check, and the platform-matrix con
 turning a question into a prerequisite. The remaining ~40 are ripples: Design step 2,
 the `stat` deviation bullet, R10's marker list, R7's executables count, and the re-derived
 size figures here and for the implementation.
+
+This round is +267 net over five findings, four of them P2 and one P3, and all five are
+corrections to what earlier rounds wrote rather than new ground. About 65 go to the
+resolver's process group being reported instead of inferred: R2's two new paragraphs on the
+`runtime-pgid` line and on the four stderr conventions it was checked against, R10's
+rewritten identification block, R6's stdout clarification, R9's documentation line, the
+ninth named parent deviation, and the group-2 stderr assertion. About 70 go to R10's
+command-word grep, which becomes three documented sweeps with a builtin and reserved-word
+set derived from `/bin/bash` at run time, and which now says why it is not a `shellcheck`
+invocation. About 40 go to the trap's two branches — R1's block on the window between `.run`
+and the parent, Design step 2's rewritten trap clause, and the signals concern. About 30 go
+to R10's new pre-parent signal case with its output-directory assertions, and about 15 to
+the Darwin `xcrun_db` assertion, which now records absence as a state and size, mtime and
+digest as the other one, and skips nothing. The remaining ~45 are the re-derived size
+figures, here and for the implementation. One of the five cost negative lines and was much
+the cheapest to fix: R7's opening sentence still promised a named Darwin residual
+that the round before it had removed from the rest of the requirement, and the fix was to
+delete the promise.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -348,9 +392,9 @@ the range above still blocks review.
   stdout and stderr through unchanged (it does not capture, buffer or rewrite them), and
   exits with the child's own exit status, or `128 + signal` when the child died on a
   signal. Its `EXIT` trap removes the run directory; it also traps `INT`, `TERM` and
-  `HUP`, and on those it **forwards the same signal to the parent, waits for the parent to
-  exit, and only then** removes the run directory and re-raises the signal so the caller
-  sees the normal signal death. That order is the whole point: the parent, not the entry,
+  `HUP`, and on those, when a parent exists, it **forwards the same signal to the parent,
+  waits for the parent to exit, and only then** removes the run directory and exits
+  `128 + signal`. That order is the whole point: the parent, not the entry,
   terminates the resolver's process group (R2), so the entry must never remove the run
   directory while a resolver could still be running out of it. A bash `wait` returns as
   soon as the trap fires, so the trap forwards the signal and then waits for the parent a
@@ -363,6 +407,37 @@ the range above still blocks review.
   script owns compilation, jq binding and platform choice
   (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
   the launch.
+
+  **The trap is installed before the parent exists, so it has two branches.** The trap goes
+  on with the `mkdir` that creates the run directory, which is well before the pin checks,
+  the two compiles and the launch (the order is fixed below), so `INT`, `TERM` or `HUP` can
+  arrive at a moment when `.run` is on disk and there is no parent process to forward
+  anything to. That is not a narrow window: ten pin checks and two compiles run inside it.
+  So the entry records the parent's pid in a variable the instant it starts the parent, and
+  the trap reads that variable to choose between two things:
+
+  - *No parent pid recorded.* Nothing was launched, so no resolver and no process group
+    exist and there is nothing to forward the signal to. The trap chmods the run directory
+    back to 0700, removes it, and exits `128 + signal`. A compiler child of the entry's own
+    may still be running when this happens — the caller's signal went to the whole
+    foreground group, so it was signalled too — and removing the run directory under it is
+    harmless, because everything that compile writes is inside the directory being removed
+    and no resolver exists anywhere in the picture.
+  - *A parent pid recorded.* The trap forwards the same signal to the parent, waits for the
+    parent to exit, removes the run directory only after that wait returns, and exits with
+    the parent's own status — which on a forwarded signal is the `128 + signal` the parent's
+    handler exits with (R2) — or, if the parent was killed rather than exiting, with
+    `128 + signal` for the signal that killed it.
+
+  Both branches chmod 0700 before removing, and in both that `chmod` is a harmless no-op
+  when the signal arrives before the mode pass, while the directory is still 0700. Both
+  exit rather than re-raising the signal, which is a deliberate choice over the more
+  idiomatic reset-and-re-raise: an explicit `exit` makes the entry's status on a signal the
+  same number in every path through this requirement — `128 + signal`, the same rule the
+  normal path already uses for a child that died on a signal — and that number is what R10
+  asserts. The empty pid variable is the only thing that distinguishes the two branches; the
+  entry sets it immediately after starting the parent and never clears it, so the no-parent
+  branch cannot be taken by a trap that fires while a parent is alive.
 
   **The entry's first statements scrub its environment with builtins, and then it re-execs
   itself with an empty one. Only after that does it run any external command.** An earlier
@@ -817,6 +892,48 @@ the range above still blocks review.
   that knows the group id. The entry's part is to forward the
   signal and wait (R1); it never terminates the group itself and never removes the run
   directory before the parent has exited.
+
+  **The parent names the resolver's process group on stderr, so nothing downstream has to
+  guess which child is which.** The parent runs children before the resolver — the
+  platform's SHA-1 tool for each blob-id pin, its SHA-256 tool for the jq digest, and the
+  bound jq for the `--version` probe (R7) — so "the parent's child" does not identify the
+  runtime, and anything picking a process by parentage could pick a digest tool instead.
+  Rather than have a reader infer it, the parent reports it. Immediately after the `fork`
+  (`portable-profile-resolution-launcher.c:432`) and the `setpgid(child, child)` the copied
+  supervisor already does from the parent side (`:450`), and before it enters the poll loop,
+  the parent writes exactly one line to its own stderr:
+
+  ```
+  runtime-pgid: <n>
+  ```
+
+  `<n>` is the child's pid in decimal, which is also the process group id: the child makes
+  itself a group leader with `setpgid(0, 0)` (`:440`) and the parent sets the same thing from
+  its side (`:450`), so the group id equals the child pid whichever of those two calls won
+  the race, and it is a number the parent already holds. The write is a `snprintf` into a
+  small buffer and then a direct `write_all(STDERR_FILENO, …)`, the helper the copied file
+  already uses for its own stderr writes (`:164`), not a buffered `fprintf` — so the line is
+  on the descriptor before the poll loop starts, and a reader watching stderr sees it while
+  the resolution is still running. This is a named deviation from the copied launcher, which
+  prints nothing there.
+
+  **Why stderr, and what it does and does not disturb.** Stderr is already the parent's
+  diagnostic channel: every `E_*` refusal line goes there (R5), and the entry passes it
+  through to the caller unchanged (R1). Four conventions were checked against this line and
+  none of them conflicts. The copied `sanitized_error` (`:118-165`) validates the *child's*
+  captured `child.stderr` bytes before relaying them — one line, a known `E_*` first word, a
+  restricted character set — and it never reads, validates or is affected by what the parent
+  itself has already written, so this line sits outside everything that function checks.
+  Every R5 refusal happens before the `fork`, so a refusal's stderr still carries exactly one
+  `E_*` line and nothing else, which is what R10's group-2 cases assert. The byte-identical
+  claim is about stdout, where this line does not appear (R6). And it is not a new write
+  root: stderr is a descriptor the caller handed in, the same one the `E_*` lines already
+  use, and R7 counts write roots on the filesystem — this adds no file anywhere. What does
+  change is that a successful run now prints one line on stderr where it printed nothing, so
+  a caller who reads any stderr output as failure would be wrong; R9's documentation says the
+  line is informational and that the exit status is the result. The alternatives considered
+  were a dedicated descriptor and a file inside the run directory, and both add a channel to
+  a security wrapper in order to serve a test, where stderr is a channel it already has.
 - **R3 — the environment is built from empty, with exactly this allowlist.** From
   `portable-profile-resolution-launcher.c:645-690`, and nothing else:
   `HOME=<sandbox>/home` and `TMPDIR=<sandbox>/tmp` (both created by the parent at mode
@@ -1112,12 +1229,14 @@ the range above still blocks review.
 - **R6 — the output is the runtime's bytes.** Success writes exactly the canonical
   `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:973`),
   streamed unchanged (`portable-profile-resolution-launcher.c:504-511`). For the same
-  request the shipped parent and the test launcher produce byte-identical output; the
-  focused test runs both and `cmp`s them.
+  request the shipped parent and the test launcher produce byte-identical **stdout**; the
+  focused test runs both and `cmp`s them. Stdout is the whole of this claim and stderr is
+  deliberately outside it: the shipped parent prints one `runtime-pgid: <n>` line there that
+  the test launcher has no counterpart for (R2), so a `cmp` of the two stderrs would fail on
+  a line that carries no profile bytes.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
-  credential, and **exactly one write root: the output path the caller named** — with one
-  named platform residual, the Darwin toolchain shim's own lookup cache, stated at the end
-  of this requirement. That is
+  credential, and **exactly one write root: the output path the caller named** — on every
+  supported platform, with no residual and nothing appended for any of them. That is
   what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
@@ -1176,7 +1295,9 @@ the range above still blocks review.
   Darwin the compiler is the CommandLineTools clang invoked directly, which execs its own
   linker and never the shim, and the git blob ids are computed from a size and the
   platform's SHA-1 tool so that no `git` runs at all (R1, both measured). The claim
-  therefore stands as written, on both platforms, with nothing appended to it — the shipped
+  therefore stands as written, on both platforms, with nothing appended to it: no shim is
+  invoked anywhere in the shipped path, so no cache write happens and there is nothing to
+  exempt, and the shipped
   path writes nothing outside the caller's output path. Linux CI is still where R10 asserts
   it mechanically, and the Darwin run is still operator-run; what the operator confirms
   there is now the claim itself rather than an exception to it.
@@ -1417,7 +1538,9 @@ the range above still blocks review.
   invocation forms, says the marker word is not a public entry point, and names the Darwin
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
-  `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). Both new
+  `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). It also states that a
+  successful launch prints one informational `runtime-pgid: <n>` line on stderr (R2), so
+  output on stderr is not by itself a failure signal — the exit status is the result. Both new
   files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
   resolver spec itself is not edited.
 - **R10 — the focused test.** `scripts/test/resolver-trusted-launch.test.sh` provisions
@@ -1534,7 +1657,11 @@ the range above still blocks review.
     check R5 adds now that the run directory lives in the output root.
 
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
-  if a check is ever quietly left to the entry. Those cases, and no others, are what "the
+  if a check is ever quietly left to the entry. Every refusal in this group happens before
+  the `fork`, so each case asserts that the `E_*` line is the *only* thing on the parent's
+  stderr: the one `runtime-pgid: <n>` line R2 adds cannot appear in a refusal, and a case
+  that saw it would mean a check had moved to the wrong side of the launch. Those cases, and
+  no others, are what "the
   parent's R5 refusals are proved" means here; the spec claims nothing wider.
 
   **Why the overlong case aims at the output path and not at the jq path.** The previous
@@ -1690,12 +1817,22 @@ the range above still blocks review.
      caveat: the `xcrun` shim's lookup cache is not in the `TMPDIR` the test watches but in
      the platform's per-user temp directory, so the watched directories could come back
      clean while a write had happened elsewhere. The shipped path no longer runs the shim
-     (R1), which turns that caveat into something checkable — so on Darwin the test records
-     `xcrun_db`'s mtime and size in the per-user temp directory before the run and requires
-     both unchanged after it, and does the same around the pin checks, which no longer run
-     `git` either. The assertion is skipped when that file does not exist, which is itself
-     the desired state. Linux still carries the general one-write-root claim, having never
-     had a shim; Darwin now proves the specific write that used to be excused. What this
+     (R1), which turns that caveat into something checkable — so on Darwin the test asserts
+     that the state of `xcrun_db` in the per-user temp directory (the directory
+     `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports) is the same after the run as before
+     it, and does the same around the pin checks, which no longer run `git` either.
+     **Absent is a state, not a reason to skip**, and an earlier round of this spec had that
+     backwards: it skipped the assertion when the file did not exist, which is exactly the
+     case where something creating it would be the write this spec no longer admits — a skip
+     there turns the strongest evidence available into no evidence at all. So the test reads
+     one of two states before the run: the file is absent, or it is present with a size, an
+     mtime and a SHA-1 of its bytes. It then requires the same state afterwards — absent
+     stays absent, and present stays byte-identical in all three values. Either starting
+     state passes; a transition in either direction fails, and so does any change to a file
+     that was already there. There is no skip on Darwin. The assertion is Darwin-only
+     because Linux has no such file and no shim that would write one, and there the general
+     one-write-root claim covers it; Darwin now proves the specific write that used to be
+     excused. What this
      half cannot do is compare the built binaries:
      the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
@@ -1783,12 +1920,32 @@ the range above still blocks review.
   resolver before signalling.** R2's group termination has no other proof, so the signal
   path has to run every time rather than whenever the timing happens to work out. The test
   starts the entry in the background on a real resolution — the default profile request
-  with this repository as the mapped root — and then, before it signals anything, waits for
-  the resolver to actually be running: it polls `pgrep -P <entry pid>` for the entry's only
-  child, the parent, and then polls for the parent's own child, the launched runtime, up to
-  a bounded number of short waits. Once that child exists the test records the resolver's
-  process group id — from the parent's own bookkeeping where the parent reports it,
-  otherwise `ps -o pgid= -p <child pid>` — and sends `SIGSTOP` to that whole group. A
+  with this repository as the mapped root — with the entry's stderr redirected into a file
+  in the test's own scratch, and then, before it signals anything, waits for the resolver to
+  exist: it polls that file for a line matching `^runtime-pgid: [0-9]+$` up to a bounded
+  number of short waits, and takes `<n>` from it.
+
+  **It reads the group id from that line and not from the process table, because only the
+  parent knows which child is the runtime.** The parent runs the two digest tools and the jq
+  `--version` probe before it forks the resolver (R7), so an earlier round's
+  `pgrep -P <entry pid>` chain — the entry's only child, then that child's own child — could
+  legitimately return a digest tool that happened to be alive when the poll looked, and
+  freezing *that* group would prove nothing while looking exactly like success. So the
+  identification moves to the one process that cannot get it wrong: the parent reports its
+  own `runtime-pgid: <n>` immediately after the fork (R2), and the test reads that.
+  `pgrep -P` is gone from this test, and there is no `ps -o pgid=` fallback either — a
+  fallback here would be a second, worse identification competing with a correct one.
+  Capturing the entry's stderr to a file and polling the file is enough, for two reasons
+  stated in the requirements it depends on: the parent writes the line unbuffered before it
+  enters the poll loop (R2), and the entry passes stderr through unchanged rather than
+  capturing or buffering it (R1). A FIFO the test creates and reads, or a `tail -f` on the
+  redirected file, would do the same job; the plan may use any of the three, and the plain
+  file is the simplest because it needs no reader process to start or clean up. What it must
+  not do is wait for the entry to finish before reading, since the whole point is to read
+  the line mid-run.
+
+  Once the line is in hand the test sends `SIGSTOP` to the group `<n>` names, and requires
+  both that the `kill` succeeds and that the group still has a member afterwards. A
   stopped group cannot make progress and cannot finish, so from that moment the run will
   not end on its own and there is no race left to lose. Only then does the test send
   `SIGTERM` to the entry.
@@ -1798,19 +1955,53 @@ the range above still blocks review.
   `kill(-pgid, SIGKILL)`, which is what actually kills the frozen group, reaps the child
   and exits `128 + 15`; the entry's second wait returns, its trap chmods the run directory
   back to 0700 and removes it, and the entry exits `143`. The test asserts the three
-  observable ends of that: `pgrep -g <pgid>` finds no process and `kill -0` on the group
+  observable ends of that: `pgrep -g <n>` finds no process and `kill -0` on the group
   fails, the output directory it gave the entry holds no `.run` entry so the run directory
-  is gone, and the entry's exit status is `143`, which is `128 + SIGTERM`.
+  is gone, and the entry's exit status is `143`, which is `128 + SIGTERM`. `pgrep -g` stays
+  in the test where `pgrep -P` is gone, and the difference is worth naming so the plan does
+  not remove the wrong one: `-g` asks whether a group the test has already identified is now
+  empty, which is an assertion about a known number, while `-P` was being asked to work out
+  which process the runtime was.
 
-  **If the resolver's child never appears, the test fails.** There is no fallback in which
-  a completed run counts as signal coverage, because a run that finished before the child
-  could be seen proves nothing about group termination. The bounded poll expiring is a test
-  failure, with a message saying the fixture was too short on this machine. The fix is one
+  **If the group is gone before the freeze lands, the test fails.** There is no fallback in
+  which a completed run counts as signal coverage, because a run that finished before the
+  freeze proves nothing about group termination. Two outcomes are failures here rather than
+  skips. The bounded poll for the `runtime-pgid` line expiring is one: it means the parent
+  never got as far as forking the resolver, so there was no group at any point the test could
+  see. A `SIGSTOP` that finds the group already empty is the other — the `kill` failing with
+  no such process, or no member left immediately after it — which means the resolution
+  finished on its own between the line and the freeze. Both print a message saying the
+  fixture was too short on this machine. The fix is one
   of two, decided in the plan rather than papered over at run time: enlarge the fixture so
-  the resolution takes long enough for the child to be observed, or drive the parent
+  the resolution takes long enough for the freeze to land, or drive the parent
   directly in the group-2 style with a deterministic pause in the launched runtime so the
-  child is guaranteed to exist before the test signals. Either way the `SIGSTOP` freeze
+  group is guaranteed to be alive when the test signals. Either way the `SIGSTOP` freeze
   runs, and the mid-run path is exercised on every platform the test runs on.
+
+  **A signal that arrives before the parent exists is tested as its own case, because the
+  trap's other branch is reachable.** The trap is installed with the `mkdir` that creates
+  `.run`, ahead of the pin checks and both compiles (R1), so there is a real window in which
+  the entry has a run directory and no parent, and the branch that handles it — chmod,
+  remove, exit `128 + signal`, nothing forwarded to anybody — has no coverage from the
+  mid-run case above. So the test runs the same real resolution in the background a second
+  time, polls the output directory for the `.run` entry with a bounded number of short waits,
+  and sends `SIGTERM` to the entry as soon as it appears. Polling for the directory rather
+  than for a process is what makes this land in the window without slowing anything down:
+  `.run` is created before the first pin check, and ten pin checks and two compiles run after
+  it. Three assertions: the entry's exit status is `143`; the output directory holds no
+  `.run` entry; and it is **completely empty** — which is also how the test knows the signal
+  landed in the window it was aiming at. The request in this fixture is a valid one, so a
+  parent that had started would have passed its checks and created its `home`, `tmp`,
+  `child.stdout` and `child.stderr` in the output directory before the signal could reach
+  it. A non-empty output directory is therefore a failure, and its message says the signal
+  landed after the parent started rather than before it. The fix belongs to the plan and is
+  not the same as the mid-run case's, because this failure means the poll was too *late*
+  rather than the fixture too short: a shorter poll interval, or a wider pre-parent window —
+  the ten pin checks and both compiles are already in it — and never a skip. What the case
+  deliberately does not assert is *which* step the signal interrupted —
+  a pin check, either compile, or the mode pass, whichever the machine happened to be on —
+  because the branch under test is the same one in every case and the claim is about what it
+  leaves behind.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -1824,28 +2015,84 @@ the range above still blocks review.
   agree — three values, not two. The test may run git freely: it is not the shipped path,
   and the allowlist grep below covers the shipped files only.
 
-  **The read allowlist is a grep, not a promise, and it covers command words only.** The
-  test greps both shipped files for
-  every command word — every absolute path under `/usr/bin`, `/bin` or
-  `/Library/Developer/CommandLineTools/usr/bin`, and every bare
-  command name — and fails unless each one appears in R7's list: `/bin/bash`,
+  **The read allowlist is a grep, not a promise, it covers external command words only, and
+  the mechanism is settled here rather than left to the plan.** The list it checks against is
+  R7's: `/bin/bash`,
   `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/bin/cat`, `/usr/bin/uname`,
   `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/env`,
   `/usr/bin/stat`, the compiler pair `/usr/bin/cc` and
   `/Library/Developer/CommandLineTools/usr/bin/clang`, and the three digest tools
   `/usr/bin/shasum`, `/usr/bin/sha256sum` and `/usr/bin/sha1sum` — sixteen command words.
-  Three changes this round, all from the same two findings. `/usr/bin/git` **leaves the
-  list**, because the shipped path computes blob ids instead of running `git hash-object`.
-  The Darwin compiler joins it as
-  `/Library/Developer/CommandLineTools/usr/bin/clang`, which is also the first time the
-  grep has to look outside `/usr/bin` and `/bin` — the plan should not miss that, since a
-  grep that only knows those two prefixes would silently pass a shipped file that had
-  grown a third one. And `/bin/cat` and `/usr/bin/sha1sum` join as the blob-id
-  construction's two new tools (R1).
+  An earlier round of this spec described the sweep as "every absolute path under
+  `/usr/bin`, `/bin` or `/Library/Developer/CommandLineTools/usr/bin`, and every bare command
+  name", which is not something a test can be written from. Taken literally it fails on `cd`,
+  `printf` and `[`, which are bash builtins the entry uses and not external commands at all,
+  and it misses an absolute path under a fourth prefix. The invariant is about what these two
+  files **execute**, so the grep has to separate three things: an absolute path that names an
+  executable, a builtin or reserved word that starts no process, and an absolute path that is
+  data rather than a command, and it needs a fourth thing that is none of those three — a
+  variable expansion standing where a command word goes. Three documented sweeps over both
+  shipped files do that.
+
+  1. *Absolute-path tokens.* Every token beginning with `/` is extracted, and each one must
+     be either one of the sixteen words above or one of the four absolute paths these files
+     name as data rather than as commands: the SDK root passed to `-isysroot`
+     (`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, R1), the `PATH` value
+     `/usr/bin:/bin` the entry writes into its own environment and into every `env -i` line,
+     and the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
+     (`portable-profile-resolution-launcher.c:178`) and the `/proc/%s/stat` template
+     (`:204`). Anything else fails, whatever prefix it carries. Matching on the leading slash
+     rather than on a list of directories is the point: the Darwin compiler took the prefix
+     set to three, and a grep that knew only the prefixes somebody told it about would
+     silently pass a shipped file that had grown a fourth.
+  2. *Bare words in command position, in the entry only.* The C file has none — it names its
+     executables as string literals, which pass 1 already covers. The entry does, so the
+     test takes the first word of each command in it and drops every name `compgen -b`
+     reports (the builtins: `cd`, `pwd`, `exec`, `wait`, `trap`, `set`, `unset`, `export`,
+     `builtin`, `shopt`, `unalias`, `printf`, `read`, `local`, `return`, `exit`, `[` and the
+     rest) and every name `compgen -k` reports (the reserved words: `if`, `then`, `else`,
+     `fi`, `case`, `esac`, `for`, `while`, `do`, `done`, `function`, `[[`, `]]`, `!` and the
+     rest). Deriving both sets at run time from `/bin/bash` rather than hard-coding them is
+     the choice this spec makes, and the reason is drift: `/bin/bash` is the same interpreter
+     the entry runs under, so the exclusion set is exactly that shell's and cannot fall out
+     of step with a list somebody typed into the test. What must remain after those two drops
+     is **nothing at all**, because every external command the entry runs it runs by absolute
+     path — so any surviving bare word is either a `PATH` search or a new external command,
+     which is precisely what this invariant exists to catch. Variable expansions in command
+     position (`"$compiler"`, the chosen SHA tool, the bound jq, the compiled parent inside
+     the run directory) are not bare words and are not swept here; pass 3 covers them.
+  3. *Variable expansions in command position, checked by name.* Pass 2 has to let those
+     through, and on its own that would leave a hole big enough for the exact thing R7's
+     compiler bullet forbids: `${CC:-/usr/bin/cc}` is neither a bare word nor an
+     unlisted absolute path, so it would slip past both sweeps while handing the caller the
+     compiler back. So the test collects the parameter *names* that appear in command
+     position and requires every one of them to be a name the entry itself assigns — the
+     chosen compiler, the chosen SHA-1 and SHA-256 tools, the bound jq, and the compiled
+     parent inside the run directory, a short list the plan fixes and the test spells out.
+     A name the entry never assigns fails, `CC` above all, and so does a default-value
+     expansion on any of them, since `${x:-…}` reintroduces exactly the override this
+     forbids. What pass 3 does not check is *values*: what those names hold comes from the
+     per-platform `case` and from the run directory's own path, and reading those tables is
+     a review item (R8, and the platform-matrix concern).
+
+  The grep is deliberately not a parser. `shellcheck -f json` was considered as a way to get
+  command positions for free and rejected: it would put a linter's syntax tree in the middle
+  of a security invariant, and the invariant would then be only as strong as that tool's
+  version and warning set. Three sweeps, one of them with a runtime-derived builtin list,
+  can be checked by reading them. `bash -n` stays where it already is — the entry has to parse — and is no part
+  of this invariant.
+
+  **The sixteen words do not move this round; the mechanism above is what moved.** Three
+  changes came with the round before it, all from the same two findings. `/usr/bin/git`
+  **left the list**, because the shipped path computes blob ids instead of running
+  `git hash-object`. The Darwin compiler joined as
+  `/Library/Developer/CommandLineTools/usr/bin/clang`, the first time the
+  grep had to look outside `/usr/bin` and `/bin`. And `/bin/cat` and `/usr/bin/sha1sum`
+  joined as the blob-id construction's two new tools (R1).
   `/usr/bin/env` and
-  `/usr/bin/stat` joined the round before (the explicit compile and launch environment, and
-  the output-root owner and mode check, R1); `/usr/bin/mktemp` left it the round before
-  that,
+  `/usr/bin/stat` joined the round before that (the explicit compile and launch environment,
+  and the output-root owner and mode check, R1); `/usr/bin/mktemp` left a round earlier
+  still,
   when the run directory became `<output>/.run`, and `/usr/bin/find` was never on it.
   Anything else — a new tool, a bare name that
   would be resolved through `PATH`, a `${CC:-…}` style override — fails CI, which is what
@@ -1857,7 +2104,9 @@ the range above still blocks review.
   It existed because `/usr/bin/git` was on the allowlist: `curl`, `wget` and `nc` failed
   the allowlist as unlisted commands, but `git fetch` and `git clone` needed their own
   assertion that no subcommand other than `hash-object` appeared. With git off the list
-  entirely, `git` fails the allowlist exactly as the three downloaders do, and the
+  entirely, `git` fails the allowlist exactly as the three downloaders do — bare `git` is a
+  pass-2 word that is neither a builtin nor a reserved word, and `/usr/bin/git` is a pass-1
+  token that is not one of the sixteen — and the
   subcommand assertion goes away — one fewer invariant to keep true by hand, and a
   stronger claim than the one it replaces. The test
   is shellcheck-clean,
@@ -1901,6 +2150,10 @@ Order, each step checkable before the next:
    runtime's own repository-root rule, `resolver/v1/profile-resolve-runtime.sh:9-10`), and
    the `INT`/`TERM`/`HUP` handlers that terminate the child's process group with
    `kill(-pgid, SIGTERM)` then `kill(-pgid, SIGKILL)`, reap, and exit `128 + signal` (R2).
+   One further line has no counterpart either: the single `runtime-pgid: <n>` written
+   straight to stderr with the copied `write_all` (`:164`) immediately after the `fork`
+   (`:432`) and the parent-side `setpgid` (`:450`) and before the poll loop, so a reader can
+   identify the resolver's process group without guessing at the process table (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
    `E_RUNTIME` before the next. **Scrub, then re-exec, before any external command** — the
    builtins-only scrub copied verbatim from
@@ -1928,9 +2181,12 @@ Order, each step checkable before the next:
    `EXIT`/`INT`/`TERM`/`HUP` trap that
    removes the whole run directory (the trap chmods the directory back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
-   unlinked; on the three signals it first forwards the signal to the parent and waits for
-   the parent to exit, and removes nothing until that wait returns, because the parent is
-   what terminates the resolver's process group — R2);
+   unlinked; on the three signals it has two branches, chosen on whether a parent pid has
+   been recorded yet — with a parent, it forwards the signal, waits for the parent to exit,
+   removes nothing until that wait returns because the parent is what terminates the
+   resolver's process group, and exits with the parent's status; without one, no group exists
+   and there is nothing to forward to, so it removes the run directory and exits
+   `128 + signal` — R1, R2);
    **then the pin check** — verify the jq passed as an argument
    against this
    platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify the blob
@@ -2087,13 +2343,19 @@ intent says for this change. Only after the operator's merge does
   at all — so it gets none of the benefit of the "copy what is already proved" argument
   the rest of the parent rests on, and it fails in the worst direction either way: a
   resolver left running under a deleted run directory, or a group killed that should not
-  have been. Its one test is at least deterministic: R10 stops the resolver's process group
-  with `SIGSTOP` before signalling the entry, so the path is exercised on every run, and a
-  run that finishes before the resolver's child appears fails the test rather than passing
-  on a weaker claim. The plan
+  have been. Its tests are at least deterministic, and there are two of them now. R10 stops
+  the resolver's process group with `SIGSTOP` before signalling the entry, so the mid-run
+  path is exercised on every run, and it takes that group from the parent's own
+  `runtime-pgid` line rather than from the process table, so it cannot freeze some digest
+  tool's group and read the result as success; a run that finishes before the freeze lands
+  fails the test rather than passing on a weaker claim. The second test drives the trap's
+  other branch — a signal that arrives after `.run` exists and before any parent does, where
+  no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
+  appears. The plan
   should treat this as the highest-risk new code here and say what it does on `EINTR` in
-  `waitpid`, on a second signal during termination, on an already-reaped child, and on a
-  group whose members are stopped when the handler fires.
+  `waitpid`, on a second signal during termination, on an already-reaped child, on a
+  group whose members are stopped when the handler fires, and on a signal that reaches the
+  entry while a compile is still running and no parent pid has been recorded.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
@@ -2156,7 +2418,7 @@ intent says for this change. Only after the operator's merge does
   of it (see the size derivation above). Copying the supervisor verbatim keeps the proven
   behaviour but carries code written for a test harness; adapting risks a subtle
   divergence in exactly the code that enforces the limits. The plan should list every
-  deviation line by line. Eight are already known in the parent: the mode-0644 check moves
+  deviation line by line. Nine are already known in the parent: the mode-0644 check moves
   from the test
   into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
@@ -2177,10 +2439,15 @@ intent says for this change. Only after the operator's merge does
   `lseek`, and the two files are opened `O_RDWR` instead of `O_WRONLY`, where the launcher
   re-opens both by path at `:505-506,518,522,526` (R5). That counts as one item on purpose:
   it is a single move from names to descriptors, and splitting the creations from the reads
-  is how it came out half-done the first time. The eighth is this round's other change to
+  is how it came out half-done the first time. The eighth came with the round before this
+  one, its other change to
   the C file — the parent-pinned subset's blob ids are computed from an `fstat` size and
   the platform's SHA-1 tool, where nothing in the launcher pins anything and the obvious
-  shortcut would have been `git hash-object` (R1, R7). Eight more
+  shortcut would have been `git hash-object` (R1, R7). The ninth is this round's only change
+  to the C file: the one `runtime-pgid: <n>` line the parent writes to its own stderr
+  immediately after the fork, where the launcher writes nothing there and leaves the
+  resolver's process group unnamed, so anything downstream had to work it out from the
+  process table (R2). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
   (`portable-profile-resolution.test.sh:130-143`); the compiler is a fixed path chosen per
