@@ -34,14 +34,17 @@ Order of work below: the proof script comes before the runner, per Step 0.
   both operator-owned edits, per `proposals/README.md`. This is proposed text, not an
   applied change.
 
-**Operator-authored, as the last commit on the same branch:**
+**Operator-authored, as the last permanent file change on the same branch:**
 
 - **`.github/workflows/ci.yml`** (~49 net). The three-job shape of R10.
 - **`AGENTS.md`** (+1). One sentence added to the CI bullet at line 86.
 
 Both come from `git apply proposals/ci-test-shards-shard-ci.patch`. Agents write the
 patch file; the operator applies and commits it. That is the whole reason this
-initiative is `risk: high`.
+initiative is `risk: high`. His commit is the last *permanent* change, not literally
+the last commit: the two throwaway proof commits of Step 6 — the red-shard file added,
+then deleted — sit on top of it and leave nothing in the merged tree. The full order
+is the numbered list at the top of Order of work.
 
 ### What does not change
 
@@ -53,8 +56,16 @@ initiative is `risk: high`.
 - **The branch ruleset.** `post_transition_ruleset` in `config/construction-mode.json`
   is not opened. The required check stays the single name `ci` (R11).
 - **`on:` and `permissions:`** in `ci.yml` (lines 3-9) are copied through unchanged.
-- **The four existing gate steps** in `ci.yml` — required-files, pinned shellcheck,
-  test, rename — keep their text; they are moved between jobs, not rewritten.
+- **The three non-test gate steps** in `ci.yml` — `Check required files exist`,
+  `Shellcheck (if any shell scripts)` and `Rename gate` — keep their text
+  byte-for-byte; they are moved into the `checks` job, not rewritten.
+- **The `Test suite` step is the one gate step that does change**, and only its `run`
+  line: `bash scripts/test/run-all.sh` becomes
+  `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`. That one line is the
+  point of the whole initiative, so it is not covered by the byte-for-byte claim
+  above. Everything else about the step is unchanged — same `name: Test suite`, same
+  `run: |` shell and the comment inside it, same default working directory, no `env:`
+  added — and it moves into the matrix `test` job.
 - **`ci/required-files.txt:89`** (`scripts/test/run-all.sh`) — the runner's path does
   not change, so that line stays. `.github/workflows/ci.yml` is not in the manifest
   and no entry is added for it.
@@ -74,6 +85,31 @@ and re-decide with the operator rather than splitting: the runner, its proof, an
 workflow that calls them are one concern.
 
 ## Order of work
+
+**The commit sequence, stated once.** Every step below assumes this order on
+`ystack/impl/ci-test-shards`:
+
+1. The coder's commits for the five agent-authored files (Steps 0-4).
+2. The PR is opened. Its first CI run is still the old serial workflow, so it is the
+   no-argument run; record it and the commit it ran on, `H0` (Step 5).
+3. The operator applies the patch and commits `.github/workflows/ci.yml` and
+   `AGENTS.md`. **This is the last permanent file change on the branch** (Step 6).
+4. The coder pushes one commit adding `scripts/test/zz-red.test.sh`. Call that head
+   `HR`, and record the red run against it (Step 6).
+5. The coder pushes a plain commit deleting that file and waits for green — never an
+   amend, never a force-push.
+6. That green head is the final head, `HF`. Both identity pairs are recorded in the
+   PR body there: the `scripts/test` tree ids for `H0` and `HF`, and the `ci.yml`
+   blob ids for `HR` and `HF`.
+7. Review happens at `HF`, and the PR is squash-merged. Commits 4 and 5 cancel out,
+   so the red suite never reaches `main`.
+
+Commits 4 and 5 are throwaway proof commits, which is why the operator's commit is
+described everywhere here as the branch's last *permanent* change rather than its last
+commit. The spec words it "the last commit on the implementation branch"
+(`work/ci-test-shards/spec.md:300-301`); this plan refines that to "last permanent
+change" for the same reason the red-shard proof moved off a scratch branch, and
+Deviations from the spec records it.
 
 ### Step 0 — the proof script first (R9)
 
@@ -258,7 +294,7 @@ keeping `name:`, `on:` and `permissions:` (lines 1-9) exactly as they are:
             shard: [1, 2, 3, 4, 5, 6]
         steps:
           - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-          - name: Test suite
+          - name: Test suite              # today's 96-100, run line changed
             run: |
               bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
 
@@ -278,12 +314,15 @@ keeping `name:`, `on:` and `permissions:` (lines 1-9) exactly as they are:
               fi
               echo "ci gate ok"
 
-Four points the diff must get right. The checkout step is repeated in `checks` and in
-`test` because each job starts with an empty workspace; without it the very first
-step cannot find `ci/required-files.txt`. The aggregate job gets no checkout — it
-opens no repository file. The aggregate job keeps the bare id `ci` and is given no
-`name:` key, so the check it reports is still literally `ci`. And the `6` in the
-matrix list and the `/6` in the run line are the same number.
+Five points the diff must get right. `Test suite` is the only one of the four gate
+steps whose text changes at all, and only its `run` line: it gains
+`--shard ${{ matrix.shard }}/6`, with name, shell and comment left alone. The other
+three are copied byte-for-byte into `checks`. The checkout step is repeated in
+`checks` and in `test` because each job starts with an empty workspace; without it the
+very first step cannot find `ci/required-files.txt`. The aggregate job gets no
+checkout — it opens no repository file. The aggregate job keeps the bare id `ci` and
+is given no `name:` key, so the check it reports is still literally `ci`. And the `6`
+in the matrix list and the `/6` in the run line are the same number.
 
 The rationale paragraph for these two files goes in the implementation PR body, per
 `proposals/README.md`.
@@ -360,7 +399,9 @@ head. That local serial run is the one place in this plan where anybody runs the
 someone's machine, and it happens only if the binding broke. No agent runs it.
 
 The operator runs `git apply proposals/ci-test-shards-shard-ci.patch`, reviews the two
-files, commits and pushes them as the last commit on `ystack/impl/ci-test-shards`.
+files, commits and pushes them as the last permanent file change on
+`ystack/impl/ci-test-shards` — the two red-shard proof commits below follow it and
+cancel each other out, so nothing after his commit survives into the squashed commit.
 Only after that does CI exercise the new shape. He records the run's wall-clock
 duration in the PR body; the target is under 25 minutes (R14).
 
@@ -429,9 +470,10 @@ real run shows GitHub actually reporting `ci` red.
 
 ## Deviations from the spec
 
-One, stated openly rather than done quietly. Requirement 11
-(`work/ci-test-shards/spec.md:168-173`) says the aggregate gate is verified "by
-failing one shard on a scratch branch", and the risk note at `:311-313` repeats it.
+One mechanism change and the wording change it forces, both stated openly rather than
+done quietly. Requirement 11 (`work/ci-test-shards/spec.md:168-173`) says the
+aggregate gate is verified "by failing one shard on a scratch branch", and the risk
+note at `:311-313` repeats it.
 That mechanism cannot work: `ci.yml`'s triggers are `pull_request` and `push` to
 `main` only (`.github/workflows/ci.yml:3-6`), so a scratch branch starts no workflow
 run whatsoever and there is nothing to watch go red. The spec's *intent* — deliberately
@@ -440,9 +482,19 @@ failure off `main` — is met exactly. Only the mechanism changes: two ordinary 
 on the single implementation PR, add then delete, squash-merged, with the red run
 bound to the final head by the `ci.yml` blob id (Step 6, Proof item 14).
 
-The correction is submitted through this gate. Accepting this plan accepts the
-corrected proof strategy; yshifu records the correction on the intake issue when this
-plan merges, so the spec's wording is not silently overridden. The spec file itself is
+That correction has one knock-on wording change, recorded here for the same reason.
+The spec says the operator commits the two constitution-path files "as the last commit
+on the implementation branch" (`work/ci-test-shards/spec.md:300-301`). Because the
+red-shard proof now runs on this PR, two commits necessarily follow his — the
+red-shard add and its delete — so this plan reads that line as the last *permanent*
+file change on the branch. Those two cancel out and leave nothing in the squashed
+commit, so the spec's intent holds exactly: the operator's files land last and no
+agent commit changes them. The full sequence is the numbered list at the top of Order
+of work.
+
+Both corrections are submitted through this gate. Accepting this plan accepts the
+corrected proof strategy; yshifu records both on the intake issue when this plan
+merges, so the spec's wording is not silently overridden. The spec file itself is
 not edited — it is the accepted contract, and this plan does not rewrite its text.
 
 ## Risks
@@ -515,7 +567,8 @@ not edited — it is the accepted contract, and this plan does not rewrite its t
   While the step exists, `checks` is a `needs:` of `ci`, so a red proof is a red gate.
   Rejected: naming it `*.test.sh`, which would add a 63rd suite, change the
   no-argument output and count, and breach both R2 and the accepted intent.
-- **The two operator files arrive last, and that order is a requirement.**
+- **The two operator files arrive after the five agent-authored ones, and that order
+  is a requirement.**
   Before Step 6, a `pull_request` run uses the workflow file on the branch head —
   which is still today's single serial `ci` job. So the PR's first CI run is the old
   shape: it runs the required-files check (now including the new manifest line),
