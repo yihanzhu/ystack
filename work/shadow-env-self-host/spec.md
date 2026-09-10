@@ -306,13 +306,63 @@ inventories and reads the source repository directly. Do not edit either; if the
 inventory or `rev-list` left anything behind in `source.git`, that check is what says
 so. The copied predicates write only inside the driver's own scratch (R7's `run_root`).
 
-**R17.** Nothing else under `shadow/v1/` changes — not the `.jq` programs, not
+**R17.** The test's own purity guard on the driver's text is *tightened*, not dropped —
+it is the one existing check this revision must edit.
+`scripts/test/shadow-slice.test.sh:612-618` greps `reproduce.sh` and fails
+`forge-or-network-command` if it finds a forge or network tool, a URL, or `git`
+followed by any of `push|commit|apply|update-ref|fetch|clone|init|config` (line 614);
+line 620's pass message reads 'the driver reads Git objects only and calls no forge,
+network, or model tool'. What that `config` word is protecting against is a driver that *writes* config —
+the way a run would quietly redirect `core.hooksPath` or any other setting and stop
+being read-only. But it matches on the two words alone, so it also refuses a *read*,
+and R7's copy contains exactly one, verbatim from `materialize.sh:314-315`:
+
+```
+"${git_env[@]}" /usr/bin/git config --file "$source_config_snapshot" \
+  --name-only --list --no-includes > "$source_config" 2>/dev/null ||
+```
+
+That lists key *names* out of a bounded copy the driver made under its own `run_root`
+(`materialize.sh:301-312`) — never out of the source repository, `$HOME`, or the
+machine — and writes nothing. Checked while drafting by running the guard's three
+greps over both copied spans: that line is the only hit, in that one clause, and no
+other clause fires. So R20's shadow-slice all-pass cannot hold until the guard is made
+precise.
+
+Drop `config` from line 614's verb list and give it its own check, which refuses
+strictly more than the old one did in every direction that matters:
+
+- refuse `git config` carrying `--global`, `--system`, `--local` or `--worktree` —
+  each of those reaches outside the snapshot, to read or to write;
+- refuse `git config` with no `--file` at all — that is the repository's own config;
+- refuse a `--file` argument that is anything other than `"$source_config_snapshot"`,
+  the driver's own scratch copy;
+- refuse any writing form on a `git config` line: `--add`, `--replace-all`, `--unset`,
+  `--unset-all`, `--edit`, `--rename-section`, `--remove-section`, or a bare
+  key-and-value pair;
+- allow exactly the two lines quoted above, and require them exactly once — `git
+  config` occurs once in `reproduce.sh`, and that occurrence is the copied read-only
+  listing. Pinning the allowed form to the copy's exact text is deliberate: it is a
+  verbatim copy (R7), so a reflow or an edit of those lines should trip the guard and
+  be looked at.
+
+Assertion form, since the file has no mutation harness for shell text (`mutate`, lines
+274-279, is jq over JSON): factor the check into a helper beside the existing ones —
+`config_guard_ok <path>`, returning nonzero on any refusal above — and call it twice.
+Once on `$reproducer`, which must pass. Once on a mutated copy under `$tmp`, made with
+`/bin/cp` plus one appended line `git config --local core.hooksPath "$scratch/hooks"`,
+which must be refused; `fail config-guard-permissive` if it is not. `reproduce.sh`
+itself is never edited, so R16's component digests still hold. The pass message
+becomes: the reproducer reads git config only from its own bounded snapshot copy and
+never writes.
+
+**R18.** Nothing else under `shadow/v1/` changes — not the `.jq` programs, not
 `validate-incident.sh` — and no adapter changes: `materialize.sh` is cited and copied
 from, never edited; its own checks stay exactly where they are, as the second line of
 defense behind the driver's copy. `ci/required-files.txt` is unchanged: the registry
 path is already listed and no new file is added.
 
-**R18.** The doc passages that count the entries, plus the two describing what the
+**R19.** The doc passages that count the entries, plus the two describing what the
 driver enforces, are updated, with no other prose change. Confirm each by grepping
 `shadow-environments`; line numbers are indicative.
 - `docs/components.md` ~1194 — "starts with exactly one entry" becomes two, named with
@@ -331,7 +381,7 @@ driver enforces, are updated, with no other prose change. Confirm each by greppi
 - `docs/transition-kit.md` ~247 — "must first be listed" becomes "is now listed", the
   run itself still gated.
 
-**R19.** Proof: shellcheck 0.11.0 `-x -S style` clean on both edited shell files
+**R20.** Proof: shellcheck 0.11.0 `-x -S style` clean on both edited shell files
 (`shadow/v1/reproduce.sh`, `scripts/test/shadow-slice.test.sh`), `bash
 scripts/test/shadow-slice.test.sh` all-pass, `bash
 scripts/test/scope-qualification.test.sh` 0 failures, `bash
@@ -339,14 +389,17 @@ scripts/test/portable-core-schema.test.sh` 0 failures, `bash scripts/check-renam
 clean, required CI green. Additionally, the verbatim copy is proven verbatim: the
 copied spans, extracted from `reproduce.sh` between the copy header and its end
 marker, compare equal to `materialize.sh:271-332` and `348-354` at the cited commit.
-Show that comparison in the PR body.
+Show that comparison in the PR body. The all-pass includes R17's two calls: the
+tightened guard accepts `reproduce.sh` as shipped and refuses the `--local` mutation
+of it.
 
-**R20.** Size: about 250–270 changed lines across the same six files
+**R21.** Size: about 260–280 changed lines across the same six files
 (`shadow/v1/shadow-environments.json`, `shadow/v1/reproduce.sh`,
 `scripts/test/shadow-slice.test.sh`, `docs/components.md`, `docs/transition.md`,
 `docs/transition-kit.md`). The earlier estimate was ~150; the verbatim copy and its
-name bindings add about 75 lines to the driver, and R14's two cases plus R15's rewrite
-about 30 to the test. That is still inside the ~300–400 net-line soft budget in
+name bindings add about 75 lines to the driver, R14's two cases plus R15's rewrite
+about 30 to the test, and R17's tightened config guard with its mutation call about 10
+more. That is still inside the ~300–400 net-line soft budget in
 `AGENTS.md:103`, so `review_size: standard`; no exception claimed. The copy is the
 largest single block and is a byte-for-byte copy of reviewed code, which reads faster
 than its line count suggests. If the implementation lands above 400 lines, stop and
@@ -411,7 +464,10 @@ In this order, because each step is checkable by the one after it.
    add the four negative cases (R12, R13, R14a, R14b), and retarget `missing-revision`
    (R15). The pin must fail before step 1 and pass after; R12's case must fail before
    the lookup edit, R13's before the root check, and R14's two before the purity copy,
-   and all four pass after. That ordering shows each edit does what it claims.
+   and all four pass after. That ordering shows each edit does what it claims. In the
+   same step, tighten the `git config` guard into `config_guard_ok` and add its two
+   calls (R17) — do this *with* step 2's copy, not after it, since the guard as it
+   stands fails the suite the moment the copied read lands.
 4. **Docs.** The six passages, nothing else.
 
 **High-risk path, before any of the above.** Draft `work/shadow-env-self-host/plan.md`
@@ -489,7 +545,7 @@ updated main and write code there. That PR is the one using `Closes #263`.
 - **A copy can rot, so it is a copy and says so.** Re-implementing the predicates would
   have let the gate and the adapter drift into two different ideas of a plain
   repository, which is how a bypass comes back. The verbatim copy with the
-  `qualified-identity.jq` header, and R19's requirement to prove the bytes match the
+  `qualified-identity.jq` header, and R20's requirement to prove the bytes match the
   cited commit in the PR, make drift visible instead of silent. It is still a real
   maintenance cost, accepted for the same reason `qualified-identity.jq` accepted it.
 - **Why the root commit is a verified identity, once the source is plain.** The driver
