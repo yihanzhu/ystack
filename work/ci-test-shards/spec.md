@@ -20,7 +20,8 @@ enforces. So a plan-only PR on
 operator merges it, and only then does `ystack/impl/ci-test-shards` open. On that
 branch the operator commits both of those files himself — the workflow and the
 `AGENTS.md` bullet of requirement 13. Agents prepare everything else: the runner,
-the proof script, the manifest line, and, for the two operator-owned files, the
+the proof script, the manifest line, the `RESTORE.md` docs edit of requirement 13,
+and, for the two operator-owned files, the
 proposed patch text only — saved as a unified diff under `proposals/`
 (`proposals/<slug>-<short-title>.patch`, with the rationale in the PR body) exactly
 as `proposals/README.md` describes, never the commit itself.
@@ -165,15 +166,41 @@ as `proposals/README.md` describes, never the commit itself.
     `ci/required-files.txt`; `scripts/test/run-all.sh` is, at line 89, and its path
     does not change.
 
-13. **Docs.** A grep for `run-all` finds no prose anywhere describing CI as one
-    serial run. `docs/transition-kit.md` mentions `scripts/test/run-all.sh` only
-    inside two quoted JSON records (`forbidden_paths`, `required_manifest_entries`),
-    which stay accurate and are not edited; README does not describe the test step.
-    The one stale passage is the `AGENTS.md` "Stack & commands" CI bullet, which
-    calls the workflow a structure check plus shellcheck; it gains a sentence naming
-    the three jobs and the shard flag. `AGENTS.md` is a constitution path, so agents
-    only write the proposed sentence into the `proposals/` patch and the PR body; the
-    operator commits that edit himself, together with the workflow.
+13. **Docs.** Two passages call the workflow a structure check plus shellcheck, and
+    both go stale once it is three jobs. A grep for `run-all` finds no prose
+    describing CI as one serial run; the two stale passages come from a grep for
+    `structure check` over `README.md`, `RESTORE.md`, `QUICKSTART.md`, `docs/` and
+    `AGENTS.md`.
+
+    - `RESTORE.md:416-418` — the restore checklist's **CI** bullet, which introduces
+      `.github/workflows/ci.yml` as "(structure check + shellcheck)". It is updated,
+      in one or two sentences, to name the three jobs — `checks`, six parallel `test`
+      shards, and the aggregate `ci` that stays the hard merge gate — and the
+      `--shard <index>/<count>` flag each shard passes to
+      `scripts/test/run-all.sh`. `RESTORE.md` is **not** a constitution path, so an
+      agent writes this edit directly on the implementation branch; it does not go
+      into the `proposals/` patch. `AGENTS.md` "PR rules" ("Every PR links its intake
+      issue and keeps README/docs in sync") makes it part of this PR, not a
+      follow-up. The nested sub-bullet under it — the structure check reading
+      `ci/required-files.txt` — stays accurate and is left alone: that check still
+      runs, now inside `checks`.
+    - `AGENTS.md:86` — the "Stack & commands" CI bullet, same phrasing; it gains a
+      sentence naming the three jobs and the shard flag. `AGENTS.md` is a
+      constitution path, so agents only write the proposed sentence into the
+      `proposals/` patch and the PR body; the operator commits that edit himself,
+      together with the workflow. Its pinned-shellcheck sub-bullet still holds —
+      `SHELLCHECK_VERSION` in `ci.yml` remains the single source of truth, now read
+      by the `checks` job.
+
+    The same grep's other two hits need no edit. `docs/transition.md:108` says
+    deleting `config/construction-mode.json` "fails CI's structure check", which is
+    still true after the split. `REVIEW.md:294` tells reviewers not to report what CI
+    already enforces, "the structure manifest, shellcheck" — also still true, and a
+    constitution path in any case. Nor does anything else move:
+    `docs/transition-kit.md` mentions `scripts/test/run-all.sh` only inside two
+    quoted JSON records (`forbidden_paths`, `required_manifest_entries`), which stay
+    accurate, and `README.md` and `QUICKSTART.md` do not describe the test step at
+    all.
 
 14. **Wall time.** Target: under 25 minutes, measured by the PR's own CI run
     duration, which the operator records in the implementation PR body.
@@ -187,12 +214,18 @@ Order of work on `ystack/impl/ci-test-shards`:
    they are; the filter sits between discovery and the run loop.
 2. `scripts/test/run-all-sharding.check.sh`, plus its line appended at the end of
    `ci/required-files.txt`.
-3. `proposals/ci-test-shards-shard-ci.patch` — the agents' proposed text for the two
-   operator-owned files in step 4, as one unified diff. Nothing else in `scripts/` or
+3. `RESTORE.md` — the one-or-two-sentence rewrite of the **CI** bullet, per
+   requirement 13. Agent-authored and committed on the implementation branch like the
+   runner, because `RESTORE.md` is not a constitution path; it stays out of the
+   `proposals/` patch.
+4. `proposals/ci-test-shards-shard-ci.patch` — the agents' proposed text for the two
+   operator-owned files in step 5, as one unified diff. Nothing else in `scripts/` or
    `docs/` changes.
-4. **Both operator-owned files, in the operator's own last commit:**
+5. **Both operator-owned files, in the operator's own last commit:**
    `.github/workflows/ci.yml` and the `AGENTS.md` bullet of requirement 13. Agents
-   write neither file. What agents produce for them is patch text: one unified diff
+   write neither file — the `RESTORE.md` half of requirement 13 is theirs, in step 3;
+   the `AGENTS.md` half is not.
+   What agents produce for these two is patch text: one unified diff
    saved as `proposals/ci-test-shards-shard-ci.patch`, covering both files, with the
    rationale in the implementation PR body, per `proposals/README.md`. The operator
    applies it (`git apply proposals/ci-test-shards-shard-ci.patch`) or types the
@@ -204,8 +237,9 @@ Order of work on `ystack/impl/ci-test-shards`:
 
 Size estimate: about 70 net lines in the runner, 170 in the new proof script, 49 in
 the workflow (the three jobs, the checkout step in each job that needs one, and the
-one step that calls the proof), one manifest line and a sentence of docs — roughly
-291 net lines, inside the 300–400 budget, hence `review_size: standard`. The
+one step that calls the proof), one manifest line, and four lines of docs — two or
+three for the `RESTORE.md` bullet plus the one `AGENTS.md` sentence — so roughly
+294 net lines, inside the 300–400 budget, hence `review_size: standard`. The
 `proposals/` patch adds about 60 more lines, but they are the same workflow and
 `AGENTS.md` text written twice — once as patch text, once as the operator's commit —
 so they are read once, not twice.
@@ -234,8 +268,12 @@ is why the shard count is a tunable.
 - **Two files are operator-authored, not one.** `.github/workflows/ci.yml` and
   `AGENTS.md` are both constitution paths, and requirement 13 needs an `AGENTS.md`
   edit, so it is easy to read this initiative as "the workflow is the operator's, the
-  rest is ours" and land the docs bullet by mistake. Agents write the runner, the
-  proof script and the manifest line; for those two files they write only patch text
+  rest is ours" and land the docs bullet by mistake. Requirement 13 makes that
+  sharper, because its two docs edits split ownership: `RESTORE.md` is the agent's to
+  commit and `AGENTS.md` is not, so the rule is the path, not the requirement.
+  Agents write the runner, the
+  proof script, the manifest line and the `RESTORE.md` bullet; for those two files
+  they write only patch text
   under `proposals/` plus the rationale in the PR body, and the operator commits both
   as the last commit on the implementation branch. That is also why this spec is
   `risk: high`.
