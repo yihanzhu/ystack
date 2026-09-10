@@ -14,18 +14,30 @@ bytes for the same request.
 
 `review_size: accepted-exception`. One concern: this is a single security-boundary
 component whose only honest proof runs the real resolver twice and compares the
-output. Evidence-based range: 600-900 changed lines (C ~250 copied/adapted, entry
-shell ~180, focused test ~290, docs/manifest ~60). The entry shell and the test are
+output. Evidence-based range: 650-1000 changed lines (C ~260 copied/adapted, entry
+shell ~210, focused test ~360, docs/manifest ~60). The entry shell and the test are
 each larger than a first estimate because the entry now owns helper provenance — blob
-pins, two compiles, a fresh private run directory — and the test proves each of those
-separately.
+pins, two compiles, a fresh private run directory, a mode-tightening pass, and its own
+wait-and-clean-up — and the test proves each of those separately, at both levels
+(through the entry, and against the parent invoked directly).
 
 ## Requirements
 
 - **R1 — two shipped files.** `resolver/v1/trusted-launch.c` is the parent.
   `resolver/v1/resolve-profile.sh` is a thin entry that checks the jq it was handed,
   compiles the parent and `resolver/v1/nofollow-snapshot.c` from the committed sources,
-  then `exec`s the parent. Nothing shipped reads `scripts/test/`. The split follows the
+  then runs the parent as a child and waits for it. The entry does **not** `exec` the
+  parent: it needs to outlive it so it can delete the run directory, which an `exec`
+  would make impossible because the entry's `EXIT` trap would never run and the
+  compiled parent, the compiled helper, and the copied jq and awk would be left behind
+  on every invocation. The entry passes the child's stdout and stderr through unchanged
+  (it does not capture, buffer or rewrite them), and exits with the child's own exit
+  status, or `128 + signal` when the child died on a signal. Its `EXIT` trap removes the
+  run directory; it also traps `INT`, `TERM` and `HUP`, and on those it kills the child,
+  removes the run directory, and re-raises the signal so the caller sees the normal
+  signal death. Because the trap runs against a run directory the entry has by then set
+  to mode 0500 (below), the trap restores mode 0700 on the directory before removing it.
+  Nothing shipped reads `scripts/test/`. The split follows the
   test today: the test script owns compilation, jq binding and platform choice
   (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
   the launch.
@@ -55,8 +67,17 @@ separately.
   entry then creates a fresh private run directory for this invocation — `mktemp -d`
   under `TMPDIR`, mode 0700, owned by the current uid, removed on exit — compiles both C
   files from those pinned sources into it with the fixed flags
-  (`portable-profile-resolution.test.sh:146-149`), and passes the helper path inside that
-  directory to the parent along with the directory itself.
+  (`portable-profile-resolution.test.sh:146-149`), copies in the bound jq and the
+  platform's awk, and then tightens modes before anything is launched: every file in the
+  run directory (the compiled parent, the compiled helper, the jq copy, the awk copy) is
+  set to mode 0500, and the run directory itself is set to mode 0500. A 0500 directory
+  admits no new entries and no renames, and 0500 files admit no writes, so from that
+  moment nothing in the run directory can be added, replaced or overwritten without a
+  `chmod` first. This is a deliberate deviation from the test, which uses 0555 for the
+  copied jq and awk (`portable-profile-resolution.test.sh:130-143`); 0500 is the same
+  minus the group and other bits, which nothing in the shipped path needs. Only after
+  the mode pass does the entry launch the parent, handing it the helper path inside that
+  directory along with the directory itself.
 - **R2 — the launch is copied, not reinvented.** The parent `execve`s the fixed path
   `/bin/bash` with argv `{"/bin/bash", <runtime>, "resolve", <request>, <map>}`
   (`portable-profile-resolution-launcher.c:652-657,701`), supervises the child the same
@@ -89,45 +110,99 @@ separately.
   `resolver/v1/profile-resolve-runtime.sh` blob; the jq at the bound path does not match
   the pinned SHA-256 for the platform or does not answer `jq-1.6`
   (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
-  `shadow/v1/reproduce.sh:113-118`); the helper fails the run-directory binding below;
+  `shadow/v1/reproduce.sh:113-118`); the helper fails the run-directory checks below;
   any allowlisted value is not an absolute
   regular path or is too long for the buffer (`:641-676`); the request or repository-map
   argument is not an absolute regular non-symlink file; or the caller's output directory
   is not an empty directory the caller owns at mode 0700, mirroring the sandbox rule the
   test uses (`portable-profile-resolution.test.sh:219-222`).
 
-  **The helper's run-directory binding.** The parent cannot recompile the helper or
-  recognise a binary by digest, so its check is a binding to the directory the entry
-  built this run. The entry passes that directory as an argument alongside the helper
-  path, and the parent refuses unless: the helper is a regular, non-symlink, executable
-  file; the directory containing it is exactly the run directory it was given, compared
-  after resolving both with `realpath`; that directory is itself a real directory, not a
-  symlink, owned by the current uid, mode 0700, and not group- or world-writable; and
-  the helper is owned by the current uid at mode 0700 or 0500 with no write bit for
-  group or others. The parent checks the opened file, not the path, so the path cannot
-  be swapped between check and use. There is no identity probe to add: the runtime's own
-  helper check is only "executable and not a symlink"
-  (`scripts/lib/profile-resolution.sh:664-667`) — jq gets a `--version` probe (`:668-671`)
-  but the helper gets none — and the helper has exactly one subcommand,
-  `snapshot-repository` with a fixed nine-argument shape
-  (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
-  identity answer. The binding is what the check rests on.
+  **The helper's run-directory checks, and what they are worth.** The runtime executes
+  the helper *by path*: `scripts/lib/profile-resolution.sh:209` runs
+  `"$YSTACK_RESOLVER_HELPER" snapshot-repository ...`, and its only check on that path is
+  `[ -x ] && [ ! -L ]` (`:664-667`) at launch-check time, not at exec time. So whatever
+  the parent checks, the file the runtime finally executes is re-resolved from the path
+  later. The parent's job here is therefore not to bind what the runtime executes; it is
+  to fail closed on any tampering observable before the launch. It refuses unless, on
+  file descriptors it opened itself and checked with `fstat` — path-based `stat` is not
+  used, so nothing the parent itself checks can be swapped for something else between its
+  own check and its own read of that object:
 
-  What that proves: the helper the runtime will execute is the artifact this invocation
-  compiled, from sources whose blob ids match the pins, in a directory this invocation
-  created and no one else can write. What it does not prove: nothing here stops root on
-  the host, who can write into any directory and replace any file. That is out of scope,
-  and it is the boundary the accepted resolver spec already assumes — the security
-  boundary begins in a parent process that was already running and trusted before any
-  hostile input arrived (`work/portable-profile-resolution/spec.md:218-222`).
+  - the helper is a regular, non-symlink, executable file, owned by the current uid, at
+    mode exactly 0500;
+  - the compiled parent binary in the same directory is likewise owned by the current uid
+    at mode exactly 0500. This does not protect the already-running parent — it is a
+    tamper indicator for the directory: if that file has been loosened or replaced, so
+    could the helper beside it have been, and the parent refuses rather than launching;
+  - the directory holding them is a real directory, not a symlink, owned by the current
+    uid, at mode exactly 0500 — so it admits no new entries and no renames — and is
+    exactly the run directory the entry named, compared after resolving both with
+    `realpath`.
+
+  There is no identity probe to add. The runtime gives jq a `--version` probe (`:668-671`)
+  but gives the helper none, and the helper has exactly one subcommand,
+  `snapshot-repository`, with a fixed nine-argument shape
+  (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
+  identity answer.
+
+  **Stated residual — a same-uid attacker who can `chmod` can still race this.** Modes
+  0500 stop a write and stop a rename; they do not stop the owner from running `chmod
+  0700` on the directory or the file and then replacing the helper in the window between
+  the parent's check and the moment the runtime execs that path. Every mode and ownership
+  check above is against the current uid, so a process already running as that uid is
+  inside all of them. This is not closed here, and the spec does not claim it is. It is
+  unchanged from the boundary the accepted resolver spec already assumes: the security
+  boundary begins in a trusted parent process that was already running before any hostile
+  input arrived, and a helper newly started from a hostile environment is not that parent
+  (`work/portable-profile-resolution/spec.md:219-222`). Root is likewise outside: root can
+  write into any directory and replace any file regardless of mode.
+
+  What the checks do buy: the entry compiled both binaries this invocation from sources
+  whose blob ids match the pins, into a directory it created; the parent refuses to launch
+  if, at check time, anything about those files or that directory has been loosened or
+  moved. After that, the runtime's own `[ -x ] && [ ! -L ]` is the last line, and the spec
+  says so rather than pretending otherwise.
+
+  Closing the residual properly needs the runtime to accept an already-opened executable
+  descriptor from the parent instead of a path — then check and exec are the same object
+  and no `chmod` race exists. That is a change to
+  `scripts/lib/profile-resolution.sh` and to the resolver's launch contract, both of which
+  this initiative explicitly does not touch, so it is a separate initiative and is recorded
+  under Out of scope as the recommended follow-up. It is not promised here.
 - **R6 — the output is the runtime's bytes.** Success writes exactly the canonical
   `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:973`),
   streamed unchanged (`portable-profile-resolution-launcher.c:504-511`). For the same
   request the shipped parent and the test launcher produce byte-identical output; the
   focused test runs both and `cmp`s them.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network,
-  no credential, no write outside the caller's output path and the run directory, no read
-  outside the repositories named in the map. No network is true by construction, not by
+  no credential, no write outside the caller's output path and the run directory.
+
+  **Reads, stated precisely.** The blanket "no read outside the repositories named in the
+  map" is wrong as written, because the entry and the parent read local files before the
+  resolver ever runs. Two separate claims:
+
+  1. *The resolver's content reads* are confined to the repositories the request's
+     repository map names. A repository root is only ever obtained by looking the
+     repository id up in the map snapshot
+     (`scripts/lib/profile-resolution.sh:193-198`), a snapshot is refused if the lookup
+     yields nothing (`:205-206`), and every Git read runs as
+     `git --git-dir=<mapped root's gitdir>` under the hardened wrapper (`:313-323`).
+  2. *The entry and the parent additionally read a fixed, listed set of trusted local
+     inputs*, and nothing else: the two committed C sources
+     `resolver/v1/trusted-launch.c` and `resolver/v1/nofollow-snapshot.c` (hashed and
+     compiled by the entry); the runtime file
+     `resolver/v1/profile-resolve-runtime.sh` (blob- and mode-checked by the parent,
+     then read by the bound `/bin/bash`); the jq binary supplied as an argument and its
+     awk sibling under `/usr/bin` (both digest- or existence-checked, then copied into
+     the run directory); the C compiler and the system tools the two files invoke by
+     fixed path under `/usr/bin:/bin` — `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
+     `/bin/chmod`, `/usr/bin/git` for `hash-object`, and the platform's SHA-256 tool;
+     the request file and the repository-map file named on the command line; and the
+     entry's own run directory. That is the whole list. Neither file reads a
+     configuration file, a dotfile, a cache, a credential store, or any path derived
+     from caller environment.
+
+  No network is true by construction, not by
   policy: neither shipped file contains a downloader, and every input the shipped path
   needs — the jq binary, the C sources, the runtime — is either handed in as an argument
   or already committed in this repository. The runtime's own guarantees are restated, not
@@ -157,7 +232,29 @@ separately.
   malformed request. The swapped-helper case is now two cases, one per owner: the entry
   refuses when `resolver/v1/nofollow-snapshot.c` is edited so its blob id no longer
   matches the pin, and the parent refuses when it is handed a helper that lives outside
-  the run directory it was given, or one whose directory is group-writable. The test also
+  the run directory it was given, or one whose mode is not 0500, or one whose directory
+  is not 0500.
+
+  **Both levels are exercised, not just the entry.** The entry refuses a bad jq before the
+  parent ever runs, so an entry-level case alone proves nothing about the parent's own
+  copy of that check. The test therefore keeps the entry-level cases and adds direct-parent
+  cases that bypass the entry: it builds a run directory by hand the way the entry would,
+  compiles the parent and helper into it, and invokes `trusted-launch` directly with
+  (a) a jq whose SHA-256 does not match the platform pin, (b) a jq whose bytes match
+  nothing that answers `jq-1.6`, and (c) a runtime file copied to mode 0755 instead of
+  0644 — since the parent, not the entry, owns the runtime-mode check (R5). Each case
+  asserts the parent's own `E_*` line on stderr and a non-zero exit, so the assertion
+  fails if the check is ever quietly left to the entry.
+
+  **Cleanup is asserted.** The entry runs the parent as a child and removes the run
+  directory in its `EXIT` trap (R1), so the test gives the entry a fresh empty `TMPDIR` of
+  its own and asserts that directory is empty again after the entry returns — once after a
+  successful resolution, and once after a refused invocation (a wrong-digest jq). No entry
+  output is needed for this and the entry is not asked to print its run directory path.
+  The test also asserts the entry's exit status is 0 in the success case and matches the
+  parent's non-zero status in the refusal case.
+
+  The test also
   asserts the pinned blob constants equal the working tree's `git hash-object` output for
   both C sources, and greps both shipped files for any downloader — `curl`, `wget`,
   `nc`, `git fetch`, `git clone` — and fails if one appears. It is shellcheck-clean,
@@ -175,7 +272,10 @@ Order, each step checkable before the next:
    `portable-profile-resolution-launcher.c:547-631`); replace the
    `YSTACK_TEST_SANDBOX` variable (`:640-644`) with a required output-path argument; take
    the run directory as a further argument and add the R5 checks, including the helper's
-   run-directory binding, that the test script performs today or cannot perform at all.
+   run-directory and mode-0500 checks, that the test script performs today or cannot
+   perform at all. Every mode and ownership check is done with `fstat` on a descriptor
+   the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
+   on a path it will later hand on by name.
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
    `E_RUNTIME` before the next: resolve the repository root from its own `BASH_SOURCE`
    the way the runtime does (`resolver/v1/profile-resolve-runtime.sh:4-16`); refuse an
@@ -183,14 +283,20 @@ Order, each step checkable before the next:
    platform's SHA-256 and `jq-1.6` (`shadow/v1/reproduce.sh:113-118`), and verify both C
    sources' blob ids against the pinned constants with `git hash-object`, the way the
    runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`);
-   create a fresh 0700 run directory with `mktemp -d` and remove it on exit; **compile** —
-   both C files from those pinned sources into the run directory with the exact flags the
-   test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
-   (`portable-profile-resolution.test.sh:146-149`), `chmod 0500` both so they satisfy the
-   binding in R5, and copy jq and the platform's awk in at the same mode the way the test
-   does (`:130-143`); clear `LD_*`, `DYLD_*`, `BASH_ENV` and
-   `ENV` from its own environment; **then `exec` the parent**, handing it the helper path
-   and the run directory so it can bind one to the other. No step reaches the network.
+   create a fresh 0700 run directory with `mktemp -d` and install the `EXIT`/`INT`/`TERM`/
+   `HUP` trap that removes it (the trap chmods the directory back to 0700 first, because
+   by launch time it is 0500 and a 0500 directory will not let its entries be unlinked);
+   **compile** — both C files from those pinned sources into the run directory with the
+   exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
+   (`portable-profile-resolution.test.sh:146-149`), and copy in jq and the platform's awk
+   the way the test does (`:130-143`); **tighten** — `chmod 0500` every file in the run
+   directory and then `chmod 0500` the run directory itself, so the R5 checks pass and
+   nothing further can be added or replaced there without a `chmod`; clear `LD_*`,
+   `DYLD_*`, `BASH_ENV` and `ENV` from its own environment; **then run the parent as a
+   child** — not `exec`, so the trap survives to clean up — handing it the helper path and
+   the run directory; **then wait**, pass the child's stdout and stderr through unchanged,
+   and exit with the child's status (`128 + signal` if it was signalled). No step reaches
+   the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
 4. **Docs and manifest** — R9, in the same pull request as the code.
 
@@ -231,6 +337,15 @@ intent says for this change. Only after the operator's merge does
 - A committed binary or a pinned binary digest.
 - Fetching, installing, caching or vendoring jq; the caller supplies the pinned binary.
 - Launch-evidence records, profile activation, or any live-qualification claim.
+- **Closing the same-uid `chmod` race on the helper — the recommended follow-up, not done
+  here.** The residual stated in R5 exists because the runtime takes the helper as a path
+  and re-resolves it at exec time
+  (`scripts/lib/profile-resolution.sh:209,664-667`). Closing it means changing the runtime
+  to accept an executable descriptor from the parent — a `fexecve`-style handoff, or an
+  `/dev/fd` path the parent opened — so the object checked and the object executed are the
+  same. That is a change to the runtime and to the resolver's launch contract, both listed
+  above as untouched, so it belongs to a separate initiative. This spec records it as the
+  recommended next step and promises nothing about it.
 
 ## Areas of concern
 
@@ -251,15 +366,32 @@ intent says for this change. Only after the operator's merge does
   working command. That trade is deliberate: a shipped security component that downloads
   a dependency has a network dependency in its trust base, and this one does not.
 - **What helper provenance proves, and where it stops.** The entry checks the source
-  blobs, compiles in a fresh private directory, and hands the parent both the helper and
-  that directory; the parent binds one to the other. Together that means the helper the
-  runtime executes is the artifact this invocation built from pinned sources. It stops
-  at root: a root user on the host can write into the run directory, or replace the
-  binary between compile and `execve`, and nothing here detects it. The same is true of
-  the compiler itself, which is trusted unverified. Both sit outside the boundary the
-  accepted resolver spec draws — it assumes the starting process is already trusted
-  (`work/portable-profile-resolution/spec.md:218-222`) — and the plan should say so
-  rather than imply the check is stronger than it is.
+  blobs, compiles into a fresh private directory, tightens everything there to 0500, and
+  hands the parent both the helper path and that directory; the parent refuses to launch
+  unless those modes and owners are still exactly right at check time. What that is worth:
+  tampering that is observable before launch fails closed. What it is *not*: it is not a
+  binding between what the parent checked and what the runtime executes. The runtime takes
+  the helper by path and re-resolves it at exec time
+  (`scripts/lib/profile-resolution.sh:209`), with only `[ -x ] && [ ! -L ]` of its own
+  (`:664-667`), so a same-uid process that can `chmod` the run directory or the helper back
+  to writable can still swap the file in the window between the check and that exec. That
+  residual is stated in R5 and is unchanged from the boundary the accepted resolver spec
+  already assumes (`work/portable-profile-resolution/spec.md:219-222`); the follow-up that
+  would actually close it — a descriptor handoff instead of a path — is under Out of scope.
+  Root is outside all of it, and so is the compiler, which is trusted unverified. The plan
+  must repeat these limits in these words rather than imply the check is stronger than it
+  is; no wording in the plan may say the parent "binds" or "guarantees" what the runtime
+  executes.
+- **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
+  `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
+  on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
+  the leftovers slightly annoying to delete by hand. The leftovers are inert — compiled
+  binaries and copies of jq and awk in a private 0500 directory under `TMPDIR`, owned by
+  the caller — but they are leftovers, and the honest statement is "removed on every exit
+  the entry can observe", not "never leaks". Not `exec`ing also leaves one extra shell in
+  the process tree for the life of the resolution; it holds no state and does nothing but
+  wait, and it is outside the sandbox and the parent's limits, so it does not widen what
+  the resolution can do.
 - **The entry script is a convenience, not part of the boundary.** The accepted spec says
   a helper newly started from a hostile environment is not the trusted parent. The C
   parent's own dynamic loader still runs before it can clean anything, so a caller who
@@ -273,8 +405,11 @@ intent says for this change. Only after the operator's merge does
   limits. The plan should list every deviation line by line. Three are already known: the
   mode-0644 check moves from the test into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
-  and the helper's run-directory binding is new code with no counterpart in the test
-  launcher, which simply trusts the path the test script hands it.
+  and the helper's run-directory and mode-0500 checks are new code with no counterpart in
+  the test launcher, which simply trusts the path the test script hands it. A fourth,
+  smaller one is in the entry rather than the parent: the run directory's files are 0500,
+  where the test uses 0555 for the copied jq and awk
+  (`portable-profile-resolution.test.sh:130-143`).
 - **Platform matrix.** Three tuples, but CI runs one. The other two are proved only when
   someone runs the test there, and the parent's Darwin memory bound is polled rather than
   enforced by the kernel (`portable-profile-resolution-launcher.c:381-386,390-392`).
