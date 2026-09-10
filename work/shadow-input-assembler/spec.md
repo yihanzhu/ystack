@@ -22,13 +22,22 @@ so plainly rather than implying otherwise.
 `review_size: accepted-exception`. One concern: one inactive component whose
 focused test must drive the real `reproduce.sh` end to end with the existing
 fixture environment (the shadow slice test itself is 622 lines for the same
-reason). Range: 450-650 net lines — about 300 lines of component (shell plus
-jq), about 250 lines of test, and the documentation rows. The evidence is the
+reason). Range: 550-780 net lines — about 385 lines of component (shell plus
+jq), about 290 lines of test, and the documentation rows. The evidence is the
 nearest thing in the repository: `scripts/test/shadow-slice.test.sh` is 622
 lines, because a test that runs the driver has to build a bare repository, a
 profile set, and a claim before the driver can run once. This test builds that
 same fixture ground and then runs the driver again on the assembled input, so
-it lands in the same band, and the component itself is the ~300 lines above.
+it lands in the same band, and the component itself is the ~385 lines above.
+
+The range moved up from 450-650 for one reason, and it is a reason that
+argues for the exception rather than against it: requirement 15 copies the
+materializer's complete source-purity predicates verbatim, about 85 lines
+including the header, the three name bindings and the subshell wrapper, plus
+the assertion and the two negative sources that prove it in the test. That is
+text this initiative did not write and must not edit. Shortening it would mean
+re-implementing a predicate the whole point of which is that it is not
+re-implemented.
 
 The exception waives only the soft line signal. It does not widen scope beyond
 the one concern, and it does not relax readability, tests, CI, review, or
@@ -44,15 +53,17 @@ a test with nothing to prove.
    <output-dir> <environment-claim-file>`. The claim is appended, so the first
    eight keep their positions. The repository id matches
    `\A[a-z0-9][a-z0-9._:-]{0,127}\z`; the source Git directory is a physical
-   bare repository, and **its hash algorithm is read from the repository, not
-   assumed** — `git rev-parse --show-object-format` under the same protective
+   bare repository that passes **every one of the materializer's source
+   guards, copied verbatim** — requirement 15, not the subset an earlier draft
+   listed here — and **its hash algorithm is read from the repository, not
+   assumed**: `git rev-parse --show-object-format` under the same protective
    environment the driver and the materializer use (`--no-replace-objects`,
    `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, no system or global
-   config, and the alternates, grafts, replace-refs, shallow, and worktree
-   checks the materializer already makes at
-   `adapters/local-git-materializer/v1/materialize.sh:265-275` and `:327-333`,
-   the same read it makes at `:352`); the commit id is lowercase hex — 40
-   characters when the repository reports `sha1`, 64 when it reports `sha256`
+   config, and the hook pin at
+   `adapters/local-git-materializer/v1/materialize.sh:265-269`) — which is the
+   same read the copied span makes at `:352`; the commit id is lowercase
+   hex — 40 characters when the repository reports `sha1`, 64 when it
+   reports `sha256`
    — must match the format the repository actually reports, and must exist
    there as a commit; the timestamp is exactly `YYYY-MM-DDTHH:MM:SSZ`; the
    profile directory holds `profile.json`, `producer-config.json`, and
@@ -113,7 +124,9 @@ a test with nothing to prove.
    six manifest files: pinning each one lets the refusal name the file that
    differs instead of failing somewhere inside the graph rules, and
    `producer-config.json` is in the profile directory but outside
-   `profile_set_ok`, so nothing else would have checked it at all. A pin is
+   `profile_set_ok`, so nothing else would have checked it at all — and
+   requirement 16 carries that same pin through into the resolved profile's
+   producer binding, which `profile_set_ok` also leaves unchecked. A pin is
    a copy of a fact that lives elsewhere in the
    repository, so it can drift, and requirement 13's test asserts each pin
    equals the digest of the live file at the same commit. That makes a later
@@ -219,12 +232,20 @@ a test with nothing to prove.
     relative path, bad repository id, bad timestamp, or a commit id that is
     not lowercase hex of one of the two accepted widths, 40 or 64 — a width
     the repository has not been asked about yet. `E_TARGET`: the source Git
-    directory is not a physical bare repository, it does not report a hash
+    directory is not a physical bare repository, it fails any of the
+    materializer source guards requirement 15 copies — including the two an
+    earlier draft left out, a config key outside the seven-name allow-list and
+    a hook that is not a `*.sample` — it does not report a hash
     algorithm of `sha1` or `sha256`, the commit id's width does not match the
-    algorithm it does report, or the commit is not in it. `E_WORKSPACE`: the
+    algorithm it does report, or the commit is not in it. The materializer's
+    own `E_SOURCE_*` ids stay in the materializer: a copied predicate that
+    fails is reported with the id this component already has, so the copy adds
+    no error id even though it adds checks. `E_WORKSPACE`: the
     output directory is not an empty physical
     `0700` directory, or it overlaps another argument. `E_RUNTIME`: wrong jq
-    digest or version, missing or symlinked required file, failed command.
+    digest or version, missing or symlinked required file, failed command, or
+    the `0700` scratch directory requirement 15's copy writes into cannot be
+    made.
     `E_LIMIT`: an input file or the finished output exceeds its bound, the
     claim's bound being the driver's own 1 MiB. `E_PARSE`: an input is not
     exactly one JSON value, or carries a BOM. `E_CANONICAL`: it parses but is
@@ -233,8 +254,10 @@ a test with nothing to prove.
     is not kind `execution_environment_claim` with an id in the id charset.
     `E_PROFILE`: the profile directory layout is wrong, it does not hold
     exactly six manifests, `profile.json` is not the default profile
-    `profile.default.v1`, or a supplied document's SHA-256 differs from its
-    pin in requirement 3 — a look-alike default, refused by bytes.
+    `profile.default.v1`, a supplied document's SHA-256 differs from its
+    pin in requirement 3 — a look-alike default, refused by bytes — or a
+    present `config_source` in the supplied resolved profile does not carry
+    the pinned digest of the document it names (requirement 16).
     `E_RELATION`: the profile set does not hold together,
     or the finished input fails `validate-input`. No new error id.
 13. **Proof runs in CI.** `scripts/test/shadow-assembler.test.sh` bootstraps
@@ -257,7 +280,19 @@ a test with nothing to prove.
     `profile.default.v1` but whose bytes differ, which must come back
     `E_PROFILE`.
 
-    Two further assertions carry the two findings this revision answers.
+    The fixture builder needs one change the existing ones do not have.
+    `scripts/test/local-git-materializer-fixtures.sh:114` writes
+    `config_source={state:"absent"}` for every binding, and the shipped
+    default profile's producer binding carries a `config_ref`, so an absent
+    config source there would not even satisfy the core rules. The test's
+    builder therefore writes a present producer `config_source` whose
+    `value.source` is that `config_ref` and whose `value.value_sha256` is the
+    real SHA-256 of `profiles/default/v1/producer-config.json` — not the
+    stand-in digest `scripts/test/default-profile-assembly.test.sh:310-311`
+    reuses for every source, which requirement 16 now refuses.
+
+    Two further assertions carry the two findings the previous revision
+    answered.
     **The pins are live.** The test recomputes the SHA-256 of each of the
     eight files under `profiles/default/v1/` in the working tree and asserts
     it equals the pin the jq program carries, so the pins and the profile can
@@ -275,6 +310,26 @@ a test with nothing to prove.
     second algorithm reuses the same fixture ground, so it adds a repository
     and an assertion block, not a second test.
 
+    Three more carry this revision's two findings. **The copy is a copy.**
+    The test extracts the copied spans from
+    `shadow/v1/assemble-materialization-input.sh`, between the copy header and
+    its end marker, and compares them byte for byte with
+    `adapters/local-git-materializer/v1/materialize.sh` lines 271-332 and
+    348-354 at the commit the header names, reading those bytes with `git
+    show <commit>:adapters/local-git-materializer/v1/materialize.sh` rather
+    than from the working tree, so the assertion means what it says even
+    while the materializer is being edited in the same branch. A reflow, an
+    edit, or a drifted line range fails CI. **The two guards an earlier draft
+    missed actually fire.** Two negative source repositories, each otherwise
+    a clean copy of the `sha1` fixture: one with a disallowed config key set
+    (`remote.origin.url`), one with a non-`*.sample` file in `hooks/`. Both
+    must come back `E_TARGET`, and the second must do so before the assembler
+    has looked up the commit. **The producer config digest is bound.** A
+    resolved profile identical to the good one except that the producer
+    binding's `config_source.value.value_sha256` is changed — its
+    `value.source` left alone, so the core rules still pass it — must come
+    back `E_PROFILE`.
+
     It then feeds the assembled `sha1` input to `shadow/v1/reproduce.sh` with
     the existing fixture environment, policy set, and duty, and the same
     claim file it handed the assembler — so the request's `environment_ref`
@@ -283,6 +338,133 @@ a test with nothing to prove.
 14. **Component conventions.** A `docs/components.md` section, one README index
     row pointing at it, a `RESTORE.md` restore block naming the test, and the new
     paths appended at the **end** of `ci/required-files.txt`.
+15. **Every one of the materializer's source guards runs here, copied
+    verbatim.** The assembler must never hand the driver an input the
+    materializer will then refuse. An earlier draft mirrored only part of what
+    the materializer demands of a source repository: the protective
+    environment, and the alternates, grafts, replace-refs, shallow, and
+    worktree checks. The materializer demands two more things. The source
+    repository's config file may contain nothing beyond seven names —
+    `core.repositoryformatversion`, `core.filemode`, `core.bare`,
+    `core.logallrefupdates`, `core.ignorecase`, `core.precomposeunicode`,
+    `extensions.objectformat` (`materialize.sh:301-323`, `E_SOURCE_CONFIG`) —
+    and its `hooks/` directory may hold no file that is not a `*.sample`
+    (`:348-351`, `E_SOURCE_HOOK`). A source that trips either one passes
+    everything the earlier draft listed, gets an input built for it, and then
+    comes back `materialization.refused` from the driver: a wasted run, and a
+    confusing one, because nothing the assembler said would explain it.
+
+    So the assembler runs the materializer's **complete** source-purity
+    predicates, not a subset and not a paraphrase. They are two contiguous
+    spans of `adapters/local-git-materializer/v1/materialize.sh`:
+
+    - **271-332** — the `git_dir` helper (271-275); the bounded filesystem
+      inventory (277-299), which requires every entry under the directory to
+      be inside it, not a symlink, and either a regular file or a directory,
+      at most 8388608 bytes of paths and 65536 entries; the bounded config
+      snapshot and its name-only allow-list (301-323); `rev-parse
+      --is-bare-repository` equal to `true` (324-325); and the structural
+      absences (326-332) — no `commondir`, no `shallow`, no entry under
+      `worktrees`, no `info/grafts`, no `objects/info/alternates`, no
+      `refs/replace` directory, and no `*.promisor` pack.
+    - **348-354** — no hook that is not a `*.sample` (348-351); and `rev-parse
+      --show-object-format` equal to `$source_algorithm` (352-354).
+
+    They are **copied verbatim** into
+    `shadow/v1/assemble-materialization-input.sh` — byte for byte, not
+    re-implemented and not approximated — under the header this repository
+    already uses for a copied predicate (`shadow/v1/qualified-identity.jq:8-13`
+    is the pattern): `# Copied verbatim from
+    adapters/local-git-materializer/v1/materialize.sh at
+    a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync.`,
+    followed by one sentence saying why it is a copy — the assembler must
+    refuse exactly what the materializer refuses, so the two can never
+    disagree about what a plain source repository is. That commit is the one
+    `materialize.sh` last changed at; if it moves before this lands, the
+    header names the new one and the copy is retaken from it.
+
+    The copy runs **before the assembler reads anything else out of the
+    repository** — before the commit lookup and before the root-tree read — so
+    an impure source is refused on its own terms rather than on some later
+    symptom. Three names are bound just above it so its body needs no editing:
+
+    - `run_root` — a fresh `0700` scratch directory the assembler makes for
+      itself, disjoint from the output directory and from every argument. The
+      copied lines write only `source-filesystem`, `source-config.snapshot`
+      and `source-config` there, and delete the first themselves.
+    - `git_env` and `git_dir` — the assembler's own protective environment,
+      which also carries the materializer's hook pin
+      (`materialize.sh:265-269`: `GIT_CONFIG_COUNT=1`,
+      `GIT_CONFIG_KEY_0=core.hooksPath`,
+      `GIT_CONFIG_VALUE_0="$run_root/no-hooks"`).
+    - `source_algorithm` — the algorithm the caller's commit-id width implies,
+      `sha1` for 40 hex and `sha256` for 64. Binding it from the argument
+      rather than from the repository is what keeps the copied 352-354 a real
+      check instead of a tautology: it is the line that refuses a 40-hex
+      commit id offered to a `sha256` repository. Requirement 1 still stands —
+      the algorithm written into the output is the one the repository
+      reported, and the copied line is what proves the two agree.
+
+    The copy runs inside a subshell function that shadows `emit_error` with an
+    immediate non-zero exit — `source_pure() ( emit_error() { exit 1; };
+    <verbatim span 271-332>; <verbatim span 348-354>; exit 0 )` — so the
+    predicates keep their exact text while a failure comes back as a return
+    code the assembler can name. Any failure is `E_TARGET`.
+
+    `materialize.sh:333-347`, the `packed-refs` scan for `refs/replace/`
+    lines, is not copied, for the reason the sibling spec gives and one of
+    this component's own: a replace ref cannot change which object the reads
+    resolve, because they run with `--no-replace-objects` and
+    `GIT_NO_REPLACE_OBJECTS=1`; and the copy has to be the same two spans the
+    driver copies, or the two are not byte-identical.
+
+    **The same copy is required of the driver by the sibling spec
+    `work/shadow-env-self-host/spec.md` (PR #268), which specifies these same
+    two spans.** The two copies must be byte-identical to each other, and both
+    must carry the header. They are copies of one span at one commit, so any
+    difference between them is a defect in one of them, and requirement 13's
+    test asserts the copied span equals the materializer's at the cited
+    commit. Whichever pull request lands second inherits the other's bytes
+    rather than retaking the copy.
+16. **The resolved profile's config bindings are bound to the pins too.**
+    Requirement 3 pins the bytes of the eight shipped documents, but that only
+    fixes what the caller's **profile directory** holds. The resolved profile
+    is a separate input, and the core rules do not tie its source claims to
+    those bytes. `resolved_binding_projection_ok` checks only that
+    `config_source.value.source` equals the binding's `config_ref` — the Git
+    object ref — and says nothing at all about
+    `config_source.value.value_sha256`
+    (`core/v2/generations/g-*/modules/profile_graph.jq:206-212`, through
+    `present_source_matches_optional_ref` at `:185-190`). `source_claims_agree`
+    (`:178-183`) only requires claims that share a source key to agree with
+    each other, and in the shipped default exactly one claim names the
+    producer config, so it agrees with itself and nothing else. A resolved
+    profile that keeps the right `source` and swaps `value_sha256` for any
+    other 64-hex string therefore passed every check this spec had.
+
+    So the assembler adds one of its own. In the supplied resolved profile,
+    the producer binding's `.body.bindings[] | select(.binding.role ==
+    "producer") | .config_source.value.value_sha256` must equal
+    `ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61`, the
+    pin requirement 3 gives `producer-config.json`. The digest sits two levels
+    down because `config_source` is a present-or-absent wrapper
+    (`core/v2/generations/g-*/modules/schema.jq:155-159`) whose `value` is a
+    `source_value_ref` (`:368-373`). It is the same digest whichever
+    `value_format` the claim carries: `raw-bytes` is what
+    `resolver/v1/profile-resolution.jq:167` and `:133-137` produce, and
+    requirement 3's files are stored canonical, so the raw bytes and the
+    canonical bytes are the same bytes.
+
+    The rule is general rather than one hard-coded field. **Every**
+    `config_source` in the resolved profile that is `state: "present"` — the
+    six bindings' own and every `tool_sources[].config_source` — must name a
+    document requirement 3 pins and carry that document's pinned digest. In
+    the shipped default there is exactly one: the producer's, pointing at
+    `profiles/default/v1/producer-config.json`, and no binding requests any
+    tools, so the general rule and the single field coincide today. Writing it
+    as a rule means a later default profile that adds a config source cannot
+    slip through unchecked. A mismatch, or a present `config_source` naming a
+    document that has no pin, is `E_PROFILE`.
 
 ## Design
 
@@ -297,7 +479,13 @@ Files, in the order they are written:
    `# pinned from profiles/default/v1 at <commit>` — `<commit>` being the
    commit the digests were taken at, `4965175d0edeeec8ba746609e585b053be03e075`
    unless the profile has moved by the time the component lands — and the
-   check that each supplied document's digest equals its pin. The claim's id and digest, the
+   check that each supplied document's digest equals its pin. Requirement
+   16's check sits beside them, because it compares against the same
+   `producer-config.json` pin and the resolved profile is already parsed
+   here: it walks every present `config_source` in the resolved profile,
+   including each `tool_sources[].config_source`, and refuses unless the
+   document it names has a pin and its `value.value_sha256` equals that pin.
+   The claim's id and digest, the
    hash algorithm, and the commit and tree ids all arrive as arguments and
    are placed in the request; the jq program never reads a file and never
    spells `sha1` as a literal in the revision it builds. Anything copied from
@@ -305,14 +493,21 @@ Files, in the order they are written:
    as `loop/v1/review-fix-planner.jq` already does.
 2. `shadow/v1/assemble-materialization-input.sh` — argument and workspace
    checks, the pinned-jq check, reading and canonicalizing each input, the
-   profile-id check and the eight digest comparisons against the pins, the
+   profile-id check and the eight digest comparisons against the pins,
+   requirement 16's producer config digest check against the same pin, the
    claim checks and the two values derived from it (its `id` and the SHA-256
-   of its bytes), the Git reads under the protective environment
-   (`rev-parse --show-object-format` first, then the commit-id width check
-   against what it reported, that the commit exists, and its root tree id),
-   the call into the jq program with the algorithm passed through, the size
-   check, then the writes: `input.json`, `stage-request-ref.json`,
-   `resolved-profile-ref.json`, and the decision-record texts.
+   of its bytes), then the Git work under the protective environment: the
+   scratch `run_root`, the `git_env` array and `git_dir` helper, the
+   verbatim `source_pure` copy of requirement 15 under its header, and only
+   after it returns clean, the commit lookup and the root tree id. The
+   algorithm the copy checked against the caller's commit-id width is the one
+   `rev-parse --show-object-format` reported inside the copy, and it is passed
+   through to the jq program. Then the size check, then the writes:
+   `input.json`, `stage-request-ref.json`, `resolved-profile-ref.json`, and
+   the decision-record texts. The copied span is the largest single block in
+   the file — about 70 lines of copied text plus its header, the three name
+   bindings, and the subshell wrapper, so roughly 85 lines that were not
+   written here and are not to be edited here.
 3. `scripts/test/shadow-assembler.test.sh` — the proof in requirement 13.
 4. `docs/components.md` — an "Inactive shadow materialization input assembler"
    section that states plainly where resolved profiles come from today, next to
@@ -341,6 +536,10 @@ operator supplies. It reads no network, no credential, and no model.
   reads the default profile's bytes and pins their digests, and it does not
   touch the profile itself — but from here on a change to that profile also
   moves the pins, in that change's own pull request.
+- Strengthening or relaxing the source-purity predicates requirement 15
+  copies. They are copied, not authored here. If one of them is wrong it is
+  wrong in `materialize.sh` and is fixed there, and both copies then move with
+  it.
 
 ## Areas of concern
 
@@ -380,7 +579,10 @@ operator supplies. It reads no network, no credential, and no model.
   `profile.default.v1`, but the id is only the cheap first check. What the
   component actually proves is that all eight supplied documents are
   byte-identical to the shipped `profiles/default/v1/` documents at the
-  pinned commit `4965175d0edeeec8ba746609e585b053be03e075`. Without that, a
+  pinned commit `4965175d0edeeec8ba746609e585b053be03e075`, and — through
+  requirement 16 — that the resolved profile's one config claim carries that
+  same `producer-config.json` digest rather than merely naming the file.
+  Without that, a
   caller could hand over a profile set that is entirely self-consistent —
   its own manifests, its own resolved profile — and reuse the id, and the
   output would claim real-default provenance for a profile nobody shipped.
@@ -404,7 +606,41 @@ operator supplies. It reads no network, no credential, and no model.
   for either, and keeps the driver's `E_STALE` comparison meaningful. What
   it does not do is make the assembler tolerant: a commit id whose width
   disagrees with the format the repository reports is `E_TARGET`, not a
-  coercion.
+  coercion — and that refusal is not written here either. It is
+  `materialize.sh:352-354`, inside requirement 15's copy, running against a
+  `source_algorithm` bound from the caller's commit-id width.
+- **The source guards are a copy, and a copy shared with another initiative.**
+  Requirement 15 puts about 70 lines of `materialize.sh` inside this
+  component, and the sibling spec puts the same 70 lines inside the driver.
+  Three things can drift instead of one: the materializer, the driver's copy,
+  and this copy. That is the price of the alternative being worse — a
+  paraphrase drifts silently, while a copy drifts loudly, because
+  requirement 13's test compares the bytes against the materializer at the
+  cited commit and fails CI the moment they differ. It is the same
+  keep-in-sync discipline the profile pins use, and the same one
+  `loop/v1/review-fix-planner.jq:1-3` states. The residual risk is that the
+  two copies land in different pull requests and someone edits one of them
+  in place; whichever lands second should take the other's bytes rather than
+  retaking the copy from the materializer, so there is one text with two
+  homes and not two texts.
+- **Requirement 16 binds the config claim, not every claim.** The resolved
+  profile makes a source claim for each binding's manifest, package, prompt,
+  skills and tools as well as its config. Only the config claim can be tied
+  to a pin, because `producer-config.json` is one of the eight documents
+  requirement 3 pins; the manifest claims are already tied to the pinned
+  manifests through `manifest_source.value_sha256 ==
+  binding.manifest_ref.sha256`, but the package, prompt and skill claims name
+  bytes that live elsewhere in the repository — adapter normalizers,
+  `routines/coder.md`, `reviewer/codex-review.md` — which this spec does not
+  pin and should not, because pinning them would make this component a second
+  copy of the whole repository's state. So a supplied resolved profile can
+  still carry a wrong digest for the producer's prompt. That matters less
+  than the config hole did: the materializer binding is the only one this
+  input actually drives, and it has no config, no prompt, no skills and no
+  tools (`materializer_relations_ok`). It is still a real limit, and it is
+  another form of the limit the bullet above about the resolved profile
+  already names — the resolved profile is trusted for what no pin covers,
+  until the trusted parent exists.
 - **Timestamp, and resolve-fresh-or-pinned.** The intent's first open question is
   decided: the timestamp is a caller-supplied argument, because a clock read
   would break determinism. Its third is answered by DR-1 — neither fresh nor
