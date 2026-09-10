@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 2036-2754 changed lines** (implementation). The derivation,
+**Evidence-based range: 2053-2777 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -66,15 +66,19 @@ measured rather than guessed:
   is how the parent computes digests: delegating to the platform's SHA-256 and SHA-1 tools
   at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
-  plan decides that, and it is the one thing that could push the C file past ~1185. The
+  plan decides that, and it is the one thing that could push the C file past ~1200. The
   round before this one moved this figure by the ~35 just named — the supervisor's reads
   moving onto the
   descriptors it already holds, and the blob id being computed in C rather than delegated
   to `git hash-object`. The round before it moved nothing here, and the one before that
   added the ~20 for the fd-relative creation. The round before that added the ~5 for the
   `runtime-pgid` line and nothing else, the round before this one added nothing here at all,
-  and this round adds the ~25 just named in the handler bullet above: the two
+  the round before this one added the ~25 named in the handler bullet above: the two
   `sig_atomic_t` variables, the `pre_child` branch and the `parent-signal:` line (R2).
+  This round adds ~15 more, to **~1090**: the signal set built once, and the
+  `sigprocmask(SIG_BLOCK, …)`/`sigprocmask(SIG_SETMASK, …)` pair around each fork the
+  parent performs — the resolver's and each pre-resolver child's — plus the child's mask
+  restore and its three `SIG_DFL` resets before `execve` (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -107,9 +111,13 @@ measured rather than guessed:
   trap's second branch — the parent-pid variable it tests, and the chmod, remove and
   `128 + signal` exit for a signal that arrives while `.run` exists and no parent does
   (R1). This round adds ~5 more, to **~380**: the one `printf` line each trap branch writes
-  to the entry's own stderr, with the signal name and the branch word it carries (R1). This
-  round adds nothing here at all: the entry's forwarded branch is unchanged, and the new
-  handling is all on the parent's side of it (R2).
+  to the entry's own stderr, with the signal name and the branch word it carries (R1). The
+  round before this one added nothing here at all: the entry's forwarded branch was
+  unchanged and the new handling was all on the parent's side of it (R2). This round adds
+  ~5, to **~385**: the `run_created` guard — the `trap` line moving ahead of the `mkdir`,
+  the guard inside both of its removal branches, and the `mkdir` becoming the one
+  `run_created=$(/bin/mkdir -- "$run" && printf 1)` command with its
+  `[ -n "$run_created" ]` refusal (R1).
 - **Focused test ~880 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -149,10 +157,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2395 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 ten rounds ago, then 1560-2120, then 1580-2130, then
+Those sum to about 2415 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 eleven rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
-1972-2668, then 1985-2685, and the
+1972-2668, then 1985-2685, then 2036-2754, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -238,7 +246,8 @@ foreground-group signalling to bash's deferral of a trapped signal — costs no
 implementation lines, because the entry it describes already ran every pre-parent child in
 the foreground. What it does add is a stated requirement that it keep doing so.
 
-This round adds ~60, in the parent and the test, and all of it comes from the second of its
+The round before this one added ~60, in the parent and the test, and all of it came from
+the second of its
 two findings. ~25 in the parent: the signal handler's two `volatile sig_atomic_t`
 variables, the assignment of each at the right moment, the `pre_child` branch with its own
 `SIGTERM`-then-`SIGKILL` and reap, the guard that keeps a zero `pgid` away from
@@ -252,6 +261,20 @@ Darwin write residual narrowing to the runtime's own `git` under DR-2 — costs 
 implementation lines at all: it changes what this spec claims and what the Darwin operator
 run measures, not what any shipped file does, which is the whole reason it is a residual
 rather than a fix. Nothing was made cheaper to compensate.
+
+This round adds ~20, in the parent and the entry, and nothing in the test, because neither
+of its two fixes has a proof a test can run. ~15 in the parent: the three-signal set, the
+`sigprocmask(SIG_BLOCK, …)` before each fork it performs and the matching
+`sigprocmask(SIG_SETMASK, …)` after the pid assignment and the `runtime-pgid:` line, and
+the child's mask restore and three `SIG_DFL` resets before `execve` (R2). ~5 in the entry:
+the `trap` line moving ahead of the `mkdir`, the `run_created` guard inside both removal
+branches, and the `mkdir` written as one command with its assignment and its emptiness
+refusal (R1). Nothing in the test, and that is a claim rather than an omission: the
+fork-and-publish window and the trap-arming order are both proved by reading, for the
+reasons R10 states in each place, and inventing a case that lands in neither window would
+pass by missing it. The round's other finding is the DR-2 decision, which is pending with
+the operator rather than settled here and adds nothing anywhere until it is answered.
+Nothing was made cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -268,7 +291,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about seven times: `wc -l
-work/resolver-trusted-parent/spec.md` is 2933 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 3168 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
@@ -289,13 +312,17 @@ from the process table, the Darwin cache assertion that no longer skips the case
 to catch, a command-word grep with a mechanism a test can actually be written from, that
 pre-parent trap branch made observable on the entry's own stderr so its
 test asserts the branch instead of an empty directory, with the deferral rule that keeps
-its removal off a live child stated correctly for the first time, and this round the
+its removal off a live child stated correctly for the first time, the
 Darwin write claim narrowed to the one residual that belongs to the unchanged runtime's
 own `git`, with DR-2 pending on it, beside the parent's signal handler specified for the
-window before a runtime process group exists).
-**Evidence-based range: 2493-3373 lines** — the measured 2933 lines plus or minus 15%. It was
-553 lines and 470-636 eleven rounds ago, then 783, then 847, then 1012, then 1202, then
-1503, then 1764, then 1955, then 2245, then 2512, then 2636;
+window before a runtime process group exists, and this round the three signals blocked
+across every fork the parent performs and its publication, so no handler can run in the
+instant when a child exists and its pid does not, beside the entry's cleanup trap armed
+before the `mkdir` rather than with it, guarded so it never removes a `.run` that is not
+its own).
+**Evidence-based range: 2693-3643 lines** — the measured 3168 lines plus or minus 15%. It was
+553 lines and 470-636 twelve rounds ago, then 783, then 847, then 1012, then 1202, then
+1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -441,7 +468,8 @@ from "parent just started", and the bounded wait the deferred trap forces on the
 remaining ~20 are ripples: the signals concern under Areas of concern, and the re-derived
 size figures here and for the implementation.
 
-This round is +297 net over one P1 and one P2, and the two are unrelated except in
+The round before this one was +297 net over one P1 and one P2, and the two were unrelated
+except in
 being places where an earlier round claimed more than it had. About 90 go to the Darwin
 write residual: R7's claim narrowed to name exactly what it covers — everything this
 initiative adds, on both platforms, and the unchanged runtime on Linux — its Darwin
@@ -470,6 +498,32 @@ the new residual bullet, R9's documentation line naming the second stderr form, 
 Copy-versus-adapt handler item growing rather than a tenth deviation being added, eight
 sentences that said "the shipped path" where they meant "either shipped file", and the
 re-derived size figures here and for the implementation.
+
+This round is +235 net over two P1 findings and one P2, and only two of the three are
+settled here. About 70 go to the parent's fork-and-publish window: R2's new block on why
+two variables are not enough on their own, the blocked-signal region around every fork
+with the exact order of `setpgid`, the pid assignment, the `runtime-pgid:` line and the
+unmask inside it, the child's mask restore and its three `SIG_DFL` resets with their two
+different reasons stated separately rather than merged, the honest note on why the
+`pre_child` clear needs no mask of its own, Design step 1's handler clause carrying the
+same sequence, the Copy-versus-adapt handler item growing again rather than a tenth
+deviation being added, and the signals bullet under Areas of concern. About 15 go to R10
+saying the window is proved by reading rather
+than by a fourth signal case, with the reason a poll-and-signal case aimed at a few
+instructions would pass by missing them. About 65 go to the entry's cleanup being armed
+before the `mkdir` rather than with it: R1's new three-statement block with the
+`run_created` guard, the create-and-flag written as one simple command, and the bash
+deferral rule behind it measured rather than assumed; both removal branches gaining the
+guard; the fixed-order sentence and the run-directory paragraph naming the trap's new
+position; Design step 2's rewritten clause; and the cleanup bullet under Areas of concern.
+About 20 go to R10's cleanup block: the
+fifth case considered and deliberately not written, with the two reasons no deterministic
+fixture for it exists, and cleanup case 2's order corrected. The remaining ~65 are
+ripples: the accepted-concern list at the top, the pre-parent signal case's opening
+sentence, and the re-derived size figures here and for the implementation.
+The third finding is DR-2 on intake `#271`, which is the operator's decision rather than
+this round's to fix; the residual bullet below still reads pending and this round does not
+touch it.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -507,7 +561,7 @@ the range above still blocks review.
   the launch.
 
   **The trap is installed before the parent exists, so it has two branches.** The trap goes
-  on with the `mkdir` that creates the run directory, which is well before the pin checks,
+  on ahead of the `mkdir` that creates the run directory, which is well before the pin checks,
   the two compiles and the launch (the order is fixed below), so `INT`, `TERM` or `HUP` can
   arrive at a moment when `.run` is on disk and there is no parent process to forward
   anything to. That is not a narrow window: ten pin checks and two compiles run inside it.
@@ -517,7 +571,9 @@ the range above still blocks review.
   - *No parent pid recorded.* Nothing was launched, so no resolver and no process group
     exist and there is nothing to forward the signal to. The trap writes its one
     `entry-signal: <NAME> no-parent` line to the entry's own stderr (below), chmods the run
-    directory back to 0700, removes it, and exits `128 + signal`. No child of the entry's
+    directory back to 0700 and removes it — or removes nothing at all, when the
+    `run_created` guard below is still empty because the `mkdir` has not completed — and
+    exits `128 + signal`. No child of the entry's
     own is alive when that removal runs, and the reason is bash's own deferral rule rather
     than anything about process groups. An earlier round of this spec said a compiler child
     "was signalled too" because the caller's signal went to the whole foreground group,
@@ -554,7 +610,9 @@ the range above still blocks review.
     `128 + signal` for the signal that killed it.
 
   Both branches chmod 0700 before removing, and in both that `chmod` is a harmless no-op
-  when the signal arrives before the mode pass, while the directory is still 0700. Both
+  when the signal arrives before the mode pass, while the directory is still 0700. In both
+  the chmod and the removal are inside the `run_created` guard below, so a trap that fires
+  before the run directory is the entry's own touches nothing on disk. Both
   exit rather than re-raising the signal, which is a deliberate choice over the more
   idiomatic reset-and-re-raise: an explicit `exit` makes the entry's status on a signal the
   same number in every path through this requirement — `128 + signal`, the same rule the
@@ -732,7 +790,8 @@ the range above still blocks review.
   invocation is `<output>/.run`: created with a plain `/bin/mkdir` — no `-p`, so an
   existing `.run` is an `EEXIST` refused with `E_RUNTIME` rather than a directory the entry
   adopts — at mode 0700, owned by the current uid, with a `tmp` subdirectory at mode 0700
-  inside it for the compiler's scratch files, and removed by the trap before the entry
+  inside it for the compiler's scratch files, and removed by the trap — which is installed
+  ahead of that `mkdir` rather than with it, for the reason given below — before the entry
   exits. It is deliberately **not** `mktemp -d` under the caller's `TMPDIR`, which is what
   an earlier round of this spec said: a run directory there is a second write root, and the
   intent allows exactly one — "no writes outside the caller's own output"
@@ -775,16 +834,67 @@ the range above still blocks review.
   not there is not a refusal; it is a quiet fallback, and what the tool does instead —
   fail obscurely, or write somewhere the spec has just promised it will not — is the
   toolchain's choice rather than the entry's. So the order is fixed here, and every later
-  section uses it: validate the output root; create `<output>/.run` and its `tmp` and `home`
-  subdirectories at mode 0700 and install the trap; run the pin checks; run the two
+  section uses it: validate the output root; install the trap; create `<output>/.run` and
+  then its `tmp` and `home` subdirectories at mode 0700; run the pin checks; run the two
   compiles; empty and remove `tmp` and `home` and tighten the modes; launch the parent. The
   only refusals that happen before anything is written are the output-root validations
   above. Every refusal after them — the pin checks included — happens with `.run` already on
-  disk, which is why the trap is installed with the `mkdir` rather than after the pins, and
-  why R10 counts a pin-check refusal as cleanup evidence rather than as a
+  disk, which is why the trap is installed ahead of the `mkdir` rather than after the pins,
+  and why R10 counts a pin-check refusal as cleanup evidence rather than as a
   nothing-was-created case.
 
-  Two of those checks need a mechanism worth naming. Emptiness is a glob, not a command:
+  **The cleanup trap is armed the instant `.run` can exist, which means before the `mkdir`
+  and not with it.** An earlier round of this spec said the trap was installed "with the
+  `mkdir`", and the sequence that came out of that phrase ran the `mkdir` first, then
+  created `tmp` and `home` inside `.run`, and only then executed the `trap` line. Three
+  things can happen in that gap and every one of them leaves the caller's output root
+  dirty with nothing registered to clean it: the `mkdir` of `tmp` can fail, the `mkdir` of
+  `home` can fail, and `INT`, `TERM` or `HUP` can arrive while `.run` is already on disk
+  and the three signals still carry their default disposition. The entry would then refuse
+  or die with a `.run` directory it created itself and no `EXIT` or signal path to remove
+  it — the one outcome the trap exists to prevent, in the one window where the trap was
+  missing. So the order inside this step is three statements, in this order and no other.
+
+  1. **Install the `EXIT`/`INT`/`TERM`/`HUP` trap, before anything creates `.run`.** The
+     removal inside it is guarded by a variable — `run_created` — that is empty until the
+     directory is known to be the entry's own, so an armed trap that fires before or during
+     the `mkdir` removes nothing. That guard is not a detail: without it the trap would
+     delete a pre-existing `.run` that the entry refused rather than adopted, which turns a
+     refusal into a destructive act on a directory the entry does not own the contents of.
+     Nothing before this statement has written anything — the output-root validations above
+     are a `stat`, a glob and a `cd -P` — so a signal that lands earlier still finds the
+     default disposition and still leaves nothing behind.
+  2. **Create the directory and set the guard in one simple command**:
+     `run_created=$(/bin/mkdir -- "$run" && printf 1)`. The two are one statement rather
+     than two for a reason that decides the whole finding: bash defers a trapped signal
+     while a foreground command runs and executes the trap only after that command — its
+     assignment included — has completed, so there is no instant at which the trap can
+     observe a created directory with an empty guard. The refusal is then
+     `[ -n "$run_created" ] || <E_RUNTIME>`; `mkdir` has no `-p`, so an existing `.run` is
+     an `EEXIST` that leaves `run_created` empty and the command's status non-zero, refused
+     rather than adopted, and the trap correctly leaves that directory where it found it.
+  3. **Only then create `tmp` and `home` inside `.run`** at mode 0700. A failure of either
+     is `E_RUNTIME`, and by then the trap is armed with the guard set, so it chmods back to
+     0700 and removes `.run` and everything in it on the way out. Pins, compiles, tighten
+     and launch follow in the order above, unchanged.
+
+  The deferral rule step 2 rests on is the same rule the no-parent branch above rests on —
+  stated in the bash manual under SIGNALS — and it was measured before being written here
+  rather than assumed. A script that traps `TERM`, runs `f=$(sleep 3 && printf 1)`, and is
+  sent `TERM` one second into the sleep prints `trap sees f=1`: the trap ran after the
+  assignment, with the guard already set, not between the command and the assignment. A
+  companion check on the real command shows the rest: the status is available afterwards,
+  and a `mkdir` onto an existing directory leaves the variable empty and the status
+  non-zero, so the `[ -n "$run_created" ]` refusal and a `$?` test say the same thing. That was
+  measured on `GNU bash, version 3.2.57(1)-release`, the `/bin/bash` a Darwin machine
+  ships; the rule is bash's documented behaviour rather than one version's accident, and
+  the plan re-runs the same two-line check against the Linux CI image's own `/bin/bash`
+  while writing this step, because that is the other `/bin/bash` the entry ever runs
+  under. R10 does not turn any of this into a test case, for the reason its cleanup block
+  gives.
+
+  Two of the output-root checks above need a mechanism worth naming. Emptiness is a glob,
+  not a command:
   `shopt -s dotglob nullglob` and then a glob of `<output>/*` into an array that must have
   no elements, which sees dotfiles and needs neither `find` nor `ls`. Owner and mode come
   from a single `/usr/bin/stat` call whose format flags differ per platform — `-c '%u %a'`
@@ -1026,7 +1136,8 @@ the range above still blocks review.
   (`portable-profile-resolution-launcher.c:440`) and the supervisor sets it from the parent
   side as well (`:450`) — and the test launcher installs no signal handler at all.
   `<signal.h>` is included (`:7`) only for `kill` and the `SIG*` constants; there is no
-  `sigaction` and no `signal()` call anywhere in the file; the only group kill is on the
+  `sigaction`, no `signal()` and no `sigprocmask` call anywhere in the file — none of the
+  three names appears in it, which is why the mask discipline below is new code too; the only group kill is on the
   limit paths (`kill(-child, SIGKILL)` at `:491`, then `kill(child, SIGKILL)` at `:492`,
   reaped at `:493-494`). So a `TERM` to the launcher kills the launcher on the default
   disposition and leaves the resolver's whole process group running, orphaned. That is
@@ -1057,16 +1168,67 @@ the range above still blocks review.
   the caller's own process group. The requirement is therefore stated as two variables and
   three branches rather than left to the plan.
 
-  - `pgid` is a `volatile sig_atomic_t` initialised to `0` and assigned immediately after
-    the `fork` (`portable-profile-resolution-launcher.c:432`) and the parent-side
-    `setpgid(child, child)` (`:450`), and before the `runtime-pgid:` line below — so the
-    line and the variable become true together, and a reader who has seen the line knows the
-    handler will take the group branch.
+  - `pgid` is a `volatile sig_atomic_t` initialised to `0` and assigned in the parent
+    immediately after the `fork` (`portable-profile-resolution-launcher.c:432`) and the
+    parent-side `setpgid(child, child)` (`:450`), and before the `runtime-pgid:` line
+    below — all of it inside the blocked-signal region the next block specifies, so the
+    line and the variable become true together, neither can be observed half-done, and a
+    reader who has seen the line knows the handler will take the group branch.
   - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
     child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
-    jq `--version` probe. It is set immediately after that child's `fork` and before the
-    `waitpid` on it, and cleared back to `0` once the `waitpid` returns, so at most one pid
-    is ever live in it and it is `0` whenever no pre-resolver child exists.
+    jq `--version` probe. It is set in the parent immediately after that child's `fork`,
+    inside the same blocked-signal region, and before the `waitpid` on it, and cleared
+    back to `0` once the `waitpid` returns, so at most one pid is ever live in it and it
+    is `0` whenever no pre-resolver child exists.
+
+  **Two variables are not enough on their own, because a signal can land between a `fork`
+  and the assignment that publishes what it returned. So the parent blocks the three
+  signals across every fork and its publication.** `fork` returns in the parent before any
+  statement can record its value, and the handler reads only the variables. An `INT`,
+  `TERM` or `HUP` delivered in that gap therefore sees `pgid == 0` and `pre_child == 0`,
+  takes the nothing-to-kill branch, writes `parent-signal: <NAME> no-runtime` and
+  `_exit(128 + signal)` — leaving the child it has just forked running, and, when that
+  child is the resolver, leaving it running while the entry's trap sees the parent gone and
+  removes `.run` from under it. That is the exact failure this requirement exists to
+  prevent, reached through a window a few instructions wide.
+
+  The window is closed by blocking, because no ordering of statements can close it. Before
+  **every** `fork` the parent performs — the resolver's
+  (`portable-profile-resolution-launcher.c:432`) and each pre-resolver child's: the SHA-1
+  tool for each of the three blob-id pins, the SHA-256 tool for the jq digest, and the jq
+  `--version` probe — the parent blocks `SIGINT`, `SIGTERM` and `SIGHUP` with
+  `sigprocmask(SIG_BLOCK, &three, &saved)`, keeping the previous mask in `saved`. In the
+  parent after `fork` returns, in this order: `setpgid(child, child)` (`:450`, the
+  resolver's fork only); assign `pgid = child` for the resolver or `pre_child = child` for
+  a pre-resolver child; write the `runtime-pgid:` line (the resolver's fork only); then
+  `sigprocmask(SIG_SETMASK, &saved, NULL)`. A signal that arrived while the three were
+  blocked is delivered at that last call, when the handler already reads the published id
+  and takes the branch that kills the child that exists. The forked-but-unpublished state
+  is never observable by a handler, because no handler runs while it holds.
+
+  In the child, after `fork` and before `execve`, the mask is restored with
+  `sigprocmask(SIG_SETMASK, &saved, NULL)` and the three dispositions are reset to
+  `SIG_DFL`. Both are needed, for two different reasons, and the plan should carry both
+  reasons rather than one. The mask **is** inherited across `exec`, so a child that kept
+  the parent's block would start the resolver with `SIGTERM` blocked and would ignore the
+  parent's own `kill(-pgid, SIGTERM)` until something unblocked it — turning the first
+  signal of the group sequence into a no-op and leaving the `SIGKILL` to do all of the
+  work. The dispositions are **not** inherited across `exec`, so the `SIG_DFL` resets are
+  not about the resolver at all; they are about the handful of statements the child runs
+  between `fork` and `execve` — `setpgid(0, 0)`, the two `dup2` calls, the two `close`
+  calls and `apply_child_limits` (`:440-443`) — during which an inherited handler would
+  otherwise run the parent's group sequence from inside the child.
+
+  After the `waitpid` on a pre-resolver child returns, `pre_child` is cleared back to `0`
+  with no mask around the clear, and that is deliberate rather than an omission. The worst
+  a handler can do with a stale pid it read just before the clear is signal a process that
+  no longer exists: the `kill` fails with `ESRCH` and the `waitpid` after it with `ECHILD`,
+  and the handler ignores the return value of both — stated here as a requirement rather
+  than left to the plan, because there is nothing useful a handler on its way to
+  `_exit(128 + signal)` can do with either error. For the pid to name something else the kernel would
+  have to recycle it within the few instructions between the reap and the clear, and the
+  parent forks nothing in that span — it reaps each pre-resolver child before it forks the
+  next one.
 
   The handler then chooses on those two, in this order. If `pgid != 0`, it runs the group
   sequence exactly as above: `kill(-pgid, SIGTERM)`, a brief wait, `kill(-pgid, SIGKILL)`,
@@ -1133,8 +1295,9 @@ the range above still blocks review.
   runtime, and anything picking a process by parentage could pick a digest tool instead.
   Rather than have a reader infer it, the parent reports it. Immediately after the `fork`
   (`portable-profile-resolution-launcher.c:432`) and the `setpgid(child, child)` the copied
-  supervisor already does from the parent side (`:450`), and before it enters the poll loop,
-  the parent writes exactly one line to its own stderr:
+  supervisor already does from the parent side (`:450`), after the `pgid` assignment and
+  still inside the blocked-signal region all three of those sit in, and before it enters
+  the poll loop, the parent writes exactly one line to its own stderr:
 
   ```
   runtime-pgid: <n>
@@ -2178,8 +2341,8 @@ the range above still blocks review.
      claim about `home` being empty, because nothing in this initiative's control governs
      what a future git might drop into a `HOME` it was handed.
   2. *A refusal by the entry, at the pin check.* The wrong-digest jq case from group 1. The
-     entry has by then validated the output root, created `.run` with its `tmp` and `home`
-     subdirectories at 0700 and installed the trap, and refuses before either compile. The
+     entry has by then validated the output root, installed the trap, and created `.run`
+     with its `tmp` and `home` subdirectories at 0700, and refuses before either compile. The
      trap therefore fires against a run directory that exists, is still 0700, and holds two
      subdirectories and no compiled file — the one shape none of the other three cases
      reaches. The output directory is asserted **completely empty** afterwards: no `.run`,
@@ -2201,6 +2364,26 @@ the range above still blocks review.
      entries as case 1 and no `.run` — this time with `child.stderr` carrying the runtime's
      error line and `child.stdout` empty, and `tmp` empty again, which is the resolver's own
      scratch cleanup asserted in the same place.
+
+  **A fifth case was considered and is not written, and the reason is said out loud.** The
+  order R1 now fixes arms the trap before the `mkdir` so that a failure of the `tmp` or
+  `home` creation, or a signal landing while `.run` exists and nothing is registered to
+  remove it, still cleans up. The case that would prove it directly is one where `.run` is
+  created and `tmp` cannot be, and there is no deterministic way to build that from
+  outside the entry. The entry creates `.run` itself at 0700 in a root it has just
+  validated as caller-owned, 0700 and empty, so every route to a failing `mkdir` of `tmp`
+  needs either a privilege the suite does not have (a read-only or quota-bound mount under
+  a directory that still passes those validations) or a same-uid process racing a `chmod`
+  into the microseconds between the two `mkdir` calls, which is a flaky test dressed as a
+  deterministic one. A test-only hook inside the entry is the thing this spec refuses
+  everywhere else. So the arming order is covered the way R2's mask window is: by reading,
+  with the plan quoting the three statements in order — `trap`, then
+  `run_created=$(/bin/mkdir -- "$run" && printf 1)`, then the two subdirectories — and the
+  reviewer checking that no statement between them can create `.run` without the guard.
+  What the four cases above still carry is everything downstream of that: case 2 proves
+  the trap is armed and removes a `.run` that holds `tmp` and `home` and no compiled file,
+  and the pre-parent signal case below proves a signal arriving with `.run` on disk and no
+  parent takes the branch that removes it.
 
   No entry output is needed for any of this, and the entry is not asked to print its run
   directory path — which is no longer worth asking for, since it is always `<output>/.run`.
@@ -2271,8 +2454,9 @@ the range above still blocks review.
   runs, and the mid-run path is exercised on every platform the test runs on.
 
   **A signal that arrives before the parent exists is tested as its own case, because the
-  trap's other branch is reachable.** The trap is installed with the `mkdir` that creates
-  `.run`, ahead of the pin checks and both compiles (R1), so there is a real window in which
+  trap's other branch is reachable.** The trap is installed ahead of the `mkdir` that
+  creates `.run`, and both are ahead of the pin checks and the two compiles (R1), so there
+  is a real window in which
   the entry has a run directory and no parent, and the branch that handles it — one
   `entry-signal:` line, chmod, remove, exit `128 + signal`, nothing forwarded to anybody —
   has no coverage from the mid-run case above. So the test runs the same real resolution in
@@ -2363,6 +2547,23 @@ the range above still blocks review.
   already the first statements of `main` (R2). **One success proves the branch**, and the
   branch is the same one every attempt aims at, so twenty attempts is a scheduling
   allowance, not twenty different tests.
+
+  **The fork-and-publish window is proved by reading, not by a fourth signal case.** The
+  gap R2 closes with the signal mask is a few instructions wide and lies between a `fork`
+  and the assignment that publishes what it returned. Nothing a test can do puts a signal
+  in it on demand: there is no stop point in there to reach without a test-only pause
+  inside the security wrapper — the thing this spec refuses everywhere else — and a
+  poll-and-signal loop aimed at it would miss on essentially every attempt while proving
+  nothing on the attempts it missed, so a case built that way would pass by not landing in
+  the window, which is worse than having no case. The coverage is therefore stated
+  honestly: the plan quotes the sequence for every fork the parent performs —
+  `sigprocmask(SIG_BLOCK, …)`, `fork`, `setpgid`, the `pgid` or `pre_child` assignment,
+  the `runtime-pgid:` line, `sigprocmask(SIG_SETMASK, …)`, and on the child's side the
+  mask restore and the three `SIG_DFL` resets before `execve` — and the reviewer checks
+  that every fork in the file sits inside one such region. The three signal cases above
+  are unchanged by the mask and must still pass exactly as written, which is the other
+  half of the check: the mask changes *when* a pending signal is delivered, never which
+  branch the handler takes once it runs.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -2519,7 +2720,15 @@ Order, each step checkable before the next:
    `--version` probe), set before its `waitpid` and cleared after — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
    only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
-   `kill(-0, …)` in any of them. Each branch first writes one line with the copied
+   `kill(-0, …)` in any of them. Every `fork` the parent performs — the resolver's
+   (`:432`) and each pre-resolver child's — is wrapped in
+   `sigprocmask(SIG_BLOCK, &three, &saved)` before it and
+   `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid`,
+   assigned `pgid` or `pre_child` and written the `runtime-pgid:` line, so no handler ever
+   runs between a `fork` and the publication of what it returned; the child restores the
+   same mask and resets the three dispositions to `SIG_DFL` before `execve`, the first
+   because the mask is inherited across `exec` and the second because the child runs C
+   code before it (R2). Each branch first writes one line with the copied
    `write_all` (`:164`) — `parent-signal: <NAME> group <pgid>` or
    `parent-signal: <NAME> no-runtime` — which is what R10's stopped-parent case asserts
    (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
@@ -2547,11 +2756,19 @@ Order, each step checkable before the next:
    `(cd -P … && pwd)` equal to the argument), owned by the current uid, mode exactly 0700
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
    (R1);
-   then create the run directory `<output>/.run` at mode 0700 with a plain `/bin/mkdir`,
-   which refuses an existing one, plus 0700 `tmp` and `home` subdirectories
-   inside it for compiler scratch and the compiler's `HOME`, and install the
-   `EXIT`/`INT`/`TERM`/`HUP` trap that
-   removes the whole run directory (the trap chmods the directory back to 0700 first,
+   then install the `EXIT`/`INT`/`TERM`/`HUP` trap **before** anything creates the run
+   directory, its removal guarded by a `run_created` variable that stays empty until the
+   directory is the entry's own; then create the run directory `<output>/.run` at mode
+   0700 and set that guard in one simple command,
+   `run_created=$(/bin/mkdir -- "$run" && printf 1)` — a plain `/bin/mkdir` with no `-p`,
+   so an existing `.run` is an `EEXIST` that leaves the guard empty and is refused rather
+   than adopted, and one statement rather than two because bash cannot run the deferred
+   trap between the `mkdir` and its assignment (R1, measured); then create the 0700 `tmp`
+   and `home` subdirectories inside it for compiler scratch and the compiler's `HOME`,
+   a failure of either refusing `E_RUNTIME` into the trap that is by then already armed.
+   That trap
+   removes the whole run directory whenever the guard is set (the trap chmods the directory
+   back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
    unlinked; on the three signals it has two branches, chosen on whether a parent pid has
    been recorded yet, and each of them first `printf`s one line to the entry's own stderr
@@ -2560,7 +2777,8 @@ Order, each step checkable before the next:
    with a parent, it forwards the signal, waits for the parent to exit,
    removes nothing until that wait returns because the parent is what terminates the
    resolver's process group, and exits with the parent's status; without one, no group exists
-   and there is nothing to forward to, so it removes the run directory and exits
+   and there is nothing to forward to, so it removes the run directory — or nothing at all,
+   if the guard is still empty — and exits
    `128 + signal`, and no child of the entry's own is alive to race that removal because
    bash defers a trapped signal until the foreground command it is waiting on finishes,
    which also means the branch can run up to one compile late — R1, R2);
@@ -2746,11 +2964,23 @@ intent says for this change. Only after the operator's merge does
   window inside the parent is no longer one of the plan's open questions: R2 states the two
   `volatile sig_atomic_t` variables, the three branches and the prohibition on
   `kill(0, …)`/`kill(-0, …)` outright, because that is not a detail an implementation should
-  be left to invent.
+  be left to invent, and neither is the window this round found inside it: a signal that
+  lands between a `fork` and the assignment that publishes its pid would take the
+  no-runtime branch and exit with the child it just forked still running, so R2 blocks
+  `INT`, `TERM` and `HUP` across every fork the parent performs and its publication and
+  restores the mask in the child before `execve`. That fix is the one thing in this bullet
+  with no test behind it — the window is a few instructions wide and nothing can put a
+  signal in it on demand — so its coverage is a sequence the plan quotes and the reviewer
+  reads, which R10 states in those words rather than implying a case exists.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
-  the leftovers slightly annoying to delete by hand. `SIGKILL` on the entry cannot be
+  the leftovers slightly annoying to delete by hand. What the trap does now
+  cover, which an earlier round of this spec left open, is the moment `.run` comes into
+  existence: the trap is installed before the `mkdir` rather than with it, and the `mkdir`
+  and the guard that arms the removal are one command, so there is no ordering in which a
+  failed `tmp` or `home` creation, or a signal arriving just after `.run` appears, finds
+  the directory on disk and nothing registered to remove it (R1). `SIGKILL` on the entry cannot be
   forwarded either, so in that case the parent keeps running and its own handlers never
   fire — the resolver group is reaped by the parent's normal exit rather than by a signal,
   which is the right outcome, but nothing removes the run directory afterwards.
@@ -2819,11 +3049,16 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2) — and this round that item grows
-  rather than a tenth being added, because it is the same deviation: the handlers carry two
-  `volatile sig_atomic_t` variables, three branches on them, a prohibition on
-  `kill(0, …)`/`kill(-0, …)`, and one `parent-signal:` line each branch writes, where the
-  launcher installs no handler at all and so has nothing to grow from; the four sandbox
+  handlers with process-group termination are new (R2) — and that item grows again this
+  round rather than a tenth being added, because it is all the same deviation: the handlers
+  carry two `volatile sig_atomic_t` variables, three branches on them, a prohibition on
+  `kill(0, …)`/`kill(-0, …)`, one `parent-signal:` line each branch writes, and now a
+  `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
+  `sigprocmask(SIG_SETMASK, …)` after the pid assignment and the `runtime-pgid:` line,
+  plus the child's own mask restore and three `SIG_DFL` resets before `execve` — where the
+  launcher forks at `:432` with no mask at all and contains no `sigprocmask`, no
+  `sigaction` and no `signal()` anywhere in its 702 lines (verified: none of the three
+  names appears in the file), so there is no handler and no mask discipline to grow from; the four sandbox
   entries `home`,
   `tmp`, `child.stdout` and `child.stderr`
   are created with `mkdirat` and `openat` relative to the output-directory descriptor the
