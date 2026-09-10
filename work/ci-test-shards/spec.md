@@ -7,7 +7,8 @@ drafted: 2026-09-09
 
 CI runs all 63 `scripts/test/*.test.sh` suites one after another in a single job and
 takes 80 to 90 minutes. This splits that work across six parallel runners without
-changing which suites run, what the merge gate is called, or what it means.
+changing any of the existing suites, what the merge gate is called, or what it
+means. The only new suite is the focused sharding test in requirement 9.
 
 **Risk is `high`.** The change edits `.github/workflows/ci.yml` — a constitution path
 (`AGENTS.md`: agents never write `.github/**`) and the workflow behind the one
@@ -172,8 +173,11 @@ clears the target, but not by much — which is why the shard count is a tunable
 
 - Making any individual suite faster. `evals-dashboard` alone is about 14 minutes and
   is the real ceiling; it gets its own follow-up issue.
-- A merge queue. Any change to the branch ruleset. Any change to which suites exist
-  or which ones CI runs. Duration-balanced or bin-packed scheduling.
+- A merge queue. Any change to the branch ruleset. Any change to the existing
+  suites — none is removed, renamed, skipped, or reordered in meaning. The one
+  addition is the focused sharding test in requirement 9, which the unchanged
+  discovery rule picks up like any other suite. Duration-balanced or bin-packed
+  scheduling.
 
 ## Areas of concern
 
