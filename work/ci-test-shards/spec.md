@@ -102,8 +102,13 @@ as `proposals/README.md` describes, never the commit itself.
 
 9. **Focused proof, outside the discovered suite set.** A new, executable
    `scripts/test/run-all-sharding.check.sh` proves by calling `--list`:
-   - for `count` in 1, 2, 6 and 16: the shards are pairwise disjoint, no suite
-     appears twice, and their union sorted equals the `--list` output with no shard;
+   - for every `count` from 1 to 16, and for each of those counts every `index`
+     from 1 to `count`: the shards are pairwise disjoint, no suite appears twice,
+     and their union sorted equals the `--list` output with no shard. Every count
+     in that range, not a sample of four, because the runner accepts every one of
+     them — that is `--shard <index>/<count> --list` for all 136 index/count pairs,
+     written as a loop over the sixteen counts rather than sixteen spelled-out
+     cases;
    - the `--list` output with no shard equals `--shard 1/1 --list`;
    - each refusal in requirement 5 exits `2`, writes that exact usage line to stderr,
      prints nothing to stdout, and runs no suite;
@@ -115,7 +120,8 @@ as `proposals/README.md` describes, never the commit itself.
    (requirement 2). It is run explicitly instead, by the workflow's `checks` job, as
    `bash scripts/test/run-all-sharding.check.sh`, in one step right after the
    shellcheck step; the workflow edit is the operator's commit anyway. It runs in
-   seconds because it only calls `--list` and never executes a suite. It is
+   seconds: the partition sweep is 136 `--list` invocations, and `--list` lists and
+   runs nothing, so the whole proof never executes a suite. It is
    `shellcheck 0.11.0 -x -S style` clean — the sweep's `find . -name '*.sh'` already
    covers it — and its path is appended at the end of `ci/required-files.txt`, which
    also checks that it is executable.
@@ -235,11 +241,14 @@ Order of work on `ystack/impl/ci-test-shards`:
    job's workspace starts empty; the aggregate `ci` job gets no checkout, since it
    only inspects `needs.*.result`.
 
-Size estimate: about 70 net lines in the runner, 170 in the new proof script, 49 in
-the workflow (the three jobs, the checkout step in each job that needs one, and the
-one step that calls the proof), one manifest line, and four lines of docs — two or
-three for the `RESTORE.md` bullet plus the one `AGENTS.md` sentence — so roughly
-294 net lines, inside the 300–400 budget, hence `review_size: standard`. The
+Size estimate: unchanged by requirement 9's sweep over all sixteen counts, because
+that is a loop over `1..16` with an inner loop over `1..count`, not sixteen
+written-out cases — the same few lines that four counts would have taken. So: about
+70 net lines in the runner, 170 in the new proof script, 49 in the workflow (the
+three jobs, the checkout step in each job that needs one, and the one step that
+calls the proof), one manifest line, and four lines of docs — two or three for the
+`RESTORE.md` bullet plus the one `AGENTS.md` sentence — so roughly 294 net lines,
+inside the 300–400 budget, hence `review_size: standard`. The
 `proposals/` patch adds about 60 more lines, but they are the same workflow and
 `AGENTS.md` text written twice — once as patch text, once as the operator's commit —
 so they are read once, not twice.
