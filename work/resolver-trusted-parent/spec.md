@@ -37,8 +37,8 @@ measured rather than guessed:
   remaining ~75 lines — the argv shape check, `child_argv`, and the whole environment
   construction R3 lists — are copied. New code on top of that: copied-from headers (~15),
   the output-path and run-directory arguments that replace `YSTACK_TEST_SANDBOX` (~30),
-  the runtime mode-0644 and blob checks (~45), the blob checks for the other two loaded
-  files the parent re-pins — `scripts/lib/profile-resolution.sh` and
+  the runtime mode-0644 and blob checks (~45), the blob checks for the other two files
+  of the parent-pinned subset — `scripts/lib/profile-resolution.sh` and
   `resolver/v1/profile-resolution.jq`, sharing the runtime's blob-id helper, so ~30 for
   the repository-root derivation, two constants and two comparisons — the parent's own jq
   digest and `jq-1.6`
@@ -67,7 +67,8 @@ measured rather than guessed:
   hand-built run-directory helper for the direct-parent cases (~15) and the sixteen
   group-2 cases on top of it (~120), the group-3 runtime refusal (~10), the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
-  signal test with its pgid bookkeeping and bounded retry (~35), the cleanup assertions
+  signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
+  `SIGSTOP` freeze (~35), the cleanup assertions
   (~50), the pin-constant assertions over ten pins (~25), the downloader grep (~15),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
@@ -96,21 +97,26 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by more than double: `wc -l
-work/resolver-trusted-parent/spec.md` is 783 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 847 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, and this round the full pinned load set,
 process-group termination on signals, and per-check direct-parent coverage).
-**Evidence-based range: 666-900 lines** — the measured 783 lines plus or minus 15%. It was
-553 lines and 470-636 in the previous round; the 230 added lines are the three findings
-this round, and where they went is worth naming so the growth can be checked rather than
-taken on trust: about 65 lines enumerating the runtime's loaded set with its evidence and
-deciding the pins (R5), about 40 restructuring R10's refusals into owner-labelled groups
-with one line per case, about 25 on the signal decision in R2 and its test, and the rest
-spread over R1, R7, the Design steps, three Areas-of-concern bullets and the re-derived
-size figures. This waives only the soft line signal for this
-artifact pull request. It waives nothing else: one concern per PR, readability, the
-review itself, CI, and operator merge all still apply, and an unexplained overrun beyond
+**Evidence-based range: 720-974 lines** — the measured 847 lines plus or minus 15%. It was
+553 lines and 470-636 two rounds ago, then 783; where each block of growth went is worth
+naming so it can be checked rather than taken on trust. The 230 lines of the previous
+round were its three findings: about 65 enumerating the runtime's loaded set with its
+evidence and deciding the pins (R5), about 40 restructuring R10's refusals into
+owner-labelled groups with one line per case, about 25 on the signal decision in R2 and
+its test, and the rest spread over R1, R7, the Design steps, three Areas-of-concern
+bullets and the re-derived size figures. The 64 lines of this round are the two reviewer
+findings: about 27 stating pin ownership once and naming the parent-pinned subset with
+its residual (R5, echoed in R1, R7 and R10), about 28 replacing the signal test's
+fallback with the `SIGSTOP` freeze and its failure case (R10, echoed in R2 and Areas of
+concern), and the remaining handful in these re-derived size figures.
+This waives only the soft line signal for this artifact pull request. It waives nothing
+else: one concern per PR, readability, the review itself, CI, and operator merge all
+still apply, and an unexplained overrun beyond
 the range above still blocks review.
 
 ## Requirements
@@ -163,7 +169,8 @@ the range above still blocks review.
   (`scripts/lib/profile-resolution.sh:7-10,711-717`). In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
   library it sources, the resolver jq program, and the five jq modules the core contract
-  imports. The pinned constants carry a
+  imports. Pinning the whole set is the entry's job alone; the parent later re-checks only
+  the first three of them (the parent-pinned subset, R5). The pinned constants carry a
   `# pinned at <commit>` header naming the commit they were read from, and the focused
   test asserts they equal the working tree's blob ids, so a source edit that forgets the
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
@@ -222,8 +229,12 @@ the range above still blocks review.
 
   So the shipped parent adds handlers for `INT`, `TERM` and `HUP` that send `SIGTERM` to
   the child's process group (`kill(-pgid, SIGTERM)`), wait briefly, send `SIGKILL` to the
-  same group, reap the child, and exit `128 + signal`. The parent owns this because the
-  parent is the only process that knows the group id. The entry's part is to forward the
+  same group, reap the child, and exit `128 + signal`. The `SIGKILL` is not a
+  belt-and-braces second try; it is required. A member of that group may be stopped — R10's
+  signal test stops the whole group on purpose to make the test deterministic — and a
+  stopped process does not act on `SIGTERM` until something continues it, while it dies to
+  `SIGKILL` either way. The parent owns all of this because the parent is the only process
+  that knows the group id. The entry's part is to forward the
   signal and wait (R1); it never terminates the group itself and never removes the run
   directory before the parent has exited.
 - **R3 — the environment is built from empty, with exactly this allowlist.** From
@@ -247,9 +258,9 @@ the range above still blocks review.
   refuses before `execve` when: the runtime file is not a regular non-symlink absolute
   path (`:635`) **or its mode is not 0644** — today that assertion lives only in the test
   (`portable-profile-resolution.test.sh:608-614`), and moving it into the parent is a
-  named deviation; any file in the runtime's loaded set below does not match its pinned
-  blob id; the jq at the bound path does not match
-  the pinned SHA-256 for the platform or does not answer `jq-1.6`
+  named deviation; any file in the parent-pinned subset — files 1, 2 and 3 of the loaded
+  set below, and no others — does not match its pinned blob id; the jq at the bound path
+  does not match the pinned SHA-256 for the platform or does not answer `jq-1.6`
   (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
   `shadow/v1/reproduce.sh:113-118`); the helper fails the run-directory checks below;
   any allowlisted value is not an absolute
@@ -260,7 +271,7 @@ the range above still blocks review.
   is not an empty directory the caller owns at mode 0700, mirroring the sandbox rule the
   test uses (`portable-profile-resolution.test.sh:219-222`).
 
-  **The loaded set is pinned, not just the entry point.** Pinning the runtime file alone
+  **The entry pins the loaded set, not just the entry point.** Pinning the runtime file alone
   buys almost nothing, because the runtime is a dozen lines of binding and then a
   `source`. It reads `scripts/lib/profile-resolution.sh` into its own shell
   (`resolver/v1/profile-resolve-runtime.sh:19`, guarded only by `[ -f ]` and `[ ! -L ]` at
@@ -300,21 +311,39 @@ the range above still blocks review.
   Files 4 through 7 are already pinned by blob inside the library itself
   (`scripts/lib/profile-resolution.sh:711-714`, against the constants at `:7-10`), and
   those pins are worth something only once the library that holds them is itself pinned.
-  So: **the entry pins the git blob id of every file in that set** — 1, 2, 3, the five
-  modules of 8, and its own two C sources — as constants carrying the same
-  `# pinned at <commit>` header, checked with `/usr/bin/git hash-object` before any
-  compile, a mismatch being `E_RUNTIME` before the compile. **The parent independently
-  re-pins the three it can locate for itself** — 1, 2 and 3, all reachable from the
-  runtime path it is handed, using the runtime's own `${dir%/resolver/v1}` repository-root
-  rule (`resolver/v1/profile-resolve-runtime.sh:9-10`) — and refuses with `E_RUNTIME`
-  before `execve`. The parent does not re-pin the five modules, because reaching them
-  needs the generation id, which lives in the library; the entry owns those five, and R10
-  says plainly that a caller who drives the parent directly loses that check. The focused
-  test asserts every pinned constant equals the working tree's `git hash-object` output,
-  so an edit that forgets a pin fails CI rather than shipping.
+  So the set has two owners, and which one owns what is stated once here and used in
+  those words everywhere else in this spec. **The entry pins the git blob id of every
+  file in that set** — 1, 2, 3, the five modules of 8, and its own two C sources — as
+  constants carrying the same `# pinned at <commit>` header, checked with
+  `/usr/bin/git hash-object` before any compile, a mismatch being `E_RUNTIME` before the
+  compile. **The parent
+  re-pins exactly files 1, 2 and 3, and nothing else; call those three the parent-pinned
+  subset.** All three are reachable from the runtime path the parent is handed, using the
+  runtime's own `${dir%/resolver/v1}` repository-root rule
+  (`resolver/v1/profile-resolve-runtime.sh:9-10`), and a mismatch on any of the three is
+  `E_RUNTIME` before `execve`. The parent does not re-pin the five modules, because
+  reaching them needs the generation id, which lives in the library; those five are
+  entry-owned. Every sentence in this spec about a parent blob refusal says "the
+  parent-pinned subset (files 1-3)" and means only those three — the parent never claims
+  to check the loaded set.
 
-  What this buys, plainly: the trusted set is explicit and finite. The parent launches
-  exactly these committed bytes or it launches nothing. What it costs: any change to
+  **What a caller who drives the parent directly loses.** That caller — the group-2 test
+  cases in R10, or an operator who invokes `trusted-launch` without the entry — gets the
+  parent-pinned subset and no other pin. Files 4 through 7 are still covered, because the
+  library's own blob checks fire at run time
+  (`scripts/lib/profile-resolution.sh:711-714`) and the parent's pin of file 2 is what
+  makes those checks trustworthy. The five module bodies are the actual gap: in that path
+  nothing checks their content at all — `scripts/core-contract.sh:250-259` checks only
+  that each one exists and is not a symlink. So the residual is exact: bypass the entry
+  and the modules are unpinned. R10 states it in those terms rather than implying the
+  parent covers the set. The focused test asserts every pinned constant equals the working
+  tree's `git hash-object` output, so an edit that forgets a pin fails CI rather than
+  shipping.
+
+  What this buys, plainly: the trusted set is explicit and finite. Go through the entry
+  and the launch is exactly these committed bytes or it is nothing; go straight to the
+  parent and it is the parent-pinned subset plus whatever the library checks for itself.
+  What it costs: any change to
   resolver code moves pins in the same pull request, and a new core generation moves five
   module pins at once. That cost is the repository's existing pattern, paid in the library
   today (`scripts/lib/profile-resolution.sh:7-10,711-714`).
@@ -416,7 +445,8 @@ the range above still blocks review.
      `resolver/v1/profile-resolution.jq`, `scripts/core-contract.sh`, the generation's
      `core-ingress.sh`, `contracts.jq` and five jq modules, and
      `core/v2/generation-registry.json` — eight of them read by the entry to be hashed,
-     three of those eight read again by the parent to be hashed and mode-checked, the
+     the three that form the parent-pinned subset read again by the parent to be hashed
+     (and the runtime file among those three also mode-checked), the
      remaining four hashed by the library itself at run time (`:711-714`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the jq binary
      supplied as an argument and its
@@ -478,9 +508,9 @@ the range above still blocks review.
     test script (R5);
   - a `scripts/lib/profile-resolution.sh` whose blob id does not match the pin, and a
     `resolver/v1/profile-resolution.jq` whose blob id does not match the pin — the two
-    sourced-and-evaluated files the parent re-pins for itself (R5), reached by handing the
-    parent a runtime path inside a copied repository tree whose library or jq program has
-    been edited;
+    sourced-and-evaluated files that, with the runtime file above, are the whole
+    parent-pinned subset (R5), reached by handing the parent a runtime path inside a copied
+    repository tree whose library or jq program has been edited;
   - a jq whose SHA-256 does not match the platform pin;
   - a jq that does not answer `jq-1.6`;
   - a request path that is not absolute, a request path that is a symlink to a real
@@ -499,6 +529,15 @@ the range above still blocks review.
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
   if a check is ever quietly left to the entry. Those cases, and no others, are what "the
   parent's R5 refusals are proved" means here; the spec claims nothing wider.
+
+  What group 2 also shows, by omission, is the residual R5 states: a caller who reaches the
+  parent directly has only the parent-pinned subset — files 1, 2 and 3 — so there is no
+  module pin anywhere in that path. Files 4 through 7 still get the library's own blob
+  checks at run time (`scripts/lib/profile-resolution.sh:711-714`), which the parent's pin
+  of file 2 is what makes worth having; the five module bodies get only existence and
+  non-symlink (`scripts/core-contract.sh:250-259`). The edited-module case therefore sits
+  in group 1, driven through the entry, and the test comment says why it cannot sit in
+  group 2.
 
   **Group 3 — a runtime refusal, labelled as one.** A malformed request document is not an
   R5 case at all: the parent accepts it as a canonical regular file and passes the path
@@ -552,25 +591,44 @@ the range above still blocks review.
   directory path. The test also asserts the entry's exit status is 0 in case 1 and equals
   the child's own non-zero status in cases 2 and 3.
 
-  **A signal mid-run is tested, because R2's group termination has no other proof.** The
-  test starts the entry in the background on a real resolution — the default profile
-  request with this repository as the mapped root, the longest-running case it has — finds
-  the parent as the entry's only child (`pgrep -P <entry pid>`), records the parent's
-  process group id (`ps -o pgid= -p <parent pid>`), and sends `SIGTERM` to the entry. It
-  then waits for the entry and asserts three things: nothing remains in the recorded
-  process group (`pgrep -g <pgid>` finds no process, and `kill -0` on the group fails),
-  the entry's own `TMPDIR` is empty so the run directory is gone, and the entry's exit
-  status is `143`, which is `128 + SIGTERM`. If on some machine the resolution finishes
-  before the signal lands, the test does not manufacture a longer run to hide it: it
-  retries a bounded number of times, and if the race still cannot be won it falls back to
-  the race-free half of the same claim — that the run directory is removed only after the
-  entry's wait for the parent returns — and reports that the mid-run path was not
-  exercised on that platform. The fallback is a weaker proof and is labelled as one.
+  **A signal mid-run is tested, and the test is deterministic because it freezes the
+  resolver before signalling.** R2's group termination has no other proof, so the signal
+  path has to run every time rather than whenever the timing happens to work out. The test
+  starts the entry in the background on a real resolution — the default profile request
+  with this repository as the mapped root — and then, before it signals anything, waits for
+  the resolver to actually be running: it polls `pgrep -P <entry pid>` for the entry's only
+  child, the parent, and then polls for the parent's own child, the launched runtime, up to
+  a bounded number of short waits. Once that child exists the test records the resolver's
+  process group id — from the parent's own bookkeeping where the parent reports it,
+  otherwise `ps -o pgid= -p <child pid>` — and sends `SIGSTOP` to that whole group. A
+  stopped group cannot make progress and cannot finish, so from that moment the run will
+  not end on its own and there is no race left to lose. Only then does the test send
+  `SIGTERM` to the entry.
+
+  What must follow, in order: the entry forwards `SIGTERM` to the parent and waits; the
+  parent's handler sends `kill(-pgid, SIGTERM)`, waits briefly, then sends
+  `kill(-pgid, SIGKILL)`, which is what actually kills the frozen group, reaps the child
+  and exits `128 + 15`; the entry's second wait returns, its trap chmods the run directory
+  back to 0700 and removes it, and the entry exits `143`. The test asserts the three
+  observable ends of that: `pgrep -g <pgid>` finds no process and `kill -0` on the group
+  fails, the entry's own `TMPDIR` is empty so the run directory is gone, and the entry's
+  exit status is `143`, which is `128 + SIGTERM`.
+
+  **If the resolver's child never appears, the test fails.** There is no fallback in which
+  a completed run counts as signal coverage, because a run that finished before the child
+  could be seen proves nothing about group termination. The bounded poll expiring is a test
+  failure, with a message saying the fixture was too short on this machine. The fix is one
+  of two, decided in the plan rather than papered over at run time: enlarge the fixture so
+  the resolution takes long enough for the child to be observed, or drive the parent
+  directly in the group-2 style with a deterministic pause in the launched runtime so the
+  child is guaranteed to exist before the test signals. Either way the `SIGSTOP` freeze
+  runs, and the mid-run path is exercised on every platform the test runs on.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
-  pinned, in the entry and, for the three it re-pins, in the parent — and greps both
+  entry-pinned, and separately, in the parent, the three constants of the parent-pinned
+  subset — and greps both
   shipped files for any downloader — `curl`, `wget`,
   `nc`, `git fetch`, `git clone` — and fails if one appears. It is shellcheck-clean,
   leaves the schema guard at zero failures, and passes
@@ -720,14 +778,20 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq`, so pinning the runtime alone proves only that a
   dozen lines of `source` chain are the committed ones. The defence against a forgotten
   pin is the CI assertion in R10, and it is worth saying that the defence is one test.
+  Worth saying too: only three of the ten are re-checked by the parent — the parent-pinned
+  subset — so the module pins exist only on the path that goes through the entry.
 - **Signals are the newest code in the most sensitive place.** Group termination on
   `INT`/`TERM`/`HUP` (R2) is copied from nothing — the test launcher installs no handler
   at all — so it gets none of the benefit of the "copy what is already proved" argument
   the rest of the parent rests on, and it fails in the worst direction either way: a
   resolver left running under a deleted run directory, or a group killed that should not
-  have been. Its one test is racy by nature with a labelled weaker fallback. The plan
+  have been. Its one test is at least deterministic: R10 stops the resolver's process group
+  with `SIGSTOP` before signalling the entry, so the path is exercised on every run, and a
+  run that finishes before the resolver's child appears fails the test rather than passing
+  on a weaker claim. The plan
   should treat this as the highest-risk new code here and say what it does on `EINTR` in
-  `waitpid`, on a second signal during termination, and on an already-reaped child.
+  `waitpid`, on a second signal during termination, on an already-reaped child, and on a
+  group whose members are stopped when the handler fires.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
