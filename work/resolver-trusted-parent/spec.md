@@ -18,10 +18,10 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1580-2130 changed lines** (implementation). The derivation,
+**Evidence-based range: 1650-2240 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
-- **C parent ~970 lines** = ~605 copied verbatim + ~365 new. The test launcher is 702
+- **C parent ~990 lines** = ~605 copied verbatim + ~385 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
   copies is nearly all of it. Block by block: the includes, platform shims and the four
   limit constants, lines 1-43 (43 lines); the eight small helpers `set_limit` through
@@ -43,52 +43,68 @@ measured rather than guessed:
   the repository-root derivation, two constants and two comparisons — the parent's own jq
   digest and `jq-1.6`
   checks (~40), the three `fstat` run-directory checks in R5 (~90), the caller
-  output-directory check (~25), the regular-non-symlink check on the request and map
+  output-directory check (~45 — it is no longer a plain emptiness test but a `readdir` over
+  the directory that admits the single `.run` entry and then compares it with `realpath`
+  against the run directory the parent was handed, R5), the regular-non-symlink check on
+  the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
   (~45), closing inherited descriptors above 2 (~15), and the usage
-  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~365
+  text and `E_*` exit paths those new checks need (~15). The biggest unknown in that ~385
   is how the parent computes digests: delegating to the platform's SHA-256 tool and
   `git hash-object` at fixed paths sits at the low end, while a SHA-256 implementation
   carried in the C file would add roughly 150 more lines. The
   plan decides that, and it is the one thing that could push the C file past ~1100.
-- **Entry shell ~255 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
-  subset — self and repository-root resolution, platform case, jq digest pin, `mktemp -d`,
+- **Entry shell ~270 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+  subset — self and repository-root resolution, platform case, jq digest pin, its own
+  `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
   about 50 lines. The entry adds ten `git hash-object` blob pins — two C sources plus the
   eight loaded files R5 lists (~25 more than two pins would be, since the constants and
   the loop over them are the whole cost) — two compiles, the awk
   copy, the `tmp` subdirectory, the `chmod 0500` pass, the
   `LD_*`/`DYLD_*`/`BASH_ENV`/`ENV` clearing, and run-as-child plus wait plus signal
-  forwarding plus `128 + signal`, each step with its own `E_RUNTIME` exit.
-- **Focused test ~570 lines.** For scale, the existing resolution test is 746 lines and
+  forwarding plus `128 + signal`, each step with its own `E_RUNTIME` exit. The output
+  directory it now takes as an argument, and the `PATH_MAX` guard it runs on that argument
+  before making `<output>/.run` (R1), are ~15 of the total.
+- **Focused test ~625 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now close to both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
-  resolutions plus `cmp` (~30), five entry-level refusals in group 1 (~60), a shared
-  hand-built run-directory helper for the direct-parent cases (~15) and the sixteen
-  group-2 cases on top of it (~130, the overlong-value case now building a near-`PATH_MAX`
+  resolutions plus `cmp` (~30), seven entry-level refusals in group 1 (~85), a shared
+  hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
+  group-2 cases on top of it (~140, the overlong-value case now building a near-`PATH_MAX`
   directory tree rather than naming a long path), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
   signal test with its bounded poll for the resolver's child, its pgid bookkeeping and its
   `SIGSTOP` freeze (~35), the cleanup assertions
-  (~50), the pin-constant assertions over ten pins (~25), the command-word allowlist grep
+  (~70 — each of the three cases now asserts the exact entry set of the output directory,
+  not one emptiness test), the pin-constant assertions over ten pins (~25), the
+  command-word allowlist grep
   plus the downloader and `git`-subcommand grep (~30),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 1855 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 two rounds ago, then 1560-2120, and the growth is itemised
+Those sum to about 1945 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 three rounds ago, then 1560-2120, then 1580-2130, and the
+growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
 more in the test (thirteen more direct-parent cases, the R3 environment proof, the signal
-test). This round moves ~15 net lines, all of them in the test and all of them from the
-three findings: the unsupported-platform case leaves the runtime list for code review
-(−10), the overlong-value case grows a near-`PATH_MAX` directory fixture (+10), and the
-downloader grep becomes a full command-word allowlist grep plus a `git`-subcommand
-assertion (+15). No implementation code changed size, because none of the three findings
-changed what the shipped files do. Nothing was made cheaper to compensate.
+test). The round before this one moved ~15 net lines, all of them in the test: the
+unsupported-platform case left the runtime list for code review
+(−10), the overlong-value case grew a near-`PATH_MAX` directory fixture (+10), and the
+downloader grep became a full command-word allowlist grep plus a `git`-subcommand
+assertion (+15). This round adds ~90, all of it from the second of its two findings —
+moving the run directory inside the caller's output root, which is a change to what the
+shipped files do and so does cost implementation lines: ~20 in the parent (the
+output-directory check becomes a `readdir` plus a `realpath` comparison), ~15 in the entry
+(the output-directory argument and its `PATH_MAX` guard), and ~55 in the test (two more
+group-1 cases, one more group-2 case, and cleanup assertions that name the exact expected
+entry set three times). The first finding — the process-table reads in R7 — adds nothing
+here, because it only states what the copied supervisor already does. Nothing was made
+cheaper to compensate.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -104,17 +120,17 @@ boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
-requests too, and this one exceeds it by more than double: `wc -l
-work/resolver-trusted-parent/spec.md` is 1012 lines. Accepted as one concern: one
+requests too, and this one exceeds it by about three times: `wc -l
+work/resolver-trusted-parent/spec.md` is 1202 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
-termination on signals, per-check direct-parent coverage, and this round an exact
-executable allowlist and two claims moved from untestable runtime cases to code review).
-**Evidence-based range: 860-1164 lines** — the measured 1012 lines plus or minus 15%. It was
-553 lines and 470-636 three rounds ago, then 783, then 847; where each block of growth
-went is worth naming so it can be checked rather than taken on trust. The 230 lines of
-the round before last were its three findings: about 65 enumerating the runtime's loaded
+termination on signals, per-check direct-parent coverage, an exact executable allowlist,
+and this round the parent's host process-table reads and a single write root).
+**Evidence-based range: 1022-1382 lines** — the measured 1202 lines plus or minus 15%. It was
+553 lines and 470-636 four rounds ago, then 783, then 847, then 1012; where each block of
+growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
+of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
 evidence and deciding the pins (R5), about 40 restructuring R10's refusals into
 owner-labelled groups with one line per case, about 25 on the signal decision in R2 and
@@ -124,15 +140,24 @@ findings: about 27 stating pin ownership once and naming the parent-pinned subse
 its residual (R5, echoed in R1, R7 and R10), about 28 replacing the signal test's
 fallback with the `SIGSTOP` freeze and its failure case (R10, echoed in R2 and Areas of
 concern), and the remaining handful in re-derived size figures.
-The 165 lines of this round are its three findings, and this one is mostly one of them:
-about 55 replacing R7's seven-tool read list with the exact twelve-command enumeration per
-shipped file and the four path-policy choices behind it, about 30 explaining why the
-overlong-value case now aims at the output path (R10, echoed in R5), about 25 on the
+The 165 lines of the round before this one were its three findings: about 55 replacing
+R7's seven-tool read list with the exact command enumeration per
+shipped file and the path-policy choices behind it, about 30 explaining why the
+overlong-value case aims at the output path (R10, echoed in R5), about 25 on the
 unsupported-platform refusal becoming code-review coverage (R10, echoed in R8, Design
 step 2 and Areas of concern), about 11 turning the read list into R10's command-word
-grep, and the rest in the Copy-versus-adapt deviation list and these re-derived figures.
-Two of the three findings shrink what the spec claims rather than adding requirements; the
-lines are the cost of saying precisely what is no longer claimed.
+grep, and the rest in the Copy-versus-adapt deviation list and re-derived figures.
+The 190 lines of this round are its two findings, split unevenly. About 45 go to R7's new
+third read item, which names the copied supervisor's `/proc` and `libproc` reads per
+platform with their line numbers, says they take no file content, and says the coverage is
+code review of the copied block — echoed in R10's grep paragraph and in Areas of concern.
+The rest go to the run directory moving inside the caller's output root, which reached
+further than any single finding so far: R1's run-directory paragraph and its `PATH_MAX`
+guard, R7's write claim rewritten around one root, R5's output-directory refusal and the
+check order it now fixes, three more R10 cases, the whole cleanup block, the signal test's
+final assertion, Design steps 1 and 2, two Areas-of-concern bullets, the Copy-versus-adapt
+list, and the implementation size figures — which moved for the first time in three
+rounds, because unlike the recent findings this one changes what the shipped files do.
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
 still apply, and an unexplained overrun beyond
@@ -147,7 +172,8 @@ the range above still blocks review.
   parent: it needs to outlive it so it can delete the run directory, which an `exec`
   would make impossible because the entry's `EXIT` trap would never run and the
   compiled parent, the compiled helper, the compiler's own intermediates, and the copied
-  jq and awk would be left behind on every invocation. The entry passes the child's
+  jq and awk would be left behind in the caller's output directory on every invocation.
+  The entry passes the child's
   stdout and stderr through unchanged (it does not capture, buffer or rewrite them), and
   exits with the child's own exit status, or `128 + signal` when the child died on a
   signal. Its `EXIT` trap removes the run directory; it also traps `INT`, `TERM` and
@@ -193,13 +219,39 @@ the range above still blocks review.
   `# pinned at <commit>` header naming the commit they were read from, and the focused
   test asserts they equal the working tree's blob ids, so a source edit that forgets the
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
-  compile. The
-  entry then creates a fresh private run directory for this invocation — `mktemp -d`
-  under `TMPDIR`, mode 0700, owned by the current uid, removed on exit — and inside it a
-  `tmp` subdirectory at mode 0700 for the compiler's scratch files. It compiles both C
+  compile.
+
+  **The run directory lives inside the caller's output directory, so the caller's output
+  path is the only write root.** The entry's positional arguments are
+  `<jq> <output directory> <request> <repository map>`, and the run directory for this
+  invocation is `<output>/.run`: created with a plain `/bin/mkdir` — no `-p`, so an
+  existing `.run` is an `EEXIST` refused with `E_RUNTIME` rather than a directory the entry
+  adopts — at mode 0700, owned by the current uid, with a `tmp` subdirectory at mode 0700
+  inside it for the compiler's scratch files, and removed by the trap before the entry
+  exits. It is deliberately **not** `mktemp -d` under the caller's `TMPDIR`, which is what
+  an earlier round of this spec said: a run directory there is a second write root, and the
+  intent allows exactly one — "no writes outside the caller's own output"
+  (`work/resolver-trusted-parent/intent.md:36`). The name is fixed rather than random
+  because a fixed name is what lets the parent check containment: the parent requires the
+  output directory to hold no entry but `.run`, and requires that entry to be the very run
+  directory it was handed (R5).
+
+  Because `<output>` comes from the caller and every path inside the run directory is built
+  from it, the entry refuses an output path too long to hold one. Before the `mkdir` it
+  checks once that `<output>/.run/tmp/` plus a maximum-length file name still fits inside
+  `PATH_MAX` — reserving `NAME_MAX` rather than any one name, because the compiler chooses
+  its own intermediate names — and refuses with `E_RUNTIME` if it does not. That guard is
+  the entry's own and is stricter than the parent's copied
+  `strlen(sandbox) > PATH_MAX - 16` (`:641`), which reserves only enough room for
+  `<output>/child.stdout`. The entry checks nothing else about the output directory;
+  emptiness and mode stay the parent's checks (R5), so a caller who names a dirty output
+  directory pays for two compiles before the refusal. That is accepted: the same rule
+  written in two places is the more expensive mistake.
+
+  The entry compiles both C
   files from those pinned sources into the run directory with the fixed flags
   (`portable-profile-resolution.test.sh:146-149`), each compile run with
-  `TMPDIR=<run dir>/tmp` in its environment and with `-o` naming a path inside the run
+  `TMPDIR=<output>/.run/tmp` in its environment and with `-o` naming a path inside the run
   directory, so that the compiler's intermediates — preprocessor output, assembler input,
   temporary object files — land inside the run directory and are removed by the same
   cleanup that removes everything else, rather than being left in the caller's `TMPDIR`
@@ -289,8 +341,16 @@ the range above still blocks review.
   argument is not an absolute regular non-symlink file — the copied launcher checks only
   the leading slash on those two (`portable-profile-resolution-launcher.c:636`), so this
   is new code; or the caller's output directory
-  is not an empty directory the caller owns at mode 0700, mirroring the sandbox rule the
-  test uses (`portable-profile-resolution.test.sh:219-222`).
+  is not a directory the caller owns at mode 0700 holding no entry other than `.run`, with
+  that `.run` entry being the same object as the run directory the parent was handed — both
+  resolved with `realpath` — which mirrors the sandbox rule the test uses
+  (`portable-profile-resolution.test.sh:219-222`), allowing for the one entry the run
+  directory now occupies there (R1). Two orderings inside this are fixed here rather than
+  left to the plan: the length guard on the output path (`:641`) runs before any of it, so
+  an overlong output path is refused without the parent looking for `.run` at all — R10's
+  overlong case depends on that order — and the whole output-directory check runs before
+  the parent creates `home` and `tmp` there (`:645-647`), so a refused run leaves the
+  output directory exactly as it found it.
 
   **The entry pins the loaded set, not just the entry point.** Pinning the runtime file alone
   buys almost nothing, because the runtime is a dozen lines of binding and then a
@@ -389,7 +449,9 @@ the range above still blocks review.
   - the directory holding them is a real directory, not a symlink, owned by the current
     uid, at mode exactly 0500 — so it admits no new entries and no renames — and is
     exactly the run directory the entry named, compared after resolving both with
-    `realpath`.
+    `realpath`, and is that directory's `.run` entry inside the caller's output directory,
+    which is the same comparison read from the other side (R1, and the output-directory
+    check above).
 
   There is no identity probe to add. The runtime gives jq a `--version` probe (`:668-671`)
   but gives the helper none, and the helper has exactly one subcommand,
@@ -427,25 +489,45 @@ the range above still blocks review.
   request the shipped parent and the test launcher produce byte-identical output; the
   focused test runs both and `cmp`s them.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
-  credential, and exactly two write locations, named exactly:
+  credential, and **exactly one write root: the output path the caller named.** That is
+  what the intent asks for — "no writes outside the caller's own output"
+  (`work/resolver-trusted-parent/intent.md:36`) — and an earlier round of this spec did not
+  deliver it, because its run directory under the caller's `TMPDIR` was a second write
+  root. Inside the one root there are two write areas, named exactly:
 
-  1. *The run directory the entry created for this invocation*, including its `tmp`
-     subdirectory: the two compiled binaries, the jq and awk copies, and the compiler
-     intermediates that `TMPDIR=<run dir>/tmp` keeps inside it. The `tmp` subdirectory is
-     emptied and removed once compilation is done, before the 0500 tightening; the rest
-     goes when the entry's trap removes the run directory.
-  2. *The output path the caller named*, which the parent also uses as the sandbox root:
-     the `home` and `tmp` directories the parent creates there at mode 0700 (R3), the
-     supervisor's captured `child.stdout` and `child.stderr`
+  1. *`<output>/.run`, the run directory the entry creates for this invocation*, including
+     its `tmp` subdirectory: the two compiled binaries, the jq and awk copies, and the
+     compiler intermediates that `TMPDIR=<output>/.run/tmp` keeps inside it. The `tmp`
+     subdirectory is emptied and removed once compilation is done, before the 0500
+     tightening; the rest goes when the entry's trap removes `.run`, which happens before
+     the entry exits, so nothing of the run directory survives a run whose end the entry
+     can observe.
+  2. *The output path itself, which the parent also uses as the sandbox root*: the `home`
+     and `tmp` directories the parent creates there at mode 0700 (R3), the supervisor's
+     captured `child.stdout` and `child.stderr`
      (`portable-profile-resolution-launcher.c:413-414`), and the runtime's own `mktemp -d`
-     scratch under that sandbox `TMPDIR`. The resolved profile itself is not written to a
-     file; it goes to the parent's stdout, which the entry passes through (R6).
+     scratch under that sandbox `TMPDIR`, which is `<output>/tmp`. The resolved profile gets
+     no file of its own: its bytes are what the supervisor captured in `child.stdout` and
+     then streamed to the parent's stdout, which the entry passes through unchanged (R6).
 
-  Nothing outside those two is written. Not the caller's own `TMPDIR` — the run directory
-  is created there and is itself location 1, but no sibling file is ever left beside it,
-  which is exactly why the compile step redirects `TMPDIR` inward. Not the repository
-  working tree, not a cache, not a dotfile, not a temporary file anywhere else on the
-  filesystem.
+  The four sandbox names — `home`, `tmp`, `child.stdout`, `child.stderr` — cannot collide
+  with `.run`: none of them begins with a dot, and the parent creates each one with
+  `mkdir(2)` (`:645-647`) or `open(2)` carrying `O_CREAT|O_EXCL|O_NOFOLLOW`
+  (`:418-421`), every one of which fails on an existing entry rather than reusing it. So a
+  name collision here could only ever be a refusal, never a silent overwrite of something
+  the entry put there.
+
+  One thing the move does not widen: the launched resolver can reach the run directory
+  either way. It is handed absolute paths into it in `YSTACK_RESOLVER_HELPER`,
+  `YSTACK_RESOLVER_JQ` and the first `PATH` element (R3), and it runs as the same uid, so
+  `.run` sitting beside its `HOME` and `TMPDIR` tells it nothing it was not already told.
+  What stops it writing there is the 0500 modes, and those are unchanged.
+
+  Nothing outside the caller's output path is written. Not the caller's `TMPDIR`, which the
+  shipped path no longer uses as a write location at all: the run directory moved inside
+  the output root for exactly that reason, and the compile step redirects the compiler's
+  own `TMPDIR` inward for the same one. Not the repository working tree, not a cache, not a
+  dotfile, not a temporary file anywhere else on the filesystem.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -475,19 +557,21 @@ the range above still blocks review.
 
      **The executables, listed exactly.** The previous round's list was short enough to be
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
-     `/bin/chmod`, `/usr/bin/git` and the SHA-256 tool — and left out four the spec's own
-     steps need: `/usr/bin/uname` for the platform case, `/usr/bin/mktemp` for the run
+     `/bin/chmod`, `/usr/bin/git` and the SHA-256 tool — and left out four the spec's steps
+     needed then: `/usr/bin/uname` for the platform case, `/usr/bin/mktemp` for the run
      directory, `/bin/rm` for the cleanup, and `/usr/bin/printf` for the `E_*` lines. It
      also left `/usr/bin/awk` ambiguous, mentioning it as a file to copy without saying
-     whether anything runs it. Twelve command words is the true count. Every external
-     command either file runs, with the fixed absolute path it runs it by:
+     whether anything runs it. That correction made the count twelve; this round it is
+     **eleven**, because the run directory is now the fixed `<output>/.run` made with
+     `/bin/mkdir` and `/usr/bin/mktemp` is not run at all (R1). Every external command
+     either file runs, with the fixed absolute path it runs it by:
 
      *The entry, `resolver/v1/resolve-profile.sh`* — `/usr/bin/uname` (`-s` and `-m`, for
      the platform case); the platform's SHA-256 tool, `/usr/bin/shasum -a 256` on Darwin
      and `/usr/bin/sha256sum` on Linux, chosen in the same `case` that chooses the jq
      digest pin; `/usr/bin/git`, for `hash-object` on the ten pinned files;
-     `/usr/bin/mktemp`, for the run directory; `/bin/mkdir`, for the `tmp` subdirectory;
-     the compiler `/usr/bin/cc`; `/bin/cp`, for the jq and awk copies; `/usr/bin/awk`,
+     `/bin/mkdir`, for the run directory `<output>/.run` and the `tmp` subdirectory inside
+     it; the compiler `/usr/bin/cc`; `/bin/cp`, for the jq and awk copies; `/usr/bin/awk`,
      read only in order to be copied in, because the runtime needs awk on its `PATH`;
      `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
      `/bin/chmod`, for the 0500 pass and the trap's 0700 restore; `/bin/rm`, for the `tmp`
@@ -503,7 +587,7 @@ the range above still blocks review.
      `/bin/mkdir`, and every mode and ownership check is an `fstat` on a descriptor the
      parent opened, not a call to `/usr/bin/stat`.
 
-     Four choices inside that list are named because each is a place the shipped path
+     Five choices inside that list are named because each is a place the shipped path
      deliberately differs from the code it copies:
 
      - **The compiler is `/usr/bin/cc`, a fixed path on both platforms, and `$CC` is not
@@ -523,6 +607,12 @@ the range above still blocks review.
        SHA-256 tool through `/usr/bin/awk '{print $1}'`; the entry takes the first field
        with a bash parameter expansion and the parent parses it in C, so awk is on this
        list only as the file copied in for the runtime's benefit.
+     - **No `mktemp`.** `shadow/v1/reproduce.sh:94-142` and the test script both make their
+       scratch with `mktemp -d` under the caller's `TMPDIR`. The entry's run directory is
+       the fixed `<output>/.run` instead (R1), so `/usr/bin/mktemp` is neither run nor
+       listed. A random name buys nothing in a directory the parent already requires to be
+       caller-owned, mode 0700 and otherwise empty, and a fixed name is what lets the
+       parent check that the run directory it was handed is that entry.
      - **No `find` and no `stat`.** The 0500 pass names the four files it tightens — the
        compiled parent, the compiled helper, the jq copy, the awk copy — instead of
        discovering them, which is the same fact as the run directory holding exactly those
@@ -536,6 +626,47 @@ the range above still blocks review.
      assembler, the linker — is outside this list and outside the claim; the compiler is
      trusted unverified, as Areas of concern says.
 
+  3. *The copied supervisor additionally reads host process-table state.* That is neither a
+     repository read nor a file in the list above, and the two claims as written left it
+     out, which made them look narrower than the shipped parent is. Exactly what it reads,
+     per platform:
+
+     - *Linux.* `process_group_count`
+       (`portable-profile-resolution-launcher.c:176-231`) opens `/proc` with `opendir`
+       (`:178`), walks it with `readdir` (`:193`), and for every numeric entry builds
+       `/proc/<pid>/stat` (`:204`), opens it and reads that file's first line
+       (`:209-213`), from which it takes one field, the process group (`:218-220`).
+     - *Darwin.* `process_group_count` (`:233-265`) asks `libproc` for the machine's pid
+       list with `proc_listallpids` (`:235,247`) and calls `getpgid` on each pid (`:255`).
+       The address-space poll `process_group_address_space_exceeded` (`:335-380`) repeats
+       that enumeration (`:337,348`) and then, for group members only, calls
+       `proc_pidinfo` with `PROC_PIDTASKINFO` and `PROC_PIDREGIONINFO`
+       (`:279-280,286-287`) to total that process's private regions.
+
+     Both run inside the supervisor's poll loop, roughly every 10 ms for the life of the
+     resolution (`:411,456-489`; called at `:460,469,474`). The enumeration is host-wide
+     because neither kernel offers a narrower way to ask "which processes are in this
+     group": both list every pid on the machine and then keep only the pids whose process
+     group is the child's. What leaves the block is only the group's own accounting — a
+     count compared against the 32-process limit, and a yes/no on the Darwin 512 MiB bound
+     (R4). Nothing about any other process is retained, printed or passed on.
+
+     **These reads take no file content.** On Linux the only bytes read are the first line
+     of each `/proc/<pid>/stat`, which is process-table state the kernel renders as a file
+     rather than content stored on disk; nothing else under `/proc` is opened, and no
+     process's memory, command line or environment is read anywhere in the parent. (The
+     focused test does read `/proc/<child pid>/environ`, but that is the test asserting R3,
+     not the shipped parent.) On Darwin nothing is opened at all — the reads are `libproc`
+     calls.
+
+     Of R7's three read claims this is the one with no mechanical check. R10's allowlist
+     grep matches command words, so it says nothing about a syscall or a `libproc` call,
+     and no test observes what the supervisor reads. The coverage is code review of the
+     copied block — the same block the existing resolution test already exercises — and
+     the review has one thing to confirm: that `process_group_count`,
+     `process_group_address_space_exceeded` and `darwin_private_virtual_size` come over
+     verbatim, and that no other reader of host state is added beside them.
+
   No network is true by construction, not by
   policy: neither shipped file contains a downloader, and every input the shipped path
   needs — the jq binary, the C sources, the runtime — is either handed in as an argument
@@ -543,7 +674,8 @@ the range above still blocks review.
   extended: git runs with system and global config disabled,
   `protocol.file.allow=never` and `GIT_NO_LAZY_FETCH=1`
   (`scripts/lib/profile-resolution.sh:313-322`); every working file goes into the
-  runtime's own `mktemp -d` scratch under `TMPDIR` at umask 077
+  runtime's own `mktemp -d` scratch at umask 077 under the sandbox `TMPDIR` the parent set,
+  which is `<output>/tmp` and so inside the one write root
   (`:688-692`), removed on exit; repository reads go through `git --git-dir` on mapped
   roots (`:323`). The spec adds no claim beyond restating them.
 - **R8 — platforms.** Supported: `Darwin:arm64`, `Darwin:x86_64`, `Linux:x86_64` — the
@@ -560,7 +692,8 @@ the range above still blocks review.
   of `ci/required-files.txt`. The accepted resolver spec itself is not edited.
 - **R10 — the focused test.** `scripts/test/resolver-trusted-launch.test.sh` provisions
   the pinned jq the way `scripts/test/shadow-slice.test.sh:24-51` does, runs the shipped
-  entry with that binary as its argument, builds a resolution request naming the real
+  entry with that binary and a fresh empty mode-0700 output directory as its arguments,
+  builds a resolution request naming the real
   committed `profiles/default/v1` profile and manifest objects with this repository as
   the mapped root, resolves it through the shipped parent and through the test launcher,
   and `cmp`s the two outputs. The refusals fall into three groups, and the test labels
@@ -569,9 +702,13 @@ the range above still blocks review.
   **Group 1 — entry-owned refusals**, driven through the shipped entry: a jq whose SHA-256
   does not match the platform pin; an edited `resolver/v1/nofollow-snapshot.c` whose blob
   id no longer matches its pin; an edited `scripts/lib/profile-resolution.sh` and an
-  edited `resolver/v1/profile-resolution.jq`, same thing; and an edited jq module under
+  edited `resolver/v1/profile-resolution.jq`, same thing; an edited jq module under
   the generation's `modules/` directory, which the entry pins and the parent does not
-  (R5). Every case here and in group 2 that needs an edited
+  (R5); an output directory that already holds a `.run` entry, which the entry's plain
+  `mkdir` refuses rather than adopting (R1); and an output path too long to hold the run
+  directory, refused by the entry's own length guard before the `mkdir` (R1), which is the
+  entry-side half of the overlong case group 2 drives at the parent. Every case here and in
+  group 2 that needs an edited
   repository file edits a copy of the repository tree and points the entry or the parent
   at the copy; the test never modifies the working tree.
 
@@ -591,7 +728,7 @@ the range above still blocks review.
   things to check. First that `case`: two matching arms that between them name exactly the
   three tuples R8 supports — `Linux:x86_64` alone, and `Darwin:x86_64|Darwin:arm64`
   sharing one arm because they share one jq digest — and a `*)` arm that refuses with
-  `E_RUNTIME` before any pin check, any compile and any `mktemp -d`. Second the negative
+  `E_RUNTIME` before any pin check, any compile and any run directory. Second the negative
   fact that makes the refusal total: those same three tuples, and no others, are the whole
   of every per-platform table in the entry — the jq digest pin (two digests, three
   tuples), the SHA-256 tool choice, the awk branch — so an unrecognised platform has no
@@ -603,9 +740,10 @@ the range above still blocks review.
   **Group 2 — parent-owned refusals, each proved by invoking `trusted-launch` directly**,
   bypassing the entry. This group carries the weight: the entry refuses a bad jq before
   the parent ever runs, so an entry-level case alone proves nothing about the parent's own
-  copy of that check. The test builds a run directory by hand the way the entry would,
-  compiles the parent and the helper into it, tightens the modes, and then invokes the
-  parent directly — one case each for:
+  copy of that check. For each case the test makes an empty mode-0700 output directory,
+  builds `<output>/.run` inside it by hand the way the entry would, compiles the parent and
+  the helper into it, tightens the modes, and then invokes the parent directly — one case
+  each for:
 
   - a runtime file whose blob id does not match the pin (one byte changed);
   - a runtime file at mode 0755 instead of 0644, the check the parent takes over from the
@@ -630,7 +768,10 @@ the range above still blocks review.
   - a compiled parent binary in the run directory whose mode is not 0500;
   - a helper outside the run directory it was given, a helper whose mode is not 0500, and
     a run directory whose mode is not 0500;
-  - an output directory that is not empty, and one whose mode is not 0700.
+  - an output directory holding an entry other than `.run`; one whose mode is not 0700; and
+    one whose `.run` is not the run directory the parent was handed — a decoy `.run`
+    beside an equally well-built run directory somewhere else — which is the containment
+    check R5 adds now that the run directory lives in the output root.
 
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
   if a check is ever quietly left to the entry. Those cases, and no others, are what "the
@@ -662,6 +803,16 @@ the range above still blocks review.
   as the output path, and asserts the parent's `E_RUNTIME` line and a non-zero exit. If a
   platform will not let the test create such a directory, that is a test failure with a
   message saying so, not a skip.
+
+  Moving the run directory inside the output root (R1) has two consequences for this case,
+  and both are why it stays a direct-parent case. The entry now refuses such an output path
+  first, with its own stricter guard, so an entry-level version of this case would prove
+  the entry's guard and nothing about the parent's — group 1 has that case separately. And
+  the run directory for this case cannot live under a near-`PATH_MAX` output path at all:
+  the test builds it in a short directory of its own and relies on the order R5 fixes,
+  where the length guard at `:641` fires before the parent looks for the output directory's
+  `.run` entry. So the refusal asserted here is the length guard's alone, not the
+  containment check's.
 
   What group 2 also shows, by omission, is the residual R5 states: a caller who reaches the
   parent directly has only the parent-pinned subset — files 1, 2 and 3 — so there is no
@@ -697,31 +848,47 @@ the range above still blocks review.
   caller's.
 
   **Cleanup is asserted, using refusals that happen after the run directory exists.** The
-  entry runs the parent as a child and removes the run directory in its `EXIT` trap (R1),
-  so the test gives the entry a fresh empty `TMPDIR` of its own and asserts that directory
-  is empty again after the entry returns. Which refusal is used matters. The wrong-digest
-  jq refusal fires during the pin check, before `mktemp -d` has run at all, so it proves
-  only that the entry never created a run directory — not that the trap removes one. It
-  stays in the test as a pin-check case and is not cited as cleanup evidence anywhere.
-  Three cases carry the cleanup claim, each asserting the entry's `TMPDIR` is empty
-  afterwards; two of them are refusal cases the list above already includes, and the
-  cleanup claim adds the `TMPDIR`-empty assertion to them:
+  entry runs the parent as a child and removes `<output>/.run` in its `EXIT` trap (R1), and
+  the caller's `TMPDIR` is not a write location any more, so every cleanup assertion is
+  about the output directory: the test gives the entry a fresh empty mode-0700 output
+  directory of its own and asserts exactly what that directory holds once the entry
+  returns. Which refusal is used matters. The wrong-digest jq refusal fires during the pin
+  check, before the run directory has been created at all, so it proves only that the entry
+  never created one — not that the trap removes one. It stays in the test as a pin-check
+  case and is not cited as cleanup evidence anywhere. Three cases carry the cleanup claim,
+  and in all three the first assertion is that no `.run` entry remains; two of them are
+  refusal cases the list above already includes, and the cleanup claim adds the
+  output-directory assertions to them:
 
   1. *A successful resolution.* The run directory existed, was tightened to 0500, and is
      gone afterwards — which also proves the trap's `chmod 0700` is there, because without
-     it the entries of a 0500 directory cannot be unlinked.
+     it the entries of a 0500 directory cannot be unlinked. What the output directory holds
+     is the parent's sandbox and nothing else: `home`, `tmp`, `child.stdout` and
+     `child.stderr` (R7). The test asserts that exact set of four entries with no `.run`
+     among them, asserts `child.stdout` is byte-identical to the entry's own stdout, and
+     asserts `child.stderr` and `tmp` are empty — `tmp` because the runtime removes its own
+     scratch under it on exit (`scripts/lib/profile-resolution.sh:688-692`). It makes no
+     claim about `home` being empty, because nothing in this initiative's control governs
+     what a future git might drop into a `HOME` it was handed.
   2. *A refusal by the parent, after the run directory and the trap both exist.* The test
      hands the entry a runtime file copied to mode 0755 instead of 0644, so the entry
      checks every pin, compiles both binaries, removes `tmp`, tightens everything to 0500 and
      launches, and the parent refuses on the runtime-mode check it owns (R5). The trap
-     therefore fires against a fully built, fully tightened run directory.
+     therefore fires against a fully built, fully tightened run directory. Here the output
+     directory is asserted **completely empty** afterwards — no `.run`, and no `home`,
+     `tmp` or `child.*` either, because every refusal check the parent makes runs before it
+     creates its sandbox there (R5).
   3. *A refusal by the runtime, deeper still.* A malformed request document, which the
      parent accepts as a canonical regular file and passes through and the runtime refuses.
      The child exits non-zero only after the resolver has run and created its own scratch
-     under the sandbox, and the entry's trap still leaves `TMPDIR` empty.
+     under the sandbox, and the output directory afterwards holds the same four sandbox
+     entries as case 1 and no `.run` — this time with `child.stderr` carrying the runtime's
+     error line and `child.stdout` empty, and `tmp` empty again, which is the resolver's own
+     scratch cleanup asserted in the same place.
 
-  No entry output is needed for any of this and the entry is not asked to print its run
-  directory path. The test also asserts the entry's exit status is 0 in case 1 and equals
+  No entry output is needed for any of this, and the entry is not asked to print its run
+  directory path — which is no longer worth asking for, since it is always `<output>/.run`.
+  The test also asserts the entry's exit status is 0 in case 1 and equals
   the child's own non-zero status in cases 2 and 3.
 
   **A signal mid-run is tested, and the test is deterministic because it freezes the
@@ -744,8 +911,8 @@ the range above still blocks review.
   and exits `128 + 15`; the entry's second wait returns, its trap chmods the run directory
   back to 0700 and removes it, and the entry exits `143`. The test asserts the three
   observable ends of that: `pgrep -g <pgid>` finds no process and `kill -0` on the group
-  fails, the entry's own `TMPDIR` is empty so the run directory is gone, and the entry's
-  exit status is `143`, which is `128 + SIGTERM`.
+  fails, the output directory it gave the entry holds no `.run` entry so the run directory
+  is gone, and the entry's exit status is `143`, which is `128 + SIGTERM`.
 
   **If the resolver's child never appears, the test fails.** There is no fallback in which
   a completed run counts as signal coverage, because a run that finished before the child
@@ -763,14 +930,20 @@ the range above still blocks review.
   entry-pinned, and separately, in the parent, the three constants of the parent-pinned
   subset.
 
-  **The read allowlist is a grep, not a promise.** The test greps both shipped files for
+  **The read allowlist is a grep, not a promise, and it covers command words only.** The
+  test greps both shipped files for
   every command word — every absolute path under `/usr/bin` or `/bin` and every bare
   command name — and fails unless each one appears in R7's list: `/bin/bash`,
-  `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/usr/bin/uname`, `/usr/bin/mktemp`,
+  `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/usr/bin/uname`,
   `/usr/bin/git`, `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/cc`, and the platform pair
-  `/usr/bin/shasum` and `/usr/bin/sha256sum`. Anything else — a new tool, a bare name that
+  `/usr/bin/shasum` and `/usr/bin/sha256sum` — eleven command words, with
+  `/usr/bin/mktemp` off the list this round because the run directory is now
+  `<output>/.run` (R1). Anything else — a new tool, a bare name that
   would be resolved through `PATH`, a `${CC:-…}` style override — fails CI, which is what
   makes R7's list an invariant rather than a paragraph someone has to keep true by hand.
+  What it cannot make an invariant is the third read claim in R7: the supervisor's
+  process-table reads are `opendir`, `fopen`, `proc_listallpids` and `proc_pidinfo`, not
+  command words, so no grep sees them and they rest on code review of the copied block.
   The downloader grep that was already here stays alongside it, because the allowlist
   cannot replace all of it: `curl`, `wget` and `nc` would fail the allowlist as
   unlisted commands, but `/usr/bin/git` is on the list, so `git fetch` and `git clone`
@@ -790,8 +963,11 @@ Order, each step checkable before the next:
    `portable-profile-resolution-launcher.c:547-631`); replace the
    `YSTACK_TEST_SANDBOX` variable (`:640-644`) with a required output-path argument; take
    the run directory as a further argument and add the R5 checks, including the helper's
-   run-directory and mode-0500 checks, that the test script performs today or cannot
-   perform at all. Every mode and ownership check is done with `fstat` on a descriptor
+   run-directory and mode-0500 checks, the output-directory rule that admits exactly a
+   `.run` entry and requires it to be the run directory the parent was handed, and the
+   check order R5 fixes (length guard, then the output directory, then the sandbox
+   `mkdir`) — checks that the test script performs today or cannot perform at all.
+   Every mode and ownership check is done with `fstat` on a descriptor
    the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
    on a path it will later hand on by name. Two blocks here have no counterpart in the
    copied source and are written fresh: the blob-id pins for the three loaded files the
@@ -811,7 +987,9 @@ Order, each step checkable before the next:
    `git hash-object` the blob ids of both C sources and of the eight loaded files R5 lists
    as entry-pinned, against the pinned constants, the way the
    runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`);
-   create a fresh 0700 run directory with `mktemp -d`, plus a 0700 `tmp` subdirectory
+   check that `<output>/.run/tmp/` plus a `NAME_MAX` name fits inside `PATH_MAX` and then
+   create the run directory `<output>/.run` at mode 0700 with a plain `/bin/mkdir`, which
+   refuses an existing one, plus a 0700 `tmp` subdirectory
    inside it for compiler scratch, and install the `EXIT`/`INT`/`TERM`/`HUP` trap that
    removes the whole run directory (the trap chmods the directory back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
@@ -822,7 +1000,7 @@ Order, each step checkable before the next:
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
    (`portable-profile-resolution.test.sh:146-149`), invoking the fixed `/usr/bin/cc` on
    both platforms rather than the test's `${CC:-…}` (`:95,102`; R7), each compile carrying
-   `TMPDIR=<run dir>/tmp` and an `-o` path inside the run directory, plus `-pipe` where
+   `TMPDIR=<output>/.run/tmp` and an `-o` path inside the run directory, plus `-pipe` where
    the compiler accepts it, so no compiler intermediate is written outside the run
    directory; then copy in jq and the platform's awk the way the test does (`:130-143`);
    **tighten** — remove the `tmp` subdirectory and its contents, then `chmod 0500` every
@@ -830,8 +1008,9 @@ Order, each step checkable before the next:
    the R5 checks pass and nothing further can be added or replaced there without a
    `chmod`; this step comes after both compiles for exactly that reason; clear `LD_*`,
    `DYLD_*`, `BASH_ENV` and `ENV` from its own environment; **then run the parent as a
-   child** — not `exec`, so the trap survives to clean up — handing it the helper path and
-   the run directory; **then wait**, pass the child's stdout and stderr through unchanged,
+   child** — not `exec`, so the trap survives to clean up — handing it the helper path,
+   the run directory, and the output directory the run directory sits in;
+   **then wait**, pass the child's stdout and stderr through unchanged,
    and exit with the child's status (`128 + signal` if it was signalled). No step reaches
    the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
@@ -898,11 +1077,14 @@ intent says for this change. Only after the operator's merge does
   not have: the unsupported-platform refusal, which no CI input can drive because the
   entry reads `/usr/bin/uname` at a fixed path, and the jq-path length guard at
   `portable-profile-resolution-launcher.c:662-665`, which an earlier `lstat` makes
-  unreachable. That is all. There is no third-party audit, no fuzzing, no formal argument
+  unreachable. A third claim rests on code review for a different reason: R7's third read
+  item, the supervisor's host process-table reads on both platforms, which are syscalls and
+  `libproc` calls that no grep and no test in R10 observes. That is all. There is no
+  third-party audit, no fuzzing, no formal argument
   that the allowlist is complete, and no launch-evidence record — nothing this produces is
-  live-qualified (`work/portable-profile-resolution/spec.md:264-271`). The read allowlist
-  is the one claim here with a mechanical check behind it: R10's command-word grep fails
-  CI on any executable path outside R7's list.
+  live-qualified (`work/portable-profile-resolution/spec.md:264-271`). The executable
+  allowlist is the one read claim here with a mechanical check behind it: R10's command-word
+  grep fails CI on any executable path outside R7's list.
 - **Network: none, and the cost of that.** The shipped path cannot reach the network
   because neither file has anything that would — the jq binary arrives as an argument and
   everything else is committed. The cost lands on the caller, who must fetch and verify
@@ -957,9 +1139,14 @@ intent says for this change. Only after the operator's merge does
   which is the right outcome, but nothing removes the run directory afterwards.
   The leftovers are inert — compiled
   binaries, copies of jq and awk, and, if the kill landed mid-compile, whatever the
-  compiler had written into the `tmp` subdirectory, all inside one private directory under
-  `TMPDIR`, owned by the caller — but they are leftovers, and the honest statement is
-  "removed on every exit the entry can observe", not "never leaks". Not `exec`ing also
+  compiler had written into the `tmp` subdirectory, all inside the one `.run` directory in
+  the caller's own output directory — but they are leftovers, and the honest statement is
+  "removed on every exit the entry can observe", not "never leaks". Putting `.run` in the
+  output root rather than under `TMPDIR` (R1) changes what a leftover costs in one useful
+  way: the next run against that same output directory refuses on the entry's plain
+  `mkdir`, so a leftover is loud rather than silently reused, and the caller deletes it —
+  after a `chmod 0700`, since it is 0500 — or names a fresh output directory.
+  Not `exec`ing also
   leaves one extra shell in the process tree for the life of the resolution; it holds no
   state and does nothing but wait, and it is outside the sandbox and the parent's
   limits, so it does not widen what the resolution can do.
@@ -985,13 +1172,16 @@ intent says for this change. Only after the operator's merge does
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); and the `INT`/`TERM`/`HUP`
-  handlers with process-group termination are new (R2). Two more, smaller,
+  handlers with process-group termination are new (R2). Three more, smaller,
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
-  (`portable-profile-resolution.test.sh:130-143`); and the compiler is the fixed
+  (`portable-profile-resolution.test.sh:130-143`); the compiler is the fixed
   `/usr/bin/cc` on both platforms with no `$CC` override, where the test honours
   `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) — a caller-chosen compiler
-  would be a caller-chosen trust base (R7).
+  would be a caller-chosen trust base (R7); and the run directory is the fixed
+  `<output>/.run` inside the caller's output directory, where the test script and
+  `shadow/v1/reproduce.sh:94-142` both use `mktemp -d` under the caller's `TMPDIR`, which
+  would be a second write root (R1, R7).
 - **Platform matrix.** Three tuples, but CI runs one. The other two are proved only when
   someone runs the test there, and the parent's Darwin memory bound is polled rather than
   enforced by the kernel (`portable-profile-resolution-launcher.c:381-386,390-392`). The
