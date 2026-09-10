@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 1836-2484 changed lines** (implementation). The derivation,
+**Evidence-based range: 1866-2524 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1010 lines** = ~605 copied verbatim + ~405 new. The test launcher is 702
@@ -61,7 +61,7 @@ measured rather than guessed:
   round moves this figure by the ~20 just named. The round before it moved nothing here,
   because its findings only stated what the copied code already did; creating the sandbox
   relative to a checked descriptor is a change to what the shipped parent does.
-- **Entry shell ~335 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
+- **Entry shell ~345 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
   the `EXIT`/`HUP`/`INT`/`TERM` traps, the bounded copy and the `--version` probe — in
@@ -78,22 +78,28 @@ measured rather than guessed:
   comparison, the `/usr/bin/stat` owner-and-mode read with its per-platform format, the
   `dotglob nullglob` emptiness glob, and an `E_RUNTIME` exit for each (R1) — and ~15 for the
   `env -i` prefixes on the pin checks, both compiles and the parent launch, plus the `home`
-  subdirectory the compile line's `HOME` needs and its removal beside `tmp`. This round adds
-  ~15 more, to **~335**: ~10 for the builtin scrub, which is the ten copied lines of
+  subdirectory the compile line's `HOME` needs and its removal beside `tmp`. The round
+  before this one added
+  ~15 more, to ~335: ~10 for the builtin scrub, which is the ten copied lines of
   `materialize.sh:4-13` and nothing else, and ~5 for the re-exec — the argument-count and
   marker-word discrimination, the `${BASH_SOURCE[0]}` absolute check, and the `exec` line
   itself (R1). Moving the pin checks after the run directory costs nothing: the same
-  statements in a different order.
-- **Focused test ~755 lines.** For scale, the existing resolution test is 746 lines and
+  statements in a different order. This round adds ~10 more, to **~345**: the marker
+  branch's re-run of that scrub, which is the same ten lines again plus the two alias-reset
+  builtins (R1).
+- **Focused test ~780 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
   that were there plus this round's five output-root cases at ~55, each of them also
   asserting the target was never written to), the entry-driven loader-variable pollution run
   with its marker library (~25 — the library, the two runs, and the at-most-one-line count
-  assertion over the marker file), the polluted-compiler-environment block — poisoned-header
+  assertion over the marker file), the forged clean-marker invocation with its
+  exported-function fixture and its marker-file assertion (~15), the
+  polluted-compiler-environment block — poisoned-header
   fixture, two entry runs, two hand-built compiles whose digests are compared, and the
-  control compile that proves the fixture poisonous (~35), a shared
+  control compile that proves the fixture poisonous (~45, of which ~10 is this round's
+  Darwin note and the narrowed write assertion beside it), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
   group-2 cases on top of it (~140, the overlong-value case now building a near-`PATH_MAX`
   directory tree rather than naming a long path), the group-3 runtime refusal (~10),
@@ -110,9 +116,9 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2160 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 five rounds ago, then 1560-2120, then 1580-2130, then
-1650-2240, then 1790-2420, and the
+Those sum to about 2195 lines; the range above is that sum with ~15% headroom at both
+ends. It grew from 1350-1800 six rounds ago, then 1560-2120, then 1580-2130, then
+1650-2240, then 1790-2420, then 1836-2484, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -141,7 +147,8 @@ polluted-compiler-environment block with its poisoned header and its control com
 Nothing in the C parent moved, for the reason its bullet gave, and again nothing was
 made cheaper to compensate.
 
-This round adds ~55, spread across all three files, from three findings that all say the
+The round before this one added ~55, spread across all three files, from three findings
+that all say the
 same thing about *when* something happens rather than whether it happens. ~20 in the C
 parent: creating the four sandbox entries relative to the checked output-directory
 descriptor, whose real cost is carrying that descriptor into `supervise`. ~15 in the entry:
@@ -150,6 +157,13 @@ the copied builtin scrub and the empty-environment re-exec ahead of every extern
 statements in a different order. ~20 in the test: the count assertion on the marker file,
 and a fourth cleanup case now that a pin-check refusal happens with `.run` on disk. Nothing
 was made cheaper to compensate.
+
+This round adds ~35, in the entry and the test only. ~10 in the entry: the marker branch
+re-running the scrub with its two alias-reset builtins. ~25 in the test: the forged
+clean-marker case, and the Darwin note with the narrowed write assertion beside it. Nothing
+moves in the C parent, because the other two findings this round settles cost no
+implementation lines — one corrects what this spec says about the Darwin toolchain's own
+cache, and the other states a residual the parent cannot close from where it stands.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -166,18 +180,22 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about five times: `wc -l
-work/resolver-trusted-parent/spec.md` is 1764 lines. Accepted as one concern: one
+work/resolver-trusted-parent/spec.md` is 1955 lines. Accepted as one concern: one
 high-risk security-boundary spec whose review
 rounds each added a verified requirement (offline jq, attestable provenance, cleanup,
 compiler temporaries, narrowed read claims, the full pinned load set, process-group
 termination on signals, per-check direct-parent coverage, an exact executable allowlist,
 the parent's host process-table reads, a single write root, a validated
 output root, loader variables tested at the boundary that can defend them, a scrubbed
-compiler environment, and this round the scrub moving ahead of every external command, the
-scratch directories moving ahead of the pin checks, and the parent's sandbox writes moving
-onto the descriptor it checked).
-**Evidence-based range: 1499-2029 lines** — the measured 1764 lines plus or minus 15%. It was
-553 lines and 470-636 six rounds ago, then 783, then 847, then 1012, then 1202, then 1503;
+compiler environment, the scrub moving ahead of every external command, the
+scratch directories moving ahead of the pin checks, the parent's sandbox writes moving
+onto the descriptor it checked, and this round a narrowed write claim on Darwin where the
+toolchain shim writes a cache the entry cannot redirect, the `.run` swap stated as a
+residual with the same-uid assumption it needs, and the marker branch re-running the
+scrub).
+**Evidence-based range: 1662-2248 lines** — the measured 1955 lines plus or minus 15%. It was
+553 lines and 470-636 seven rounds ago, then 783, then 847, then 1012, then 1202, then 1503,
+then 1764;
 where each
 block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
@@ -229,7 +247,8 @@ explain them, a fourth per-platform table in three places, Design steps 1 and 2 
 two more entries in the Copy-versus-adapt list, and `home` appearing everywhere `tmp`
 already did.
 
-This round is +261 net over three findings that are all corrections to the previous round
+The round before this one was +261 net over three findings that were all corrections to
+the round before it
 rather than new ground — each one says a defence it added is in the right place but at the
 wrong moment. About 105 go to the loader scrub: R1's three new paragraphs on why an
 `env -i` prefix cannot protect the `env` that carries it, the verbatim builtin scrub and
@@ -244,6 +263,22 @@ for the implementation. The remaining ~20 are ripples: R10's marker assertion be
 count, its cleanup list going from three cases to four with the group-1 pin cases
 reclassified, R3's parenthetical on `mkdirat`, and two more entries in the
 Copy-versus-adapt list.
+
+This round is +191 net over three findings that are corrections of a different kind: two
+of them narrow a claim this spec was making too strongly, and the third closes a door it
+had described as locked. About 65 go to the Darwin toolchain cache — R1's measured
+paragraphs on where `xcrun_db` actually lives, why the documented `xcrun_nocache` control
+makes the write more frequent rather than stopping it, and that `/usr/bin/git` is the same
+shim as `/usr/bin/cc`, plus R7's narrowed write claim and R10's platform note on the
+compiler-pollution case, with the settled-fact line under Areas of concern beside them.
+About 25 go to the `.run` swap: R5's rewritten residual, the
+same-uid assumption stated beside the accepted spec's trusted-parent one, and the reworded
+bullets under Areas of concern and Out of scope. About 75 go to the marker branch — R1's
+third named deviation with the re-run scrub and its two alias-reset builtins, the
+unsupported-form statement, the one sentence on why a nonce would be theatre, and R10's
+forged-marker case. The remaining ~25 are ripples: Design step 2, R9's documentation line,
+the Copy-versus-adapt list, and the re-derived size figures here and for the
+implementation.
 
 This waives only the soft line signal for this artifact pull request. It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -311,7 +346,7 @@ the range above still blocks review.
     /bin/bash "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"
   ```
 
-  Two named deviations from the copied lines, and nothing else. The marker word is
+  Three named deviations from the copied lines, and nothing else. The marker word is
   `__resolve_profile_clean` in place of `__materialize_clean` (`:25,29`). And the arity
   differs: the materializer's caller-facing shape carries a leading subcommand word, so
   both of its invocations are eight arguments and `$1` alone tells them apart (`:22,25,29`),
@@ -319,17 +354,59 @@ the range above still blocks review.
   <repository map>` (below) — four arguments with no subcommand word — so the entry tells
   them apart by count and word together: five arguments whose first is the marker word is
   the clean path, exactly four arguments is the dirty path and re-execs, and anything else
-  is `E_USAGE`. That keeps the materializer's two properties intact — a caller cannot enter
-  the clean path, because it would have to supply the marker word, and the re-exec cannot
-  re-enter the dirty one, because it always supplies it. Everything else is the same:
+  is `E_USAGE`. That keeps one of the materializer's two properties intact — the re-exec
+  cannot re-enter the dirty path, because it always supplies the marker word. The other one
+  it does not keep: a caller *can* enter the clean path, by supplying the marker word
+  themselves, and the third deviation below is what this spec does about that. Everything
+  else is the same:
   `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
   re-exec is an `exec`, so no extra process is left behind. The literal
-  `PATH=/usr/bin:/bin` above is not a third deviation: the materializer writes
+  `PATH=/usr/bin:/bin` above is not a further deviation: the materializer writes
   `PATH="${PATH:-/usr/bin:/bin}"` there (`:26`), and the scrub has just set `PATH` to
   exactly that value, so the two are the same line with the indirection spelled out.
   Every step this spec describes after this point — the platform case, the output-root
   validation, the pin checks, the compiles, the mode pass, the launch — runs in that second
   process, which was started with an empty environment.
+
+  **The third deviation: the marker branch re-runs the scrub as its first statements.**
+  Nothing stops a caller from invoking the entry as `/bin/bash <entry>
+  __resolve_profile_clean <jq> <output> <request> <map>` — five arguments whose first is the
+  marker word — and landing on the clean path directly. The marker word is a literal in a
+  committed file, not a secret. What such a caller reaches is the clean path running in a
+  process whose loader consumed *their* environment, because the re-exec, the only step that
+  produces an environment built from nothing, is precisely the step the marker branch skips:
+  it is the branch the re-exec arrives on. So the marker branch does not assume it was
+  reached through the re-exec. Its first two statements, before anything else in it, are
+  `builtin unalias -a` and `builtin shopt -u expand_aliases` — two lines the copied bytes do
+  not have, needed because the scrub unsets inherited functions and exported names and an
+  alias is neither. They go first because bash expands aliases as it reads each command, so
+  the reset has to run before the shell parses the rest of the branch. Then the builtin
+  scrub itself, re-run in full: `builtin unset -f` over `builtin compgen -A function`,
+  `builtin unset` over `builtin compgen -e` except `PATH`, `PATH=/usr/bin:/bin`, `LC_ALL=C`,
+  `export PATH LC_ALL`. `builtin` prefixes every one of these, so a function of that name
+  cannot intercept the reset. The sibling specs treat this the same way — #268 and #273 both
+  add the alias reset to their own marker branch for the same reason — and the plan should
+  keep the three files' wording in step.
+
+  **And the direct marker invocation is unsupported, which is the part that actually settles
+  it.** There are two supported ways to run the entry: execute the file, so its
+  `#!/bin/bash -p` shebang is what starts bash, or
+  `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <entry> <jq> <output> <request> <map>`.
+  Invoking the marker word directly is neither, this spec makes no safety claim about it,
+  and R9's documentation says so: the marker exists so the re-exec has somewhere to arrive,
+  not as a public entry point. It is worth being plain about what that caller gains —
+  nothing beyond their own process, which they already control. The environment they can
+  pollute is the environment of a process they started themselves, and every claim this spec
+  makes further in still holds: the parent is launched under `/usr/bin/env -i` and the
+  resolver's environment is built from empty (R3). The re-scrub is defence in depth against
+  one door into the clean path; the unsupported-form statement is the answer to the door
+  existing at all.
+
+  **No nonce, and one sentence on why.** The obvious-looking fix — the dirty path mints a
+  random token, passes it through the environment, and the clean path refuses unless the
+  token matches its argument — is theatre, because the same caller who can supply the marker
+  word supplies both sides of that comparison, so it would add a check that refuses nobody
+  while reading like a lock.
 
   **The residual, stated plainly: the entry's own first process is not covered by any of
   this.** The caller started that process, so its loader read the caller's `LD_PRELOAD` and
@@ -497,8 +574,7 @@ the range above still blocks review.
   question is whether it can still find an SDK with an empty environment. It can: with
   `DEVELOPER_DIR` unset, `xcrun` takes the developer directory from the persistent
   `xcode-select` setting on disk rather than from the environment, and with `SDKROOT` unset
-  it takes the active toolchain's default SDK; its own lookup cache lives under `TMPDIR`,
-  which the line above already points inside the run directory. So the spec requires that
+  it takes the active toolchain's default SDK. So the spec requires that
   line on both platforms, with no SDK variable passed. The honest gap: CI is Linux-only (R8,
   Areas of concern), so nothing in CI exercises that reasoning, and it is confirmed only
   when someone runs the focused test on a Darwin machine. If a Darwin toolchain turns out to
@@ -506,6 +582,40 @@ the range above still blocks review.
   — `DEVELOPER_DIR`, or `SDKROOT` — set by the entry to a value it computed itself and never
   passed through from the caller. The plan records that as the one thing to check on the
   first Darwin run.
+
+  **The same shim writes a cache the entry cannot redirect, and that narrows the
+  one-write-root claim on Darwin.** An earlier round of this spec said the shim's lookup
+  cache "lives under `TMPDIR`, which the line above already points inside the run
+  directory". That is wrong, and what replaces it was measured on a Darwin 27 machine
+  rather than argued. The cache is a single file, `xcrun_db`, in the *per-user temp
+  directory* — the one `confstr(_CS_DARWIN_USER_TEMP_DIR)` reports,
+  `/var/folders/<...>/T/`, mode 0600 — and the `TMPDIR` in the environment does not move
+  it: run `/usr/bin/xcrun --find <tool>` under `env -i PATH=/usr/bin:/bin TMPDIR=<scratch>`
+  for a tool name the cache did not already hold, and the file under `/var/folders` grows
+  while the scratch directory stays empty.
+
+  Two more facts from the same probe, both load-bearing. There is a documented no-cache
+  control, and it makes things worse rather than better: `xcrun(1)` has `-n, --no-cache`
+  with the environment equivalent `xcrun_nocache`, and the environment form is the one to
+  reach for here, because the manual page says the command-line options cannot be used when
+  the shim stands in for another tool. But `--no-cache` is documented as causing "the cache
+  entry to be refreshed", and that is exactly what it does: a warm-cache compile through
+  `/usr/bin/cc` wrote nothing to `xcrun_db`, while the same compile with `xcrun_nocache=1`
+  grew that file on every run. Requiring it would turn an occasional write into a
+  guaranteed one, so the entry does not set it. And `/usr/bin/git` is not merely a similar
+  shim, it is the same one: `/usr/bin/cc`, `/usr/bin/git` and `/usr/bin/clang` are a single
+  inode with dozens of links on that machine, so the ten `git hash-object` pin checks reach
+  the same cache the two compiles do.
+
+  So the claim is narrowed rather than defended. **On Darwin the Apple toolchain shim may
+  write its lookup cache under the per-user temp directory — or `/tmp`, where that is what
+  the platform reports — before the real tool runs.** That is a write outside the caller's
+  output path, in a file the entry does not name, cannot redirect and does not control; it
+  is recorded here and in R7 as a residual of the platform's toolchain instead of being
+  papered over. Linux is the proof platform for the one-write-root claim: there is no shim
+  there, `/usr/bin/cc` and `/usr/bin/git` are the real tools, and Linux CI is where R10
+  asserts the claim mechanically. The Darwin run is operator-run with the residual noted,
+  and the plan says so in these words.
 
   The entry then copies in the bound jq and the platform's awk, and then — only after both
   compiles have finished — empties and removes the `tmp` and `home` subdirectories and
@@ -774,17 +884,35 @@ the range above still blocks review.
   (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
   identity answer.
 
-  **Stated residual — a same-uid attacker who can `chmod` can still race this.** Modes
-  0500 stop a write and stop a rename; they do not stop the owner from running `chmod
-  0700` on the directory or the file and then replacing the helper in the window between
-  the parent's check and the moment the runtime execs that path. Every mode and ownership
-  check above is against the current uid, so a process already running as that uid is
-  inside all of them. This is not closed here, and the spec does not claim it is. It is
-  unchanged from the boundary the accepted resolver spec already assumes: the security
-  boundary begins in a trusted parent process that was already running before any hostile
-  input arrived, and a helper newly started from a hostile environment is not that parent
-  (`work/portable-profile-resolution/spec.md:219-222`). Root is likewise outside: root can
-  write into any directory and replace any file regardless of mode.
+  **Stated residual — a same-uid process that can write the output directory can swap
+  `.run` out from under all of this.** An earlier round of this spec said a replacement
+  "needs a `chmod` first". That is true only of the files inside the run directory, and an
+  attacker does not have to touch them. The 0500 modes stop an in-place write to one of
+  those four files and a rename of an entry *inside* the run directory. They say nothing
+  about the directory one level up: `<output>` is mode 0700 and owned by the same uid, so a
+  process running as that uid can rename `<output>/.run` aside and put a directory of its
+  own in its place — its own helper, its own jq, its own awk — after the entry's checks and
+  after the parent's, with no `chmod` anywhere.
+
+  Nothing in the parent's descriptors stops that swap from taking effect, because the
+  runtime resolves what it runs from *strings*: `YSTACK_RESOLVER_HELPER`,
+  `YSTACK_RESOLVER_JQ` and the first `PATH` element are all `<output>/.run/...` paths (R3),
+  and `scripts/lib/profile-resolution.sh:209` execs the helper by that path. The parent's
+  descriptor still refers to the original directory and the original files, and it can prove
+  they were right when it looked; it cannot make the runtime use them. The fd-relative
+  sandbox creation above closes the race on the parent's own four writes and is not claimed
+  to close this one — same shape as the `HOME`/`TMPDIR` residual stated just above it.
+
+  **So the boundary carries a second assumption, and it is stated next to the first.** The
+  accepted resolver spec already assumes the security boundary begins in a trusted parent
+  process that was already running before any hostile input arrived, and that a helper
+  newly started from a hostile environment is not that parent
+  (`work/portable-profile-resolution/spec.md:219-222`). This spec adds one: **no hostile
+  same-uid process is active in the caller's output root while the run is in progress.**
+  Every mode and ownership check here is against the current uid, so a process already
+  running as that uid is inside all of them; what the checks buy is tamper detection at
+  check time, not exclusion. Root is outside all of it as well — root can write into any
+  directory and replace any file regardless of mode.
 
   What the checks do buy: the entry compiled both binaries this invocation from sources
   whose blob ids match the pins, into a directory it created; the parent refuses to launch
@@ -792,9 +920,10 @@ the range above still blocks review.
   moved. After that, the runtime's own `[ -x ] && [ ! -L ]` is the last line, and the spec
   says so rather than pretending otherwise.
 
-  Closing the residual properly needs the runtime to accept an already-opened executable
-  descriptor from the parent instead of a path — then check and exec are the same object
-  and no `chmod` race exists. That is a change to
+  Closing the residual properly needs the runtime to accept already-opened descriptors
+  from the parent instead of path strings — for the helper, and for jq beside it — so that
+  the object checked and the object used are the same object and there is no window in
+  which a path can be made to name something else. That is a change to
   `scripts/lib/profile-resolution.sh` and to the resolver's launch contract, both of which
   this initiative explicitly does not touch, so it is a separate initiative and is recorded
   under Out of scope as the recommended follow-up. It is not promised here.
@@ -804,7 +933,9 @@ the range above still blocks review.
   request the shipped parent and the test launcher produce byte-identical output; the
   focused test runs both and `cmp`s them.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
-  credential, and **exactly one write root: the output path the caller named.** That is
+  credential, and **exactly one write root: the output path the caller named** — with one
+  named platform residual, the Darwin toolchain shim's own lookup cache, stated at the end
+  of this requirement. That is
   what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
@@ -850,6 +981,19 @@ the range above still blocks review.
   `$HOME` writes it inside the run directory and it goes with the rest. Not the repository
   working tree, not a cache, not a
   dotfile, not a temporary file anywhere else on the filesystem.
+
+  **One exception, on Darwin only, and it belongs to the platform rather than to the
+  entry.** There `/usr/bin/cc` and `/usr/bin/git` are one and the same `xcrun` shim, and
+  the shim may write its tool-lookup cache — a single `xcrun_db` file in the per-user temp
+  directory the platform reports, not in the `TMPDIR` the compile line sets — before the
+  real tool runs. That is measured rather than assumed, and R1 carries the probe and the
+  numbers, including that the documented `xcrun_nocache` control refreshes the file instead
+  of suppressing it, which is why the entry does not set it. So the honest claim in full:
+  the shipped path writes nothing outside the caller's output path, except that on Darwin
+  the Apple toolchain shim may touch its own lookup cache under the per-user temp directory,
+  which is outside the entry's control. Linux, where both tools are real binaries and no
+  shim runs, is the proof platform — R10 asserts the claim there — and the Darwin run is
+  operator-run with this residual noted.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -1044,8 +1188,10 @@ the range above still blocks review.
   accepted resolver spec's "a production trusted parent is not implemented" sentence
   (`work/portable-profile-resolution/spec.md:256-257`), and repeats what the proof does and
   does not cover. `README.md:252` gets the updated resolver row. `RESTORE.md:43-46` counts
-  the resolver files correctly. Both new files plus the new test are appended at the END
-  of `ci/required-files.txt`. The accepted resolver spec itself is not edited.
+  the resolver files correctly. The entry's documentation states the two supported
+  invocation forms and says the marker word is not a public entry point (R1). Both new
+  files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
+  resolver spec itself is not edited.
 - **R10 — the focused test.** `scripts/test/resolver-trusted-launch.test.sh` provisions
   the pinned jq the way `scripts/test/shadow-slice.test.sh:24-51` does, runs the shipped
   entry with that binary and a fresh empty mode-0700 output directory as its arguments,
@@ -1272,6 +1418,26 @@ the range above still blocks review.
   inherited: they are absent from the child's environ even when both are set in the
   caller's.
 
+  **The forged clean-marker invocation is tested, and what it asserts is that the scrub
+  ran.** A caller can reach the clean path directly by supplying the marker word (R1), so
+  the test does exactly that: it runs `/bin/bash <entry> __resolve_profile_clean <jq>
+  <output> <request> <map>` from a caller environment carrying exported shell functions
+  named `pwd`, `cd` and `find` — each appending a line to a marker file and returning
+  success — alongside a `BASH_ENV` that would define an alias and the same polluted
+  variables the R3 run uses. Those three names are the ones worth hijacking: the output-root
+  validation runs `(cd -P "$out" && pwd)`, and `cd` and `pwd` are builtins that a function
+  of the same name shadows, which is how a wrong output root could be made to compare equal
+  to itself. Two assertions: the resolution succeeds with stdout byte-identical to an
+  ordinary clean run's, and the marker file was never created — so the re-run scrub's
+  `unset -f` removed those functions before the first check that could have used one. The
+  alias half is belt-and-braces, since bash imports no alias through the environment and a
+  non-interactive shell does not expand aliases unless something turns that on; the fixture
+  keeps the `BASH_ENV` anyway, because `#!/bin/bash -p` is bypassed on this invocation form
+  — the caller starts bash themselves. What the case deliberately does not assert is that
+  the run is *safe*: the direct marker form is unsupported (R1), the process's loader has
+  already read the caller's variables by then, and the claim is only that the clean path
+  adds no trust in the environment it was handed.
+
   **A polluted compiler environment is tested too, because ignoring `$CC` was never the
   whole of it.** The entry compiles under the `env -i` line quoted verbatim in R1, and the
   test proves the line is doing work. The pollution fixture is one directory the test
@@ -1289,7 +1455,14 @@ the range above still blocks review.
      both exit 0, their stdouts are byte-identical, the marker string appears in neither
      run's output, and the watched `TMPDIR` and `HOME` are untouched afterwards — which is
      the same fact R7's one-write-root claim makes about the compile step, asserted here
-     rather than stated. What this half cannot do is compare the built binaries: the entry's
+     rather than stated. On Darwin that assertion still passes and is worth less than it
+     looks, so the case carries a note rather than a stronger claim: the toolchain shim's
+     lookup cache is not in the `TMPDIR` the test watches but in the platform's per-user
+     temp directory (R1, R7), which the test asserts nothing about because the entry cannot
+     control it. The note names Linux as the platform that proves the one-write-root claim —
+     no shim there, both tools real binaries — and records the Darwin write as a known
+     residual instead of a failure. What this half cannot do is compare the built binaries:
+     the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
      the binaries would be a debug mode in a security wrapper — a worse thing to ship than a
      behavioural assertion.
@@ -1470,8 +1643,11 @@ Order, each step checkable before the next:
    `adapters/local-git-materializer/v1/materialize.sh:4-13` under the same `#!/bin/bash -p`
    shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
-   marker word and the arity only, with the clean path refusing unless its first argument is
-   the marker word (R1). Everything below runs in that second process. Then: resolve the
+   marker word, the arity, and the scrub the marker branch re-runs as its own first
+   statements — the same builtin scrub plus `builtin unalias -a` and `builtin shopt -u
+   expand_aliases` — with the clean path refusing unless its first argument is the marker
+   word (R1), and the direct marker invocation documented as unsupported. Everything below
+   runs in that second process. Then: resolve the
    repository root from its own `BASH_SOURCE`
    the way the runtime does (`resolver/v1/profile-resolve-runtime.sh:4-16`); refuse an
    unsupported platform, from a `case` over `/usr/bin/uname -s` and `-m` with one arm per
@@ -1565,7 +1741,7 @@ intent says for this change. Only after the operator's merge does
 - A committed binary or a pinned binary digest.
 - Fetching, installing, caching or vendoring jq; the caller supplies the pinned binary.
 - Launch-evidence records, profile activation, or any live-qualification claim.
-- **Closing the same-uid `chmod` race on the helper — the recommended follow-up, not done
+- **Closing the same-uid swap window on the helper — the recommended follow-up, not done
   here.** The residual stated in R5 exists because the runtime takes the helper as a path
   and re-resolves it at exec time
   (`scripts/lib/profile-resolution.sh:209,664-667`). Closing it means changing the runtime
@@ -1612,8 +1788,15 @@ intent says for this change. Only after the operator's merge does
   binding between what the parent checked and what the runtime executes. The runtime takes
   the helper by path and re-resolves it at exec time
   (`scripts/lib/profile-resolution.sh:209`), with only `[ -x ] && [ ! -L ]` of its own
-  (`:664-667`), so a same-uid process that can `chmod` the run directory or the helper back
-  to writable can still swap the file in the window between the check and that exec. That
+  (`:664-667`), so a same-uid process can still swap the file in the window between the
+  check and that exec — by loosening modes with `chmod`, or, without touching a mode at all,
+  by renaming `<output>/.run` aside and putting its own `.run` in its place, which the
+  mode-0700 output directory it owns allows — the runtime resolves the helper, jq and its
+  `PATH` from `<output>/.run/...` strings, so the swap takes effect even though the parent's
+  descriptor still points at the original. That is why R5 now states a second assumption
+  beside the accepted spec's trusted-parent one: no hostile same-uid process is active in
+  the caller's output root while the run is in progress. The plan must carry both, in these
+  words. That
   residual is stated in R5 and is unchanged from the boundary the accepted resolver spec
   already assumes (`work/portable-profile-resolution/spec.md:219-222`); the follow-up that
   would actually close it — a descriptor handoff instead of a path — is under Out of scope.
@@ -1738,7 +1921,9 @@ intent says for this change. Only after the operator's merge does
   that is a copy rather than new code — just from a third file: the entry opens with the
   builtins-only environment scrub and the empty-environment re-exec taken from
   `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`, deviating from *those*
-  lines only in the marker word and the arity (R1), where the test script and
+  lines in the marker word, the arity, and the scrub the marker branch re-runs as its own
+  first statements with two alias-reset lines the copied bytes do not have (R1), where the
+  test script and
   `reproduce.sh` scrub nothing at all and run every command under the caller's own
   environment.
 - **Platform matrix.** Three tuples, but CI runs one. The other two are proved only when
@@ -1750,9 +1935,15 @@ intent says for this change. Only after the operator's merge does
   platform override to the security wrapper, and the plan should treat the `case` and the
   per-platform tables (jq digests, SHA-256 tool, `/usr/bin/stat` format, awk branch) as one
   thing to read
-  together: all five must agree on the same three tuples. The Darwin-only question this
-  round adds to that list is whether `/usr/bin/cc` finds its SDK under the `env -i` compile
-  line (R1); Linux CI cannot answer it.
+  together: all five must agree on the same three tuples. The Darwin-only question one round
+  added to that list is whether `/usr/bin/cc` finds its SDK under the `env -i` compile
+  line (R1); Linux CI cannot answer it. This round adds a Darwin fact rather than a
+  question, and it is settled rather than open: `/usr/bin/cc` and `/usr/bin/git` there are
+  one `xcrun` shim, and the shim writes its lookup cache in the platform's per-user temp
+  directory, which no environment variable the entry sets redirects and the documented
+  `xcrun_nocache` control makes more frequent rather than stopping. R1 has the measurements
+  and R7 carries the narrowed write claim; Linux is where that claim is proved, and the
+  Darwin run is operator-run with the residual noted.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
   (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
