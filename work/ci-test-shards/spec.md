@@ -365,6 +365,6 @@ two throwaway commits on the single implementation PR bound to the final head by
 identity. The knock-on wording change: the operator's commit is the last *permanent*
 file change on the branch, not literally its last commit. Nothing else changes;
 `intent-blob` and `risk: high` are unchanged. Plan PR #281 re-pins its `spec-blob` to
-this blob once this merges. The deterministic branch `ystack/spec/ci-test-shards`
-could not be reused after its squash merge without a force-push, so this amendment
-comes on `ystack/spec/ci-test-shards-proof`.
+this blob once this merges. This amendment is on the deterministic stage branch
+`ystack/spec/ci-test-shards`, rebuilt by merging `main` into the merged stage head
+and adding the amendment on top, with no force-push (`AGENTS.md:389-392`).
