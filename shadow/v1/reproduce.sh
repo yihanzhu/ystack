@@ -1,5 +1,21 @@
-#!/bin/bash
+#!/bin/bash -p
 # shellcheck disable=SC2016
+# Copied verbatim from adapters/local-git-materializer/v1/materialize.sh at
+# a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync. The
+# driver must scrub exactly what the producer scrubs, so the two can never
+# disagree about what a clean start is.
+# copy-begin materialize.sh:4-13
+clean_path=/usr/bin:/bin
+while IFS= builtin read -r inherited_function; do
+  builtin unset -f "$inherited_function" 2>/dev/null || :
+done < <(builtin compgen -A function)
+while IFS= builtin read -r exported_name; do
+  case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
+done < <(builtin compgen -e)
+PATH=$clean_path
+LC_ALL=C
+export PATH LC_ALL
+# copy-end materialize.sh:4-13
 set -uo pipefail
 export LC_ALL=C
 umask 077
@@ -58,7 +74,22 @@ check_disjoint() {
   return 0
 }
 
-[ "$#" -eq 13 ] && [ "$1" = reproduce ] || emit_error E_USAGE
+# Copied verbatim from adapters/local-git-materializer/v1/materialize.sh at
+# a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync, with
+# the deviations R7 names: the driver must scrub and re-exec exactly as the
+# producer does, so the two can never disagree about what a clean start is.
+# copy-begin materialize.sh:22-29
+[ "$#" -eq 13 ] || emit_error E_USAGE
+script_path=${BASH_SOURCE[0]}
+case "$script_path" in /*) ;; *) script_path="$(pwd -P)/$script_path" ;; esac
+[ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_RUNTIME
+if [ "$1" = reproduce ]; then
+  exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
+    /bin/bash "$script_path" __reproduce_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8" \
+    "$9" "${10}" "${11}" "${12}" "${13}"
+fi
+[ "$1" = __reproduce_clean ] || emit_error E_USAGE
+# copy-end materialize.sh:22-29
 shift
 incident=$1
 claim=$2
