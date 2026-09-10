@@ -1,5 +1,21 @@
-#!/bin/bash
+#!/bin/bash -p
 # shellcheck disable=SC2016
+# Copied verbatim from adapters/local-git-materializer/v1/materialize.sh at
+# a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync. The
+# driver must scrub exactly what the producer scrubs, so the two can never
+# disagree about what a clean start is.
+# copy-begin materialize.sh:4-13
+clean_path=/usr/bin:/bin
+while IFS= builtin read -r inherited_function; do
+  builtin unset -f "$inherited_function" 2>/dev/null || :
+done < <(builtin compgen -A function)
+while IFS= builtin read -r exported_name; do
+  case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
+done < <(builtin compgen -e)
+PATH=$clean_path
+LC_ALL=C
+export PATH LC_ALL
+# copy-end materialize.sh:4-13
 set -uo pipefail
 export LC_ALL=C
 umask 077
@@ -58,7 +74,22 @@ check_disjoint() {
   return 0
 }
 
-[ "$#" -eq 13 ] && [ "$1" = reproduce ] || emit_error E_USAGE
+# Copied verbatim from adapters/local-git-materializer/v1/materialize.sh at
+# a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync, with
+# the deviations R7 names: the driver must scrub and re-exec exactly as the
+# producer does, so the two can never disagree about what a clean start is.
+# copy-begin materialize.sh:22-29
+[ "$#" -eq 13 ] || emit_error E_USAGE
+script_path=${BASH_SOURCE[0]}
+case "$script_path" in /*) ;; *) script_path="$(pwd -P)/$script_path" ;; esac
+[ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_RUNTIME
+if [ "$1" = reproduce ]; then
+  exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
+    /bin/bash "$script_path" __reproduce_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8" \
+    "$9" "${10}" "${11}" "${12}" "${13}"
+fi
+[ "$1" = __reproduce_clean ] || emit_error E_USAGE
+# copy-end materialize.sh:22-29
 shift
 incident=$1
 claim=$2
@@ -183,8 +214,13 @@ shape=$("$jq_bin" -r --arg operation shape --arg record_sha "$incident_sha" \
   .schema_version == 1 and .kind == "shadow_environment_registry" and
   .body.activation_state == "inactive" and
   (.body.environments | type == "array" and length >= 1 and length <= 64 and
-   all(.[];.environment_id | type == "string" and
-     test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")))
+   all(.[];
+     (.environment_id | type == "string" and
+       test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
+     (.target_repository_id | type == "string" and
+       test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
+     (.source_root_commit | type == "string" and
+       test("\\A[0-9a-f]{40}\\z"))))
 ' "$scratch/registry.json" >/dev/null 2>&1 || emit_error E_RELATION
 
 incident_id=$("$jq_bin" -r '.id' "$scratch/incident.json") || emit_error E_RUNTIME
@@ -255,6 +291,12 @@ environment_id=$("$jq_bin" -r '
   $identity[0].body.resolved_profile_ref == pair_ref(.resolved_profile)
 ' "$scratch/materialize-input.json" >/dev/null 2>&1 || emit_error E_RELATION
 
+git_env=(/usr/bin/env -i HOME="$scratch" TMPDIR="$scratch" PATH=/usr/bin:/bin
+  LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0
+  GIT_OPTIONAL_LOCKS=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
+  GIT_CONFIG_VALUE_0="$scratch/no-hooks" GIT_GRAFT_FILE="$scratch/no-grafts")
+
 outcome=inconclusive
 reason=environment.unlisted
 environment_result=result.environment-refused
@@ -264,9 +306,117 @@ execution_section='{"reason_id":"check.not-attempted","state":"absent"}'
 adapter_fact=none
 tool_fact=none
 
-if "$jq_bin" -e --arg id "$environment_id" \
-   '[.body.environments[] | select(.environment_id == $id)] | length == 1' \
-   "$scratch/registry.json" >/dev/null 2>&1; then
+run_root="$scratch/source-purity"
+/bin/mkdir -m 0700 "$run_root" || emit_error E_RUNTIME
+source_algorithm=$hash_algorithm
+# Copied verbatim from adapters/local-git-materializer/v1/materialize.sh at
+# a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main) — keep in sync. The
+# gate must refuse exactly what the materializer refuses, so the two can
+# never disagree about what a plain source repository is.
+source_pure() (
+  emit_error() { exit 1; }
+# copy-begin materialize.sh:271-332
+git_dir() {
+  local directory=$1
+  shift
+  "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
+}
+
+source_inventory="$run_root/source-filesystem"
+source_inventory_byte_limit=8388608
+source_inventory_entry_limit=65536
+source_inventory_ceiling=$((source_inventory_byte_limit + 1))
+if ! /usr/bin/find "$source_git_dir" -mindepth 1 -print0 |
+  /usr/bin/head -c "$source_inventory_ceiling" > "$source_inventory"; then
+  emit_error E_SOURCE_LIMIT
+fi
+source_inventory_bytes=$(/usr/bin/wc -c < "$source_inventory" | /usr/bin/tr -d ' ') ||
+  emit_error E_SOURCE_LIMIT
+[ "$source_inventory_bytes" -le "$source_inventory_byte_limit" ] ||
+  emit_error E_SOURCE_LIMIT
+source_inventory_entries=0
+while IFS= builtin read -r -d '' source_entry; do
+  source_inventory_entries=$((source_inventory_entries + 1))
+  [ "$source_inventory_entries" -le "$source_inventory_entry_limit" ] ||
+    emit_error E_SOURCE_LIMIT
+  case "$source_entry" in "$source_git_dir"/*) ;; *) emit_error E_SOURCE_GIT ;; esac
+  if [ -L "$source_entry" ] || { [ ! -f "$source_entry" ] && [ ! -d "$source_entry" ]; }; then
+    emit_error E_SOURCE_GIT
+  fi
+done < "$source_inventory"
+/bin/rm -f -- "$source_inventory"
+
+source_config_input="$source_git_dir/config"
+[ -f "$source_config_input" ] && [ ! -L "$source_config_input" ] ||
+  emit_error E_SOURCE_CONFIG
+source_config_snapshot="$run_root/source-config.snapshot"
+source_config_ceiling=1048577
+if ! /usr/bin/head -c "$source_config_ceiling" "$source_config_input" \
+  > "$source_config_snapshot"; then
+  emit_error E_SOURCE_CONFIG
+fi
+source_config_bytes=$(/usr/bin/wc -c < "$source_config_snapshot" | /usr/bin/tr -d ' ') ||
+  emit_error E_SOURCE_CONFIG
+[ "$source_config_bytes" -le 1048576 ] || emit_error E_SOURCE_CONFIG
+source_config="$run_root/source-config"
+"${git_env[@]}" /usr/bin/git config --file "$source_config_snapshot" \
+  --name-only --list --no-includes > "$source_config" 2>/dev/null ||
+  emit_error E_SOURCE_CONFIG
+while IFS= read -r config_key; do
+  case "$config_key" in
+    core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates|core.ignorecase|core.precomposeunicode|extensions.objectformat) ;;
+    '') ;;
+    *) emit_error E_SOURCE_CONFIG ;;
+  esac
+done < "$source_config"
+[ "$(git_dir "$source_git_dir" rev-parse --is-bare-repository 2>/dev/null)" = true ] ||
+  emit_error E_SOURCE_WORKTREE
+[ ! -e "$source_git_dir/commondir" ] && [ ! -e "$source_git_dir/shallow" ] &&
+  [ -z "$(find "$source_git_dir/worktrees" -mindepth 1 -print -quit 2>/dev/null)" ] &&
+  [ ! -e "$source_git_dir/info/grafts" ] &&
+  [ ! -e "$source_git_dir/objects/info/alternates" ] &&
+  [ ! -d "$source_git_dir/refs/replace" ] &&
+  [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
+  emit_error E_SOURCE_GIT
+# copy-end materialize.sh:271-332
+# copy-begin materialize.sh:348-354
+if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
+   /usr/bin/grep -q .; then
+  emit_error E_SOURCE_HOOK
+fi
+actual_algorithm=$(git_dir "$source_git_dir" rev-parse --show-object-format 2>/dev/null) ||
+  emit_error E_SOURCE_GIT
+[ "$actual_algorithm" = "$source_algorithm" ] || emit_error E_SOURCE_IDENTITY
+# copy-end materialize.sh:348-354
+  exit 0
+)
+
+environment_listed=no
+if "$jq_bin" -e --arg id "$environment_id" --arg repo "$repository_id" '
+     [.body.environments[] |
+       select(.environment_id == $id and .target_repository_id == $repo)] |
+     length == 1
+   ' "$scratch/registry.json" >/dev/null 2>&1; then
+  if source_pure; then
+    entry_root=$("$jq_bin" -r --arg id "$environment_id" --arg repo "$repository_id" '
+      .body.environments[] |
+        select(.environment_id == $id and .target_repository_id == $repo) |
+        .source_root_commit
+    ' "$scratch/registry.json") || emit_error E_RUNTIME
+    root_status=0
+    observed_root=$("${git_env[@]}" GIT_ALTERNATE_OBJECT_DIRECTORIES= \
+      GIT_DIR="$source_git_dir" /usr/bin/git --no-replace-objects \
+      --git-dir="$source_git_dir" rev-list --max-parents=0 "$commit_id" \
+      2>/dev/null | /usr/bin/head -c 4096) || root_status=$?
+    case "$observed_root" in
+      *[!0-9a-f]*|"") ;;
+      *) [ "$root_status" -eq 0 ] && [ "${#observed_root}" -eq 40 ] &&
+           [ -n "$entry_root" ] && [ "$observed_root" = "$entry_root" ] &&
+           environment_listed=yes ;;
+    esac
+  fi
+fi
+if [ "$environment_listed" = yes ]; then
   evaluation_status=0
   PATH="$scratch/bin:/usr/bin:/bin" "$sandbox_evaluator" evaluate \
     "$scratch/policy-set.json" "$scratch/duty.json" "$scratch/claim.json" \
@@ -335,10 +485,6 @@ fi
 
 if [ "$reason" = check.completed ]; then
   repository="$candidate_root/repository.git"
-  git_env=(/usr/bin/env -i HOME="$scratch" TMPDIR="$scratch" PATH=/usr/bin:/bin
-    LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-    GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0
-    GIT_OPTIONAL_LOCKS=0)
   # Only a blob can be digest-checked; a directory or other object at the
   # path is an unreadable check, not a failed run.
   object_type=$("${git_env[@]}" /usr/bin/git --no-replace-objects \
