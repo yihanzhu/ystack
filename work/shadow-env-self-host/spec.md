@@ -15,8 +15,11 @@ repository, binds every entry to the repository it is for: by the document id th
 incident carries, and by the root commit of the source repository the driver reads for
 itself. Reading a repository's root commit only means something if the repository
 answers out of its own object store, so the driver first checks that the directory it
-was handed is a plain repository with nothing pointing outside it. The test and docs
-that count the entries become true again. No run happens here.
+was handed is a plain repository with nothing pointing outside it — and, because those
+checks are only as good as the shell they run in, the driver starts by scrubbing the
+environment it was called with and re-execing itself clean, the way the materializer
+already does. The test and docs that count the entries become true again. No run
+happens here.
 
 ## Requirements
 
@@ -31,7 +34,7 @@ history identity and which the driver computes itself from the bytes it reads.
 The existing `env.local-macos-fixture` entry gains `target_repository_id`
 `fixture.target` (the repository id every fixture incident in the shadow test already
 carries) and `source_root_commit` `866a40ce4a7fb6198fd489a0326f0cd1c2e2d791`, the root
-commit of the fixture bare repository that test builds (R11 shows why that sha is
+commit of the fixture bare repository that test builds (R12 shows why that sha is
 fixed and pins it). Its other four values are unchanged.
 
 **R2.** The registry gains exactly one new entry, appended *after* the fixture entry
@@ -51,7 +54,7 @@ and `.schema_version` (`1`) are unchanged.
 **R4.** The file stays exactly one canonical JSON text: `cmp` of the file against
 `jq -S -c . <file>` succeeds. On main it is a single line whose last byte is `0a`
 (verified) and that `cmp` passes; preserve both. `jq -S -c` emits the trailing newline
-itself, so writing its output is enough — and for the same reason R11's `cmp` of a
+itself, so writing its output is enough — and for the same reason R12's `cmp` of a
 `jq -S -c`-built expectation is exact. `reproduce.sh`'s `canonical_json` and the test's
 `registry-canonical` check depend on this byte-exactly.
 
@@ -72,21 +75,149 @@ caller-supplied claim. It selects on **both** `environment_id == $id` **and**
 driver already parses into `repository_id` at `shadow/v1/reproduce.sh:191`; pass it as
 a second `--arg`. Exactly one entry must match, as today.
 
-**R7.** Driver edit three: the source directory must be a plain repository *before*
-the driver asks it who it is. R8's binding asks git to resolve object ids inside
+**R7.** Driver edit three, and the first thing the driver does: a clean entry, copied
+from the materializer. A fixed `PATH` is not enough to make the copied predicates in R8
+mean what they say. Bash resolves a command word by looking for a shell *function* of
+that name before it ever looks at `PATH`, and a function can be handed to a child bash
+through the environment (`find() { :; }; export -f find`). So a caller who cannot touch
+`PATH` can still make the three bare `find` calls in the copy (`materialize.sh:327`,
+`331`, `348`) run its own silent code, and the worktrees, promisor-pack and hook
+predicates all report "nothing found" — the R8/R9 bypass again, one layer earlier. The
+same door is open to `head`, `wc`, `tr`, `rm` and `grep` (every other command in the
+copy is absolute), and an exported `IFS`, `BASH_ENV` or `SHELLOPTS` reaches the same
+code by another route.
+
+The materializer already closes this at its own entry, and the driver adopts that entry
+rather than inventing one. It is `adapters/local-git-materializer/v1/materialize.sh:4-13`
+— the scrub —
+
+```
+clean_path=/usr/bin:/bin
+while IFS= builtin read -r inherited_function; do
+  builtin unset -f "$inherited_function" 2>/dev/null || :
+done < <(builtin compgen -A function)
+while IFS= builtin read -r exported_name; do
+  case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
+done < <(builtin compgen -e)
+PATH=$clean_path
+LC_ALL=C
+export PATH LC_ALL
+```
+
+— and `materialize.sh:22-29` — the arity check and the re-exec:
+
+```
+[ "$#" -eq 8 ] || emit_error E_USAGE
+script_path=${BASH_SOURCE[0]}
+case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac
+if [ "$1" = materialize ]; then
+  exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
+    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+fi
+[ "$1" = __materialize_clean ] || emit_error E_USAGE
+```
+
+Both blocks are **copied** into `shadow/v1/reproduce.sh`, under the same copy header R8
+uses (the `shadow/v1/qualified-identity.jq:8-13` convention), naming
+`materialize.sh:4-13` and `22-29` at the same commit as R8's spans. Copying rather than
+paraphrasing is the point: the driver must scrub exactly what the producer scrubs, so
+the two can never disagree about what a clean start is. Every deviation from the
+materializer's bytes, and nothing beyond these:
+
+- **the marker word and verb** — `reproduce` where it says `materialize`, and
+  `__reproduce_clean` where it says `__materialize_clean`;
+- **the argument count** — `13`, not `8`, and the exec forwards `"$2"` … `"${13}"`,
+  twelve paths after the marker;
+- **the shebang** — the driver's `#!/bin/bash` becomes `#!/bin/bash -p`
+  (`materialize.sh:1`), which is part of this entry: started through its shebang, a
+  privileged bash imports no function from the environment and ignores `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH`. `-p` alone is not the fix — it is
+  bypassed entirely when the file is run as `bash reproduce.sh` — which is why the
+  scrub and the re-exec are copied too, and why R15d tests both invocations;
+- **the script path** — the materializer refuses a relative `${BASH_SOURCE[0]}` with
+  `E_USAGE`; the driver instead normalizes it against `$(pwd -P)`, exactly as
+  `reproduce.sh:94-95` already does, and then requires the result to be an existing
+  non-symlink regular file or `E_RUNTIME` — the code `reproduce.sh:96` already uses for
+  that condition. Reason: the driver accepts a relative invocation path today, and a
+  failed `exec` would report bash's own message instead of the driver's error
+  vocabulary. `reproduce.sh:94-101` stays exactly as it is and re-derives and re-checks
+  the path in the clean process;
+- **`set -euo pipefail`** — `materialize.sh:15` is *not* copied. The driver keeps its
+  own `set -uo pipefail` (`reproduce.sh:3`); R9's status capture and R10's fall-through
+  both depend on there being no `-e`, and adding one would change every existing branch
+  in the file;
+- **where the dispatch sits** — at the driver's existing arity check
+  (`reproduce.sh:61`), which is after the helper-function definitions because
+  `emit_error` must exist to say `E_USAGE`. Those definitions are the only thing above
+  it and they run no command. The scrub block itself is at the very top of the file,
+  above `set -uo pipefail` and `umask 077`. `reproduce.sh:4`'s `export LC_ALL=C` stays
+  where it is, as `materialize.sh:30` keeps its own: the same value, said twice, costs
+  nothing and keeps both files reading the same way.
+
+**Ordering, which is the whole value.** The scrub is the first thing in the file and the
+re-exec is the first thing after the arity check, both before any external command, before
+R8's copied spans, before R9's root lookup, and before the sandbox evaluation at
+`reproduce.sh:270-273`. Everything the driver does after it runs in a process with no
+imported functions, no inherited exported variables, and `PATH=/usr/bin:/bin`
+`LC_ALL=C` fixed. The scrub runs in both entries — the public one and the marker one —
+so invoking the marker form directly gains a caller nothing.
+
+**The 13-argument contract is unchanged from the caller's view.** Callers still write
+`reproduce` plus twelve absolute paths, and `[ "$#" -eq 13 ]` stays exactly as written
+and still runs *before* the dispatch, because the marker form is also thirteen words
+(marker plus the same twelve). So `shadow-slice.test.sh:565-569` (two arguments →
+`E_USAGE`) and `571-577` (thirteen words, one relative path → `E_USAGE`) both hold
+unchanged: the relative path is forwarded and refused by the same loop
+(`reproduce.sh:76-78`) in the clean process, and stderr survives `exec`. A wrong verb is
+still `E_USAGE`, now from the marker check. No other test asserts the driver's first
+lines, its shebang or its arity — checked while drafting; the only other text assertions
+on the file are the digest check (computed from the file at run time, not a stored
+constant) and R18's greps, which the entry does not trip.
+
+**What the clean entry passes through: `PATH` and `LC_ALL`, exactly as the materializer
+does, and nothing else.** The one inherited variable `reproduce.sh` reads today is
+`TMPDIR`, at `reproduce.sh:120`
+(`mktemp -d "${TMPDIR:-/tmp}/ystack-shadow-reproduce.XXXXXX"`), and it is deliberately
+not passed:
+
+- it cannot be re-derived from an argument. `scratch_root` must still be an *empty*
+  private directory when the materializer checks it (`materialize.sh:120`,
+  `E_SCRATCH_ROOT`), and the driver creates its scratch (line 120) long before it calls
+  the materializer (line 302); `candidate_root` and `state_dir` are outputs the driver
+  itself requires empty (`reproduce.sh:84`). Putting the scratch in any of them breaks
+  the run;
+- it should not be passed through. It is a caller-chosen path that decides where the
+  driver writes — today, with nothing checking it, that includes inside
+  `$source_git_dir`. Dropping it removes a caller's influence over an authorization
+  path and costs only the fallback `/tmp` that same line already declares. Every
+  directory the driver actually needs is an argument.
+
+`HOME` needs nothing: the driver reads it nowhere, and git sees the `HOME="$scratch"`
+`git_env` sets explicitly (`reproduce.sh:338-341`, R9). Two consequences, both accepted:
+the sandbox evaluator and the trace validator are invoked with only a `PATH` prefix
+(`reproduce.sh:271`, `460`) and so inherit this environment — they take their scratch
+from `${TMPDIR:-/tmp}` (`evaluate-sandbox.sh:59`) or `/tmp` outright
+(`validate-trace-ledger.sh:102`), so they move with the driver and need no change, and
+they keep `$scratch/bin` first on the `PATH` those invocations set, which is how they
+find the pinned jq; and the materializer invocation at `reproduce.sh:302` already went
+through its own `env -i`, so it is unaffected. No new error code, no new reason id, no
+change to the record.
+
+**R8.** Driver edit four: the source directory must be a plain repository *before*
+the driver asks it who it is. R9's binding asks git to resolve object ids inside
 `$source_git_dir`. Git will answer out of an object store that is not in that
 directory if the directory tells it to: `objects/info/alternates` names extra object
 directories, a `commondir` file points the whole repository at another one, and
 `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` do the same from the
 environment. So a directory holding none of ystack's objects can still report ystack's
-root and pass R8 — checked while drafting: a copy of the fixture bare repository with
+root and pass R9 — checked while drafting: a copy of the fixture bare repository with
 its own objects removed and `objects/info/alternates` pointing at the real fixture
 object store reports `866a40ce…`, and so does the same copy with a `commondir` file
 instead. The materializer refuses such a source, but it only runs *after* the
 environment gate, so the gate would already have been passed and the run would reach
 sandbox evaluation and materialization instead of `environment.unlisted`. The driver
 therefore runs the materializer's own source-purity predicates inside the R6 `if` and
-**before** R8's lookup.
+**before** R9's lookup.
 
 Those predicates are two contiguous spans of
 `adapters/local-git-materializer/v1/materialize.sh`:
@@ -119,7 +250,7 @@ binding the names it uses just above it:
 - `run_root` — a fresh `0700` directory the driver creates under its own `$scratch`
   (the copied lines write only `source-filesystem`, `source-config.snapshot` and
   `source-config` there, and delete the first themselves);
-- `git_env` and the `git_dir` helper — the driver's own, hoisted per R8. The driver's
+- `git_env` and the `git_dir` helper — the driver's own, hoisted per R9. The driver's
   `git_env` also gains the materializer's hook pin (`materialize.sh:268-269`:
   `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=core.hooksPath`,
   `GIT_CONFIG_VALUE_0="$scratch/no-hooks"`) so the copied predicates run under an
@@ -132,11 +263,12 @@ binding the names it uses just above it:
 The copy runs inside a subshell function that shadows `emit_error` with an immediate
 non-zero exit — `source_pure() ( emit_error() { exit 1; }; <verbatim span 271-332>;
 <verbatim span 348-354>; exit 0 )` — so the predicates keep their exact text while an
-impure source produces a failed return instead of a driver error (R9). No purity
+impure source produces a failed return instead of a driver error (R10). No purity
 failure is ever reported as an error code: the shadow driver's error codes are for
 malformed inputs, and an impure source is a run the entry does not authorize.
 
-**The copy must run under a fixed `PATH`, so the driver fixes one.** Inside the
+**The copy must run under a fixed `PATH` and with no inherited function, which is what
+R7's clean entry is for.** Inside the
 materializer these spans always run under `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C`
 — the re-exec at `materialize.sh:26-27`, which every `materialize` invocation goes
 through. That is why the three bare command words in the copy are safe there: `find`
@@ -151,37 +283,37 @@ is absolute (`/usr/bin/shasum`, `/usr/bin/stat`, `/usr/bin/find`, `/bin/dd`, `/b
 and the trace validator; `reproduce.sh:302`, `env -i PATH=/usr/bin:/bin` for the
 materializer; `reproduce.sh:338` inside `git_env`). Pasted into the driver as written,
 those three bare `find`s would be the first commands in the file to resolve against the
-**caller's** `PATH` — and they run before R8's binding and before the sandbox
+**caller's** `PATH` — and they run before R9's binding and before the sandbox
 evaluation, at the one moment the gate is deciding whether to trust the directory. A
 caller that puts its own `find` first on `PATH` (exit 0, print nothing) makes the
 worktrees, promisor-pack and hook predicates all report "nothing found" and walks an
 impure source through the gate.
 
-So the driver sets `PATH=/usr/bin:/bin; export PATH` at the top, beside the existing
-`export LC_ALL=C` (`reproduce.sh:3-5`), before any external command runs; the copied
-spans inherit it. Driver-wide, not a `PATH=/usr/bin:/bin source_pure` prefix on the
-invocation: the driver's own commands are already absolute so a driver-wide fix costs
-them nothing, the four sites above set `PATH` on their own invocation and are
-untouched — in particular the evaluator and the trace validator keep `$scratch/bin`
-first, which is how they find the pinned jq — and whether an assignment prefix on a
-*function* call survives the call differs between bash's default and POSIX modes,
-which is not something an authorization gate should rest on. Beyond fixing `PATH`,
-require that every command word in the two copied spans resolves under
-`PATH=/usr/bin:/bin`: check it when the copy lands. If a later span ever names a
-command that lives outside `/usr/bin` and `/bin`, stop and re-decide — do not widen
-`PATH` to accommodate it. `LC_ALL=C` needs nothing new: line 4 already exports it, the
-same value the copy was written under.
+R7 gives the copy the environment it was written for: `PATH=/usr/bin:/bin` and
+`LC_ALL=C`, exported before any external command runs, in a process that imported no
+function and no other variable. Driver-wide, not a `PATH=/usr/bin:/bin source_pure`
+prefix on the invocation: the driver's own commands are already absolute so a
+driver-wide fix costs them nothing, the four sites above set `PATH` on their own
+invocation and are untouched — in particular the evaluator and the trace validator
+keep `$scratch/bin` first, which is how they find the pinned jq — and whether an
+assignment prefix on a *function* call survives the call differs between bash's
+default and POSIX modes, which is not something an authorization gate should rest on.
+A prefix would also have done nothing about an exported `find` function, which is the
+half of this that `PATH` cannot reach at all. Beyond the fixed environment, require
+that every command word in the two copied spans resolves under `PATH=/usr/bin:/bin`:
+check it when the copy lands. If a later span ever names a command that lives outside
+`/usr/bin` and `/bin`, stop and re-decide — do not widen `PATH` to accommodate it.
 
 `materialize.sh:333-347` (the `packed-refs` scan for `refs/replace/` lines) is
-deliberately **not** copied. Replace refs cannot move the binding: R8's lookup runs
+deliberately **not** copied. Replace refs cannot move the binding: R9's lookup runs
 with `--no-replace-objects` and `GIT_NO_REPLACE_OBJECTS=1`, verified while drafting
 (a copy carrying a `refs/replace/<incident commit>` line in `packed-refs` still
-reports `866a40ce…`). It stays a materializer-only check, and R15 uses it.
+reports `866a40ce…`). It stays a materializer-only check, and R16 uses it.
 
-**R8.** Driver edit four: the driver verifies the source repository's identity. R6's
+**R9.** Driver edit five: the driver verifies the source repository's identity. R6's
 two values are both caller-supplied text, so the entry must also be checked against
 something the driver computes from the bytes of the repository the run will read.
-After R7's purity check passes and **before** the sandbox evaluation at
+After R8's purity check passes and **before** the sandbox evaluation at
 `shadow/v1/reproduce.sh:270-273`:
 
 - read that entry's `source_root_commit` out of the registry snapshot with the same two
@@ -189,18 +321,43 @@ After R7's purity check passes and **before** the sandbox evaluation at
 - run, read-only, `git --no-replace-objects --git-dir="$source_git_dir" rev-list
   --max-parents=0 "$commit_id"`, where `$commit_id` is the incident revision the driver
   already parsed at `shadow/v1/reproduce.sh:195`; capture stdout bounded through
-  `/usr/bin/head -c 4096`, discard stderr;
-- require the captured text to equal the entry's `source_root_commit` exactly. A
-  different root, more than one root line, an incident commit absent from that
-  repository, an unreadable directory, or any git failure all leave the run on the
-  **existing** `environment.unlisted` branch (R9). The comparison is on captured text,
-  so a nonzero git exit fails closed on its own: `reproduce.sh` runs under
-  `set -uo pipefail` with no `-e`.
+  `/usr/bin/head -c 4096`, discard stderr, and **capture the pipeline's exit status in
+  the same breath** — `observed_root=$(…); root_status=$?` on the line after, or the
+  `if observed_root=$(…); then … else …` shape; either is fine, silence is not.
+  `reproduce.sh` runs under `set -uo pipefail` with no `-e`, so a failing git neither
+  stops the driver nor shows up in the captured text by itself; `pipefail` is what makes
+  the pipeline's status git's rather than `head`'s;
+- require **all three** before the entry is treated as matching: `root_status` equal to
+  `0`; the captured text exactly one line of forty lowercase hex characters
+  (`[0-9a-f]{40}`, no second line and nothing else — the capture strips the trailing
+  newline, so this is a whole-string check); and that line equal to the entry's
+  `source_root_commit`.
+- anything else is `environment.unlisted` (R10): a different root, more than one root
+  line, output that is not a bare object id, an incident commit absent from that
+  repository, an unreadable directory, and any nonzero status. Status is checked
+  separately from text because the two can disagree in the direction that matters: git
+  can print a root and *then* fail — a walk that runs into a missing object after
+  reaching one, or a `head -c 4096` bound closing the pipe on a repository with very many
+  roots — and a text-only comparison would read that partial answer as a clean one.
+  Refusing on a status the driver does not understand is the safe direction; the entry
+  is only for a repository that answers cleanly.
+
+How the status check is proved. The nonzero branch is executed by the suite as it
+stands: R14's foreign repository does not contain the incident commit, so `rev-list`
+exits 128 and prints nothing, and R15a/R15b's impure copies reach the same branch by
+another route. The one corner the test cannot reach is a nonzero status that has
+*already* printed the pinned root: the incident commit is fixed by the incident
+document, git prints a root only once the walk reaches one, and a store truncated
+anywhere on the way therefore fails before printing — so no deterministic fixture in
+this suite produces output-plus-failure. Do not build a hand-corrupted repository to
+manufacture one; that corner is proved by review of the code shape, which is why this
+requirement pins the shape (status captured, three conditions, all required) and not
+just the outcome.
 
 Run it with the protective environment `reproduce.sh` already uses for git
 (`shadow/v1/reproduce.sh:338-341`), hoisted above the environment decision so the new
 check and the existing candidate-blob reads at `shadow/v1/reproduce.sh:344-361` share
-one definition and cannot drift, plus the hook pin from R7 and three additions. The
+one definition and cannot drift, plus the hook pin from R8 and three additions. The
 git process for the lookup sees exactly this environment and nothing else, because
 `git_env` starts with `/usr/bin/env -i`:
 
@@ -223,14 +380,14 @@ reach the git process unset (verified while drafting: the env-alternates bypass 
 works with a plain `git` fails under `env -i`), and `--git-dir` on the command line
 wins over `GIT_DIR` anyway — naming them puts the guarantee on the face of the code
 next to the check it protects, and `$scratch/no-hooks` and `$scratch/no-grafts` are
-paths the driver never creates. R7's copied `objects/info/alternates` and `commondir`
+paths the driver never creates. R8's copied `objects/info/alternates` and `commondir`
 predicates cover the on-disk half, which the environment cannot.
 
-Keep both R7 and this check inside the R6 `if`, so a run whose environment was never
+Keep both R8 and this check inside the R6 `if`, so a run whose environment was never
 listed still touches no git object and reads nothing under the source directory, as
 today.
 
-**R9.** No new outcome vocabulary. An entry bound to another repository, a source
+**R10.** No new outcome vocabulary. An entry bound to another repository, a source
 directory that is not a plain repository, or a source repository whose root is not the
 entry's, does not authorize the run, so it falls through to the **existing**
 `environment.unlisted` branch already initialized at `shadow/v1/reproduce.sh:258-264`:
@@ -240,14 +397,14 @@ that one outcome on purpose: on an impure source the binding cannot be verified 
 so the environment is not listed for it. No new reason id, no new record field, no
 change to the record shape, no new error code.
 
-**R10.** Consumers untouched, and proven so. Because R9 adds no reason id and no record
+**R11.** Consumers untouched, and proven so. Because R10 adds no reason id and no record
 field, the reason/state table copied out of the driver into `scope/v1/scope-gates.jq`
 (`slice_states`, ~lines 536-558, first row `environment.unlisted` → `inconclusive`
 with every section `absent`) needs no change. Do not edit it; the only drift is the
 indicative line range in the comment above it, left as is. Re-run `bash
 scripts/test/scope-qualification.test.sh` and require 0 failures as the proof.
 
-**R11.** `scripts/test/shadow-slice.test.sh` (the `registry-contents` block, near lines
+**R12.** `scripts/test/shadow-slice.test.sh` (the `registry-contents` block, near lines
 322-328) pins the *complete* registry document, not a subset of its fields: build the
 whole expected registry with `"$jq_bin" -S -c` (the way that file already builds
 canonical fixtures) and `cmp` it byte for byte against the committed
@@ -270,7 +427,7 @@ fixture incidents pin to the same root. The block's `pass` message stops saying
 "exactly the one … fixture environment" and states something true of two entries:
 neither proven, each bound to one repository by id and by root commit.
 
-**R12.** One new negative case for the id binding, beside the existing
+**R13.** One new negative case for the id binding, beside the existing
 `unlisted-environment` case (near lines 436-443): the fixture incident
 (`target_repository_id` `fixture.target`) run with a claim whose `.id` is mutated to
 `env.local-macos-ystack-self` — a *listed* id, bound to `repo.ystack` — yields
@@ -279,22 +436,24 @@ neither proven, each bound to one repository by id and by root commit.
 execution `absent`. Use the existing `mutate` and `expect_outcome` helpers; add no new
 helper.
 
-**R13.** One new negative case for the source binding: the unmutated fixture claim and
+**R14.** One new negative case for the source binding: the unmutated fixture claim and
 the fixture incident — so *both* R6 values match the fixture entry — run against a
 second bare repository whose history is not the fixture's, giving the same
 `environment.unlisted` result and the same three absent sections. Build that repository
 beside the existing one with `git_clean`, deterministically: `init -q --bare
 --object-format=sha1`, then one root commit (`commit-tree` over the empty tree, no
 parent). `run_case` already takes the source directory as its fifth argument (line
-333), so no new helper is needed. This case fails before R8 and passes after: today the
+333), so no new helper is needed. This case fails before R9 and passes after: today the
 run reaches the sandbox evaluator and materializes against whatever repository it was
 handed.
 
-**R14.** Three new negative cases for source purity. The first two are impure copies of
-the fixture repository that *would* satisfy R8's root check through an object store
-outside themselves; the third is the same first copy with a poisoned `PATH`. All three
-give `outcome: inconclusive`, `reason_id: environment.unlisted` and the same three
-absent sections, with the unmutated fixture claim and incident:
+**R15.** Five new cases for source purity and the environment it is judged in. The first
+two are impure copies of the fixture repository that *would* satisfy R9's root check
+through an object store outside themselves; (c) and (d) are the same first copy with the
+caller's environment turned against the copied predicates; (e) is a positive run proving
+the clean entry did not take anything the driver needs. (a) through (d) give
+`outcome: inconclusive`, `reason_id: environment.unlisted` and the same three absent
+sections, with the unmutated fixture claim and incident:
 
 - (a) **alternates.** `/bin/cp -R "$tmp/source.git" "$tmp/alternates.git"`, remove the
   copy's own objects (`/bin/rm -rf "$tmp/alternates.git/objects"`, then recreate
@@ -317,32 +476,67 @@ absent sections, with the unmutated fixture claim and incident:
   `$scratch/bin` itself, and sets `PATH` on the invocation at each of the four sites
   that need one — so the test's own `$bin` entry, which sits behind the poison
   directory here and is exported at `shadow-slice.test.sh:56`, keeps working for the
-  suite's own commands and is irrelevant to the run. This case fails before the `PATH`
-  fix — the marker appears, and with the hook and promisor predicates silenced the run
-  gets further than `environment.unlisted` — and passes after.
+  suite's own commands and is irrelevant to the run. This case fails before R7's
+  clean entry, which is what fixes `PATH` — the marker appears, and with the hook and
+  promisor predicates silenced the run gets further than `environment.unlisted` — and
+  passes after.
+- (d) **exported shell function.** The alternates copy from (a) once more, this time run
+  with `find() { :; }` exported into the driver's environment — the attack `PATH` alone
+  cannot stop, since bash resolves a function before it consults `PATH`. Set it around
+  the calls and take it back the way (c) does with `PATH`: define the function,
+  `export -f find`, make the calls, then `unset -f find` (the suite's own `find` uses are
+  absolute, so nothing else in the file is affected). Three assertions:
+  - through `run_case` as usual — the driver invoked as `"$reproducer"`, so its shebang
+    is honoured — the impure copy is still refused with `environment.unlisted`;
+  - the same exported function, and the *positive* inputs of the `reproduced` case
+    against `$tmp/source.git`, still gives `reproduced` / `check.failed-at-revision`:
+    the clean entry must not break a good run;
+  - one more invocation of the impure copy written out directly as
+    `/bin/bash "$reproducer" reproduce …` with the function still exported, shaped like
+    the existing direct invocations at `shadow-slice.test.sh:565-577` (capture the
+    status and stderr; no new helper), asserting the same `environment.unlisted` record.
+    This third one is the assertion that earns its place: run that way the
+    `#!/bin/bash -p` shebang is bypassed entirely, so only the scrub and the re-exec
+    can be what refuses it.
+
+  With R8's copy in place but without R7, the first and third fail: the exported `find`
+  silences the same worktrees, promisor-pack and hook predicates R15c's planted binary
+  does, and the impure copy walks the gate. The second is a guard rather than a
+  discriminator — it must hold before and after, since a neutered `find` makes the
+  inventory report nothing, which is also the answer a pure repository gives. Note the
+  driver's own `/usr/bin/find` calls are untouched by any of this: a function named
+  `find` shadows the bare word only.
+- (e) **the clean entry takes nothing the driver needs.** The `reproduced` case's inputs
+  once more, run with `TMPDIR` pointed at a directory that does not exist
+  (`saved_tmpdir=${TMPDIR-}`, `TMPDIR="$tmp/no-such-tmpdir"`, the `expect_outcome` call,
+  then restore — the same set-around-the-call shape as (c)), requiring the ordinary
+  `reproduced` / `check.failed-at-revision` record. Before R7 this fails: `mktemp -d`
+  under a missing directory returns `E_RUNTIME`. After it, the caller's `TMPDIR` reaches
+  nothing, which is exactly the pass-through decision R7 makes, held in place by a test
+  rather than by prose.
 
 The first two were reproduced while drafting: each copy resolves the incident
 commit and reports root `866a40ce…` — the fixture entry's pinned value — out of
-the *other* repository's objects. So each fails before R7 (the run passes the
+the *other* repository's objects. So each fails before R8 (the run passes the
 gate and goes on to sandbox evaluation) and passes after, exactly the regression
 this revision closes.
 No copy is written to by the run, and the fixture repository's own fingerprint
-check (R16) still covers the store they read through.
+check (R17) still covers the store they read through.
 
-**R15.** The `missing-revision` case (lines 476-480) changes, and must be retargeted,
+**R16.** The `missing-revision` case (lines 476-480) changes, and must be retargeted,
 not deleted. It runs the fixture incident against an empty bare repository and today
-expects `materialization.refused`; under R8 the driver refuses one step earlier
+expects `materialization.refused`; under R9 the driver refuses one step earlier
 (`environment.unlisted`), since a repository without the incident commit has no root to
-report for it — that path is now R13's. `materialization.refused` is covered nowhere
+report for it — that path is now R14's. `materialization.refused` is covered nowhere
 else in the suite, so keep it covered with a source the driver's own checks accept and
 the materializer's later ones do not. That must be a check the driver does not copy,
 which rules out the `core.bare = false` copy an earlier draft of this spec proposed:
-R7 now performs `--is-bare-repository` itself, so that copy would come back
+R8 now performs `--is-bare-repository` itself, so that copy would come back
 `environment.unlisted` and stop proving anything. Use the un-copied `packed-refs` scan
 instead: `/bin/cp -R` the fixture repository and write one line
 `<some commit id> refs/replace/<failing_commit>` into the copy's `packed-refs`. Checked
-while drafting, that copy passes every predicate R7 copies (bare, allow-listed config
-keys only, no `refs/replace` *directory*, no symlink, matching object format) and R8's
+while drafting, that copy passes every predicate R8 copies (bare, allow-listed config
+keys only, no `refs/replace` *directory*, no symlink, matching object format) and R9's
 root check (`866a40ce…`), and `materialize.sh:343-345` refuses it with `E_SOURCE_GIT`,
 which the driver records as `inconclusive` / `materialization.refused`
 (`reproduce.sh:306-308`) exactly as before. Rename the case and its `pass` message to
@@ -353,23 +547,23 @@ environment decision. Checked while drafting: `$tmp/gone.git` is the only source
 suite other than `$tmp/source.git`, so no other existing case moves. Any *other*
 changed outcome means the change is wrong.
 
-**R16.** Nothing a run touches is written: the existing never-written checks must pass
+**R17.** Nothing a run touches is written: the existing never-written checks must pass
 unchanged — the registry re-digest (same test, near lines 604-610) and the source
 repository fingerprint (near lines 100-102 and 601), which now covers a driver that
 inventories and reads the source repository directly. Do not edit either; if the purity
 inventory or `rev-list` left anything behind in `source.git`, that check is what says
-so. The copied predicates write only inside the driver's own scratch (R7's `run_root`).
+so. The copied predicates write only inside the driver's own scratch (R8's `run_root`).
 
-**R17.** The test's own purity guard on the driver's text is *tightened*, not dropped —
+**R18.** The test's own purity guard on the driver's text is *tightened*, not dropped —
 it is the one existing check this revision must edit.
 `scripts/test/shadow-slice.test.sh:612-618` greps `reproduce.sh` and fails
-`forge-or-network-command` if it finds a forge or network tool, a URL, or `git`
-followed by any of `push|commit|apply|update-ref|fetch|clone|init|config` (line 614);
-line 620's pass message reads 'the driver reads Git objects only and calls no forge,
-network, or model tool'. What that `config` word is protecting against is a driver that *writes* config —
-the way a run would quietly redirect `core.hooksPath` or any other setting and stop
-being read-only. But it matches on the two words alone, so it also refuses a *read*,
-and R7's copy contains exactly one, verbatim from `materialize.sh:314-315`:
+`forge-or-network-command` if it finds a forge or network tool, a URL, or `git` followed
+by any of `push|commit|apply|update-ref|fetch|clone|init|config` (line 614); line 620's
+pass message reads 'the driver reads Git objects only and calls no forge, network, or
+model tool'. What that `config` word is protecting against is a driver that *writes*
+config — the way a run would quietly redirect `core.hooksPath` or any other setting and
+stop being read-only. But it matches on the two words alone, so it also refuses a
+*read*, and R8's copy contains exactly one, verbatim from `materialize.sh:314-315`:
 
 ```
 "${git_env[@]}" /usr/bin/git config --file "$source_config_snapshot" \
@@ -380,7 +574,7 @@ That lists key *names* out of a bounded copy the driver made under its own `run_
 (`materialize.sh:301-312`) — never out of the source repository, `$HOME`, or the
 machine — and writes nothing. Checked while drafting by running the guard's three
 greps over both copied spans: that line is the only hit, in that one clause, and no
-other clause fires. So R20's shadow-slice all-pass cannot hold until the guard is made
+other clause fires. So R21's shadow-slice all-pass cannot hold until the guard is made
 precise.
 
 Drop `config` from line 614's verb list and give it its own check, which refuses
@@ -397,7 +591,7 @@ strictly more than the old one did in every direction that matters:
 - allow exactly the two lines quoted above, and require them exactly once — `git
   config` occurs once in `reproduce.sh`, and that occurrence is the copied read-only
   listing. Pinning the allowed form to the copy's exact text is deliberate: it is a
-  verbatim copy (R7), so a reflow or an edit of those lines should trip the guard and
+  verbatim copy (R8), so a reflow or an edit of those lines should trip the guard and
   be looked at.
 
 Assertion form, since the file has no mutation harness for shell text (`mutate`, lines
@@ -406,17 +600,17 @@ Assertion form, since the file has no mutation harness for shell text (`mutate`,
 Once on `$reproducer`, which must pass. Once on a mutated copy under `$tmp`, made with
 `/bin/cp` plus one appended line `git config --local core.hooksPath "$scratch/hooks"`,
 which must be refused; `fail config-guard-permissive` if it is not. `reproduce.sh`
-itself is never edited, so R16's component digests still hold. The pass message
+itself is never edited, so R17's component digests still hold. The pass message
 becomes: the reproducer reads git config only from its own bounded snapshot copy and
 never writes.
 
-**R18.** Nothing else under `shadow/v1/` changes — not the `.jq` programs, not
+**R19.** Nothing else under `shadow/v1/` changes — not the `.jq` programs, not
 `validate-incident.sh` — and no adapter changes: `materialize.sh` is cited and copied
 from, never edited; its own checks stay exactly where they are, as the second line of
 defense behind the driver's copy. `ci/required-files.txt` is unchanged: the registry
 path is already listed and no new file is added.
 
-**R19.** The doc passages that count the entries, plus the two describing what the
+**R20.** The doc passages that count the entries, plus the two describing what the
 driver enforces, are updated, with no other prose change. Confirm each by grepping
 `shadow-environments`; line numbers are indicative.
 - `docs/components.md` ~1194 — "starts with exactly one entry" becomes two, named with
@@ -425,7 +619,7 @@ driver enforces, are updated, with no other prose change. Confirm each by greppi
 - `docs/components.md` ~1203 — "the claim's document id is listed in the environment
   file" becomes listed, bound to this incident's target repository id, *and* run
   against a plain source repository — no alternates, no `commondir`, nothing pointing
-  outside it — whose root commit is the entry's, matching R6, R7 and R8.
+  outside it — whose root commit is the entry's, matching R6, R8 and R9.
 - `docs/components.md` ~1247 — the fixture-proof-only paragraph must not read as if no
   self-host environment is listed: it is listed and unproven, its proof a later step.
 - `docs/transition.md` ~65 — "lists exactly one execution environment" becomes two,
@@ -435,31 +629,43 @@ driver enforces, are updated, with no other prose change. Confirm each by greppi
 - `docs/transition-kit.md` ~247 — "must first be listed" becomes "is now listed", the
   run itself still gated.
 
-**R20.** Proof: shellcheck 0.11.0 `-x -S style` clean on both edited shell files
+**R21.** Proof: shellcheck 0.11.0 `-x -S style` clean on both edited shell files
 (`shadow/v1/reproduce.sh`, `scripts/test/shadow-slice.test.sh`), `bash
 scripts/test/shadow-slice.test.sh` all-pass, `bash
 scripts/test/scope-qualification.test.sh` 0 failures, `bash
 scripts/test/portable-core-schema.test.sh` 0 failures, `bash scripts/check-rename.sh`
-clean, required CI green. Additionally, the verbatim copy is proven verbatim: the
-copied spans, extracted from `reproduce.sh` between the copy header and its end
-marker, compare equal to `materialize.sh:271-332` and `348-354` at the cited commit.
-Show that comparison in the PR body. The all-pass includes R17's two calls — the
-tightened guard accepts `reproduce.sh` as shipped and refuses the `--local` mutation
-of it — and R14c's second assertion, that the planted `find` was never executed.
+clean, required CI green — shellcheck included on the new shebang and the clean-entry
+block, with no new `shellcheck disable` directive added to the file. Additionally, the
+copies are proven to be copies. For R8's
+two predicate spans, that is byte equality: extracted from `reproduce.sh` between the
+copy header and its end marker, they compare equal to `materialize.sh:271-332` and
+`348-354` at the cited commit. For R7's clean entry, which is adapted rather than
+byte-identical, show a diff against `materialize.sh:4-13` and `22-29` at the same commit
+and check that every hunk in it is one of the six deviations R7 names — the marker word
+and verb, the argument count, the `-p` shebang, the script-path normalization, the
+omitted `set -euo pipefail`, and where the dispatch sits — and nothing else. Show both
+comparisons in the PR body. The all-pass includes R18's two calls — the tightened guard
+accepts `reproduce.sh` as shipped and refuses the `--local` mutation of it — R15c's
+second assertion, that the planted `find` was never executed, and R15d's three
+assertions, of which the `/bin/bash "$reproducer"` one is the only proof that the scrub
+and re-exec work where the `-p` shebang does not apply.
 
-**R21.** Size: about 275–295 changed lines across the same six files
+**R22.** Size: about 300–320 changed lines across the same six files
 (`shadow/v1/shadow-environments.json`, `shadow/v1/reproduce.sh`,
 `scripts/test/shadow-slice.test.sh`, `docs/components.md`, `docs/transition.md`,
-`docs/transition-kit.md`). The earlier estimate was ~150; the verbatim copy and its
-name bindings add about 75 lines to the driver, R14's three cases plus R15's rewrite
-about 45 to the test, R17's tightened config guard with its mutation call about 10
-more, and R7's `PATH` fix one. That is still inside the ~300–400 net-line soft
-budget in `AGENTS.md:103`, so `review_size: standard`; no exception claimed. The
-copy is the largest single block and is a byte-for-byte copy of reviewed code,
-which reads faster than its line count suggests. If the implementation lands
-above 400 lines, stop and re-decide the size with the operator rather than
-splitting the gate across PRs — the three driver checks are one concern and must
-not ship apart.
+`docs/transition-kit.md`). The earlier estimate was ~150, then 275–295; R8's copy and
+its name bindings add about 75 lines to the driver, R15's five cases plus R16's rewrite
+about 60 to the test, R18's tightened config guard with its mutation call about 10 more,
+R7's clean entry about 20 to the driver (the two copied blocks, the copy header, and the
+script-path normalization), and R9's status capture about 5. That is inside the
+~300–400 net-line soft budget in `AGENTS.md:103`, at the low end of it, so
+`review_size: standard` still stands and no exception is claimed. Two of the three
+biggest blocks — R7's entry and R8's spans — are copies of reviewed code a reviewer
+checks by diffing against the original rather than by reading them as new logic, which
+is faster than the line count suggests. If the implementation lands above 400 lines,
+stop and re-decide the size with the operator rather than splitting the gate across
+PRs — the clean entry and the four driver edits are one concern and must not ship
+apart.
 
 ## Design
 
@@ -476,17 +682,23 @@ In this order, because each step is checkable by the one after it.
    file, then move it into place. `-S` sorts object keys while arrays keep their order
    (so the new entry lands second), and `-c` plus jq's trailing newline reproduce
    today's byte shape. Verify with R4's `cmp` before committing.
-2. **Driver, four small edits plus the one-line `PATH` fix, nothing else.** Add
-   `PATH=/usr/bin:/bin; export PATH` beside `export LC_ALL=C` at
-   `shadow/v1/reproduce.sh:3-5`, before anything else, so the copied spans in the same
-   file cannot resolve a command out of the caller's `PATH` (R7). Extend the
+2. **Clean entry, before any other driver edit (R7).** Copy `materialize.sh:4-13` into
+   `shadow/v1/reproduce.sh` above its `set -uo pipefail`, change the shebang to
+   `#!/bin/bash -p`, and copy `materialize.sh:22-29` over the existing arity line
+   (`reproduce.sh:61`), with the marker `__reproduce_clean`, thirteen arguments, the
+   relative-path normalization from `reproduce.sh:94-95` in place of the materializer's
+   `E_USAGE`, and without `materialize.sh:15`'s `set -euo pipefail`. Put the copy header
+   on it, naming both line ranges at the cited commit. Do this on its own and run the
+   suite: everything must still pass with no other change, which is what says the entry
+   cost the driver nothing. Only then paste into the file anything that depends on it.
+3. **Driver, four small edits on top of the clean entry, nothing else.** Extend the
    `E_RELATION` shape jq (`shadow/v1/reproduce.sh:182-188`) with R5's two string
    checks. Hoist the `git_env=(…)` array (today at
    `shadow/v1/reproduce.sh:338-341`) to just above the environment decision and add
    the hook pin and `GIT_GRAFT_FILE="$scratch/no-grafts"` — `$scratch` is the
    driver's own mktemp directory (lines 120-122) and nothing
    creates `$scratch/no-grafts` or `$scratch/no-hooks`. Paste the two verbatim spans
-   into `source_pure()` with its copy header and its name bindings (R7). Then replace
+   into `source_pure()` with its copy header and its name bindings (R8). Then replace
    the single `if` at `shadow/v1/reproduce.sh:267-269` with a gate that leaves the
    sandbox block below it untouched and unindented — purity first, then identity, then
    the existing evaluation:
@@ -496,13 +708,17 @@ In this order, because each step is checkable by the one after it.
    if <R6 lookup>; then
      if source_pure; then
        entry_root=$(<jq read of the matched entry's source_root_commit>)
+       root_status=0
        observed_root=$("${git_env[@]}" GIT_ALTERNATE_OBJECT_DIRECTORIES= \
          GIT_DIR="$source_git_dir" /usr/bin/git --no-replace-objects \
          --git-dir="$source_git_dir" rev-list --max-parents=0 "$commit_id" \
-         2>/dev/null | /usr/bin/head -c 4096)
-       if [ -n "$entry_root" ] && [ "$observed_root" = "$entry_root" ]; then
-         environment_listed=yes
-       fi
+         2>/dev/null | /usr/bin/head -c 4096) || root_status=$?
+       case "$observed_root" in
+         *[!0-9a-f]*|"") ;;
+         *) [ "$root_status" -eq 0 ] && [ "${#observed_root}" -eq 40 ] &&
+              [ -n "$entry_root" ] && [ "$observed_root" = "$entry_root" ] &&
+              environment_listed=yes ;;
+       esac
      fi
    fi
    if [ "$environment_listed" = yes ]; then
@@ -511,24 +727,30 @@ In this order, because each step is checkable by the one after it.
 
    The extra `VAR=value` words sit between `git_env`'s `/usr/bin/env -i` and the
    command, so they are that one command's environment and no other caller of
-   `git_env` is affected. The `-n` guard is belt and braces: R5 already makes
-   `source_root_commit` 40 hex on every entry. The `head -c` bound keeps a repository
-   with very many roots out of a shell variable; a truncated list is unequal anyway.
+   `git_env` is affected. The exact shape of the three conditions is R9's; what the
+   sketch shows is that the status is captured on the same statement as the output and
+   checked beside it, and that the text must be one 40-character run of `[0-9a-f]` — a
+   second root puts a newline in the variable and the `case` pattern refuses it. The
+   `-n` guard on `entry_root` is belt and braces: R5 already makes `source_root_commit`
+   40 hex on every entry. The `head -c` bound keeps a repository with very many roots
+   out of a shell variable; a truncated list fails the shape check, and the `SIGPIPE`
+   that bound can cause fails the status check.
    The driver touches `$source_git_dir` before this point only for path checks
    (`physical_dir` line 83, `check_disjoint` lines 87-89) — no git command, no read of
    its contents — so `source_pure` is its first look at the source repository, and it
    happens before anything is evaluated, materialized or executed.
-3. **Test.** Turn `registry-contents` into a full-document byte comparison with the
-   fixture root computed from the fixture repository (R11), update its pass message,
-   add the five negative cases (R12, R13, R14a, R14b, R14c), and retarget
-   `missing-revision` (R15). The pin must fail before step 1 and pass after; R12's
-   case must fail before the lookup edit, R13's before the root check, R14a and
-   R14b before the purity copy, and R14c before the `PATH` fix, and all five pass
-   after. That ordering shows each edit does what it claims. In the same step,
-   tighten the `git config` guard into `config_guard_ok` and add its two calls
-   (R17) — do this *with* step 2's copy, not after it, since the guard as it
-   stands fails the suite the moment the copied read lands.
-4. **Docs.** The six passages, nothing else.
+4. **Test.** Turn `registry-contents` into a full-document byte comparison with the
+   fixture root computed from the fixture repository (R12), update its pass message,
+   add the seven new cases (R13, R14, R15a, R15b, R15c, R15d, R15e), and retarget
+   `missing-revision` (R16). The pin must fail before step 1 and pass after; R13's case
+   must fail before the lookup edit, R14's before the root check, R15a and R15b before
+   the purity copy, and R15c, R15d and R15e before the clean entry that fixes `PATH`
+   and scrubs the environment — and all of them pass after. That ordering shows each
+   edit does what it claims. In the same step, tighten the `git config` guard into
+   `config_guard_ok` and add its two calls (R18) — do this *with* step 3's copy, not
+   after it, since the guard as it stands fails the suite the moment the copied read
+   lands.
+5. **Docs.** The six passages, nothing else.
 
 **High-risk path, before any of the above.** Draft `work/shadow-env-self-host/plan.md`
 on `ystack/plan/shadow-env-self-host` as a plan-only PR (`Tracks #263`), get
@@ -539,10 +761,12 @@ updated main and write code there. That PR is the one using `Closes #263`.
 ## Out of scope
 
 - Any shadow run. Listing an environment only permits one.
-- Any driver change beyond the four edits in R5, R6, R7 and R8 and R7's one-line
-  `PATH` fix: no new reason id, no new record field, no reordering of the driver's
-  stages, no change to the read-only guards or the error codes, and no change to the
-  materializer.
+- Any driver change beyond R7's clean entry and the four edits in R5, R6, R8 and R9:
+  no new reason id, no new record field, no reordering of the driver's stages, no
+  change to the read-only guards or the error codes, and no change to the materializer.
+  In particular the clean entry is copied as it stands and not improved on: no `-e`
+  added to the driver's `set`, no new argument to carry `TMPDIR` or anything else in,
+  and no second marker verb.
 - Any registry field other than the two this change adds. R1, R2, R5 and R6 add
   exactly `target_repository_id` and `source_root_commit` to each entry, and nothing
   else: no third new key on an entry, and no new field in the registry header, which
@@ -594,8 +818,8 @@ updated main and write code there. That PR is the one using `Closes #263`.
   materialization instead of stopping at `environment.unlisted`. The environment half
   of that was already closed — `git_env` begins with `/usr/bin/env -i`, and the
   env-based bypass that works with a plain `git` fails under it — but the on-disk half
-  was open, and it is the half a caller controls by handing over a directory. R7 closes
-  it by checking the directory is plain *before* asking it anything, and R8 names the
+  was open, and it is the half a caller controls by handing over a directory. R8 closes
+  it by checking the directory is plain *before* asking it anything, and R9 names the
   environment variables explicitly so the closed half stays visibly closed.
 - **A copied check carries its environment with it — the fourth P1.** The two spans
   are safe in the materializer partly because of what surrounds them: every
@@ -606,11 +830,38 @@ updated main and write code there. That PR is the one using `Closes #263`.
   run those three under the caller's `PATH`, before the binding and before the sandbox
   evaluation — a planted `find` that exits 0 silently turns three refusals into three
   passes. That is the same failure as the third P1 in a different coat: a check
-  reading something the caller controls. R7 fixes `PATH` driver-wide, R14c plants a
-  `find` and asserts it is never executed, and the rule "every command word in the copy
-  must resolve under `PATH=/usr/bin:/bin`" is written down so the next span copied in
-  is checked against it. The general lesson for future copies: copy the predicate and
-  the environment it assumed, or prove the destination already provides it.
+  reading something the caller controls. R15c plants a `find` on `PATH` and asserts it
+  is never executed, and the rule "every command word in the copy must resolve under
+  `PATH=/usr/bin:/bin`" is written down so the next span copied in is checked against
+  it. The general lesson for future copies: copy the predicate and the environment it
+  assumed, or prove the destination already provides it.
+- **Functions are looked up before `PATH`, which is why the fix is the producer's whole
+  entry and not a `PATH` line — the fifth P1.** An earlier revision of this spec fixed
+  `PATH` at the top of the driver and stopped there. That closes only the outer door.
+  Bash resolves a command word by looking for a shell function first, and a function
+  arrives from the caller for free: `find() { :; }; export -f find` and the copied
+  `find` predicates are silent again, with `PATH` untouched and looking correct. The
+  same trick fits `head`, `wc`, `tr`, `rm` and `grep`, and `IFS`, `BASH_ENV` and
+  `SHELLOPTS` are the same idea aimed at the shell rather than at a command. `unset -f
+  find` before the copy would have been the small local fix, and it is the wrong one
+  twice over: it is a list of names someone has to keep in step with the copy, and it
+  leaves the driver differing from the producer at exactly the point where the copy's
+  safety comes from the producer's surroundings. So R7 takes the materializer's entry
+  instead — scrub every function and every exported variable, then re-exec the script
+  through `/usr/bin/env -i` — which is a property (nothing is inherited), not an
+  enumeration (these names are not inherited). It also puts the driver and the adapter
+  on the same entry convention, so a reviewer reads one pattern in two files and a
+  future copy between them stays honest. The cost is a re-exec per run and one
+  inherited variable given up (`TMPDIR`, see R7); both are cheap for a gate.
+- **Reading only stdout is half a check.** The root lookup asks git a question and
+  compares the answer, and an earlier revision of R9 compared the text alone. Under
+  `set -uo pipefail` with no `-e`, a git that fails says so only in its exit status, and
+  the usual case — it fails and prints nothing — happens to compare unequal, which is
+  what made the gap easy to miss. The case that does not is a git that prints a root and
+  then dies, and a gate that accepted that would be authorizing on a partial answer. So
+  R9 requires the status, the shape and the value together. The general form of this
+  one: when a check's evidence comes from a command, the command's success is part of
+  the evidence.
 - **Order is the whole point.** Purity, then identity, then evaluation. A check that
   runs after the gate does not protect the gate: the materializer already refuses
   alternates, `commondir`, grafts, replace refs, `shallow` and promisor packs
@@ -623,7 +874,7 @@ updated main and write code there. That PR is the one using `Closes #263`.
 - **A copy can rot, so it is a copy and says so.** Re-implementing the predicates would
   have let the gate and the adapter drift into two different ideas of a plain
   repository, which is how a bypass comes back. The verbatim copy with the
-  `qualified-identity.jq` header, and R20's requirement to prove the bytes match the
+  `qualified-identity.jq` header, and R21's requirement to prove the bytes match the
   cited commit in the PR, make drift visible instead of silent. It is still a real
   maintenance cost, accepted for the same reason `qualified-identity.jq` accepted it.
 - **Why the root commit is a verified identity, once the source is plain.** The driver
@@ -632,48 +883,48 @@ updated main and write code there. That PR is the one using `Closes #263`.
   content-addressed, so a repository cannot present the incident's commit id without
   holding that exact object with that exact history, and cannot report ystack's root
   without holding ystack's root commit object with the incident commit descended from
-  it. "Holding" is exactly what R7 establishes: with no alternates, no `commondir` and
+  it. "Holding" is exactly what R8 establishes: with no alternates, no `commondir` and
   no graft file, the objects git reads are the ones in that directory.
 - **What the root commit does not prove, stated plainly.** It proves the incident's
   commit descends from ystack's root; it does not prove the directory is a clone of the
   ystack remote. ystack is public, so someone could build a repository holding its real
-  root commit and hang a fabricated commit off it, and that repository would pass R7
-  and R8. The limit is accepted here because it is strictly narrower than today (an
+  root commit and hang a fabricated commit off it, and that repository would pass R8
+  and R9. The limit is accepted here because it is strictly narrower than today (an
   unrelated repository — the actual P1 — is now refused), because nothing available to
   the driver on a local bare directory does better (every ref, config value and object
   outside the content-addressed chain is equally caller-supplied), and because the run
   this authorizes is read-only, network-denied and non-authoritative: one revision
   materialized, one blob digested, an inconclusive-by-default record. Anything stronger
   belongs to the run initiative, where the operator names the path.
-- **Grafts, and why `GIT_GRAFT_FILE` is in R8.** `info/grafts` rewrites the parent
+- **Grafts, and why `GIT_GRAFT_FILE` is in R9.** `info/grafts` rewrites the parent
   links git reports, so without neutralizing it the root a source repository reports is
   a value that repository chooses. Reproduced while drafting: the same commit reports
   `52022bc4…` with a graft in place and `866a40ce…` with `GIT_GRAFT_FILE` set to a path
-  that does not exist. R7 also refuses an `info/grafts` file outright; both stay,
+  that does not exist. R8 also refuses an `info/grafts` file outright; both stay,
   because the env variable protects the lookup even if the copy is ever narrowed, and
   a gate should not be satisfiable by the thing it gates. Replace refs are already
   neutralized by `--no-replace-objects` and `GIT_NO_REPLACE_OBJECTS=1`.
 - **The one existing case that moves, and the coverage it was holding.**
   `missing-revision` is the only case in the suite that does not use `$tmp/source.git`,
-  and it is the only holder of `materialization.refused`. R15 keeps that coverage using
+  and it is the only holder of `materialization.refused`. R16 keeps that coverage using
   the one source check the driver deliberately does not copy — the `packed-refs`
   replace-ref scan — and explains why the `core.bare = false` copy an earlier draft
   proposed no longer works now that the driver runs `--is-bare-repository` itself. That
   is the cost of purity-first, paid once and visibly: the set of sources the driver
   admits and the materializer then refuses is smaller, so a test for the materializer's
   refusal has to reach for a narrower one.
-- **A pinned sha in an authorization file can go stale.** R11 answers that for the
+- **A pinned sha in an authorization file can go stale.** R12 answers that for the
   fixture entry: the test computes the root and byte-compares the whole registry, so
   the pin cannot drift from the builder without a red test. The self-host sha cannot
   drift at all — a root commit is fixed for the life of a history, and were ystack's
   ever rewritten the entry would stop matching and self-host runs would go
   `environment.unlisted`: refusing, not running.
-- **The gate now does real work on a caller-supplied directory.** R7 inventories every
+- **The gate now does real work on a caller-supplied directory.** R8 inventories every
   entry under `$source_git_dir` and reads its config before the run is authorized. The
   copied predicates carry their own bounds (8388608 bytes, 65536 entries, a 1 MiB
   config) and treat any excess as a refusal, and everything they write goes to the
   driver's own scratch, so the cost is bounded and nothing under the source directory
-  changes — R16's fingerprint is what proves the last part. This is more work before
+  changes — R17's fingerprint is what proves the last part. This is more work before
   authorization than the driver did before, and it is the price of deciding
   authorization from the bytes rather than from the caller's word.
 - **High risk, and not because of size.** The registry is an authorization list:
