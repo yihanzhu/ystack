@@ -78,13 +78,13 @@ concern, and requirement 17's entry is the first lines of the same script as req
 predicates.
 
 **Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 837 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
+file is 880 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
 PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
 unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
 proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
 order and success-path guarantee are each spelled out step by step because both are one line's
 position away from being wrong. Evidence-based
-range **710-960 net lines** — the measured count above, plus or minus 15%. This exception waives
+range **750-1010 net lines** — the measured count above, plus or minus 15%. This exception waives
 only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
 CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
 figure is the 700-1000 range proposed above.
@@ -241,11 +241,45 @@ reading the whole file.
   padded path is its own key, so it lands in a group of one and the rule is satisfied. So the
   padded document keeps every digest, id, key and binding exactly
   as the good fixture has them and differs only in one path string made long — a single segment of
-  `p`, no slashes needed. Better still, pad the subject path of `selection_ref` or
-  `repository_context_ref` instead: those are scope refs the assembler copies unchanged into the
-  stage request (1.6) and the request is required to match them
-  (`stage_request.jq:298-299`), so every padded byte lands in `input.json` **twice** and about
-  4.2 MB of padding crosses the cap with room to spare rather than needing a byte-exact fit.
+  `p`, no slashes needed. Do **not** reach for `selection_ref` or `repository_context_ref`
+  instead. Those two are `scope_ref`s (`schema.jq:324-329`) and their subjects are content refs,
+  not Git object refs: the fixture builds both as `subject_ref: {type:"artifact", value:
+  {type:"content", …}}` (`scripts/test/portable-core-stage-request-fixtures.jq:103-131`), and a
+  `content_ref` is `{content_id, media_type, sha256}` (`schema.jq:296-302`) with the `content_id`
+  capped at 128 bytes by `id_ok` (`:161`), `media_type` at 127 (`:172-175`) and `sha256` fixed at
+  64. There is no `location.value` there to lengthen and no field in them that can hold a megabyte,
+  so a case built that way would fail shape validation long before the finished output was
+  measured. One padded path in the resolved profile is enough on its own; see the arithmetic below.
+
+  **The arithmetic, measured rather than guessed.** The paddable field is
+  `body.bindings[<n>].manifest_source.source.location.value`, and the schema line that shows the
+  absence of a cap is `repo_path_ok` (`schema.jq:205-210`) — non-empty, no control characters, no
+  backslash, no empty or dot segment, and **no length condition of any kind**; nothing above it in
+  the chain adds one either (`git_location_ok`, `:275-279`, only delegates to it). So a single one
+  of those seven paths can hold megabytes and the number of padded fields is irrelevant. The case
+  lives between two bounds that are the same number: the resolved-profile file's own 8388608 (2.3)
+  and the finished output's 8388608 (2.7). The room between them is everything else the input
+  carries, because the resolved-profile document is embedded exactly **once**
+  (`scripts/test/local-git-materializer-fixtures.sh:170`; the stage request holds a `document_ref`
+  to it, not its content), and `p` needs no JSON escaping, so each padded byte adds exactly one
+  byte to `input.json`. Write it in the test in this order, taking both starting numbers from step
+  0.4's successful run rather than from any figure in this plan:
+
+  - `good=$(wc -c < "$out/input.json")`, `base=$(wc -c < "$resolved_file")`,
+    `other=$((good - base))` — `other` is the attempt block, the profile, the six manifests, the
+    stage request and the two payloads carried twice, about 40 KB of the roughly 50 KB a good run
+    produces (spec requirement 11).
+  - `pad=$((8388608 - base - 1024))` bytes of `p` appended to that one path, and the padded
+    document re-emitted through `jq -S -c` like every other fixture document — a hand-edited file
+    is refused `E_CANONICAL` in 2.3 before the size check is reached.
+  - **Assert the padded file's `wc -c` is `-le 8388608`** before feeding it to the assembler, the
+    way case (a) asserts its own size, so 2.3's input bound cannot be the thing that fires. It
+    comes out at exactly `8388608 - 1024`.
+  - **Assert `other -gt 1024`.** The finished output is then `good + pad`, which is
+    `8388608 + (other - 1024)` exactly — over the cap by `other - 1024`, about 39,000 bytes with
+    today's fixture. If `other` ever falls to 1024 or below, the case is unconstructible and this
+    assertion fails and says so, rather than the run passing for some other reason.
+  - Expected: `E_LIMIT` from 2.7's output-size check, and an output directory still empty.
 
   Two things make that case honest rather than a trick, and both are worth checking before writing
   it. The padded document is **fully valid, only too big**: `profile_set_ok` applies no
@@ -735,7 +769,9 @@ an environment read to move it; the trap plus the staging step is the answer.
 
 Run all of this on the final implementation commit and say which commit; old proof on a new
 commit is stale. `$t` is any scratch directory, `$m` is
-`adapters/local-git-materializer/v1/materialize.sh`.
+`adapters/local-git-materializer/v1/materialize.sh`. Paste these into **`bash`**, not `sh`: the
+two `cmp <(…)` lines below use process substitution, which POSIX `sh` does not have. And anything
+run under `env -i` gets its own `/bin/bash -c '…'` wrapper, for the reason the last bullet gives.
 
 - `bash scripts/test/shadow-assembler.test.sh` — all pass, exit 0. The run prints one
   `ok <n> - <case>` line per check, because that is what the `pass` helper copied in step 0.1
@@ -752,9 +788,10 @@ commit is stale. `$t` is any scratch directory, `$m` is
 - **One case per refusal class.** Paste the id each case produced, one line per class in
   requirement 12: `E_USAGE`, `E_TARGET`, `E_WORKSPACE`, `E_RUNTIME`, `E_LIMIT` twice (the padded
   claim — paste its `wc -c`, which has to be above 1048576, or the case proves nothing; and the
-  resolved profile whose padded source path pushes the finished output over
+  resolved profile whose padded `manifest_source` path pushes the finished output over
   8388608 — paste that document's own size beside the output's, to show it was under its own 8 MiB
-  input bound and the refusal was the output check's), `E_PARSE` twice (two
+  input bound and the refusal was the output check's, and paste the good run's `input.json` size
+  too, since the padding is derived from it), `E_PARSE` twice (two
   JSON values, and the BOM), `E_CANONICAL`, `E_SHAPE`, `E_PROFILE`, `E_RELATION`. Then say the one
   half with no runtime case — the finished input failing `validate-input` — and name the review
   that covers it, so the gap is on the record rather than read as an omission.
@@ -833,5 +870,11 @@ commit is stale. `$t` is any scratch directory, `$m` is
   refusal, `ls -a "$out"` shows nothing at all, and the retry into that same directory with the
   good fixture assembles normally. Paste both listings; an empty listing on the successful run is
   the `committed` flag missing or set in the wrong place.
-- **The copy's environment.** `env -i PATH=/usr/bin:/bin command -v find head wc tr rm grep git`
-  resolves every one under `/usr/bin` or `/bin`.
+- **The copy's environment.**
+  `env -i PATH=/usr/bin:/bin /bin/bash -c 'command -v find head wc tr rm grep git'` resolves every
+  one under `/usr/bin` or `/bin`. The wrapper is load-bearing, not decoration: `command` is a
+  shell builtin and `env` can only exec a real file, so the unwrapped
+  `env -i … command -v …` runs only on hosts that happen to ship a `/usr/bin/command` — macOS
+  does, GNU/Linux and the GitHub runners do not, where it dies with "No such file or directory"
+  before checking a single tool. `/bin/sh -c '…'` works the same way if you prefer it. Keep
+  `env -i` outside the wrapper so the shell itself starts with `PATH` and nothing else.
