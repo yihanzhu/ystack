@@ -169,8 +169,23 @@ as `proposals/README.md` describes, never the commit itself.
     (`post_transition_ruleset` in `config/construction-mode.json`: single
     `required_status_check: "ci"`, `required_status_check_app_id: 15368`, strict) is
     not touched. A green `ci` still means every gate and every suite passed. Verified
-    by reading the check name on the PR and by failing one shard on a scratch branch
-    and confirming `ci` goes red.
+    by reading the check name on the PR and by deliberately failing one shard and
+    confirming `ci` goes red rather than skipped. That failure runs on the
+    implementation PR itself, not on a scratch branch: `ci.yml` triggers on
+    `pull_request` and on `push` to `main` only, so a scratch branch starts no run at
+    all, and a second PR is not an option either — every PR links its intake issue and
+    two PRs must never be open for one slug and stage (`AGENTS.md:389-392`). So it is
+    two ordinary commits on the implementation branch. One adds
+    `scripts/test/zz-red.test.sh`, two lines — `#!/usr/bin/env bash`, then
+    `exit 1` — which sorts last and so lands in shard 3; the red run is recorded
+    against that head. A plain new commit then deletes the file — never an amend,
+    never a force-push — and the squash merge keeps both off `main`. The red run
+    therefore sits on a superseded head, and old proof on a new commit is stale
+    (`AGENTS.md:409-411`), so it is bound to the final head by identity: the
+    `.github/workflows/ci.yml` blob id equal between the red head and the final head,
+    the `scripts/test` tree id equal between the delete head and the final head, and
+    the diff between the red and delete heads exactly that one file. The plan carries
+    the procedure and the exact records.
 
 12. **Existing pins.** Three suites assert that run-all.sh still contains the exact
     discovery string in requirement 3:
@@ -240,7 +255,8 @@ Order of work on `ystack/impl/ci-test-shards`:
 4. `proposals/ci-test-shards-shard-ci.patch` — the agents' proposed text for the two
    operator-owned files in step 5, as one unified diff. Nothing else in `scripts/` or
    `docs/` changes.
-5. **Both operator-owned files, in the operator's own last commit:**
+5. **Both operator-owned files, in the operator's own commit — the last permanent
+   file change on the branch:**
    `.github/workflows/ci.yml` and the `AGENTS.md` bullet of requirement 13. Agents
    write neither file — the `RESTORE.md` half of requirement 13 is theirs, in step 3;
    the `AGENTS.md` half is not.
@@ -297,8 +313,10 @@ is why the shard count is a tunable.
   proof script, the manifest line and the `RESTORE.md` bullet; for those two files
   they write only patch text
   under `proposals/` plus the rationale in the PR body, and the operator commits both
-  as the last commit on the implementation branch. That is also why this spec is
-  `risk: high`.
+  as the last permanent file change on the implementation branch. The two throwaway
+  proof commits of requirement 11 follow it and cancel each other out, so they leave
+  nothing in the squashed commit and no agent commit changes those two files. That is
+  also why this spec is `risk: high`.
 - **The sharding proof sits outside the suite set on purpose.** The accepted intent
   says "No change to which suites exist" and that the runner stays usable locally,
   unchanged, with no arguments. A new `*.test.sh` file would breach both: the
@@ -310,7 +328,8 @@ is why the shard count is a tunable.
   *skipped* when a dependency fails, and a skipped required check leaves the gate
   ambiguous. `if: always()` plus explicit `needs.*.result` comparisons make it run
   and go red instead. This is the riskiest detail here, and the plan should say how
-  it is proved — deliberately failing one shard on a scratch branch.
+  it is proved — deliberately failing one shard on the implementation PR itself, on a
+  commit that is deleted again before merge (requirement 11).
 - **Six is a tunable.** Changing it means editing both the matrix list and the `/6`
   in the run line, and they must stay equal. Any count from 1 to 16 keeps the
   partition property, so a wrong count is slow or wasteful, never incorrect.
@@ -335,3 +354,17 @@ is why the shard count is a tunable.
 - **Balanced by measured duration or by index?** By index — see requirement 4.
 - **Does the slowest suite get a follow-up?** Yes, separately. `evals-dashboard` at
   about 14 minutes is the floor no shard count can beat. Out of scope here.
+
+## Amendment
+
+Amended after the plan gate. Requirement 11 and the matching risk note asked for the
+red-shard proof "on a scratch branch"; plan review on PR #281 showed that is
+infeasible — `ci.yml` triggers on `pull_request` and `push` to `main` only, so a
+scratch branch starts no run — so both now describe the mechanism the plan proves,
+two throwaway commits on the single implementation PR bound to the final head by
+identity. The knock-on wording change: the operator's commit is the last *permanent*
+file change on the branch, not literally its last commit. Nothing else changes;
+`intent-blob` and `risk: high` are unchanged. Plan PR #281 re-pins its `spec-blob` to
+this blob once this merges. The deterministic branch `ystack/spec/ci-test-shards`
+could not be reused after its squash merge without a force-push, so this amendment
+comes on `ystack/spec/ci-test-shards-proof`.
