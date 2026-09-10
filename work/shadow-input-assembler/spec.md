@@ -57,6 +57,11 @@ predicate the whole point of which is that it is not re-implemented.
 This revision adds about 15 more lines, and they are the same kind of thing:
 requirement 17's marker-branch alias reset is two lines, requirement 18's
 `run_root` trap is about four, and the two tests that prove them are the rest.
+The revision after it adds about ten more of the same kind: requirement 10's
+`time_ok` run on the timestamp argument is one jq call and its refusal,
+requirement 18's trap gains a guard and a fixed order, and the three
+assertions that prove those two are the rest. The range above still covers
+both.
 
 The exception waives only the soft line signal. It does not widen scope beyond
 the one concern, and it does not relax readability, tests, CI, review, the
@@ -72,12 +77,13 @@ budget of ~300-400 net lines applies to this spec PR as well, not only to the
 implementation it describes, and this file is far over that budget, so the
 overrun is recorded here rather than left unexplained. One concern: one
 component spec for an input assembler that carries security controls, whose
-eleven review rounds each added a verified requirement (protocol-valid
+twelve review rounds each added a verified requirement (protocol-valid
 inertness, byte-pinned default profile, hash algorithm, full repository-level
 source guards, clean entry, working-tree proofs, the alias reset, the
-`run_root` trap, and the `high` risk class those controls require).
-Evidence-based range: 1286 lines measured — the
-count is self-inclusive, the length of this file as committed — so 1093-1479
+`run_root` trap and the order it is installed in, the core's own timestamp
+rule, and the `high` risk class those controls require).
+Evidence-based range: 1395 lines measured — the
+count is self-inclusive, the length of this file as committed — so 1186-1604
 net lines at that measurement +/-15%. This exception waives only the soft line
 signal for this artifact PR. It does not widen scope beyond the one concern,
 and it does not relax readability, review, CI, or operator merge. No content
@@ -109,7 +115,9 @@ lose the verified detail the rounds added.
    there as a commit whose object is at most 1 MiB; existence, object type and
    that size bound are all decided by requirement 15's copied lines `:355-360`
    rather than by anything written here; the timestamp is exactly
-   `YYYY-MM-DDTHH:MM:SSZ`; the
+   `YYYY-MM-DDTHH:MM:SSZ` **and is a real instant, decided by the core's own
+   `time_ok` and not by a shape test written here** — requirement 10 says how
+   that rule is run and why the shape alone is not enough; the
    profile directory holds `profile.json`, `producer-config.json`, and
    `manifests/`, whose bytes must match the digests requirement 3 pins; the
    jq binary is the pinned jq 1.6
@@ -261,10 +269,55 @@ lose the verified detail the rounds added.
    `pair_ref` documents `{schema_version, kind, id, sha256}` for `stage_request`
    and `resolved_profile`, so the qualified-identity builder (initiative #264)
    binds exactly what `shadow/v1/reproduce.sh` lines 250-256 compares.
-10. **Deterministic.** Identical inputs produce byte-identical outputs. The
+10. **Deterministic, and the timestamp argument is held to the core's own
+    rule.** Identical inputs produce byte-identical outputs. The
     caller's timestamp argument fills `requested_at`, `started_at`,
     `finished_at`, and `recorded_at`; the component reads no clock, no
     environment, and no random source. Attempt and request ids are fixed strings.
+
+    Because that one argument becomes four core fields, checking its shape is
+    not the same as checking it. The core rule is `time_ok`, at
+    `core/v2/generations/g-*/modules/schema.jq:186-202`, and it asks for more
+    than the pattern. After matching
+    `\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\z` it captures
+    the six numbers and requires `$month >= 1 and $month <= 12`, `$day >= 1
+    and $day <= $days[$month - 1]` against a month-length table whose
+    February is `29` only when `$year % 4 == 0 and ($year % 100 != 0 or $year
+    % 400 == 0)`, `$hour >= 0 and $hour <= 23`, and minutes and seconds from
+    `0` to `59`. So the rule is: calendar-valid date, leap years included,
+    and a real clock time. `2026-02-30T00:00:00Z` and `2026-01-01T24:00:00Z`
+    have exactly the right shape and are not instants.
+
+    The core applies that rule to `requested_at`
+    (`core/v2/generations/g-*/modules/stage_request.jq:120`, the last line of
+    `stage_request_body_shape_ok`: `(.requested_at | schema::time_ok)`), and
+    requirement 8's `validate-input` self-check reaches it through
+    `document_self_ok` (`adapters/local-git-materializer/v1/protocol.jq:138`).
+    A shape-only argument check therefore lets a bad timestamp in the front
+    door and has it come back at the very end as `E_RELATION` — the component
+    reporting that its own finished output does not hold together, when what
+    actually happened is that the caller mistyped one argument. That is a true
+    statement and a useless one.
+
+    **So the assembler runs the core's `time_ok` on the argument, and the
+    calendar logic is not re-implemented in shell.** Concretely: after the
+    pinned-jq check, the assembler invokes that jq binary the same way it
+    already loads core modules for requirement 3's profile-set rules and
+    requirement 8's self-check — `-L` pointing at
+    `core/v2/generations/<generation>/modules`, resolved from the script's own
+    normalized path the way `shadow/v1/reproduce.sh:100` resolves the
+    repository root, which is the `"$jq_bin" -L "$modules" …` load
+    `evals/v1/evals-driver.sh:58` and `:161` already use — with `import
+    "schema" as schema;` and `schema::time_ok` applied to that one string.
+    Anything but `true`, and any failure of the jq call itself, is `E_USAGE`.
+    One rule with one home: if the core's notion of an instant ever changes,
+    this check changes with it, because there is no second copy to drift.
+
+    The check needs jq, so it cannot sit with the cheap string comparisons.
+    It runs immediately after the pinned-jq check — before any input file is
+    opened and before anything at all is read out of the repository — which is
+    early enough that a mistyped argument comes back as a usage error and late
+    enough that the jq running it is the pinned one.
 11. **Bounded size.** The finished input must be under the driver's 8 MiB cap
     (`snapshot_bounded ... 8388608`), and the assembler refuses rather than emit
     something the driver would reject. Evidence: the five-manifest fixture input
@@ -274,7 +327,9 @@ lose the verified detail the rounds added.
 12. **Refusals use ids that already exist**, from `shadow/v1/reproduce.sh` and
     `packaging/v1/install.sh`. `E_USAGE`: wrong argument count or verb —
     both decided by requirement 17's copied entry, before anything else runs
-    — relative path, bad repository id, bad timestamp, or a commit id that is
+    — relative path, bad repository id, a timestamp the core's `time_ok`
+    rejects — the wrong shape, or the right shape and not a real instant,
+    `2026-02-30T00:00:00Z` included (requirement 10) — or a commit id that is
     not lowercase hex of one of the two accepted widths, 40 or 64 — a width
     the repository has not been asked about yet. `E_TARGET`: the source Git
     directory is not a physical bare repository, it fails any of the
@@ -314,7 +369,9 @@ lose the verified detail the rounds added.
     present `config_source` in the supplied resolved profile does not carry
     the pinned digest of the document it names (requirement 16).
     `E_RELATION`: the profile set does not hold together,
-    or the finished input fails `validate-input`. No new error id.
+    or the finished input fails `validate-input` — which a bad timestamp no
+    longer reaches, because requirement 10 refuses it as `E_USAGE` before any
+    of this runs. No new error id.
 13. **Proof runs in CI.** `scripts/test/shadow-assembler.test.sh` bootstraps
     the pinned jq 1.6 the way the existing slice test does, builds a fixture
     bare repository, and produces a resolved profile the way
@@ -369,7 +426,9 @@ lose the verified detail the rounds added.
     the copy is proven, the commit-size guard, and the clean entry — plus the
     guards an earlier draft missed and the producer config digest. This
     revision adds two more: the alias reset on the marker branch, and the
-    `run_root` cleanup requirement 18 now guarantees.
+    `run_root` cleanup requirement 18 now guarantees. The revision after it
+    adds the timestamp rule of requirement 10 and the source order of
+    requirement 18's trap.
 
     **The copy is a copy, and
     it is compared against the working tree.** The test extracts the copied
@@ -478,6 +537,14 @@ lose the verified detail the rounds added.
     `value.source` left alone, so the core rules still pass it — must come
     back `E_PROFILE`.
 
+    **The timestamp is the core's rule, and a shape check would have missed
+    it.** The test runs the assembler with `2026-02-30T00:00:00Z` — a
+    well-shaped date that does not exist — and asserts `E_USAGE`, not
+    `E_RELATION` from the self-check at the end, so the refusal names the
+    argument the caller got wrong. It runs it again with
+    `2024-02-29T00:00:00Z`, a real leap day, and asserts the run assembles
+    normally: the check refuses what the core refuses and nothing more.
+
     **A refusal leaves the output directory empty.** The test runs the
     assembler against the `hooks/` negative repository — a refusal that fires
     after `run_root` has been created — and asserts two things about the
@@ -487,6 +554,15 @@ lose the verified detail the rounds added.
     assembles normally rather than failing `E_WORKSPACE`. That second half is
     the point of requirement 18: the guarantee is not tidiness, it is that a
     caller can retry.
+
+    The order requirement 18 now fixes cannot be proved by sending a signal
+    into a window a few microseconds wide, so the test proves it where it is
+    written instead: it asserts that in
+    `shadow/v1/assemble-materialization-input.sh` the `trap` lines naming
+    `run_root` appear on earlier lines than the `mkdir` that creates it. That
+    is a source-order assertion, not a runtime one, and it is named as such —
+    it catches the ordering being undone by a later edit, which is the
+    realistic way this regresses.
 
     **Shellcheck.** `shellcheck -x -S style` at the pinned 0.11.0 passes on
     both new shell files, with no new `shellcheck disable` directive in
@@ -621,7 +697,7 @@ lose the verified detail the rounds added.
 
     - `run_root` — a `0700` scratch directory the assembler creates **inside
       the caller's output directory**, and removes through the `EXIT` trap
-      requirement 18 installs the moment it is created, so the output
+      requirement 18 installs *before* it is created, so the output
       directory ends up holding only the documents requirements 6, 8
       and 9 name — on every path out, not only the successful one. It is
       inside the output directory rather than under
@@ -899,20 +975,35 @@ lose the verified detail the rounds added.
     left. The refusal is then about the assembler's own leftovers rather than
     about anything the caller did, which is the worst kind of error message.
 
-    So the removal is not a step at the end. **The assembler installs an
-    `EXIT` trap that removes `run_root` immediately after creating it** — the
-    trap is installed in the same breath as the `mkdir`, so there is no window
-    in which the directory exists untrapped. `INT`, `TERM` and `HUP` are
-    trapped as well: each removes `run_root`, resets its own trap to default,
-    and re-raises the signal, so the assembler dies of the signal it was sent
-    with the right exit status rather than swallowing it, and the `EXIT` trap
-    does not run twice on a directory that is already gone.
+    So the removal is not a step at the end — and it is not a step just after
+    the `mkdir` either. **The trap goes on first, and `run_root` is created
+    second.** An earlier revision said the trap was installed "in the same
+    breath as the `mkdir`", which reads as safe and is not: `trap` and `mkdir`
+    are two commands, and a signal arriving between them — an operator's
+    Ctrl-C, a `TERM` from a wrapper — leaves a directory nothing is watching.
+    That is the same leftover this requirement exists to prevent, reached
+    through a window instead of through a refusal, and the caller's retry is
+    refused `E_WORKSPACE` for it just the same.
+
+    Ordering it the other way round has no such window, and it costs nothing,
+    because the only thing the trap needs from the `mkdir` is the *name* — and
+    the name is known before the directory exists. So: `run_root`'s path is
+    computed, the trap is installed, and only then is the directory created.
+    The trap body is guarded — `[ -n "${run_root:-}" ] && [ -d "$run_root" ]`
+    ahead of the `rm -rf` — so a trap that fires before the `mkdir` has run,
+    or after the directory is already gone, does nothing rather than
+    complaining about a path that is not there. `INT`, `TERM` and `HUP` are
+    trapped alongside `EXIT`: each removes `run_root`, resets its own trap to
+    default, and re-raises the signal, so the assembler dies of the signal it
+    was sent with the right exit status rather than swallowing it, and the
+    `EXIT` trap does not run twice on a directory that is already gone.
 
     The guarantee to the caller is one sentence: the output directory ends up
     either empty, exactly as it was supplied, or holding only the documents
     requirements 6, 8 and 9 name — and the two limits below are the only ways
     out of those two states. Requirement 13 proves it on a refusal that fires
-    after `run_root` exists, and proves the retry that follows works.
+    after `run_root` exists, proves the retry that follows works, and asserts
+    the trap-before-`mkdir` order where that order is written, in the source.
 
     Two limits, named rather than implied. A `KILL`, a power loss, or a full
     disk mid-`rm` can still leave `run_root` behind; no trap covers those, and
@@ -960,15 +1051,19 @@ Files, in the order they are written:
      other line in it. Everything below runs in a
      process with no imported functions, no inherited exported variables, no
      aliases, and `PATH` and `LC_ALL` fixed.
-   - Argument and workspace checks, the pinned-jq check, reading and
+   - Argument and workspace checks, the pinned-jq check, then requirement
+     10's `time_ok` run on the timestamp argument — the first jq the component
+     runs, before any input file is opened — then reading and
      canonicalizing each input, the profile-id check and the eight digest
      comparisons against the pins, requirement 16's producer config digest
      check against the same pin, and the claim checks with the two values
      derived from the claim (its `id` and the SHA-256 of its bytes).
-   - The Git work under the protective environment: `run_root` created `0700`
-     inside the output directory **and trapped in the same breath**
-     (requirement 18 — `EXIT` removes it, `INT`/`TERM`/`HUP` remove it and
-     re-raise), the `git_env` array and `git_dir` helper,
+   - The Git work under the protective environment: `run_root`'s path
+     computed, **then the trap installed, and then** the `0700` directory
+     created inside the output directory — that order, for the reason
+     requirement 18 gives (`EXIT` removes it, `INT`/`TERM`/`HUP` remove it
+     and re-raise, and the guarded body does nothing while the directory does
+     not exist), the `git_env` array and `git_dir` helper,
      and the verbatim `source_pure` copy of requirement 15 — spans 271-332,
      333-347 and 348-360, in materializer order — under its
      header. The commit's existence, type and size are decided inside that
@@ -984,7 +1079,7 @@ Files, in the order they are written:
      requirement 15 states.
    - The size check, then the writes: `input.json`, `stage-request-ref.json`,
      `resolved-profile-ref.json`, and the decision-record texts. There is no
-     removal step here: the `EXIT` trap installed with the `mkdir` takes
+     removal step here: the `EXIT` trap installed before the `mkdir` takes
      `run_root` away on this path and on every refusal path alike, so the
      output directory holds only those documents — or, if the run refused,
      nothing at all.
@@ -1215,8 +1310,11 @@ change of process and not just a change of label.
   made the assembler's scratch and the caller's workspace the same directory,
   and a refusal that left the scratch behind turned the caller's obvious next
   move, retrying in the same directory, into an `E_WORKSPACE` about the
-  assembler's own leftovers. Requirement 18 fixes that with a trap installed
-  at creation rather than a removal step at the end, and requirement 13
+  assembler's own leftovers. Requirement 18 fixes that with a trap rather
+  than a removal step at the end — and the trap goes on *before* the
+  directory is created, not at creation, because `trap` and `mkdir` are two
+  commands and a signal between them would leave exactly the leftover the
+  trap exists to prevent. Requirement 13
   proves the retry. What the trap cannot cover is a `KILL`, a power loss, or a
   failure part-way through the removal itself; in those cases the directory
   keeps a `run_root` and the caller empties it or supplies another. That is a
@@ -1284,3 +1382,14 @@ change of process and not just a change of label.
   would break determinism. Its third is answered by DR-1 — neither fresh nor
   pinned; the resolved profile is an input, and producing one in production is
   the trusted-parent initiative.
+
+  Being an argument makes it the one field a caller can get wrong simply by
+  typing, so requirement 10 holds it to the core's own `time_ok` instead of to
+  a pattern this spec writes for itself. A shape test would have taken
+  `2026-02-30T00:00:00Z` and turned a typo into an `E_RELATION` about the
+  finished output at the very end of the run. The residual is the one every
+  shared rule has — the check is only as good as the core module it runs — and
+  it runs the core module rather than a copy of it, which is the strongest
+  form of that trade available here. There is nothing to keep in sync,
+  because there is nothing copied: unlike requirements 3, 15 and 17, this
+  check has no pin, no header and no byte comparison, and needs none.
