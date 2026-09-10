@@ -286,6 +286,7 @@ and one row here.
 | Inactive deploy and rollback gates | `deploy/v1/` | Environment tiers, release records, and the deploy, status, and rollback requests, with one evaluator that answers only whether a request could be handed to a deployment adapter after the transition. | [read](docs/components.md#inactive-deploy-and-rollback-gates) |
 | Inactive review-fix loop planner | `loop/v1/plan-review-fix.sh` | Turns one review observation plus the credential, reconciliation, risk, and attempt evidence into one bounded fix request or one named refusal. It dispatches nothing. | [read](docs/components.md#inactive-review-fix-loop-planner) |
 | Inactive shadow reproduction slice | `shadow/v1/` | Replays one incident's failing check at its exact revision, read-only, in a listed execution environment, and answers reproduced, no-change, or inconclusive. It never patches, publishes, or deploys. | [read](docs/components.md#inactive-shadow-reproduction-slice) |
+| Inactive shadow materialization input assembler | `shadow/v1/assemble-materialization-input.sh` | Builds the one materialization input the shadow driver needs, for a real repository revision, from the real default profile and an already-resolved profile the caller supplies. | [read](docs/components.md#inactive-shadow-materialization-input-assembler) |
 
 ## Portable contract validator
 

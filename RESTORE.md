@@ -220,6 +220,26 @@ reproduces nothing on its own: the slice
 is read-only, grants no authority and no deploy authority, and performs no model,
 credential, forge, network, publish, or target operation.
 
+### Restore the inactive shadow materialization input assembler
+
+Restore the three paths listed under “Inactive shadow materialization input
+assembler” in [`ci/required-files.txt`](ci/required-files.txt), together with
+the local Git materializer and `profiles/default/v1/`, then run:
+
+```sh
+bash scripts/test/shadow-assembler.test.sh
+```
+
+The proof builds a fixture bare repository and a resolved profile over the
+shipped default, assembles a materialization input, and shows it validating
+against the materializer protocol, byte-identical on a repeat run, read-only
+in both payload places, and accepted by `shadow/v1/reproduce.sh`. It also
+shows every refusal: an impure or non-physical source repository, a
+look-alike default profile, an unpinned config source, a malformed or
+oversized input, and a finished input over the driver's own size cap.
+Restoring these records materializes nothing on its own: the assembler is
+read-only and resolves no profile.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in

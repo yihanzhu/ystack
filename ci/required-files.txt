@@ -399,3 +399,8 @@ scripts/test/maintenance-loop.test.sh
 # Operating-mode transition proposal
 docs/transition.md
 docs/transition-kit.md
+
+# Inactive shadow materialization input assembler
+shadow/v1/assemble-materialization-input.sh
+shadow/v1/materialization-input.jq
+scripts/test/shadow-assembler.test.sh
