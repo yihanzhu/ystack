@@ -1,0 +1,467 @@
+---
+spec-blob: ab212e82359ba3132fa6127194b61fa484bb1a85
+drafted: 2026-09-10
+---
+
+# Plan: shadow-input-assembler
+
+The spec (`work/shadow-input-assembler/spec.md`, blob above) is the contract and states
+requirements 1-18 in full. This plan says which files change, in what order, where in today's
+files each piece comes from, what can break, and how each requirement group is proved. Where a
+step names a requirement, that requirement's own wording is the detail to follow — this plan does
+not restate it. Freshness: the spec's `intent-blob`
+`61218c3c9b3554f4a86c58fd3a7311d9e818f3b6` equals `main`'s
+`work/shadow-input-assembler/intent.md` at `986531a`, so the spec is current against the merged
+intent.
+
+## Files that change
+
+Seven files, nothing else. Counts are net changed lines, honest estimates.
+
+- **`shadow/v1/materialization-input.jq`** (~200, new). The eight digest pins and their header
+  (~15); document construction mirroring the fixture builder — contract, six manifests, profile
+  pair, resolved-profile pair, the four decision-record scope refs, stage request, then the input
+  wrapper (~130); requirement 3's id and digest checks plus requirement 16's `config_source` walk
+  (~40); the two `pair_ref` projections (~15).
+- **`shadow/v1/assemble-materialization-input.sh`** (~230, new). The copied clean entry with its
+  header and the assembler's own `set`/`emit_error`/`umask` lines (~30); argument, workspace and
+  pinned-jq checks (~45); requirement 10's `time_ok` call with its split status handling (~15);
+  reading and canonicalizing the five inputs (~25); the `run_root` path, trap and `mkdir` plus the
+  `git_env`/`git_dir`/`source_algorithm`/`source_commit` bindings (~20); `source_pure` with the
+  three verbatim spans and the copy header (~95); the algorithm and root-tree reads, the size
+  check, the stage step and the commit step (~30). Roughly 130 of those are copied lines that must
+  not be edited here.
+- **`scripts/test/shadow-assembler.test.sh`** (~330, new). jq bootstrap and scaffolding (~40);
+  the `sha1` and `sha256` fixture repositories (~30); the resolved profile built over the shipped
+  documents (~45); the positive assertion groups including the driver run (~70); the negative
+  sources and the refusal cases (~90); the copy, pin-liveness and source-order assertions (~55).
+- **`docs/components.md`** (~35). One new "Inactive shadow materialization input assembler"
+  section after the existing `## Inactive shadow reproduction slice` section (line 1175).
+- **`README.md`** (1). One index row beside the shadow slice row at line 288.
+- **`RESTORE.md`** (~20). One restore block in the shape of "Restore the inactive shadow
+  reproduction slice" (lines 200-221), naming `scripts/test/shadow-assembler.test.sh`.
+- **`ci/required-files.txt`** (~5). A blank line, a section comment, then the three new paths,
+  appended at the **end** of the file after today's last line `docs/transition-kit.md`
+  (requirement 14).
+
+Estimate total: about 820 net lines.
+
+**`review_size: accepted-exception`**, as the spec records it. One concern: one inactive component
+whose focused test must drive the real `reproduce.sh` end to end over fixture ground it has to
+build first. Range **610-840 net lines** — about 430 of component (jq plus shell), about 330 of
+test, and the documentation rows. The estimate above sits inside that range, near its top because
+~130 lines are copied text this initiative did not write. The exception waives only the soft line
+signal in `AGENTS.md:102-106`; readability, tests, CI, review, the high-risk gate and operator
+merge are unchanged. **Above 840, stop and re-decide with the operator** rather than splitting:
+the component and its focused test are one concern, and requirement 17's entry is the first lines
+of the same script as requirement 15's predicates.
+
+**What does not change.** `shadow/v1/reproduce.sh`, `adapters/local-git-materializer/v1/**`
+(`materialize.sh` and `protocol.jq` both), `core/v2/**`, `profiles/default/v1/**`,
+`scripts/test/local-git-materializer-fixtures.sh`, `scripts/test/shadow-slice.test.sh`,
+`shadow/v1/shadow-environments.json`, `scope/v1/**`, and everything under `work/**` once this
+plan's PR merges. The assembler adds a producer of an input those components already consume; it
+adds no error id, no reason id and no record field. The eight profile documents are read as data
+and their digests copied; their bytes are not touched.
+
+## Order of work
+
+### Step 0 — the test, before any behavior (requirement 13)
+
+Write the whole of `scripts/test/shadow-assembler.test.sh` against the finished behavior. It does
+not pass at the end of this step. Run it once and paste the single `FAIL:` line it prints; the
+`fail` helper exits on the first failure, the way `scripts/test/shadow-slice.test.sh:19` does, so
+one run names one case.
+
+0.1 **Scaffolding.** Copy the pinned-jq bootstrap from `scripts/test/shadow-slice.test.sh:1-56` —
+the platform case with the two release digests, the shared cache under
+`${TMPDIR:-/tmp}/ystack-portable-core-jq16`, the `curl` fetch with a digest check, the copy into
+`$tmp/bin/jq` at 0555, and the `jq-1.6` identity assertion. Take `git_clean` from lines 70-79 and
+`fail`/`pass`/`sha_file` from lines 19-23 unchanged. Step 0.7's driver run also needs the
+`object-closure` helper compiled the way lines 52-55 compile it.
+
+0.2 **Two fixture repositories.** Build the `sha1` bare repository the way
+`scripts/test/shadow-slice.test.sh:81-98` does (`git_clean init -q --bare --object-format=sha1`,
+`hash-object`, `mktree`, `commit-tree`) and a second one with `--object-format=sha256`, the shape
+`scripts/test/local-git-materializer-adapter.test.sh:973-981` already builds. Keep each commit's
+root tree id, since 0.4 asserts the widths follow the repository.
+
+0.3 **A resolved profile over the shipped documents.** Follow
+`scripts/test/local-git-materializer-fixtures.sh:103-117` — the `-L "$fixtures"` import of
+`portable-core-profile-graph-fixtures`, `f::resolved_profile_doc`, the `v2` walk, and the
+per-binding rewrite — but over `profiles/default/v1/profile.json` and the six manifests in
+`profiles/default/v1/manifests/`, not the five synthetic manifests that builder invents. One
+change the existing builders do not have: where line 114 writes `config_source={state:"absent"}`
+for every binding, the producer binding here carries a present `config_source` whose
+`value.source` is the binding's own `config_ref` and whose `value.value_sha256` is the real
+SHA-256 of `profiles/default/v1/producer-config.json`
+(`ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61`) — not the stand-in digest
+`scripts/test/default-profile-assembly.test.sh:310-311` reuses, which requirement 16 refuses.
+Pass the existing fixture claim — built the way `scripts/test/shadow-slice.test.sh:128-194` builds
+`policy-set.json`, `duty.json` and `claim.json` — as the ninth argument.
+
+0.4 **The positive assertion groups**, each from requirement 13: `validate-input` accepts the
+output; a second run is byte-identical; the read-only shape holds in `.payloads` and
+`.trust_context.verified_payloads` and `network_mode` is `deny`; `environment_ref.environment_id`
+equals the claim's `.id` and `fingerprint_sha256` equals the SHA-256 of the claim file's bytes;
+the two `pair_ref` documents equal what `shadow/v1/reproduce.sh:250-256` compares; and both
+algorithms are covered — `target_revision.hash_algorithm` and the commit and tree id widths
+follow the repository in each case, and a 40-hex commit id offered to the `sha256` repository is
+`E_TARGET`.
+
+0.5 **The negative cases**, one per refusal in requirement 12, plus the four negative source
+repositories requirement 13 names, each otherwise a clean copy of the `sha1` fixture: a disallowed
+config key (`remote.origin.url` set), a non-`*.sample` file under `hooks/`, a `packed-refs`
+carrying a `refs/replace/<commit>` line, and a head commit whose message exceeds 1 MiB so its
+commit object trips `materialize.sh:359-360`. All four are `E_TARGET`, the last pinned as
+`E_TARGET` and not `E_LIMIT`. Then: the exported-function cases (`find() { :; }; export -f find`,
+and the same for `grep`) against the `hooks/` repository and against the good fixture, each run
+through the shebang form **and** as `/bin/bash <script> assemble …`; the `BASH_ENV` alias case
+through a supported form only; `2026-02-30T00:00:00Z` → `E_USAGE` and `2024-02-29T00:00:00Z` → a
+normal run; the unreadable modules directory (`chmod 000`, restored afterwards, or a module path
+with no `schema.jq` if the test runs as root) → `E_RUNTIME`; the claim of the wrong kind, the
+out-of-charset claim id and the non-canonical claim; a `profile.json` whose id is not
+`profile.default.v1`; the self-consistent look-alike profile set that reuses the id but differs in
+bytes → `E_PROFILE`; and the resolved profile whose producer `config_source.value.value_sha256` is
+swapped while `value.source` is left alone → `E_PROFILE`. Also the refuse-then-retry pair: after
+the `hooks/` refusal the output directory exists and holds nothing at all, and a rerun into it
+with the good fixture assembles normally rather than failing `E_WORKSPACE`. Add no case that
+invokes `__assemble_clean` directly, and write the negative-knowledge sentence requirement 13 asks
+for beside the alias case.
+
+0.6 **The three source-derived assertions**, which read files rather than run the assembler.
+(a) **The pins are live**: recompute the SHA-256 of each of the eight files under
+`profiles/default/v1/` in the working tree and require it to equal the pin the jq program carries.
+(b) **The copies are copies**, by the commands the Proof section spells out: anchor each span on
+its own first line (exactly one match, at 271, 333, 348, 4 and 22), bound its end by the extracted
+block's own length (332, 347, 360, 13 and 29), `cmp` the three spans and the scrub, and diff the
+entry so every hunk is one of the four named deviations and nothing else. Never anchor on a span's
+last line — `emit_error E_SOURCE_GIT`, `fi` and `emit_error E_SOURCE_LIMIT` each appear several
+times — and never read a past commit: a default-depth `actions/checkout`
+(`.github/workflows/ci.yml:15`) has no ancestor objects.
+(c) **The orders**: in `shadow/v1/assemble-materialization-input.sh`, the `trap` lines naming
+`run_root` are on earlier lines than the `mkdir` that creates it; every `mv` whose destination is
+the output directory is on a later line than the last check including the staged `validate-input`;
+the `mv` of `input.json` is the last of those; and each destination's list-append is on an
+**earlier** line than its own `mv`.
+
+0.7 **The driver run.** Feed the assembled `sha1` input to `shadow/v1/reproduce.sh` with the
+fixture environment, policy set, duty and the same claim file, using the thirteen-argument
+invocation `scripts/test/shadow-slice.test.sh:338-340` uses, and assert the outcome is not
+`inconclusive`.
+
+### Step 1 — `shadow/v1/materialization-input.jq` (requirements 3, 4, 5, 6, 8, 9, 16)
+
+1.1 The eight pins as constants at the top, under the header
+`# pinned from profiles/default/v1 at 4965175d0edeeec8ba746609e585b053be03e075` — the commit the
+spec's table is taken at, replaced with the current commit if the profile moves before this lands.
+Copy the digest strings from the spec's table verbatim; do not retype them from a fresh
+`shasum` run. Requirement 3's check: the supplied `profile.json` carries top-level `id`
+`"profile.default.v1"` first, then each supplied document's digest equals its pin, and the refusal
+names the file that differed.
+
+1.2 Requirement 16's rule beside them, because it compares against the same `producer-config.json`
+pin and the resolved profile is already parsed here: walk every `config_source` in the resolved
+profile that is `state: "present"` — the six bindings' own and every `tool_sources[].config_source`
+— and refuse unless the document it names has a pin and its `value.value_sha256` equals that pin.
+`config_source` is a present-or-absent wrapper (`schema.jq:155-159`) whose `value` is a
+`source_value_ref` (`:368-373`), so the digest is two levels down.
+
+1.3 Document construction, mirroring `scripts/test/local-git-materializer-fixtures.sh` in its own
+order — contract (~31-38), manifests (~49-72), profile pair (~83-99), resolved-profile pair
+(~103-118), stage request (~119-153), then the input wrapper with `payloads` and `trust_context`
+(~155-188). Six manifests, not five. Anything lifted from a producer sits verbatim under a
+`copied from <path> at <commit>` header, the convention `loop/v1/review-fix-planner.jq:1-3` uses.
+
+1.4 The read-only facts of requirement 4: `input.producer-patch` data is `""` in `.payloads` and
+in `.trust_context.verified_payloads`, and the empty-content digest
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` goes wherever the fixture
+builder puts the patch digest — the verified payload's `sha256` and the stage request's
+`input.producer-patch` content ref. `network_mode: deny`. Those are the three facts
+`shadow/v1/reproduce.sh:241-246` reads.
+
+1.5 The protocol minimum of requirement 5: `allowed_paths: [".ystack/never-written"]`,
+`max_patch_bytes: 1`, `max_changed_paths: 1`.
+
+1.6 Requirement 6's four decision-record texts as outputs, each with its real SHA-256 and
+`scope_sha256` equal to `decision_record_ref.sha256` — the convention `evals/v1/framework.jq:36`
+uses. `finish_condition` and `verification_instruction` are `delivered_scope_ok`
+(`schema.jq:375-380`), so each carries a `ref` plus an `input_id`; the output contract is
+`operation.arguments.materialization_contract.ref`; the policy ref sits in the risk claim, the
+shape `scripts/test/portable-core-stage-request-fixtures.jq:210` shows. `selection_ref` and
+`repository_context_ref` are copied unchanged from the resolved profile, and `requested_by` is
+projected from the resolved forge binding.
+
+1.7 `environment_ref` from the claim (requirement 7): `environment_id` from the claim's `.id`,
+`fingerprint_sha256` from the SHA-256 of the claim's canonical bytes, both arriving as arguments.
+The two-field shape is `environment_ref_ok`, `schema.jq:345-348`.
+
+1.8 The two `pair_ref` outputs of requirement 9, `{schema_version, kind, id, sha256}` for
+`stage_request` and `resolved_profile`, projected exactly as
+`shadow/v1/reproduce.sh:251-254` projects them.
+
+1.9 `stage_request.sha256` is re-digested after the request is finished. The hash algorithm, the
+commit id and the tree id arrive as arguments; the program never reads a file and never writes
+`sha1` as a literal in the revision it builds (`git_revision_ref_ok`, `schema.jq:266-273`).
+
+### Step 2 — `shadow/v1/assemble-materialization-input.sh` (requirements 1, 2, 10, 11, 12, 15, 17, 18)
+
+Land 2.1 as its own commit before anything that depends on it, the way PR #278 landed the
+driver's entry alone: it rewrites the front door while the arity check has to keep meaning what
+it means in both entries, and a commit of its own is what makes it bisectable.
+
+2.1 **The clean entry, and nothing before it.** `#!/bin/bash -p` (`materialize.sh:1`), then the
+copied scrub `materialize.sh:4-13` at the top of the file under the copy header, then the
+assembler's own `set -euo pipefail`, `emit_error` and `umask 077` in the places
+`materialize.sh:15`, `:17-20` and `:31` put them — `emit_error` before the arity check, so
+`E_USAGE` can be said at all — then the copied `materialize.sh:22-29` with exactly four
+deviations: the marker word and verb (`assemble`, `__assemble_clean`); `[ "$#" -eq 10 ]` with the
+exec forwarding `"$2"` … `"${10}"`; the script path normalized against `$(pwd -P)` and then
+required to be an existing non-symlink regular file or `E_RUNTIME`, the way
+`shadow/v1/reproduce.sh:94-96` does; and `builtin unalias -a` plus `builtin shopt -u expand_aliases`
+as the first two lines of the marker branch, above every other line in it, because bash expands
+aliases as it reads each command and the reset has to run before `source_pure` is parsed.
+**Inherit PR #278's bytes for the shared lines.** That PR carries the same scrub and the same
+entry in `shadow/v1/reproduce.sh` under `# copy-begin materialize.sh:4-13` / `:22-29` markers;
+if it has merged, take the scrub bytes from there rather than retaking the copy, so the two
+components hold one text and not two. Use the same `# copy-begin`/`# copy-end` marker convention,
+since step 0.6(b) extracts by it.
+
+2.2 **Argument and workspace checks, in the spec's order.** Nine positional arguments per
+requirement 1. Pinned jq first — the platform digest table and identity check
+`shadow/v1/reproduce.sh:113-118` and `:141-142` use. Then requirement 10's `time_ok` on the
+timestamp argument, before any input file is opened: resolve the modules directory the way
+`materialize.sh:60-69` does (read `PORTABLE_CORE_GENERATION` out of `scripts/core-contract.sh:207`
+with `sed`, check the shape, check the generation is in `core/v2/generation-registry.json`, then
+`core/v2/generations/$generation/modules`), from a repository root resolved from the script's own
+normalized path the way `shadow/v1/reproduce.sh:100` resolves it, and call
+`"$jq_bin" -L "$modules" … 'import "schema" as schema; … schema::time_ok'` on that one string —
+the load shape `evals/v1/evals-driver.sh:58` and `:161` already use. Capture the exit status and
+stdout **separately**, on the command's own failure branch (`|| status=$?`) so `set -e` does not
+end the run: status 0 with stdout exactly `true` proceeds, status 0 with stdout exactly `false`
+is `E_USAGE`, and everything else — non-zero exit, jq that would not start, modules that would
+not load, stdout that is neither word — is `E_RUNTIME`. Then the path checks (absolute, physical,
+non-symlink, disjoint), the repository id charset, the commit-id width as lowercase hex of 40 or
+64, and the output directory as an existing empty physical `0700` directory.
+
+2.3 **Read and canonicalize the five inputs.** Follow `shadow/v1/reproduce.sh:144-153`'s
+`canonical_json` shape — BOM check, one JSON value, `jq -S -c` compared with `cmp` — and its
+`snapshot_bounded` bounds, the claim at the driver's own 1 MiB (`:156`). Then the profile-id check
+and the eight digest comparisons, requirement 16's producer-config check, and the claim checks:
+`kind` exactly `execution_environment_claim`, `id` in the core id charset (`:222-228`), and the
+two derived values — the claim's `id` and the SHA-256 of its bytes, the digest `:168` takes as
+`claim_sha`.
+
+2.4 **`run_root`, trap first.** Compute `run_root`'s path inside the caller's output directory,
+**install the trap**, and only then `mkdir -m 0700` it — that order, because `trap` and `mkdir`
+are two commands and a signal between them leaves a directory nothing is watching. The trap body
+is guarded with `[ -n "${run_root:-}" ] && [ -d "$run_root" ]` ahead of its `rm -rf`. `INT`, `TERM`
+and `HUP` are trapped beside `EXIT`; each removes every recorded commit destination that exists,
+then `run_root`, then resets its own trap and re-raises, the shape
+`shadow/v1/reproduce.sh:124-127` uses. Then bind the four names the copy needs, just above it:
+`git_env` copied from `materialize.sh:265-269` including the `core.hooksPath` pin and the explicit
+`HOME`/`TMPDIR`; `git_dir` comes with span 271-332; `source_algorithm` from the caller's commit-id
+width, `sha1` for 40 and `sha256` for 64 — bound from the argument, not the repository, which is
+what keeps the copied `:352-354` a real check; and `source_commit` from the caller's commit id.
+
+2.5 **`source_pure`, the verbatim copy.** `source_pure() ( emit_error() { exit 1; }; <271-332>;
+<333-347>; <348-360>; exit 0 )`, the three spans in materializer order, all under one copy header
+naming `adapters/local-git-materializer/v1/materialize.sh` at
+`a637451d4b3fbef6b516a9c08f68c0dde46a7059 (origin/main)` plus one sentence saying why it is a
+copy — the header shape `shadow/v1/qualified-identity.jq:8-13` uses. Take 271-332 from PR #278's
+`reproduce.sh` copy if that has merged, and 333-347 and 355-360 from `materialize.sh`. Any
+non-zero return is `E_TARGET`, whichever `E_SOURCE_*` id the copied line names. Do not edit a
+byte inside the markers; if the anchors in step 0.6(b) do not land on 271, 333 and 348, that is
+drift in `materialize.sh` to resolve with the operator before merging, not a number to adjust.
+
+2.6 **After `source_pure` returns clean**, in the parent shell: `rev-parse --show-object-format`
+for the algorithm written into the output, and the commit's root tree id. Nothing re-reads the
+commit's tree content — that boundary is requirement 15's. There is no separate commit-existence,
+type or size check: `:355-360` inside the copy decides all three.
+
+2.7 **Size check, then stage, then commit** (requirement 18). Refuse `E_LIMIT` rather than emit
+something over the driver's 8 MiB cap (`shadow/v1/reproduce.sh:158`). **Stage:** `mkdir` a
+`stage/` under `run_root` and write `input.json`, `stage-request-ref.json`,
+`resolved-profile-ref.json` and the four decision-record texts there, each as
+`> <name>.tmp && mv <name>.tmp <name>` inside that directory; then run
+`"$jq_bin" -L "$modules" -e --arg command validate-input -f "$protocol"` on the staged
+`input.json`, the call `materialize.sh:167-168` makes, with `$protocol` being
+`<repo>/adapters/local-git-materializer/v1/protocol.jq` checked for existence and non-symlinkness
+alongside the other required files the way `shadow/v1/reproduce.sh:103-111` checks its own.
+Nothing has touched the output directory yet. **Commit:** for each staged file, append its destination path to the trap's list on the line
+**above** its own `mv`, then `mv` it into the output directory, with `input.json` last. No removal
+step at the end — the trap owns `run_root` on every path.
+
+2.8 **Refusal ids** exactly as requirement 12 lists them, and no new id. Three that are easy to
+get wrong: everything the copy refuses about the source repository is `E_TARGET`, the oversized
+commit object included even though the copied line says `E_SOURCE_LIMIT`; `E_LIMIT` is for the
+caller's own files and the finished output; and a `time_ok` that ran and answered `false` is
+`E_USAGE` while one that could not run is `E_RUNTIME`.
+
+### Step 3 — documentation, index, restore and manifest (requirement 14)
+
+3.1 `docs/components.md`: a new `## Inactive shadow materialization input assembler` section
+after the shadow slice section (line 1175 onward). It says plainly that the resolved profile is an
+input and where resolved profiles come from today — matching the wording of the resolver
+trusted-parent note at lines 33-37, not editing it — and names the **two supported invocations**:
+executing the file so its `#!/bin/bash -p` shebang starts bash, or
+`env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <script> assemble …`. It says invoking
+`__assemble_clean` directly is not one of them and carries no safety claim, and that tree content
+is the materializer's check, so a source that trips the tree scan comes back
+`materialization.refused` from the driver.
+
+3.2 `README.md`: one row beside line 288's shadow slice row, same three columns, linking
+`docs/components.md#inactive-shadow-materialization-input-assembler`.
+
+3.3 `RESTORE.md`: one block in the shape of lines 200-221, naming the three paths, the command
+`bash scripts/test/shadow-assembler.test.sh`, what the proof shows, and the sentence that
+restoring the records materializes nothing on its own.
+
+3.4 `ci/required-files.txt`: append the section comment and
+`shadow/v1/assemble-materialization-input.sh`, `shadow/v1/materialization-input.jq`,
+`scripts/test/shadow-assembler.test.sh` at the end. The structure check also requires a listed
+`scripts/*.sh` to be executable (`AGENTS.md:96-99`), so give both new shell files mode 0755.
+
+### Step 4 — run the Proof section on the final commit and paste it into the PR body.
+
+## Risks
+
+**The verbatim copies are the riskiest thing here, and 2.5 is the riskiest step.** About 95 lines
+of predicate plus 18 of entry must be placed byte-exactly and not improved. Three things go wrong
+in practice: a line reflowed by an editor; an anchor that has stopped being unique in
+`materialize.sh`; and the shared lines diverging from PR #278's copy. Step 0.6(b) catches the
+first two, which is why it is written before the copy exists. The third no test catches — both
+copies can be byte-equal to the materializer and still have been taken twice — so 2.1 and 2.5
+inherit #278's bytes for 271-332 and the 348-354 prefix rather than retaking them. If #278 has
+not merged when this starts, take them from `materialize.sh` and re-`cmp` against `reproduce.sh`
+once it does.
+
+**`emit_error` shadowing, and which `set` the assembler runs under.** The shadow
+(`emit_error() { exit 1; }`) must stay inside the `( )` subshell, or every later refusal in the
+run becomes a silent `exit 1`. On the `set` question the answer is favorable and worth stating,
+because the driver's answer is different: `materialize.sh:15` is `set -euo pipefail`, and
+requirement 17 gives the assembler the same line in the same place, so the copied spans run under
+the errexit semantics they were written under. PR #278's driver is the odd one — `set -uo
+pipefail`, no `-e` — so do not copy the driver's reasoning about bare commands along with its
+bytes. The one place a non-zero exit is deliberately caught rather than left to `set -e` is
+requirement 10's `time_ok` call in 2.2; every other refusal in the copy is an explicit
+`|| emit_error` or `if …; then emit_error`. Read the copy line by line once it lands and confirm
+the only bare command is `materialize.sh:299`'s `/bin/rm -f` of the inventory, which is cleanup.
+
+**`time_ok` module-path resolution.** The one new dependency on the core layout, and it fails in
+two directions: point it at the wrong directory and every good timestamp comes back `E_RUNTIME`;
+skip the generation-registry check and a stale `PORTABLE_CORE_GENERATION` loads a module set
+nothing verified. Follow `materialize.sh:60-69` whole rather than shortening it, and resolve the
+repository root from the script's own normalized path — not from `$PWD`, which the clean entry has
+not fixed. Do not hard-code a generation id the way `evals/v1/evals-driver.sh:57` does: there are
+two generation directories under `core/v2/generations/` today and the wrapper says which is
+selected. Step 0.5's unreadable-modules case proves the `E_RUNTIME` half.
+
+**The stage/commit ordering regresses by edit, not by accident.** Nothing at runtime can inject a
+failure between the staging step and the commit step, so requirement 18's orders are only ever
+proved in the source (step 0.6(c)) — exactly the kind of thing a later well-meaning edit undoes
+by moving the `mkdir` above the `trap` or the list-append below its `mv`. Keep the three
+assertions, and keep them named as source-order assertions so a reader does not mistake them for
+runtime proofs.
+
+**What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 10 ]`
+before the dispatch, and the marker form is also ten words. A relative path is refused in the
+re-exec'd process, not the caller's; `exec` preserves the working directory so the `pwd -P`
+normalization agrees on both sides, and stderr survives `exec` so the error vocabulary still
+reaches the test. Write 0.5's cases with that in mind.
+
+**`run_root` inside the caller's output directory** is right for requirement 15's reason — the
+clean entry passes through `PATH` and `LC_ALL` only, so there is no `TMPDIR` to read — but it
+makes the assembler's scratch and the caller's workspace one directory. Do not add an argument or
+an environment read to move it; the trap plus the staging step is the answer.
+
+**Alternatives rejected.**
+- Re-implementing the source guards, or mirroring only the subset an earlier draft listed: a
+  paraphrase drifts silently while a copy drifts loudly in CI, and the subset is what left the
+  config, hooks, `packed-refs` and commit-size checks out.
+- Copying `scan_tree` too: it needs the object-closure walk, which is most of the materializer,
+  and no tree-content condition can make this run write anything — empty patch, network denied.
+- A shape-only timestamp check in shell: it takes `2026-02-30T00:00:00Z` and returns `E_RELATION`
+  from the self-check at the very end, blaming the component for the caller's typo.
+- Mapping every failure of the `time_ok` jq call to `E_USAGE`: it blames an argument that may be
+  perfectly good and leaves a missing modules directory unnamed.
+- Resolving the profile here, or calling `scripts/test/`'s launcher: DR-1 option 2 on issue #262
+  settles both — the resolved profile is an input, and the trusted parent is its own initiative.
+- A test-only hook to fail between staging and commit: a second entry into the script, which
+  requirement 17 spends its whole length narrowing.
+- `unset -f find` or any name list instead of the producer's whole entry: a list someone must keep
+  in step with the copy, silent about `head`, `wc`, `tr`, `rm`, `grep`, `IFS` and `BASH_ENV`.
+- `set +o posix` or any further marker-branch state reset: nothing has been shown to need one, and
+  a reset that guards nothing reads as a guarantee and is not one.
+- Writing outputs straight into the output directory: a signal mid-write or a full disk leaves a
+  truncated `input.json` the trap does not clean and the caller's retry cannot get past.
+
+## Proof
+
+Run all of this on the final implementation commit and say which commit; old proof on a new
+commit is stale. `$t` is any scratch directory, `$m` is
+`adapters/local-git-materializer/v1/materialize.sh`.
+
+- `bash scripts/test/shadow-assembler.test.sh` — all pass, last line
+  `shadow assembler: <N> focused checks passed` and nothing else printed. That one line covers
+  every group in step 0: both algorithms, the four negative sources, the exported-function and
+  `BASH_ENV` cases in both invocation forms, the two timestamp cases, the unreadable-modules case,
+  the look-alike profile set, the swapped producer-config digest, the refuse-then-retry pair, and
+  the copy, pin-liveness and source-order assertions.
+- **The driver accepts the input.** Inside that run: `shadow/v1/reproduce.sh` on the assembled
+  `sha1` input with the fixture environment, policy set, duty and the same claim file produces a
+  `shadow_reproduction_record` whose `.body.outcome` is **not** `inconclusive`. Paste the outcome
+  and reason id.
+- **Protocol.** `jq -L "$modules" -e --arg command validate-input -f
+  adapters/local-git-materializer/v1/protocol.jq "$out/input.json"` — exit 0.
+- **Determinism and canonical form.** Two runs into two empty directories:
+  `cmp "$a/input.json" "$b/input.json"` exit 0 for every one of the seven outputs; and
+  `jq -S -c . "$out/input.json" | cmp - "$out/input.json"` — no output, exit 0.
+- **The pins are live.** `shasum -a 256 profiles/default/v1/profile.json
+  profiles/default/v1/producer-config.json profiles/default/v1/manifests/*.json` — all eight
+  digests appear in `shadow/v1/materialization-input.jq`, `grep -c` for each pin is 1. Expected
+  values are the spec's table; today's working tree already matches it.
+- **The copies are copies**, read against the **working tree**, never a commit. First anchor:
+  `grep -n -x -F '<first line>' "$m"` for each of the five first lines matches exactly once, at
+  271, 333, 348, 4 and 22. Then extract each block from the assembler between its markers
+  (`awk '/^# copy-begin materialize.sh:271-332$/{f=1;next} /^# copy-end
+  materialize.sh:271-332$/{f=0} f' shadow/v1/assemble-materialization-input.sh > "$t/copy-a"`, and
+  likewise `333-347`, `348-360`, `4-13`, `22-29`), confirm each block's line count puts its last
+  line at 332, 347, 360, 13 and 29, and compare:
+  ```
+  sed -n '271,332p' "$m" > "$t/orig-a"; cmp "$t/orig-a" "$t/copy-a"
+  sed -n '333,347p' "$m" > "$t/orig-b"; cmp "$t/orig-b" "$t/copy-b"
+  sed -n '348,360p' "$m" > "$t/orig-c"; cmp "$t/orig-c" "$t/copy-c"
+  sed -n '4,13p'    "$m" > "$t/orig-scrub"; cmp "$t/orig-scrub" "$t/copy-scrub"
+  sed -n '22,29p'   "$m" > "$t/orig-entry"; diff -u "$t/orig-entry" "$t/copy-entry"
+  cmp <(sed -n 1p "$m") <(sed -n 1p shadow/v1/assemble-materialization-input.sh)
+  ```
+  The three `cmp`s and the scrub `cmp` are byte-equal, exit 0. The shebang `cmp` confirms
+  `#!/bin/bash -p`. The `diff -u` shows only the four named deviations — `-eq 8` → `-eq 10`; the
+  `case … E_USAGE` line replaced by the `pwd -P` normalization plus the `-f`/`-L` check;
+  `materialize` → `assemble` and `__materialize_clean` → `__assemble_clean`; and the exec
+  forwarding `"$2"` … `"${10}"` — and no fifth hunk. The alias reset is outside the markers, so it
+  is not in that diff; show it separately with
+  `grep -n -A2 '__assemble_clean' shadow/v1/assemble-materialization-input.sh`.
+- **The shared lines match the driver.** `cmp "$t/copy-a" <(awk '…271-332…'
+  shadow/v1/reproduce.sh)` and the same for the 348-354 prefix and the scrub — byte-equal, exit 0.
+  Run this once PR #278 has merged; if it has not, say so and say which bytes were taken from
+  `materialize.sh` instead.
+- **Source order.** Paste the line numbers: the `trap` lines naming `run_root` before the `mkdir`;
+  every output-directory `mv` after the staged `validate-input`; `input.json`'s `mv` last; and
+  each list-append above its own `mv`.
+- **Shellcheck.** Under **0.11.0** (paste `shellcheck --version`):
+  `shellcheck -x -S style shadow/v1/assemble-materialization-input.sh
+  scripts/test/shadow-assembler.test.sh` — no findings, exit 0; and
+  `grep -c 'shellcheck disable' shadow/v1/assemble-materialization-input.sh` is `0`, or `1` for a
+  file-level `SC2016` on embedded jq text and no other — no new directive either way.
+- `bash scripts/test/portable-core-schema.test.sh` — final line `failures: 0`, exit 0.
+- `bash scripts/check-rename.sh` — `check-rename: clean — no old names in tracked files.`
+- **Scope and size.** `git diff --stat main` lists exactly the seven files this plan names and
+  nothing else, with a net total inside **610-840**. Paste the total. Above 840, stop and
+  re-decide with the operator.
+- **Output directory contract.** After a successful run, `ls -a "$out"` shows exactly the seven
+  documents and no `run_root`. After the `hooks/` refusal, `ls -a "$out"` shows nothing at all,
+  and the retry into that same directory with the good fixture assembles normally.
+- **The copy's environment.** `env -i PATH=/usr/bin:/bin command -v find head wc tr rm grep git`
+  resolves every one under `/usr/bin` or `/bin`.
