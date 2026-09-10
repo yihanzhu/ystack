@@ -13,16 +13,20 @@ agents write only the proposed patch text for those.
 
 ## Files that change
 
-Seven files, nothing else. Counts are net changed lines, honest estimates.
+Seven files, nothing else. Counts are net changed lines, honest estimates. The
+agent-authored files are listed in the order they are written, which is the order in
+Order of work below: the proof script comes before the runner, per Step 0.
 
 **Agent-authored, on `ystack/impl/ci-test-shards`:**
 
+- **`scripts/test/run-all-sharding.check.sh`** (new, ~185, mode `0755`). The focused
+  proof of R9. Its name ends `.check.sh`, never `.test.sh`. Written and run first,
+  against the unchanged runner (Step 0).
 - **`scripts/test/run-all.sh`** (~70 net; the file is 21 lines today, about 90 after).
   Argument and environment parsing, the `--list` mode, the round-robin filter, the
   new selection line, the refusal paths. Discovery (line 15) and the four `GIT_*`
-  defaults (lines 5-8) are untouched.
-- **`scripts/test/run-all-sharding.check.sh`** (new, ~185, mode `0755`). The focused
-  proof of R9. Its name ends `.check.sh`, never `.test.sh`.
+  defaults (lines 5-8) are untouched. Edited only after the proof script's failing run
+  is recorded.
 - **`ci/required-files.txt`** (+1). One line appended at the very end, after today's
   last line 401 (`docs/transition-kit.md`), becoming line 402.
 - **`RESTORE.md`** (~3). The **CI** bullet at lines 416-418 only.
@@ -453,15 +457,23 @@ serial suite, and CI runs it for free on the PR's first run, under the unchanged
 workflow, before the operator's commit exists. That run is required, not incidental
 (Step 5), and item 12 below is where it is recorded. It is R2's second verification.
 
-1. **The focused proof (R1, R3, R5, R6, R9).**
-   `bash scripts/test/run-all-sharding.check.sh` → one line per assertion, final line
+**The order of this list is binding and follows Order of work.** Item 1's first run
+happens in Step 0, against the unchanged `scripts/test/run-all.sh`, before Step 1
+edits it; every item after that needs the finished runner. Once Step 1 lands, the
+pre-fix run can no longer be produced here, so it is never left for later.
+
+1. **The focused proof (R1, R3, R5, R6, R9).** Two runs of the same command, in this
+   order.
+   **First, before the runner is edited (Step 0).**
+   `bash scripts/test/run-all-sharding.check.sh` against today's unchanged runner
+   prints `error: run-all.sh does not implement --shard/--list yet` to stderr, exits
+   `2` in under a second, and its output contains no `==> ` header — that last part is
+   what shows no suite ran. That failing run is what proves the script tests
+   something, so record the line, the status and the timing before touching
+   `scripts/test/run-all.sh`.
+   **Then, after Step 1.** The same command → one line per assertion, final line
    `sharding proof: all checks passed`, exit `0`, a few seconds.
-   The fast-fail half is evidence too, and it is recorded once in Step 0 before the
-   runner is touched: that same command against today's runner prints
-   `error: run-all.sh does not implement --shard/--list yet` to stderr, exits `2` in
-   under a second, and its output contains no `==> ` header — that last part is what
-   shows no suite ran. Paste that line, the status and the timing in the PR body
-   beside the green run.
+   Both go in the PR body, the recorded refusal beside the green run.
 2. **Discovery and ordering are untouched (R2, R3).**
 
        root=$(pwd -P)
