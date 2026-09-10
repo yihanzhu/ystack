@@ -102,13 +102,26 @@ as `proposals/README.md` describes, never the commit itself.
 
 9. **Focused proof, outside the discovered suite set.** A new, executable
    `scripts/test/run-all-sharding.check.sh` proves by calling `--list`:
-   - for every `count` from 1 to 16, and for each of those counts every `index`
-     from 1 to `count`: the shards are pairwise disjoint, no suite appears twice,
-     and their union sorted equals the `--list` output with no shard. Every count
-     in that range, not a sample of four, because the runner accepts every one of
-     them — that is `--shard <index>/<count> --list` for all 136 index/count pairs,
-     written as a loop over the sixteen counts rather than sixteen spelled-out
-     cases;
+   - the script works out the full suite list for itself, without asking the runner:
+     `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
+     `LC_ALL=C sort`, written out as repo-relative paths the same way the runner writes
+     them. That raw list is what everything else in this bullet is compared against.
+     It has to be, because comparing the shards only to the runner's own no-shard
+     `--list` shows the runner agrees with itself, not that it is right: if discovery
+     ever narrowed — a changed pattern, a wrong directory — and `--list` and the shard
+     filter both read that narrowed list, the shards would still add up to `--list`
+     and the proof would pass green while suites quietly went unrun. An independent
+     oracle catches that; self-consistency cannot. So the script asserts both:
+     (a) the `--list` output with no shard equals the raw list; and (b) for every
+     `count` from 1 to 16, and for each of those counts every `index` from 1 to
+     `count`: the shards are pairwise disjoint, no suite appears twice, and their
+     union sorted equals that same raw list — not merely the `--list` output. Every
+     count in that range, not a sample of four, because the runner accepts every one
+     of them — that is `--shard <index>/<count> --list` for all 136 index/count pairs,
+     written as a loop over the sixteen counts rather than sixteen spelled-out cases.
+     This is the same `find` command requirement 2 names; there it is a check someone
+     runs by hand, and here it becomes part of the CI-gated proof, so requirement 2's
+     discovery-and-ordering comparison is enforced on every PR rather than done once;
    - the `--list` output with no shard equals `--shard 1/1 --list`;
    - each refusal in requirement 5 exits `2`, writes that exact usage line to stderr,
      prints nothing to stdout, and runs no suite;
@@ -120,11 +133,11 @@ as `proposals/README.md` describes, never the commit itself.
    (requirement 2). It is run explicitly instead, by the workflow's `checks` job, as
    `bash scripts/test/run-all-sharding.check.sh`, in one step right after the
    shellcheck step; the workflow edit is the operator's commit anyway. It runs in
-   seconds: the partition sweep is 136 `--list` invocations, and `--list` lists and
-   runs nothing, so the whole proof never executes a suite. It is
-   `shellcheck 0.11.0 -x -S style` clean — the sweep's `find . -name '*.sh'` already
-   covers it — and its path is appended at the end of `ci/required-files.txt`, which
-   also checks that it is executable.
+   seconds: the partition sweep is 136 `--list` invocations plus the one `find` that
+   builds the raw list, and `--list` lists and runs nothing, so the whole proof never
+   executes a suite. It is `shellcheck 0.11.0 -x -S style` clean — the sweep's
+   `find . -name '*.sh'` already covers it — and its path is appended at the end of
+   `ci/required-files.txt`, which also checks that it is executable.
 
 10. **Workflow shape.** `.github/workflows/ci.yml` keeps its `on:` triggers unchanged
     (`pull_request`, and `push` to `main`) and its `permissions` block, and gains
