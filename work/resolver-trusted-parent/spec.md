@@ -192,7 +192,7 @@ measured rather than guessed:
   where nothing has written one (R1). Four assignments is the whole cost; the rule they
   satisfy is stated in R1 and read in R10 rather than tested. This round adds ~6 more, to
   **~415**: the wait on the parent becomes a loop rather than two `wait` calls — the
-  `while`, the `kill -0` test that tells an interrupted wait from a reaping one, the
+  `while`, the test that tells an interrupted wait from a reaping one, the
   `last_forwarded` guard with its assignment beside the `kill`, and the `continue` and
   `break` — where two waits and one `kill` were three statements (R1). The traps changing
   from `entry_signal=NAME` to `: "${entry_signal:=NAME}"` costs nothing: the same three
@@ -202,12 +202,22 @@ measured rather than guessed:
   the first statement of the marker branch; and the comment that says why a marker arrival
   without `-p` is refused rather than scrubbed (R1). The `-p` added to the re-exec's
   `/bin/bash` costs nothing — two characters on a line that was already there.
-- **Focused test ~951 lines.** For scale, the existing resolution test is 746 lines and
+  This round adds ~2 more, to **~420**, both inside the wait loop: the
+  `wait_interrupted=''` that clears the flag at the top of each iteration, and the
+  `[ "$status" -ne 127 ] || { … }` guard for the coincidence case. The `kill -0` test the
+  flag replaces was already counted, so swapping it for `[ -n "$wait_interrupted" ]` is
+  free, and so is the `wait_interrupted=1` each of the three traps gains — the same three
+  lines, longer. There is no fifth initialisation to pay for either: `wait_interrupted` is
+  only ever read after the loop's own clear, so it stays off the initialise-before-arming
+  list for the same reason `last_forwarded` does (R1).
+- **Focused test ~971 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
-  resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
-  that were there plus this round's five output-root cases at ~55, each of them also
-  asserting the target was never written to), the entry-driven loader-variable pollution run
+  resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
+  that were there plus this round's edited-`trusted-launch.c` case at ~15: the one-byte
+  append to the copied parent source, the background poll over `.run` for a compiler
+  output that must never appear, the pin-naming stderr assertion and the empty-output-root
+  assertion), the entry-driven loader-variable pollution run
   with its marker library (~25 — the library, the two runs, and the at-most-one-line count
   assertion over the marker file), the forged clean-marker invocation with its
   exported-function fixture and its marker-file assertion, in two halves this round
@@ -230,11 +240,13 @@ measured rather than guessed:
   parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), the
   repeated-signal one that runs the mid-run case again and sends a second `SIGTERM`, and
   in a variant a `SIGINT`, 100 ms after the first — the second signal, the sampler that
-  polls the parent's pid against the existence of `.run` and fails on the first sample
-  that finds the directory gone with the parent alive, the cross-check of that pid
-  against the `entry-signal:` line, the one-line count-and-name assertion, the `set -m`
-  both runs now need, and this round's third signal sent to the whole group 100 ms after
-  the second (~18) — the
+  polls the existence of `.run` against the appearance of the parent's own
+  `parent-signal:` line and fails on the first sample that finds the directory gone with
+  that line still unwritten, the one-line count-and-name assertion, the `set -m`
+  both runs need, and the third signal sent to the whole group 100 ms after
+  the second (~21 — this round's rewrite of the sampler costs ~3: reading a line out of a
+  file the case already has open takes a little more than a `kill -0` did, and the pid
+  cross-check it drops gives one line back) — the
   pre-parent one that signals as soon as `.run` appears and asserts the trap's own
   `entry-signal:` line, with a bounded wait for the deferred trap (~30), the group-signal
   one that runs the entry in a process group of its own, waits for a compile to be the
@@ -242,9 +254,11 @@ measured rather than guessed:
   its bounded wait and adding the assertion that no `E_RUNTIME` line was written (~12),
   and the stopped-parent one that drives the parent directly, sends `STOP`/`TERM`/`CONT`, asserts
   the `parent-signal: TERM no-runtime` line and a surviving sentinel in the test's own
-  process group, and retries a bounded twenty times — both non-proving outcomes now, the
+  process group, and retries a bounded twenty times — both non-proving outcomes, the
   late stop as well as the early signal, each printed per attempt and counted in the
-  message the exhausted budget fails with (~40) — the cleanup assertions
+  message the exhausted budget fails with (~42, of which this round's ~2 are the `set +m`
+  that puts the sentinel and the parent in one group and the `ps -o pgid=` equality check
+  that proves it) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
   directory rather than one emptiness test), the two-umask case (~15 — a `umask 000` run
   and a `umask 777` run, the background poll that reads `.run`, `tmp` and `home` while
@@ -264,8 +278,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2441 lines; the range above is that sum with ~15% headroom at both
-ends. It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
+Those sum to about 2463 lines; the range above is that sum with ~15% headroom at both
+ends, and this round's ~22 — ~2 in the entry's wait loop and ~20 in the test — moved it
+by under one per cent, so the implementation range stands where it was.
+It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
 2066-2796, and the
@@ -522,8 +538,9 @@ expresses, so the implementation range was unchanged.
 This round adds ~21, in the entry and the test, from one P1, and it is the first
 entry-side figure in several rounds to move because a control structure changed rather
 than a statement being added. ~6 in the entry: the wait on the parent becomes a loop that
-ends only when `kill -0` says the parent's pid has been reaped — the `while`, the
-`kill -0` test, the `last_forwarded` guard that keeps a repeat from being forwarded twice,
+ends only when the parent has been reaped — the `while`, the test that tells the two
+kinds of return apart (that round asked `kill -0`, which this round replaces), the
+`last_forwarded` guard that keeps a repeat from being forwarded twice,
 and the `continue` and `break` — in place of the two `wait` calls and the one `kill` an
 earlier round wrote, which a second signal during the second wait would have cut short
 with the parent still alive and `.run` about to be removed (R1). The three traps becoming
@@ -554,7 +571,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 5153 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 5448 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -624,19 +641,27 @@ touches the disk, so the `chmod` and the `/bin/rm` it runs inherit the ignore an
 beside the marker branch refusing outright unless it was reached in privileged mode, so
 the one door into the clean path is shut by a condition the supported invocations create
 rather than by a scrub the unsupported one could have shadowed, and the spec's claim for
-that scrub cut back to what it is, and this round every `waitpid` that reaps a tracked
+that scrub cut back to what it is, beside every `waitpid` that reaps a tracked
 child brought inside the same signal block, with the id it reaps zeroed before the mask is
 restored, so a pid the kernel has already handed to some other process on the machine can
-never be the one a handler signals).
-**Evidence-based range for this spec pull request: 4380-5926 lines** — the measured
-5153 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+never be the one a handler signals, and this round the entry's wait loop deciding what
+interrupted it from a flag its own traps set rather than by asking whether the parent's
+pid still answers, so the discriminator stops being a question about a number the kernel
+may already have given to somebody else, with the test's sampler moved off that pid for
+the same reason, beside the pin on the parent's own source exercised for the first time,
+so the one check standing between an edited `trusted-launch.c` and a launched altered
+parent cannot be missing while the suite passes, beside the sentinel that proves the
+parent never signals the caller's process group placed in that group by turning job
+control off for its case, so it can no longer survive the mistake it exists to catch).
+**Evidence-based range for this spec pull request: 4631-6265 lines** — the measured
+5448 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023; where each block of
+5023, then 5153; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1050,10 +1075,11 @@ round wrote one `wait` too short rather than new ground: the entry's forward-the
 handled the first signal and could be cut short by the second, which would have let the
 `EXIT` trap remove `.run` while the parent was still terminating a stopped resolver.
 About 105 go to R1's wait on the parent: the loop written out in full, the piece-by-piece
-account of why the status alone cannot tell an interrupted wait from a reaping one and why
-`kill -0` can — a live or zombie parent answers, a reaped pid gives `ESRCH` — the note
-that pid reuse is impossible inside the loop because the zombie holds the pid until this
-very `wait` takes it, the forward-once rule with both choices stated and the quieter one
+account of why the status alone cannot tell an interrupted wait from a reaping one, a
+`kill -0` discriminator with a zombie argument under it and a note claiming pid reuse was
+impossible inside the loop — all three of which this round withdraws, because bash reaps
+its own children and there is no zombie — the forward-once rule with both choices stated
+and the quieter one
 picked, and the bash 3.2 measurement with its two variants and its zombie check. About 35
 go to the first-signal-wins rule the loop rests on: the three traps becoming
 `: "${entry_signal:=NAME}"`, the block on why the first name stands and what that costs a
@@ -1138,13 +1164,54 @@ handler item growing again rather than a new deviation being added, the
 accepted-concern list at the top, and the re-derived size figures here and for the
 implementation, whose range moves by the ~10 the parent gains.
 
+This round is +295 net over three P2s, and the first of them is a correction to the
+fix the round before last made: the loop that round wrote is right about *when* to stop
+and was wrong about *how* it decided. About 126 go to R1's wait on the parent. The
+discriminator changes from `kill -0` on the parent's pid to a `wait_interrupted` flag the
+three recording traps set and the loop clears before every `wait`, which is two shipped
+lines; the rest is the withdrawal underneath it, because the sentence being replaced did
+not merely pick a weak test, it argued from a zombie that is not there. Bash reaps its own
+children asynchronously and keeps the status in its job table, so the pid is gone — and
+free for the kernel to hand to anyone — before the `wait` that reports the status returns.
+Both halves of that were measured on the same bash 3.2 rather than reasoned about: an
+exited, never-waited-for background child answers `kill -0` with `ESRCH` and shows nothing
+in `ps`, and a sixty-attempt coincidence run caught the old loop reading `143` off an
+interrupted wait for a parent that had exited `7`. The measurement paragraph is rewritten
+around that: three columns per line — the flag, `jobs -p`, and what the old loop asked —
+so the candidate taken, the candidate rejected and the test withdrawn can be compared on
+the same events. `jobs -p` is recorded as workable and rejected on cost, which is the
+honest reason rather than a manufactured defect. The coincidence brings one new shipped
+line, the `[ "$status" -ne 127 ] || { … }` guard, and one new admission: in that instant
+the parent's own status can be lost and `128 + signal` is what the entry reports. A second
+admission replaces a claim — the forward-once rule used to end "pid reuse is impossible
+inside this loop", and now bounds the hazard instead of denying it, one `kill` in one
+instant against a loop that used to re-send for as long as a stranger answered.
+About 45 go to R10's new group-1 refusal: an edited `resolver/v1/trusted-launch.c`, which
+the suite had never exercised, with the compile-never-ran assertion, the honest limits of
+the poll that makes it, and the reason the parent cannot stand in for the entry here —
+by the time it runs it *is* the source it would be checking. About 35 go to the
+repeated-signal case's sampler, which polled the same pid R1 has just stopped trusting and
+in exactly the window where it is least trustworthy; it now watches the parent's own
+`parent-signal:` line against the existence of `.run`, with the reason that line cannot be
+written early. About 30 go to the stopped-parent case's sentinel: `set +m` for that case
+with the measurement that explains it, the `ps -o pgid=` equality assertion before any
+signal is sent, and the check of the other two job-control cases, which keep `set -m`
+because they aim at a group and have no sentinel to strand. The remaining ~59 are the
+ripples and the bookkeeping: Design step 2's wait clause, R1's initialise-before-arming
+paragraph, which now names the new flag and says why a variable only traps write is
+outside the rule, the signals bullet under Areas
+of concern, two earlier rounds' accounting paragraphs corrected where they asserted the
+zombie as fact, the accepted-concern list at the top, and the re-derived size figures here
+and for the implementation, whose range does not move because the ~22 the entry and the
+test gain is under one per cent of the sum it comes from.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 4380-5926 lines**, which is this file's measured
-5153 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 4631-6265 lines**, which is this file's measured
+5448 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1258,6 +1325,12 @@ the spec pull request's range above still blocks review.
   in that list and does not belong among these four: no trap, no checkpoint and no part
   of the `EXIT` trap reads it, it is assigned empty on the statement immediately above the
   loop, and nothing under `set -u` can reach a read of it before that.
+  `wait_interrupted` is outside the rule too, and for a sharper reason: the three traps
+  *write* it, and a write is not a read, so `set -u` has nothing to say about it however
+  early a signal arrives. Its only read is the loop's own `[ -n "$wait_interrupted" ]`,
+  which is always preceded in the same iteration by the loop's `wait_interrupted=''`.
+  The rule above is about reads, and those two variables are the check that it is being
+  applied rather than recited.
 
   The alternative was considered and is not taken: writing each read as
   `${entry_signal:-}` and leaving the variables undeclared would satisfy `set -u` too. An
@@ -1435,8 +1508,10 @@ the spec pull request's range above still blocks review.
   ```
   last_forwarded=''
   while :; do
+    wait_interrupted=''
     wait "$parent_pid"; status=$?
-    if kill -0 "$parent_pid" 2>/dev/null; then
+    if [ -n "$wait_interrupted" ]; then
+      [ "$status" -ne 127 ] || { entry_status=$((128 + $(kill -l "$entry_signal"))); break; }
       [ "$entry_signal" = "$last_forwarded" ] || {
         kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
         last_forwarded=$entry_signal
@@ -1447,6 +1522,14 @@ the spec pull request's range above still blocks review.
     break
   done
   ```
+
+  The three recording traps set `wait_interrupted` as well as the name, so each of them
+  reads `: "${entry_signal:=TERM}"; wait_interrupted=1` rather than the assignment alone.
+  That the trap body's own success does not become `$?` is bash's rule rather than an
+  accident of writing — the shell saves the exit status before it runs a trap and restores
+  it afterwards — and it is the rule `status=$?` depends on here, so the measurement below
+  checks it rather than citing it: every interrupted wait in it reports `143` or `130`,
+  not the `0` the trap's last assignment would have left.
 
   An earlier round of this spec wrote that as two `wait` calls — one interrupted by the
   signal, one for the parent's real status — and the second of those is not safe from the
@@ -1465,39 +1548,93 @@ the spec pull request's range above still blocks review.
   interrupted returns `128 + signal` with the parent still alive, and a wait that reaped
   the parent returns the parent's own status — which, on the forwarded path, is itself
   `128 + signal` for the same signal (R2), so the two are frequently the same number.
-  **`kill -0 "$parent_pid"`** is what tells them apart, because it asks about the process
-  rather than about the number: a running parent answers, and so does a parent that has
-  died but has not yet been reaped, because a zombie still holds its pid; only a pid that
-  has actually been reaped fails with `ESRCH`. So a successful `kill -0` means the wait
-  was interrupted and the parent is still there — loop round and wait again — and a
-  failing one means this `wait` is the one that reaped it, so `status` is the parent's own
-  and the loop ends. The intermediate case takes care of itself: a parent that died a
-  moment ago is a zombie, `kill -0` succeeds, the loop waits again, and *that* wait reaps
-  it and returns the real status. **`entry_status=$status; break`** therefore runs at one
-  moment only — after the parent has been reaped — and the `EXIT` trap's removal of `.run`
-  can never precede the parent's exit, however many signals arrive.
-  Pid reuse is not a risk inside this loop, and the reason is the same zombie: the kernel
-  cannot hand `parent_pid` to another process while an unreaped child still holds it, and
-  the only thing that reaps it is this `wait`, so every `kill -0` and every `kill` in the
-  loop is aimed at the entry's own parent and at nothing else.
-  Nothing in the loop is an external command — `wait`, `kill` and `[` are bash builtins,
-  so `kill -0` starts no `/bin/kill` process — which is why the three-step rule above does
-  not apply to it and why R7's command-word list and R10's grep are untouched by it.
+  **`wait_interrupted` is what tells them apart**, and it is set by the same traps that
+  record the name: the loop clears it immediately before each `wait`, so finding it set
+  afterwards means a trap ran while that `wait` was blocked and the wait was cut short —
+  loop round and wait again — and finding it empty means nothing interrupted this `wait`,
+  so it returned because the parent was reaped and `status` is the parent's own.
+  **`entry_status=$status; break`** therefore runs at one moment only, and the `EXIT`
+  trap's removal of `.run` can never precede the parent's exit, however many signals
+  arrive.
+
+  **An earlier round of this spec used `kill -0 "$parent_pid"` as that discriminator, and
+  it was wrong in both directions.** The claim it rested on was that an exited child stays
+  visible as a zombie until `wait` reaps it, so a successful `kill -0` proved the parent
+  was still there and a failing one proved this `wait` had just reaped it. Neither half
+  survives contact with the thing actually doing the reaping. Bash reaps its own children
+  asynchronously in its `SIGCHLD` handling and keeps the status in its job table until a
+  `wait` asks for it, so the zombie is gone — and the pid with it — well before the `wait`
+  that reports the status returns. The measurement below records both failures on the same
+  bash 3.2. A pid whose exited background child had never been waited for answers `kill -0`
+  with `ESRCH` and shows nothing at all in `ps`, not state `Z`; and in the coincidence run
+  — a parent exiting by itself at the instant a signal lands — the interrupted wait
+  returned `143` and `kill -0` said the pid was gone, which is precisely the reading that
+  makes the old loop take `143` for a parent that in fact exited `7`. The other direction
+  is the reviewer's: once bash has reaped the parent, the kernel is free to hand
+  `parent_pid` to any other process on a busy same-uid host, and a `kill -0` that succeeds
+  on that stranger would keep the loop spinning and could forward the recorded signal to
+  it — the same pid-reuse hazard R2 closes for the parent's own reaps. So `kill -0` is
+  gone from this loop, and no sentence anywhere in this spec claims it distinguishes a
+  live parent from a reaped one.
+
+  **The coincidence case is the one the flag alone does not settle, and it is settled
+  honestly rather than silently.** If the parent exits in the same instant a signal lands,
+  the `wait` can return the parent's real status *and* have run a trap, so
+  `wait_interrupted` is set on a wait that was not really cut short. The loop forwards —
+  at a pid whose process has gone, which is normally `ESRCH` and discarded by the `|| :`,
+  and which is the one residual the forwarding paragraph below states rather than waves
+  away — and waits again, and what that next `wait` answers decides the
+  status. On the bash this entry ships against it answers with the parent's saved status,
+  because bash 3.2 keeps a terminated job's status in its job table and hands it back to
+  every `wait` that asks: the measurement below ran the coincidence sixty times and the
+  second wait returned the real `7` on all sixty. The `[ "$status" -ne 127 ]` guard is for
+  the other answer, which a bash that discards the status after the first `wait` would
+  give: `127` means "not a child of this shell", and after an interrupted wait the only
+  way to reach it is that the parent was reaped during that wait. It is never a reused
+  pid, because bash answers `wait` from its own job table and never from the process
+  table. On that branch the entry says plainly what it lost: the parent's own status is
+  unavailable, so the entry reports `128 + signal` for the first recorded signal — the
+  same number the parent would have given had it died of the forwarded signal, and the
+  number this requirement promises on every other signal path.
+  Nothing in the loop is an external command — `wait`, `kill`, `[` and `kill -l` are bash
+  builtins, and `$(kill -l "$entry_signal")` is a subshell around a builtin rather than a
+  `/bin/kill` — which is why the three-step rule above does not apply to it and why R7's
+  command-word list and R10's grep are untouched by it.
+  `wait_interrupted` is deliberately outside the initialise-before-arming rule, for the
+  same reason `last_forwarded` is: `set -u` bites on reads, and the only read of it is
+  inside the loop, after the loop's own `wait_interrupted=''` has set it. The traps write
+  it from the moment they are armed, which is safe whether or not the loop has run yet.
 
   **Forwarding is once per new signal, and a repeat is not re-forwarded.** The
   `[ "$entry_signal" = "$last_forwarded" ]` test is what makes that true: without it every
   interrupted wait would send another `kill`, so a user holding `Ctrl-C` would produce a
-  stream of signals at a parent that is already terminating. Both choices are safe, which
-  is worth saying before picking one. Re-forwarding would be harmless — the parent's
-  handler `_exit`s on the first signal it takes (R2), so a second `kill` reaches either a
-  process that is already inside its final sequence or a zombie, and in the second case
-  `kill` fails with `ESRCH`, which the `|| :` discards. Not re-forwarding is harmless for
-  the same reason, and it is the one taken here, because it sends the minimum: exactly one
-  signal per name the entry has recorded, which is the behaviour a reader can state in one
-  sentence. Since the traps keep the *first* name (above), `entry_signal` never changes
+  stream of signals at a parent that is already terminating. The guard does more than keep
+  the noise down, and this round is why. Bash reaps the parent the instant it exits, before
+  the `wait` that reports its status returns, so from that instant `parent_pid` is a number
+  the kernel may give to anybody — and a `kill` the loop sends afterwards is a `kill` at
+  whatever now holds it. One forward per recorded name is what bounds that. The loop sends
+  at most one signal in the whole run, and it sends it on the first interrupted wait, which
+  in every ordinary case is while the parent is still running its termination sequence.
+  Since the traps keep the *first* name (above), `entry_signal` never changes
   after it is set, so in practice the loop forwards exactly once per run — but the
   comparison is not therefore redundant, because what it suppresses is the re-forward on
   every subsequent interrupted wait, not a second name.
+
+  **What that leaves is one send in one instant, and it is stated rather than argued
+  away.** In the coincidence case above — the parent exiting by itself at the moment a
+  signal lands — the single forward goes out after bash has reaped the parent, so if the
+  kernel has already recycled the pid it reaches a stranger. Nothing inside the entry can
+  tell that case from an ordinary interrupted wait: the flag is set either way, the status
+  is the same number either way, and bash's job table still lists the pid either way, which
+  the measurement below shows directly. The residual is therefore real, and it is the
+  smallest version of itself: one `kill`, of the signal the caller sent, inside the window
+  between the parent's exit and the next statement of this loop, on a host that must
+  recycle that exact pid in that window. The `kill -0` loop this replaces had no such
+  bound — it re-sent on every interrupted wait, for as long as the pid answered, which
+  after the reap is a question about a stranger — so the change narrows the hazard the
+  reviewer raised rather than trading it for another. Closing it entirely needs a handle
+  the shell does not have: a pidfd, or a parent that reports its own exit through something
+  other than its pid, and the second is the test-only channel this spec refuses everywhere.
 
   Nothing is removed before that loop ends, which is the
   ordering the whole requirement exists for. On a forwarded signal the parent's own status
@@ -1508,31 +1645,35 @@ the spec pull request's range above still blocks review.
 
   **This was measured rather than argued, on the same `GNU bash, version
   3.2.57(1)-release` the other measurement in this requirement used.** A script built as
-  the loop above describes — three assign-if-empty traps, a child standing in for the
+  the loop above describes — three traps that record the name and set `wait_interrupted`,
+  a child standing in for the
   parent whose own `TERM` handler takes a second to finish terminating its group before it
   exits, and the loop with a line printed at each iteration — was started in the
   background of a driving shell and sent two `TERM`s 0.5 s apart, the second landing while
-  the stand-in parent was still inside its handler:
+  the stand-in parent was still inside its handler. Each printed line carries three
+  readings side by side, so the two candidate discriminators and the discredited one can
+  be compared on the same events: `interrupted=` is the flag, `jobs -p=` is bash's own job
+  table, and `kill -0=` is what the old loop asked.
 
   ```
   entry status=143
-  wait 1 returned 143; parent alive=yes; entry_signal=[TERM]
-  forwarded TERM to 49256
-  wait 2 returned 143; parent alive=yes; entry_signal=[TERM]
-  wait 3 returned 143; parent alive=no; entry_signal=[TERM]
+  wait 1 returned 143; interrupted=[1]; jobs -p=[57406 ]; kill -0=yes; entry_signal=[TERM]
+  forwarded TERM to 57406
+  wait 2 returned 143; interrupted=[1]; jobs -p=[57406 ]; kill -0=yes; entry_signal=[TERM]
+  wait 3 returned 143; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[TERM]
   parent marker at entry exit: present
-  entry-signal: TERM forwarded 49256
+  entry-signal: TERM forwarded 57406
   ```
 
   (The status prints first for the same reason it does in the other measurement in this
   requirement: the script's stderr went to a file the harness reads back after the entry
   had exited.)
-  The second `TERM` interrupted the second wait exactly as predicted — `143` with the
-  parent still alive — and the loop went round instead of exiting on it; the third wait is
+  The second `TERM` interrupted the second wait exactly as predicted — `143` with the flag
+  set — and the loop went round instead of exiting on it; the third wait is
   the one that reaped the parent, and the marker the stand-in writes as it exits was
   already on disk when the entry left, so the cleanup could not have preceded the parent.
   Nothing was forwarded twice. Two variants were run the same way. With the second signal
-  an `INT` rather than a `TERM`, wait 2 returns `130` with the parent alive, `entry_signal`
+  an `INT` rather than a `TERM`, wait 2 returns `130` with the flag set, `entry_signal`
   stays `TERM`, the `INT` is not forwarded, and the entry still exits `143` — a second,
   differing signal changes neither the line nor the status. And with the stand-in parent
   exiting `42` instead of `128 + 15`, the entry exits `42`, which is the assertion that
@@ -1540,12 +1681,57 @@ the spec pull request's range above still blocks review.
   either of the two that a signal interrupted. (The `INT` variant needs the entry in a
   process group of its own — `set -m` in the driving shell — because a shell starts an
   asynchronous child with `SIGINT` ignored when job control is off, and a signal ignored
-  at entry cannot be trapped.) The `kill -0` claim the loop turns on was checked on the
-  same machine rather than taken from the manual page: a pid whose child had exited and
-  had not been reaped answers `kill -0` and shows state `Z` in `ps`, and the same pid
-  fails with `ESRCH` immediately after it is reaped. The same script is re-run against the
-  Linux CI image's `/bin/bash` while the plan is written, for the same reason the other
-  measurement is.
+  at entry cannot be trapped.) A run with no signal at all and a stand-in that exits `7` by
+  itself is the control, and it takes one pass:
+  `wait 1 returned 7; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[]`, entry
+  status `7`.
+
+  **The coincidence was provoked and run sixty times, and it is what settled the choice.**
+  The stand-in was made to exit `7` on its own at 0.30 s and the driving shell sent one
+  `TERM` at 0.30 s; every one of the sixty attempts landed in the coincidence, and every
+  one of them came out like this:
+
+  ```
+  wait 1 returned 143; interrupted=[1]; jobs -p=[57480 ]; kill -0=no; entry_signal=[TERM]
+  forwarded TERM to 57480
+  wait 2 returned 7; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[TERM]
+  attempts=60  127-after-interrupt=0  interrupted-then-real-status=60  no-interrupt=0
+  ```
+
+  Read the first line again, because it is the whole finding: the wait returned `143`, the
+  flag was set, and `kill -0` already said `no` — the parent's pid was gone while the
+  parent's real status, `7`, was still waiting in bash's job table. The old loop reads that
+  `no` as "this wait reaped the parent", records `143` and exits on it, reporting a signal
+  death for a parent that exited `7` of its own accord. The flag reads it correctly, loops,
+  and the second wait hands back the `7`. No attempt produced a `127`, which is the other
+  half of the measurement: bash 3.2 keeps a terminated job's status and returns it to every
+  `wait` that asks — a separate four-`wait` check on one reaped child returned `7` four
+  times with `jobs -p` empty throughout — so the `127` guard is dead code on this bash and
+  is kept only for a bash that discards the status, where it is the difference between a
+  correct `128 + signal` and a spin.
+
+  **The zombie claim the old loop rested on was checked on the same machine and is false
+  for a bash-managed child.** A background child was allowed to exit and was never waited
+  for; 0.3 s later, `kill -0 on un-waited, exited child: no (ESRCH)`,
+  `ps says: no such process (no zombie)`, and `wait still returns 7`. Bash's own `SIGCHLD`
+  handling had already reaped it, so there is no zombie for `kill -0` to see and the pid is
+  free for the kernel to hand to somebody else from that moment — before the `wait` that
+  reports the status has returned. That is the reviewer's pid-reuse hazard, measured rather
+  than reasoned about, and it is why no version of `kill -0` on `parent_pid` is kept here.
+
+  **The second candidate was measured beside the first and rejected on cost, not on
+  correctness.** The `jobs -p=` column above is bash's job table, and it tracked the flag
+  on every event in every run — populated whenever a status was still to come, empty on the
+  wait that delivered it, including in the coincidence where `kill -0` was already wrong. It
+  would work. It is not taken because reading it costs more than the flag does: `jobs -p`
+  has to be captured, and a `$(jobs -p)` is a subshell whose job-table inheritance is a
+  question this spec would then have to answer, while redirecting it to a file puts a write
+  in the middle of a signal path that must not touch the disk. The flag is one assignment in
+  each trap and one clear per iteration, and it asks the question directly — "was this wait
+  cut short" — instead of inferring it. The same script, with all three columns, is re-run
+  against the Linux CI image's `/bin/bash` while the plan is written, for the same reason
+  the other measurement is; the `127` guard is the one line whose behaviour could differ
+  there, and the plan records which way it went.
 
   **The two branches are `parent_pid` empty or not, and the main flow is what distinguishes
   them.** The traps go on ahead of the `mkdir` that creates the run directory, which is
@@ -3419,7 +3605,8 @@ the spec pull request's range above still blocks review.
 
   **Group 1 — entry-owned refusals**, driven through the shipped entry: a jq whose SHA-256
   does not match the platform pin; an edited `resolver/v1/nofollow-snapshot.c` whose blob
-  id no longer matches its pin; an edited `scripts/lib/profile-resolution.sh` and an
+  id no longer matches its pin; an edited `resolver/v1/trusted-launch.c`, the parent's own
+  source, the same way; an edited `scripts/lib/profile-resolution.sh` and an
   edited `resolver/v1/profile-resolution.jq`, same thing; an edited jq module under
   the generation's `modules/` directory, which the entry pins and the parent does not
   (R5); an output path too long to hold the run
@@ -3451,6 +3638,49 @@ the spec pull request's range above still blocks review.
   directory is created before the pins are checked (R1), so each of them asserts the
   refusal and, afterwards, that the trap removed `.run` — and the wrong-digest jq case among
   them is where the cleanup list below states those assertions in full, as its case 2.
+
+  **The edited-`trusted-launch.c` case is this round's, and it carries two assertions the
+  other pin cases do not, because it is the only pin whose subject is compiled into the
+  thing the entry then trusts.** Every other pin in group 1 guards a file that is read at
+  run time; this one guards the source of the parent itself, so a miswired or missing
+  check here does not produce a wrong answer, it produces a *different parent*, compiled
+  from whatever the caller's tree happened to contain and launched with the entry's
+  blessing. The previous round's list left it out and proved only `nofollow-snapshot.c`,
+  and the two are not interchangeable: a suite that exercises one of the two C pins says
+  nothing about whether the other is wired up at all.
+
+  So the case appends one byte to a copy of `resolver/v1/trusted-launch.c` in the copied
+  tree — a newline, so the file would still compile and the refusal can only be the pin — and
+  asserts four things. One: the entry exits non-zero with one `E_RUNTIME` line, and that
+  line names the parent-source pin rather than some other check, so a case that refused
+  for an unrelated reason fails instead of passing. Two: **no compiler ever ran.** From
+  the moment `.run` appears until the entry exits, a background poll every few
+  milliseconds — the same mechanism the two-umask case already uses to read inside `.run`
+  while it exists, and the same `-o` target the group-signal case watches for — requires
+  that neither `.run/trusted-launch` nor any object file beside it ever appears. Three:
+  the output directory is completely empty afterwards, `.run` included, which is the
+  trap's removal. Four: the copied tree's `nofollow-snapshot.c` is untouched by the test,
+  so the refusal cannot be the neighbouring pin's.
+
+  Say what the poll can and cannot do, in the same terms as the sampler further down: a
+  compiled `trusted-launch` persists inside `.run` from the instant the compiler writes it
+  until the trap removes the directory, so any sample in that span sees it, and the span
+  on this path is at least the remaining pin checks and the refusal — many samples at a
+  few milliseconds each. What it cannot do is prove the absence at instants it did not
+  sample. The ordering guarantee itself is R1's — the pin checks all precede both compiles
+  — and the reviewer reads it there; this assertion is what fails loudly if a plan
+  compiles first and checks afterwards.
+
+  **The parent cannot catch this for itself, which is why the entry has to.** The
+  parent-pinned subset R5 defines is three files — `scripts/lib/profile-resolution.sh`,
+  `resolver/v1/profile-resolution.jq` and the runtime — and its own source is not among
+  them and cannot be. By the time the parent runs it *is* the compiled result of that
+  source; a check it made would be a check the altered parent performs on itself, with the
+  altered constant the same edit could carry. The entry is the last process in the chain
+  that sees the source as an input rather than as itself, so this pin is the only place the
+  substitution is visible, and this case is the only thing in the suite that proves the
+  pin exists.
+
   Every case here and in
   group 2 that needs an edited
   repository file edits a copy of the repository tree and points the entry or the parent
@@ -4004,24 +4234,39 @@ the spec pull request's range above still blocks review.
   entry's exit status is `143` — and two more that are what this case exists for.
 
   **Four: `.run` is never gone while the parent is alive.** The test records the order
-  rather than inferring it. Before it sends the first signal it takes the parent's pid —
-  the entry's only child at that moment, by R1's rule that the entry runs no pre-parent
-  child in the background and by the parent being alive, which is what the
-  `runtime-pgid:` line already proved — and from the first signal until the entry exits it
-  polls, every few milliseconds, two facts together: `kill -0 <parent pid>` and whether
-  `<output>/.run` exists. A sample that finds `.run` gone while the parent still answers
-  is a failure, and the case fails on the first such sample rather than at the end. Using
-  the entry's child here is not the `pgrep -P` the mid-run case bans above: that ban was
-  about
-  identifying the *runtime*, where the parent's own digest and `--version` children made
-  the answer ambiguous, and this question — which process is the entry's child — has
-  exactly one answer by construction. The test proves it took the right one anyway, by
-  requiring the pid it polled to equal the pid in the `entry-signal: TERM forwarded <pid>`
-  line the entry writes on the way out. Say plainly what a sampler can and cannot do: it
-  can catch an entry that exits on the second wait, because that leaves the parent alive
-  for as long as its `SIGKILL` sequence takes, which is hundreds of milliseconds here and
-  so tens of samples wide at a few milliseconds each; and it cannot prove the ordering at
-  instants it did not sample. The
+  rather than inferring it, and it does so **without sampling a pid**. From the first
+  signal until the entry exits it polls, every few milliseconds, two facts together:
+  whether `<output>/.run` exists, and whether the parent's own
+  `parent-signal: TERM group <pgid>` line has yet appeared in the stderr file this case
+  already redirects the entry's output to. A sample that finds `.run` gone with no
+  `parent-signal:` line written is a failure, and the case fails on the first such sample
+  rather than at the end.
+
+  **The line is the right marker because the parent cannot write it early.** R2 fixes it
+  after the group `SIGTERM`, the wait and the group `SIGKILL`, after the reap, and
+  immediately before the handler's `_exit` — so its absence is proof the parent has not
+  finished, and the bug this case exists for leaves it absent for as long as the `SIGKILL`
+  sequence takes, which is hundreds of milliseconds here and so tens of samples wide at a
+  few milliseconds each. Its presence does not prove the parent has exited, and the
+  sampler does not need it to: the only combination it fails on is the removal happening
+  with the line still unwritten. The line cannot be lost to a full pipe either, for the
+  same reason the `runtime-pgid:` poll is safe in the mid-run case — this case's stderr is
+  a plain file, where a write can neither block nor return `EAGAIN` (R2, R1).
+
+  **An earlier round of this spec polled `kill -0 <parent pid>` instead, and that has to
+  go for the same reason R1 takes it out of the entry's loop.** The pid the sampler would
+  poll is a grandchild of the test and a child of the entry, so the entry's own bash reaps
+  it, and from that instant the number can belong to any other process on the machine. The
+  ordering the sampler watches for puts the removal *after* that reap — the wait returns,
+  the loop breaks, the `EXIT` trap unlinks — so the one sample that matters is taken in
+  exactly the window where the pid is no longer the parent's. A `kill -0` answering there
+  is a stranger answering, and the case would report the ordering bug it is named for on
+  an implementation that has it right. The pid cross-check that used to sit beside the
+  poll — the polled pid against the pid in the `entry-signal: TERM forwarded <pid>` line —
+  goes with it, because there is no longer a polled pid to check; the `entry-signal:` line
+  is still asserted, by assertion five below. Say plainly what a sampler can and cannot
+  do: it can catch an entry that exits on the second wait, and it cannot prove the
+  ordering at instants it did not sample. The
   guarantee itself comes from R1's loop, which a reviewer reads; this assertion is what
   fails loudly if a plan writes two `wait` calls instead.
 
@@ -4156,7 +4401,34 @@ the spec pull request's range above still blocks review.
   progress past process start; then `kill -TERM`, which stays pending on a stopped process;
   then `kill -CONT`, which is what lets the installed handler run. Alongside the parent, and
   before any of that, the test starts a sentinel `sleep` in the **same process group as the
-  parent** — the test's own group, which is what a plain background child joins.
+  parent**.
+
+  **That sharing is not automatic, and this case turns job control off to get it.** The
+  sentinel only detects an accidental `kill(0, …)` or `kill(-0, …)` if the parent's own
+  group is the group the sentinel is in; a sentinel somewhere else survives a handler that
+  signals its group by mistake, and the assertion that earns this case would pass on the
+  bug it exists to catch. Bash's default for a background job is the wrong one here:
+  with monitor mode on, each `&` gets a **new** process group of its own, so the parent and
+  the sentinel would sit in two different groups and neither would be the test's. That was
+  measured on the same bash 3.2 as R1's loop — with `set -m`, two background `sleep`s
+  reported pgids `58405` and `58406` against a shell pgid of `58393`; with `set +m`, both
+  reported `58393`. So **this case runs with `set +m`, stated here rather than left to the
+  plan**, and it states it because two of the entry-side signal cases above deliberately do
+  the opposite. Monitor mode is left on for the repeated-signal case and the group-signal
+  case, which need exactly the behaviour this case must not have: a group of the entry's
+  own to aim `kill -TERM -<pgid>` at without hitting the test's shell. The stopped-parent
+  case signals the parent by pid only, so it needs no group of its own and can afford to
+  share one — and must.
+
+  **The sharing is asserted, not assumed.** Before it sends the first signal, the test
+  requires `ps -o pgid= -p <parent>` and `ps -o pgid= -p <sentinel>` to be equal, and to
+  equal the test shell's own group; a mismatch fails the case immediately with a message
+  saying the sentinel was in the wrong group, rather than letting the run reach assertion
+  three and report a pass. That check is what keeps the case honest if a future edit adds a
+  `set -m` above it, or if the plan starts the sentinel through some wrapper that changes
+  its group. The sentinel is the only one in this test, and the two `set -m` cases above
+  are the only other places job control is touched; all three were read against this same
+  question this round, and the two that keep `set -m` have no sentinel to strand.
 
   Three assertions, and they are the assertions of an attempt that actually reached the
   branch; an attempt that ends in either of the two outcomes below is retried before any of
@@ -4589,12 +4861,18 @@ Order, each step checkable before the next:
    empty or not.
    With a parent, the wait is a loop rather than a fixed pair of `wait` calls: each
    `wait "$parent_pid"` that a trap interrupts returns `128 + signal` of its own with the
-   parent still alive, and the loop tells that apart from a wait that reaped the parent by
-   asking `kill -0 "$parent_pid"` — a live or zombie parent answers, a reaped pid gives
-   `ESRCH`. While the parent answers, the entry forwards the recorded signal once with
+   parent still alive, and the loop tells that apart from a wait that reaped the parent
+   with a `wait_interrupted` flag the three traps set and the loop clears before every
+   `wait` — not by asking about the pid, which after bash's own reap may belong to another
+   process entirely (R1). While the flag comes back set, the entry forwards the recorded
+   signal once with
    `kill -"$entry_signal"` (a `last_forwarded` variable keeps a further interrupted wait
-   from re-sending it) and waits again; when the pid no longer answers, that wait's status
-   is the parent's own, and the entry records it in `entry_status`, breaks and exits. So
+   from re-sending it) and waits again; when it comes back clear, that wait's status
+   is the parent's own, and the entry records it in `entry_status`, breaks and exits. The
+   one wrinkle is a parent that exits in the same instant a signal lands, where the flag is
+   set on a wait that was not cut short: the loop waits once more, bash 3.2 hands back the
+   parent's saved status, and the `[ "$status" -ne 127 ]` guard covers a bash that would
+   instead have discarded it, reporting `128 + signal` and saying so (R1). So
    nothing is
    removed until the parent has actually been reaped, however many signals arrive,
    because the parent is what terminates the
@@ -4840,11 +5118,28 @@ intent says for this change. Only after the operator's merge does
   bounded budget and counted in the failure message (R10). This round settles the entry's
   half of that same question, which was still open and did not look it: a second signal
   arriving while the entry is waiting on the parent interrupts that wait exactly as the
-  first one did, so R1 makes the wait a loop that forwards once per recorded name, tells
-  an interrupted wait from a reaping one with `kill -0` on the parent's pid, and takes the
+  first one did, so R1 makes the wait a loop that forwards once per recorded name and
+  takes the
   exit status only from the wait that actually reaped the parent — and unlike the two
   fixes above it does have a test behind it, the repeated-signal case in R10, because this
   window is hundreds of milliseconds wide rather than a few instructions.
+  **This round replaces the thing that loop asked.** It told an interrupted wait from a
+  reaping one with `kill -0` on the parent's pid, and a pid is the one question that stops
+  being about the parent the moment bash reaps it — measured, not argued: an exited
+  background child answers `kill -0` with `ESRCH` and shows no zombie at all, so on a busy
+  same-uid host the number can already belong to a stranger when the loop asks. R1 now
+  asks the traps instead, through a `wait_interrupted` flag the loop clears before every
+  `wait`, and R10's sampler stops polling that pid too, watching the parent's own
+  `parent-signal:` line against the existence of `.run`. What is left is a residual rather
+  than a hole, and R1 states it: the single forward can, in the instant the parent exits by
+  itself, go to a recycled pid, and nothing a shell can reach distinguishes that instant.
+  Two more of this round's finds are the test's. Group 1 gains an edited-`trusted-launch.c`
+  case, because the suite proved only the *other* C pin, and a missing parent-source pin
+  would let the entry compile and launch an altered parent — which the parent, being that
+  binary, cannot catch for itself. And the stopped-parent case now runs with job control
+  off and asserts its sentinel shares the parent's process group, because with `set -m`
+  each background job gets a group of its own and the sentinel would have survived the
+  accidental `kill(0, …)` it exists to detect (R10).
   One more
   ordering belongs in this bullet, and it points the other way: the two diagnostic lines
   this path writes — the parent's `parent-signal:` and the entry's `entry-signal:` — are
