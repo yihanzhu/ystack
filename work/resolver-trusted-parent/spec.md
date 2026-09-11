@@ -169,7 +169,20 @@ measured rather than guessed:
   `if (!reaped)` guards after the loop — one around the single-pid branch's `SIGKILL` and
   blocking reap, one around the group branch's blocking reap alone (~2). The group
   branch's `SIGKILL` gains no guard and no line: it stays unconditional, which is the
-  half of this fix that costs nothing (R2).
+  half of this fix that costs nothing (R2). This round adds ~30 more, to **~1203**, in
+  two blocks. ~18 are R5's two new checks on the bound tool root: the
+  `openat(run_fd, "jq", …)` beside an `O_NOFOLLOW` open of the handed path, two `fstat`s
+  and the `st_dev`/`st_ino` comparison (~5, the same shape as the `.run` comparison, so a
+  second instance rather than a new mechanism), the `openat(run_fd, "awk", …)` with its
+  regular-file, owner and mode tests (~4), and the byte comparison (~9 — the platform
+  `#if`, the Linux `open` of `/usr/bin/awk`, the Darwin two-line constant, the size test,
+  a fixed-buffer `read` loop over both sides and the `memcmp`, with one refusal line
+  serving all of it). ~12 are the startup close becoming two steps: the
+  `opendir`/`readdir`/`closedir` over `/dev/fd` with its all-digits test and its four-way
+  skip (~8), the `E_RUNTIME` refusal when that `opendir` fails (~2), and the ceiling
+  changing to `rlim_max`-or-`sysconf` with the 65536 cap (~2). The ~7 the round above
+  counts for the soft-limit arithmetic is spent rather than returned: the `getrlimit`
+  read stays and only which field it takes changes (R5).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -380,8 +393,10 @@ measured rather than guessed:
   exclusion sets derived at run time,
   plus the downloader grep, which no longer needs a `git`-subcommand assertion now that
   `git` is off the allowlist, plus the `/usr/bin/awk` position assertion that comes with
-  awk moving to pass 1's data paths — every occurrence matched against the `cp` source
-  and the Darwin shim text, none in command position, and none at all in the C file
+  awk moving to pass 1's data paths — in the entry, every occurrence matched against the
+  `cp` source and the Darwin shim text and none in command position; in the C file, every
+  occurrence matched against the Linux `open` argument and the Darwin shim constant R5's
+  awk verification needs, and none in any `execve` argument array
   (~46),
   exit-status assertions (~15), harness
   boilerplate (~30), the per-case temporary directory setup and teardown (~45), and this
@@ -411,21 +426,36 @@ measured rather than guessed:
   `fcntl` probe run against the write end before launch with its `clear` assertion (~1),
   and the teardown that kills the filler before it closes the pipe (~1). Nothing else in
   the case moves: the entry run, the poll, the `SIGTERM`, the bounded wait and the three
-  assertions are the same statements they were (R1, R10).
+  assertions are the same statements they were (R1, R10). This round adds ~20 more, to
+  **~1069**, in three places: the two group-2 bound-tool-root cases (~12 — the
+  out-of-directory jq fixture with the `awk` script the test writes beside it, the
+  negative control that requires that script to print its marker before the parent run is
+  trusted, the marker grep over stdout, stderr and the two capture files, and the
+  tampered-awk case, which is a `chmod`, a one-byte edit or an appended line, a `chmod`
+  back and this group's two standard assertions), the second parent-half descriptor run
+  (~5 — the `exec 300>` onto the fifo, the `ulimit -S -n 64` after it, and the same
+  EOF-before-`runtime-pgid:` assertion the first run makes, whose helper and polling it
+  reuses whole), and pass 1's awk position assertion widening to the C file (~3 — the two
+  literals it may appear as, and the requirement that it appear in no `execve` argument
+  array) (R5, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2680 lines. The range above is not re-derived from
+Those four bullets now sum to about 2730 lines. The range above is not re-derived from
 that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
 both ends, and every round since has recorded its own delta against that figure rather
-than moving the range for it. This round's ~18 is ~3 in the parent, ~3 in the entry and
-~12 in the test — the first round in several to touch all three, because its two findings
-are the same rule applied on both sides of the process boundary — and it takes the sum to
-about 11% above the ~2420, still
+than moving the range for it. This round's ~50 is ~30 in the parent and ~20 in the test,
+with nothing in the entry — the entry already copies both tool files and already
+enumerates `/dev/fd`, so both of this round's shipped-code findings land on the C half —
+and it takes the sum to
+about 13% above the ~2420, still
 inside the ±15%
-the range expresses, so the implementation range stands where it was. The round before
-this one added ~33, ~8 in the parent and ~25 in the test, and took the sum to about 10%;
-the one before that added ~4, all in the parent, and took it to about 9%.
+the range expresses, so the implementation range stands where it was. It is the largest
+single-round delta since the run directory moved inside the output root, and the reason is
+the same: unlike most rounds here, these findings change what the shipped parent does
+rather than what the spec says about it. The round before this one added ~18, ~3 in the
+parent, ~3 in the entry and ~12 in the test, and took the sum to about 11%; the one before
+that added ~33, ~8 in the parent and ~25 in the test, and took it to about 10%.
 It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
@@ -807,14 +837,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**6727-9101 lines** — this file's measured 7914 lines plus or minus 15%, rounded. That
+**7006-9478 lines** — this file's measured 8242 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 7914 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 8242 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -952,17 +982,26 @@ kill exists for being the one thing a handler has no safe way to check, beside t
 full-pipe case filling its pipe with a blocking writer rather than a non-blocking one, so
 the flag the old filler left behind on the shared open file description can no longer turn
 the entry's unconditional write into a fast `EAGAIN` and pass the single case in this
-suite that exists to catch that write, and this round this pull request's own
+suite that exists to catch that write, beside this pull request's own
 `review_size` value written out as the exact token the plan gate names, beside the one
 concern and the range, so a reviewer or a check looking for the record finds the value
 rather than prose it would have to read the value out of, and cannot take the
-implementation's token for this one).
+implementation's token for this one, and this round the bound jq required to be the run
+directory's own and the `awk` beside it verified byte for byte before any fork, so a
+caller who hands the parent a genuine pinned jq out of a directory of their own can no
+longer have the resolver execute their `awk` from the tool root it derives from that one
+path, beside the parent's startup close enumerating `/dev/fd` and treating the caller's
+soft limit as a ceiling nowhere, so a descriptor opened high and left above a lowered
+`RLIMIT_NOFILE` can no longer ride into every digest tool the parent forks, beside the
+documentation's promise of an `entry-signal:` line carrying the same omission condition R1
+states, so a caller who pipes stderr is no longer told to expect a line the entry
+deliberately does not write).
 The same record again here, where the count it rests on is derived, on its own line:
 
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**6727-9101 lines** — this file's measured 7914 lines plus or minus 15%, rounded. That
+**7006-9478 lines** — this file's measured 8242 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -975,7 +1014,7 @@ range is the separate figure above. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420, then 7690, then 7878; where each block of
+7173, then 7420, then 7690, then 7878, then 7914; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1903,13 +1942,68 @@ is the accepted-concern list at the top and the re-derived size figures here and
 waiver below. Nothing in the shipped design moves, so the implementation range does not
 move either.
 
+This round is +328 net over one P1, one P2 and one P3, and the first two share a shape
+worth naming: each is a check that was correct about the object it named and silent about
+a second object reachable from it. **About 170 go to the bound tool root.** The parent
+checked the helper and its own binary inside `.run` and said nothing about the jq path it
+is handed — and the runtime derives its whole tool root from that one string:
+`${YSTACK_RESOLVER_JQ%/*}`, then `$tool_root/awk`, checked with `[ -x ]` and `[ ! -L ]`
+and nothing else and then executed
+(`scripts/lib/profile-resolution.sh:673-676` and `:99`, read on `origin/main` rather than
+carried over from an earlier round), with the parent's own `PATH` for the child built from
+the same string (`portable-profile-resolution-launcher.c:662-677`). So a genuine pinned jq
+sitting in a directory of the caller's own put the caller's `awk` inside the boundary with
+every check the parent already makes satisfied. Two refusals close it before any `fork`:
+the jq argument must be `.run/jq` by `st_dev`/`st_ino` identity against the
+run-directory descriptor the parent has already proved, and `.run/awk` must be a regular
+caller-owned mode-0500 file whose bytes the parent has compared in full — against
+`/usr/bin/awk` on Linux, against the entry's own two-line 35-byte shim on Darwin, read
+through descriptors with no child process anywhere in it, because awk's bytes are whatever
+the host's OS build shipped and cannot be pinned the way jq's digest is. The ripples are
+named rather than absorbed: R7's read list gains `/usr/bin/awk` for the parent on Linux,
+R7's awk data-path paragraph gains the parent's one occurrence, R10's pass 1 replaces "the
+C parent must not contain the token at all" with a position rule in that file too, R1's
+copy paragraph says what the two destinations are so the parent's check has something to
+be the other half of, and Copy-versus-adapt's run-directory item grows a third time rather
+than an eleventh deviation being added — with the clean negative result recorded beside it,
+that the launcher holds no `awk` token anywhere in its 702 lines and does nothing with
+`argv[4]` but a `strlen`, a `strrchr` and the `PATH` it builds from the result.
+**About 85 go to the startup close.** Its ceiling was the smaller of
+`sysconf(_SC_OPEN_MAX)` and `rlim_cur`, and `rlim_cur` is not a ceiling on what is open: a
+caller opens a high descriptor, lowers the soft limit under it, `exec`s, and the loop walks
+straight past a descriptor every SHA-1 tool, SHA-256 tool and jq probe then inherits. So
+the parent enumerates `/dev/fd` first — all-digit entries closed except 0, 1, 2 and
+`dirfd`, with an `E_RUNTIME` refusal if the `opendir` fails, because a parent that cannot
+read what the caller left open cannot make this requirement's claim — and sweeps 3 to
+`rlim_max`-or-`sysconf` capped at 65536 second, as a belt for a `/dev/fd` that lists
+incompletely. The "why not `closefrom`" paragraph loses its argument that the parent "does
+not need" the directory, and the paragraph that says the launcher has no startup close
+gains the note that `opendir` does appear there once, on `/proc`, in the copied
+process-table scan. R10 gains the case the finding describes: the fifo's write end on
+descriptor 300, `ulimit -S -n 64` after it, the parent exec'd, and the
+EOF-before-`runtime-pgid:` observation required to hold for 300.
+**About 12 go to the documentation line.** R9 promised the caller an `entry-signal:`
+line beside the parent's on an interrupted launch, and R1 omits that line on a pipe, a
+FIFO or a socket, so an implementation following R1 would have shipped documentation that
+was false for every piped caller. The line now carries R1's condition in the same
+three-and-three words, and R1's own reading note says why this one mention writes the
+condition out instead of taking the shorthand: a reading note settles things inside the
+spec and settles nothing for someone reading the shipped documentation.
+The remaining ~61 are the ripples and the bookkeeping: two more entries on the
+proof-by-reading list — the enumeration being first, its refusal existing at all, and the
+two new checks standing before the `fork`, none of which a case in this suite can reach;
+Design step 1's close clause and its check clause; the inherited-descriptor group going
+from five runs to six; the accepted-concern list at the top; and the re-derived size
+figures here and for the implementation, whose range does not move because +30 in the
+parent and +20 in the test leave the sum inside the ±15% it already expresses.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 6727-9101 lines**, which is this file's measured
-7914 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 7006-9478 lines**, which is this file's measured
+8242 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -2885,7 +2979,13 @@ the spec pull request's range above still blocks review.
   summary of the forwarded branch, R10's assertions — the shorthand "`128 + signal` and
   the one `entry-signal:` line" appears. Read it with this condition attached: one line on
   a stderr that can take one, and none on a stderr that cannot. The status half of that
-  shorthand is unconditional and is the half anything ever depends on.
+  shorthand is unconditional and is the half anything ever depends on. One mention does
+  **not** take the shorthand, deliberately: R9's documentation requirement writes the
+  condition out in full, because that line is a promise to a caller reading the entry's
+  documentation rather than a cross-reference between two requirements, and a caller who
+  pipes stderr and then goes looking for a line the docs promised has been told something
+  untrue. A reading note settles it inside the spec; it settles nothing for a reader of the
+  shipped documentation.
 
   Nothing is lost for the tests
   that assert the line, and this is now load-bearing rather than incidental: R10 reads it
@@ -3797,8 +3897,18 @@ the spec pull request's range above still blocks review.
   focused test on a Darwin machine. R10 gives the operator the recipe for that measurement,
   and the platform note and the plan both say the other two are operator-confirmed.
 
-  The entry then copies in the bound jq and the platform's awk, and then — only after both
-  compiles have finished — empties and removes the `tmp` and `home` subdirectories and
+  The entry then copies in the bound jq and the platform's awk — the jq by `/bin/cp` into
+  `<output>/.run/jq`, and the awk either by `/bin/cp` from `/usr/bin/awk` on Linux or, on
+  Darwin, as the two-line `#!/bin/bash` / `exec /usr/bin/awk "$@"` shim `/usr/bin/printf`
+  writes, the shapes the test uses at
+  `scripts/test/portable-profile-resolution.test.sh:132-141`. Both destinations are fixed
+  names inside `.run` and not paths the caller can influence, which is what the parent
+  re-establishes from its own side before it launches anything: the jq argument it is
+  handed must be that `.run/jq` by descriptor identity, and `.run/awk` must hold exactly
+  the bytes this step wrote (R5). The entry's copy and the parent's check are the same fact
+  stated by the two processes that each have to be able to state it alone. And then — only
+  after both
+  compiles have finished — the entry empties and removes the `tmp` and `home` subdirectories and
   tightens modes
   before anything is launched: every file in the run directory (the compiled parent, the
   compiled helper, the jq copy, the awk copy) is
@@ -4552,7 +4662,10 @@ the spec pull request's range above still blocks review.
   set below, and no others — does not match its pinned blob id; the jq at the bound path
   does not match the pinned SHA-256 for the platform or does not answer `jq-1.6`
   (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
-  `shadow/v1/reproduce.sh:113-118`); the helper fails the run-directory checks below;
+  `shadow/v1/reproduce.sh:113-118`), or is not the run directory's own `jq`; the `awk`
+  beside it in that directory is not a regular caller-owned mode-0500 file holding the
+  bytes the entry put there — the bound-tool-root block below specifies those last two in
+  full; the helper fails the run-directory checks below;
   any allowlisted value is not an absolute
   regular path, or is too long for the fixed buffer it is copied into (`:641`, `:662-665`
   — a guard that is reachable for the output path and, for the reason R10 gives,
@@ -4573,8 +4686,8 @@ the spec pull request's range above still blocks review.
   the parent creates `home` and `tmp` there (`:645-647`, which the parent replaces with
   `mkdirat` on the descriptor that check opened, below), so a refused run leaves the output
   directory exactly as it found it; and the `.run` identity comparison runs before the
-  helper, binary and run-directory checks below, for the reason the block after this one
-  gives.
+  helper, binary, run-directory, jq-identity and awk checks below, for the reason the
+  block after this one gives.
 
   **That containment check is descriptor identity, and it follows no symlink anywhere.**
   An earlier round of this spec wrote it as a string comparison of two `realpath` answers,
@@ -4617,8 +4730,9 @@ the spec pull request's range above still blocks review.
   `out_fd` itself.
 
   **The order matters as much as the identity does.** The comparison happens before the
-  parent trusts anything *inside* the run directory: the helper, the compiled parent binary
-  and the run-directory mode checks below all run after it, so they are made against an
+  parent trusts anything *inside* the run directory: the helper, the compiled parent binary,
+  the run-directory mode check, and — since this round — the jq identity comparison and the
+  `awk` verification below all run after it, so every one of them is made against an
   object already proved to be the `.run` of the output root the parent checked, rather than
   against whatever the run-directory argument happened to name. And the descriptors stay
   open — the run-directory descriptor from step 4 is the one those later checks use, with
@@ -4721,36 +4835,68 @@ the spec pull request's range above still blocks review.
   equivalent of the shell's process substitutions or its re-exec sitting between the start
   of the process and the close (R1):
 
-  1. Determine the ceiling. `sysconf(_SC_OPEN_MAX)` is the portable answer and is available
-     on both platforms; the parent also reads `getrlimit(RLIMIT_NOFILE, &rl)` and uses
-     `rl.rlim_cur` where it is smaller and not `RLIM_INFINITY`, because a caller can raise
-     `_SC_OPEN_MAX` to something large and there is no reason to spin over descriptors the
-     process cannot hold. A sane floor and ceiling are applied so a hostile or absurd
-     limit cannot turn this into a long loop.
-  2. `for (int fd = 3; fd < ceiling; fd++) (void)close(fd);` — errors ignored, because
+  1. Enumerate what is actually open. `opendir("/dev/fd")`, then for each entry whose name
+     is all digits, `close` that number unless it is 0, 1, 2 or the number the directory
+     stream itself holds (`dirfd`), and `closedir` at the end. Nothing else is skipped for
+     any reason. If the `opendir` fails, the parent refuses with `E_RUNTIME` and launches
+     nothing: this is the one step that knows what the caller left open, and a parent that
+     cannot read it cannot make the claim this requirement makes, so it fails closed rather
+     than proceeding on a list it does not have.
+  2. Then close a range as well, as a belt:
+     `for (int fd = 3; fd < ceiling; fd++) (void)close(fd);` — errors ignored, because
      `EBADF` on a descriptor that was never open is the expected answer for most of the
-     range and the call has nothing else to report.
+     range and the call has nothing else to report. The ceiling is
+     `getrlimit(RLIMIT_NOFILE, &rl)`'s `rl.rlim_max` where that is not `RLIM_INFINITY`,
+     and `sysconf(_SC_OPEN_MAX)` otherwise, capped at 65536 so a hostile or absurd limit
+     cannot turn this into a long loop. The sweep exists for a `/dev/fd` that lists
+     incompletely — a platform where it is absent under a chroot, a partial mount, an
+     answer nobody predicted — where step 1 would otherwise come up silently short; the
+     cost of having it anyway is a few instructions per descriptor.
+
+  **Neither step is capped at the caller's current soft limit, and an earlier round of this
+  spec capped the loop at exactly that.** That round took `sysconf(_SC_OPEN_MAX)` and used
+  `rl.rlim_cur` "where it is smaller", reasoning that there is no point spinning over
+  descriptors the process cannot hold. The reasoning is wrong about the one case that
+  matters. `RLIMIT_NOFILE` bounds the numbers a process may *allocate*; it closes nothing
+  that is already open. So a caller opens a descriptor at a high number, lowers `rlim_cur`
+  below it, and `exec`s the parent: the descriptor is still open, its number is above the
+  new soft limit, and a loop that stopped at `rlim_cur` walks straight past it and leaves
+  it inherited by every SHA-1 tool, SHA-256 tool and `jq --version` probe the parent forks
+  — this requirement's own claim, made false by two lines of caller setup. So the cap is
+  withdrawn. `rlim_max` is the right bound where it is finite, because the hard limit is
+  what the caller had to be under to open that descriptor at all and it does not fall when
+  `rlim_cur` does; the 65536 on top of it bounds the loop and not the claim, for the same
+  reason — a descriptor numbered above 65536 can only exist on a host whose hard limit
+  allowed it, and on such a host `rlim_max` is the larger of the two and is the one used.
+  And the arithmetic is the belt rather than the guarantee: step 1 closes what is open,
+  whatever its number, which is why it is first and why its failure is a refusal. The
+  entry's side of this needs no change at all — its loop already enumerates `/dev/fd/*`
+  with a glob and never reads a limit, for the reason R1 gives (a shell has no loop cheap
+  enough to do it the other way), so the finding reaches the C half only.
 
   **Why not `closefrom` or `close_range`.** Neither is portable across the two platforms
   this initiative pins. `closefrom(3)` is a BSD interface and is not in glibc on the Linux
   side; `close_range(2)` is Linux-only and needs a kernel and a libc newer than this
-  initiative is willing to require. A `/dev/fd` enumeration is the other portable shape and
-  is what the entry uses, because a shell has no loop cheap enough to do it the other way;
-  the parent does not need it — a bounded `close` loop in C is a few instructions per
-  descriptor and asks nothing of the filesystem — and using the directory would mean the
-  parent's first act was an `opendir` on a path, which is exactly the shape R5 spends the
-  rest of its length replacing. If the plan finds the loop unacceptable on a host with a
-  very large limit, `/dev/fd` is the named fallback and the plan says so rather than
-  inventing a third.
+  initiative is willing to require. Either would have done both steps above in one call.
+  The two portable shapes are what the parent uses instead: `/dev/fd`, which is what the
+  entry uses for the same job, and a bounded `close` loop in C. An earlier round of this
+  spec used the loop alone and argued the parent "does not need" the directory, because
+  reading a path would be the shape R5 spends the rest of its length replacing. That
+  argument does not survive the descriptor the loop cannot reach, and it overstated the
+  cost: nothing in `/dev/fd` is opened, resolved for content or handed on — the parent
+  reads a list of numbers out of it and closes them.
 
   **What the parent deliberately holds, and why none of it is affected.** Every descriptor
   this requirement keeps open from check to use is opened *after* startup, by the parent
   itself: the output-directory descriptor from the `O_DIRECTORY|O_NOFOLLOW` open, the
   run-directory descriptor from the `openat` on `.run`, and the two `child.stdout` and
   `child.stderr` descriptors the parent creates with `openat(..., O_CREAT | O_EXCL |
-  O_NOFOLLOW)` and later reads back through (all in this requirement, above). The close
-  loop runs before any of them exists, so it cannot take one away, and R7's read and write
-  lists are unchanged by it. Stdin, stdout and stderr are untouched, which is what R6's
+  O_NOFOLLOW)` and later reads back through (all in this requirement, above). Both steps
+  run before any of them exists, so neither can take one away, and R7's read and write
+  lists are unchanged by them. The one descriptor a step must not shut while it is using it
+  is the directory stream's own, which is why `dirfd` is on step 1's skip list beside 0, 1
+  and 2 — and it is gone before step 2 begins, because `closedir` closes it, so the skip
+  costs the claim nothing. Stdin, stdout and stderr are untouched, which is what R6's
   byte-identical stdout and R2's `runtime-pgid:` and `parent-signal:` lines on stderr
   depend on.
   This is an extension of the second named deviation from the copied launcher rather than a
@@ -4759,7 +4905,13 @@ the spec pull request's range above still blocks review.
   (`:214,217`) is on a descriptor or stream it
   opened itself, and `closefrom`, `close_range`, `sysconf` and `getrlimit` do not appear in
   its 702 lines — so the deviation that already said the parent closes inherited
-  descriptors rather than relying on `O_CLOEXEC` now says it does so at both ends.
+  descriptors rather than relying on `O_CLOEXEC` now says it does so at both ends. One
+  name in the pair above does appear in the launcher and it is not a startup close:
+  `opendir` is there once, on `/proc` in the Linux `process_group_count`
+  (`portable-profile-resolution-launcher.c:178`, with its `readdir` at `:193` and its
+  `closedir` at `:229`), which R7 already lists among the copied supervisor's
+  process-table reads. The parent's `/dev/fd` enumeration is a second use of the same call
+  for a different job, and the plan should not read the copied one as precedent for it.
 
   **Creating those two files fd-relative is only half of the fix, because the copied
   supervisor reads them back by path.** After the child exits it goes back to the two path
@@ -4934,6 +5086,70 @@ the spec pull request's range above still blocks review.
   (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
   identity answer.
 
+  **The bound jq must live inside the checked run directory, and the `awk` beside it is
+  verified before any fork.** The helper and the compiled parent binary are not the only
+  executables in play, because the run directory holds two more and the runtime reaches
+  one of them without ever being told its path. `YSTACK_RESOLVER_JQ` is the jq the parent
+  hands over (R3), and the runtime derives its whole tool root from that one string:
+  `profile_resolution_bound_tool_root=${YSTACK_RESOLVER_JQ%/*}`, then
+  `profile_resolution_bound_core_awk="$profile_resolution_bound_tool_root/awk"`, checked
+  with `[ -x ]` and `[ ! -L ]` and nothing else
+  (`scripts/lib/profile-resolution.sh:673-676`, read and verified), and then executed —
+  `"$profile_resolution_bound_core_awk"` is the command word at `:99`, in the function
+  that decodes every byte string the resolver writes. The parent's own `PATH` for the
+  child is built from the same string, `<dir of the bound jq>:/usr/bin:/bin`
+  (`portable-profile-resolution-launcher.c:662-677`). So a caller who invokes
+  `trusted-launch` directly can hand the parent a genuine pinned jq 1.6 that happens to
+  sit in a directory of the caller's own, and the resolver will execute that directory's
+  `awk` — the caller's program, inside the boundary, with every check above satisfied.
+  All of those checks are aimed at `.run`; what the parent had not said is that the bound
+  jq is in there too.
+
+  Two refusals close it, both before any `fork`:
+
+  - **The jq path argument must be the run directory's own `jq`.** The parent opens
+    `openat(run_fd, "jq", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)` — `run_fd` being the
+    descriptor already proved to be the output root's own `.run` — opens the path it was
+    handed with the same flags, `fstat`s both, and requires equal `st_dev` **and**
+    `st_ino`. Same mechanism as the `.run` containment check above and for the same
+    reason: nothing is resolved twice and no symlink is followed on either side, so an
+    equal answer means one object rather than two names that agree at the moment of
+    asking. A jq anywhere else is `E_RUNTIME`. The SHA-256 pin and the `jq-1.6` probe
+    still run on it — descriptor identity is a further condition, not a replacement for
+    either.
+  - **`.run/awk` is verified the way the helper is.** Opened
+    `openat(run_fd, "awk", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)`, it must be a regular
+    file, owned by the current uid, at mode exactly 0500 — the same three facts the
+    helper bullet above requires — and its bytes must be the bytes the entry put there.
+    The parent needs no digest tool for that and starts no process: it reads both sides
+    in full through descriptors it opened, compares the sizes first and then the bytes.
+    On Linux the other side is `/usr/bin/awk` itself, opened `O_RDONLY|O_NOFOLLOW`,
+    because that is what the entry copied in (`/bin/cp /usr/bin/awk <run>/awk`, R1, R7).
+    On Darwin the entry writes a two-line shim instead — `#!/bin/bash` and
+    `exec /usr/bin/awk "$@"`, 35 bytes — so the other side is that string, held in the
+    parent as a constant, which is the stronger of the two comparisons. It is a byte
+    comparison and not a pinned digest for one plain reason: awk's bytes are whatever the
+    host's OS build shipped, they differ between machines of the same platform, and a
+    constant in a committed C file cannot name them the way the jq digest pin names jq's.
+
+  **Why that closes the hole, in the runtime's own terms.** Once the jq argument is
+  proved to be `.run/jq`, the runtime's `${YSTACK_RESOLVER_JQ%/*}` is `.run`, so
+  `$profile_resolution_bound_tool_root/awk` is `.run/awk` — the file the parent has just
+  read end to end — and `PATH=<.run>:/usr/bin:/bin` names a 0500 directory whose whole
+  content is the four files the parent has now checked. There is no fifth entry for a
+  `PATH` search to reach, because the output-directory rule admits exactly `.run` and the
+  run directory holds exactly those four files and no subdirectory at launch (R1). The
+  caller's `awk` is then unreachable by either route, the derived one and the `PATH` one.
+
+  **And the check is the parent's, not the entry's, even though the entry already copies
+  both files.** The entry puts the jq and the awk into `.run` and tightens them to 0500
+  before it launches anything (R1), so on the supported path neither refusal ever fires.
+  They exist for the caller every other check in this requirement exists for: the direct
+  `trusted-launch` invocation, which R10's group 2 drives and which an operator running
+  step 7 by hand drives as well. A contract the parent states has to hold without the
+  entry, or the parent is not a boundary — it is a second copy of the entry's checks that
+  happens to agree with them.
+
   **Stated residual — a same-uid process that can write the output directory can swap
   `.run` out from under all of this.** An earlier round of this spec said a replacement
   "needs a `chmod` first". That is true only of the files inside the run directory, and an
@@ -4951,7 +5167,13 @@ the spec pull request's range above still blocks review.
   descriptor still refers to the original directory and the original files, and it can prove
   they were right when it looked; it cannot make the runtime use them. The fd-relative
   sandbox creation above closes the race on the parent's own four writes and is not claimed
-  to close this one — same shape as the `HOME`/`TMPDIR` residual stated just above it.
+  to close this one — same shape as the `HOME`/`TMPDIR` residual stated just above it. The
+  two refusals added just above are inside this residual rather than outside it, and the
+  shape is worth saying exactly: they are check-time facts like every other one here, so a
+  `.run` swapped out after them takes the jq and the awk with it as surely as it takes the
+  helper. What they do buy, which nothing before them did, is that a caller cannot *name* a
+  tool root outside the output structure at all — the swap needs write access to the
+  caller's own output directory, where handing over a jq from somewhere else needed nothing.
 
   **So the boundary carries a second assumption, and it is stated next to the first.** The
   accepted resolver spec already assumes the security boundary begins in a trusted parent
@@ -5145,10 +5367,16 @@ the spec pull request's range above still blocks review.
      remaining four hashed by the library itself at run time (`:711-714`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the request
      file and the repository-map file named on the command line; the jq binary supplied as
-     an argument; `/usr/bin/awk`, which the entry reads on Linux for the one purpose of
-     copying it into the run directory, and does not read at all on Darwin, where it
-     writes a shim naming that path instead (below); the caller's output directory; and
-     the entry's own run directory.
+     an argument; `/usr/bin/awk`, read on Linux by **both** shipped files and by neither on
+     Darwin — the entry reads it to copy it into the run directory, and the parent reads it
+     to compare it byte for byte against the `awk` it finds there (R5), while on Darwin the
+     entry writes a two-line shim naming that path and the parent compares against that
+     same two-line string held as a constant, so neither opens the host binary at all
+     (below); the caller's output directory; and
+     the entry's own run directory. That is the round's one widening of this list and it is
+     a read of a fixed path in the same class as the ones already here, not a new kind of
+     read: no content of it leaves the parent, and the only thing the parent does with the
+     bytes is compare them.
 
      **The executables, listed exactly.** The previous round's list was short enough to be
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
@@ -5298,10 +5526,18 @@ the spec pull request's range above still blocks review.
      tightened the directory to 0500, and the entry never runs it. Nothing else touches
      the path: awk is not one of the ten computed blob-id pins and it is not the SHA-256
      digest pin — that one is jq's — so it is not an input to either digest pipeline
-     either. R10's pass 1 therefore lists it with the data paths, and the assertion there
-     pins those two positions rather than only reclassifying the path, because a
-     classification on its own would let an accidental `/usr/bin/awk '{print $1}'` in
-     command position through the very grep that exists to catch it.
+     either. **This round the parent's source names it too, in one place, and that place
+     is not a command either.** It is the string literal the Linux arm of the `.run/awk`
+     verification opens `O_RDONLY|O_NOFOLLOW` to read the expected bytes from (R5); the
+     Darwin arm names it once more inside the two-line constant it compares against
+     instead, which is text the parent reads out of `.run` and never runs, exactly as the
+     entry's copy of that text is text the entry writes and never runs. R10's pass 1
+     therefore lists the path with the data paths, and the assertion there pins the
+     positions rather than only reclassifying the path, because a classification on its
+     own would let an accidental `/usr/bin/awk '{print $1}'` in command position through
+     the very grep that exists to catch it — and it now pins three positions across two
+     files rather than two in one, the C file's occurrences being required to be the
+     `open` argument and the constant and never an entry in any `execve` argv.
 
      The bound jq is the opposite case, and the two are set side by side here so a plan
      cannot conflate them. The entry both **reads** jq — `/bin/cp` copies it into `.run`
@@ -5350,9 +5586,13 @@ the spec pull request's range above still blocks review.
        SHA-256 tool through `/usr/bin/awk '{print $1}'`; the entry takes the first field
        with a bash parameter expansion and the parent parses it in C. That was the last
        place either shipped file would have run awk, so `/usr/bin/awk` is off the command
-       list entirely and appears only as the file copied in for the runtime's benefit —
-       the paragraph above says where, and R10's pass 1 and its position assertion are
-       what hold it there.
+       list entirely and appears only as a file read and named — copied in for the
+       runtime's benefit by the entry, and read once more by the parent as the bytes
+       `.run/awk` has to match (R5). That comparison starts no process either: the
+       parent reads both sides through descriptors it opened and compares sizes and then
+       bytes, so this round widens what awk *is* in these two files without putting it
+       back among the things either one runs. The paragraph above says where the path may
+       stand, and R10's pass 1 and its position assertion are what hold it there.
      - **No `mktemp`.** `shadow/v1/reproduce.sh:94-142` and the test script both make their
        scratch with `mktemp -d` under the caller's `TMPDIR`. The entry's run directory is
        the fixed `<output>/.run` instead (R1), so `/usr/bin/mktemp` is neither run nor
@@ -5474,8 +5714,12 @@ the spec pull request's range above still blocks review.
   successful launch prints one informational `runtime-pgid: <n>` line on stderr — best-effort,
   so a caller whose stderr is a pipe it is not draining may not see it (R2) — and that an
   interrupted one prints one `parent-signal: <NAME> group <pgid>` or
-  `parent-signal: <NAME> no-runtime` line beside the entry's own `entry-signal:` line (R2),
-  so
+  `parent-signal: <NAME> no-runtime` line, and beside it the entry's own `entry-signal:`
+  line **when stderr is a regular file, a terminal or a character device, and no such line
+  at all when it is a pipe, a FIFO or a socket** — the same condition R1 states and in the
+  same three-and-three words, because the documentation was the one place that promised the
+  line unconditionally and an implementation following R1 would have made it false for
+  every piped caller. So the documentation carries the condition rather than the promise, and
   output on stderr is not by itself a failure signal — the exit status is the result. Both new
   files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
   resolver spec itself is not edited.
@@ -5618,6 +5862,26 @@ the spec pull request's range above still blocks review.
     repository tree whose library or jq program has been edited;
   - a jq whose SHA-256 does not match the platform pin;
   - a jq that does not answer `jq-1.6`;
+  - **a valid pinned jq that is not the run directory's own.** The run directory is built
+    correctly, with its real jq and awk inside it, and the parent is then handed a
+    *second* copy of the same jq — the genuine binary, matching the platform's SHA-256 pin
+    and answering `jq-1.6` — sitting in a directory of the test's own that also holds an
+    executable `awk` the test wrote, a two-line script whose only job is to print a marker
+    and exit non-zero. So every check the previous two cases exercise passes and only the
+    identity check can refuse. Two assertions: the parent's `E_RUNTIME` line and a non-zero
+    exit, before the `fork`, as every case in this group asserts; and the marker **nowhere**
+    — not on stdout, not on stderr, not in either capture file — which is what says the
+    caller's `awk` never ran rather than only that the run failed. The negative control
+    that makes the second assertion mean something is the same fixture's `awk` invoked
+    directly by the test before the parent run, which must print the marker, so a marker
+    grep that could never match is not mistaken for a pass;
+  - **a tampered `.run/awk`.** Everything else is as the entry would leave it, including a
+    jq argument that is the run directory's own jq, and the only change is to the awk copy
+    inside `.run`: one byte flipped in the Linux copy, and on Darwin a third line added to
+    the two-line shim. Refused with the parent's `E_RUNTIME` line and a non-zero exit
+    before the `fork`. The case has to relax the 0500 mode to write the file and set it
+    back, which is a fixture detail worth naming so nobody reads the case as also testing
+    the mode: the mode assertions are the bullets below, and this one is about bytes;
   - a request path that is not absolute, a request path that is a symlink to a real
     request, and a repository-map path that is a symlink — three cases, because the copied
     launcher checks only the leading slash on those two arguments
@@ -6074,7 +6338,7 @@ the spec pull request's range above still blocks review.
   attribute no environment scrub touches (R1, R5), and the failure it guards against is
   silent: a run that is correct in every observable way while a caller's credential,
   socket or write handle sits open inside every child the entry or the parent forks. There
-  are five runs — four on the entry and one on the parent, two of the entry's added this
+  are six runs — four on the entry and two on the parent, the parent's second added this
   round — and every one of them is built on the same helper. The test makes a fifo in its
   own scratch, starts a reader
   on it in the background — `/bin/cat > /dev/null`, which returns when every writer has
@@ -6135,6 +6399,22 @@ the spec pull request's range above still blocks review.
     the test can read. The assertion is the same shape against the parent's own first
     observable: the reader must return before the `runtime-pgid:` line appears in that
     file.
+  - *The parent half, second run: a high descriptor under a lowered soft limit.* The same
+    fixture and the same fifo, with two changes the test makes in the subshell it launches
+    from, **in this order**: the write end is opened on **descriptor 300** rather than 7,
+    and only then `ulimit -S -n 64` lowers the soft limit under it. That order is the whole
+    fixture — `RLIMIT_NOFILE` bounds new allocations and closes nothing already open, so
+    300 stays open and its number is now above the limit the parent reads — and it is the
+    caller shape the round-39 finding describes. The assertion is the one above, unchanged:
+    end-of-file on the fifo before the `runtime-pgid:` line appears in the parent's stderr
+    file. A parent that took `rlim_cur` as its ceiling walks past 300, and the reader stays
+    blocked until the resolver exits, which is long after the line — so this case fails on
+    exactly the implementation the finding names and passes on the two-step close R5
+    specifies. Two fixture notes, both worth stating rather than rediscovering: `ulimit -S`
+    and not plain `ulimit`, because the hard limit has to stay where it was — it is what
+    made 300 openable, and it is the parent's own ceiling for the second sweep; and 64 is
+    the same floor R4 already gives the resolver child, so nothing downstream is starved by
+    it.
 
   **Why the ordering and not the descriptor itself is what gets asserted.** The obvious
   test — look at the child's open descriptors — is not portable between the two platforms
@@ -6573,8 +6853,9 @@ the spec pull request's range above still blocks review.
   branch the handler takes once it runs.
 
   **Three more lines join that list this round, two of them positions and one of them a
-  guard.** The reviewer reads, in the parent, that the `close` loop from 3 to the ceiling
-  sits among the opening statements of `main` — after `umask(077)` and the three
+  guard.** The reviewer reads, in the parent, that the startup close — the `/dev/fd`
+  enumeration and the range sweep behind it since round 39, a bare `close` loop when this
+  line was written — sits among the opening statements of `main` — after `umask(077)` and the three
   `sigaction` calls, before the first pin check and therefore before the first `fork` —
   because the descriptor case above proves the close precedes the *resolver* fork and
   leaves the pre-resolver forks to this reading (R5). In the entry, the same reader checks
@@ -6665,6 +6946,22 @@ the spec pull request's range above still blocks review.
   not — the failure needs the kernel to hand the reaped pid to another process in the few
   instructions between the loop's `waitpid` and the `kill`, which nothing a test script
   can arrange, so a case aimed at it would pass by missing (R2).
+  **Two more join the list this round, both in the parent, and both are about order rather
+  than content.** The reviewer reads that the startup close is the `/dev/fd` enumeration
+  *first* and the range sweep second, that the enumeration's failure is an `E_RUNTIME`
+  refusal and not a fall-through to the sweep, that its only skips are 0, 1, 2 and `dirfd`,
+  and that `rlim_cur` appears nowhere in either ceiling — a grep for the name settling the
+  last of those in a line. The fd-300 case above bounds this by observation for one
+  descriptor number; the reading is what covers the enumeration being first and the refusal
+  existing at all, neither of which any case in this suite reaches, since a `/dev/fd` that
+  cannot be opened is not a state a test script can arrange on either platform. And the
+  reviewer reads that the jq-identity and `.run/awk` checks stand before the first `fork` —
+  in the same run of statements as the helper and run-directory checks, after the
+  output-directory identity comparison and before the sandbox creation — and that the awk
+  byte comparison is two `read` loops and a `memcmp` with no `fork`, no `posix_spawn` and
+  no `system` in it. The group-2 cases above prove both refusals fire; what the reading adds
+  is that they fire on the right side of the launch, which is the half a refusing case
+  cannot distinguish from a refusal that happens to arrive later (R5).
   The `kill -0` reading is on this list for the same reason the reaps are: the failure needs
   a signal to land in the instant between a reaping `wait` and the next statement, and a
   case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
@@ -6860,7 +7157,9 @@ the spec pull request's range above still blocks review.
      the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
      (`portable-profile-resolution-launcher.c:178`) and the `/proc/%s/stat` template
      (`:204`) — and `/usr/bin/awk`, which the entry copies and names in the Darwin shim
-     text and never executes (R7). Anything else fails, whatever prefix it carries. Matching
+     text, and which the parent opens on Linux and names in its own copy of that shim
+     text, neither of them ever executing it (R5, R7). Anything else fails, whatever
+     prefix it carries. Matching
      on the leading slash
      rather than on a list of directories is the point: the Darwin compiler took the prefix
      set to three, and a grep that knew only the prefixes somebody told it about would
@@ -6877,7 +7176,14 @@ the spec pull request's range above still blocks review.
      run directory, or inside the quoted shim text passed to `/usr/bin/printf`, and none
      of them is the first word of a command — which is the same command-position
      extraction pass 2 already performs, run a second time and asked for the opposite
-     answer. The C parent must not contain the token at all. That is what makes an
+     answer. **This round the C parent may contain the token, so "not at all" is replaced
+     by a position rule there too.** The previous round's assertion was that the C file
+     must not hold it anywhere, and that is no longer a correct assertion: R5's `.run/awk`
+     verification needs the path as the Linux arm's `open` argument and again inside the
+     Darwin arm's two-line constant. So the test requires every occurrence in the C file
+     to be one of those two literals and requires none of them to appear in any `execve`
+     argument array — which is the same grep the `environ`/`execv` reading already scopes
+     to the exec sites, asked about one more token. That is what makes an
      accidental host-awk invocation a CI failure rather than an allowlisted path in a new
      place. The test may still run awk freely for its own parsing, the way the existing
      test does at `scripts/test/portable-profile-resolution.test.sh:448-449`, for the
@@ -6973,9 +7279,15 @@ Order, each step checkable before the next:
    which proves that last fact by `fstatat(out_fd, ".run", …, AT_SYMLINK_NOFOLLOW)` with an
    `S_ISDIR` test and then equal `st_dev`/`st_ino` off two `fstat`s, never by comparing
    `realpath` answers, with the listing done by `fdopendir` on a `dup` of that descriptor
-   (R5) — and
+   (R5), and including the bound tool root: the jq path argument proved to be the run
+   directory's own `jq` by the same `st_dev`/`st_ino` identity off an
+   `openat(run_fd, "jq", O_RDONLY|O_NOFOLLOW)` and an `O_NOFOLLOW` open of the handed
+   path, and `.run/awk` opened `openat(run_fd, "awk", O_RDONLY|O_NOFOLLOW)` and required
+   to be a regular caller-owned mode-0500 file whose bytes equal `/usr/bin/awk`'s on Linux
+   or the two-line shim constant on Darwin — read in full through both descriptors, sizes
+   compared and then bytes, with no child process anywhere in it (R5) — and
    the check order R5 fixes (length guard, then the output directory with its identity
-   comparison, then the helper and run-directory checks, then the sandbox
+   comparison, then the helper, run-directory, jq-identity and awk checks, then the sandbox
    creation) — checks that the test script performs today or cannot perform at all.
    Every mode and ownership check is done with `fstat` on a descriptor
    the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
@@ -6986,8 +7298,13 @@ Order, each step checkable before the next:
    rather than the modes that were asked for (R5); every descriptor above 2 that the
    parent inherited is closed in the same opening run of statements, after that `umask`
    and after the handler installations but before the first pin check and therefore before
-   the first `fork`, by a `close` loop from 3 to a ceiling taken from
-   `sysconf(_SC_OPEN_MAX)` and capped by `getrlimit(RLIMIT_NOFILE)` — not `closefrom` or
+   the first `fork`, in two steps — an `opendir("/dev/fd")` enumeration that closes every
+   all-digit entry except 0, 1, 2 and `dirfd`, refusing `E_RUNTIME` if the `opendir`
+   itself fails, and then a `close` loop from 3 to `getrlimit(RLIMIT_NOFILE)`'s
+   `rlim_max` where that is finite or `sysconf(_SC_OPEN_MAX)` otherwise, capped at 65536,
+   with the caller's `rlim_cur` used as a ceiling nowhere, because a caller can open a
+   high descriptor and lower the soft limit under it before the `exec` — not `closefrom`
+   or
    `close_range`, neither of which is portable to both pinned platforms — so that no SHA
    tool, SHA-256 tool or `jq --version` probe the parent forks can inherit a caller's
    credential, socket or write handle, with the resolver child's own pre-`execve` close
@@ -7694,9 +8011,11 @@ intent says for this change. Only after the operator's merge does
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens —
   and that item grows this round rather than an eleventh being added, because it is the
   same deviation at a second point: the close now happens twice, once among the first
-  statements of `main` before any fork, with the ceiling from `sysconf(_SC_OPEN_MAX)`
-  capped by `getrlimit(RLIMIT_NOFILE)` and neither `closefrom` nor `close_range` used
-  because neither is portable across both pinned platforms, and once in the resolver child
+  statements of `main` before any fork — a `/dev/fd` enumeration that refuses `E_RUNTIME`
+  if its `opendir` fails, then a range sweep whose ceiling is `rlim_max` where finite and
+  `sysconf(_SC_OPEN_MAX)` otherwise, capped at 65536 and never at the caller's `rlim_cur`,
+  with neither `closefrom` nor `close_range` used
+  because neither is portable across both pinned platforms — and once in the resolver child
   before `execve` as before, where the launcher has no startup close anywhere in its 702
   lines (verified: every `close` and `fclose` in the file is on a descriptor or stream it
   opened itself, and `closefrom`, `close_range`, `sysconf` and `getrlimit` do not appear
@@ -7711,7 +8030,16 @@ intent says for this change. Only after the operator's merge does
   its 702 lines (verified: none of those four names appears in the file, and its only
   `O_NOFOLLOW` uses are the two `open` calls at `:86,120` and the two at `:418-420`, with
   `:30-31` defining the flag to `0` when the platform lacks it), so there is nothing there
-  to copy and the whole check is written fresh (R5); the blob pins
+  to copy and the whole check is written fresh (R5) — and it grows once more this round
+  for the two executables the run directory holds besides those the item already names:
+  the jq path argument is proved to be `.run/jq` by the same `st_dev`/`st_ino` identity,
+  and `.run/awk` is opened relative to the run-directory descriptor and its bytes compared
+  in full against `/usr/bin/awk` on Linux or against a two-line constant on Darwin, all of
+  it new code for the same reason the rest of the item is — the launcher takes the jq path
+  and the tool root it derives entirely on trust, doing nothing with `argv[4]` but the
+  `strlen` guard at `:662-665`, the `strrchr` that cuts the directory off at `:667-672`
+  and the `PATH` it builds from the result at `:673-677`, and it never looks at `awk` at
+  all (verified: the token does not appear in its 702 lines); the blob pins
   for the runtime, `scripts/lib/profile-resolution.sh` and
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
