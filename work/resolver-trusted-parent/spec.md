@@ -289,6 +289,19 @@ measured rather than guessed:
   why the reference existed now says why the precondition does and why nothing above 2 is
   skipped, which is the one line that stops a later reader deleting a statement that
   looks like ceremony and re-introducing a skip that looks like care (R1).
+  This round adds ~3 more, to **~439**, all inside the wait loop and all of it the
+  forward moving above the `wait`: the
+  `if [ -n "$entry_signal" ] && [ "$entry_signal" != "$last_forwarded" ]; then` that now
+  opens it and the `fi` that closes it (~2), and `last_forwarded=$entry_signal` standing
+  as its own statement after the `case` rather than inside the brace group it used to
+  share with the `kill` (~1). The `case`, its `Running` arm and the `kill` are the same
+  three lines a pass earlier in the loop, the two `break` tests are the same statements
+  lower down, and the `wait_interrupted=''` that moves from just above the `wait` to the
+  top of the body is the same line in a different position — so the whole of the fix
+  this round makes to the loop's behaviour costs three lines, and the matching fix to the
+  traps costs none at all: `wait_interrupted=1` was already counted as part of each of the
+  three bodies when the flag went in, and this round only makes that normative everywhere
+  the bodies are quoted (R1).
 - **Focused test ~1043 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -753,7 +766,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 7420 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 7690 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -871,16 +884,21 @@ having done nothing, beside every call in the parent's three signal handlers hel
 POSIX.1-2017 async-signal-safe list by name, so the wait between the `SIGTERM` and the
 `SIGKILL` and the line that reports the branch cannot be written with the `nanosleep` and
 the `snprintf` the rest of the file may use and deadlock the process in the middle of the
-cleanup they exist to describe, and this round that skip withdrawn and replaced by a
+cleanup they exist to describe, beside that skip withdrawn and replaced by a
 descriptor-headroom refusal above the loop, because an identity test on the open file
 cannot tell a caller's read-only handle on the entry script from a write handle on it and
 so kept a writable descriptor outside the output root alive across the re-exec and into
 every child, where closing every number above 2 without exception and letting bash
 relocate its own script input — with a refusal first if `ulimit -n` is below 64, which is
 where the relocation has no free number to use — shuts the write handle and keeps the
-entry running to its end).
-**Evidence-based range for this spec pull request: 6307-8533 lines** — the measured
-7420 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+entry running to its end, and this round the entry's signal traps setting the wait loop's
+flag as part of recording the signal and that loop forwarding an already-recorded signal
+before each `wait` rather than only after an interrupted one, so a signal delivered while
+the entry sits in `wait` can no longer be read as the parent's own exit and one delivered
+before the loop began can no longer be left unsent while the entry blocks for the parent's
+whole natural life and then reports the status of a run nobody interrupted).
+**Evidence-based range for this spec pull request: 6537-8844 lines** — the measured
+7690 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
@@ -888,7 +906,7 @@ range is the separate figure above and the two are never compared. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173; where each block of
+7173, then 7420; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1726,13 +1744,53 @@ list at the top; and the re-derived size figures here and for the implementation
 range does not move because −1 in the entry and +10 in the test leave the sum at about 12%
 of the ~2420 it is derived from.
 
+This round is +270 net over two P2s, and both are one finding in two places: a
+statement sitting in the right block and in the wrong position relative to the `wait` it
+exists to protect. About 55 go to the traps. The normative form is now the two-statement
+`: "${entry_signal:=TERM}"; wait_interrupted=1`, written that way in the traps-only-record
+block, in the first-signal-wins block and in Design step 2, with the flag write stated to
+be part of *recording* rather than an exception to it, and with the failure a
+record-only body produces written out rather than left to the loop: a signal arriving
+inside `wait` leaves the flag empty, the loop reads that wait's `128 + signal` as the
+parent's status, breaks, and the `EXIT` trap removes `.run` with the parent possibly still
+alive. The name stays first-wins and the flag is said to be latest-wins on purpose, since
+the loop clears it itself every pass. About 135 go to the loop's order. The five steps are
+numbered and fixed — clear, forward, `wait`, clear-flag break, `127` break — the forward
+moves above the `wait` and the clear to the top of the body, and the three arrival times
+are worked through one at a time: recorded before the loop began, where step 2 of the
+first pass sends it; landing between the clear and the `wait`, where the flag survives
+because the clear is no longer the statement above the `wait`; and landing inside the
+`wait`, which is the one arrival the old order also handled, now one pass later and no
+slower. The measurement is re-run from scratch under the new order rather than
+re-labelled, and it carries the finding in two blocks on one event: `entry status=143`
+with the parent signalled and its marker on disk, against the old order's
+`entry status=0` on the same event, with the `TERM` sent, nothing forwarded and the
+stand-in's handler never entered. Beside it go a probe that widens the gap between the
+clear and the `wait` with a `sleep` and drops a signal into it, the `INT`, exit-`42` and
+no-signal-control variants re-run, and the sixty-attempt coincidence run kept as it is
+with the reason its verdict survives the move — the same read of the same table, one
+statement earlier on the following pass. Two limits go in with the fix rather than being
+left to be found: a trap consumes the signal, so the `wait` entered after it is not
+interrupted and the forward waits on that wait's return, which is why the gap is called
+narrow — two builtins and a subshell — rather than closed; and a signal that lands after
+the parent's own exit is forwarded to nobody, with both of the statuses a caller can see
+there named and each tied to which `wait` answered. The remaining ~80 are the ripples and
+the bookkeeping: Design step 2's trap and wait clauses, R10's read-and-check list, which
+now reads the trap bodies for two statements and the loop for its five steps in order,
+because both of the windows those positions close need a signal delivered between two
+adjacent statements and so cannot be tested; the repeated-signal case's job-table
+paragraph; the Copy-versus-adapt trap item; the signals bullet under Areas of concern; the
+accepted-concern list at the top; and the re-derived size figures here and for the
+implementation, whose range does not move because the entry's ~3 is the whole
+implementation cost of the round.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 6307-8533 lines**, which is this file's measured
-7420 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 6537-8844 lines**, which is this file's measured
+7690 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1755,8 +1813,9 @@ the spec pull request's range above still blocks review.
   stdout and stderr through unchanged (it does not capture, buffer or rewrite them), and
   exits with the child's own exit status, or `128 + signal` when the child died on a
   signal. Its `EXIT` trap removes the run directory. It also traps `INT`, `TERM` and
-  `HUP`, and those three traps do one thing only: they record the *first* signal's name in
-  an `entry_signal` variable. Everything else happens in the main flow afterwards, at the
+  `HUP`, and those three traps do one thing only, and do it in two statements: they record
+  the *first* signal's name in an `entry_signal` variable and set the `wait_interrupted`
+  flag the wait loop below reads. Everything else happens in the main flow afterwards, at the
   checkpoints set out below. When a parent exists the entry **forwards the same signal to
   the parent, waits for the parent to exit, and only then** lets the `EXIT` trap remove the
   run directory, and it exits `128 + signal`. That order is the whole point: the parent,
@@ -1764,8 +1823,9 @@ the spec pull request's range above still blocks review.
   remove the run directory while a resolver could still be running out of it. A bash `wait`
   interrupted by a trapped signal returns at once with `128 + signal` of its own rather
   than the child's status, and a second signal interrupts the next `wait` the same way, so
-  the main flow does not wait a fixed number of times: it waits in a loop that forwards the
-  signal once, ignores every further interruption, and ends only when the parent has
+  the main flow does not wait a fixed number of times: it waits in a loop that forwards a
+  recorded signal once — ahead of each `wait` rather than only after one has been cut
+  short — ignores every further interruption, and ends only when the parent has
   actually been reaped, taking the parent's real status from the wait that reaped it; the
   removal happens after that. Because the `EXIT` trap runs against a run
   directory the entry has by then set to mode 0500 (below), it restores mode 0700
@@ -1789,10 +1849,22 @@ the spec pull request's range above still blocks review.
   precisely the `.run` directory the guard was meant to cover. No ordering of statements
   fixes that, because the loss happens inside a child process rather than in the shell.
 
-  So the signal path is split in two. The three traps are one assign-if-empty each —
-  `: "${entry_signal:=INT}"`, `: "${entry_signal:=TERM}"`, `: "${entry_signal:=HUP}"` —
+  So the signal path is split in two. **The three traps are exactly two statements each,
+  and this is the normative form every place in this spec that quotes them uses** —
+  `: "${entry_signal:=TERM}"; wait_interrupted=1`, and its `INT` and `HUP` siblings, which
+  differ in the name and in nothing else —
   and nothing else: no
-  forward, no chmod, no removal, no write, no exit. The `EXIT` trap does the cleanup, and
+  forward, no chmod, no removal, no write, no exit. The flag write is *part of* recording
+  rather than an exception to it: the assign-if-empty records **which** signal arrived and
+  `wait_interrupted=1` records **that** one did, and the wait loop below needs both
+  answers. A trap body carrying only the assignment is the bug that reading makes easy to
+  miss, so it is spelt out here rather than left to the loop: a signal arriving while the
+  entry is inside `wait "$parent_pid"` would leave the flag empty, the loop below would
+  read that wait's `128 + signal` return as the parent's own status, break, and let the
+  `EXIT` trap remove `.run` while the parent — and therefore possibly the resolver's
+  process group — was still alive, which is the one ordering this whole requirement exists
+  to prevent. Two statements, three times, and nothing else in any of them.
+  The `EXIT` trap does the cleanup, and
   the main flow decides when to leave. That costs nothing in latency, and the reason is the
   same bash rule the rest of this requirement rests on: while a foreground command runs, a
   trapped signal is not delivered at all, so a trap body could never have acted sooner than
@@ -1810,6 +1882,12 @@ the spec pull request's range above still blocks review.
   assigns only while the variable is still empty, so one name is fixed at the first
   arrival and every later reader sees it: the checkpoints, the forward below, the one
   `entry-signal:` line and the `128 + signal` the `EXIT` trap derives from it. The
+  `wait_interrupted=1` standing beside it is a plain assignment on purpose and is not
+  given the same treatment: it is a fact about the wait the loop is in the middle of, not
+  about which signal was first, and the loop clears it itself at the top of every
+  iteration, so a second arrival is *supposed* to set it again. The name is first-wins,
+  the flag is latest-wins, and the two statements sit side by side in every one of the
+  three bodies. The
   alternative — record the latest — was considered and is not taken, because it makes
   every one of those observables depend on when the caller's second press landed relative
   to a compile, which is exactly the kind of scheduling-dependent output a test cannot
@@ -2036,30 +2114,102 @@ the spec pull request's range above still blocks review.
   last_forwarded=''
   while :; do
     wait_interrupted=''
+    if [ -n "$entry_signal" ] && [ "$entry_signal" != "$last_forwarded" ]; then
+      case " $(jobs -l) " in
+        *" $parent_pid Running"*)
+          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
+          ;;
+      esac
+      last_forwarded=$entry_signal
+    fi
     wait "$parent_pid"; status=$?
     if [ -z "$wait_interrupted" ]; then
       entry_status=$status
       break
     fi
     [ "$status" -ne 127 ] || { entry_status=$((128 + $(kill -l "$entry_signal"))); break; }
-    case " $(jobs -l) " in
-      *" $parent_pid Running"*)
-        [ "$entry_signal" = "$last_forwarded" ] || {
-          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
-          last_forwarded=$entry_signal
-        }
-        ;;
-    esac
   done
   ```
 
-  The three recording traps set `wait_interrupted` as well as the name, so each of them
-  reads `: "${entry_signal:=TERM}"; wait_interrupted=1` rather than the assignment alone.
+  **The order of those five steps is the whole of the loop's correctness, so it is written
+  out as an order rather than left to be read off the block.** Per iteration, and in this
+  sequence and no other: (1) `wait_interrupted=''` clears the flag; (2) if `entry_signal`
+  is set and differs from `last_forwarded`, consult the job table and send
+  `kill -"$entry_signal" "$parent_pid"` — only when `$(jobs -l)` shows that pid `Running`
+  — then record the attempt in `last_forwarded`; (3) `wait "$parent_pid"; status=$?`;
+  (4) if `wait_interrupted` is empty this wait was not cut short, so it reaped the parent:
+  `entry_status=$status` and break; (5) if `status` is `127` the parent was reaped during
+  an interrupted wait and its own status is gone, so `entry_status` is
+  `128 + <signum of entry_signal>` and the loop breaks on that instead; otherwise go round.
+  The forward is step 2 and not a step after the `wait`, and the clear is step 1 and not
+  the statement before the `wait` — those two positions are what this round fixes, and the
+  paragraphs below say which window each one closes.
+
+  The three recording traps set `wait_interrupted` as well as the name, which is why each
+  of them is the two-statement `: "${entry_signal:=TERM}"; wait_interrupted=1` stated
+  above and not the assignment alone.
   That the trap body's own success does not become `$?` is bash's rule rather than an
   accident of writing — the shell saves the exit status before it runs a trap and restores
   it afterwards — and it is the rule `status=$?` depends on here, so the measurement below
   checks it rather than citing it: every interrupted wait in it reports `143` or `130`,
   not the `0` the trap's last assignment would have left.
+
+  **Three arrival times, and the order above is what makes all three come out right.** An
+  earlier round of this spec forwarded *after* the `wait` and cleared the flag on the
+  statement before it, and two of the three were wrong there.
+
+  1. **A signal recorded before the loop begins** — between `parent_pid=$!` and the first
+     iteration, which is a real window because the traps have been armed since before the
+     `mkdir` and bash defers a trapped signal until the foreground command it is waiting
+     on finishes, so the trap can run on the statement that starts the parent. Step 2 of
+     the **first** pass forwards it, because step 2 asks whether a name is recorded rather
+     than whether a `wait` was interrupted. A loop that only forwarded after an
+     interrupted wait forwards nothing here: nothing interrupted anything, the first
+     `wait` blocks for as long as the parent takes, and the entry then reports the
+     parent's ordinary completion — measured below as an entry that exits `0` on a run the
+     caller sent a `TERM` to, with the parent never signalled at all.
+  2. **A signal landing between step 1 and step 3** — after the clear, during the
+     `$(jobs -l)` or the `kill` or in the instant before `wait` blocks. It sets the flag,
+     and because the clear is step 1 rather than the statement immediately above the
+     `wait`, that flag is still set when step 3 returns. So step 4 does not mistake the
+     return for a reap, and the next pass's step 2 forwards the name. A loop that cleared
+     the flag last erases exactly this arrival, and one that carried the flag from the
+     previous iteration has the mirror-image fault: a stale `1` on a wait nothing
+     interrupted, read as an interruption. One honest limit belongs with this one, and it
+     is the shell's rather than the design's: a signal *consumed by a trap* leaves nothing
+     pending, so the `wait` step 3 enters is not interrupted and the next pass is reached
+     only when that `wait` returns — when the parent exits, or when a further signal cuts
+     the wait short. Bash gives a script no way to test the flag and block atomically (no
+     `sigsuspend`, and `wait` takes no timeout in 3.2), so the window between step 1 and
+     step 3 is narrow — two builtins and one subshell around a builtin — rather than
+     closed. Inside it the forward waits on the parent's own exit, which the probe below
+     provokes with a `sleep` in that gap and measures: the flag survives, the status
+     reported is the parent's real one, and nothing is sent at a reaped pid. Everything
+     the `EXIT` trap promises still holds there — the removal follows the reap — and what
+     is late is the forward, not the cleanup.
+  3. **A signal landing while step 3 is blocked** — the ordinary `Ctrl-C` case. `wait`
+     returns `128 + signal` with the flag set, step 4 keeps the loop, step 5 is not taken,
+     and the next pass's step 2 forwards. This is the one arrival the old order also got
+     right, and it costs one extra pass round the loop to get it right this way, which is
+     one `wait` call and no external command.
+
+  **The residual is one arrival and it is stated rather than argued away: a signal that
+  lands after the parent has already exited on its own, but before the loop observes it.**
+  It is forwarded to nobody, and correctly so — the job table does not say `Running`, so
+  step 2 sends nothing at a pid the shell has given back. What the caller sees then
+  depends on which wait the signal landed across, and both answers are honest ends rather
+  than failures. If the parent's status is still in bash's job table — which it is on the
+  bash this entry ships against — the next `wait` hands it back with the flag clear and
+  step 4 reports **the parent's own status**: the parent finished its work before the
+  signal existed, and that is what the caller is told. If the status has been consumed
+  instead, the interrupted wait answers `127` and step 5 reports **`128 + signal`** for the
+  recorded name. The first is what all sixty coincidence attempts below produced and what
+  the gap probe below produced; the second is the branch the `127` guard exists for, dead
+  code on bash 3.2 and kept for a bash that discards a collected status — which is one of
+  the two lines the plan re-measures on the CI image's bash and records the answer for.
+  Neither answer is `128 + signal` *and* a forwarded signal, because there was nothing
+  left to forward to; the entry's promise of `128 + signal` covers the signals it can
+  still act on, and this one arrived after the thing it would have acted on was gone.
 
   An earlier round of this spec wrote that as two `wait` calls — one interrupted by the
   signal, one for the parent's real status — and the second of those is not safe from the
@@ -2079,10 +2229,14 @@ the spec pull request's range above still blocks review.
   the parent returns the parent's own status — which, on the forwarded path, is itself
   `128 + signal` for the same signal (R2), so the two are frequently the same number.
   **`wait_interrupted` is what tells them apart**, and it is set by the same traps that
-  record the name: the loop clears it immediately before each `wait`, so finding it set
-  afterwards means a trap ran while that `wait` was blocked, and finding it empty means
-  nothing interrupted this `wait`, so it returned because the parent was reaped and
-  `status` is the parent's own.
+  record the name: the loop clears it at the top of each iteration, so finding it set
+  afterwards means a trap ran at some point after that clear — while the `wait` was
+  blocked, or in the two builtins between the clear and it — and finding it empty means
+  nothing at all has run a trap this iteration, so the `wait` returned because the parent
+  was reaped and `status` is the parent's own. The clear is at the *top* of the iteration
+  rather than immediately above the `wait` on purpose, because the statements in between
+  are the forward, and a clear below them would erase a signal that arrived while they
+  ran.
   **`entry_status=$status; break`** therefore runs at one moment only, and the `EXIT`
   trap's removal of `.run` can never precede the parent's exit, however many signals
   arrive.
@@ -2091,20 +2245,24 @@ the spec pull request's range above still blocks review.
   An earlier round wrote the loop as though the flag answered both, and it does not.
 
   1. **Whether to leave the loop is the flag's decision, and an uninterrupted wait is a
-     reaped parent.** `[ -z "$wait_interrupted" ]` is the first test in the body, ahead of
-     everything else, and on it the entry records `status` as the parent's own and breaks.
+     reaped parent.** `[ -z "$wait_interrupted" ]` is the first test after the `wait`,
+     ahead of everything else that return could mean, and on it the entry records `status`
+     as the parent's own and breaks.
      Nothing is forwarded on that path, because there is nothing left to forward to: the
      parent has been reaped, and `parent_pid` is a number bash has already given back.
   2. **Whether to forward is bash's job table's decision, and only a job listed as
-     `Running` is forwarded to.** The flag cannot make this one. It says a trap ran while
-     that `wait` was blocked; it does not say the parent was alive when it ran. A signal
-     delivered after the `wait` has already reaped the parent but before the branch below
-     it runs sets the flag on a wait whose `status` is the parent's real status — the
+     `Running` is forwarded to.** The flag cannot make this one. It says a trap ran since
+     the last clear; it does not say the parent was alive when it ran. A signal
+     delivered after a `wait` has already reaped the parent but before the loop looks at
+     the return sets the flag on a wait whose `status` is the parent's real status — the
      reviewer's case, and the measurement below catches it 27 times in 60 — and a loop
      that forwarded on the flag alone would `kill` a pid the shell has already reaped,
      which after pid reuse is a signal at an unrelated process and is the very hazard the
      surrounding text says this loop avoids. So the `kill` sits inside a
-     `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else.
+     `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else — and that
+     `case` now stands *above* the `wait` rather than below it, which changes what asks
+     the question and not what the question is: a recorded name the loop has not forwarded
+     yet, checked against the table, on every pass including the first.
 
   **Why the job table and not something else.** It is the only thing in a shell that knows
   the difference, and it is immune to pid reuse by construction: bash answers `jobs` from
@@ -2148,9 +2306,11 @@ the spec pull request's range above still blocks review.
   table check is for.** If the parent exits in the same instant a signal lands, the `wait`
   can return the parent's real status *and* have run a trap, so
   `wait_interrupted` is set on a wait that was not really cut short. The loop does not
-  forward there, because the table does not say `Running` — the job is `Exit <n>` or gone,
+  forward there: the pass that could send it is the one *after* that wait, since the name
+  was not yet recorded when this pass's step 2 read it, and by then the table does not say
+  `Running` — the job is `Exit <n>` or gone,
   and the `case` falls through — so no `kill` is sent at a pid the shell has given back.
-  It waits again, and what that next `wait` answers decides the
+  It holds the forward and waits again, and what that next `wait` answers decides the
   status. On the bash this entry ships against it answers with the parent's saved status,
   because bash 3.2 keeps a terminated job's status in its job table and hands it back to
   every `wait` that asks: the measurement below ran the coincidence sixty times and the
@@ -2176,22 +2336,29 @@ the spec pull request's range above still blocks review.
   it from the moment they are armed, which is safe whether or not the loop has run yet.
 
   **Forwarding is once per new signal, and a repeat is not re-forwarded.** The
-  `[ "$entry_signal" = "$last_forwarded" ]` test is what makes that true: without it every
-  interrupted wait with the parent still listed as `Running` would send another `kill`, so
+  `[ "$entry_signal" != "$last_forwarded" ]` test is what makes that true: without it every
+  pass with the parent still listed as `Running` would send another `kill`, so
   a user holding `Ctrl-C` would produce a
-  stream of signals at a parent that is already terminating. The guard does more than keep
+  stream of signals at a parent that is already terminating — and with the forward moved
+  above the `wait`, "every pass" is what it would mean, since the loop no longer needs an
+  interruption to reach the `kill`. `last_forwarded` records the *attempt* rather than the
+  send: it is assigned after the `case` whether or not the table let the `kill` through,
+  and that loses nothing, because the only way the table withholds it is that the parent
+  has already exited, and a parent that has exited does not come back. The guard does more than keep
   the noise down. Bash reaps the parent the instant it exits, before
   the `wait` that reports its status returns, so from that instant `parent_pid` is a number
   the kernel may give to anybody — and a `kill` the loop sends afterwards is a `kill` at
   whatever now holds it. One forward per recorded name is what bounds that, and the table
   check above is what makes the bound narrow rather than merely finite. The loop sends
-  at most one signal in the whole run; it sends it on the first interrupted wait that finds
-  the parent's job listed as `Running`, which
+  at most one signal in the whole run; it sends it on the first pass that finds a recorded
+  name it has not already forwarded and the parent's job listed as `Running`, which is the
+  pass after the one a signal cut short, or the very first pass when the signal was
+  recorded before the loop began — and which
   in every ordinary case is while the parent is still running its termination sequence.
   Since the traps keep the *first* name (above), `entry_signal` never changes
   after it is set, so in practice the loop forwards exactly once per run — but the
   comparison is not therefore redundant, because what it suppresses is the re-forward on
-  every subsequent interrupted wait, not a second name.
+  every subsequent pass, not a second name.
 
   **What that leaves is one send in one instant, and it is stated rather than argued
   away.** The table check moves the question from "is this pid answering" to "is this job
@@ -2221,53 +2388,122 @@ the spec pull request's range above still blocks review.
   not the number some interrupted wait returned.
 
   **This was measured rather than argued, on the same `GNU bash, version
-  3.2.57(1)-release` the other measurement in this requirement used.** A script built as
-  the loop above describes — three traps that record the name and set `wait_interrupted`,
-  a child standing in for the
-  parent whose own `TERM` handler takes a second to finish terminating its group before it
-  exits, and the loop with a line printed at each iteration — was started in the
-  background of a driving shell and sent two `TERM`s 0.5 s apart, the second landing while
-  the stand-in parent was still inside its handler. Each printed line carries three
-  readings side by side, so the two decisions the loop now makes and the test it no longer
-  uses can be compared on the same events: `interrupted=` is the flag that decides whether
-  to leave the loop, `running=` is the `" $parent_pid Running"` match against `$(jobs -l)`
-  that decides whether to forward, and `kill -0=` is what the loop two rounds ago asked.
+  3.2.57(1)-release` the other measurement in this requirement used, and it was re-run
+  from scratch this round because the order of the loop's own statements is what
+  changed.** A script built as the five steps above describe — three traps that are the
+  two-statement bodies this requirement fixes, a child standing in for the
+  parent whose own `TERM` handler takes 0.6 s to finish terminating its group before it
+  exits `143`, and the loop printing one line per pass — was started in the
+  background of a driving shell with `set -m`, so the entry has a process group of its
+  own, and signalled at chosen moments. Each line names its pass, so the pass a forward
+  went out on is read off the output rather than inferred: `interrupted=` is the flag that
+  decided whether to leave the loop, `entry_signal=` is the recorded name, and
+  `forwarded=` is `last_forwarded` after that pass's step 2.
+
+  Two `TERM`s during the wait, 0.1 s apart, is the ordinary case, and it takes three
+  passes:
 
   ```
-  entry status=143
-  wait 1 returned 143; interrupted=[1]; running=[yes]; kill -0=yes; entry_signal=[TERM]
-  forwarded TERM to 59783
-  wait 2 returned 143; interrupted=[1]; running=[yes]; kill -0=yes; entry_signal=[TERM]
-  wait 3 returned 143; interrupted=[]; running=[no]; kill -0=no; entry_signal=[TERM]
+  pass 1: wait returned 143; interrupted=[1]; entry_signal=[TERM]; forwarded=[]
+  pass 2: forwarded TERM to 84789
+  pass 2: wait returned 143; interrupted=[1]; entry_signal=[TERM]; forwarded=[TERM]
+  parent: got TERM
+  pass 3: wait returned 143; interrupted=[]; entry_signal=[TERM]; forwarded=[TERM]
   parent marker at entry exit: present
+  entry status=143
   ```
 
-  (The status prints first for the same reason it does in the other measurement in this
-  requirement: the script's stderr went to a file the harness reads back after the entry
-  had exited.)
-  The second `TERM` interrupted the second wait exactly as predicted — `143` with the flag
-  set — and the loop went round instead of exiting on it; the third wait is
-  the one that reaped the parent, and the marker the stand-in writes as it exits was
+  The forward goes out at the top of pass 2 rather than at the foot of pass 1, which is
+  the same instant in wall-clock terms — nothing stands between them but the loop
+  header — and still a whole pass ahead of the reap. The second `TERM` interrupted
+  pass 2's wait exactly as predicted, `143` with the flag
+  set, and the loop went round instead of exiting on it; pass 3 is
+  the wait that reaped the parent, and the marker the stand-in writes as it exits was
   already on disk when the entry left, so the cleanup could not have preceded the parent.
-  Nothing was forwarded twice. Two variants were run the same way. With the second signal
-  an `INT` rather than a `TERM`, wait 2 returns `130` with the flag set, `entry_signal`
+  Nothing was forwarded twice.
+
+  **The signal that arrives before the loop starts is the run this round exists for, and
+  the same event was measured under both orders.** The stand-in sleeps and then exits `0`
+  of its own accord; a `sleep 0.5` stands between `parent_pid=$!` and the loop, in place
+  of the statements the real entry runs there; the driving shell sends one `TERM` 0.25 s
+  in, so the trap records while that sleep is the foreground command and the loop begins
+  with the name already set and the flag already `1`. With the forward at step 2:
+
+  ```
+  pass 1: forwarded TERM to 84690
+  parent: got TERM
+  pass 1: wait returned 143; interrupted=[]; entry_signal=[TERM]; forwarded=[TERM]
+  parent marker at entry exit: present
+  entry status=143
+  ```
+
+  and with that same script's forward moved back below the `wait`, which is the loop the
+  round before this one specified, on the same event:
+
+  ```
+  pass 1: wait returned 0; interrupted=[]; entry_signal=[TERM]; forwarded=[]
+  parent marker at entry exit: absent
+  entry status=0
+  ```
+
+  That is the finding in two blocks. The old order forwards nothing, blocks for the
+  parent's whole natural life, reports the parent's ordinary `0` for a run the caller sent
+  a `TERM` to, and leaves the stand-in's handler never having run — no marker, and in the
+  shipped arrangement no group termination either. One more thing to read off pass 1 of
+  the new run, because it is the clear rather than the forward: the flag the trap set
+  during the `sleep` was cleared by step 1, so the wait that reaped the parent was read as
+  a reap and the `143` reported is the *parent's own* status and not an interrupted wait's
+  number.
+
+  **The gap between the clear and the `wait`, widened on purpose.** A `sleep 0.4` was
+  inserted between step 2 and step 3 of the first pass and a `TERM` sent into it, with a
+  stand-in that exits `9` by itself 1.2 s in. The signal is consumed by the trap, so the
+  `wait` that follows is not interrupted and blocks until the parent's own exit:
+
+  ```
+  pass 1: wait returned 9; interrupted=[1]; entry_signal=[TERM]; forwarded=[]
+  pass 2: not forwarding TERM; job table does not say 84771 is Running
+  pass 2: wait returned 9; interrupted=[]; entry_signal=[TERM]; forwarded=[TERM]
+  parent marker at entry exit: present
+  entry status=9
+  ```
+
+  Both halves of the residual are in those four lines. The flag survived the wait, so
+  pass 1's `9` was not read as a reap even though it was one; the table refused the
+  forward on pass 2, because by then the parent had gone; and the status the caller sees
+  is the parent's real `9` rather than a `143` nothing earned. In the shipped loop that
+  gap is two builtins and one subshell around a builtin, not 0.4 s.
+
+  **Two more variants and a control, all under the new order.** With the second signal
+  an `INT` rather than a `TERM`, pass 2's wait returns `130` with the flag set,
+  `entry_signal`
   stays `TERM`, the `INT` is not forwarded, and the entry still exits `143` — a second,
-  differing signal changes neither the line nor the status. And with the stand-in parent
+  differing signal changes neither the line nor the status, and the run contains exactly
+  one forward, which is the one forward per distinct recorded name the guard promises.
+  With the stand-in parent
   exiting `42` instead of `128 + 15`, the entry exits `42`, which is the assertion that
   matters most here: the status comes from the wait that reaped the parent and not from
-  either of the two that a signal interrupted. (The `INT` variant needs the entry in a
+  either of the two that a signal interrupted. (The `INT` runs need the entry in a
   process group of its own — `set -m` in the driving shell — because a shell starts an
   asynchronous child with `SIGINT` ignored when job control is off, and a signal ignored
   at entry cannot be trapped.) A run with no signal at all and a stand-in that exits `7` by
-  itself is the control, and it takes one pass:
-  `wait 1 returned 7; interrupted=[]; running=[no]; kill -0=no; entry_signal=[]`, entry
+  itself is the control, and it takes one pass and sends nothing, which is what proves
+  step 2 is inert until a name is recorded:
+  `pass 1: wait returned 7; interrupted=[]; entry_signal=[]; forwarded=[]`, entry
   status `7`.
 
-  **The coincidence was provoked and run sixty times, and it is what this round's finding
-  lives in.** The stand-in was made to exit `7` on its own at 0.30 s and the driving shell
+  **The coincidence was provoked and run sixty times, and it is what the round before
+  this one's finding lives in.** The stand-in was made to exit `7` on its own at 0.30 s and
+  the driving shell
   sent one `TERM` at 0.31 s, which puts the signal in and around the window between the
   parent's exit and the loop's next statement. Every attempt was classified by its first
-  wait, and the two classes were both hit:
+  wait, and the two classes were both hit. These sixty were run with the forward standing
+  *below* the `wait`, which is the position this round moves, and they are kept rather than
+  re-run because what they measure is the table gate's verdict on those events and the move
+  does not change it: the same read of the same table, taken one statement earlier on the
+  following pass, and a job the table did not call `Running` on one pass cannot be
+  `Running` on the next. So read the output for the classification each line carries, not
+  for where the forward line sits in it:
 
   ```
   delay=0.31 attempts=60
@@ -2291,8 +2527,9 @@ the spec pull request's range above still blocks review.
 
   Read the B run first, because it is the finding exactly as the reviewer stated it: the
   wait returned `7` — the parent's *real* status — and the flag was set anyway, because
-  the `TERM` landed after that wait had reaped the parent and before the branch below it
-  ran. A loop that forwarded on the flag alone sends a `kill` there, at a pid the shell has
+  the `TERM` landed after that wait had reaped the parent and before the loop had looked
+  at what it returned. A loop that forwarded on the flag alone sends a `kill` there, at a
+  pid the shell has
   already given back. The table check holds it, the loop goes round, the second wait hands
   back the same `7`, and the entry exits `7`. Twenty-seven of the sixty attempts were that
   case; all sixty finished with the parent's own status.
@@ -5596,7 +5833,16 @@ the spec pull request's range above still blocks review.
   reviewer checking that those four initialisations all precede the `trap` builtins, so
   that no variable a trap, a checkpoint or the `EXIT` trap reads can be unset when `set -u`
   meets it, that no statement between them can create `.run` without the guard,
-  and that no signal trap body does anything but record a name. One more line joins that
+  and that each signal trap body is the two statements R1 fixes — the assign-if-empty and
+  `wait_interrupted=1` — and nothing besides: a body carrying only the assignment is the
+  one form of this bug a test cannot catch, because the loop it breaks needs a signal
+  inside a `wait` to break it. The wait loop's own statement order joins that list for the
+  same reason and is read the same way, with the plan quoting the five steps in sequence —
+  the flag cleared at the top of the body, the forward of an already-recorded signal above
+  the `wait`, the `wait`, the clear-flag break, the `127` break — and the reviewer checking
+  that no statement stands between the clear and the loop header and that no `kill` stands
+  below the `wait`, since both of the windows those positions close need a signal delivered
+  between two adjacent statements (R1). One more line joins that
   list this round, and it is a position rather than a value: **the `EXIT` trap's body runs
   `trap '' INT TERM HUP` after its status capture and ahead of the first external command
   the trap runs** — ahead of the `chmod` and ahead of the `/bin/rm` — which is what makes
@@ -5899,8 +6145,9 @@ the spec pull request's range above still blocks review.
 
   **The job-table check R1 adds this round changes nothing this case asserts, and that is
   worth saying rather than leaving to be rediscovered.** The word `forwarded` in that line
-  is now conditional on `$(jobs -l)` listing the parent as `Running` at the moment of the
-  first interrupted wait, and in this case it always is: the parent is alive and inside its
+  is now conditional on `$(jobs -l)` listing the parent as `Running` at the moment the
+  loop asks — the pass after the wait a signal cut short, which is where this round's
+  reordering puts the question — and in this case it always is: the parent is alive and inside its
   `SIGTERM`-then-`SIGKILL` sequence against a group that has been `SIGSTOP`ped, which is
   the slowest window this whole requirement has, and the case does not even signal until it
   has read the parent's `runtime-pgid:` line. So the line still reads
@@ -6690,9 +6937,12 @@ Order, each step checkable before the next:
    directory — and after the four empty initialisations above and after `run` itself is
    assigned from the validated output root, so nothing any trap reads is unset when it is
    armed (R1) — the three signal traps recording the **first** signal's name in
-   `entry_signal` with an assign-if-empty, `: "${entry_signal:=TERM}"` and its two
-   siblings, so a repeat or a second, different signal cannot overwrite a name the entry
-   has already acted on (R1), and
+   `entry_signal` with an assign-if-empty and setting the wait loop's flag beside it,
+   `: "${entry_signal:=TERM}"; wait_interrupted=1` and its `INT` and `HUP` siblings, which
+   is two statements in each of the three bodies and the whole of each of them, so that a
+   repeat or a second, different signal cannot overwrite a name the entry
+   has already acted on and no signal arriving during a `wait` can leave the loop below
+   reading an interrupted wait's return as the parent's own status (R1), and
    doing nothing else, and the `EXIT` trap's removal guarded by a `run_created` variable
    that stays unset until the directory is the entry's own; then refuse a pre-existing
    `.run` with `[ -e ]`; then create the run directory `<output>/.run` at mode 0700 with a
@@ -6729,19 +6979,31 @@ Order, each step checkable before the next:
    otherwise be reported as an `E_RUNTIME` refusal in place of the `128 + signal` exit and
    the `entry-signal:` line the caller is owed (R1). The two branches are `parent_pid`
    empty or not.
-   With a parent, the wait is a loop rather than a fixed pair of `wait` calls, and it makes
-   two separate decisions. **Whether to leave the loop** is the `wait_interrupted` flag's:
-   the three traps set it, the loop clears it before every `wait`, and a `wait` that comes
+   With a parent, the wait is a loop rather than a fixed pair of `wait` calls, and its five
+   steps run in this order on every pass: clear the flag; forward an already-recorded
+   signal; `wait`; leave on a clear flag; leave on a `127`. **Whether to leave the loop**
+   is the `wait_interrupted` flag's:
+   the three traps set it, the loop clears it at the top of every pass, and a `wait` that
+   comes
    back with it clear was not cut short, so its status is the parent's own — the entry
    records it in `entry_status`, breaks and exits, forwarding nothing, because the parent
-   has been reaped. **Whether to forward** is bash's job table's: while the flag comes back
-   set, the entry consults `$(jobs -l)` and sends `kill -"$entry_signal"` only if the
+   has been reaped. **Whether to forward** is bash's job table's, and the question is asked
+   *before* each `wait` rather than after an interrupted one: if `entry_signal` is set and
+   differs from `last_forwarded`, the entry consults `$(jobs -l)` and sends
+   `kill -"$entry_signal"` only if the
    parent's job is listed as `Running`, because the flag says a trap ran and not that the
    parent was alive when it ran — a signal landing after a `wait` has reaped the parent but
-   before the branch runs sets it too, and forwarding there is a `kill` at a pid the shell
-   has given back, which after pid reuse is a stranger's. A job listed `Exit`/`Done`, or
-   absent, is not forwarded to; a `last_forwarded` variable keeps a further interrupted
-   wait from re-sending; neither `jobs` nor `case` forks an external command, and no
+   before the loop reads the return sets it too, and forwarding there is a `kill` at a pid
+   the shell
+   has given back, which after pid reuse is a stranger's. Asking before the `wait` is what
+   covers a signal recorded before the loop began — the first pass forwards it, where a
+   loop that forwarded only after an interruption would block for the parent's whole
+   natural life and report its ordinary status (R1, measured) — and clearing the flag at
+   the top rather than immediately above the `wait` is what keeps a signal that lands
+   during the forward from being erased. A job listed `Exit`/`Done`, or
+   absent, is not forwarded to; a `last_forwarded` variable, assigned after the `case`
+   whether or not the table let the `kill` through, keeps a later
+   pass from re-sending; neither `jobs` nor `case` forks an external command, and no
    version of `kill -0` on the pid survives anywhere in the loop (R1). The
    one wrinkle is a parent that exits in the same instant a signal lands, where the flag is
    set on a wait that was not cut short: nothing is forwarded, the loop waits once more,
@@ -6955,7 +7217,14 @@ intent says for this change. Only after the operator's merge does
   half of that distrust, on the shipped side rather than the test's: the loop forwards the
   recorded signal only while bash's own job table still lists the parent's job as
   `Running`, so a signal that lands after the reap cannot send a `kill` at a pid the kernel
-  may already have given to another process (R1). The third test drives the
+  may already have given to another process (R1). This round adds the two positions that
+  make that loop see a signal at all, and both are read rather than tested because each
+  needs an arrival between two adjacent statements: the traps set the loop's flag as part
+  of recording, so a signal delivered inside `wait` cannot pass for the parent's own exit;
+  and the loop forwards an already-recorded signal *before* each `wait`, so a signal that
+  arrived before the loop began is not left unsent while the entry blocks for the parent's
+  whole natural life — measured on bash 3.2 both ways, and the old order exits `0` on a run
+  the caller sent a `TERM` to (R1). The third test drives the
   entry's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
@@ -7313,7 +7582,8 @@ intent says for this change. Only after the operator's merge does
   would be a second write root (R1, R7) — and that item grows this round rather than a
   ninth being added, because the run directory's whole lifecycle is one deviation from the
   same lines: `reproduce.sh` cleans up inside its `EXIT`/`HUP`/`INT`/`TERM` trap bodies,
-  where the entry's three signal traps only record the signal's name, its `EXIT` trap does
+  where the entry's three signal traps only record — the signal's name and the wait loop's
+  `wait_interrupted` flag, two statements each — its `EXIT` trap does
   the cleanup under a `run_created` guard, and the main flow does the forwarding and the
   leaving at `checkpoint` calls, with the guard set from `/bin/mkdir`'s own status behind
   an `[ -e ]` refusal rather than from a command substitution a group signal can kill
