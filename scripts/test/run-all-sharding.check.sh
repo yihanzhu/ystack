@@ -10,143 +10,92 @@ trap 'rm -rf "$tmpdir"' EXIT
 passed=0
 failed=0
 
-check() {
-  # check <description> <status>  -- status 0 means the assertion held.
-  local desc=$1 status=$2
-  if [ "$status" -eq 0 ]; then
-    passed=$((passed + 1))
-  else
-    failed=$((failed + 1))
-    echo "FAIL: $desc" >&2
-  fi
+check() { # check <desc> <status> -- status 0 means the assertion held.
+  if [ "$2" -eq 0 ]; then passed=$((passed + 1)); else fail "$1"; fi
 }
 
-fail() {
-  # fail <message> -- unconditional failure with a message, then record it.
+fail() { # fail <message>
   echo "FAIL: $1" >&2
   failed=$((failed + 1))
 }
 
-bounded_list() {
-  # bounded_list <outfile> [args...] -- run run-all.sh under a wall-clock bound
-  # and capture stdout to outfile. Returns the run's exit status via $?; a
-  # timeout (perl's alarm) yields 142.
-  local out=$1
-  shift
-  local status=0
-  /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" "$@" >"$out" 2>"$tmpdir/stderr.tmp" || status=$?
-  return "$status"
+# run <outfile> <errfile> [args...] -- run-all.sh under a 60s wall-clock
+# bound (perl alarm; macOS has no timeout/gtimeout). Sets RUN_STATUS; 142
+# means the bound fired, i.e. the runner started a suite instead of listing.
+run() {
+  local out=$1 err=$2
+  shift 2
+  RUN_STATUS=0
+  /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" "$@" >"$out" 2>"$err" || RUN_STATUS=$?
 }
 
-# ---------------------------------------------------------------------------
-# Precondition: the runner must already implement --shard/--list. Check this
-# statically, before ever invoking it, so a pre-fix run cannot fall through to
-# the 80-90 minute serial suite. Grep -F keeps the usage line's <, > and
-# parens literal; the --list case label is passed via -e since it begins with
-# "--" and would otherwise be read as an option.
-# ---------------------------------------------------------------------------
+# bounded_list <outfile> [args...] -- run(), asserting the bound wasn't hit.
+bounded_list() {
+  local out=$1 desc="run-all.sh $*"
+  shift
+  run "$out" "$tmpdir/err.tmp" "$@"
+  if [ "$RUN_STATUS" -eq 142 ]; then
+    fail "$desc did not return within 60s (the runner started a suite)"
+    return 1
+  elif [ "$RUN_STATUS" -ne 0 ]; then
+    fail "$desc exited $RUN_STATUS, expected 0"
+    return 1
+  fi
+}
+
+# ---- Precondition: refuse before ever invoking the runner (Step 0). Grep -F
+# keeps the usage line's <, > and parens literal; -e '--list)' is needed
+# because a pattern starting with "--" would otherwise be read as an option.
 usage_line='usage: run-all.sh [--shard <index>/<count>] [--list] (1 <= index <= count <= 16)'
-
-precondition_ok=1
-if ! grep -Fq "$usage_line" "$runner"; then
-  precondition_ok=0
-fi
-if ! grep -Fq -e '--list)' "$runner"; then
-  precondition_ok=0
-fi
-
-if [ "$precondition_ok" -ne 1 ]; then
+if ! grep -Fq "$usage_line" "$runner" || ! grep -Fq -e '--list)' "$runner"; then
   echo "error: run-all.sh does not implement --shard/--list yet" >&2
   exit 2
 fi
 
-# ---------------------------------------------------------------------------
-# The raw suite list: the oracle. Built directly, without asking the runner,
-# so the proof does not merely check the runner's self-consistency.
-# ---------------------------------------------------------------------------
+# ---- The raw suite list: the independent oracle everything below compares
+# against, built without asking the runner.
 raw_list="$tmpdir/raw.txt"
 find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh' -print \
   | LC_ALL=C sort | sed "s|^$root/||" > "$raw_list"
 
 # 1. --list with no selector equals the raw list.
 list_all="$tmpdir/list_all.txt"
-status=0
-bounded_list "$list_all" --list || status=$?
-if [ "$status" -eq 142 ]; then
-  fail "run-all.sh --list did not return within 60s (the runner started a suite)"
-elif [ "$status" -ne 0 ]; then
-  fail "run-all.sh --list exited $status, expected 0"
-else
-  if cmp -s "$raw_list" "$list_all"; then
-    check "--list with no selector equals the raw list" 0
-  else
-    check "--list with no selector equals the raw list" 1
-  fi
+if bounded_list "$list_all" --list; then
+  check "--list with no selector equals the raw list" "$(cmp -s "$raw_list" "$list_all"; echo $?)"
 fi
 
 # 2. --shard 1/1 --list equals --list with no selector.
 list_1_1="$tmpdir/list_1_1.txt"
-status=0
-bounded_list "$list_1_1" --shard 1/1 --list || status=$?
-if [ "$status" -eq 142 ]; then
-  fail "run-all.sh --shard 1/1 --list did not return within 60s (the runner started a suite)"
-elif [ "$status" -ne 0 ]; then
-  fail "run-all.sh --shard 1/1 --list exited $status, expected 0"
-else
-  if cmp -s "$list_all" "$list_1_1"; then
-    check "--shard 1/1 --list equals --list with no selector" 0
-  else
-    check "--shard 1/1 --list equals --list with no selector" 1
-  fi
+if bounded_list "$list_1_1" --shard 1/1 --list; then
+  check "--shard 1/1 --list equals --list with no selector" "$(cmp -s "$list_all" "$list_1_1"; echo $?)"
 fi
 
-# 3, 4. Exact membership/order per shard, plus union and disjointness, for
-# every count from 1 to 16 and every index from 1 to that count (136 pairs).
+# 3, 4. Exact membership/order per shard (the assertion a shifted-or-chunked
+# assignment would fail), plus union and disjointness — over all 136
+# index/count pairs for count 1..16.
 for n in $(seq 1 16); do
   concat="$tmpdir/concat-$n.txt"
   : > "$concat"
   for i in $(seq 1 "$n"); do
-    expected="$tmpdir/expected-$n-$i.txt"
+    expected="$tmpdir/expected.txt"
     actual="$tmpdir/actual-$n-$i.txt"
     awk -v i="$i" -v n="$n" '((NR - 1) % n) + 1 == i' "$raw_list" > "$expected"
-
-    status=0
-    bounded_list "$actual" --shard "$i/$n" --list || status=$?
-    if [ "$status" -eq 142 ]; then
-      fail "run-all.sh --shard $i/$n --list did not return within 60s (the runner started a suite)"
-      continue
-    elif [ "$status" -ne 0 ]; then
-      fail "run-all.sh --shard $i/$n --list exited $status, expected 0"
-      continue
+    if bounded_list "$actual" --shard "$i/$n" --list; then
+      if cmp -s "$expected" "$actual"; then
+        check "shard $i/$n exact membership and order" 0
+      else
+        fail "shard $i/$n exact membership and order: expected first line '$(head -1 "$expected")', got '$(head -1 "$actual")'"
+      fi
+      cat "$actual" >> "$concat"
     fi
-
-    if cmp -s "$expected" "$actual"; then
-      check "shard $i/$n exact membership and order" 0
-    else
-      exp_line="$(head -1 "$expected" 2>/dev/null || true)"
-      act_line="$(head -1 "$actual" 2>/dev/null || true)"
-      fail "shard $i/$n exact membership and order: expected first line '$exp_line', got '$act_line'"
-    fi
-
-    # Every selected path appears in the raw list.
-    if comm -23 <(LC_ALL=C sort "$actual") <(LC_ALL=C sort "$raw_list") | grep -q .; then
-      fail "shard $i/$n: a selected path is not in the raw list"
-    else
-      check "shard $i/$n: every selected path is in the raw list" 0
-    fi
-
-    cat "$actual" >> "$concat"
   done
-
-  # No duplicate line across the n shards (pairwise disjointness plus no
-  # repeat inside a shard).
+  # No duplicate line across the n shards (pairwise disjoint, no repeat), and
+  # the sorted concatenation equals the raw list (nothing went unrun).
   if [ "$(LC_ALL=C sort "$concat" | wc -l)" -eq "$(LC_ALL=C sort -u "$concat" | wc -l)" ]; then
     check "count $n: shards have no duplicate line" 0
   else
     fail "count $n: a suite went unrun or was duplicated (shards are not disjoint)"
   fi
-
-  # The sorted concatenation equals the raw list.
   if cmp -s <(LC_ALL=C sort "$concat") <(LC_ALL=C sort "$raw_list"); then
     check "count $n: union of shards equals the raw list" 0
   else
@@ -154,95 +103,65 @@ for n in $(seq 1 16); do
   fi
 done
 
-# 5. Every refusal, as the flag and as the environment variable.
-bad_values=('0/4' '5/4' '9/6' 'a/b' '1/0' '1/17' '1' '/4' '4/' '')
-check_refusal() {
-  # check_refusal <description> <exit_status> <stdout_file> <stderr_file>
-  local desc=$1 status=$2 out=$3 err=$4
-  if [ "$status" -ne 2 ]; then
-    fail "$desc: exit status $status, expected 2"
-    return
-  fi
-  if [ -s "$out" ]; then
+# 5. Every refusal (R5), as the flag and as YSTACK_TEST_SHARD, plus a bare
+# --shard with no value.
+check_refusal() { # check_refusal <desc> <outfile> <errfile>
+  local desc=$1 out=$2 err=$3
+  if [ "$RUN_STATUS" -ne 2 ]; then
+    fail "$desc: exit status $RUN_STATUS, expected 2"
+  elif [ -s "$out" ]; then
     fail "$desc: stdout was not empty"
-    return
-  fi
-  if ! cmp -s <(printf '%s\n' "$usage_line") "$err"; then
+  elif ! cmp -s <(printf '%s\n' "$usage_line") "$err"; then
     fail "$desc: stderr did not match the usage line exactly"
-    return
+  else
+    check "$desc" 0
   fi
-  if grep -q '^==> ' "$out" 2>/dev/null; then
-    fail "$desc: a suite header appeared, a suite ran"
-    return
-  fi
-  check "$desc" 0
 }
 
+bad_values=('0/4' '5/4' '9/6' 'a/b' '1/0' '1/17' '1' '/4' '4/' '')
 for v in "${bad_values[@]}"; do
-  out="$tmpdir/refuse-out.txt"
-  err="$tmpdir/refuse-err.txt"
-  status=0
-  /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" --shard "$v" >"$out" 2>"$err" || status=$?
-  check_refusal "refusal: --shard '$v'" "$status" "$out" "$err"
+  out="$tmpdir/ro.txt"; err="$tmpdir/re.txt"
+  run "$out" "$err" --shard "$v"
+  check_refusal "refusal: --shard '$v'" "$out" "$err"
 
-  out2="$tmpdir/refuse-out2.txt"
-  err2="$tmpdir/refuse-err2.txt"
-  status2=0
-  YSTACK_TEST_SHARD="$v" /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" >"$out2" 2>"$err2" || status2=$?
-  check_refusal "refusal: YSTACK_TEST_SHARD='$v'" "$status2" "$out2" "$err2"
+  out2="$tmpdir/ro2.txt"; err2="$tmpdir/re2.txt"
+  RUN_STATUS=0
+  /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 env YSTACK_TEST_SHARD="$v" bash "$runner" >"$out2" 2>"$err2" || RUN_STATUS=$?
+  check_refusal "refusal: YSTACK_TEST_SHARD='$v'" "$out2" "$err2"
 done
 
-# A bare --shard with nothing after it.
-out="$tmpdir/refuse-bare-out.txt"
-err="$tmpdir/refuse-bare-err.txt"
-status=0
-/usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" --shard >"$out" 2>"$err" || status=$?
-check_refusal "refusal: bare --shard with no value" "$status" "$out" "$err"
+out="$tmpdir/ro.txt"; err="$tmpdir/re.txt"
+run "$out" "$err" --shard
+check_refusal "refusal: bare --shard with no value" "$out" "$err"
 
-# 6. The flag wins; the variable is never read (nor validated) when the flag
-# is given. Two malformed values plus one well-formed value, each compared to
-# the same flag-only invocation.
-baseline="$tmpdir/baseline-1-6.txt"
-status=0
-bounded_list "$baseline" --shard 1/6 --list || status=$?
-if [ "$status" -ne 0 ]; then
-  fail "baseline --shard 1/6 --list exited $status, expected 0"
-fi
-
+# 6. The flag wins; the variable is neither read nor validated when the flag
+# is given. Two malformed values plus one well-formed one, each compared
+# against the same flag-only invocation.
+baseline="$tmpdir/baseline.txt"
+bounded_list "$baseline" --shard 1/6 --list || true
 for v in '2/6' 'a/b' '9/6'; do
-  out="$tmpdir/precedence-out.txt"
-  status=0
-  YSTACK_TEST_SHARD="$v" /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" --shard 1/6 --list >"$out" 2>"$tmpdir/precedence-err.txt" || status=$?
-  if [ "$status" -eq 142 ]; then
+  out="$tmpdir/prec.txt"
+  RUN_STATUS=0
+  /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 env YSTACK_TEST_SHARD="$v" bash "$runner" --shard 1/6 --list >"$out" 2>"$tmpdir/prec-err.txt" || RUN_STATUS=$?
+  if [ "$RUN_STATUS" -eq 142 ]; then
     fail "YSTACK_TEST_SHARD=$v --shard 1/6 --list did not return within 60s"
-    continue
-  elif [ "$status" -ne 0 ]; then
-    fail "YSTACK_TEST_SHARD=$v --shard 1/6 --list exited $status, expected 0"
-    continue
-  fi
-  if cmp -s "$baseline" "$out"; then
-    check "flag wins over YSTACK_TEST_SHARD=$v" 0
+  elif [ "$RUN_STATUS" -ne 0 ]; then
+    fail "YSTACK_TEST_SHARD=$v --shard 1/6 --list exited $RUN_STATUS, expected 0"
   else
-    fail "flag wins over YSTACK_TEST_SHARD=$v: output differed"
+    check "flag wins over YSTACK_TEST_SHARD=$v" "$(cmp -s "$baseline" "$out"; echo $?)"
   fi
 done
 
 # 7. YSTACK_TEST_SHARD alone selects the same set as the equivalent flag.
 via_env="$tmpdir/via-env.txt"
-via_flag="$tmpdir/via-flag.txt"
-status=0
-YSTACK_TEST_SHARD='3/6' /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$runner" --list >"$via_env" 2>"$tmpdir/via-env-err.txt" || status=$?
-if [ "$status" -ne 0 ]; then
-  fail "YSTACK_TEST_SHARD=3/6 --list exited $status, expected 0"
+RUN_STATUS=0
+/usr/bin/perl -e 'alarm shift; exec @ARGV' 60 env YSTACK_TEST_SHARD='3/6' bash "$runner" --list >"$via_env" 2>"$tmpdir/via-env-err.txt" || RUN_STATUS=$?
+if [ "$RUN_STATUS" -ne 0 ]; then
+  fail "YSTACK_TEST_SHARD=3/6 --list exited $RUN_STATUS, expected 0"
 else
-  status2=0
-  bounded_list "$via_flag" --shard 3/6 --list || status2=$?
-  if [ "$status2" -ne 0 ]; then
-    fail "--shard 3/6 --list exited $status2, expected 0"
-  elif cmp -s "$via_env" "$via_flag"; then
-    check "YSTACK_TEST_SHARD=3/6 alone equals --shard 3/6" 0
-  else
-    fail "YSTACK_TEST_SHARD=3/6 alone did not equal --shard 3/6"
+  via_flag="$tmpdir/via-flag.txt"
+  if bounded_list "$via_flag" --shard 3/6 --list; then
+    check "YSTACK_TEST_SHARD=3/6 alone equals --shard 3/6" "$(cmp -s "$via_env" "$via_flag"; echo $?)"
   fi
 fi
 
@@ -261,13 +180,11 @@ if [ -f "$workflow" ]; then
     else
       fail "workflow shard count mismatch: run line says N=$shard_n, matrix list is '$matrix_list'"
     fi
+  elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    fail "no --shard run line in ci.yml: the sharded test run line was removed"
   else
-    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-      fail "no --shard run line in ci.yml: the sharded test run line was removed"
-    else
-      echo "workflow is still serial: no --shard run line in ci.yml"
-      check "workflow is still serial (local, GITHUB_ACTIONS unset)" 0
-    fi
+    echo "workflow is still serial: no --shard run line in ci.yml"
+    check "workflow is still serial (local, GITHUB_ACTIONS unset)" 0
   fi
 else
   fail "workflow file not found: $workflow"
@@ -276,9 +193,5 @@ fi
 echo ""
 echo "assertions passed: $passed"
 echo "assertions failed: $failed"
-
-if [ "$failed" -ne 0 ]; then
-  exit 1
-fi
-
+[ "$failed" -eq 0 ] || exit 1
 echo "sharding proof: all checks passed"
