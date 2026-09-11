@@ -413,8 +413,11 @@ That checklist covers:
   command** (unlike the labels loop), and **branch protection isn't available on free
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.
-- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (structure
-  check + shellcheck). It is the **hard merge gate**; restore it by having this repo's
+- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml): a
+  `checks` job (structure check, shellcheck, sharding proof, rename gate), six
+  parallel `test` shards each running
+  `scripts/test/run-all.sh --shard <index>/<count>`, and an aggregate `ci` job
+  that stays the **hard merge gate**. Restore it by having this repo's
   `.github/workflows/` present on `main`. Don't copy its steps here — link to it.
   - The structure check enforces the full backup against
     [`ci/required-files.txt`](ci/required-files.txt) — the **source of truth** for every
