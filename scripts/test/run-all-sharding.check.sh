@@ -118,7 +118,7 @@ check_refusal() { # check_refusal <desc> <outfile> <errfile>
   fi
 }
 
-bad_values=('0/4' '5/4' '9/6' 'a/b' '1/0' '1/17' '1' '/4' '4/' '')
+bad_values=('0/4' '5/4' '9/6' 'a/b' '1/0' '1/17' '1' '/4' '4/' '' '01/6' '1/999999999999999999999999' '999999999999999999999999/6')
 for v in "${bad_values[@]}"; do
   out="$tmpdir/ro.txt"; err="$tmpdir/re.txt"
   run "$out" "$err" --shard "$v"

@@ -47,7 +47,13 @@ fi
 index=0
 count=0
 if [ "$shard_given" -eq 1 ]; then
-  if ! [[ "$shard_value" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]]; then
+  # Cap the numeric shape (at most two digits each, no leading zero) before
+  # any arithmetic or `[ -le ]`: count is bounded at 16 by the spec, so two
+  # digits suffice, and a value this short can never overflow the range
+  # checks below (unlike an unbounded `[0-9]*`, which lets an oversized
+  # selector such as 1/999999999999999999999999 reach `[ -gt ]` and fail
+  # there instead of refusing cleanly).
+  if ! [[ "$shard_value" =~ ^[1-9][0-9]?/[1-9][0-9]?$ ]]; then
     usage
   fi
   index="${shard_value%%/*}"
