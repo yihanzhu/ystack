@@ -505,21 +505,32 @@ measured rather than guessed:
   the `E_RUNTIME` grep written to tolerate bash's own `redirection error` line beside it,
   the non-zero-exit check, the empty-output-root poll, and the comment saying the two
   numbers follow the ladder's rungs). Both reuse machinery rather than bringing any, which
-  is why two runs cost ~10 and not ~25 (R1, R10).
+  is why two runs cost ~10 and not ~25 (R1, R10). This round adds ~1 more, to **~1095**,
+  and it is the whole of this round's implementation cost: pass 1 of the allowlist grep
+  gains the `/usr/bin/printf` ordering assertion — one `grep -n` for the `env -i` re-exec
+  line, one for every `/usr/bin/printf` occurrence, and a numeric comparison, written
+  beside the `/usr/bin/awk` position assertion that already stands there and reusing its
+  extraction (R7, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2822 lines — added as they stand, ~1228 + ~440 +
-~1094 + ~60, rather than carried forward: a round two back wrote the running
+Those four bullets now sum to about 2823 lines — added as they stand, ~1228 + ~440 +
+~1095 + ~60, rather than carried forward: a round two back wrote the running
 total as ~2730 and adding its own four bullets gave ~2771, so the figure is corrected here
-in the same way an earlier round corrected ~2535 to ~2578. **This round's own delta is +12**
+in the same way an earlier round corrected ~2535 to ~2578. **This round's own delta is +1**,
+and it is the smallest this spec has recorded: the round is three consistency fixes, two of
+which change wording only — the parent's fork enumeration and the entry's soft-limit
+postcondition both describe implementations this spec already required — and the third adds
+one assertion to the test, the `/usr/bin/printf` ordering grep. Nothing in the parent,
+nothing in the entry, nothing in the docs. The range does not move for it: ~2823 is still
+under the 2829 top of the standing band, by six lines, which is now close enough that the
+next round of any size should expect to move it. **The round before this one was +12**
 — ~2 in the entry, the unmatched-glob refusal and the second comment line, and ~10 in the
-test, the two descriptor runs — and the range does not move for it: ~2822 is still under
-the 2829 top of the standing band, by seven lines, which is close enough to be worth
-saying rather than leaving for the next round to discover. The round before this one
+test, the two descriptor runs — and left the range alone at ~2822 for the same reason,
+by seven lines. The round before that one
 recorded its own delta as −1 and left the range alone for the same reason in the other
-direction. **The round before that moved the implementation range, for the first time
-in fourteen rounds.** The convention held
+direction. **The round before that one again moved the implementation range, for the first
+time in fourteen rounds.** The convention held
 until then was that the range is not re-derived from the sum each round: it was the ~2441
 of the round it was set in, with ±15% at
 both ends, and every round since recorded its own delta against that figure rather
@@ -921,14 +932,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7880-10662 lines** — this file's measured 9271 lines plus or minus 15%, rounded. That
+**7999-10822 lines** — this file's measured 9410 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 9271 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 9410 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1097,13 +1108,23 @@ precondition trying the largest cap first so that normalising the soft limit rai
 caller's room where it can rather than always cutting it to 256, so a caller who has
 already filled the low descriptor numbers is either served with every one of them shut or
 turned away before anything is created, and can no longer be handed a run that closed
-nothing, kept their credential open inside every child and reported success).
+nothing, kept their credential open inside every child and reported success, and this round
+three statements this spec made when a number was smaller brought back into step with the
+number: the parent's blocked-signal rule naming all eight of its hash children rather than
+the three it had when the rule was written, so the five module-hash forks cannot be read as
+standing outside the window that exists to stop a handler killing a child whose pid has not
+been published; the entry's soft-limit postcondition stated as the three rungs the ladder
+actually leaves rather than the two it used to, so no plan or test asserts a limit the
+entry stopped setting; and the external `printf` restricted to the data writes it performs,
+with every refusal line the builtin's and an ordering assertion behind it, so the boundary
+R7 states — the first external command the entry runs is `/usr/bin/env` — cannot be broken
+by an implementer who took an allowlist entry at its word).
 The same record again here, where the count it rests on is derived, on its own line:
 
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7880-10662 lines** — this file's measured 9271 lines plus or minus 15%, rounded. That
+**7999-10822 lines** — this file's measured 9410 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1116,8 +1137,9 @@ range is the separate figure above. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420, then 7690, then 7878, then 7914, then 8242, then 8637, then 8867;
-where each block of growth went is worth naming so it can be checked rather than trusted.
+7173, then 7420, then 7690, then 7878, then 7914, then 8242, then 8637, then 8867,
+then 9271; where each block of growth went is worth naming so it can be checked rather
+than trusted.
 The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -2264,7 +2286,10 @@ The two shapes the ladder does not save are measured and named: a hard limit bet
 and 1023, where the second rung still lowers under a full low range and the refusal catches
 it, and a caller who has filled every number below the *hard* limit, where the `ulimit`
 attempts fail on their own `2>/dev/null` and the precondition refuses one statement
-earlier. **About 18 go to R7**, whose claim now reads "closed or refused" and never
+earlier. (**Round 43 changes nothing about this ladder and fixes what it left behind**:
+the two paragraphs elsewhere that still stated the postcondition as the old two rungs, one
+of them the sentence a plan or a test would read. The rungs, the floor and the refusals
+here are untouched.) **About 18 go to R7**, whose claim now reads "closed or refused" and never
 "silently skipped", with the arrangement it used to admit written out rather than a
 qualification quietly dropped; the parent's half is unaffected, its own enumeration having
 been fail-closed since round 39. **About 41 go to R10**, in two new descriptor runs rather
@@ -2296,13 +2321,58 @@ implementation, where the entry bullet goes up by ~2 and the test bullet by ~10,
 range does not move because ~2822 is still inside a band whose top is 2829 — by seven
 lines, which is close enough that the next round should expect to move it.
 
+This round is +139 net over three P2s, and all three are the same kind of finding
+rather than three different ones: a statement this spec made when a number was smaller and
+did not revisit when the number grew. No design changes, nothing new is required of any
+shipped file, and the only implementation line anywhere is one test assertion.
+**About 30 go to R2's fork set.** The mask-publish rule enumerated the pre-resolver
+children as "the SHA-1 tool for each of the three blob-id pins", which was true until R5
+widened the parent-pinned set to eight files, and left the five module-hash forks readable
+as outside the region — forked and published with `INT`, `TERM` and `HUP` unblocked, which
+is the exact window the rule exists to close. The enumeration now names all eight, and the
+count is written down once where a reader meets it: eight SHA-1 children, one SHA-256
+child, one jq probe, ten pre-resolver children, eleven forks in a run. The same count goes
+into the R2 summary bullet, into `pre_child`'s definition and the reap block that clears
+it, and into R10's proof-by-reading list, where it turns a judgement into arithmetic — a
+file with ten regions has left one fork out. Nothing about the mechanism moves; the parent
+already had to do this for every fork, and R5 already costed the five extra children at
+"the same shape, five more instances of it".
+**About 20 go to R1's soft-limit postcondition.** Round 42 put a 1024 rung above the two
+the precondition had, and two paragraphs went on saying the limit past that line is 256 or
+64 — one of them the postcondition sentence itself, which is what a plan or a test would
+read. The postcondition is now stated once, normatively, in R1's requirement text: exactly
+one of 1024, 256 or 64, the first rung the hard limit allows, with the note that an
+assertion still written against "256 or 64" is testing the ladder this one replaced. The
+two stale paragraphs and R10's fixture preamble follow it. The round-41 measurements that
+record "normalised to 256 or 64" are left alone: they are what that round measured on the
+two-rung form, and rewriting them would be inventing a measurement.
+**About 40 go to R7's printf split and the assertion that holds it.** The allowlist listed
+`/usr/bin/printf` "for the `E_*` lines", and an implementer who took that literally for the
+refusals above the scrub — the `ulimit` ladder's and the close loop's unmatched-glob
+`case` — would run an external binary in front of `/usr/bin/env`, which R7 names as the
+entry's first external command. The list now says what the external one is for, which is
+data: the `blob %d\0` header bytes into the SHA-1 pipeline, and the Darwin awk shim text.
+Refusal lines are the builtin's, everywhere in the file, above and below the re-exec, so
+there is no second question about which side of the boundary a given `E_*` line is on, and
+the marker branch's `exit 78` writes nothing at all. R10 gains the one thing that keeps
+this from being prose: pass 1 records the line number of the `env -i` re-exec and requires
+every `/usr/bin/printf` occurrence to sit below it. Line-number ordering inside the one
+file is the chosen mechanism and a marker comment is the rejected one, for the reason the
+pass gives — a marker is a second thing to keep in step. Pass 2 keeps dropping the builtin
+`printf` from `compgen -b`, which is what lets the refusals through and is why the ordering
+assertion is the half that catches the mistake.
+**The remaining lines are the bookkeeping**: round 42's accounting paragraph marked where
+its three-rung line is now the postcondition's, the accepted-concern list at the top, the
+test bullet at +1 with the sum and its band, and the re-derived self-count and range here
+and in the two waivers.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 7880-10662 lines**, which is this file's measured
-9271 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 7999-10822 lines**, which is this file's measured
+9410 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -3692,7 +3762,9 @@ the spec pull request's range above still blocks review.
   when the hard limit is below 64 — which is the one environment the round-35 precondition
   refused, refused here for the same reason, with the same single `E_RUNTIME` line and the
   same non-zero exit. The check and the fix are the same statement, and on every arrival
-  that gets past it the soft limit is 256, or 64, so the headroom the loop below needs has
+  that gets past it the soft limit is one of the ladder's own constants — 1024, 256 or 64,
+  the first rung the hard limit allows, counting the third rung the block below adds above
+  these two — so the headroom the loop below needs has
   stopped being a fact about the caller.
 
   **The `2>/dev/null` on each attempt is there for a reason and is not the trap the block
@@ -3880,14 +3952,16 @@ the spec pull request's range above still blocks review.
 
   **Normalising the soft limit is a determinism gain rather than a cost, and the three
   places it could have been a cost are each checked.** Past the precondition the entry and
-  everything it starts run with a soft `RLIMIT_NOFILE` of 256 — or 64 where the hard limit
-  forced the second attempt — instead of whatever the caller left behind, which measured
+  everything it starts run with a soft `RLIMIT_NOFILE` of **exactly one of 1024, 256 or
+  64** — the first rung the hard limit allows, which is the postcondition the whole ladder
+  exists to produce and the one every assertion about this limit reads — instead of
+  whatever the caller left behind, which measured
   1,048,576 on this machine and is something else again on a CI runner. Nothing downstream
   wants more. The parent's own startup close does not take the soft limit as a ceiling
   anywhere: it enumerates `/dev/fd` and uses `rlim_max`-or-`sysconf` capped at 65536 as its
   belt (R5), which is the round-39 fix and is untouched by this one. The resolver child's
   `RLIMIT_NOFILE` is set to 64 by the parent whatever it inherited (R4), and an inherited
-  soft limit of 256 does not stop `setrlimit` putting 64 under it. And the compiles, the
+  soft limit of 1024, 256 or 64 does not stop `setrlimit` putting 64 under it. And the compiles, the
   digest tools, the `cp`s and the jq probe open a handful of files each. The one property
   given up is named: the entry no longer passes the caller's soft limit down to its
   children, which is the same trade R3 already makes for every environment variable in the
@@ -4659,7 +4733,8 @@ the spec pull request's range above still blocks review.
     resolver's group can still be there to kill. The reap block below says that once for
     both variables.
   - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
-    child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
+    child that is running right now: each of the eight SHA-1 tool invocations, the SHA-256
+    tool, and the
     jq `--version` probe. It is set in the parent immediately after that child's `fork`,
     inside the same blocked-signal region, and before the `waitpid` on it, and cleared
     back to `0` under the block around that `waitpid` and before the mask is restored, so
@@ -4679,7 +4754,9 @@ the spec pull request's range above still blocks review.
   The window is closed by blocking, because no ordering of statements can close it. Before
   **every** `fork` the parent performs — the resolver's
   (`portable-profile-resolution-launcher.c:432`) and each pre-resolver child's: the SHA-1
-  tool for each of the three blob-id pins, the SHA-256 tool for the jq digest, and the jq
+  tool for **each of the eight blob-id pins of the parent-pinned set**, the three the
+  parent has always held and the five module pins R5 added beside them, the SHA-256 tool
+  for the jq digest, and the jq
   `--version` probe — the parent blocks `SIGINT`, `SIGTERM` and `SIGHUP` with
   `sigprocmask(SIG_BLOCK, &three, &saved)`, keeping the previous mask in `saved`. In the
   parent after `fork` returns, in this order: `setpgid(child, child)` (`:450`, the
@@ -4689,6 +4766,16 @@ the spec pull request's range above still blocks review.
   already reads the published id and takes the branch that kills the child that exists.
   The forked-but-unpublished state is never observable by a handler, because no handler
   runs while it holds.
+
+  **The count is stated once here so no reader has to work it out twice: eight SHA-1
+  children, one SHA-256 child and one jq probe are ten pre-resolver children, and with the
+  resolver's the parent forks eleven times in a run.** The number is worth writing down
+  because it moved: R5 widened the parent-pinned set from three files to eight, which
+  turned five pre-resolver children into ten, and an enumeration left at three would read
+  as leaving the five module-hash children outside this region — forked and published with
+  the signals unblocked, which is exactly the window the rule exists to close. There is no
+  such gap and no second rule: the mask goes on before each of the eleven and comes off
+  after the publication of each, and the reap block below covers all eleven the same way.
 
   **Nothing else belongs inside that region, and the `runtime-pgid:` line in particular is
   written after the restore rather than before it.** An earlier round of this spec put the
@@ -4745,8 +4832,8 @@ the spec pull request's range above still blocks review.
   the handler can only run after the restore, what it reads is either an id whose process is
   alive or is a zombie this parent has not yet reaped, or `0`. Never a reaped one.
 
-  For a pre-resolver child — each SHA-1 tool invocation, the SHA-256 tool, the jq
-  `--version` probe — that is four statements in this order:
+  For a pre-resolver child — each of the eight SHA-1 tool invocations, the SHA-256 tool,
+  the jq `--version` probe, ten of them — that is four statements in this order:
   `sigprocmask(SIG_BLOCK, &three, &saved)`, `waitpid(pre_child, &st, 0)`, `pre_child = 0`,
   `sigprocmask(SIG_SETMASK, &saved, NULL)`. The cost is worth stating plainly rather than
   leaving a reader to find it: while the three are blocked, a signal the caller forwarded
@@ -6138,7 +6225,9 @@ the spec pull request's range above still blocks review.
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
      `/bin/chmod`, `/usr/bin/git` and the SHA-256 tool — and left out four the spec's steps
      needed then: `/usr/bin/uname` for the platform case, `/usr/bin/mktemp` for the run
-     directory, `/bin/rm` for the cleanup, and `/usr/bin/printf` for the `E_*` lines. It
+     directory, `/bin/rm` for the cleanup, and `/usr/bin/printf`, which that round put on
+     the list for the `E_*` lines — a reason this round withdraws, the refusal lines being
+     the builtin's and the external one's job being the data writes named below. It
      also left `/usr/bin/awk` ambiguous, mentioning it as a file to copy without saying
      whether anything runs it. That correction made the count twelve; the round after it
      eleven, when the run directory became the fixed `<output>/.run` made with `/bin/mkdir`
@@ -6188,7 +6277,11 @@ the spec pull request's range above still blocks review.
      `/Library/Developer/CommandLineTools/usr/bin/clang` on Darwin, where `/usr/bin/cc`
      would be the `xcrun` shim (R1); `/bin/cp`,
      for the jq and awk copies;
-     `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
+     `/usr/bin/printf`, **for data writes only, never for a refusal line**: the
+     `blob %d\0` header bytes it feeds into the SHA-1 pipeline for each pin (R1) and, on
+     Darwin, the two-line awk shim text it writes into the run directory. Those two uses
+     and no others. Every `E_*` line the entry writes is written with bash's **builtin**
+     `printf`, which starts no process — see the boundary note below this list;
      `/bin/chmod`, for the 0500 pass and the trap's 0700 restore; `/bin/rm`, for the `tmp`
      subdirectory and the run directory; `/bin/bash`, which is its own interpreter and the
      target of its own re-exec (R1) — it is also the shebang of the Darwin awk shim, but
@@ -6202,6 +6295,22 @@ the spec pull request's range above still blocks review.
      belong on it: it is a bash builtin, like `printf`, `[`, `cd` and `pwd` elsewhere in
      this requirement, so the `umask 077` the entry sets beside its scrub (R1) forks
      nothing and R10's command-word grep drops it by name from `compgen -b`.
+
+     **"`/usr/bin/env` is the first external command" is true by construction, and this
+     round is what makes it so rather than leaving it to a reading.** Everything above the
+     re-exec is builtins and reserved words: the privileged-mode refusal is a `case` and a
+     bare `exit 78` that prints nothing at all, the `ulimit` ladder is three builtins, and
+     the close loop is a glob, a `case`, a parameter expansion and an `eval` (R1). The two
+     refusals in that stretch that *do* write a line — the ladder's and the loop's
+     unmatched-glob `case` — write it with the builtin `printf`, which is why the sentence
+     holds: an `/usr/bin/printf 'E_RUNTIME\n'` there would be an external command standing
+     in front of `env`, which is the boundary this whole ordering exists to give, and it
+     would do it on the one path where nothing has been checked yet. So the split in the
+     list above is the rule and not a note about it — external `printf` writes data,
+     builtin `printf` writes refusals — and it holds below the re-exec too, where the
+     external one is available and is still not used for a refusal, so a reader never has
+     to work out which side of the boundary a given `E_*` line is on. R10 asserts the
+     boundary as an ordering rather than trusting the reading (R1, R7, R10).
 
      *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
      argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); the same
@@ -7212,8 +7321,8 @@ the spec pull request's range above still blocks review.
     is better than an assertion that looks stronger than it is (R1).
   - *The entry half, third and fourth runs: descriptor headroom.* **These two cases are
     rewritten this round, and the thing they set is the change: the fixture lowers the
-    caller's *hard* limit, not its soft one.** R1's precondition now raises the soft limit
-    to 256, or to 64, rather than reading it and refusing, so a fixture that only lowers
+    caller's *hard* limit, not its soft one.** R1's precondition now sets the soft limit
+    to 1024, or to 256, or to 64, rather than reading it and refusing, so a fixture that only lowers
     the soft limit no longer produces scarcity — the entry simply takes the headroom back —
     and a case built that way would assert an ordinary success under a name that promised a
     refusal. Both runs therefore set both numbers, in one line and in this order, in the
@@ -7707,7 +7816,11 @@ the spec pull request's range above still blocks review.
   before `execve` — and the
   reviewer checks
   that every fork in the file sits inside one such region, and that nothing which can
-  block — the `runtime-pgid:` write above all — sits inside one with it (R2). **The reaps
+  block — the `runtime-pgid:` write above all — sits inside one with it (R2). **The count
+  is part of that reading**: eleven forks, the resolver's and the ten pre-resolver
+  children's — a SHA-1 tool for each of the eight files of the parent-pinned set, the
+  SHA-256 tool and the jq probe — so a file with the five module-hash forks outside the
+  pattern fails this reading by arithmetic rather than by judgement. **The reaps
   are checked the same way, and belong on the same list.** The reviewer reads that every
   `waitpid` on a tracked id — each pre-resolver child's, and the supervisor's `:457`,
   `:493-494` and `:451-452` — sits inside a
@@ -8055,7 +8168,7 @@ the spec pull request's range above still blocks review.
   the mechanism is settled here rather than left to the plan.** The list it checks against is
   R7's: `/bin/bash`,
   `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/bin/cat`, `/usr/bin/uname`,
-  `/usr/bin/printf`, `/usr/bin/env`,
+  `/usr/bin/printf` (data writes only, R7), `/usr/bin/env`,
   `/usr/bin/stat`, the compiler pair `/usr/bin/cc` and
   `/Library/Developer/CommandLineTools/usr/bin/clang`, and the three digest tools
   `/usr/bin/shasum`, `/usr/bin/sha256sum` and `/usr/bin/sha1sum` — fifteen command words.
@@ -8112,6 +8225,26 @@ the spec pull request's range above still blocks review.
      place. The test may still run awk freely for its own parsing, the way the existing
      test does at `scripts/test/portable-profile-resolution.test.sh:448-449`, for the
      same reason it may run git: the sweeps cover the two shipped files only.
+
+     **And `/usr/bin/printf` gets an ordering assertion, for the mirror-image reason.**
+     R7 splits the two printfs — the external one writes data, the builtin one writes
+     refusals — and the half of that split a grep can lose is the first external command
+     boundary: an implementer who wrote the `ulimit` ladder's refusal or the close loop's
+     as `/usr/bin/printf 'E_RUNTIME\n' >&2` would pass pass 1 as a listed command word and
+     pass 2 as no bare word, and would have run an external binary above the `env -i`
+     re-exec. So the test asserts the order rather than the wording: it takes the line
+     number of the entry's `env -i` re-exec and requires **every** occurrence of
+     `/usr/bin/printf` in the file to sit below it. Line-number ordering inside the one
+     file is the mechanism, chosen over a marker comment on purpose — a marker is a second
+     thing to keep in step with the statement it marks, and the re-exec line is already
+     unique in the file and already the thing R1 orders everything else around. The
+     assertion is one `grep -n` for each and a numeric comparison, and it is what makes
+     R7's "first external command is `/usr/bin/env`" a checked claim. **Pass 2 must not
+     count the builtin `printf` as an external command**, and does not: `compgen -b` reports
+     it and pass 2 drops every name that set holds, which is the same drop that lets `cd`,
+     `umask` and `[` through. The two halves are deliberate and belong together — without
+     the drop the refusals fail the grep, and without the ordering the drop would hide the
+     one arrangement this pair exists to catch (R1, R7).
   2. *Bare words in command position, in the entry only.* The C file has none — it names its
      executables as string literals, which pass 1 already covers. The entry does, so the
      test takes the first word of each command in it and drops every name `compgen -b`
@@ -8273,7 +8406,8 @@ Order, each step checkable before the next:
    `volatile sig_atomic_t` variables R2 specifies — `pgid`,
    `0` until it is assigned right after the `fork` (`:432`) and the parent-side `setpgid`
    (`:450`), and `pre_child`, the pid of the
-   pre-resolver child currently being waited on (a SHA-1 tool, the SHA-256 tool, the jq
+   pre-resolver child currently being waited on (one of the eight SHA-1 tool runs, the
+   SHA-256 tool, the jq
    `--version` probe), set before its `waitpid` and cleared to `0` under the same
    three-signal block as that `waitpid`, before the mask is restored, because a pid the
    kernel has taken back can be handed to any process on the machine and not only to a
@@ -8309,8 +8443,9 @@ Order, each step checkable before the next:
    forbidden there, so the `parent-signal:` line is assembled from a static signal-name
    table indexed by signal number and a hand-written decimal routine for the pgid rather
    than by `snprintf` — which the `runtime-pgid:` write below may still use, being in
-   `main` (R2). Every `fork` the parent performs — the resolver's
-   (`:432`) and each pre-resolver child's — is wrapped in
+   `main` (R2). Every `fork` the parent performs — eleven in a run: the resolver's
+   (`:432`) and each of the ten pre-resolver children's, one SHA-1 tool per pinned file for
+   all eight of the parent-pinned set, the SHA-256 tool and the jq probe — is wrapped in
    `sigprocmask(SIG_BLOCK, &three, &saved)` before it and
    `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid` and
    assigned `pgid` or `pre_child`, so no handler ever
@@ -8365,7 +8500,11 @@ Order, each step checkable before the next:
    the ladder fails throughout only when the hard limit is below 64. The rungs descend, the
    largest first, so a caller whose hard limit allows 1024 has the entry's room *raised* or
    held rather than cut to 256 — which is what stops the normalisation itself taking away
-   the free numbers the loop below needs (R1). The loop below closes the
+   the free numbers the loop below needs (R1). **The postcondition is exact and is stated
+   here once: past this line the soft limit is one of 1024, 256 or 64 — the first rung the
+   hard limit allows — and nothing else.** Every assertion in R10 that names the limit, and
+   every fixture that sets one, reads those three values; an assertion still written against
+   "256 or 64" is testing the two-rung form this ladder replaced (R1, R10). The loop below closes the
    descriptor bash reads the script from and bash needs free numbers at or above 10 to
    relocate its input onto — with no headroom it truncates the script and exits `0`, or
    crashes — and nothing above the loop may fork, because a child there would inherit the
