@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 2066-2796 changed lines** (implementation). The derivation,
+**Evidence-based range: 2075-2807 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -107,10 +107,19 @@ measured rather than guessed:
   `S_ISDIR` test, the `openat` on `.run`, the `open` on the run-directory argument, the two
   `fstat`s and the `st_dev`/`st_ino` compare, the `fdopendir` on a `dup` of the checked
   descriptor for the listing, and a refusal on each — where two `realpath` calls and a
-  `strcmp` were three statements (R5). This round adds ~3 more, to **~1117**: the
+  `strcmp` were three statements (R5). The round before this one added ~3 more, to ~1117:
+  the
   three-signal `sa_mask` on each of the three `sigaction` installations, which is one
   `sigemptyset` and three `sigaddset` calls on a set the parent already builds for the
-  fork mask, assigned into each `struct sigaction` before it is installed (R2).
+  fork mask, assigned into each `struct sigaction` before it is installed (R2). This round
+  adds ~10 more, to **~1127**: the block around every reap. Five pre-resolver `waitpid`
+  calls get a `sigprocmask` pair and a `pre_child = 0` between them, which is one shared
+  two-line wrapper rather than five copies if the plan factors the reap the way it factors
+  the fork (~4); the supervisor's poll-loop `waitpid` (`:457`) gets the pair with
+  `pgid = 0` inside the `observed == child` arm (~3); the limit path's blocking `waitpid`
+  (`:493-494`) gets the same (~2); and the `setpgid`-failure reap (`:451-452`) gets only a
+  mask restore before its `return 70`, being already inside the fork region (~1). Nothing
+  is added after the reap, because nothing there names a pid (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -255,10 +264,11 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2431 lines; the range above is that sum with ~15% headroom at both
+Those sum to about 2441 lines; the range above is that sum with ~15% headroom at both
 ends. It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
-1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, and the
+1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
+2066-2796, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -544,7 +554,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 5023 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 5153 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -614,16 +624,19 @@ touches the disk, so the `chmod` and the `/bin/rm` it runs inherit the ignore an
 beside the marker branch refusing outright unless it was reached in privileged mode, so
 the one door into the clean path is shut by a condition the supported invocations create
 rather than by a scrub the unsupported one could have shadowed, and the spec's claim for
-that scrub cut back to what it is).
-**Evidence-based range for this spec pull request: 4270-5776 lines** — the measured
-5023 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+that scrub cut back to what it is, and this round every `waitpid` that reaps a tracked
+child brought inside the same signal block, with the id it reaps zeroed before the mask is
+restored, so a pid the kernel has already handed to some other process on the machine can
+never be the one a handler signals).
+**Evidence-based range for this spec pull request: 4380-5926 lines** — the measured
+5153 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
-4773 (the round before this one appended none of its own, and both are restored here);
-where each block of
+4773 — one round appended none of its own and both were restored the round after — then
+5023; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1091,15 +1104,49 @@ Copy-versus-adapt scrub item, the cleanup bullet and the entry's-first-process b
 under Areas of concern, the accepted-concern list at the top, and the re-derived size
 figures here and for the implementation.
 
+This round is +130 net over one P2, and it is the other half of a rule an earlier
+round wrote for forks and did not write for reaps: the parent blocked the three signals
+while a pid was being published and left it unblocked while the same pid was being given
+back. About 41 go to R2's new reap block. The rule itself is four statements — block,
+`waitpid`, zero the id, restore — but most of those lines are the correction underneath
+it, because the sentence being replaced was not merely incomplete, it argued the gap was
+safe: pid reuse is system-wide, so the parent forking nothing in that span says nothing
+about whether the number is still the parent's, and a handler that ran there could send
+`SIGTERM` and `SIGKILL` to a process belonging to somebody else. The cost of the fix is
+stated rather than skipped — a forwarded signal waits for the child being reaped, which is
+milliseconds for a digest or a `--version`, bounded by nothing in this spec, and accepted
+because these are tools the parent already trusts by path and by digest. The resolver's
+three reap sites are named with their lines: the poll loop's `WNOHANG` call, the limit
+path's blocking wait after the group `SIGKILL`, and the `setpgid`-failure reap that is
+already inside the fork region and needs only the mask restored — with the rest of the
+poll loop deliberately left outside the block, so responsiveness does not change and each
+blocked window is microseconds. About 18 go to what happens after the reap: no `kill` may
+name the old `pgid`, the streaming and classification read descriptors rather than
+processes, and the one place the reaped number is still used — the copied survivor check
+immediately after `observed == child` — is named as a read whose worst case is a
+misclassified exit, kept as copied on the supervisor's local `child` and explicitly not
+"fixed" by reaching for a `pgid` that is `0` by then. The earlier `ESRCH`/`ECHILD`
+sentence is corrected rather than kept: the ids are never stale, so the error no longer
+stands for a pid that might belong to a stranger, only for a child that died between the
+handler's read and its `kill` and is a zombie this parent owns. The remaining ~71 are the
+ripples and the bookkeeping, and one of them carries mechanism: R10's proof-by-reading
+sequence gains the reaps, with the reason no test is written for them — the failure needs
+the kernel to hand the pid to another process at the instant a signal arrives, which no
+test can arrange, so a case aimed at it would pass by missing. The rest are the two
+variables' own bullets in R2, Design step 1's handler clause, the Copy-versus-adapt
+handler item growing again rather than a new deviation being added, the
+accepted-concern list at the top, and the re-derived size figures here and for the
+implementation, whose range moves by the ~10 the parent gains.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 4270-5776 lines**, which is this file's measured
-5023 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 4380-5926 lines**, which is this file's measured
+5153 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
-2066-2796 changed lines derived at the top of this section belong to the *implementation*
+2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -2250,13 +2297,16 @@ the spec pull request's range above still blocks review.
     order, and the order holds either way. The variable is set before the line goes out, so
     a reader who has seen the line knows the handler will take the group branch, and a
     handler that runs in the gap between the restore and the line still finds `pgid` set and
-    kills the group.
+    kills the group. It goes back to `0` the way it was set — under the three-signal block,
+    before the mask is restored — at whichever `waitpid` reaps the resolver, so it is
+    non-zero exactly while a resolver this parent owns exists. The reap block below says
+    that once for both variables.
   - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
     child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
     jq `--version` probe. It is set in the parent immediately after that child's `fork`,
     inside the same blocked-signal region, and before the `waitpid` on it, and cleared
-    back to `0` once the `waitpid` returns, so at most one pid is ever live in it and it
-    is `0` whenever no pre-resolver child exists.
+    back to `0` under the block around that `waitpid` and before the mask is restored, so
+    at most one pid is ever live in it and it is `0` whenever no pre-resolver child exists.
 
   **Two variables are not enough on their own, because a signal can land between a `fork`
   and the assignment that publishes what it returned. So the parent blocks the three
@@ -2325,16 +2375,75 @@ the spec pull request's range above still blocks review.
   child can both take one of the three signals and still have the parent's handler
   installed.
 
-  After the `waitpid` on a pre-resolver child returns, `pre_child` is cleared back to `0`
-  with no mask around the clear, and that is deliberate rather than an omission. The worst
-  a handler can do with a stale pid it read just before the clear is signal a process that
-  no longer exists: the `kill` fails with `ESRCH` and the `waitpid` after it with `ECHILD`,
-  and the handler ignores the return value of both — stated here as a requirement rather
-  than left to the plan, because there is nothing useful a handler on its way to
-  `_exit(128 + signal)` can do with either error. For the pid to name something else the kernel would
-  have to recycle it within the few instructions between the reap and the clear, and the
-  parent forks nothing in that span — it reaps each pre-resolver child before it forks the
-  next one.
+  **Every `waitpid` that can reap a tracked child is called with the three signals blocked
+  too, and the id it reaps is set to `0` before the mask is restored.** An earlier round of
+  this spec cleared `pre_child` outside any mask and defended the gap: the kernel would have
+  to recycle the pid in the few instructions between the reap and the clear, and the parent
+  forks nothing in that span. That defence was wrong, and the reason is one sentence. Pid
+  reuse is system-wide, not per-parent: any process on the machine can fork in that window
+  and be handed the number this parent has just given back, and a handler running there
+  would read a non-zero `pre_child` and send `SIGTERM` and then `SIGKILL` to a stranger.
+  Nothing about this parent's own forking habits bears on that. So the rule is stated for
+  every reap instead of argued away — block, `waitpid`, zero the id, restore — and because
+  the handler can only run after the restore, what it reads is either an id whose process is
+  alive or is a zombie this parent has not yet reaped, or `0`. Never a reaped one.
+
+  For a pre-resolver child — each SHA-1 tool invocation, the SHA-256 tool, the jq
+  `--version` probe — that is four statements in this order:
+  `sigprocmask(SIG_BLOCK, &three, &saved)`, `waitpid(pre_child, &st, 0)`, `pre_child = 0`,
+  `sigprocmask(SIG_SETMASK, &saved, NULL)`. The cost is worth stating plainly rather than
+  leaving a reader to find it: while the three are blocked, a signal the caller forwarded
+  waits until that child exits. These children are short and bounded by what they are — a
+  digest of a file the parent has already `fstat`ed, or a `--version` that prints one line —
+  so the wait is milliseconds. It is bounded by nothing else: `apply_child_limits`
+  (`portable-profile-resolution-launcher.c:388-398`) and the supervisor's
+  `INVOCATION_SECONDS` poll (`:456-489`) are the resolver's limits, and the pre-resolver
+  children run under neither. So a pre-resolver tool that hung would hold the signal until
+  it ended, and that is accepted here rather than papered over: these are the platform tools
+  at fixed paths that this parent already trusts by path and by digest (R7), and the only
+  alternative on offer is the stranger-kill above.
+
+  For the resolver the same shape wraps every `waitpid` in the copied supervisor that can
+  reap it, and there are three. The poll loop's `waitpid(child, &status, WNOHANG)` (`:457`):
+  block, call it, and when it returns the child, set `pgid = 0` before restoring the mask.
+  Everything else in that loop runs **outside** the block: the survivor check at
+  `:460-462` that follows the reap, the `process_group_count` and address-space scans at
+  `:469-483`, the clock check at `:484-487` and the `nanosleep` at `:488`. So
+  responsiveness is exactly what it was, and each blocked window is the microseconds of one
+  non-blocking `waitpid` and one assignment. The limit path's
+  `while (waitpid(child, &status, 0) < 0 && errno == EINTR)` (`:493-494`), which follows
+  `kill(-child, SIGKILL)` and `kill(child, SIGKILL)` (`:491-492`): the same block around it,
+  `pgid = 0` before the restore — and there the block costs nothing at all, because the
+  group has just been sent `SIGKILL` and the wait is as long as the kernel takes to finish
+  killing it. The `setpgid`-failure path's `kill(child, SIGKILL)` and
+  `waitpid(child, &status, 0)` (`:451-452`) needs no block of its own: it sits inside the
+  fork-and-publish region above, before `pgid` has ever been assigned, so it reaps under a
+  block already held and leaves `pgid` at `0`. All it has to do is restore the mask before
+  it returns 70.
+
+  **After the resolver is reaped, no code path may use the old `pgid` for a kill.** There is
+  none to remove: everything after the loop is the exit classification and the streaming
+  back — `empty_regular_file`, `stream_file` and `sanitized_error` (`:504-531`), which after
+  R5's change read the descriptors the parent already holds and name no process at all. One
+  place does still use the reaped number, and it is a read rather than a kill:
+  `process_group_count(child)` at `:460-462`, the survivor check the copied loop runs the
+  moment `observed == child`. It stays as copied, on the supervisor's own local `child` and
+  not on the shared `pgid`, and the worst case is honest and small — a recycled pid whose
+  new owner happens to lead a group would turn a clean exit into `E_LIMIT process-limit`,
+  which misreports this run rather than touching anyone else's. That is the copied
+  supervisor's own behaviour, unchanged here, and the plan should not reach for `pgid` to
+  "fix" it: `pgid` is `0` by then on purpose.
+
+  With those rules the handler's contract below needs no change and is finally true rather
+  than nearly true: a non-zero `pgid` or `pre_child` always names a process this parent
+  owns, running or a zombie it has not reaped. The handler still ignores the result of its
+  `kill` and of its reap, and the reason is narrower than an earlier round of this spec
+  gave. The ids are never stale, so `ESRCH` no longer stands for "this number may belong to
+  someone else now". It stands for the one case left: the child exited between the handler's
+  read of the variable and its `kill`, leaving a zombie this parent owns which the outer
+  run's own reap may already have taken — with `ECHILD` from the handler's `waitpid` for the
+  same reason. There is nothing a handler on its way to `_exit(128 + signal)` can do with
+  either, so it checks neither; that is a requirement here rather than a note for the plan.
 
   The handler then chooses on those two, in this order. If `pgid != 0`, it runs the group
   sequence exactly as above: `kill(-pgid, SIGTERM)`, a brief wait, `kill(-pgid, SIGKILL)`,
@@ -4114,7 +4223,17 @@ the spec pull request's range above still blocks review.
   before `execve` — and the
   reviewer checks
   that every fork in the file sits inside one such region, and that nothing which can
-  block — the `runtime-pgid:` write above all — sits inside one with it (R2). The same
+  block — the `runtime-pgid:` write above all — sits inside one with it (R2). **The reaps
+  are checked the same way, and belong on the same list.** The reviewer reads that every
+  `waitpid` on a tracked id — each pre-resolver child's, and the supervisor's `:457`,
+  `:493-494` and `:451-452` — sits inside a
+  `sigprocmask(SIG_BLOCK, …)`/`sigprocmask(SIG_SETMASK, …)` pair that also sets that id to
+  `0` before the restore, and that no `kill` anywhere after a reap names the old `pgid`. A
+  test cannot do better here than it can on the fork window, and for a harder reason: the
+  failure needs the kernel to hand the reaped pid to some other process on the machine at
+  the instant a signal arrives, which nothing a test script can do makes happen, so a case
+  aimed at it would pass by missing. Proof by reading, and no flaky case pretending
+  otherwise (R2). The same
   reading covers the handler installations themselves, and for the same reason: the
   reviewer checks that all three `sigaction` calls set `sa_mask` to `SIGINT`, `SIGTERM` and
   `SIGHUP` and leave `SA_RESTART` unset, because a sibling signal re-entering a handler
@@ -4356,7 +4475,14 @@ Order, each step checkable before the next:
    `0` until it is assigned right after the `fork` (`:432`) and the parent-side `setpgid`
    (`:450`), and `pre_child`, the pid of the
    pre-resolver child currently being waited on (a SHA-1 tool, the SHA-256 tool, the jq
-   `--version` probe), set before its `waitpid` and cleared after — with three branches on
+   `--version` probe), set before its `waitpid` and cleared to `0` under the same
+   three-signal block as that `waitpid`, before the mask is restored, because a pid the
+   kernel has taken back can be handed to any process on the machine and not only to a
+   child of this one — the same block-reap-zero-restore shape around each of the three
+   `waitpid`s in the copied supervisor that can reap the resolver (`:457` in the poll loop,
+   `:493-494` on the limit path, and `:451-452`, which is already inside the fork region and
+   needs only the mask restored before it returns), with the rest of the poll loop
+   (`:460-488`) left outside the block — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
    only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
    `kill(-0, …)` in any of them. Every `fork` the parent performs — the resolver's
@@ -4884,6 +5010,10 @@ intent says for this change. Only after the operator's merge does
   `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
   `sigprocmask(SIG_SETMASK, …)` after the pid assignment and nothing else inside the region
   with them — the `runtime-pgid:` line is written after that restore, not in there —
+  and the same pair around every `waitpid` that can reap a tracked child, with the id set
+  to `0` before the restore: each pre-resolver child's, and the copied supervisor's
+  `:457`, `:493-494` and `:451-452`, the last of which is already inside the fork region,
+  plus the rest of the poll loop at `:460-488` deliberately left outside the block —
   plus the child's own `SIG_DFL` resets before that restore rather than after it — where the
   launcher forks at `:432` with no mask at all and contains no `sigprocmask`, no
   `sigaction` and no `signal()` anywhere in its 702 lines (verified: none of the three
