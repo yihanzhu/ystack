@@ -14,9 +14,9 @@ bytes for the same request.
 
 **Implementation `review_size: accepted-exception`** — this figure and the derivation
 under it are the *implementation* pull request's exception, not this spec pull request's
-(that one is recorded separately at the end of this section). One concern: this is a
-single security-boundary component whose only honest proof runs the real resolver twice
-and compares the output.
+(that one is recorded on its own line in the size-exception waiver later in this
+section). One concern: this is a single security-boundary component whose only honest
+proof runs the real resolver twice and compares the output.
 
 **Evidence-based range: 2075-2807 changed lines** (implementation). The derivation,
 measured rather than guessed:
@@ -801,9 +801,20 @@ reviewed lines instead of lowering them. The size is the honest cost of proving 
 boundary once.
 
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
+`work/README.md:71-73` asks for the value itself to be recorded rather than inferred, so
+here it is for this pull request, on its own line:
+
+`review_size: accepted-exception` (this spec PR)
+
+One concern: **the launch boundary as a security control**. Evidence-based range:
+**6727-9101 lines** — this file's measured 7914 lines plus or minus 15%, rounded. That
+token is this spec pull request's; the `review_size: accepted-exception` recorded at the
+top of this section is the *implementation* pull request's, and the two are never compared
+or summed.
+
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 7878 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 7914 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -941,17 +952,30 @@ kill exists for being the one thing a handler has no safe way to check, beside t
 full-pipe case filling its pipe with a blocking writer rather than a non-blocking one, so
 the flag the old filler left behind on the shared open file description can no longer turn
 the entry's unconditional write into a fast `EAGAIN` and pass the single case in this
-suite that exists to catch that write).
-**Evidence-based range for this spec pull request: 6696-9060 lines** — the measured
-7878 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
-recorded again in the waiver at the end of this section; the implementation pull request's
-range is the separate figure above and the two are never compared. It was
+suite that exists to catch that write, and this round this pull request's own
+`review_size` value written out as the exact token the plan gate names, beside the one
+concern and the range, so a reviewer or a check looking for the record finds the value
+rather than prose it would have to read the value out of, and cannot take the
+implementation's token for this one).
+The same record again here, where the count it rests on is derived, on its own line:
+
+`review_size: accepted-exception` (this spec PR)
+
+One concern: **the launch boundary as a security control**. Evidence-based range:
+**6727-9101 lines** — this file's measured 7914 lines plus or minus 15%, rounded. That
+token is this spec pull request's; the `review_size: accepted-exception` recorded at the
+top of this section is the *implementation* pull request's, and the two are never compared
+or summed.
+
+That range is the artifact pull request's own, recorded in the same words in the waiver
+above and in the waiver at the end of this section; the implementation pull request's
+range is the separate figure above. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420, then 7690; where each block of
+7173, then 7420, then 7690, then 7878; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1869,14 +1893,26 @@ accepted-concern list at the top; and the re-derived size figures here and for t
 implementation, whose range does not move because +4 in the parent and +6 in the test leave
 the sum inside the ±15% it already expresses.
 
+This round is +36 net over one P2, and all of it is this pull request's own
+bookkeeping: the exact `review_size: accepted-exception` token for this spec pull request
+now stands on its own line in the artifact-PR waiver and again in the self-count
+paragraph, in the same words both times, with the one concern and the range beside it and
+one sentence in each place saying which token belongs to which pull request, so the
+implementation's token at the top of this section cannot be read as this one's. The rest
+is the accepted-concern list at the top and the re-derived size figures here and in the
+waiver below. Nothing in the shipped design moves, so the implementation range does not
+move either.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 6696-9060 lines**, which is this file's measured
-7878 lines plus or minus 15%, the same two figures the self-count paragraph above
-states. That is the *spec* pull request's range and nothing else's: the
+for this spec pull request is 6727-9101 lines**, which is this file's measured
+7914 lines plus or minus 15%, the same two figures the self-count paragraph above
+states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
+on its own line in the artifact-PR waiver at the start of this exception and in the
+self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
