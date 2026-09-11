@@ -152,7 +152,18 @@ measured rather than guessed:
   free if the plan factors the best-effort write the way it factors the fork and the reap.
   The handler's line needs none of it, its `sa_mask` already covering its own toggle, and
   no other write in the parent touches `F_SETFL` at all, so the rule reaches exactly one
-  site today (R2).
+  site today (R2). This round adds ~15 more, to **~1169**, all of it inside the three
+  handlers. ~3 are the bounded wait: the `for` with its counter, the
+  `waitpid(…, WNOHANG)` with its `break`, the `timeval` and the `select` — which replaces
+  "a brief wait" and is the same shape a `nanosleep` would have been, so the cost is the
+  statements and not the choice. ~12 are the `parent-signal:` assembly without
+  `snprintf`: the three-entry static signal-name table (~3), the hand-written decimal
+  routine for the pgid (~8 — the divide-by-ten loop, the reversal and the static buffer),
+  and the `memcpy` joins that build the line before the single `write(2)` (~1), where one
+  `snprintf` was one statement. Nothing else changes: the `fcntl` pair, the write and the
+  `_exit` were all on the list already, and the `runtime-pgid:` write keeps its
+  `snprintf` because it is not in a handler. The forbidden-call list is a reading and a
+  grep in R10, not a line in the parent (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -256,7 +267,16 @@ measured rather than guessed:
   [ -c /dev/fd/2 ]` and its `fi` around the `EXIT` trap's one `printf` (~2), and the
   comment saying why a pipe is omitted rather than written to, which is the one line that
   stops a later reader deleting the condition as redundant (~1). The `printf` itself was
-  counted rounds ago and only gains an indent (R1).
+  counted rounds ago and only gains an indent (R1). This round adds ~4 more, to **~437**,
+  all four inside the close loop: the `exec 3<"${BASH_SOURCE[0]}" || exit 79` above it
+  (~1), the `[ "/dev/fd/$fd" -ef /dev/fd/3 ] && continue` inside it (~1), the
+  `eval 'exec 3<&-' 2>/dev/null` below it (~1), and the comment saying why the reference
+  exists at all, which is the one line that stops a later reader deleting three statements
+  that look like ceremony (~1). Adding `3` to the `case` arm costs nothing — one character
+  on a line that was already there. This is ~2 more than the decision that ordered the fix
+  assumed, and the reason is that the measurement moved the rule: comparing against
+  `${BASH_SOURCE[0]}` by pathname would have been the single line that decision costed,
+  and it does not work on Darwin, so the reference has to be opened and closed (R1).
 - **Focused test ~1033 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -651,9 +671,29 @@ statement that already existed rather than a new mechanism (R1). ~12 in the C pa
 inherited-descriptor cases and the fifo-and-reader helper they share (R10). Nothing was
 made cheaper to compensate — the job-table gate could in principle have paid for itself by
 retiring the `wait_interrupted` flag, and it does not, because the two answer different
-questions and the loop needs both. The sum of the four bullets is now ~2625 against the
+questions and the loop needs both. The sum of the four bullets was then ~2625 against the
 ~2420 the range is derived from, about 8% above it and so still well inside the ±15% the
-range expresses, so the implementation range is unchanged.
+range expresses, so the implementation range was unchanged.
+
+This round adds ~19, in the C parent and the entry and nothing in the test, from one P1
+and one P2 that share a shape worth naming: both are a call that looked safe in the place
+it was written and is not safe in the place it actually runs. ~15 in the parent: the
+bounded `waitpid(…, WNOHANG)`/`select` loop that replaces the handler's unspecified
+"brief wait" (~3), and the `parent-signal:` line assembled from a static signal-name
+table and a hand-written decimal routine because `snprintf` is not async-signal-safe
+(~12). ~4 in the entry: the reference open on descriptor 3, the `-ef` skip, the close and
+the comment that keeps the three from being tidied away, which together stop the close
+loop shutting the descriptor bash reads the script from. Nothing in the test, and that is
+a claim rather than an omission — the entry-side descriptor case is unchanged except for
+one condition on its fixture that the fifo already satisfies, and both new properties are
+on R10's proof-by-reading list for reasons that section gives: a handler's undefined
+behaviour cannot be provoked on demand, and a silently truncated entry produces neither
+an error nor a status any assertion here reads. Nothing was made cheaper to compensate.
+Re-derived from the four bullets as they now stand rather than carried forward — the
+running total above had not been re-added since two rounds moved the bullets under it —
+the sum is ~2699 (~1169 + ~437 + ~1033 + ~60) against the ~2420 the range is derived
+from, about 12% above it and so still inside the ±15% the range expresses, so the
+implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -670,7 +710,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 6767 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 7173 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -778,16 +818,25 @@ between the set and the restore can no longer save the toggled flags, restore th
 original and leave a shared descriptor non-blocking behind it, beside the entry's own
 diagnostic omitted wherever bash cannot write it without the risk of never returning, so
 a caller who pipes stderr into a reader that is not draining gets the `128 + signal` exit
-this path promises rather than a finished cleanup and a hung entry).
-**Evidence-based range for this spec pull request: 5752-7782 lines** — the measured
-6767 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+this path promises rather than a finished cleanup and a hung entry, and this round the
+entry's close loop made to skip the descriptor bash is reading the script from, by an
+identity test against a reference the entry opens on its own script rather than by the
+pathname comparison that is measurably false on Darwin, so a caller with a low
+`RLIMIT_NOFILE` can no longer make the entry stop part-way through itself and exit `0`
+having done nothing, beside every call in the parent's three signal handlers held to the
+POSIX.1-2017 async-signal-safe list by name, so the wait between the `SIGTERM` and the
+`SIGKILL` and the line that reports the branch cannot be written with the `nanosleep` and
+the `snprintf` the rest of the file may use and deadlock the process in the middle of the
+cleanup they exist to describe).
+**Evidence-based range for this spec pull request: 6097-8249 lines** — the measured
+7173 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153, then 5448, then 5897, then 6140, then 6415; where each block of
+5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1517,13 +1566,66 @@ accepted-concern list at the top, and the re-derived size figures here and for t
 implementation, whose range does not move because the round's ~18 leaves the sum at about
 11% of the ~2420 it is derived from.
 
+This round is +406 net over one P1 and one P2, and the two share a shape: a
+call or a statement that is correct where it was written and unsafe where it actually
+runs. About 155 go to R1's close loop. The finding was that the loop shuts bash's own
+script descriptor because only 0, 1 and 2 are skipped, and most of those lines are the
+measurements, because the measurements moved the fix twice. The first moved the *hazard*:
+closing that descriptor does not normally make bash fail, it makes bash relocate its
+script buffer onto a free descriptor — measured moving from 255 to 12 to 13 across two
+runs of the loop, with a 68 KiB script reaching its last line every time — and it fails
+only where `RLIMIT_NOFILE` leaves no headroom, where it fails *silently*: at
+`ulimit -n 12` the script stopped at the end of what bash had buffered and exited `0`,
+which is worse than the failure the finding described, because an entry that skips the
+scrub, the re-exec and every check below and reports success is the one outcome no
+refusal in this spec covers. The second measurement moved the *fix*: the natural test,
+`[ "/dev/fd/$fd" -ef "${BASH_SOURCE[0]}" ]`, is false on Darwin for the descriptor it is
+meant to catch, because `/dev/fd` there is an `fdesc` filesystem that reports the
+underlying file's inode and its own device number, and `-ef` needs both — a rule that
+would have parsed, read correctly, done nothing on one of the two shipped platforms, and
+been true on the one CI runs. What works is comparing two `/dev/fd` entries against each
+other, so the entry opens its own script on descriptor 3 and the loop skips 3 and anything
+`-ef` it, with 3 chosen because bash's script descriptor is the top of the table and never
+below 4 in any environment where bash starts at all. The rest of those lines are the
+honest edges: the one descriptor this keeps open that it did not open (a caller's own
+handle on the entry's script, read-only, none of the three things the loop exists to
+stop), the two rejected alternatives with the measurement that rejects each, the `79`
+refusal when the reference cannot be opened, and the `exec`-with-`2>/dev/null` trap —
+measured, because `exec 3<"${BASH_SOURCE[0]}" 2>/dev/null` points the shell's own stderr
+at `/dev/null` for the rest of the run and would delete every `E_*` line below it. About
+100 go to R2's handlers. The finding was that "a brief wait" inside a signal handler
+constrains nothing, and the answer is the bounded
+`waitpid(…, WNOHANG)`/`select`-at-50 ms loop written out, with the authority named:
+POSIX.1-2017 XSH 2.4.3 carries `select`, `pselect`, `poll`, `sleep`, `waitpid`, `kill`,
+`write`, `fcntl`, `sigprocmask`, `_exit`, `memcpy` and `strlen`, and does not carry
+`nanosleep`, `usleep` or `snprintf`. Both of those absences are load-bearing rather than
+trivia: the copied supervisor has a `nanosleep` at `:488` that a plan would copy into the
+handler by reflex, and the `runtime-pgid:` line has an `snprintf` this spec explicitly
+tells the plan to make the handler's line "the same way" as — so the handler's line is
+respecified as a static signal-name table plus a hand-written decimal routine, and the
+`runtime-pgid:` block gains the paragraph saying which half of "the same way" does not
+carry. A few of those lines reconcile the standard against the platform's own
+`sigaction(2)`, which reproduces the POSIX.1-1990 list and has no `select` on it: that is
+an older list rather than a contradiction, `sleep(1)` is named as the fallback if it ever
+turns out to be one, and saying so is cheaper than leaving a reviewer to find two lists
+and assume a conflict. About 36 go to R10: two readings on the entry's loop, one of them
+a grep for the `exec` redirection trap, one reading and one eight-name grep on the handler
+bodies scoped so the legitimate `snprintf` and `nanosleep` elsewhere in the file do not
+trip it, and the one condition added to the entry-side descriptor case's fixture, which
+the fifo already satisfies. The remaining ~115 are the ripples and the bookkeeping: Design
+steps 1 and 2, the Copy-versus-adapt handler item and the entry's third
+above-the-scrub statement both growing rather than new deviations being added, the
+accepted-concern list at the top, and the re-derived size figures here and for the
+implementation — whose running total is re-added from the four bullets rather than
+carried forward, because it had not been since two rounds moved them.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 5752-7782 lines**, which is this file's measured
-6767 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 6097-8249 lines**, which is this file's measured
+7173 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -2445,12 +2547,154 @@ the spec pull request's range above still blocks review.
   shuts them, and shuts them at the top rather than at the bottom:
 
   ```
+  exec 3<"${BASH_SOURCE[0]}" || exit 79
   for fd in /dev/fd/*; do
     fd=${fd##*/}
-    case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
+    case $fd in ''|*[!0-9]*|0|1|2|3) continue ;; esac
+    [ "/dev/fd/$fd" -ef /dev/fd/3 ] && continue
     eval "exec ${fd}>&-" 2>/dev/null
   done
+  eval 'exec 3<&-' 2>/dev/null
   ```
+
+  **The first and last lines of that are this round's, and without them the loop can shut
+  the descriptor bash is reading the script from.** Bash does not read a script the way it
+  reads a here-document. It opens the file, keeps it open on a descriptor of its own, and
+  reads on as it executes — so a loop that closes every descriptor above 2 finds that one
+  too, because it is a descriptor above 2 and nothing about the numbers tells it apart.
+  What follows was measured rather than reasoned, on bash 3.2.57 on `arm64-apple-darwin`
+  (`Darwin 27.0.0`), and the measurements changed the shape of the fix twice.
+
+  **Where the descriptor is.** Under both supported invocations — the `#!/bin/bash -p`
+  shebang and `/bin/bash -p <entry>` — bash puts the script on `255`, and `$0` and
+  `${BASH_SOURCE[0]}` are the path the caller wrote either way. `255` is not a constant: it
+  is the top of the descriptor table, and with `RLIMIT_NOFILE` lowered the number follows
+  it down — 63 at `ulimit -n 64`, 15 at 16, 11 at 12, 9 at 10. It is also close-on-exec,
+  verified by running `/bin/ls /dev/fd` from inside the script and seeing the listing's own
+  descriptors and nothing else, so it never reaches anything the entry `exec`s and is not
+  itself one of the descriptors this loop exists to shut.
+
+  **What closing it does is not what the finding that raised this said, and it is worse.**
+  Closing it does not usually make bash fail. Bash notices that the descriptor being closed
+  is the one its script buffer sits on and duplicates the buffered stream onto another:
+  with the loop running unguarded and a caller holding 4-14, 20 and 254, `before` listed
+  the script on 255 and `after` listed it on 12, a second run of the same loop moved it to
+  13, and a 68 KiB script with the loop at the top reached its final line every time. The
+  relocation needs a free descriptor to move to, though, and under a tight `RLIMIT_NOFILE`
+  there is not one. At `ulimit -n 12` the script sat on 11, the loop closed it, the
+  relocation left no high descriptor in the listing at all and printed nothing, and the
+  script stopped at the end of what bash had already buffered — the marker at the end never
+  printed and the exit status was **`0`**. At 10, 9 and 8 the same thing happened with
+  `redirection error: cannot duplicate fd: Invalid argument` on stderr first, and the status
+  was still `0`. That is the hazard stated exactly: not a failure, a silent truncation that
+  reports success. For this entry it would mean skipping the scrub, the re-exec, every
+  check below and the whole resolution, and exiting `0` with nothing done — worse than any
+  refusal this requirement defines, and worse than the "bash fails while reading the rest of
+  the file" the finding described. A caller does not have to be hostile to arrange it:
+  `RLIMIT_NOFILE` is inherited like every other process attribute, and this requirement's
+  whole premise is that nothing obliges a caller to leave one alone.
+
+  **The obvious test for the descriptor does not work on one of the two platforms, and that
+  is measured too.** The natural rule is to skip any descriptor that is the script:
+  `[ "/dev/fd/$fd" -ef "${BASH_SOURCE[0]}" ]`, with `-ef` a bash builtin that compares
+  `st_dev` and `st_ino` and so forks nothing. On Darwin it is **false for the script's own
+  descriptor**, and false for every other one, so the rule would parse, read correctly and
+  do nothing at all. `/dev/fd` there is an `fdesc` filesystem rather than a symlink farm:
+  `stat` on `/dev/fd/1` reports the underlying file's type, mode and inode — `Regular File`,
+  `--w-------`, `ino=1282180223` — and `fdesc`'s own device number, `dev=886325431`, where
+  the file on disk is `dev=16777230`. `-ef` needs both halves and only gets one. On Linux,
+  where `/dev/fd` is a symlink to `/proc/self/fd` and `stat` follows through to the real
+  file, the same expression is true — so the pathname form is not merely weak, it is a rule
+  that behaves differently on the two platforms this spec ships to, and CI runs the one
+  where it happens to work. That is the worst kind of rule to write down, and it is why the
+  measurement came before the wording.
+
+  **What does work is comparing two `/dev/fd` entries against each other, which is why the
+  entry opens its own script first.** Both sides of the comparison are then the same kind of
+  object on both platforms: on Darwin two `fdesc` nodes carrying the same inode and the same
+  device, on Linux two symlinks resolving to the same file. Measured on Darwin, with the
+  entry's own open of the script on descriptor 3 and a caller holding an unrelated file on
+  7, `-ef /dev/fd/3` answered *same* for 255 and for 3 and *diff* for 0, 1, 2, 7 and the
+  glob's own — the discrimination the loop needs, and the one the pathname form could not
+  give. With the two lines in place, the same 68 KiB script across the same sweep of
+  `ulimit -n` values — 10, 12, 16, 64, 256 — kept its script descriptor in the `after`
+  listing and printed its last line every time, while the caller's 4, 5 and 7 were shut on
+  the ordinary run.
+
+  **Why descriptor 3, and why that is a measurement and not a guess.** The reference has to
+  go somewhere, and it must not be a number bash could be using for the script. It cannot
+  be: the script descriptor is the top of the table and the bottom of the table is where the
+  entry has room. At `ulimit -n 5`, 6 and 7 the script sat on 4, 5 and 6, and at 4 bash
+  cannot start at all — it fails to open its own script and dies before the first line runs.
+  So 3 is below bash's own in every environment where bash runs, and the entry takes it. If
+  the caller had a descriptor there it is destroyed rather than closed, which is the same
+  outcome the loop was going to give it one statement later. The glob moves up out of the
+  way by itself: with 3 held, the `/dev/fd` listing opens on 4, and the `case` skips 3 while
+  the loop's attempt on the glob's own number fails harmlessly into `2>/dev/null` exactly as
+  it did before.
+
+  **The exactness claim, and the one descriptor it keeps open that it did not open.** The
+  test is an identity test on the open file, not a guess about a number, so the only
+  descriptor it can wrongly skip is one that really is the entry's own script — which means
+  a caller that hands the entry a descriptor on `resolve-profile.sh` itself. That descriptor
+  survives the loop, and this spec says so plainly rather than claiming a clean sweep: it is
+  a read-only handle on a file every child below could open by name in any case, it is none
+  of the three things the loop exists to stop (a credential, a socket, a write handle
+  outside the output root), and the alternative — giving up the ability to tell it from
+  bash's own — costs the entry the rest of the file. Measured: with the caller holding the
+  entry's own script on 6 and an unrelated file on 7, 7 was shut, 6 was skipped and visible
+  in a child's `/dev/fd`, and the script ran to its end.
+
+  **The alternatives were rejected for reasons the measurements give rather than on taste.**
+  Skipping the number 255 outright is a guess about bash internals, and a wrong one: the
+  sweep above shows the number is `RLIMIT_NOFILE - 1` capped at 255, so a fixed 255 protects
+  nothing in exactly the low-limit environments where the failure is silent. Closing only
+  below some bound — 3 to 63, say — leaves every caller descriptor above it open, which is
+  this requirement inverted. Leaning on bash's relocation is the third, and it is the one
+  this round actually tested: it works wherever the table has headroom and loses the script
+  without a word where it does not, so it is a behaviour to record and not a behaviour to
+  depend on.
+
+  **Two details of the shape are load-bearing and a plan can get either wrong.** The
+  `2>/dev/null` on the loop's `eval` is attached to the `eval`, where it is a temporary
+  redirection the shell undoes when `eval` returns, while the `exec` inside the quoted
+  string is what makes the close permanent — which is why the reference's own close is
+  written `eval 'exec 3<&-' 2>/dev/null` in the same shape, and why **neither `exec` may
+  carry a bare `2>/dev/null` of its own**. Measured: `exec 3<"${BASH_SOURCE[0]}" 2>/dev/null`
+  opens the script on 3 *and points the shell's own stderr at `/dev/null` for the rest of the
+  run*, because a redirection on an `exec` with no command is a redirection of the shell — a
+  line written to suppress one possible error message would silently delete every diagnostic
+  below it, the `E_*` refusals included. So the reference's open carries no redirection at
+  all and its one ordinary failure is allowed to print. The residual that leaves is small and
+  stated: under a pathological `RLIMIT_NOFILE` — 10 or below, where bash is already failing
+  to relocate — the close can put one `redirection error: cannot duplicate fd` line on stderr
+  that the `eval`'s redirection does not catch. The entry still runs to its end there, and
+  the line is noise on a run the caller has already crippled.
+
+  **A failed open refuses, and `79` is a bare literal for the reason `78` above is one.** If
+  the entry cannot open `${BASH_SOURCE[0]}` the loop has no reference, every comparison is
+  false, and the next statement shuts the script — so the entry stops instead of proceeding
+  into the failure this whole block exists to prevent. The condition is not hypothetical:
+  it is the same condition the re-exec below meets when it runs `/bin/bash -p "$script_path"`
+  on a path that has been replaced or unlinked under it, so refusing here turns a silent
+  truncation into a distinct status two statements earlier. `79` is written as a number
+  because no name has been assigned at that point and a symbolic `E_*` would be unbound under
+  `set -u`, and it is distinct from `78`, from the entry's `E_USAGE` and `E_RUNTIME` status
+  and from anything `128 + signal` can produce, so a test asserting it cannot be satisfied by
+  anything else. One ordering point, because a reader will look for it: this open uses
+  `${BASH_SOURCE[0]}` before the absolute-path check the re-exec depends on
+  (`materialize.sh:23-24`), and it does not need that check. It opens for reading, from the
+  first statements of the file, where nothing has changed directory yet, so a relative
+  `${BASH_SOURCE[0]}` resolves to the same file bash is already reading — which is the
+  only property the comparison uses. The absolute check exists because `exec … /bin/bash -p
+  "$script_path"` happens later and under a different environment, and it stays exactly
+  where it is.
+
+  **The re-exec side needs nothing of its own.** The second bash opens the script again on a
+  descriptor of its own, the three opening statements run again there, and the loop's
+  reference and its test find and skip it by exactly the same comparison. Measured end to
+  end: the dirty process listed the caller's 7 and 8 and shut both, the clean process listed
+  only its own, and the marker at the end of the clean path printed.
 
   **The position is half the requirement, and an earlier round of this spec had it wrong.**
   That round put the loop after the copied scrub and after the re-exec, on the marker
@@ -2466,9 +2710,10 @@ the spec pull request's range above still blocks review.
   root (`work/resolver-trusted-parent/intent.md:36-44`). Putting the loop above both closes
   that: nothing this entry forks or execs, on either path, has ever held a descriptor the
   loop did not shut first. The loop then runs a second time in the process the re-exec
-  lands in, where it finds 0, 1, 2 and the glob's own descriptor and shuts nothing — one
-  glob and a handful of builtins, which is cheaper than a condition that would skip it and
-  one fewer thing for a reader to have to check.
+  lands in, where it finds 0, 1, 2, its own reference, that second bash's script descriptor
+  and the glob's own, and shuts nothing — one open, one glob and a handful of builtins,
+  which is cheaper than a condition that would skip the whole block and one fewer thing for
+  a reader to have to check.
 
   **Each line of it is chosen for bash 3.2 and for forking nothing.** The enumeration is
   a glob over `/dev/fd`, which is a directory of the calling process's own open
@@ -2479,7 +2724,11 @@ the spec pull request's range above still blocks review.
   what makes the `eval` safe: the only strings that get there are numbers the glob read out
   of a directory of numbers, and 0, 1 and 2 are skipped because they are the caller's three
   and passing them through is what R1's pass-through claim and R2's `entry-signal:` line
-  both depend on. Running ahead of the scrub costs that `eval` nothing, and the refusal at
+  both depend on. `3` is skipped in the same `case` arm because it is the entry's own
+  reference and the loop must not shut what it is comparing against, and the `-ef` line
+  behind that arm is a builtin test on device and inode — no `stat`, no external command,
+  nothing forked — which is the only reason a per-descriptor comparison can stand this
+  early in the file at all. Running ahead of the scrub costs that `eval` nothing, and the refusal at
   the top is the reason it can: `eval`, `exec` and `continue` are builtins and `case`,
   `in`, `esac`, `for`, `do` and `done` are reserved words, and on every arrival that gets
   this far bash imported no function and read no `BASH_ENV`, so there is no `eval` of the
@@ -2513,7 +2762,8 @@ the spec pull request's range above still blocks review.
   With the loop above as the script's first statement, `fds before:
   /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3 /dev/fd/7` and `fds after:
   /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3` — descriptor 7 gone, and `/dev/fd/3` the
-  listing's own descriptor in both readings — and the reader saw EOF 0.3 s in, while the
+  listing's own descriptor in both readings, this round's reference having been opened and
+  closed again between them — and the reader saw EOF 0.3 s in, while the
   script still had two seconds of work left to do. Without the loop the reader saw no EOF
   until the script had exited, and in a third run, where the script forked a helper and
   exited immediately, the reader saw no EOF until the *helper* exited three seconds later:
@@ -3335,15 +3585,95 @@ the spec pull request's range above still blocks review.
   either, so it checks neither; that is a requirement here rather than a note for the plan.
 
   The handler then chooses on those two, in this order. If `pgid != 0`, it runs the group
-  sequence exactly as above: `kill(-pgid, SIGTERM)`, a brief wait, `kill(-pgid, SIGKILL)`,
+  sequence exactly as above: `kill(-pgid, SIGTERM)`, the bounded wait below,
+  `kill(-pgid, SIGKILL)`,
   reap. Else if `pre_child != 0`, it signals that **one** pid and no group —
-  `kill(pre_child, SIGTERM)`, a brief wait, `kill(pre_child, SIGKILL)`, reap — because a
+  `kill(pre_child, SIGTERM)`, the same bounded wait, `kill(pre_child, SIGKILL)`, reap —
+  because a
   digest tool or a `jq --version` is a single short-lived process with no group of its own
   worth naming. Else there is nothing to kill, and the handler kills nothing. In all three
   cases it then writes its one `parent-signal:` line (below) and `_exit(128 + signal)` — in
   that order, killing and reaping before writing anything, for the reason the line's own
   block gives — and that status is the same one the group branch already produced and the
   same number the entry reports (R1).
+
+  **"A brief wait" is not a specification, and this round makes it one, because the wait
+  happens inside a signal handler.** Everything between the first `kill` and the `_exit`
+  runs in handler context, where the only calls a program may make are the ones POSIX lists
+  as async-signal-safe; anything else is undefined behaviour, and the two ways it goes
+  wrong are exactly the two ways a termination path must not — a deadlock on a lock the
+  interrupted code was already holding, or a corrupted structure in a process that is
+  part-way through killing a process group. So the wait is written out here rather than
+  left to the plan:
+
+  ```
+  for (i = 0; i < 20; i++) {
+    if (waitpid(target, &st, WNOHANG) > 0) break;
+    tv.tv_sec = 0; tv.tv_usec = 50000;
+    select(0, NULL, NULL, NULL, &tv);
+  }
+  ```
+
+  Twenty iterations of a 50 ms `select` with no descriptors in it — about one second in
+  all — ending early the moment the reap succeeds, and then the `SIGKILL` and the final
+  blocking reap whichever way the loop left. `target` is `-pgid` on the group branch and
+  `pre_child` on the other, and that is the only difference between the two.
+
+  **Both of those calls are on the list, and the list is named here rather than left to be
+  looked up.** POSIX.1-2017 (IEEE Std 1003.1-2017, XSH 2.4.3) is the standard this rests
+  on, and it carries `select()`, `pselect()`, `poll()`, `sleep()`, `waitpid()`, `kill()`,
+  `write()`, `fcntl()`, `sigprocmask()`, `_exit()`, `getpid()`, `getppid()` and `time()` —
+  every call this handler makes, its stderr toggle and its `_exit` included. It does
+  **not** carry `nanosleep()`, `usleep()` or `snprintf()`. That answers the finding's first
+  half directly: `nanosleep` is the obvious way to write a 50 ms wait in C, the copied
+  supervisor already has one at `portable-profile-resolution-launcher.c:488`, and a plan
+  reaching for that line inside the handler would be reaching for a call POSIX does not
+  permit there. The `nanosleep` at `:488` stays exactly where it is — it is in the poll
+  loop, in ordinary code, and nothing about this rule reaches it.
+
+  **The platform's own page lists less than that, and the difference is age rather than
+  disagreement.** macOS `sigaction(2)` reproduces the POSIX.1-1990 list: `_exit()`,
+  `alarm()`, `fcntl()`, `kill()`, `pause()`, `read()`, `sigprocmask()`, `sleep()`, `time()`,
+  `waitpid()`, `write()` and the rest of that vintage, with no `select()`, no `pselect()`,
+  no `poll()` and no `nanosleep()`. Read as a prohibition it would leave `sleep()` as the
+  only wait available on both lists. It is not one — it is the shorter, older list, and the
+  standard that supersedes it adds `select()` by name — and this spec says which authority
+  it is using rather than letting a reviewer find the two lists and assume a conflict.
+  `sleep(1)` is named anyway as the fallback a plan may take if a platform is ever found
+  where `select()` in a handler is genuinely unsafe, and the reason it is not the first
+  choice is responsiveness rather than safety: `sleep(1)` cannot return early, so every
+  interrupt would cost a full second even where the group died at once, while the loop
+  above returns as soon as the reap succeeds. Neither shipped file uses `alarm()` or
+  `SIGALRM`, so the `sleep()`/`alarm()` interaction POSIX leaves unspecified is not a reason
+  for the choice and is not being relied on in either direction.
+
+  **The `parent-signal:` line is assembled without `snprintf`, and both halves are named.**
+  The `runtime-pgid:` line below uses one and may, because it is written from `main` and
+  not from a handler; the handler's line cannot, and "format it some other way" is not
+  enough of an instruction to hand a plan. `<NAME>` comes from a `static const char *`
+  table indexed by signal number — three entries, for `SIGINT`, `SIGTERM` and `SIGHUP`, no
+  search and no formatting — and the pgid is rendered by a hand-written decimal routine
+  into a `static char` buffer: the ordinary divide-by-ten loop that writes the digits
+  backwards and reverses them, which calls nothing at all. The two are copied into one
+  static buffer and go out in a single `write(2)`. The choice between rendering in the
+  handler and pre-rendering the digits under the blocked region at the moment `pgid` is
+  assigned is settled here rather than left open: **render in the handler**, because
+  pre-rendering means a second piece of handler-visible state to keep in step with `pgid`
+  and a second place the clear-to-`0` rule above would have to reach, where the routine
+  that avoids it is a dozen lines touching nothing outside their own buffer. `memcpy()` and
+  `strlen()` are themselves on the POSIX.1-2017 list — worth saying, because the shorter
+  list on the platform's page implies otherwise — so the assembly rests on the same
+  authority as the rest of the handler.
+
+  **The rule, for the plan and for the reviewer, in one sentence: every call in the three
+  handlers is checked by name against the POSIX.1-2017 list, and `snprintf`, `malloc`,
+  `free`, `fprintf`, `printf`, `strerror`, `nanosleep` and `usleep` are forbidden there
+  outright.** Six calls are the whole inventory today — `kill`, `waitpid`, `select`,
+  `fcntl`, `write` and `_exit` — plus the `memcpy` in the assembly above, and a plan that
+  needs a seventh names it and says where on the list it appears. The prohibition is
+  written as a list of names rather than as a principle because every one of those is a
+  call somebody reaches for by reflex when writing a diagnostic, and the handler is the one
+  place in this file where the reflex is wrong.
 
   **The handler never calls `kill(0, …)` or `kill(-0, …)`, and the reason is the whole point
   of the branch.** Both forms signal the caller's own process group, which in the shipped
@@ -3492,7 +3822,9 @@ the spec pull request's range above still blocks review.
   the race, and it is a number the parent already holds.
 
   **The write is made the same way the handler's `parent-signal:` line is made, and for the
-  same reason.** It is a `snprintf` into a small buffer and then a **single `write(2)`**
+  same reason — with one difference this round names, because it is the only place the two
+  lines part company.** It is a `snprintf` into a small buffer and then a **single
+  `write(2)`**
   with stderr in non-blocking mode for it: `fcntl(STDERR_FILENO, F_GETFL, 0)` to read the
   flags, `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` before the write, and the saved
   flags put back with a second `F_SETFL` after it — the same three calls in the same order
@@ -3506,6 +3838,15 @@ the spec pull request's range above still blocks review.
   a non-blocking full pipe that loop is a spin rather than a write — nor a buffered
   `fprintf`, so the line is on the descriptor before the poll loop starts and a reader
   watching stderr sees it while the resolution is still running.
+
+  The `snprintf` is the difference, and it is allowed here for one reason only: this write
+  runs in `main`, not in a signal handler, so the async-signal-safe list the handler's line
+  is held to (above) does not bind it. A plan must not read the "same way" of this block as
+  permission to run the `snprintf` the other direction — the handler's line is assembled
+  from a static signal-name table and a hand-written decimal routine precisely because
+  `snprintf` is not on that list. Same three `fcntl`/`write` statements, same best-effort
+  contract, two different ways of filling the buffer, and the boundary between them is
+  which function the code is in.
 
   **Those calls run with `INT`, `TERM` and `HUP` blocked, and the block is part of the
   sequence rather than a precaution wrapped around it.** The whole write is six statements
@@ -5155,6 +5496,13 @@ the spec pull request's range above still blocks review.
     `<output>/.run` appears. The test watches both — the reader in the background setting
     a flag, the output directory polled every few milliseconds the way the two-umask case
     above already polls it — and fails if `.run` exists while the reader is still blocked.
+    The assertions are unchanged this round, and one condition on the fixture is added
+    because the loop now has an exception: **the object on descriptor 7 must not be the
+    entry's own script.** A fifo in the test's own scratch already satisfies that, so
+    nothing about the case as written moves — it is written down so that a later round
+    which swaps the fifo for some other object cannot pick the one object the loop is
+    required to skip and turn a correct implementation into a failure it would take a long
+    time to explain (R1).
   - *The parent half.* Build a run directory by hand with the group-2 fixture builder and
     invoke the parent directly with `7>` the same kind of fifo, with its stderr in a file
     the test can read. The assertion is the same shape against the parent's own first
@@ -5609,7 +5957,20 @@ the spec pull request's range above still blocks review.
   the round-30 wording allowed a plan to get wrong while still satisfying every word of
   it; the
   entry-side descriptor case does bound this one by observation, and the reading is what
-  catches a plan that keeps the loop and moves it. And in the entry's wait loop, the
+  catches a plan that keeps the loop and moves it. **Two more join it there this round,
+  both inside that same loop.** The reviewer reads that the entry opens its own script on
+  descriptor 3 immediately above the loop, that the loop skips 3 and skips any descriptor
+  for which `[ "/dev/fd/$fd" -ef /dev/fd/3 ]` holds, and that the reference is closed
+  after it — because a loop missing either line shuts the descriptor bash reads the script
+  from, and the failure that follows is a *silent* truncation with exit status `0` that no
+  assertion in this suite would catch: every case here reads output or a status, and the
+  truncated entry produces neither an error nor a diagnostic (R1). And the same reader
+  checks that neither of those two `exec` statements carries a bare `2>/dev/null` — the
+  loop's suppression belongs to its `eval`, and the same two characters on an `exec` with
+  no command point the shell's own stderr at `/dev/null` for the rest of the run, taking
+  every `E_*` line below with it. That one is a grep as much as a reading, and it is on
+  the list because it is the kind of line a plan adds while tidying up a stray error
+  message (R1). And in the entry's wait loop, the
   reviewer checks that the only `kill` is inside the
   `case " $(jobs -l) " in *" $parent_pid Running"*)` arm, that the not-interrupted branch
   breaks without forwarding, and that no `kill -0` on `parent_pid` has come back anywhere
@@ -5638,6 +5999,21 @@ the spec pull request's range above still blocks review.
   checks the rule behind it holds for the file as a whole — that the handler's own toggle
   needs no `sigprocmask` because `sa_mask` already covers it, and that no other write in
   the parent touches `F_SETFL` at all.
+  **One more joins the list this round, and it is a list of names rather than a sequence.**
+  The reviewer takes every call appearing in the three handler bodies and checks each
+  against the POSIX.1-2017 async-signal-safe list (R2), which today should find exactly
+  `kill`, `waitpid`, `select`, `fcntl`, `write`, `_exit` and the `memcpy` of the
+  `parent-signal:` assembly and nothing else; and greps the handler bodies for `snprintf`,
+  `malloc`, `free`, `fprintf`, `printf`, `strerror`, `nanosleep` and `usleep`, requiring no
+  hit on any of the eight. It is a reading rather than a case for a reason worth stating
+  plainly: undefined behaviour in a handler is not an outcome a test can provoke on demand,
+  and the two failures it produces — a deadlock in the middle of a termination, or a
+  corrupted allocator in a process that is killing a process group — would show up in this
+  suite as a flake, so a case aimed at them would pass almost every time on the bug. The
+  grep for the eight names is what actually holds the property. Its one false-positive risk
+  is named so the reviewer does not widen it: `snprintf` is legitimate in the parent's
+  `runtime-pgid:` write and `nanosleep` is legitimate in the copied poll loop at `:488`, so
+  the grep is scoped to the handler bodies and not to the file (R2).
   The `kill -0` reading is on this list for the same reason the reaps are: the failure needs
   a signal to land in the instant between a reaping `wait` and the next statement, and a
   case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
@@ -5977,7 +6353,18 @@ Order, each step checkable before the next:
    before — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
    only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
-   `kill(-0, …)` in any of them. Every `fork` the parent performs — the resolver's
+   `kill(-0, …)` in any of them. The wait between the `SIGTERM` and the `SIGKILL` is a
+   bounded loop of at most twenty iterations, each a `waitpid(target, &st, WNOHANG)` that
+   breaks out on a successful reap and a `select(0, NULL, NULL, NULL, &tv)` with `tv` at
+   50 ms — about a second in total, ending early — chosen because both calls are on the
+   POSIX.1-2017 async-signal-safe list and `nanosleep` and `usleep` are not, which rules
+   out copying the poll loop's own `nanosleep` (`:488`) into handler context; every call
+   in the three handler bodies is checked against that list by name, and `snprintf`,
+   `malloc`, `free`, `fprintf`, `printf`, `strerror`, `nanosleep` and `usleep` are
+   forbidden there, so the `parent-signal:` line is assembled from a static signal-name
+   table indexed by signal number and a hand-written decimal routine for the pgid rather
+   than by `snprintf` — which the `runtime-pgid:` write below may still use, being in
+   `main` (R2). Every `fork` the parent performs — the resolver's
    (`:432`) and each pre-resolver child's — is wrapped in
    `sigprocmask(SIG_BLOCK, &three, &saved)` before it and
    `sigprocmask(SIG_SETMASK, &saved, NULL)` after the parent has done its `setpgid` and
@@ -6026,8 +6413,13 @@ Order, each step checkable before the next:
    the scrub, because the scrub resets variables and not the process umask (R1). Then
    every inherited descriptor above 2 closed — the
    numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
-   all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
-   has no `{fd}>&-` form — placed here, ahead of the scrub and the re-exec, because the
+   all digits and not 0, 1, 2 or 3 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
+   has no `{fd}>&-` form, and with the entry's own script opened on descriptor 3 by an
+   `exec 3<"${BASH_SOURCE[0]}"` immediately above the loop (refusing `79` if that fails),
+   a `[ "/dev/fd/$fd" -ef /dev/fd/3 ]` skip inside it so the loop cannot shut the
+   descriptor bash is reading the script from, and an `eval 'exec 3<&-' 2>/dev/null` after
+   it; neither `exec` carries a bare `2>/dev/null`, which on a command-less `exec` would
+   redirect the shell's own stderr for the rest of the run — placed here, ahead of the scrub and the re-exec, because the
    scrub's two process substitutions fork bash children and the re-exec runs
    `/usr/bin/env` and a second bash, all of which would otherwise inherit whatever the
    caller left open, and so that none of the pin checks, compiles, copies or probes the
@@ -6042,7 +6434,8 @@ Order, each step checkable before the next:
    have in that position — and then the marker branch, which re-runs the same builtin
    scrub plus `builtin unalias -a` and `builtin shopt -u expand_aliases` as defence in
    depth (R1). The three opening statements run again in the second process, where the
-   close loop finds nothing above 2 to shut. Then, still
+   close loop finds nothing above 2 to shut but its own reference and that second bash's
+   script descriptor, and skips both by the same test. Then, still
    before the first external command, the four variables every trap and checkpoint reads
    declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
    `parent_pid=''` — so that under `set -u` a signal-free run's first checkpoint and a
@@ -6604,6 +6997,12 @@ intent says for this change. Only after the operator's merge does
   with them — the `runtime-pgid:` line is written after that restore, not in there, under a
   second and much shorter block of its own that spans only its `fcntl`/`write(2)`/`fcntl`,
   so a handler can never save the toggled flags as the original —
+  and, this round, a bounded `waitpid(…, WNOHANG)`/`select` loop for the wait between the
+  `SIGTERM` and the `SIGKILL` with every call in the three bodies held to the
+  POSIX.1-2017 async-signal-safe list, which is why that line is a `select` and not the
+  `nanosleep` the copied poll loop uses at `:488` and why the `parent-signal:` line is
+  built from a static table and a hand-written decimal routine instead of the `snprintf`
+  the `runtime-pgid:` line is allowed —
   and the same pair around every `waitpid` that can reap a tracked child, with the id set
   to `0` before the restore: each pre-resolver child's, and the copied supervisor's
   `:457`, `:493-494` and `:451-452`, the last of which is already inside the fork region —
@@ -6697,7 +7096,14 @@ intent says for this change. Only after the operator's merge does
   counterpart in the copied file at all and has to precede it, because the copied scrub's
   two process substitutions (`:5-10`) fork bash children and the copied re-exec (`:22-29`)
   execs `env` and a second bash, and each of those would otherwise inherit a caller's
-  descriptor above 2. The copied bytes are untouched by all three; what moved is what
+  descriptor above 2 — and that third statement grows this round rather than a fourth
+  being added, because it is the same block gaining the two lines that keep it from
+  shutting the descriptor bash reads the script from: an `exec 3<"${BASH_SOURCE[0]}"`
+  above it with a `79` refusal, and an `-ef /dev/fd/3` skip inside it, with the reference
+  closed again below. The materializer has nothing of the kind to deviate from — it closes
+  no descriptors anywhere in its own opening statements — so this is new code in a new
+  position rather than copied lines altered. The copied bytes are untouched by all three;
+  what moved is what
   stands in front of them (R1) — where the
   test script and
   `reproduce.sh` scrub nothing at all and run every command under the caller's own
