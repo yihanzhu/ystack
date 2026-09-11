@@ -51,9 +51,10 @@ measured rather than guessed:
   `st_dev`/`st_ino` compare, each with its own refusal, R5), the regular-non-symlink check on
   the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
-  (~70 — the group sequence itself is ~45, and the two `volatile sig_atomic_t` variables,
+  (~73 — the group sequence itself is ~45, the two `volatile sig_atomic_t` variables,
   the `pre_child` branch, the zero-`pgid` guard and the one `parent-signal:` line each
-  branch writes are ~25 more), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and one
+  branch writes are ~25 more, and the three-signal `sa_mask` each of the three `sigaction`
+  installations sets is ~3 more), the one `runtime-pgid: <n>` line written after the fork — a `snprintf` and one
   stderr write (~5, R2), closing inherited descriptors above 2 (~15), the fd-relative
   creation of the four
   sandbox entries (~20 — two `mkdirat` and two `openat` calls in place of two `mkdir` and
@@ -100,13 +101,16 @@ measured rather than guessed:
   `umask(077)` call
   among the first statements of `main`, which the copied launcher does not have, so the
   `home` and `tmp` the parent creates are 0700 and its two capture files 0600 whatever
-  umask the caller left behind (R5). This round adds ~15 more, to **~1114**: the
+  umask the caller left behind (R5). The round before this one added ~15 more, to ~1114: the
   output-directory check's `realpath` string comparison becomes the descriptor-identity
   sequence the bullet above itemises — the `fstatat` with `AT_SYMLINK_NOFOLLOW` and its
   `S_ISDIR` test, the `openat` on `.run`, the `open` on the run-directory argument, the two
   `fstat`s and the `st_dev`/`st_ino` compare, the `fdopendir` on a `dup` of the checked
   descriptor for the listing, and a refusal on each — where two `realpath` calls and a
-  `strcmp` were three statements (R5).
+  `strcmp` were three statements (R5). This round adds ~3 more, to **~1117**: the
+  three-signal `sa_mask` on each of the three `sigaction` installations, which is one
+  `sigemptyset` and three `sigaddset` calls on a set the parent already builds for the
+  fork mask, assigned into each `struct sigaction` before it is installed (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -165,7 +169,7 @@ measured rather than guessed:
   **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there and
   copied from the same file (`materialize.sh:31`), plus the comment that says why a scrub
   of variables does not cover a process attribute (R1).
-- **Focused test ~905 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~910 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -192,7 +196,9 @@ measured rather than guessed:
   `entry-signal:` line, with a bounded wait for the deferred trap (~30), and the
   stopped-parent one that drives the parent directly, sends `STOP`/`TERM`/`CONT`, asserts
   the `parent-signal: TERM no-runtime` line and a surviving sentinel in the test's own
-  process group, and retries a bounded twenty times (~35) — the cleanup assertions
+  process group, and retries a bounded twenty times — both non-proving outcomes now, the
+  late stop as well as the early signal, each printed per attempt and counted in the
+  message the exhausted budget fails with (~40) — the cleanup assertions
   (~85 — four cases now rather than three, each asserting the exact entry set of the output
   directory rather than one emptiness test), the two-umask case (~15 — a `umask 000` run
   and a `umask 777` run, the background poll that reads `.run`, `tmp` and `home` while
@@ -398,7 +404,7 @@ the deviation — not what any shipped file does. The sum of the four bullets wa
 against the ~2420 the range is derived from, which is inside the rounding rather than a new
 figure, so the implementation range was unchanged. Nothing was made cheaper to compensate.
 
-This round adds ~25, in the C parent and the test, from one finding. ~15 in the parent:
+The round before this one added ~25, in the C parent and the test, from one finding. ~15 in the parent:
 the output directory's `.run` containment check stops being two `realpath` calls and a
 `strcmp` and becomes a descriptor-identity sequence — `fstatat` with
 `AT_SYMLINK_NOFOLLOW` and an `S_ISDIR` test on the `.run` entry, an `openat` on it, an
@@ -411,8 +417,24 @@ compared paths for this: its own output-root validation is the emptiness glob an
 `cd -P` comparison, and the `.run` it creates is one it makes itself, so the finding does
 not reach it. Nothing was made cheaper to compensate — the withdrawn `realpath` comparison
 was the cheap wrong answer, and the right one costs more lines than it. The sum of the four
-bullets is now ~2476 against the ~2420 the range is derived from, about 2% above it and so
-still well inside the ±15% the range expresses, so the implementation range is unchanged.
+bullets was then ~2476 against the ~2420 the range is derived from, about 2% above it and so
+still well inside the ±15% the range expresses, so the implementation range was unchanged.
+
+This round adds ~8, in the C parent and the test, from two findings, and neither is a new
+mechanism: one is a flag on code that already exists, the other is a test outcome
+reclassified. ~3 in the parent: each of the three `sigaction` installations gets `sa_mask`
+set to the whole `SIGINT`/`SIGTERM`/`SIGHUP` set, which is one `sigemptyset` and three
+`sigaddset` calls — on the same set the fork mask already builds, so the cost is the
+assignment into each `struct sigaction` and the comment saying why — so that a sibling
+signal cannot re-enter a handler that is part-way through the kill, the reap and the
+shared `pgid`/`pre_child` state (R2). ~5 in the test: the stopped-parent signal case stops
+treating a `runtime-pgid:` line as an immediate failure and retries on it the way it
+already retries on a missing `parent-signal:` line, which is the outcome branch changing
+target plus the second counter and the two counts in the failure message (R10). Nothing in
+the entry, which neither finding touches, and nothing was made cheaper to compensate. The
+sum of the four bullets is now ~2484 against the ~2420 the range is derived from, about 3%
+above it and so still well inside the ±15% the range expresses, so the implementation range
+is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -429,7 +451,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 4013 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 4128 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -472,17 +494,21 @@ very command that was supposed to set it, and this round DR-2 answered and writt
 the intent this spec pins, so the one deviation from the write-root constraint is carried
 by the accepted artifact rather than by a spec waiting on a decision, beside a known umask
 set before anything is created, so the modes every other requirement states are the modes
-that appear whatever umask the caller left behind, and this round the `.run` containment
+that appear whatever umask the caller left behind, beside the `.run` containment
 check decided by descriptor identity with no symlink followed anywhere in it, so an output
 directory whose only entry is a link to a run directory somewhere else can no longer
-satisfy the containment the check exists to prove).
-**Evidence-based range for this spec pull request: 3411-4615 lines** — the measured
-4013 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+satisfy the containment the check exists to prove, and this round the three signal handlers
+installed with a mask that blocks all three of them, so a sibling signal can never re-enter
+a handler that is part-way through killing a group and reaping, beside the one signal test
+that could fail a correct implementation on a loaded runner now retrying that outcome
+instead of failing on it).
+**Evidence-based range for this spec pull request: 3509-4747 lines** — the measured
+4128 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409, then 3642, then 3866; where each block of
+3295, then 3409, then 3642, then 3866, then 4013; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -780,7 +806,7 @@ list at the top and the re-derived size figures here and for the implementation,
 range did not move because the ~19 the three files gained is inside the rounding of the sum
 it is derived from.
 
-This round is +147 net over one P2, and it is a correction to a mechanism an
+The round before this one was +147 net over one P2, and it was a correction to a mechanism an
 earlier round chose too quickly rather than new ground: the `.run` containment check was
 written as a comparison of two `realpath` answers, and `realpath` resolves through the one
 thing the check exists to refuse. About 55 go to R5: the refusal clause losing the words
@@ -806,13 +832,38 @@ the range expresses. Nothing else in this spec used `realpath` for anything: the
 are round-history sentences recording what an earlier round added, which are left as the
 history they are.
 
+This round is +115 net over two P2s, and both are the same kind of finding: a
+sentence that was true of one signal and not of three. About 40 go to the handler mask.
+R2 gains a block saying that POSIX blocks only the delivered signal by default, that this
+handler touches the shared `pgid` and `pre_child`, kills a group and reaps, and that each
+of the three `sigaction` installations therefore sets `sa_mask` to all three of `SIGINT`,
+`SIGTERM` and `SIGHUP` — with the two flags stated beside it, `SA_RESTART` unset and
+`SA_SIGINFO` unused, and the note that the held sibling is discarded by the `_exit` every
+branch ends in, so the handler runs at most once and nothing in it has to be written to
+survive running twice. The ripples carry the same clause: the installation sentence in R2,
+Design step 1's handler clause, the Copy-versus-adapt handler item growing again rather
+than a new deviation being added, R10's read-and-check sequence gaining the mask as
+something the reviewer checks by reading, and the signals bullet under Areas of concern,
+where "a second signal during termination" stops being one of the plan's open questions.
+About 30 go to R10's stopped-parent case, where a `runtime-pgid:` line stops being an
+immediate failure: the two non-proving outcomes are now retried inside the same budget of
+twenty, with the reason the late stop is a scheduling artefact of driving a process from a
+shell rather than an implementation fault, the per-attempt print of which outcome was seen,
+the failure message carrying a count of each, and the retry-cost paragraph rewritten so it
+covers both windows instead of one. The case's opening sentence loses the words
+"deterministic by construction", which were the claim the finding actually landed on, and
+its three assertions are labelled as the assertions of a proving attempt. The remaining
+~45 are ripples: the accepted-concern list at the top, and the re-derived size
+figures here and for the implementation, whose range does not move because the ~8 the
+parent and the test gain is inside the rounding of the sum it is derived from.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 3411-4615 lines**, which is this file's measured
-4013 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 3509-4747 lines**, which is this file's measured
+4128 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2057-2783 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1594,6 +1645,24 @@ the spec pull request's range above still blocks review.
   signal and wait (R1); it never terminates the group itself and never removes the run
   directory before the parent has exited.
 
+  **Each of the three handlers blocks all three signals while it runs, not only the one
+  that was delivered.** POSIX adds just the delivered signal to the mask for the duration
+  of its handler, so on the default terms a `HUP` can run this handler while a `TERM` is
+  part-way through it — and this is not a handler that could survive that. It reads and
+  writes the shared `pgid` and `pre_child`, it kills a process group, and it reaps a child
+  the outer run is already reaping. So each of the three `sigaction` installations sets
+  `sa_mask` to the same set — `SIGINT`, `SIGTERM` and `SIGHUP`, all three, not only the one
+  being installed — and a sibling signal that arrives mid-handler is held until the handler
+  returns. It never returns: every branch below ends in `_exit(128 + signal)`, so the held
+  signal is still pending when the process goes away and is discarded with it. The handler
+  therefore runs at most once in the life of the parent, which is the property every other
+  paragraph in this block is written against. Two flags go with that and are stated so the
+  plan does not have to choose: `SA_RESTART` is **not** set, because nothing in the parent
+  needs a slow call resumed after the handler — the handler does not return to it — and
+  `SA_SIGINFO` is not needed, because the handler uses the signal number and nothing else a
+  `siginfo_t` would carry. Blocking is the whole of the protection here: nothing in the
+  handler is written to be correct if it runs twice.
+
   **The handler has to work before any runtime process group exists, and that window is
   most of the parent's life.** The entry records the parent's pid the instant it starts the
   parent and forwards from that moment on (R1), but the parent does not fork the resolver
@@ -1720,6 +1789,7 @@ the spec pull request's range above still blocks review.
   would, at best, kill the test that was checking it and, at worst, take down the caller's
   session. There is no case in this requirement where signalling the parent's own group is
   the right thing to do. The handlers are installed as the **first statements of `main`**,
+  each with `sigaction` and each with the three-signal `sa_mask` above,
   before any pin work, any digest and any argument checking, so the window in which a
   signal still finds the default disposition is as small as a process start rather than as
   long as a pin pass; R10 says what the test does about that window and why it cannot be
@@ -3213,14 +3283,18 @@ the spec pull request's range above still blocks review.
   own, so this case is written in the group-2 style with a run directory the test builds by
   hand.
 
-  The sequence is three signals and it is deterministic by construction. The test starts the
+  The sequence is three signals, and it is as close to deterministic as this branch can be
+  driven from outside the parent — which is not all the way, for the reason the retry
+  paragraph below gives. The test starts the
   parent in the background and **immediately** sends it `kill -STOP`, so it cannot make
   progress past process start; then `kill -TERM`, which stays pending on a stopped process;
   then `kill -CONT`, which is what lets the installed handler run. Alongside the parent, and
   before any of that, the test starts a sentinel `sleep` in the **same process group as the
   parent** — the test's own group, which is what a plain background child joins.
 
-  Three assertions. One: the parent's exit status is `143`, which is `128 + SIGTERM`. Two:
+  Three assertions, and they are the assertions of an attempt that actually reached the
+  branch; an attempt that ends in either of the two outcomes below is retried before any of
+  them is treated as a failure. One: the parent's exit status is `143`, which is `128 + SIGTERM`. Two:
   its stderr holds `parent-signal: TERM no-runtime` and **no** `runtime-pgid:` line — the
   first says the handler ran and took the branch, the second says there was no resolver
   group for it to take the other one. Three: the sentinel `sleep` is still alive afterwards,
@@ -3228,24 +3302,43 @@ the spec pull request's range above still blocks review.
   the caller's process group, whether through a zero `pgid` or a literal `kill(-0, …)`, and
   it fails loudly because the group in question is the test's own (R2).
 
-  **Two outcomes are not proof, and they are handled differently.** If a `runtime-pgid:`
-  line appears, the `SIGSTOP` landed too late: the parent got all the way through its checks
-  and forked before the stop took effect, so the attempt exercised the group branch and not
-  this one. That is a failure with exactly that message — never a pass, because the group
-  branch already has its own case. If the parent died with no `parent-signal:` line at all,
-  the `SIGTERM` was delivered before the handlers were installed and the default disposition
-  killed it — the process-start window R2 keeps as small as it can. That is not a failure of
-  the shipped code, so the test **retries the whole attempt**, bounded to a stated number of
-  attempts: twenty, written into the test rather than left open, and if none of the twenty
-  produces the line the case fails. Which of the two outcomes ended each attempt is printed,
-  so a run that fails says whether the stop was landing late or the signal early.
+  **Two outcomes are not proof, and both of them are retried rather than failed on.**
+  The first is a `runtime-pgid:` line: the `SIGSTOP` landed after the fork, so the parent
+  got all the way through its pre-resolver checks and started the resolver before the stop
+  took effect, and the attempt exercised the group branch, which already has its own case.
+  An earlier round of this spec made that outcome an immediate failure, and that was wrong:
+  nothing in the test can guarantee the stop lands first. The `kill -STOP` is sent by the
+  test shell after the parent has been started in the background, so between the two there
+  is a fork, an exec and however long the scheduler takes to run either process — and on a
+  fast machine, or a loaded one where the test shell is the process that gets descheduled,
+  the parent can be through its checks by then. It is a scheduling artefact of driving
+  another process from a shell, not a fault in the implementation, and a correct
+  implementation will still produce it sometimes on a busy runner. Failing on it makes this
+  case flaky in CI for a reason that says nothing about the code under test.
+  The second outcome is a parent that died with no `parent-signal:` line at all: the
+  `SIGTERM` was delivered before the handlers were installed and the default disposition
+  killed it — the process-start window R2 keeps as small as it can. That one was already
+  retried and stays retried.
+
+  So the two share one budget and one mechanism. The test **retries the whole attempt** on
+  either outcome, bounded to a stated number of attempts: twenty, written into the test
+  rather than left open, and the twenty are the total across both outcomes rather than
+  twenty of each. Every retry prints which of the two ended the attempt — the stop landing
+  late, or the signal landing early — so a run that is drifting toward flaky says so while
+  it is still passing. The case fails only when the budget is exhausted without a single
+  proving attempt, and the failure message carries the count of each outcome, so the
+  operator reading it knows which way to move the timing: a shorter path to the `kill -STOP`
+  if the stops are late, a wider gap before the `kill -TERM` if the signals are early.
+  Neither outcome is ever counted as a pass.
 
   Say plainly what the retry costs and why it is the right trade: it is the honest price of a
-  window the shipped code must not widen for a test's convenience. Making the case
-  first-time deterministic would mean a pause, an environment variable or a test-only argv
+  window the shipped code must not widen for a test's convenience. Making either outcome
+  impossible would mean a pause, an environment variable or a test-only argv
   mode inside a security wrapper, which is the thing this spec refuses everywhere else, and
-  the window itself cannot be shortened below a process start because the handlers are
-  already the first statements of `main` (R2). **One success proves the branch**, and the
+  neither window can be closed from outside: the early-signal one cannot be shortened below
+  a process start because the handlers are already the first statements of `main` (R2), and
+  the late-stop one cannot be widened without the parent agreeing to wait, which is exactly
+  the test-only hook that is refused. **One success proves the branch**, and the
   branch is the same one every attempt aims at, so twenty attempts is a scheduling
   allowance, not twenty different tests.
 
@@ -3264,7 +3357,12 @@ the spec pull request's range above still blocks review.
   before `execve` — and the
   reviewer checks
   that every fork in the file sits inside one such region, and that nothing which can
-  block — the `runtime-pgid:` write above all — sits inside one with it (R2). The three
+  block — the `runtime-pgid:` write above all — sits inside one with it (R2). The same
+  reading covers the handler installations themselves, and for the same reason: the
+  reviewer checks that all three `sigaction` calls set `sa_mask` to `SIGINT`, `SIGTERM` and
+  `SIGHUP` and leave `SA_RESTART` unset, because a sibling signal re-entering a handler
+  that is part-way through the kill and the reap is the other way this state can be raced,
+  and no test can put one there on demand either (R2). The three
   signal cases above
   are unchanged by the mask and must still pass exactly as written, which is the other
   half of the check: the mask changes *when* a pending signal is delivered, never which
@@ -3454,7 +3552,11 @@ Order, each step checkable before the next:
    the `INT`/`TERM`/`HUP` handlers that terminate the child's process group with
    `kill(-pgid, SIGTERM)` then `kill(-pgid, SIGKILL)`, reap, and exit `128 + signal` (R2).
    Those handlers are installed as the first statements of `main`, before any pin or digest
-   work, and they carry the two `volatile sig_atomic_t` variables R2 specifies — `pgid`,
+   work, each by a `sigaction` whose `sa_mask` is the whole set `SIGINT`, `SIGTERM`,
+   `SIGHUP` — so a sibling signal cannot re-enter a handler that is part-way through the
+   kill and the reap, and is discarded by the `_exit` every branch ends in — with
+   `SA_RESTART` unset and `SA_SIGINFO` unused, and they carry the two
+   `volatile sig_atomic_t` variables R2 specifies — `pgid`,
    `0` until it is assigned right after the `fork` (`:432`) and the parent-side `setpgid`
    (`:450`), and `pre_child`, the pid of the
    pre-resolver child currently being waited on (a SHA-1 tool, the SHA-256 tool, the jq
@@ -3737,7 +3839,7 @@ intent says for this change. Only after the operator's merge does
   process group rather than a resolver's, and the case asserts against exactly that with a
   sentinel process in the test's own group that has to survive (R2, R10). The plan
   should treat this as the highest-risk new code here and say what it does on `EINTR` in
-  `waitpid`, on a second signal during termination, on an already-reaped child, on a
+  `waitpid`, on an already-reaped child, on a
   group whose members are stopped when the handler fires, and on a signal that reaches the
   entry while a compile is still running and no parent pid has been recorded — where bash
   defers the signal until that compile finishes and the entry's next checkpoint is what
@@ -3755,7 +3857,18 @@ intent says for this change. Only after the operator's merge does
   inside the child and kill groups from the wrong process. That fix is the one thing in this bullet
   with no test behind it — the window is a few instructions wide and nothing can put a
   signal in it on demand — so its coverage is a sequence the plan quotes and the reviewer
-  reads, which R10 states in those words rather than implying a case exists. One more
+  reads, which R10 states in those words rather than implying a case exists. A second
+  signal arriving while the handler is already running is no longer one of the plan's
+  questions either, and it is this round's find: the three handlers are installed with
+  `sa_mask` set to all three signals, so a sibling is held until the handler `_exit`s and
+  then discarded with the process, and nothing in this path has to be written to survive
+  running twice (R2). That fix has no test behind it for the same reason the mask above
+  does not, and it is read the same way. This round's other change is on the test side and
+  is an admission rather than a mechanism: the stopped-parent case used to fail outright
+  when the `SIGSTOP` landed after the fork, which made a correct implementation flaky on a
+  loaded runner, so both of that case's non-proving outcomes are now retried inside one
+  bounded budget and counted in the failure message (R10).
+  One more
   ordering belongs in this bullet, and it points the other way: the two diagnostic lines
   this path writes — the parent's `parent-signal:` and the entry's `entry-signal:` — are
   written **after** the killing and the cleanup rather than before, and best-effort, because
@@ -3868,6 +3981,8 @@ intent says for this change. Only after the operator's merge does
   slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
   handlers with process-group termination are new (R2) — and that item grows again this
   round rather than a tenth being added, because it is all the same deviation: the handlers
+  are installed by `sigaction` with `sa_mask` set to all three of `SIGINT`, `SIGTERM` and
+  `SIGHUP` and `SA_RESTART` unset, so none of them can re-enter another, and they
   carry two `volatile sig_atomic_t` variables, three branches on them, a prohibition on
   `kill(0, …)`/`kill(-0, …)`, one `parent-signal:` line each branch writes — written last,
   after the kill and the reap, with stderr made non-blocking for a single `write(2)` whose
