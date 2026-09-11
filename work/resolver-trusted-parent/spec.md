@@ -353,6 +353,17 @@ measured rather than guessed:
   statements they are; this list counts lines, and those two shared one, so the figure
   moves by one. The same divergence, in the other direction, was recorded two items above
   when a measurement made a fix cost ~2 more than its decision estimated (R1).
+  This round adds ~2 more, to **~440**, both in the close loop's own block. ~1 is the
+  statement that makes the unmatched glob fail closed —
+  `case $fd in '/dev/fd/*') printf 'E_RUNTIME\n' >&2; exit 1 ;; esac`, the loop's first
+  line, above the `${fd##*/}` strip. ~1 is the comment beside the block, which becomes two
+  lines rather than one because it now has two things to say instead of one: why the soft
+  limit is set rather than read, and why an expansion that matched nothing is a refusal and
+  not an empty loop — the second being the line that stops a later reader deleting a `case`
+  whose pattern looks like a typo for the glob above it. The precondition's third rung costs
+  **nothing**: `ulimit -S -n 1024 2>/dev/null ||` goes in front of the two attempts already
+  on that line, which is a longer line and not another one, and the `E_RUNTIME` brace group
+  at the end of it is the same brace group (R1).
 - **Focused test ~1049 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -484,18 +495,30 @@ measured rather than guessed:
   comparisons (~5 — the parent's five module pins joining the loop, and one `grep` each
   for the generation id and the schema major against the library's own lines), and the
   comment beside the group-2 fixture builder saying the group is the only legitimate user
-  of the direct-invocation shape (~2) (R5, R10).
+  of the direct-invocation shape (~2) (R5, R10). This round adds ~10 more, to **~1094**,
+  in the two descriptor runs R10 gains and nothing else: the filled-low-numbers success run
+  (~5 — the `while` loop that opens 253 descriptors on 3 through 255 with the fifo's write
+  end among them, the `ulimit -S -n 1024; ulimit -H -n 1024` pair on the same line ahead of
+  it, and the three assertions, all of which reuse the fifo-and-reader helper, the `.run`
+  poll and the byte-compare the suite already has) and the filled-below-the-cap refusal run
+  (~5 — the same opening loop at 3 through 300 with `ulimit -S -n 1023; ulimit -H -n 1023`,
+  the `E_RUNTIME` grep written to tolerate bash's own `redirection error` line beside it,
+  the non-zero-exit check, the empty-output-root poll, and the comment saying the two
+  numbers follow the ladder's rungs). Both reuse machinery rather than bringing any, which
+  is why two runs cost ~10 and not ~25 (R1, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2810 lines — added as they stand, ~1228 + ~438 +
-~1084 + ~60, rather than carried forward: a round two back wrote the running
+Those four bullets now sum to about 2822 lines — added as they stand, ~1228 + ~440 +
+~1094 + ~60, rather than carried forward: a round two back wrote the running
 total as ~2730 and adding its own four bullets gave ~2771, so the figure is corrected here
-in the same way an earlier round corrected ~2535 to ~2578. **This round's own delta is −1,
-all of it in the entry** — the headroom precondition's two lines replaced by one — and the
-range does not move for it: a band whose top is 2829 absorbs a single line off the sum
-without a word, and re-deriving a range downward on one line would be noise dressed as
-precision. **The round before this one moved the implementation range, for the first time
+in the same way an earlier round corrected ~2535 to ~2578. **This round's own delta is +12**
+— ~2 in the entry, the unmatched-glob refusal and the second comment line, and ~10 in the
+test, the two descriptor runs — and the range does not move for it: ~2822 is still under
+the 2829 top of the standing band, by seven lines, which is close enough to be worth
+saying rather than leaving for the next round to discover. The round before this one
+recorded its own delta as −1 and left the range alone for the same reason in the other
+direction. **The round before that moved the implementation range, for the first time
 in fourteen rounds.** The convention held
 until then was that the range is not re-derived from the sum each round: it was the ~2441
 of the round it was set in, with ±15% at
@@ -898,14 +921,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7537-10197 lines** — this file's measured 8867 lines plus or minus 15%, rounded. That
+**7880-10662 lines** — this file's measured 9271 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 8867 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 9271 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1064,17 +1087,23 @@ the runtime through a caller who skipped the entry and the one thing that path s
 entry is the only supported launch, beside the entry's own diagnostic narrowed to a
 regular file alone, so the line can no longer be written to a terminal whose output is
 flow-controlled or whose pty master nobody is reading and hang the exit the whole signal
-path exists to deliver, and this round the entry's descriptor-headroom precondition
+path exists to deliver, beside the entry's descriptor-headroom precondition
 setting the soft limit with a builtin instead of reading it through a command
 substitution, so no child of any kind exists above the close loop and the boundary R7
 states — every process in this tree starting after the caller's descriptors are shut —
-is true as written rather than true but for one short-lived bash child).
+is true as written rather than true but for one short-lived bash child, and this round the
+entry's close loop refusing outright when its `/dev/fd` glob matches nothing, with the
+precondition trying the largest cap first so that normalising the soft limit raises a
+caller's room where it can rather than always cutting it to 256, so a caller who has
+already filled the low descriptor numbers is either served with every one of them shut or
+turned away before anything is created, and can no longer be handed a run that closed
+nothing, kept their credential open inside every child and reported success).
 The same record again here, where the count it rests on is derived, on its own line:
 
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7537-10197 lines** — this file's measured 8867 lines plus or minus 15%, rounded. That
+**7880-10662 lines** — this file's measured 9271 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1087,8 +1116,8 @@ range is the separate figure above. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420, then 7690, then 7878, then 7914, then 8242, then 8637; where each
-block of growth went is worth naming so it can be checked rather than taken on trust.
+7173, then 7420, then 7690, then 7878, then 7914, then 8242, then 8637, then 8867;
+where each block of growth went is worth naming so it can be checked rather than trusted.
 The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -2191,15 +2220,89 @@ Areas-of-concern descriptor bullet, whose one-child residual goes back to none; 
 paragraphs marked where each recorded something this round withdraws; the accepted-concern
 list at the top; and the re-derived size figures here and for the implementation, where the
 entry bullet goes down by one — the two precondition lines out and one back in — and the
-range does not move, because a −1 needs no band.
+range does not move, because a −1 needs no band. (**Round 42 adds a third rung to that one
+line and a refusal inside the loop below it**, because setting the limit turned out to be
+able to take away the very numbers the loop needs; the builtin-only shape and the fork-free
+claim this round bought are unchanged and the rung is free.)
+
+This round is +404 net over one P1, and it is the third time in this spec that a
+statement written to make the entry safe is what makes it unsafe in some caller's hands.
+**About 100 go to R1's close loop.** The finding is that the loop can be handed nothing to
+close and say nothing about it: `/dev/fd/*` is a glob, `nullglob` is off, and an expansion
+that matches nothing leaves its own literal word in the `for` list — which is exactly what
+a caller who has filled every descriptor below the normalised soft limit produces, because
+reading a directory needs a descriptor too. The round-41 text then ran one pass over the
+word `/dev/fd/*`, threw it away on the all-digits arm, closed nothing, and went on to the
+scrub, the re-exec, the compiles and the `cp`s with the caller's credential, socket and
+write handle still open, exiting `0`. So the loop's first statement is now a `case` on the
+unstripped word against the quoted literal, writing one `E_RUNTIME` line and exiting. Most
+of those 100 are measurement, and the rest is why this shape and not another: the literal
+test is exact where an `[ -e "$fd" ]` proxy is not, which is measured from both sides — the
+word `/dev/fd/*` matches the pattern and `/dev/fd/7`, `/dev/fd/255`, `/dev/fd/` and a bare
+`*` do not, and `/dev/fd` cannot hold a file named `*` for a matching expansion to have
+produced it, `: > /dev/fd/x` answering `No such file or directory`. The finding's own
+fixture is measured twice at the round-41 cap, once with the refusal and once without —
+253 descriptors on 3 through 255, hard and soft 1024 — giving one glob word, nothing closed
+and exit `0` without it, and `E_RUNTIME`, exit 1 and nothing created with it; and a
+3-through-200 fixture beside them shows the ordinary case unchanged, 203 words, 198
+descriptors shut and the relocated `/dev/fd/12` alone left above 2.
+**About 84 go to the precondition's ladder**, which is the other half of the same
+finding and is where the fix actually lands for most callers. Normalising *downward* is
+what created the broken caller, so the entry now tries `1024` before `256` before `64`, on
+the rule the round before this one already rested on: an unprivileged process may set its
+soft limit anywhere up to its hard limit, so the three fail together only below 64, and the
+round-35 floor, the 63 refusal and the argument for both survive untouched. Measured as six
+fixtures with the round-41 shape beside this one, where only the two rows at a hard limit
+of 1024 or more move — soft 256 becomes soft 1024 — and end to end on the finding's own
+fixture, where the ladder turns the refusal into an ordinary success with all 253
+descriptors shut. The ordering question the finding invites is measured rather than argued:
+a 118,131-byte script with the loop first and no precondition above it, started with the
+caller holding 3 through 9, reaches its marker at soft 11 and at 14 and above and
+**silently truncates at 13 and at 12 with exit `0`**, which is the round-35 hazard — so
+raising first is what makes the close safe, and neither order is safe without the refusal.
+The two shapes the ladder does not save are measured and named: a hard limit between 256
+and 1023, where the second rung still lowers under a full low range and the refusal catches
+it, and a caller who has filled every number below the *hard* limit, where the `ulimit`
+attempts fail on their own `2>/dev/null` and the precondition refuses one statement
+earlier. **About 18 go to R7**, whose claim now reads "closed or refused" and never
+"silently skipped", with the arrangement it used to admit written out rather than a
+qualification quietly dropped; the parent's half is unaffected, its own enumeration having
+been fail-closed since round 39. **About 41 go to R10**, in two new descriptor runs rather
+than a rewrite of the four it had: the filled-low-numbers success run at 3 through 255
+under hard and soft 1024, which fails on the round-41 text and passes on the ladder, and
+the filled-below-the-cap refusal run at 3 through 300 under hard and soft 1023. **The
+second of those departs from the decision that ordered this round**, which costed two cases
+from the two measured fixtures and expected the first of them to be a refusal; the ladder
+makes it a success, so the refusal needs a fixture of its own, and the smaller
+3-through-200 shape is left as a measurement in R1 rather than run twice in the suite. Two
+things about the refusal run are stated where a plan would otherwise guess. Its stderr
+assertion is deliberately weaker than its neighbour's, for a measured reason: on a table
+that full bash cannot save a descriptor to perform `>&2` and writes one
+`redirection error: cannot duplicate fd` line of its own, so the case greps for the
+`E_RUNTIME` line where the hard-limit-63 case can still demand exactly one line. And it is
+the one run in that group with no fifo, because there is no ordering to observe when the
+entry refuses before its first external command. **The remaining ~161 are the
+ripples and the bookkeeping**: the proof-by-reading list, which gains the three things to
+read about the literal `case` — that it is its own statement, that it refuses rather than
+`continue`s, and that the `*` is quoted — and has its precondition entry rewritten to
+three rungs; Design step 2's precondition clause and its close-loop clause; the
+Copy-versus-adapt entry item, where the loop's text grows back by one statement after
+round 41 shrank it by three; the Areas-of-concern descriptor bullet, which now says the
+loop can be handed nothing and that the answer is a refusal rather than a residual; R1's
+own "what it buys" paragraph, which states the two-outcome boundary in the words R7 uses;
+round 41's accounting paragraph marked where it recorded a line this round adds to; the
+accepted-concern list at the top; and the re-derived size figures here and for the
+implementation, where the entry bullet goes up by ~2 and the test bullet by ~10, and the
+range does not move because ~2822 is still inside a band whose top is 2829 — by seven
+lines, which is close enough that the next round should expect to move it.
 
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 7537-10197 lines**, which is this file's measured
-8867 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 7880-10662 lines**, which is this file's measured
+9271 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -3358,13 +3461,113 @@ the spec pull request's range above still blocks review.
   shuts them, and shuts them at the top rather than at the bottom:
 
   ```
-  ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || { printf 'E_RUNTIME\n' >&2; exit 1; }
+  ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || { printf 'E_RUNTIME\n' >&2; exit 1; }
   for fd in /dev/fd/*; do
+    case $fd in '/dev/fd/*') printf 'E_RUNTIME\n' >&2; exit 1 ;; esac
     fd=${fd##*/}
     case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
     eval "exec ${fd}>&-" 2>/dev/null
   done
   ```
+
+  **The glob can fail to match, and this round the loop's first action is to refuse when it
+  has.** `/dev/fd/*` is a glob, and with `nullglob` off — which it is, nothing in the entry
+  sets it, and setting it would be a shell option the scrub below does not reset — an
+  expansion that matches nothing leaves the word alone: the `for` list becomes the single
+  literal string `/dev/fd/*`. There is one reason that happens here, and it is not a missing
+  directory — `/dev/fd` is present on both supported platforms and its absence would be a
+  broken system rather than a caller — it is that reading a directory takes a descriptor
+  too, so with no free number below the soft limit the `opendir` fails and bash reports no
+  match. (A refusal covers the broken-system case as well, which costs nothing and is the
+  right answer there too: the loop cannot do its job either way.) That is a caller the entry
+  can be handed. It is the caller who has already filled the numbers the entry would have
+  used — 3 through 255 open, say, before the soft limit is normalised down to 256 — and it
+  is the worst caller to be quiet about, because the loop then visits exactly one word, the
+  literal, whose `${fd##*/}` is `*`, which the all-digits arm throws away. Nothing is
+  closed. Every credential, socket and write handle this requirement exists to remove
+  survives into the scrub's process substitutions, the re-exec, the compiles and the `cp`s,
+  and the run reports success. So the loop tests for it, on the word and before anything
+  else in the body: `case $fd in '/dev/fd/*') printf 'E_RUNTIME\n' >&2; exit 1 ;; esac`.
+  **The literal test is the exact one and the `[ -e "$fd" ]` alternative is refused.** The
+  pattern is the failed expansion itself, spelled out with the `*` quoted so it is a literal
+  and not a wildcard, so it is true in exactly the case that produced it and false for every
+  real descriptor path — measured on this bash: the word `/dev/fd/*` matches, and
+  `/dev/fd/7`, `/dev/fd/255`, `/dev/fd/` and a bare `*` do not. The only way a *matching*
+  file could produce that word is a file literally named `*` inside `/dev/fd`, which neither
+  platform's descriptor filesystem can hold — measured: `: > /dev/fd/x` on Darwin answers
+  `/dev/fd/x: No such file or directory`, the directory admitting numbers and nothing else.
+  An `[ -e "$fd" ]` test would be a proxy for that fact rather than the fact, it would pay a
+  `stat` on every descriptor in the ordinary case to catch a condition that has one word,
+  and it answers the wrong question — a valid descriptor whose `stat` fails would refuse a
+  run that should continue. The refusal is one `E_RUNTIME` line and a non-zero exit, and
+  because the loop stands above the scrub, the re-exec and every external command, it
+  happens before the run directory exists and before anything at all has been created: a
+  caller who has filled the table gets a refusal, never a silent pass.
+
+  **Measured, bash 3.2.57 on `arm64-apple-darwin` (`Darwin 27.0.0`), with the caller's
+  descriptors opened in the shell that `exec`s the entry.** The fixture is the finding's
+  own: 253 descriptors open on 3 through 255, hard and soft limit 1024, the loop run once
+  without this round's refusal and once with it on the same script, each reporting which
+  numbers above 2 it still holds after the loop:
+
+  ```
+  fixture                       without the refusal    with the refusal
+  caller 3..255                 continue, exit 0       E_RUNTIME, exit 1
+    glob words seen by loop     1 (the literal)        1 (the literal)
+    descriptors closed          0                      0
+    still open above 2          253 (3 … 255)          253 (3 … 255), untouched
+    output root afterwards      empty                  empty, nothing created
+  caller 3..200                 continue, exit 0       continue, exit 0
+    glob words seen by loop     203                    203
+    still open above 2          1 (the relocated 12)   1 (the relocated 12)
+  ```
+
+  **Both columns hold the soft-limit cap at 256**, which is the round-41 statement, so that
+  what the two columns differ by is the refusal and nothing else. The cap itself is this
+  round's other change and the block further down measures the same first fixture again
+  under it: with the limit ladder in place that caller is *served* rather than refused, and
+  the refusal is left holding the narrower set of callers the ladder cannot help. The second
+  fixture is the ordinary case and is there to show the refusal is narrow even at the fixed
+  cap: with
+  198 caller descriptors and a free number left under the cap the glob expands normally, the
+  loop shuts all 198 and bash's own script descriptor, and what remains above 2 is the
+  relocated script input alone — `/dev/fd/12`, the same relocation the block below measures.
+  The first fixture is the finding: one word, nothing closed, and the difference between the
+  two columns is the whole of this round's change to the loop. One thing the first fixture
+  shows that is worth stating rather than leaving for a reader to hit: on a table that full
+  bash cannot save a descriptor to perform `>&2`, so it writes one
+  `redirection error: cannot duplicate fd: Too many open files` line of its own before the
+  refusal's line — the `E_RUNTIME` still arrives and the exit is still 1, but stderr carries
+  two lines rather than one, and R10's assertion is written for that.
+
+  **Why the limit step stands above the loop and not below it, with both orders needing the
+  refusal.** Running the loop first and normalising afterwards looks like it would dodge the
+  whole problem, since the glob would then run at the caller's own soft limit, which is
+  higher in the case the finding names. It trades this round's failure for the round-35 one
+  and that is a worse trade, because the round-35 failure is the silent one. Measured, on a
+  118,131-byte script whose first statement is the close loop with no precondition above it
+  and whose last line prints a marker, started with the caller holding 3 through 9:
+
+  ```
+  soft 11 -> CLOSE-LOOP-DONE, MARKER-END, exit 0
+  soft 12 -> one 'redirection error: cannot duplicate fd' line, no CLOSE-LOOP-DONE,
+             no MARKER-END, exit 0
+  soft 13 -> CLOSE-LOOP-DONE, no MARKER-END, exit 0
+  soft 14 -> CLOSE-LOOP-DONE, MARKER-END, exit 0
+  ```
+
+  The 13 row is the round-35 hazard exactly: the loop shut bash's script descriptor, bash
+  had no free number at or above 10 to relocate onto, the script stopped at the end of what
+  it had already buffered, and the status was `0` — an entry that skipped the scrub, the
+  re-exec, every check and the whole resolution and reported success. The 12 row is worse
+  again: nothing ran at all and the status was still `0`. The same script with the
+  precondition back above the loop reaches its marker on every one of those fixtures —
+  measured at soft 12, 13, 14 and 64, all four printing `CLOSE-LOOP-DONE` and `MARKER-END`.
+  So the limit step goes first because it is what makes the close itself safe, and the
+  refusal above is what covers the one case the limit step cannot buy its way out of.
+  Neither order is safe without the refusal: a loop that ran before the limit step would
+  meet the same unmatched glob whenever the caller's own soft limit left no free number, and
+  would close nothing just as quietly.
 
   **Nothing above 2 is skipped, and the exception the round before this one added is
   withdrawn.** That round had the entry open its own script on descriptor 3 and skip any
@@ -3514,10 +3717,13 @@ the spec pull request's range above still blocks review.
   well clear of every measurement in this block, still far above the two or three free
   numbers at or above 10 that the relocation actually needs, and still leaves room for the
   handful of files the entry opens afterwards — the pinned jq, the ten pin reads, the two
-  compiles, the copies. 256 is tried first rather than instead, because it is the
+  compiles, the copies. 256 is tried before 64 rather than instead of it, because it is the
   traditional Darwin soft default and so cannot be an unusual value for anything in this
   tree to run under, and because a caller who has lowered the *hard* limit into the range
-  between 64 and 256 has narrowed the entry's room without breaking it. Three statements of
+  between 64 and 256 has narrowed the entry's room without breaking it. (**This round puts
+  a third rung above both**, `ulimit -S -n 1024`, for the reason the block below gives; the
+  argument for 256 and for the 64 floor is unchanged and they are now the second and third
+  attempts of three.) Three statements of
   the round-35 shape are **withdrawn** with the reading: `nofile=$(ulimit -n)`, the `case`
   that mapped `unlimited` and unparsable answers, and the `[ "$nofile" -ge 64 ]`
   comparison. The hazard that `case` existed for goes with them rather than being handled
@@ -3562,6 +3768,87 @@ the spec pull request's range above still blocks review.
   loop shuts it; the relocation then needs a free number at or above 10 and below 64, and
   it lands on 12. The last row is the environment the round-35 shape refused outright and
   the one no precondition at all truncates silently.
+
+  **This round the precondition tries 1024 before it tries 256, and the reason is exactly
+  the caller the refusal above exists for.** Normalising downward is what created that
+  caller. A caller holding 3 through 255 with a soft limit of 1024 has free numbers to
+  spare; the round-41 statement took them away — it set the soft limit to 256, every number
+  below 256 was already occupied, and the glob had nothing left to open. The round-41 text
+  bought determinism there and paid for it with the entry's whole purpose. Adding a rung
+  above it buys the determinism back without the bill, and it is the same rule that made one
+  statement do two jobs in the first place: an unprivileged process may set its soft limit
+  anywhere up to its hard limit, so `ulimit -S -n 1024` succeeds whenever the hard limit is
+  at least 1024, `256` whenever it is at least 256, `64` whenever it is at least 64, and the
+  three fail together only when the hard limit is below 64 — which is still the round-35
+  floor, still refused with the same single `E_RUNTIME` line, and still the only environment
+  the precondition turns away. The cost is one more builtin on a line that already had two,
+  and no fork: `ulimit` is a builtin (`type -t ulimit` answers `builtin`), so the extra
+  attempt opens nothing, execs nothing and creates no process, and the claim above about
+  what stands between the entry's first statement and the loop's last pass is unchanged.
+
+  **Measured, the same four fixtures as the block above plus the two the rung is for,
+  round 41's shape and this round's side by side on the same script**, with the hard limit
+  set after the soft one in the subshell the script is started from, because a bare
+  `ulimit -H -n` under a higher soft limit is refused by bash itself:
+
+  ```
+  fixture (hard, caller soft)   round-41 shape        this round's ladder
+  512, 100                      continue, soft 256    continue, soft 256
+  128, 128                      continue, soft 64     continue, soft 64
+  63, 63                        E_RUNTIME, exit 1     E_RUNTIME, exit 1
+  1023, 1023                    continue, soft 256    continue, soft 256
+  1024, 1024                    continue, soft 256    continue, soft 1024
+  unlimited, 12                 continue, soft 256    continue, soft 1024
+  ```
+
+  Only the last two rows move, and they are the rows the finding is about: where the hard
+  limit will allow 1024 the entry takes 1024 instead of cutting itself down to 256. Nothing
+  below 1024 changes at all, so the 63 refusal, the 64 fallback and the argument for the
+  floor are all untouched by the rung. End to end on the finding's own fixture — 253
+  descriptors open on 3 through 255, hard and soft 1024 — the ladder turns the refusal
+  measured two blocks above into an ordinary success:
+
+  ```
+  caller 3..255, hard 1024, soft 1024:
+    round-41 cap 256:   glob expands to the literal, 0 closed, 253 still open, exit 0
+    this round's cap 256 + refusal: E_RUNTIME, exit 1, nothing created
+    this round's ladder:            soft stays 1024, glob sees 257 words, 253 closed,
+                                    still open above 2: /dev/fd/12 alone, exit 0
+  ```
+
+  **What the rung does not buy, and where the refusal is still the answer.** Two shapes
+  remain, and both fail closed rather than quietly. The first is the narrowed lowering
+  window: a hard limit between 256 and 1023 with a caller soft limit above 256 still makes
+  the second rung *lower* the limit, and a caller who has filled every number below 256
+  there is the finding's caller again. Measured, hard and soft 1023 with the caller holding
+  3 through 300: the first rung fails against the hard limit, the second succeeds and takes
+  the soft limit from 1023 to 256, the glob then has no free number under 256 and expands to
+  the literal — without this round's refusal the run continues with all 298 caller
+  descriptors intact and exits `0`, and with it the entry writes `E_RUNTIME` and exits 1
+  having created nothing. That is the price of normalisation, stated where it is paid: the
+  entry still prefers one of three known soft limits to whatever the caller left behind, and
+  where that preference costs a caller their run, the caller is told so rather than served a
+  silent pass. The second shape is a caller who has filled every number below the *hard*
+  limit, where no rung can help because there is no headroom to be had: measured, hard and
+  soft 256 with the caller holding 3 through 254, all three `ulimit` attempts fail — not on
+  the limit but on their own `2>/dev/null`, which needs a descriptor the caller has not left
+  — and the refusal at the end of the chain writes `E_RUNTIME` and exits 1. Three bash
+  `/dev/null: Too many open files` lines arrive with it, which is the same stderr residual
+  the fixture two blocks above shows and is named again here rather than discovered later.
+  Both shapes refuse; neither is skipped.
+
+  **Normalising to 1024 rather than 256 is the same trade in the same direction, and the
+  three places round 41 checked are still the places.** Past the precondition the entry and
+  everything it starts run with a soft `RLIMIT_NOFILE` of 1024, or 256, or 64 — one of three
+  constants in the shipped file rather than the caller's own number, which measured
+  1,048,576 on this machine. Nothing downstream wants more and nothing downstream is
+  starved: the parent's own startup close takes `rlim_max`-or-`sysconf` capped at 65536 as
+  its ceiling and the soft limit as a ceiling nowhere (R5), the parent puts 64 under the
+  resolver child whatever it inherited (R4), and the compiles, digest tools, `cp`s and jq
+  probe open a handful of files each. What 1024 changes against 256 is the direction of the
+  adjustment in the common case — on a machine whose hard limit is generous the entry now
+  raises or holds where it used to cut — which is strictly more room for every child below
+  and strictly fewer callers whose descriptors the entry has to refuse.
 
   **The precondition forks nothing, and that is the point of the rewrite.** The round-35
   shape opened with `nofile=$(ulimit -n)`, and bash 3.2 forks for a command substitution —
@@ -3710,7 +3997,16 @@ the spec pull request's range above still blocks review.
   socket, no write handle outside the root reaches the scrub's two process substitutions,
   the `env` and second bash of the re-exec, a SHA tool, a compiler, a `cp` or the jq probe,
   and the single-write-root claim in R7 and the no-caller-state claim in R3 stop depending
-  on the caller's own hygiene. It does not replace the parent's close, which happens in the
+  on the caller's own hygiene. **Say the boundary the way this round makes it true: every
+  descriptor above 2 is closed or the run is refused, and none is ever silently skipped.**
+  That is one claim in two halves and the second half is this round's. The loop shuts every
+  number it is given, with no exception of any kind; and in the one arrangement where it can
+  be given no numbers at all — a caller who has filled every descriptor below the soft limit
+  the precondition settles on, so that the glob's own `opendir` fails and the expansion is
+  the literal word — the loop's first action is an `E_RUNTIME` refusal before anything has
+  been created. There is no third outcome, and there used to be: the round-41 text let that
+  arrangement through with every caller descriptor intact and a status of `0`.
+  It does not replace the parent's close, which happens in the
   resolver child before `execve` (R3) — that one is the last line of defence and stays
   where it is — and it does not replace the parent's own startup close, which R5 now
   requires for the same reason on the direct-parent path (R10's group-2 cases start the
@@ -5731,6 +6027,25 @@ the spec pull request's range above still blocks review.
   are the whole of it whatever the caller held open, and R10 asserts the closes by
   observation on both files.
 
+  **The entry's half of that claim is stated as "closed or refused" from this round on, and
+  never as "silently skipped".** The wording matters because the exception it rules out is
+  the one the round before this one actually had. The entry enumerates the descriptors with
+  a `/dev/fd/*` glob, and a glob that matches nothing leaves its own word in the list rather
+  than producing an empty one — which is what happens to a caller who has filled every
+  descriptor number below the soft limit the precondition settles on, because reading a
+  directory needs a descriptor too. The round-41 text ran its loop over that one literal
+  word, closed nothing, and went on to the scrub, the re-exec, the compiles and the `cp`s
+  with the caller's write handle still open and a status of `0` at the end: precisely a
+  second write root that the lists above do not mention, preserved by the statement written
+  to remove it. R1 now refuses that arrangement outright — one `E_RUNTIME` line and a
+  non-zero exit, before the run directory exists and before anything at all is created — and
+  R1's raised-first limit ladder narrows the set of callers who reach it. So the claim this
+  paragraph makes has two exits and no hole: for the entry, every descriptor above 2 is
+  closed, or the entry refuses to run and writes nothing anywhere. The parent's half is
+  unaffected: its startup close is a C `/dev/fd` enumeration whose `opendir` failure is
+  already an `E_RUNTIME` refusal rather than a fall-through (R5), which is the same
+  fail-closed shape arrived at independently a few rounds earlier.
+
   **That last sentence is exactly true from this round on, and it was not when it was
   written.** The round that moved the entry's close to the top of the file paid for the
   descriptor-headroom precondition standing above it with `nofile=$(ulimit -n)`, and bash
@@ -6850,9 +7165,10 @@ the spec pull request's range above still blocks review.
   attribute no environment scrub touches (R1, R5), and the failure it guards against is
   silent: a run that is correct in every observable way while a caller's credential,
   socket or write handle sits open inside every child the entry or the parent forks. There
-  are six runs — four on the entry and two on the parent, the parent's second added this
-  round — and every one of them is built on the same helper. The test makes a fifo in its
-  own scratch, starts a reader
+  are eight runs — six on the entry and two on the parent, the entry's fifth and sixth added
+  this round — and every one of them except the sixth is built on the same helper, the sixth
+  being a refusal with no ordering to observe and saying so where it stands. The test
+  makes a fifo in its own scratch, starts a reader
   on it in the background — `/bin/cat > /dev/null`, which returns when every writer has
   closed — opens the write end on descriptor 7, starts the process under test with that
   descriptor inherited, and then **closes its own copy of 7 immediately**, because while
@@ -6918,6 +7234,46 @@ the spec pull request's range above still blocks review.
     — at a hard limit of 63 the entry refuses and closes nothing, at 64 it closes every
     caller descriptor and runs to its end — while the fixture's own two-call shape is
     measured here rather than in R1, being a property of the test's setup (R1, R10).
+  - *The entry half, fifth run: the caller has filled the low descriptor numbers.* This is
+    the round-42 finding's own fixture and it is a **success** case, which is worth saying
+    before the shape, because the decision that ordered this round costed it as a refusal.
+    Before it `exec`s the entry the launching subshell opens 253 descriptors on the numbers
+    3 through 255 — a `while` loop of `eval "exec $i</dev/null"` that **skips 7**, which the
+    shared helper has already opened on the fifo, so the ordering observable still applies —
+    with `ulimit -S -n 1024;
+    ulimit -H -n 1024` set first so that both limits are 1024 and bash has a number left for
+    the entry's own script. Three assertions, and they are the three the first run makes:
+    end-of-file on the fifo before `<output>/.run` appears, a run that completes normally,
+    and profile bytes identical to the ordinary case. Under R1's limit ladder the first rung
+    holds the soft limit at 1024, the glob finds free numbers, and all 253 are shut; under
+    the round-41 single cap of 256 the same fixture lowered the limit under a full low range,
+    the glob expanded to its own literal, nothing was closed and the run still exited `0` —
+    so this case fails on exactly the text the finding names and passes on the ladder. The
+    smaller 3-through-200 shape is the same case with a smaller number and is measured in R1
+    rather than run twice here (R1, R10).
+  - *The entry half, sixth run: the caller has filled every number the entry can normalise
+    to.* The refusal side of the same mechanism, and the case that holds the "closed or
+    refused" half of R7's boundary. The launching subshell sets `ulimit -S -n 1023;
+    ulimit -H -n 1023` and then opens 298 descriptors on 3 through 300. The ladder's first
+    rung fails against the hard limit, its second succeeds and lowers the soft limit to 256,
+    every number below 256 is occupied, and the glob's own `opendir` therefore fails and
+    leaves the literal `/dev/fd/*` as the loop's single word. Three assertions, the same
+    three the hard-limit-63 case makes and for the same reason: an `E_RUNTIME` line on
+    stderr, a non-zero exit, and **an output root that is still empty**, with no
+    `<output>/.run` at any point. Two notes on what the assertions may and may not say, both
+    measured in R1 rather than guessed. The stderr assertion is *an* `E_RUNTIME` line and
+    not *exactly one line*: on a table this full bash cannot save a descriptor to perform
+    `>&2` and writes one `redirection error: cannot duplicate fd` line of its own beside the
+    refusal, so the case greps for the `E_RUNTIME` line and requires no second `E_RUNTIME`,
+    where the hard-limit-63 case can still demand exactly one. And the numbers are the
+    fixture rather than the rule — 1023 and 300 are chosen because the second rung lowers
+    only from above 256 and only when the hard limit is under 1024, which is the narrow
+    window R1 names; a plan that changes the ladder's rungs changes these two numbers with
+    it, and the comment beside the case says so. This is the one run in the group that does
+    **not** use the fifo-and-reader helper, and the omission is deliberate rather than an
+    oversight: there is no ordering to observe when the entry refuses before its first
+    external command, so the helper would start a reader that only ever sees the entry exit.
+    It sits in this group because it is the same mechanism from the other side (R1, R10).
   - *The parent half, one run.* Build a run directory by hand with the group-2 fixture
     builder and invoke the parent directly with `7>` the same kind of fifo, with its stderr in a file
     the test can read. The assertion is the same shape against the parent's own first
@@ -7404,9 +7760,24 @@ the spec pull request's range above still blocks review.
   reaches the re-exec and every child below, and `-ef` in particular cannot tell a
   caller's read-only handle on the entry script from a write handle on it. This is the
   reading that covers descriptor 8 in the same-file case above, which no assertion there
-  can reach. And the reviewer reads that the headroom precondition stands between
+  can reach. **One line joins this entry rather than contradicting it this round, and the
+  distinction is the point of reading it.** The loop's body now opens with a *separate*
+  `case` on the unstripped word — `case $fd in '/dev/fd/*') printf 'E_RUNTIME\n' >&2;
+  exit 1 ;; esac` — and the reviewer checks three things about it: that it is its own
+  statement above the `fd=${fd##*/}` and not a fourth pattern added to the all-digits arm,
+  which would be the skip this list exists to forbid; that its body refuses and exits rather
+  than `continue`-ing, since a `continue` on the unmatched glob is the round-41 behaviour
+  under a different spelling; and that the `*` inside the pattern is **quoted**, because
+  unquoted it is a wildcard that matches every real descriptor path and would refuse every
+  run. That last one is a grep as much as a reading and it is the kind of quoting a later
+  editor removes as noise. The sixth descriptor run above bounds this by observation for one
+  fixture; the reading is what covers the shape, and the two together are why R1 can claim
+  "closed or refused" with no third outcome (R1). And the reviewer reads that the headroom
+  precondition stands between
   `umask 077` and the loop, and that it is the one-line builtin-only form R1 specifies —
-  `ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null` and then the refusal, with
+  `ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64
+  2>/dev/null` and then the refusal, three rungs in descending order with the largest first
+  so the entry raises where it can rather than cutting itself down, and with
   **no command substitution, no process substitution and no external word anywhere above
   the loop** — because a loop that runs without the precondition shuts the descriptor bash
   reads the script from in an environment where bash cannot relocate, and the failure that
@@ -7986,11 +8357,15 @@ Order, each step checkable before the next:
    `adapters/local-git-materializer/v1/materialize.sh:31` but set here rather than after
    the scrub, because the scrub resets variables and not the process umask (R1). Then the
    descriptor-headroom precondition, one line and builtins only:
-   `ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null`, and on the failure of
-   both one `E_RUNTIME` line and a non-zero exit. It *sets* the headroom rather than
-   reading it, which is why it forks nothing, and the two attempts are what make it a check
+   `ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64
+   2>/dev/null`, and on the failure of
+   all three one `E_RUNTIME` line and a non-zero exit. It *sets* the headroom rather than
+   reading it, which is why it forks nothing, and the attempts are what make it a check
    as well as a fix: an unprivileged process may raise its soft limit to its hard limit, so
-   the pair fails together only when the hard limit is below 64. The loop below closes the
+   the ladder fails throughout only when the hard limit is below 64. The rungs descend, the
+   largest first, so a caller whose hard limit allows 1024 has the entry's room *raised* or
+   held rather than cut to 256 — which is what stops the normalisation itself taking away
+   the free numbers the loop below needs (R1). The loop below closes the
    descriptor bash reads the script from and bash needs free numbers at or above 10 to
    relocate its input onto — with no headroom it truncates the script and exits `0`, or
    crashes — and nothing above the loop may fork, because a child there would inherit the
@@ -7998,7 +8373,15 @@ Order, each step checkable before the next:
    every inherited descriptor above 2 closed, with **no exception of any kind** — the
    numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
    all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
-   has no `{fd}>&-` form. Bash's own script descriptor is closed with the rest and bash
+   has no `{fd}>&-` form — and **the one arrangement in which that glob yields no numbers
+   refused rather than skipped**: with `nullglob` off an expansion that matches nothing
+   leaves its own word behind, which is what a caller who has filled every descriptor below
+   the normalised soft limit produces, because the glob's own directory read needs a
+   descriptor too. So the loop's first statement is a `case` on the unstripped word against
+   the quoted literal `'/dev/fd/*'`, and its body is one `E_RUNTIME` line and a non-zero
+   exit — above the `${fd##*/}` strip, refusing rather than continuing, and reached before
+   the run directory exists, so such a caller gets a refusal and never a run that closed
+   nothing and reported success (R1). Bash's own script descriptor is closed with the rest and bash
    relocates it (`save_bash_input`), which is why the precondition comes first and why the
    round-34 reference-open-and-skip is gone: `-ef` cannot tell a caller's read-only handle
    on the entry script from a write handle on it, and the skip preserved both. The
@@ -8605,10 +8988,24 @@ intent says for this change. Only after the operator's merge does
   builtin, with nothing of the caller's able to run inside it (the `-p` refusal above it
   means no imported function and no `BASH_ENV`), and gone before the loop's first pass, but
   a process that had briefly held a caller's credential or socket all the same. The
-  precondition is now `ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null ||
+  precondition is now `ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null ||
+  ulimit -S -n 64 2>/dev/null ||
   refuse`, which sets the headroom instead of reading it and creates no process at all
   (R1), so the count above the close is zero children rather than one and the
-  write-root claim in R7 carries no qualification. Nothing else about the residual changes:
+  write-root claim in R7 carries no qualification. **A second thing this bullet used to
+  leave unsaid is what happens when the loop is given nothing to close, and this round it
+  is a refusal rather than a residual.** A caller who has filled every descriptor number
+  below the soft limit the precondition settles on makes the `/dev/fd/*` glob match nothing
+  — the directory read needs a descriptor of its own — and with `nullglob` off the loop then
+  runs over the glob's own literal word and shuts nothing at all, which until this round
+  meant the caller's credential, socket or write handle survived into every child and the
+  run reported success. R1 now refuses that arrangement with one `E_RUNTIME` line before
+  anything is created, and R1's ladder raises the soft limit where the hard limit allows it
+  rather than always cutting to 256, which shrinks the set of callers who reach the refusal
+  to those whose hard limit is under 1024 and whose low numbers are full. So this bullet
+  carries the residual it always carried — the statements above the loop run with the
+  caller's descriptors open — and it no longer carries a case where the loop ran and left
+  them open. Nothing else about the residual changes:
   the entry's own first process still runs with the caller's descriptors open and with the
   caller's loader variables already consumed, and that is the same one answer as above. The
   parent closes its own at the top of `main`
@@ -8783,7 +9180,9 @@ intent says for this change. Only after the operator's merge does
   refuses on a condition of its own — a *hard* limit below 64, since round 41 rewrote the
   statement as `ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || refuse`,
   which sets the headroom rather than reading it and so forks nothing where the round-35
-  `nofile=$(ulimit -n)` forked once — and has to stand before the
+  `nofile=$(ulimit -n)` forked once, and which this round gives a third rung at the top,
+  `ulimit -S -n 1024` before the other two, so the statement raises a caller's room where
+  the hard limit allows it instead of always cutting to 256 — and has to stand before the
   close rather than inside it; and the `/dev/fd/*` close loop, which has no
   counterpart in the copied file at all and has to precede the scrub, because the copied
   scrub's two process substitutions (`:5-10`) fork bash children and the copied re-exec
@@ -8793,7 +9192,12 @@ intent says for this change. Only after the operator's merge does
   because `-ef` compares device and inode and so kept a caller's *writable* handle on the
   entry script alive across the re-exec and into every child — the loop now skips nothing
   above 2 and closes bash's own script descriptor with the rest, which bash survives by
-  relocating its input. The materializer has nothing of the kind to deviate from — it
+  relocating its input. **This round it grows back by one statement, and the statement is a
+  refusal rather than a skip**: a `case` on the unstripped glob word against the quoted
+  literal `'/dev/fd/*'`, above the `${fd##*/}` strip, writing one `E_RUNTIME` line and
+  exiting — because a glob that matched nothing leaves its own word in the list, and a
+  caller who has filled every number below the normalised soft limit is exactly the caller
+  who makes that happen. The materializer has nothing of the kind to deviate from — it
   closes no descriptors anywhere in its own opening statements and neither reads nor sets a
   resource limit — so this is new code in a new position rather than copied lines altered. The
   copied bytes are untouched by all four;
