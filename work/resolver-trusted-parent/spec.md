@@ -158,18 +158,25 @@ measured rather than guessed:
   The round before this one added nothing here either and the figure stayed at ~385: its
   only
   entry-side change was to a sentence in R2 that summarised the forwarded branch in the wrong
-  order, which is prose about the entry rather than a change to it (R1, R2). This round
-  adds ~10 more, to **~395**, and it is the first entry-side figure in several rounds that
-  moves because shipped statements move: the three signal traps shrink to one assignment
+  order, which is prose about the entry rather than a change to it (R1, R2). The round
+  after that added ~10 more, to **~395**, and it was the first entry-side figure in several
+  rounds that moved because shipped statements moved: the three signal traps shrink to one assignment
   each, which is cheaper than the branch bodies they replace, but the `checkpoint`
   function and its calls after the `mkdir`, after each pin check, after each compile and
   after the copies, the `[ -e ]` pre-check, the three-case status test on the `mkdir`, and
   the forward-then-wait moving out of a trap body and into the main flow around the `wait`
-  come to about ten lines more than what came out (R1). This round adds ~2 more, to
-  **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there and
-  copied from the same file (`materialize.sh:31`), plus the comment that says why a scrub
-  of variables does not cover a process attribute (R1).
-- **Focused test ~910 lines.** For scale, the existing resolution test is 746 lines and
+  come to about ten lines more than what came out (R1). The round after that added ~2 more,
+  to **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there
+  and copied from the same file (`materialize.sh:31`), plus the comment that says why a
+  scrub of variables does not cover a process attribute (R1). The round before this one
+  added nothing here and the figure stayed at ~397: both of its findings were in the
+  parent and the test. This round adds ~8 more, to **~405**: every external command in the
+  entry gains a captured status and a `checkpoint` ahead of its refusal in place of a
+  `cmd || refuse` written beside it — one extra statement each across the ten pin checks,
+  the two compiles and the two copies, which comes to fewer lines than fourteen because
+  the `checkpoint` calls were counted in the figure above already and the refusals only
+  move (R1).
+- **Focused test ~922 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -190,11 +197,14 @@ measured rather than guessed:
   untouched target), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
-  three signal cases — the mid-run one with its live read of the entry's stderr for the
+  four signal cases — the mid-run one with its live read of the entry's stderr for the
   parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), the
   pre-parent one that signals as soon as `.run` appears and asserts the trap's own
-  `entry-signal:` line, with a bounded wait for the deferred trap (~30), and the
-  stopped-parent one that drives the parent directly, sends `STOP`/`TERM`/`CONT`, asserts
+  `entry-signal:` line, with a bounded wait for the deferred trap (~30), the group-signal
+  one that runs the entry in a process group of its own, waits for a compile to be the
+  foreground step and signals the group rather than the pid, reusing that case's poll and
+  its bounded wait and adding the assertion that no `E_RUNTIME` line was written (~12),
+  and the stopped-parent one that drives the parent directly, sends `STOP`/`TERM`/`CONT`, asserts
   the `parent-signal: TERM no-runtime` line and a surviving sentinel in the test's own
   process group, and retries a bounded twenty times — both non-proving outcomes now, the
   late stop as well as the early signal, each printed per attempt and counted in the
@@ -420,8 +430,8 @@ was the cheap wrong answer, and the right one costs more lines than it. The sum 
 bullets was then ~2476 against the ~2420 the range is derived from, about 2% above it and so
 still well inside the ±15% the range expresses, so the implementation range was unchanged.
 
-This round adds ~8, in the C parent and the test, from two findings, and neither is a new
-mechanism: one is a flag on code that already exists, the other is a test outcome
+The round before this one added ~8, in the C parent and the test, from two findings, and
+neither was a new mechanism: one is a flag on code that already exists, the other is a test outcome
 reclassified. ~3 in the parent: each of the three `sigaction` installations gets `sa_mask`
 set to the whole `SIGINT`/`SIGTERM`/`SIGHUP` set, which is one `sigemptyset` and three
 `sigaddset` calls — on the same set the fork mask already builds, so the cost is the
@@ -431,10 +441,25 @@ shared `pgid`/`pre_child` state (R2). ~5 in the test: the stopped-parent signal 
 treating a `runtime-pgid:` line as an immediate failure and retries on it the way it
 already retries on a missing `parent-signal:` line, which is the outcome branch changing
 target plus the second counter and the two counts in the failure message (R10). Nothing in
-the entry, which neither finding touches, and nothing was made cheaper to compensate. The
-sum of the four bullets is now ~2484 against the ~2420 the range is derived from, about 3%
-above it and so still well inside the ±15% the range expresses, so the implementation range
-is unchanged.
+the entry, which neither finding touched, and nothing was made cheaper to compensate. The
+sum of the four bullets was then ~2484 against the ~2420 the range is derived from, about
+3% above it and so still well inside the ±15% the range expresses, so the implementation
+range was unchanged.
+
+This round adds ~20, in the entry and the test, from one P2, and it is an ordering rule
+rather than a new mechanism. ~8 in the entry: every external command it runs — the ten pin
+checks, the two compiles and the two copies, and the `$(...)` substitutions among them —
+is written status first, `checkpoint` second, refusal third, in place of a `cmd || refuse`
+beside the command, which costs one statement each where the refusal and the checkpoint
+already existed (R1). ~12 in the test: a fourth signal case that runs the entry in a
+process group of its own and sends `SIGTERM` to the group while a compile is the
+foreground step, reusing the pre-parent case's poll, its bounded wait and its
+stderr-from-a-plain-file reading, and adding the assertion the case exists for — no
+`E_RUNTIME` line on a signalled run (R10). Nothing in the C parent, which the finding does
+not touch: the shape it forbids is a shell shorthand and the parent has no equivalent.
+Nothing was made cheaper to compensate. The sum of the four bullets is now ~2504 against
+the ~2420 the range is derived from, about 3.5% above it and so still well inside the ±15%
+the range expresses, so the implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -451,7 +476,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 4128 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 4293 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -501,14 +526,17 @@ satisfy the containment the check exists to prove, and this round the three sign
 installed with a mask that blocks all three of them, so a sibling signal can never re-enter
 a handler that is part-way through killing a group and reaping, beside the one signal test
 that could fail a correct implementation on a loaded runner now retrying that outcome
-instead of failing on it).
-**Evidence-based range for this spec pull request: 3509-4747 lines** — the measured
-4128 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+instead of failing on it, and this round every external command in the entry ordered
+status first, checkpoint second, refusal third, so a command the caller's terminal signal
+killed can never be reported as an `E_RUNTIME` refusal in place of the signal exit it
+actually was, with a fourth signal case that signals the foreground group to prove it).
+**Evidence-based range for this spec pull request: 3649-4937 lines** — the measured
+4293 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409, then 3642, then 3866, then 4013; where each block of
+3295, then 3409, then 3642, then 3866, then 4013, then 4128; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -832,8 +860,8 @@ the range expresses. Nothing else in this spec used `realpath` for anything: the
 are round-history sentences recording what an earlier round added, which are left as the
 history they are.
 
-This round is +115 net over two P2s, and both are the same kind of finding: a
-sentence that was true of one signal and not of three. About 40 go to the handler mask.
+The round before this one was +115 net over two P2s, and both were the same kind of
+finding: a sentence that was true of one signal and not of three. About 40 go to the handler mask.
 R2 gains a block saying that POSIX blocks only the delivered signal by default, that this
 handler touches the shared `pgid` and `pre_child`, kills a group and reaps, and that each
 of the three `sigaction` installations therefore sets `sa_mask` to all three of `SIGINT`,
@@ -853,17 +881,46 @@ the failure message carrying a count of each, and the retry-cost paragraph rewri
 covers both windows instead of one. The case's opening sentence loses the words
 "deterministic by construction", which were the claim the finding actually landed on, and
 its three assertions are labelled as the assertions of a proving attempt. The remaining
-~45 are ripples: the accepted-concern list at the top, and the re-derived size
-figures here and for the implementation, whose range does not move because the ~8 the
-parent and the test gain is inside the rounding of the sum it is derived from.
+~45 were ripples: the accepted-concern list at the top, and the re-derived size
+figures here and for the implementation, whose range did not move because the ~8 the
+parent and the test gained is inside the rounding of the sum it is derived from.
+
+This round is +165 net over one P2, and it is an ordering rule rather than new
+ground: the entry's signal design was stated in full and its checkpoints were placed
+correctly, but nothing said what shape the commands *between* the checkpoints take, so a
+plan following the ordinary `cmd || refuse E_RUNTIME` shorthand would have reported an
+interrupted pin check or compile as a runtime refusal and swallowed the signal exit the
+same design promises. About 40 go to R1's new block: the shape forbidden by name, the
+three numbered steps with the `set -uo pipefail` and `-e`-unset detail they need, the
+reason stated as a mechanism — a terminal signal reaches the foreground child, so the
+status is non-zero because of the signal and the refusal beside the command runs before
+the checkpoint ever looks at `entry_signal` — the same rule extended to `$(...)`
+substitutions that run tools, and the note that the `mkdir` block above is already written
+this way and is the worked example rather than an exception. About 35 go to R10's new
+group-signal case, which is the entry's no-parent branch reached the way a terminal
+reaches it rather than the way a bare `kill` does: the entry in a process group of its
+own, the signal sent to the group while a compile is the foreground step, and four
+assertions of which the third — no `E_RUNTIME` line anywhere on the run's stderr — is the
+one the case exists for, with the case after it renumbered and the
+diagnostics paragraph checking it beside them. The remaining ~90 are ripples that
+carry the rule where it is needed rather than restating it: R1's fixed-order sentence,
+R5's pin-check clause, Design step 2's checkpoint clause, the signals bullet under Areas
+of concern, the accepted-concern list at the top, and the re-derived size figures here and
+for the implementation. A grep of this spec's entry pseudocode for `|| refuse`,
+`|| emit`, `|| exit` and the like found one construct and it is correct as it stands: the
+`checkpoint` function's own body, `[ -z "$entry_signal" ] || exit`, written out once in R1
+and once in Design step 2, which is a test on a shell variable rather than an external
+command's status being turned into a refusal. So no existing line had to be rewritten, and
+the finding is settled by stating the rule where the plan will read it rather than by
+fixing examples that were never there.
 
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 3509-4747 lines**, which is this file's measured
-4128 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 3649-4937 lines**, which is this file's measured
+4293 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2057-2783 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -994,6 +1051,45 @@ the spec pull request's range above still blocks review.
   hands control to the `EXIT` trap, which does the cleanup, writes the line and supplies
   the status — `128 + signal` for the recorded name, because a checkpoint never records an
   `entry_status`. That is the same number every path through this requirement produces.
+
+  **Every external command the entry runs is written in three steps: status, then
+  checkpoint, then refusal.** The usual shell shorthand — `cmd || refuse E_RUNTIME`, or
+  any `||` that turns a non-zero status straight into an error — is **forbidden** for
+  every external command in this entry, and the reason is the same bash rule the
+  checkpoints rest on. A `Ctrl-C` at a terminal signals the whole foreground process
+  group, so the SHA-1 pipeline, the compile or the `cp` the entry happens to be waiting on
+  receives the signal too and dies on it. That command's status is then non-zero *because
+  of the signal*, and a refusal written beside the command runs first — before the
+  checkpoint ever looks at `entry_signal` — so the caller gets an `E_RUNTIME` line and a
+  refusal status where this requirement promises `128 + signal` and one `entry-signal:`
+  line. The refusal would be true of nothing: the command did not fail, it was
+  interrupted, and hiding the interruption behind a refusal is the one report the caller
+  cannot act on, because it names the wrong cause and loses the signal the caller sent.
+
+  So each one is three statements, in this order and no other:
+
+  1. **Run the command and capture its status.** `cmd; status=$?` — the entry runs under
+     `set -uo pipefail` with `-e` deliberately not set, so a non-zero status reaches the
+     next line instead of killing the shell — or `status=0; cmd || status=$?` where that
+     reads better. Either way the status lands in a variable and nothing branches on it
+     yet.
+  2. **`checkpoint`.** If `entry_signal` is set the entry leaves here, through the `EXIT`
+     trap, with `128 + signal` and the one `entry-signal:` line, which is exactly what a
+     command that died on the caller's signal should produce whatever status it left
+     behind.
+  3. **Only then the refusal.** `[ "$status" -eq 0 ] || refuse E_RUNTIME`, or the step's
+     own error id where it has one. By this point a non-zero status can only mean the
+     command itself failed, because an interrupted run has already left through step 2.
+
+  The same three steps apply to a `$(...)` substitution that runs an external tool — the
+  SHA-1 and SHA-256 pipelines and the `uname` and `stat` reads are the ones here: assign
+  the substitution's output in its own statement, capture that statement's status,
+  `checkpoint`, and only then judge the status. A substitution is a foreground child like
+  any other and a group signal reaches it the same way; that is the same lesson the
+  withdrawn `run_created=$(…)` guard taught, applied to every command rather than to one.
+  The `mkdir` block above already reads in this order, and is written out there only
+  because its status test has three cases rather than two — it is the worked example of
+  this rule, not an exception to it.
 
   **The wait on the parent is the last checkpoint, and it is the one that forwards.** The
   entry records the parent's pid in `parent_pid` the instant it starts the parent, then
@@ -1310,7 +1406,9 @@ the spec pull request's range above still blocks review.
   then its `tmp` and `home` subdirectories at mode 0700; run the pin checks; run the two
   compiles; empty and remove `tmp` and `home` and tighten the modes; launch the parent —
   with a `checkpoint` call after the `mkdir`, after each pin check, after each compile,
-  after the copies and immediately before the launch (above). The
+  after the copies and immediately before the launch (above), and with every one of those
+  external commands written status first, checkpoint second, refusal third, never
+  `cmd || refuse` (above). The
   only refusals that happen before anything is written are the output-root validations
   above. Every refusal after them — the pin checks included — happens with `.run` already on
   disk, which is why the traps are installed ahead of the `mkdir` rather than after the
@@ -2188,7 +2286,11 @@ the spec pull request's range above still blocks review.
   file in that set** — 1, 2, 3, the five modules of 8, and its own two C sources — as
   constants carrying the same `# pinned at <commit>` header, checked before any compile
   against a blob id the entry computes itself (R1), a mismatch being `E_RUNTIME` before the
-  compile. **The parent
+  compile. Each of those ten checks is written the way R1 requires of every external
+  command in the entry — the digest command's status captured, then `checkpoint`, then the
+  refusal on that status, never a `|| refuse` beside the command — so a pin check that a
+  terminal `Ctrl-C` killed exits `128 + signal` with an `entry-signal:` line rather than
+  reporting a blob mismatch that did not happen. **The parent
   re-pins exactly files 1, 2 and 3, and nothing else; call those three the parent-pinned
   subset.** All three are reachable from the runtime path the parent is handed, using the
   runtime's own `${dir%/resolver/v1}` repository-root rule
@@ -3274,10 +3376,42 @@ the spec pull request's range above still blocks review.
   because the branch under test is the same one in every case and the claim is about what it
   says and what it leaves behind.
 
-  **A third signal case drives the parent directly, for the window in which the parent
-  itself has no runtime group yet.** The two cases above are both about the entry. Neither
+  **A terminal signal to the whole foreground group is the third case, because that branch
+  is reached two different ways and the case above drives only one of them.** The
+  pre-parent case sends `SIGTERM` to the entry's pid alone, which is what a plain `kill`
+  does and is not what a `Ctrl-C` at a terminal does: a terminal signals the entire
+  foreground process group, so the pin check, the compile or the `cp` the entry is waiting
+  on gets the signal too and exits non-zero because of it. That is the path on which a
+  refusal written beside the command — `cmd || refuse E_RUNTIME` — turns an interrupted
+  run into an `E_RUNTIME` report and loses the signal exit the caller is owed (R1), and no
+  case above can catch it, because a signal delivered to one pid leaves the foreground
+  child untouched and its status is whatever it would have been.
+
+  So the test runs the same real resolution a third time, with the entry in a process
+  group of its own — `set -m` in the test shell, or any equivalent that puts the
+  background entry in a fresh group, with the group id recorded — polls the output
+  directory for `.run` exactly as the case above does, waits until a compile is the
+  foreground step, and then sends `SIGTERM` to the **group**: `kill -TERM -<pgid>`, not
+  `kill -TERM <pid>`. How it knows a compile is running is the plan's to settle from the
+  same measurement the pre-parent case's timeout needs — the compiler's `-o` target appearing inside
+  `.run` is the cheap answer, a short fixed delay after `.run` appears is the other — and
+  landing outside that window is a failure with the same remedy as the case above, never a
+  skip.
+
+  Four assertions, and the third is the one this case exists for. One: the exit status is
+  `143`, which is `128 + SIGTERM`. Two: the entry's stderr holds exactly one
+  `entry-signal: TERM no-parent` line — the same branch the case above proves, reached by
+  the other route. Three: that stderr holds **no** `E_RUNTIME` line at all, which is the
+  assertion that fails if a compile's signal death was reported as a runtime refusal.
+  Four: the output directory is completely empty. The bounded wait for the deferred trap,
+  the reading of stderr from a plain file in the test's own scratch, and the
+  landed-too-late message are the pre-parent case's, unchanged; what differs is the
+  signal's target and the third assertion.
+
+  **A fourth signal case drives the parent directly, for the window in which the parent
+  itself has no runtime group yet.** The three cases above are all about the entry. None
   reaches R2's `no-runtime` branch: the mid-run case signals after `runtime-pgid:` has been
-  read, so `pgid` is set, and the pre-parent case never starts a parent at all. The branch
+  read, so `pgid` is set, and neither pre-parent case starts a parent at all. The branch
   in between — a parent that is running, has installed its handlers, and has not yet forked
   the resolver because it is still doing blob and jq checks (R2) — needs the parent on its
   own, so this case is written in the group-2 style with a run directory the test builds by
@@ -3342,7 +3476,7 @@ the spec pull request's range above still blocks review.
   branch is the same one every attempt aims at, so twenty attempts is a scheduling
   allowance, not twenty different tests.
 
-  **The fork-and-publish window is proved by reading, not by a fourth signal case.** The
+  **The fork-and-publish window is proved by reading, not by a signal case of its own.** The
   gap R2 closes with the signal mask is a few instructions wide and lies between a `fork`
   and the assignment that publishes what it returned. Nothing a test can do puts a signal
   in it on demand: there is no stop point in there to reach without a test-only pause
@@ -3362,13 +3496,13 @@ the spec pull request's range above still blocks review.
   reviewer checks that all three `sigaction` calls set `sa_mask` to `SIGINT`, `SIGTERM` and
   `SIGHUP` and leave `SA_RESTART` unset, because a sibling signal re-entering a handler
   that is part-way through the kill and the reap is the other way this state can be raced,
-  and no test can put one there on demand either (R2). The three
+  and no test can put one there on demand either (R2). The four
   signal cases above
   are unchanged by the mask and must still pass exactly as written, which is the other
   half of the check: the mask changes *when* a pending signal is delivered, never which
   branch the handler takes once it runs.
 
-  **The same is true of the diagnostics moving after the cleanup, and each of the three
+  **The same is true of the diagnostics moving after the cleanup, and each of the four
   cases was checked rather than assumed.** R2's handler and R1's `EXIT` trap write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
   the assertions above are worth re-reading in that order. This round's redesign of the
@@ -3387,7 +3521,11 @@ the spec pull request's range above still blocks review.
   `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the `EXIT` trap
   writes that line after the chmod and the removal and still before its `exit`, and the case
   already reads the file only after the entry has exited; the plain file it reads is also
-  why that last-position write cannot hang here at all (R1). The stopped-parent case
+  why that last-position write cannot hang here at all (R1). The group-signal case added
+  this round reads the same line out of the same kind of plain file and the same sentence
+  covers it; its extra assertion is a negative one, about an `E_RUNTIME` line the entry
+  must never write on a signal path, which no ordering of the diagnostics can affect.
+  The stopped-parent case
   still finds `parent-signal: TERM no-runtime`, because that branch kills nothing and
   reaps nothing, so "after the killing" is immediately, and its sentinel assertion is
   about what the handler did not signal rather than about when it wrote. No assertion is
@@ -3637,7 +3775,14 @@ Order, each step checkable before the next:
    signal, at
    a `checkpoint` — `[ -z "$entry_signal" ] || exit` — placed after the `mkdir`, after each
    pin check, after each compile, after the copies and immediately before the launch, and
-   again around the wait on the parent. The two branches are `parent_pid` empty or not.
+   again around the wait on the parent. Every external command in this entry — each pin
+   check, both compiles, both copies, and every `$(...)` that runs a tool — is written in
+   three statements rather than two: run it with its status captured, then `checkpoint`,
+   then the refusal on that captured status. `cmd || refuse` is forbidden here, because a
+   terminal signal reaches the foreground command too, so its non-zero status would
+   otherwise be reported as an `E_RUNTIME` refusal in place of the `128 + signal` exit and
+   the `entry-signal:` line the caller is owed (R1). The two branches are `parent_pid`
+   empty or not.
    With a parent, the first `wait` returns on the trap with `128 + signal` of its own, the
    entry forwards the same signal with `kill -"$entry_signal"`, waits a second time for the
    parent's real status, records it in `entry_status` and only then exits, so nothing is
@@ -3821,8 +3966,9 @@ intent says for this change. Only after the operator's merge does
   at all — so it gets none of the benefit of the "copy what is already proved" argument
   the rest of the parent rests on, and it fails in the worst direction either way: a
   resolver left running under a deleted run directory, or a group killed that should not
-  have been. Its tests are at least deterministic, and there are three of them now, one per
-  branch that exists. R10 stops
+  have been. Its tests are at least deterministic, and there are four of them now: one per
+  branch that exists, plus a second route into the entry's no-parent branch, which is
+  reachable two ways and had only one of them driven. R10 stops
   the resolver's process group with `SIGSTOP` before signalling the entry, so the mid-run
   path is exercised on every run, and it takes that group from the parent's own
   `runtime-pgid` line rather than from the process table, so it cannot freeze some digest
@@ -3832,9 +3978,14 @@ intent says for this change. Only after the operator's merge does
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
   appears, and it asserts that branch by the `entry-signal: TERM no-parent` line the entry
   writes rather than by an empty output directory, which cannot tell that branch from a
-  parent that had only just started. The third covers the window between those two, which is
-  the one this round found open: a parent that is alive and has not yet forked the resolver,
-  so its `pgid` is still zero. That is the most dangerous of the three to get wrong, because
+  parent that had only just started. The third is that same branch signalled the way a
+  terminal signals it — to the whole foreground process group, so the compile the entry is
+  waiting on dies too — and it is this round's find: its extra assertion is that no
+  `E_RUNTIME` line came out, because a refusal written beside a foreground command is what
+  would report an interrupted compile as a runtime failure and swallow the signal exit
+  (R1, R10). The fourth covers the window between the first two, which is
+  the one an earlier round found open: a parent that is alive and has not yet forked the resolver,
+  so its `pgid` is still zero. That is the most dangerous of the four to get wrong, because
   a handler that let a zero `pgid` reach `kill(-pgid, …)` would signal the caller's own
   process group rather than a resolver's, and the case asserts against exactly that with a
   sentinel process in the test's own group that has to survive (R2, R10). The plan
@@ -3848,7 +3999,7 @@ intent says for this change. Only after the operator's merge does
   window inside the parent is no longer one of the plan's open questions: R2 states the two
   `volatile sig_atomic_t` variables, the three branches and the prohibition on
   `kill(0, …)`/`kill(-0, …)` outright, because that is not a detail an implementation should
-  be left to invent, and neither is the window this round found inside it: a signal that
+  be left to invent, and neither is the window an earlier round found inside it: a signal that
   lands between a `fork` and the assignment that publishes its pid would take the
   no-runtime branch and exit with the child it just forked still running, so R2 blocks
   `INT`, `TERM` and `HUP` across every fork the parent performs and its publication, and in
@@ -3859,12 +4010,12 @@ intent says for this change. Only after the operator's merge does
   signal in it on demand — so its coverage is a sequence the plan quotes and the reviewer
   reads, which R10 states in those words rather than implying a case exists. A second
   signal arriving while the handler is already running is no longer one of the plan's
-  questions either, and it is this round's find: the three handlers are installed with
+  questions either, and it was an earlier round's find: the three handlers are installed with
   `sa_mask` set to all three signals, so a sibling is held until the handler `_exit`s and
   then discarded with the process, and nothing in this path has to be written to survive
   running twice (R2). That fix has no test behind it for the same reason the mask above
-  does not, and it is read the same way. This round's other change is on the test side and
-  is an admission rather than a mechanism: the stopped-parent case used to fail outright
+  does not, and it is read the same way. That round's other change was on the test side and
+  an admission rather than a mechanism: the stopped-parent case used to fail outright
   when the `SIGSTOP` landed after the fork, which made a correct implementation flaky on a
   loaded runner, so both of that case's non-proving outcomes are now retried inside one
   bounded budget and counted in the failure message (R10).
@@ -3878,8 +4029,8 @@ intent says for this change. Only after the operator's merge does
   handler's line goes out with one non-blocking `write(2)` whose failure is ignored, and the
   entry's `printf` is the last statement of its `EXIT` trap, before that trap's own `exit`.
 
-  One more thing about the entry's side belongs here, because it is this round's change and
-  it is a withdrawal rather than an addition. The entry's `INT`/`TERM`/`HUP` traps no longer
+  One more thing about the entry's side belongs here, because it was a withdrawal rather
+  than an addition. The entry's `INT`/`TERM`/`HUP` traps no longer
   do anything but record the signal's name; the forward, the cleanup, the diagnostic and
   the exit all happen in the main flow and in the `EXIT` trap (R1). The design that was
   withdrawn armed the cleanup from a command substitution —
@@ -3890,6 +4041,20 @@ intent says for this change. Only after the operator's merge does
   same exit statuses, same removal, same one line last — which is what makes it safe to
   make at spec stage, and the plan should treat "no trap body does anything but record"
   as a rule of the entry rather than a style preference.
+
+  This round finishes that split on the other side of it, and the fix is an ordering rule
+  rather than new mechanism. Recording the signal in a trap and acting at a checkpoint
+  only works if the checkpoint is what the entry reaches next, and the ordinary shell
+  shorthand `cmd || refuse E_RUNTIME` puts a refusal in front of it. A terminal signal
+  goes to the whole foreground group, so the pin check or the compile that was running
+  dies on it and returns non-zero *because of the signal*; the refusal beside the command
+  then fires first and the caller gets an `E_RUNTIME` line instead of `128 + signal` and
+  the `entry-signal:` line — the wrong cause, and the signal lost. So R1 requires the
+  three-step shape of every external command in the entry, `$(...)` substitutions
+  included: capture the status, `checkpoint`, then refuse. The plan should treat
+  "no external command is followed by `|| refuse`" as a rule of the entry beside the
+  trap-body rule above, and R10's group-signal case is what proves it from outside,
+  by asserting that no `E_RUNTIME` line appears on a signalled run.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
   `exec`ing is what makes cleanup possible at all, but a trap is not a guarantee: `SIGKILL`
   on the entry, or a power loss, leaves the run directory behind, and its 0500 mode makes
