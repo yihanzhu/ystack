@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Evidence-based range: 2091-2829 changed lines** (implementation). The derivation,
+**Evidence-based range: 2100-2841 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -379,6 +379,17 @@ measured rather than guessed:
   when the status-checkpoint-refusal rule was costed at ~8 across every external command
   including the two `uname` reads, and what changes this round is the *spec paragraph* that
   was still depicting the shorthand the rule forbids (R1, R10).
+  This round adds ~3 more, to **~447**, and all three are the self path being made
+  absolute rather than refused: the copied `case "$script_path" in /*) ;; *) emit_error
+  E_USAGE ;; esac` is one line, and the two-arm `case` that replaces it is four —
+  the `case` word, the `/*)` arm that assigns `${BASH_SOURCE[0]}` unchanged, the `*)` arm
+  that assigns `$PWD/${BASH_SOURCE[0]}`, and the `esac` — so three lines go in where one
+  came out (R1). The committed `100755` mode this round also requires costs the entry
+  **nothing**: a file mode is not a statement in the file, it is how the file is added, and
+  the two assertions that hold it are in the test bullet below. Nothing else in the entry
+  moves — the `exec` line is the same line, the argument-count discrimination above it is
+  untouched, and `script_path` needs no initialisation because both arms assign it before
+  anything reads it (R1).
 - **Focused test ~1049 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
@@ -525,23 +536,43 @@ measured rather than guessed:
   gains the `/usr/bin/printf` ordering assertion — one `grep -n` for the `env -i` re-exec
   line, one for every `/usr/bin/printf` occurrence, and a numeric comparison, written
   beside the `/usr/bin/awk` position assertion that already stands there and reusing its
-  extraction (R7, R10).
+  extraction (R7, R10). This round adds ~8 more, to **~1103**, in two places. ~3 are the
+  committed-mode pair: the `git ls-files -s --` run with its first-field extraction and the
+  comparison against the literal `100755` (~2), and the `[ -x ]` check on the checked-out
+  file with the comment saying why CI's `scripts/*.sh` rule does not cover this path (~1).
+  ~5 are the relative repo-root invocation, which is one more run of the resolution the
+  suite already knows how to set up and assert — a `cd` to the repository root, the entry
+  named relatively, and the byte-compare and empty-output-root assertions reusing the
+  helpers the absolute run uses, plus the comment recording why no bogus-`PWD` case stands
+  beside it. It costs ~5 rather than ~30 for the same reason the other extra runs do: the
+  fixtures, the jq provisioning and the comparison are already built (R1, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2827 lines — added as they stand, ~1228 + ~444 +
-~1095 + ~60, rather than carried forward: a round three back wrote the running
+Those four bullets now sum to about 2838 lines — added as they stand, ~1228 + ~447 +
+~1103 + ~60, rather than carried forward: a round four back wrote the running
 total as ~2730 and adding its own four bullets gave ~2771, so the figure is corrected here
 in the same way an earlier round corrected ~2535 to ~2578. **This round's own delta is
-+4**, all of it in the entry's wait loop: the second job-table read, the second `wait`, its
++11**: ~3 in the entry, the two-arm `case` that makes the self path absolute where the
+copied one-line refusal stood, and ~8 in the test, the committed-mode pair and the
+relative repo-root run. Nothing in the parent and nothing in the docs bullet — the
+documentation changes this round makes are rewordings of lines `docs/components.md`
+already carries, and the `100755` mode is how a file is added rather than a line in one.
+**And the range moves, exactly as the round before this one said it would have to.** ~2838
+is nine lines past the 2829 top of the standing band, so the band is re-derived rather
+than stretched: the base becomes ~2470 and the range **2100-2841 changed lines**, which is
+~2470 ±15% rounded — 2470 × 0.85 = 2099.5 and 2470 × 1.15 = 2840.5 — with the sum sitting
+~14.9% above the base, inside the band by three lines. The top of this section and both
+waivers record the same two figures. Nothing about the derivation changed and nothing was
+rounded to fit: the previous move, four rounds back, took the base from ~2441 to
+~2460 on the same reasoning when the sum passed 2807, and the honest thing then and now is
+to say the band moved rather than to shave the sum. **The round before this one was +4**,
+all of it in the entry's wait loop: the second job-table read, the second `wait`, its
 two `127` fallbacks and the assignment-and-break they feed, in place of the one `127` line
-that stood there. Nothing in the parent, nothing in the test, nothing in the docs, and
-nothing from this round's second finding at all — the platform check's three-step shape is
-a rule the shipped entry has owed since round 24 and the fix is to the paragraph that
-depicted it wrongly. The range does not move for it: ~2827 is still
-under the 2829 top of the standing band, but by two lines rather than six, so the next
-round of any size at all moves it — this one is the last that can honestly leave it
-alone. **The round before this one was +1**, the smallest this spec has recorded, and it
+that stood there. The range did not move for it: ~2827 was still
+under the 2829 top of the band standing then, but by two lines rather than six, which is
+why that round wrote that it was the last one that could honestly leave it
+alone. **The round before that one was +1**, the smallest this spec has recorded, and it
 was three consistency fixes whose only implementation line was the test's
 `/usr/bin/printf` ordering grep. **The round before that one was +12**
 — ~2 in the entry, the unmatched-glob refusal and the second comment line, and ~10 in the
@@ -560,7 +591,7 @@ condition, so the widening landed on the C half and the narrowing cost no statem
 all — and it took the sum to ~2811, which was four lines past the 2807 top of the
 range standing then. Four lines is not a real overrun and pretending it is inside the band
 would be worse than moving the band, so the base became ~2460 and the range **2091-2829
-changed lines**, which the top of this section and the waiver record in the same figures.
+changed lines** — the band this round replaces, by the same arithmetic, four rounds later.
 Nothing about the derivation changed; one addition took the sum over the edge of a band
 that had absorbed thirteen rounds of deltas, and the honest move was to say so rather than
 to round the sum down to fit. The round before that one added ~50, ~30 in the parent and
@@ -951,14 +982,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8249-11161 lines** — this file's measured 9705 lines plus or minus 15%, rounded. That
+**8461-11447 lines** — this file's measured 9954 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 9705 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 9954 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1144,13 +1175,19 @@ loop's reading of it can no longer cost the caller the parent's real exit status
 back a `127` or a signal number the parent never produced, beside the platform check
 written as the two assignments, two checkpoints and two refusals the entry's own rule has
 required of it since round 24, so a `Ctrl-C` during `uname` can no longer be reported as an
-unsupported machine).
+unsupported machine, and this round the entry required to be committed executable and to
+make its own path absolute, so the shebang launch this spec names as one of its two
+supported forms actually runs when someone types it from a repository root instead of
+failing with a permission denied no check in this repository would have caught or an
+`E_USAGE` for a relative path, beside the refusal claim cut back to the clean-environment
+case it can keep, so the documentation stops promising a security refusal that a polluted
+non-privileged shell can run the caller's code straight through).
 The same record again here, where the count it rests on is derived, on its own line:
 
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8249-11161 lines** — this file's measured 9705 lines plus or minus 15%, rounded. That
+**8461-11447 lines** — this file's measured 9954 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1164,8 +1201,8 @@ range is the separate figure above. It was
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
 7173, then 7420, then 7690, then 7878, then 7914, then 8242, then 8637, then 8867,
-then 9271, then 9705; where each block of growth went is worth naming so it can be
-checked rather
+then 9271, then 9705, then 9954; where each block of growth went is worth naming so
+it can be checked rather
 than trusted.
 The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
@@ -2431,17 +2468,72 @@ with the sum and its band — now two lines under the top rather than six, which
 plainly — the accepted-concern list at the top, and the re-derived self-count and range
 here and in the two waivers.
 
+This round is +249 net over two P2s, and both are the same kind of gap: this spec
+named a supported launch and then described a file that could not perform it, and named a
+refusal the shell cannot always perform either.
+**About 120 go to the shebang launch being made real.** Two things were missing and
+neither was visible from inside the prose. The first is the committed mode: R1 now requires
+`resolver/v1/resolve-profile.sh` to be added with git mode `100755`, and says why the
+requirement has to be written down rather than assumed — CI's structure check reads
+`ci/required-files.txt` and enforces executability for `scripts/*.sh` alone
+(`AGENTS.md:96-99`), and the entry is not under `scripts/`, so a `100644` entry passes
+every gate this repository has and then fails in the caller's hands. Measured on bash 3.2,
+`arm64-apple-darwin`: the mode-0644 entry run through its shebang prints `Permission
+denied` and exits `126` from a relative and an absolute path alike, while the same file run
+as `/bin/bash -p <entry>` succeeds — the asymmetry that lets the mistake survive any check
+that only tries the documented direct form. The second is the self path. The copied
+materializer line refuses a relative `${BASH_SOURCE[0]}` with `E_USAGE` (`:23-24`), which is
+right for a component other code calls by absolute path and wrong for a file a person runs
+as `resolver/v1/resolve-profile.sh` from a repository root, so the entry now *makes* the
+path absolute in the position the refusal held, with a two-arm `case` and `$PWD` and no
+command at all. Whether `$PWD` can be trusted for that was measured rather than argued:
+bash 3.2 validates an inherited `PWD` against `getcwd` and re-derives it when it does not
+name the current directory — `PWD=/bogus`, `PWD=/tmp` from elsewhere and `env -u PWD` all
+produce the real directory, under `-p` and without it — and keeps only a value that does
+name it, such as the symlinked `/tmp` for `/private/tmp`. That is exactly the property the
+join needs, and the joined path is `-ef` the relative one in every form tried, including
+the symlinked-cwd one, with no surviving check on the script's own path for a symlinked
+prefix to break. `builtin cd -P .` was considered and rejected for moving the working
+directory every relative argument is still resolved against. The re-exec's deviation list
+goes from four named deviations to five, in R1's own paragraph, in the R1 requirement
+listing and in the Copy-versus-adapt item, and R10 gains both assertions: the `git ls-files
+-s` first field compared to the literal `100755`, `[ -x ]` on the checked-out file beside
+it, and the relative repo-root run as a case of its own, with the reason there is no
+bogus-`PWD` case written down so a later round does not spend one rediscovering the
+measurement.
+**About 40 go to narrowing the refusal claim.** R9's documentation line said that any
+invocation without `-p`, marker word or not, exits 78 at the entry's first statement, and
+that is false in precisely the scenario it exists to warn about: R1's own marker-branch
+discussion has said for several rounds that a non-privileged bash runs the caller's
+imported functions and `BASH_ENV` before the first statement is parsed and can shadow
+`exit` or expand the reserved word `case` into something else. The claim is now two-sided
+everywhere it appears — clean non-`-p` arrivals are refused at the first statement having
+created and read nothing, polluted non-`-p` arrivals are outside the safety claim rather
+than refused-and-safe — in R9's documentation requirement, in R1's supported-launch
+paragraph, and in the R1 requirement listing's sentence about the first statement. R10's
+unsupported-half case keeps every assertion it had and gains a comment saying which side of
+the boundary it covers, since it already ran from a clean environment on purpose. Every
+"exits 78" and "exit 78" in the file was read: the code line, the accounting entries, the
+two measurements and the test assertion are all about the clean case or about the statement
+itself and stand unchanged; the three sentences that generalised are the three that moved.
+**The remaining lines are the bookkeeping**: the entry bullet at +3, the test bullet at +8,
+the sum at ~2838 and the implementation band re-derived to 2100-2841 because the sum
+finally crossed the top the round before this one said it would, one stale "this round" in
+the Copy-versus-adapt deviation list that belonged to round 31 and now names no round at
+all, the accepted-concern list at the top, and the re-derived self-count and range here and
+in the two waivers.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8249-11161 lines**, which is this file's measured
-9705 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8461-11447 lines**, which is this file's measured
+9954 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2091-2829 changed lines derived at the top of this section belong to the *implementation*
+2100-2841 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -4349,7 +4441,7 @@ the spec pull request's range above still blocks review.
     /bin/bash -p "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"
   ```
 
-  Four named deviations from the copied lines, and nothing else. The marker word is
+  Five named deviations from the copied lines, and nothing else. The marker word is
   `__resolve_profile_clean` in place of `__materialize_clean` (`:25,29`). And the arity
   differs: the materializer's caller-facing shape carries a leading subcommand word, so
   both of its invocations are eight arguments and `$1` alone tells them apart (`:22,25,29`),
@@ -4373,9 +4465,60 @@ the spec pull request's range above still blocks review.
   copied scrub, none of which the copied file has in that position — the `case $-` refusal,
   the `umask 077` lifted from `:31`, the descriptor-headroom precondition and the
   descriptor close — together with the marker
-  branch's own re-run of the scrub behind two alias-reset builtins, below. Everything
-  else is the same:
-  `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
+  branch's own re-run of the scrub behind two alias-reset builtins, below.
+
+  **The fifth is `$script_path`: the entry makes its own path absolute instead of refusing
+  a relative one.** The materializer writes the check as a refusal —
+  `script_path=${BASH_SOURCE[0]}` and then
+  `case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac` (`:23-24`) — and the
+  re-exec does need an absolute path, because it runs the second bash from a process whose
+  working directory the caller chose and `exec` carries no `cd` with it. But the
+  materializer is a component other code calls by an absolute path, and the entry is
+  something a person runs from a repository root. Keeping the refusal would mean
+  `resolver/v1/resolve-profile.sh <jq> <output> <request> <map>` — the most ordinary way
+  anyone will ever type it — exits `E_USAGE` for a reason no message explains, so the entry
+  turns the relative form into an absolute one with builtins only, in the same place and in
+  the same `case`:
+
+  ```
+  case ${BASH_SOURCE[0]} in
+    /*) script_path=${BASH_SOURCE[0]} ;;
+    *)  script_path=$PWD/${BASH_SOURCE[0]} ;;
+  esac
+  ```
+
+  Four lines where the copied file has one, no command run and no variable read that the
+  shell does not maintain itself, and it sits where the refusal sat — after the argument
+  count and before the `exec`, still ahead of every external command.
+
+  **Why `$PWD` is trustworthy enough to build a path from, measured rather than assumed.**
+  `PWD` is an ordinary exported variable and a caller can set it to anything, `-p` or not:
+  privileged mode drops `BASH_ENV` and refuses to import functions, and it does nothing at
+  all about a plain variable. So the question is whether bash 3.2 trusts what it inherits.
+  It does not. Measured, `arm64-apple-darwin`: `PWD=/bogus /bin/bash -p -c 'echo $PWD'`
+  prints the real working directory, not `/bogus`; so does `PWD=/tmp` run from somewhere
+  that is not `/tmp`; so does `env -u PWD`; and the plain non-`-p` forms behave the same
+  way. What bash keeps is an inherited value that *names the current directory* — `cd /tmp`
+  then a child bash reports `/tmp` rather than `/private/tmp`, because on Darwin the two are
+  the same directory through a symlink. That is the whole rule, and it is the one this line
+  needs: bash checks the inherited `PWD` against `getcwd` and re-derives it when it does not
+  name the current directory, so `$PWD` always names the current directory and
+  `$PWD/${BASH_SOURCE[0]}` always names the same file the relative path did. It may name it
+  through a symlinked prefix, which costs nothing here — measured, the joined path is `-ef`
+  the relative one in every form tried, including the symlinked-cwd one, and nothing below
+  compares `$script_path` against a canonical path or against itself. The round-34
+  identity test that did such a comparison is gone (withdrawn in a later round, and the
+  close loop's `-ef` skip with it), so there is no surviving check on the script's own path
+  for a symlinked prefix to break. `builtin cd -P .` before reading `$PWD` would physicalise
+  it and was considered and rejected: it changes the process's working directory, which
+  every relative argument the caller passed is still resolved against, and it buys nothing
+  the `-ef` measurement does not already give. Refusing the relative form is the other
+  rejected option, and it is rejected for the usability reason above rather than a safety
+  one. Two joins are ugly and neither is wrong: a `${BASH_SOURCE[0]}` of
+  `./resolver/v1/resolve-profile.sh` gives a `/…/repo/./resolver/…` with a `.` still in it,
+  and a `$PWD` of `/` gives a leading `//`. Measured on Darwin, both open the right file —
+  `//etc/hosts` reads `/etc/hosts` — and neither shape reaches a comparison. Everything
+  else is the same: the
   re-exec is an `exec`, so no extra process is left behind. The literal
   `PATH=/usr/bin:/bin` above is not a further deviation: the materializer writes
   `PATH="${PATH:-/usr/bin:/bin}"` there (`:26`), and the scrub has just set `PATH` to
@@ -4424,13 +4567,43 @@ the spec pull request's range above still blocks review.
   it.** There are two supported ways to run the entry: execute the file, so its
   `#!/bin/bash -p` shebang is what starts bash, or
   `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <entry> <jq> <output> <request> <map>`.
-  Invoking the marker word directly is neither, this spec makes no safety claim about it,
+  **The first of those two forms only exists if the file is committed executable, so this
+  spec requires the mode rather than leaving it to an implementer's habit:
+  `resolver/v1/resolve-profile.sh` is added to the repository with git mode `100755`.** It
+  has to be said here because nothing in this repository would otherwise catch a file that
+  landed as `100644`. CI's structure check reads `ci/required-files.txt` and fails a listed
+  path that is missing, but it checks executability for `scripts/*.sh` and nothing else
+  (`AGENTS.md:96-99`); the entry lives under `resolver/v1/`, so a non-executable entry
+  passes the manifest check, passes the lint, passes every other gate, and fails only in the
+  caller's hands. Measured, bash 3.2 on `arm64-apple-darwin`: a mode-0644 copy of the entry
+  run as `./resolver/v1/resolve-profile.sh` prints `Permission denied` and exits `126`, from
+  either a relative or an absolute path, and not one statement of the entry runs — while the
+  same mode-0644 copy run as `/bin/bash -p <entry>` succeeds, because there the kernel is
+  never asked to execute the file and bash only reads it. That asymmetry is exactly why the
+  mode is a requirement and not a detail: it breaks the shebang launch, which is the form a
+  caller reaches for, and leaves the documented direct form working, so the mistake survives
+  any check that only tries the second form. R10 asserts the committed mode rather than
+  trusting it.
+  Invoking the marker word directly is neither of the two forms, this spec makes no safety
+  claim about it,
   and R9's documentation says so: the marker exists so the re-exec has somewhere to arrive,
   not as a public entry point. What the entry does about it is the refusal above, and the
   refusal draws the line in the one place a reader can check: a marker invocation carrying
   `-p` is inside the boundary, because privileged mode is exactly the condition the
   supported forms create and the polluted direct form cannot; a marker invocation without
-  it exits 78 having created nothing and read nothing. It is worth being plain about what
+  it, **from a clean environment**, exits 78 having created nothing and read nothing. That
+  qualifier carries the whole of the paragraph above and is not decoration. From a
+  *polluted* environment a non-`-p` process has already imported the caller's exported
+  functions and already sourced their `BASH_ENV` before the entry's first statement is
+  parsed, so a function named `exit` runs the caller's code where the refusal meant to
+  leave, and an alias on the reserved word `case` expands the refusal into something else
+  entirely — both measured, same shell, and both recorded above. So the honest statement of
+  the boundary is two-sided: a non-`-p` arrival from a clean environment is refused at the
+  first statement, and a non-`-p` arrival from a polluted one is **outside the safety claim
+  altogether** — unsupported, not refused-and-safe. No sentence anywhere in this spec may
+  promise the second case a refusal, R9's documentation line included, and R10's
+  clean-environment test case is written against the first case alone for the same reason.
+  It is worth being plain about what
   the caller who gets past that gains —
   nothing beyond their own process, which they already control. The environment they can
   pollute is the environment of a process they started themselves, and every claim this spec
@@ -6802,8 +6975,27 @@ the spec pull request's range above still blocks review.
   caller, so a direct run that succeeds is not a supported configuration and is not
   evidence that one exists. The entry's documentation states the two supported
   invocation forms — both of which carry `-p` — says the marker word is not a public entry
-  point and that any invocation without `-p`, marker word or not, exits 78 at the entry's
-  first statement without doing anything, and
+  point, and states the refusal in the two-sided form R1 states it in rather than the
+  one-sided form an earlier round of this spec used. **The one-sided form was false.** It
+  said that any invocation without `-p`, marker word or not, exits 78 at the entry's first
+  statement without doing anything, which promises a security refusal the shell cannot
+  give: the very scenario the sentence exists to warn about — a caller who starts the entry
+  from a polluted environment without `-p` — is one where imported functions, a `BASH_ENV`
+  or an alias on a reserved word run the caller's code before that first statement is
+  reached, and can shadow `exit` or expand `case` into something else, both measured in R1.
+  So the documentation says instead: an invocation without `-p` **from a clean
+  environment** — marker word or not — exits 78 at the entry's first statement having
+  created nothing and read nothing; and a non-`-p` invocation from a polluted environment,
+  direct or marker, is **outside the safety claim** — unsupported, with the caller's code
+  able to run ahead of the refusal — for which it points the reader at R1's paragraph on
+  the marker branch rather than restating the mechanism. That is the same boundary R1 draws
+  and the same one R10's two halves test, and the documentation now draws it in the same
+  words. **The documentation also states the committed mode and why the reader cannot
+  infer it from CI**: the entry ships as git mode `100755`, because the shebang launch is
+  one of the two supported forms and a `100644` entry fails it with `Permission denied` and
+  exit `126` (R1), and the repository's structure check enforces executability for
+  `scripts/*.sh` alone (`AGENTS.md:96-99`), which does not cover `resolver/v1/`. It
+  also
   names the Darwin
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
@@ -7282,7 +7474,43 @@ the spec pull request's range above still blocks review.
   supported arrivals behave, and the unsupported arrival is turned away before it touches
   anything — not that the unsupported arrival is safe. It is not, the direct marker form
   without `-p` is unsupported (R1), and the process's loader has already read the caller's
-  variables before any statement of the entry runs.
+  variables before any statement of the entry runs. The case's own comment says which of
+  the two sides of R1's boundary it covers, in R1's words, so a later round cannot read the
+  passing case as evidence that the polluted side is refused too.
+
+  **The committed mode of the entry is asserted, because no other check in this repository
+  covers it.** R1 requires `resolver/v1/resolve-profile.sh` to be committed `100755`, and
+  the shebang launch — one of the two supported forms — is exactly what a `100644` entry
+  breaks. Two assertions, both cheap and both in the suite's own repository checkout rather
+  than in a fixture: first, `git ls-files -s -- resolver/v1/resolve-profile.sh` run from the
+  repository root produces one line whose **first whitespace-separated field is `100755`**
+  — the full shape being `<mode> <blob id> <stage>` and then a single tab and the path,
+  measured against this repository's own tree, where `scripts/doctor.sh` reports
+  `100755 20d3e15b… 0` and `ci/required-files.txt` reports `100644 9c2227fc… 0` — so the
+  assertion reads the field and compares it to the literal `100755` rather than grepping
+  the whole line. Second, and separately, `[ -x resolver/v1/resolve-profile.sh ]` on the
+  checked-out file, which is what the caller actually executes and which a
+  `core.fileMode=false` checkout or an unpacked archive can get wrong independently of the
+  index. The comment beside the pair says why the suite carries them at all: the structure
+  check in `.github/workflows/ci.yml` enforces executability for the `scripts/*.sh` entries
+  of `ci/required-files.txt` and for nothing else (`AGENTS.md:96-99`), and the entry is not
+  under `scripts/`, so this is the entry's own assertion and not a duplicate of a CI gate.
+
+  **And the relative repo-root invocation is a case, because it is the form a person
+  types.** One run of `resolver/v1/resolve-profile.sh <jq> <output> <request> <map>` —
+  relative, no leading `./`, from the repository root, with a clean environment and a
+  `PWD` the shell derived itself — completes with the same byte-identical output the
+  absolute run produces and the same empty output root after cleanup. It is one case and it
+  proves two things at once: that the committed mode makes the shebang launch work, and
+  that R1's `$PWD` join hands the re-exec an absolute path the second bash can open.
+  Measured ahead of writing it, bash 3.2 on `arm64-apple-darwin`: the relative form reaches
+  the clean path with `$-` of `hpB` and `$0` absolute, exactly as the absolute form does.
+  There is deliberately **no** bogus-`PWD` case beside it, and the reason is the
+  measurement rather than an omission: bash re-derives an inherited `PWD` that does not name
+  the current directory, so `PWD=/bogus` in the caller's environment changes nothing the
+  entry could observe and the case would assert against a value the shell never uses (R1).
+  The negative result is written down here so a later round does not spend a case
+  rediscovering it.
 
   **A polluted compiler environment is tested too, because ignoring `$CC` was never the
   whole of it.** The entry compiles under the `env -i` line quoted verbatim in R1, and the
@@ -8765,13 +8993,23 @@ Order, each step checkable before the next:
    flag goes outside one, which every flag-toggling diagnostic the parent writes follows
    (R2) — and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
-2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
+2. **`resolver/v1/resolve-profile.sh`** — **committed with git mode `100755`**, because
+   executing the file under its `#!/bin/bash -p` shebang is one of the two supported
+   launches and a `100644` entry fails that launch with `Permission denied` and exit `126`
+   before any statement runs; the repository's own structure check covers executability for
+   `scripts/*.sh` alone (`AGENTS.md:96-99`), so this mode is asserted by R10's suite and by
+   nothing else. Then, in this order, each step refusing with
    `E_RUNTIME` before the next. **The entry's own four statements, then the copied scrub
    and re-exec, and only then anything external.** First
    `case $- in *p*) ;; *) exit 78 ;; esac` as the first statement in the file, so an
    arrival that is not one of the two supported invocations is turned away before anything
-   else is parsed, and so that everything below it runs in a shell that imported no
-   function and read no `BASH_ENV`. Then `umask 077`, copied from
+   else *of the entry's* is parsed, and so that everything below it runs in a shell that
+   imported no function and read no `BASH_ENV`. Stated exactly, because an earlier round
+   stated it too broadly: that holds for every arrival that reaches the statement, which is
+   every arrival from a clean environment and every arrival under `-p`; a non-`-p` arrival
+   from a *polluted* environment has already run the caller's imported functions and
+   `BASH_ENV` by then and can shadow `exit` or `case` outright, and is outside this spec's
+   safety claim rather than covered by this line. Then `umask 077`, copied from
    `adapters/local-git-materializer/v1/materialize.sh:31` but set here rather than after
    the scrub, because the scrub resets variables and not the process umask (R1). Then the
    descriptor-headroom precondition, one line and builtins only:
@@ -8820,8 +9058,13 @@ Order, each step checkable before the next:
    shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
    marker word, the arity, the `-p` that carries privileged mode across the re-exec where
-   the materializer drops it, and the four statements above that the copied file does not
-   have in that position — and then the marker branch, which re-runs the same builtin
+   the materializer drops it, the four statements above that the copied file does not
+   have in that position, and `$script_path` *made* absolute where the materializer
+   refuses a relative one — `case ${BASH_SOURCE[0]} in /*) script_path=${BASH_SOURCE[0]}
+   ;; *) script_path=$PWD/${BASH_SOURCE[0]} ;; esac`, builtins only, in the position
+   `:23-24`'s refusal held, so that a repo-root `resolver/v1/resolve-profile.sh …` runs
+   instead of exiting `E_USAGE` and the `exec` still gets the absolute path it needs
+   (R1) — and then the marker branch, which re-runs the same builtin
    scrub plus `builtin unalias -a` and `builtin shopt -u expand_aliases` as defence in
    depth (R1). The four opening statements run again in the second process, where the
    close loop finds nothing above 2 but that second bash's script descriptor and shuts it,
@@ -9605,7 +9848,13 @@ intent says for this change. Only after the operator's merge does
   `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29,31`, deviating from *those*
   lines in the marker word, the arity, the `-p` added to the re-exec's `/bin/bash`, the
   marker branch's re-run of the scrub with two alias-reset lines the copied bytes do
-  not have, and — this round, and this is a change of position rather than of text — the
+  not have, the self path *made* absolute in place of the copied refusal — this round's,
+  and the one deviation in this list that replaces a copied statement with a different one
+  rather than adding or moving: `:23-24`'s `case "$script_path" in /*) ;; *) emit_error
+  E_USAGE ;; esac` becomes the two-arm `case` that assigns `$PWD/${BASH_SOURCE[0]}` on the
+  relative arm, so the ordinary repo-root invocation runs instead of being refused, which
+  the materializer never had to care about because nothing types its path by hand
+  (R1) — and — this is a change of position rather than of text — the
   four statements the entry puts *above* the copied scrub: the
   `case $- in *p*) ;; *) exit 78 ;; esac` refusal, which was on the marker branch and is
   now the first statement in the file; the `umask 077`, copied unchanged from `:31` but
