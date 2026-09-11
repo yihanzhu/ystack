@@ -134,7 +134,17 @@ measured rather than guessed:
   needs one restore at the clean exit that leaves the loop without survivors and one after
   the group kill, plus the matching block on the limit path's entry at `:491` where a pair
   already stood inside it (~4). The copied statements themselves are untouched; this is
-  the mask around them (R2).
+  the mask around them (R2). This round adds ~8 more, to **~1151**, in two places. ~2 are
+  the handler's restore: the `fcntl(F_SETFL, flags)` with the saved value before the
+  `_exit`, in each of the three handlers if they are written out and once if they share a
+  body, plus the local the saved flags already needed for the `F_SETFL` above them — the
+  `F_GETFL` was counted in the ~5 of the round that made the line non-blocking. ~6 are
+  the fixed `envp`: one `static char *const helper_env[]` of two strings and a `NULL`
+  built once near the top (~3), and the three `execve` call sites — the SHA-1 tool, the
+  SHA-256 tool and the jq probe — passing it in place of `environ`, which is one argument
+  each and free if the plan factors the helper fork the way it factors the reap (~3).
+  Nothing is added for `execv`/`execvp`/`execlp`: they are absent already, and keeping
+  them absent is a grep in R10, not a line in the parent (R2, R7).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -234,7 +244,7 @@ measured rather than guessed:
   its `Running` arm, the `;;` and the `esac` wrapped around the `kill` that was already
   there, plus the `if`/`break` for the not-interrupted branch moving to the top of the
   body, which is the same statements re-ordered and costs nothing of its own (R1).
-- **Focused test ~996 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~1021 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
@@ -303,17 +313,30 @@ measured rather than guessed:
   and the Darwin shim text, none in command position, and none at all in the C file
   (~46),
   exit-status assertions (~15), harness
-  boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
+  boilerplate (~30), the per-case temporary directory setup and teardown (~45), and this
+  round's two additions (~25): the third direct-parent pollution run at ~15 — the Darwin
+  `PERL5LIB` directory with its four-line `strict.pm`, the `PERL5OPT` beside it, the
+  negative control that requires `/usr/bin/shasum -a 1 /dev/null` to print the marker and
+  exit 3 before the real run is trusted, the polluted parent run itself, the
+  byte-identical compare against the clean direct-parent run, the marker grep over
+  stdout, stderr and the two capture files, and the Linux `case` arm, which is short
+  because it reuses the loader marker library and its file and only changes the variable
+  and what the marker file may hold; and the mid-run case's pipe variant at ~10 — the
+  pipe, the background reader, the `dup` the test keeps, the rerun of the case body,
+  and the `fcntl` probe, of which the probe is ~5 of C compiled beside the marker
+  library and the rest is shell (R2, R7).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2629 lines. The range above is not re-derived from
+Those four bullets now sum to about 2662 lines. The range above is not re-derived from
 that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
 both ends, and every round since has recorded its own delta against that figure rather
-than moving the range for it. This round's ~4 is all in the parent — the entry's change is
-a reordering of statements it already has and the test gains nothing — and it takes the
-sum to about 9% above the ~2420, still well inside the ±15%
-the range expresses, so the implementation range stands where it was.
+than moving the range for it. This round's ~33 is ~8 in the parent and ~25 in the test —
+the entry gains nothing, both findings being about children the parent forks and a
+descriptor it was handed — and it takes the sum to about 10% above the ~2420, still
+inside the ±15%
+the range expresses, so the implementation range stands where it was. The round before
+this one added ~4, all in the parent, and took the sum to about 9%.
 It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
@@ -623,7 +646,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 6140 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 6415 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -718,16 +741,23 @@ surviving resolver group behind, beside the entry's descriptor close moving ahea
 copied scrub and the re-exec, with the privileged-mode refusal moved to the first
 statement in the file to make that safe, so nothing the entry forks or execs — the
 scrub's own process substitutions and the `env` and second bash included — ever holds a
-descriptor the close did not shut first).
-**Evidence-based range for this spec pull request: 5219-7061 lines** — the measured
-6140 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+descriptor the close did not shut first, and this round the parent's signal handler
+putting stderr's file status flags back before it exits, so a flag it set for one
+best-effort line can no longer break the entry's own diagnostic and the caller's output
+on a descriptor none of the three own alone, beside every helper the parent runs before
+the resolver exists — the two digest tools and the jq probe — `execve`d with a fixed
+two-variable environment instead of the caller's, so a `PERL5LIB` aimed at Darwin's
+perl-script `shasum` can no longer run the caller's code inside the tool whose answer
+decides whether the pins hold).
+**Evidence-based range for this spec pull request: 5453-7377 lines** — the measured
+6415 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153, then 5448, then 5897; where each block of
+5023, then 5153, then 5448, then 5897, then 6140; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1362,13 +1392,56 @@ word "group", the accepted-concern list at the top, and the re-derived size
 figures here and for the implementation, whose range does not move because the parent's
 ~4 is the whole implementation cost of the round.
 
+This round is +275 net over two P2s, and both are the same mistake in two places: a
+defence that stopped at the process boundary when the thing it was protecting crosses it.
+About 55 go to R2's handler. The fix is one statement — `fcntl(F_SETFL, flags)` with the
+saved value before the `_exit` — and nearly all the lines are the withdrawal of the
+sentence it replaces, which did not merely omit a restore but argued one was unnecessary
+because `_exit` follows immediately. That reasoning takes the flag for a property of the
+process. It is a property of the open file description, which the parent shares with the
+entry that started it and with whatever started the entry, so the parent exiting leaves
+the flag exactly where it put it and the entry's `EXIT` trap writes its `entry-signal:`
+line through it afterwards; on a pipe, that is a truncated line and a caller whose own
+writes start failing. The restore is required unconditionally, including after a write
+that failed, and the `runtime-pgid:` line's own restore — which was justified narrowly, by
+the parent still being alive — is re-justified on the same wider ground. About 90 go to
+R7's fixed `envp`. The three children the parent forks before the resolver exists — a
+SHA-1 tool per pin, the SHA-256 tool, the jq probe — were being `execve`d with whatever
+the caller set, which R3's array does not cover because R3's array is built later and for
+the resolver alone. Each now gets `PATH=/usr/bin:/bin`, `LC_ALL=C` and nothing else, the
+same pair the entry launches the parent under (R1), and `environ` is handed to no child of
+this parent ever. Most of those lines are the evidence and the narrowing: Darwin's
+`/usr/bin/shasum` is a perl script, and a `PERL5LIB` with a `strict.pm` in it makes it
+print a marker and exit 3 instead of a digest — measured, with the `env -i` form measured
+beside it returning the right forty hex digits with the pollution still set — plus the
+reason `TMPDIR` and `HOME` are on R1's compile line and deliberately not here, which is
+that nothing in these three reads either, the entry's two directories are already removed
+by the time the parent runs, and the parent's own sandbox pair is created after the pin
+checks on purpose, so a refused run leaves the caller's output directory untouched.
+About 70 go to R10: the third direct-parent pollution case with its per-platform fixture
+and, more to the point, its negative control, because a case whose assertion is that a
+marker never appears passes on any machine where the marker could never appear; the
+mid-run signal case's pipe variant, which asserts the flag rather than the line, with both
+weaker tests written out and rejected — a drained pipe passes on the broken parent, and a
+plain file ignores `O_NONBLOCK` entirely, which is why the suite already in place could
+not have caught this; and two more lines on the proof-by-reading list, the handler's three
+`fcntl`s and a grep for `environ`/`execv`/`execvp`/`execlp`. The remaining ~60 are the
+ripples and the bookkeeping: R2's pre-resolver child list, R3's no-caller-variable
+sentence, R5's descriptor-close block gaining the environment as the other half of the
+same claim, R1's "needs no `HOME` and no `TMPDIR`" sentence, Design step 1's handler and
+exec clauses, the Copy-versus-adapt handler item and the blob-pin item growing rather than
+an eleventh deviation being added — with the launcher verified to contain no `environ`, no
+`execv`, no `execvp` and no `execlp`, and both of its exec sites already passing explicit
+arrays — the accepted-concern list at the top, and the re-derived size figures here and
+for the implementation.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 5219-7061 lines**, which is this file's measured
-6140 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 5453-7377 lines**, which is this file's measured
+6415 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -2781,7 +2854,10 @@ the spec pull request's range above still blocks review.
   commands — the platform's SHA-1 tool, which it feeds the `blob <size>\0` header and then
   the file bytes for a blob-id pin, and the platform's SHA-256 tool, for the jq digest —
   each write a digest to
-  stdout.
+  stdout. Those two and the jq `--version` probe are `execve`d under this very pair of
+  variables and no others, written by the parent rather than inherited, which is what
+  keeps a caller's `PERL5LIB` out of Darwin's perl-script `shasum` on the path where no
+  entry ran at all (R7).
 - **R2 — the launch is copied, not reinvented.** The parent `execve`s the fixed path
   `/bin/bash` with argv `{"/bin/bash", <runtime>, "resolve", <request>, <map>}`
   (`portable-profile-resolution-launcher.c:652-657,701`), supervises the child the same
@@ -3105,9 +3181,11 @@ the spec pull request's range above still blocks review.
   important thing in it and goes last: branch, kill, reap, write, `_exit`.
 
   **The line is best-effort, and what that means is stated rather than left to the plan.**
-  The handler puts stderr into non-blocking mode for that one write —
-  `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` inside the handler, with no restore
-  afterwards because `_exit(128 + signal)` follows immediately — and it emits the line with
+  The handler puts stderr into non-blocking mode for that one write and puts the flags
+  back before it leaves — `fcntl(STDERR_FILENO, F_GETFL, 0)` to save them,
+  `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)`, the write, then
+  `fcntl(STDERR_FILENO, F_SETFL, flags)` with the saved value, and only then
+  `_exit(128 + signal)` — and it emits the line with
   a **single `write(2)` call**, not the copied
   `write_all(STDERR_FILENO, …)` (`portable-profile-resolution-launcher.c:164`) the copied
   file uses for every stderr write of its own, because `write_all` loops until the whole
@@ -3115,7 +3193,32 @@ the spec pull request's range above still blocks review.
   A short write, an
   `EAGAIN` or an `EPIPE` is ignored — no check of the return value and no retry — so a
   truncated line, or no line at all, is an accepted outcome where a hung termination is
-  not. `SIGPIPE` is **ignored**, not blocked: the parent sets it to `SIG_IGN` in the same
+  not.
+
+  **The restore is not optional, and the earlier round that said it was had the wrong model
+  of what `F_SETFL` changes.** That round wrote "no restore afterwards because
+  `_exit(128 + signal)` follows immediately", which would be sound if the flag belonged to
+  the process. It does not. `O_NONBLOCK` is a *file status flag*, and file status flags
+  live on the **open file description** — not on the descriptor, and not on the process —
+  so the parent, the entry that started it and whatever started the entry are all looking
+  at one flag through descriptors of their own. The parent exiting takes its descriptor
+  away and leaves the flag exactly as it set it. That matters on this path and nowhere
+  else, because stderr here is inherited rather than opened: after the parent exits, the
+  entry's `EXIT` trap still writes its `entry-signal:` line to that same stderr and the
+  caller goes on using it afterwards (R1). If stderr is a pipe, a flag the parent left
+  behind turns those later writes into `EAGAIN`s and short writes the moment the pipe is
+  full — a truncated or missing `entry-signal:` line, and a caller whose own output starts
+  failing — which is the entry's diagnostic contract broken by the parent's convenience,
+  and on a descriptor the parent never owned. So the handler restores, and the restore is
+  made **unconditionally, including when the write failed or wrote nothing**, because the
+  flag was set whatever the write did; it is the same single `fcntl` either way. It costs
+  the termination nothing measurable: `fcntl` on the process's own descriptor neither
+  blocks nor forks, and it happens after the killing and the reaping like the write it
+  follows. The `runtime-pgid:` write below already restores, and the reason recorded there
+  was the narrow one — the parent keeps running on that descriptor. The shared open file
+  description is the wider reason, it was the reason all along, and it covers both writes.
+
+  `SIGPIPE` is **ignored**, not blocked: the parent sets it to `SIG_IGN` in the same
   first statements of `main` that install the three handlers, so a write to a closed stderr
   returns `EPIPE` to a handler that already ignores errors instead of killing the parent
   in the middle of terminating a group. Blocking it instead would only defer the kill — a
@@ -3163,7 +3266,9 @@ the spec pull request's range above still blocks review.
   **The parent names the resolver's process group on stderr, so nothing downstream has to
   guess which child is which.** The parent runs children before the resolver — the
   platform's SHA-1 tool for each blob-id pin, its SHA-256 tool for the jq digest, and the
-  bound jq for the `--version` probe (R7) — so "the parent's child" does not identify the
+  bound jq for the `--version` probe, each `execve`d with the fixed environment R7
+  specifies rather than with the one the parent was handed — so "the parent's child" does
+  not identify the
   runtime, and anything picking a process by parentage could pick a digest tool instead.
   Rather than have a reader infer it, the parent reports it. After the `fork`
   (`portable-profile-resolution-launcher.c:432`), the `setpgid(child, child)` the copied
@@ -3186,9 +3291,10 @@ the spec pull request's range above still blocks review.
   same reason.** It is a `snprintf` into a small buffer and then a **single `write(2)`**
   with stderr in non-blocking mode for it: `fcntl(STDERR_FILENO, F_GETFL, 0)` to read the
   flags, `fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)` before the write, and the saved
-  flags put back with a second `F_SETFL` after it — two `fcntl` calls here where the handler
-  needs only one, because the parent goes on to supervise a whole resolution on that same
-  descriptor while the handler `_exit`s immediately after its own line. A short write, an
+  flags put back with a second `F_SETFL` after it — the same three calls in the same order
+  as the handler's, and for the same two reasons: the parent goes on to supervise a whole
+  resolution on that descriptor, and the descriptor is not its own to alter, the flag being
+  shared with the entry and the caller through one open file description (above). A short write, an
   `EAGAIN` or an `EPIPE` is ignored: no check of the return value and no retry. `SIGPIPE` is
   already `SIG_IGN` from the first statements of `main` (above), so a closed stderr returns
   `EPIPE` to code that ignores it rather than killing the parent. It is neither the copied
@@ -3239,7 +3345,10 @@ the spec pull request's range above still blocks review.
   `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and `YSTACK_RESOLVER_TEST_GIT_STOP` (`:686-689`)
   are never set by the shipped parent; the runtime refuses the launch if either appears
   alone (`scripts/lib/profile-resolution.sh:656-659`). No caller variable is copied
-  through, and the parent closes every inherited descriptor above 0/1/2 twice over: once
+  through — and that holds for the parent's *other* children as well, not only for this
+  array: the SHA-1 tool, the SHA-256 tool and the jq probe run before this array exists
+  and are `execve`d with the fixed two-variable environment R7 specifies, `environ` being
+  handed to nothing the parent starts. The parent closes every inherited descriptor above 0/1/2 twice over: once
   among the first statements of `main`, before it forks anything at all, so no SHA tool
   and no `jq --version` probe can inherit one either (R5), and again in the resolver child
   before `execve`, which is the line of defence this requirement has always named.
@@ -3406,6 +3515,16 @@ the spec pull request's range above still blocks review.
   file, socket, or write handle outside the output root, inherited by a SHA tool the parent
   forks, is a hole in the same two claims the child-side close protects: no caller state
   reaches a helper (R3), and there is one write root (R7).
+
+  **Descriptors are one of the two things a `fork` hands on that the parent did not choose;
+  the environment is the other, and it is closed in R7 rather than here.** The same three
+  children, forked in the same window and for the same reasons, would otherwise be
+  `execve`d with whatever environment the caller set, which on Darwin is enough to run
+  code inside the digest tool that decides whether the pins hold. R7 requires a fixed
+  `envp` on every one of those execs and forbids the parent from ever handing `environ` to
+  a child. The two fixes are separate statements in separate requirements because they are
+  separate mechanisms, and they are named together in both places because either one alone
+  leaves "no caller state reaches the parent's children" false.
 
   So the close goes where it can be checked — among the first statements of `main`, after
   `umask(077)` and after the three `sigaction` installations, before the first pin, the
@@ -3927,6 +4046,61 @@ the spec pull request's range above still blocks review.
      and every mode and ownership check is an `fstat` on a descriptor the
      parent opened, not a call to `/usr/bin/stat`.
 
+     **Every one of those three is `execve`d with a fixed environment the parent writes,
+     never with the one it was handed.** They run *before* the resolver's clean
+     environment exists — R3 builds that array for the resolver child and for nothing
+     else — so on the direct-parent path, where an operator running step 7 by hand or
+     R10's whole group 2 starts the parent itself, the caller's environment would
+     otherwise be standing in front of the SHA-1 tool, the SHA-256 tool and the jq probe
+     at the exact moment the pins decide whether this run is trustworthy. On Darwin that
+     is not a hypothetical: `/usr/bin/shasum` is a perl script — `#!/usr/bin/perl` on its
+     first line — so `PERL5LIB` naming a directory the caller controls, or a `PERL5OPT`
+     with a `-M` in it, runs the caller's code inside the digest tool before the tool
+     reaches its own first statement, and a tool that never digests anything can print
+     whatever hex the caller likes. Measured on `Darwin 27.0.0` while this round was
+     written: with `PERL5LIB` pointing at a directory holding a four-line `strict.pm` that
+     writes a marker to stderr and exits 3, `/usr/bin/shasum -a 1 /dev/null` writes the
+     marker and exits 3 where a clean run prints `da39a3ee…` and exits 0; `PERL5OPT=-Mstrict`
+     does the same; and the same command under `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C`,
+     with both variables still set in the caller's environment, prints the digest and
+     exits 0. `LC_ALL` is the quiet half of the same problem — it is these tools' output
+     formatting, and the parent compares their stdout as text.
+
+     **The fixed environment is two variables: `PATH=/usr/bin:/bin` and `LC_ALL=C`,
+     and nothing else.** That is not a new list; it is exactly the environment the entry
+     launches the parent under (`/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C`, R1), so the
+     parent hands its children the environment it was meant to have rather than the one it
+     happens to have, and on the normal path the two are the same array written twice.
+     `TMPDIR` and `HOME`, which R1's compile line carries beside those two, are
+     deliberately **not** here, and the reason is worth stating so a plan does not add them
+     back for symmetry. R1 already says the parent needs neither: they are on the compile
+     line because a compiler writes intermediates and a toolchain reads a home, and these
+     three children do neither — a digest written to stdout, of bytes the parent hands the
+     tool on stdin or of a file it names, and a
+     `--version` that prints one line. The two directories that line names,
+     `<output>/.run/tmp` and `<output>/.run/home`, do not exist by the time the parent runs
+     at all: the entry removes both before the mode pass (R1). And the parent's own sandbox
+     `tmp` and `home` come last in R5's order, after the pin checks, which is load-bearing
+     rather than incidental — a refused run leaves the caller's output directory exactly as
+     it found it — so pointing `TMPDIR` at them would mean creating them ahead of the
+     checks and paying for two variables nothing reads with a weakened refusal. Measured with the
+     rest of the block above: the full blob-id pipeline under those two variables, with
+     `PERL5LIB` and `PERL5OPT` set in the caller's environment, returns the same forty
+     hex digits as `git hash-object`.
+
+     **And the parent hands `environ` to nothing, ever.** Not to these three, not to the
+     resolver child, whose array R3 builds from empty, and not to any child a later round
+     adds. `execv`, `execvp` and `execlp` — the forms that take the caller's environment
+     implicitly — appear nowhere in the file; every exec in it is an `execve` with an array
+     the parent wrote, which is also what the copied launcher does at each of its own two
+     exec sites (verified: `execve` at `:445` and `:622`, and neither `environ` nor any
+     `execv`/`execvp`/`execlp` appears anywhere in its 702 lines). R10 reads the file for
+     that and greps it for those four names. This is what makes the claim R3 states and
+     R5 leans on true rather than nearly true: **no caller state reaches the parent's
+     children.** Descriptors were the other half of it and were closed in R5; the
+     environment is this half; together they are the whole of what a `fork` and an `exec`
+     would otherwise carry across that the parent did not choose.
+
      **Where `/usr/bin/awk` does appear, and why the bound jq is the opposite case.** The
      entry's source names `/usr/bin/awk` in exactly two places, both of them argument
      positions and neither of them a command. On Linux it is the source argument of the
@@ -4359,6 +4533,42 @@ the spec pull request's range above still blocks review.
   decoy tools, and both
   `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS=1` and `YSTACK_RESOLVER_TEST_GIT_STOP=1` — and
   the test asserts its stdout is byte-identical to the clean run's.
+
+  **A third direct-parent run pollutes the variables the parent's *own* helpers read,
+  which the two above do not reach.** Everything in that pollution set is aimed at the
+  resolver, and R3's array is built from empty before the resolver starts, so a run that
+  passes proves the resolver was not reached. The SHA-1 tool, the SHA-256 tool and the jq
+  probe are a different question: they are forked while the pins are being checked, long
+  before that array exists, and what shields them is the fixed `envp` R7 requires. So the
+  case sets `PERL5LIB` to a directory the test builds containing a `strict.pm` that writes
+  `YSTACK-PERL-MARKER` to stderr and exits 3, sets `PERL5OPT=-Mstrict` beside it, runs the
+  parent directly on the group-2 fixture, and asserts three things: the pin checks all
+  passed and the run completed with the clean run's stdout byte for byte; no `E_*` line
+  was written; and `YSTACK-PERL-MARKER` appears in nothing the run produced — not stdout,
+  not stderr, not `child.stdout` or `child.stderr`. A parent that passed `environ` fails
+  the first of those, because a `shasum` that exits 3 without printing a digest is a pin
+  that cannot match.
+
+  **That case carries its own negative control, and would be worthless without one.**
+  A fixture that is simply inert passes it on every run: the assertion is that a marker
+  does *not* appear, and a marker that could never appear satisfies it. So before the
+  polluted run, the same function runs `/usr/bin/shasum -a 1 /dev/null` itself, in the
+  same shell and under the same two variables, and **requires** the marker on stderr and
+  an exit of 3 — if the pollution cannot reach a perl script the test invokes on purpose,
+  it proves nothing about one the parent invokes, and the case fails there rather than
+  passing later. This was measured before it was specified, on `Darwin 27.0.0`: the
+  control fires exactly as described, and the same command under
+  `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C` returns `da39a3ee…` with both variables
+  still set. On Linux the fixture is a different pair for the same reason the control
+  exists — `/usr/bin/sha1sum` is a coreutils binary and reads no perl variable, and
+  `/usr/bin/shasum` may not be installed at all — so the Linux arm pollutes with
+  `LD_PRELOAD` naming the marker library the loader-variable case already builds, and
+  controls it the same way, by running `/usr/bin/sha1sum /dev/null` under that environment
+  and requiring a line in the marker file. Its assertion is then the one the platform
+  allows honestly: the marker file may hold the parent's own line, because the loader acts
+  before `main` and R10 says elsewhere why no test can change that, and it must hold **no**
+  line for a SHA tool, for jq, or for the resolver. Neither arm skips; each has a fixture
+  that fires on its own platform.
 
   **Loader variables are deliberately not in that list, and moving them out was a
   correction.** An earlier round put `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` in the
@@ -5141,7 +5351,20 @@ the spec pull request's range above still blocks review.
   reviewer checks that the only `kill` is inside the
   `case " $(jobs -l) " in *" $parent_pid Running"*)` arm, that the not-interrupted branch
   breaks without forwarding, and that no `kill -0` on `parent_pid` has come back anywhere
-  (R1). That last one is on this list for the same reason the reaps are: the failure needs
+  (R1). **Two more join the list this round, both in the parent, and both are things a
+  grep settles in a line.** The reviewer reads that each of the three `sigaction` handlers
+  ends `fcntl(F_GETFL)`, `fcntl(F_SETFL, flags | O_NONBLOCK)`, one `write(2)`,
+  `fcntl(F_SETFL, flags)`, `_exit` — the restore unconditional, ahead of the `_exit`, and
+  not inside any branch on what the write returned — because the pipe variant above proves
+  the flag is clear after a `TERM` and this reading is what covers `INT` and `HUP`, which
+  have no variant of their own and cannot earn one: a third and fourth copy of the same
+  case would measure the same statement. And the reviewer greps the file for `environ`,
+  `execv`, `execvp` and `execlp`, requiring no hit on any of the four, and reads that each
+  `execve` in it is given an array the parent built — the two-variable one for the SHA
+  tools and the jq probe, R3's for the resolver child (R7). That one is on the list rather
+  than in a case because the polluted-helper case above can only prove the variables it
+  thought to set, where the grep covers the ones nobody has thought of yet.
+  The `kill -0` reading is on this list for the same reason the reaps are: the failure needs
   a signal to land in the instant between a reaping `wait` and the next statement, and a
   case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
   how the behaviour was established, and it is a measurement of the design rather than a
@@ -5183,6 +5406,36 @@ the spec pull request's range above still blocks review.
   reaps nothing, so "after the killing" is immediately, and its sentinel assertion is
   about what the handler did not signal rather than about when it wrote. No assertion is
   dropped or weakened; only the order the prose describes changes.
+
+  **The mid-run case gains one assertion this round, in a variant of its own, and it is
+  about the flags rather than about the line.** The obvious test for the handler's restore
+  is to put the run's stderr on a pipe and check that the entry's `entry-signal:` line
+  arrives whole — and it is the wrong test twice over. On a pipe nobody has filled, a line
+  that short leaves in one atomic write whether `O_NONBLOCK` is set or not, so the case
+  would pass on the broken parent as readily as on the fixed one: it would pass by missing,
+  which this section refuses everywhere else. Asserting the same thing on the case's
+  existing plain file is worse, because regular files ignore `O_NONBLOCK` altogether — the
+  flag can be left set all day and nothing observable changes, which is also the honest
+  reason this bug survived the suite it already has. What *is* measurable is the flag, and
+  the reason it is measurable is the reason the bug matters: the flag is not the parent's
+  to leave, it lives on the open file description, and the test can be holding that same
+  description itself.
+
+  So the variant reruns the mid-run case's body with the run's stderr on a pipe the test
+  made, keeps a `dup` of the write end for itself — the same open file description it
+  handed the run, not a second `open` of the same object, which is the entire point — and
+  leaves a background reader on the read end so nothing ever fills. After the run has
+  exited `143` and the case's three existing assertions have passed, the test reads the
+  flags back off its own `dup` with a small C probe it compiles beside the marker library
+  (an `fcntl(3, F_GETFL, 0)`, a `nonblock`-or-`clear` line on stdout, exit 0) and requires
+  `clear`. Nothing here is a race: a parent that leaves the flag set fails this on every
+  run and on both platforms, because the flag outlives the process that set it. That was
+  checked before it was written down — a stand-in child that sets `O_NONBLOCK` on an
+  inherited pipe write end, writes one line and `_exit`s leaves the flag set on the
+  surviving `dup`, measured on `Darwin 27.0.0`. The variant asserts nothing else: the
+  `runtime-pgid:` read, the `SIGSTOP` freeze and the group assertions stay on the
+  plain-file variant they already work on, where a non-blocking write can neither block
+  nor fail.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -5357,7 +5610,12 @@ Order, each step checkable before the next:
    `close_range`, neither of which is portable to both pinned platforms — so that no SHA
    tool, SHA-256 tool or `jq --version` probe the parent forks can inherit a caller's
    credential, socket or write handle, with the resolver child's own pre-`execve` close
-   kept as the second line (R3, R5); and the sandbox's four entries —
+   kept as the second line (R3, R5); every `execve` in the file is given an array the
+   parent wrote and never `environ` — the fixed `PATH=/usr/bin:/bin`, `LC_ALL=C` pair for
+   each SHA-1 tool, the SHA-256 tool and the `jq --version` probe, which run before R3's
+   array exists, and R3's array for the resolver child — with `execv`, `execvp` and
+   `execlp` absent from the file, so a caller's `PERL5LIB` cannot run code inside Darwin's
+   perl-script `shasum` while the pins are being decided (R3, R7); and the sandbox's four entries —
    `home`, `tmp`,
    `child.stdout`, `child.stderr` — are created with `mkdirat` and `openat` relative to the
    output-directory descriptor the check opened, in place of the copied `mkdir` at
@@ -5417,8 +5675,13 @@ Order, each step checkable before the next:
    the mask is inherited across `exec` (R2). Each branch ends by writing one line —
    `parent-signal: <NAME> group <pgid>` or `parent-signal: <NAME> no-runtime`, which is
    what R10's stopped-parent case asserts — **after** it has killed and reaped, not before,
-   with stderr put into non-blocking mode and a single `write(2)` rather than the copied
-   `write_all` (`:164`), a short write or `EAGAIN`/`EPIPE` ignored, and `SIGPIPE` set to
+   with stderr put into non-blocking mode by an `F_GETFL` and an `F_SETFL`, a single
+   `write(2)` rather than the copied
+   `write_all` (`:164`), a short write or `EAGAIN`/`EPIPE` ignored, and the saved flags put
+   back by a third `fcntl` before the `_exit`, unconditionally and whatever the write
+   returned, because a file status flag lives on the open file description the entry and
+   the caller share and a flag left set would turn their later stderr writes into
+   `EAGAIN`s; and `SIGPIPE` set to
    `SIG_IGN` among the same first statements of `main`, so a blocking or closed stderr can
    never hold up the termination this path exists to guarantee (R2). One further line has no counterpart either: the single `runtime-pgid: <n>` written
    straight to stderr after the `fork` (`:432`), the parent-side `setpgid` (`:450`), the
@@ -5983,7 +6246,9 @@ intent says for this change. Only after the operator's merge does
   carry two `volatile sig_atomic_t` variables, three branches on them, a prohibition on
   `kill(0, …)`/`kill(-0, …)`, one `parent-signal:` line each branch writes — written last,
   after the kill and the reap, with stderr made non-blocking for a single `write(2)` whose
-  short write or `EAGAIN`/`EPIPE` is ignored, and `SIGPIPE` left at `SIG_IGN` from the
+  short write or `EAGAIN`/`EPIPE` is ignored and the saved flags put back by a third
+  `fcntl` before the `_exit`, because the flag sits on an open file description the entry
+  and the caller share, and `SIGPIPE` left at `SIG_IGN` from the
   first statements of `main`, so the diagnostic can never hold up the termination — and a
   `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
   `sigprocmask(SIG_SETMASK, …)` after the pid assignment and nothing else inside the region
@@ -6015,7 +6280,17 @@ intent says for this change. Only after the operator's merge does
   one, its other change to
   the C file — the parent-pinned subset's blob ids are computed from an `fstat` size and
   the platform's SHA-1 tool, where nothing in the launcher pins anything and the obvious
-  shortcut would have been `git hash-object` (R1, R7). The ninth is this round's only change
+  shortcut would have been `git hash-object` (R1, R7) — and that item grows this round
+  rather than an eleventh being added, because it is the same new block seen from the
+  side of what it runs: those digest tools, and the `jq --version` probe beside them, are
+  pre-resolver children the launcher does not have at all, and each is `execve`d with the
+  fixed `PATH=/usr/bin:/bin`, `LC_ALL=C` pair the parent writes rather than with
+  `environ`. There is nothing to adapt here and it is worth recording as a clean result
+  rather than as an omission: the launcher's only two exec sites are `execve` at `:445`
+  and `:622`, both already handed an explicit array, and `environ`, `execv`, `execvp` and
+  `execlp` appear nowhere in its 702 lines (verified). So the deviation is the new
+  children, not a habit corrected — which is exactly why the rule had to be written down
+  instead of inherited (R7). The ninth is this round's only change
   to the C file: the one `runtime-pgid: <n>` line the parent writes to its own stderr after
   the fork and after the mask restore, best-effort with the same non-blocking single
   `write(2)` the handler's line uses, where the launcher writes nothing there and leaves the
