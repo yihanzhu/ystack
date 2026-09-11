@@ -43,9 +43,12 @@ measured rather than guessed:
   the repository-root derivation, two constants and two comparisons — the parent's own jq
   digest and `jq-1.6`
   checks (~40), the three `fstat` run-directory checks in R5 (~90), the caller
-  output-directory check (~45 — it is no longer a plain emptiness test but a `readdir` over
-  the directory that admits the single `.run` entry and then compares it with `realpath`
-  against the run directory the parent was handed, R5), the regular-non-symlink check on
+  output-directory check (~60 — it is no longer a plain emptiness test but an `fdopendir`
+  on a `dup` of the checked descriptor and a `readdir` over it that admits the single
+  `.run` entry, and then a descriptor-identity comparison against the run directory the
+  parent was handed: an `fstatat` with `AT_SYMLINK_NOFOLLOW` and its `S_ISDIR` test, an
+  `openat`, a second `open` on the run-directory argument, two `fstat`s and the
+  `st_dev`/`st_ino` compare, each with its own refusal, R5), the regular-non-symlink check on
   the request and map
   arguments (~15), the `INT`/`TERM`/`HUP` handlers and process-group termination in R2
   (~70 — the group sequence itself is ~45, and the two `volatile sig_atomic_t` variables,
@@ -93,10 +96,17 @@ measured rather than guessed:
   order (R2). The round before this one added nothing here and the figure stayed at ~1097:
   both of its
   findings were outside the C parent — the entry's signal design, and this artifact pull
-  request's own size record. This round adds ~2 more, to **~1099**: the `umask(077)` call
+  request's own size record. The round before this one added ~2 more, to ~1099: the
+  `umask(077)` call
   among the first statements of `main`, which the copied launcher does not have, so the
   `home` and `tmp` the parent creates are 0700 and its two capture files 0600 whatever
-  umask the caller left behind (R5).
+  umask the caller left behind (R5). This round adds ~15 more, to **~1114**: the
+  output-directory check's `realpath` string comparison becomes the descriptor-identity
+  sequence the bullet above itemises — the `fstatat` with `AT_SYMLINK_NOFOLLOW` and its
+  `S_ISDIR` test, the `openat` on `.run`, the `open` on the run-directory argument, the two
+  `fstat`s and the `st_dev`/`st_ino` compare, the `fdopendir` on a `dup` of the checked
+  descriptor for the listing, and a refusal on each — where two `realpath` calls and a
+  `strcmp` were three statements (R5).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -155,7 +165,7 @@ measured rather than guessed:
   **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there and
   copied from the same file (`materialize.sh:31`), plus the comment that says why a scrub
   of variables does not cover a process attribute (R1).
-- **Focused test ~895 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~905 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -169,9 +179,11 @@ measured rather than guessed:
   control compile that proves the fixture poisonous (~55, of which ~20 is the Darwin
   `xcrun_db` before-and-after assertion — the state recorded as absent, or as a size, an
   mtime and a digest, with no skip either way, R1), a shared
-  hand-built run-directory helper for the direct-parent cases (~15) and the seventeen
-  group-2 cases on top of it (~140, the overlong-value case now building a near-`PATH_MAX`
-  directory tree rather than naming a long path), the group-3 runtime refusal (~10),
+  hand-built run-directory helper for the direct-parent cases (~15) and the nineteen
+  group-2 cases on top of it (~150, the overlong-value case now building a near-`PATH_MAX`
+  directory tree rather than naming a long path, and the two new `.run` containment cases —
+  the symlinked `.run` and the regular-file `.run` — each asserting the refusal and an
+  untouched target), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
   three signal cases — the mid-run one with its live read of the entry's stderr for the
@@ -212,7 +224,8 @@ downloader grep became a full command-word allowlist grep plus a `git`-subcomman
 assertion (+15). The round after that added ~90, all of it from the second of its two findings —
 moving the run directory inside the caller's output root, which is a change to what the
 shipped files do and so does cost implementation lines: ~20 in the parent (the
-output-directory check becomes a `readdir` plus a `realpath` comparison), ~15 in the entry
+output-directory check became a `readdir` plus a `realpath` comparison — the comparison
+this round replaces), ~15 in the entry
 (the output-directory argument and its `PATH_MAX` guard), and ~55 in the test (two more
 group-1 cases, one more group-2 case, and cleanup assertions that name the exact expected
 entry set three times). The first finding — the process-table reads in R7 — adds nothing
@@ -367,7 +380,8 @@ a new figure, so the implementation range was unchanged. That round's third find
 then still open with the operator; it did not touch it. Nothing was made cheaper to
 compensate.
 
-This round adds ~19, and for once it touches all three files from a single finding. ~2 in
+The round before this one added ~19, and for once it touched all three files from a single
+finding. ~2 in
 the C parent: `umask(077)` among the first statements of `main`, so the `mkdirat` and
 `openat` modes the parent asks for are the modes that appear on its four sandbox entries
 (R5). ~2 in the entry: `umask 077` in the marker branch beside the scrub it already re-runs
@@ -380,9 +394,25 @@ exists, the bounded retry that poll needs, and the direct-parent invocation unde
 no implementation lines at all, in the way the Darwin residual never has: DR-2 was decided
 by the operator on 2026-09-10 and carried into the chain by intent pull request `#282`, so
 what changes is the intent this spec pins and the way R7 and the residual bullet describe
-the deviation — not what any shipped file does. The sum of the four bullets is ~2451
+the deviation — not what any shipped file does. The sum of the four bullets was ~2451
 against the ~2420 the range is derived from, which is inside the rounding rather than a new
-figure, so the implementation range is unchanged. Nothing was made cheaper to compensate.
+figure, so the implementation range was unchanged. Nothing was made cheaper to compensate.
+
+This round adds ~25, in the C parent and the test, from one finding. ~15 in the parent:
+the output directory's `.run` containment check stops being two `realpath` calls and a
+`strcmp` and becomes a descriptor-identity sequence — `fstatat` with
+`AT_SYMLINK_NOFOLLOW` and an `S_ISDIR` test on the `.run` entry, an `openat` on it, an
+`open` on the run-directory argument, two `fstat`s, the `st_dev`/`st_ino` compare, the
+listing moving to `fdopendir` on a `dup` of the checked descriptor, and a refusal on each
+step (R5). ~10 in the test: two more group-2 cases, a `.run` that is a symlink to a real
+well-built run directory elsewhere and a `.run` that is a regular file, each asserting the
+refusal and that the parent touched nothing (R10). Nothing in the entry, which never
+compared paths for this: its own output-root validation is the emptiness glob and the
+`cd -P` comparison, and the `.run` it creates is one it makes itself, so the finding does
+not reach it. Nothing was made cheaper to compensate — the withdrawn `realpath` comparison
+was the cheap wrong answer, and the right one costs more lines than it. The sum of the four
+bullets is now ~2476 against the ~2420 the range is derived from, about 2% above it and so
+still well inside the ±15% the range expresses, so the implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -399,7 +429,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 3866 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 4013 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -442,14 +472,17 @@ very command that was supposed to set it, and this round DR-2 answered and writt
 the intent this spec pins, so the one deviation from the write-root constraint is carried
 by the accepted artifact rather than by a spec waiting on a decision, beside a known umask
 set before anything is created, so the modes every other requirement states are the modes
-that appear whatever umask the caller left behind).
-**Evidence-based range for this spec pull request: 3286-4446 lines** — the measured
-3866 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+that appear whatever umask the caller left behind, and this round the `.run` containment
+check decided by descriptor identity with no symlink followed anywhere in it, so an output
+directory whose only entry is a link to a run directory somewhere else can no longer
+satisfy the containment the check exists to prove).
+**Evidence-based range for this spec pull request: 3411-4615 lines** — the measured
+4013 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409, then 3642; where each block of
+3295, then 3409, then 3642, then 3866; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -716,8 +749,9 @@ re-derived size figures here and for the implementation, whose range does not mo
 the ~10 the entry gains is inside the rounding of the sum it is derived from. That round's
 third finding was DR-2, unchanged and then still open; it did not touch it.
 
-This round is +224 net over one P1 and one P2, and the P1 is the one finding
-this spec has carried
+The round before this one was +224 net over one P1 and one P2, and the P1 was the one
+finding
+this spec had carried
 unanswered for five rounds. About 45 go to DR-2, which the operator decided on
 2026-09-10, choosing option (a): the residual is accepted, named, and measured exactly. The
 decision reaches this artifact the only way an intake decision can reach a spec after G1 —
@@ -743,16 +777,42 @@ a builtin and forks nothing, Design step 1's clause, the tenth parent deviation 
 widened entry copy in Copy versus adapt, and R10's two-umask case with the poll it borrows
 from the pre-parent signal case. The remaining 63 are the accepted-concern
 list at the top and the re-derived size figures here and for the implementation, whose
-range does not move because the ~19 the three files gain is inside the rounding of the sum
+range did not move because the ~19 the three files gained is inside the rounding of the sum
 it is derived from.
+
+This round is +147 net over one P2, and it is a correction to a mechanism an
+earlier round chose too quickly rather than new ground: the `.run` containment check was
+written as a comparison of two `realpath` answers, and `realpath` resolves through the one
+thing the check exists to refuse. About 55 go to R5: the refusal clause losing the words
+"both resolved with `realpath`", the new block that says why that was wrong in one sentence
+and then gives the five-step descriptor-identity sequence — the `O_NOFOLLOW` open of the
+output directory, the `fstatat` with `AT_SYMLINK_NOFOLLOW` and its `S_ISDIR` test, the
+`openat` on `.run`, the `open` on the run-directory argument, and the `st_dev`/`st_ino`
+compare — with the two mechanism notes beside it (why the `S_ISDIR` test and not the
+`O_NOFOLLOW` flag carries the refusal, given the launcher's own shim at `:30-31`, and the
+listing moving to `fdopendir` on a `dup` of the checked descriptor), and the ordering
+paragraph that puts the identity comparison before anything inside the run directory is
+trusted and keeps the descriptors open from check to use. About 5 go to the helper block's
+own half of the same comparison, which had the same flaw and now reads the same way. About
+10 go to R10's two new group-2 cases — the symlinked `.run` and the regular-file `.run`,
+each asserting the refusal and an untouched target — with the sentence saying the symlinked
+one is precisely the case the withdrawn comparison passes. About 15 are the two ripples
+that carry mechanism: Design step 1's clause, and the parent deviation item growing rather
+than an eleventh being added, with the launcher verified to contain no `realpath`, no
+`fstatat`, no `openat` and no `O_DIRECTORY`. The remaining ~60 are the accepted-concern
+list at the top and the re-derived size figures here and for the implementation, whose
+range does not move because the ~25 the parent and the test gain is inside the ±15% band
+the range expresses. Nothing else in this spec used `realpath` for anything: the only other mentions
+are round-history sentences recording what an earlier round added, which are left as the
+history they are.
 
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 3286-4446 lines**, which is this file's measured
-3866 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 3411-4615 lines**, which is this file's measured
+4013 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2057-2783 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1833,16 +1893,71 @@ the spec pull request's range above still blocks review.
   the leading slash on those two (`portable-profile-resolution-launcher.c:636`), so this
   is new code; or the caller's output directory
   is not a directory the caller owns at mode 0700 holding no entry other than `.run`, with
-  that `.run` entry being the same object as the run directory the parent was handed — both
-  resolved with `realpath` — which mirrors the sandbox rule the test uses
+  that `.run` entry being the same object as the run directory the parent was handed —
+  the same object by descriptor identity, with no symlink followed anywhere in the
+  comparison, which the block after this one specifies in full — which mirrors the sandbox
+  rule the test uses
   (`portable-profile-resolution.test.sh:219-222`), allowing for the one entry the run
-  directory now occupies there (R1). Two orderings inside this are fixed here rather than
+  directory now occupies there (R1). Three orderings inside this are fixed here rather than
   left to the plan: the length guard on the output path (`:641`) runs before any of it, so
   an overlong output path is refused without the parent looking for `.run` at all — R10's
-  overlong case depends on that order — and the whole output-directory check runs before
+  overlong case depends on that order; the whole output-directory check runs before
   the parent creates `home` and `tmp` there (`:645-647`, which the parent replaces with
   `mkdirat` on the descriptor that check opened, below), so a refused run leaves the output
-  directory exactly as it found it.
+  directory exactly as it found it; and the `.run` identity comparison runs before the
+  helper, binary and run-directory checks below, for the reason the block after this one
+  gives.
+
+  **That containment check is descriptor identity, and it follows no symlink anywhere.**
+  An earlier round of this spec wrote it as a string comparison of two `realpath` answers,
+  and that is wrong in exactly the way the check exists to catch: `realpath` resolves
+  *through* a symlink, so an output directory whose only entry is a `.run` symlink pointing
+  at a well-built run directory somewhere else resolves to that other directory on both
+  sides and compares equal. The containment the requirement is trying to enforce — the run
+  directory is inside the output root the caller was judged on — would then be satisfied by
+  the link rather than by the directory. So the parent compares no resolved paths here. It
+  does this instead, in this order:
+
+  1. `open(<output>, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)` — the same
+     descriptor the owner, mode and listing checks use and the same one the four sandbox
+     entries are later created relative to (below), opened once.
+  2. `fstatat(out_fd, ".run", &st, AT_SYMLINK_NOFOLLOW)`, which must succeed and must
+     report `S_ISDIR`. A symlink there is a refusal whatever it points at, and so is a
+     regular file, a fifo, a socket, a device or anything else that is not a directory.
+     This is the step that refuses the attack, and it refuses it before anything is
+     resolved.
+  3. `openat(out_fd, ".run", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)`, then
+     `fstat` on the descriptor it returns.
+  4. `open(<run-directory argument>, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)`,
+     then `fstat` on that one.
+  5. The two `struct stat`s must agree on `st_dev` **and** `st_ino`. Anything else — a
+     failure at any of the three opens, an `ELOOP` from `O_NOFOLLOW`, a non-directory, or
+     an identity mismatch — is the refusal this requirement already uses everywhere else:
+     one `E_RUNTIME` line on stderr and a non-zero exit, before the `fork` and before
+     anything is created.
+
+  Two mechanism notes the plan should not have to rediscover. The explicit `S_ISDIR` test
+  in step 2 is what carries the symlink refusal, not the `O_NOFOLLOW` flags: the copied
+  launcher's portability shim defines `O_NOFOLLOW` to `0` when the platform does not have
+  it (`portable-profile-resolution-launcher.c:30-31`), and a flag that can compile away to
+  nothing is not where a security refusal belongs — the flags stay, as the second line they
+  are. And the rest of this check reads the directory through the descriptor too, never
+  through the path: the "no entry other than `.run`" listing is `fdopendir` on a `dup` of
+  `out_fd` — a `dup` because `fdopendir` takes ownership of the descriptor it is handed and
+  is closed by `closedir`, while the parent needs `out_fd` alive afterwards for the
+  `mkdirat` and `openat` calls below — and the owner and mode facts are an `fstat` on
+  `out_fd` itself.
+
+  **The order matters as much as the identity does.** The comparison happens before the
+  parent trusts anything *inside* the run directory: the helper, the compiled parent binary
+  and the run-directory mode checks below all run after it, so they are made against an
+  object already proved to be the `.run` of the output root the parent checked, rather than
+  against whatever the run-directory argument happened to name. And the descriptors stay
+  open — the run-directory descriptor from step 4 is the one those later checks use, with
+  `openat` relative to it instead of fresh path resolutions, so the object checked is the
+  object used and no name is resolved a second time between the check and the use. That is
+  the same names-to-descriptors discipline the sandbox creations and the supervisor's reads
+  follow, stated here for the check that admits the run directory in the first place.
 
   **The parent's version of the output-directory rule is a re-check, not the only check.**
   The entry refuses the same output root — absolute, a real directory with no symlink
@@ -2055,10 +2170,16 @@ the spec pull request's range above still blocks review.
     could the helper beside it have been, and the parent refuses rather than launching;
   - the directory holding them is a real directory, not a symlink, owned by the current
     uid, at mode exactly 0500 — so it admits no new entries and no renames — and is
-    exactly the run directory the entry named, compared after resolving both with
-    `realpath`, and is that directory's `.run` entry inside the caller's output directory,
-    which is the same comparison read from the other side (R1, and the output-directory
-    check above).
+    exactly the run directory the entry named, which is the caller's output directory's own
+    `.run` read from the other side (R1). That last fact is the output-directory check
+    above and is established the way that check establishes it: equal `st_dev` and `st_ino`
+    between the descriptor opened on the run-directory argument and the descriptor
+    `openat`ed on `.run` relative to the output-directory descriptor, with nothing resolved
+    through a symlink on either side. An earlier round of this spec wrote both halves of
+    the comparison with `realpath`, and both halves carried the one flaw described up
+    there. The helper and the compiled binary are then checked with `openat` relative to
+    that same run-directory descriptor, so the directory proved to be `.run` is the
+    directory their checks read from.
 
   There is no identity probe to add. The runtime gives jq a `--version` probe (`:668-671`)
   but gives the helper none, and the helper has exactly one subcommand,
@@ -2601,10 +2722,22 @@ the spec pull request's range above still blocks review.
   - a compiled parent binary in the run directory whose mode is not 0500;
   - a helper outside the run directory it was given, a helper whose mode is not 0500, and
     a run directory whose mode is not 0500;
-  - an output directory holding an entry other than `.run`; one whose mode is not 0700; and
+  - an output directory holding an entry other than `.run`; one whose mode is not 0700;
     one whose `.run` is not the run directory the parent was handed — a decoy `.run`
-    beside an equally well-built run directory somewhere else — which is the containment
-    check R5 adds now that the run directory lives in the output root.
+    beside an equally well-built run directory somewhere else; one whose only entry `.run`
+    is a **symlink** to a real, correctly built, correctly moded run directory elsewhere,
+    which is the case a `realpath` comparison passes and the `fstatat(out_fd, ".run", …,
+    AT_SYMLINK_NOFOLLOW)` plus `S_ISDIR` test refuses (R5) — the directory it points at is
+    built exactly the way every other group-2 case builds one, so the link is the only
+    thing that distinguishes it from a run that should succeed, which is what makes the
+    case a test of the containment rule rather than of a broken fixture; and one whose only
+    entry `.run` is a regular file, the non-directory half of the same test. Those two
+    assert more than the `E_RUNTIME` line and the non-zero exit: they assert the parent
+    touched nothing — no `home`, no `tmp`, no `child.stdout`, no `child.stderr`, in the
+    output directory or in the run directory the link points at, whose entry set is exactly
+    what the test built. The last three of these five are the containment check R5 adds now
+    that the run directory lives in the output root; the first two are the entry-set and
+    mode halves of the same output-directory rule.
 
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
   if a check is ever quietly left to the entry. Every refusal in this group happens before
@@ -3286,8 +3419,13 @@ Order, each step checkable before the next:
    the run directory as a further argument and add the R5 checks, including the helper's
    run-directory and mode-0500 checks, the output-directory rule that admits exactly a
    `.run` entry and requires it to be the run directory the parent was handed — which
-   re-checks on an opened descriptor what the entry already refused by path (R1, R5) — and
-   the check order R5 fixes (length guard, then the output directory, then the sandbox
+   re-checks on an opened descriptor what the entry already refused by path (R1, R5), and
+   which proves that last fact by `fstatat(out_fd, ".run", …, AT_SYMLINK_NOFOLLOW)` with an
+   `S_ISDIR` test and then equal `st_dev`/`st_ino` off two `fstat`s, never by comparing
+   `realpath` answers, with the listing done by `fdopendir` on a `dup` of that descriptor
+   (R5) — and
+   the check order R5 fixes (length guard, then the output directory with its identity
+   comparison, then the helper and run-directory checks, then the sandbox
    creation) — checks that the test script performs today or cannot perform at all.
    Every mode and ownership check is done with `fstat` on a descriptor
    the parent opened (`O_DIRECTORY|O_NOFOLLOW` for the run directory), never with `stat`
@@ -3714,7 +3852,16 @@ intent says for this change. Only after the operator's merge does
   into the parent; inherited descriptors above 2 are
   closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
   the helper's run-directory and mode-0500 checks are new code with no counterpart in
-  the test launcher, which simply trusts the path the test script hands it; the blob pins
+  the test launcher, which simply trusts the path the test script hands it — and that item
+  grows this round rather than an eleventh being added, because the output directory's
+  `.run` rule is the same new block read from the other side: the entry is admitted by
+  `fstatat(out_fd, ".run", …, AT_SYMLINK_NOFOLLOW)` with an `S_ISDIR` test and then proved
+  identical to the handed run directory by `st_dev`/`st_ino` off two `fstat`s, where the
+  launcher has no `realpath`, no `fstatat`, no `openat` and no `O_DIRECTORY` anywhere in
+  its 702 lines (verified: none of those four names appears in the file, and its only
+  `O_NOFOLLOW` uses are the two `open` calls at `:86,120` and the two at `:418-420`, with
+  `:30-31` defining the flag to `0` when the platform lacks it), so there is nothing there
+  to copy and the whole check is written fresh (R5); the blob pins
   for the runtime, `scripts/lib/profile-resolution.sh` and
   `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
