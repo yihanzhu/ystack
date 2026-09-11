@@ -144,7 +144,15 @@ measured rather than guessed:
   SHA-256 tool and the jq probe — passing it in place of `environ`, which is one argument
   each and free if the plan factors the helper fork the way it factors the reap (~3).
   Nothing is added for `execv`/`execvp`/`execlp`: they are absent already, and keeping
-  them absent is a grep in R10, not a line in the parent (R2, R7).
+  them absent is a grep in R10, not a line in the parent (R2, R7). This round adds ~3
+  more, to **~1154**: the `sigprocmask(SIG_BLOCK, &three, &saved)` and
+  `sigprocmask(SIG_SETMASK, &saved, NULL)` that bracket the `runtime-pgid:` line's own
+  `fcntl`/`write(2)`/`fcntl`, plus the local for the saved mask — the signal set itself is
+  the one the fork and reap blocks already build, so it is two calls and a variable, and
+  free if the plan factors the best-effort write the way it factors the fork and the reap.
+  The handler's line needs none of it, its `sa_mask` already covering its own toggle, and
+  no other write in the parent touches `F_SETFL` at all, so the rule reaches exactly one
+  site today (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -243,8 +251,13 @@ measured rather than guessed:
   `done` (R1). ~4 are the job-table gate in the wait loop: the `case " $(jobs -l) "` line,
   its `Running` arm, the `;;` and the `esac` wrapped around the `kill` that was already
   there, plus the `if`/`break` for the not-interrupted branch moving to the top of the
-  body, which is the same statements re-ordered and costs nothing of its own (R1).
-- **Focused test ~1021 lines.** For scale, the existing resolution test is 746 lines and
+  body, which is the same statements re-ordered and costs nothing of its own (R1). This
+  round adds ~3 more, to **~433**: the `if [ -t 2 ] || [ -f /dev/fd/2 ] ||
+  [ -c /dev/fd/2 ]` and its `fi` around the `EXIT` trap's one `printf` (~2), and the
+  comment saying why a pipe is omitted rather than written to, which is the one line that
+  stops a later reader deleting the condition as redundant (~1). The `printf` itself was
+  counted rounds ago and only gains an indent (R1).
+- **Focused test ~1033 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
@@ -270,7 +283,7 @@ measured rather than guessed:
   untouched target), the group-3 runtime refusal (~10),
   the R3 polluted
   environment run plus the Linux `/proc/<pid>/environ` allowlist assertion (~25), the
-  five signal cases — the mid-run one with its live read of the entry's stderr for the
+  five of the six signal cases — the mid-run one with its live read of the entry's stderr for the
   parent's `runtime-pgid` line, its `SIGSTOP` freeze and its group assertions (~40), the
   repeated-signal one that runs the mid-run case again and sends a second `SIGTERM`, and
   in a variant a `SIGINT`, 100 ms after the first — the second signal, the sampler that
@@ -324,19 +337,27 @@ measured rather than guessed:
   and what the marker file may hold; and the mid-run case's pipe variant at ~10 — the
   pipe, the background reader, the `dup` the test keeps, the rerun of the case body,
   and the `fcntl` probe, of which the probe is ~5 of C compiled beside the marker
-  library and the rest is shell (R2, R7).
+  library and the rest is shell (R2, R7), and this round's sixth signal case (~12): the
+  pipe, the fill-to-`EAGAIN` mode added to that same C probe (~3 — it already sets and
+  reads flags on descriptor 3, so filling is a loop and an `errno` test rather than a new
+  program), the entry run with the write end as its stderr, the `.run` poll and the
+  `SIGTERM` reused from the pre-parent case, the bounded-timeout wait, and the three
+  assertions — `143`, an empty output directory, and no `entry-signal:` line in what the
+  test drains off the read end afterwards (R1, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2662 lines. The range above is not re-derived from
+Those four bullets now sum to about 2680 lines. The range above is not re-derived from
 that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
 both ends, and every round since has recorded its own delta against that figure rather
-than moving the range for it. This round's ~33 is ~8 in the parent and ~25 in the test —
-the entry gains nothing, both findings being about children the parent forks and a
-descriptor it was handed — and it takes the sum to about 10% above the ~2420, still
+than moving the range for it. This round's ~18 is ~3 in the parent, ~3 in the entry and
+~12 in the test — the first round in several to touch all three, because its two findings
+are the same rule applied on both sides of the process boundary — and it takes the sum to
+about 11% above the ~2420, still
 inside the ±15%
 the range expresses, so the implementation range stands where it was. The round before
-this one added ~4, all in the parent, and took the sum to about 9%.
+this one added ~33, ~8 in the parent and ~25 in the test, and took the sum to about 10%;
+the one before that added ~4, all in the parent, and took it to about 9%.
 It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
@@ -477,7 +498,10 @@ predecessor left
 incomplete on one line. ~2 in the parent: the `runtime-pgid:` line gets the same two
 `fcntl` calls and the same single unchecked `write(2)` the handler's line got, and it moves
 out of the blocked-signal region to after the `sigprocmask(SIG_SETMASK, …)` — a move that
-costs nothing, being the same statements in a different order. Nothing in the entry: the
+costs nothing, being the same statements in a different order. (Round 33 adds a second and
+much shorter block around that line's own three statements. The position this paragraph
+records is unchanged — the line still stands outside the fork region — and what round 19
+ruled out was a *blocking* write in a blocked region, which this is not.) Nothing in the entry: the
 fix there was to a sentence in R2 that summarised the forwarded branch in the wrong
 order, and R1, which owns the branch, already stated the right one, so no shipped statement
 moved. Nothing in the test either, and that was checked rather than assumed: the one case
@@ -646,7 +670,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 6415 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 6767 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -748,16 +772,22 @@ on a descriptor none of the three own alone, beside every helper the parent runs
 the resolver exists — the two digest tools and the jq probe — `execve`d with a fixed
 two-variable environment instead of the caller's, so a `PERL5LIB` aimed at Darwin's
 perl-script `shasum` can no longer run the caller's code inside the tool whose answer
-decides whether the pins hold).
-**Evidence-based range for this spec pull request: 5453-7377 lines** — the measured
-6415 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+decides whether the pins hold, and this round the parent's one flag-toggling diagnostic
+outside a handler performed with the three signals blocked, so a handler that fires
+between the set and the restore can no longer save the toggled flags, restore them as the
+original and leave a shared descriptor non-blocking behind it, beside the entry's own
+diagnostic omitted wherever bash cannot write it without the risk of never returning, so
+a caller who pipes stderr into a reader that is not draining gets the `128 + signal` exit
+this path promises rather than a finished cleanup and a hung entry).
+**Evidence-based range for this spec pull request: 5752-7782 lines** — the measured
+6767 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153, then 5448, then 5897, then 6140; where each block of
+5023, then 5153, then 5448, then 5897, then 6140, then 6415; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1402,7 +1432,10 @@ process. It is a property of the open file description, which the parent shares 
 entry that started it and with whatever started the entry, so the parent exiting leaves
 the flag exactly where it put it and the entry's `EXIT` trap writes its `entry-signal:`
 line through it afterwards; on a pipe, that is a truncated line and a caller whose own
-writes start failing. The restore is required unconditionally, including after a write
+writes start failing. (Round 33 withdraws the first half of that example: the entry now
+omits its line entirely when stderr is a pipe, so what a left-set flag breaks there is the
+caller's own writes, which was always the stronger half. The conclusion is unchanged and
+R2 now rests it on the caller alone.) The restore is required unconditionally, including after a write
 that failed, and the `runtime-pgid:` line's own restore — which was justified narrowly, by
 the parent still being alive — is re-justified on the same wider ground. About 90 go to
 R7's fixed `envp`. The three children the parent forks before the resolver exists — a
@@ -1435,13 +1468,62 @@ an eleventh deviation being added — with the launcher verified to contain no `
 arrays — the accepted-concern list at the top, and the re-derived size figures here and
 for the implementation.
 
+This round is +352 net over two P2s, and they are one rule reaching the two sides of the
+process boundary: a diagnostic must be *incapable* of blocking, and putting it last is
+not the same thing. About 85 go to R2's `runtime-pgid:` line. The line was already
+non-blocking and already outside the fork region, and what was missing is that the
+`F_SETFL` toggle around it is itself a window: a handler firing between the set and the
+restore reads `flags | O_NONBLOCK`, takes that for the original, restores it before its
+`_exit`, and leaves the flag on a description the entry and the caller share — the round
+before this one's fix defeated through the one path that fix cannot see. The write now
+runs between a `sigprocmask(SIG_BLOCK, …)` and its restore, and most of those lines are
+reconciling that with round 19, which moved this line *out* of a blocked region: the
+hazard there was a `write_all` that can wait, the write here returns immediately, the
+line's position has not changed, and the rule that covers both is written down once —
+no blocking write inside a blocked region, no shared-flag toggle outside one. The
+enumeration behind the claim that the rule reaches one site is written down too, because
+"apply this everywhere" is worth nothing without a list: two flag-toggling writes in the
+parent, the handler's already held by `sa_mask`, every other stderr write going out
+through the copied `write_all` and touching no flag. About 155 go to the entry's line.
+The finding is that the `EXIT` trap's `printf` can hang forever on a full undrained pipe,
+and that the sentence this spec used to close that question — written last, "a hung write
+can only delay the exit status" — is simply wrong: a `printf` that never returns means
+the entry never reaches `128 + signal` and the caller's `wait` never returns either, with
+the cleanup already done and the whole promise of the path unkept for the sake of a
+courtesy. Bash 3.2 cannot set `O_NONBLOCK`, so there is no version of the parent's fix to
+copy, and the decision is to write the line only where a write cannot block — a terminal,
+a regular file, a character device — and omit it on a pipe, a FIFO or a socket. Most of
+those lines are what makes that a decision rather than a hunch: the measured table of
+what `[ -t 2 ]`, `-f /dev/fd/2` and `-c /dev/fd/2` answer for each of seven kinds of
+stderr, the argument that the condition is a whitelist so an unrecognised object omits
+rather than writes, the measurement that an unconditional `printf` into a 65536-byte
+full pipe had not returned after five seconds while the guarded one exited `143` in
+0.01 s, the cost stated plainly (a draining pipe loses the line too, and no test can tell
+a draining pipe from a full one without performing the write that is the hazard), and the
+statement that this is the one rule the two shipped files do not share. About 55 go to
+R10: the sixth signal case with its pre-filled pipe and its three assertions, the
+reading of the parent's six statements added to the proof-by-reading list, and the
+re-check of the cases that already assert the entry's line — all of which read it from a
+plain file, which was a readability choice and is now load-bearing, said here rather than
+left to be discovered by moving one of them onto a pipe. The remaining ~57 are the
+ripples and the bookkeeping: R2's restore justification withdrawing the half of its
+example the omission rule invalidates and resting on the caller instead, R2's
+two-lines-compose paragraph, R1's `EXIT` trap step list and its reading note on the
+"one `entry-signal:` line" shorthand used elsewhere, Design steps 1 and 2, the
+Copy-versus-adapt handler and `runtime-pgid:` items growing rather than new deviations
+being added, the Areas-of-concern diagnostics bullet, round 19's and round 32's
+accounting paragraphs marked where each recorded something this round narrows, the
+accepted-concern list at the top, and the re-derived size figures here and for the
+implementation, whose range does not move because the round's ~18 leaves the sum at about
+11% of the ~2420 it is derived from.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 5453-7377 lines**, which is this file's measured
-6415 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 5752-7782 lines**, which is this file's measured
+6767 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1581,12 +1663,15 @@ the spec pull request's range above still blocks review.
   `trap '' INT TERM HUP`, which is the second statement of the trap body and stands ahead
   of every external command in it;
   then, **if `run_created` is set**, `chmod 0700` the run directory and remove it and
-  everything in it; then, **if `entry_signal` is set**, write the one `entry-signal:` line
+  everything in it; then, **if `entry_signal` is set and stderr is a kind of object a
+  write cannot block on**, write the one `entry-signal:` line
   described below to the entry's own stderr; then exit. The
   `chmod` is a harmless no-op when the signal arrives before the mode pass, while the
   directory is still 0700. With `run_created` unset the trap touches nothing on disk, which
   is the normal case for a refusal that happens before the directory exists. With
-  `entry_signal` unset it writes nothing, which is every non-signal exit.
+  `entry_signal` unset it writes nothing, which is every non-signal exit. With stderr on a
+  pipe, a FIFO or a socket it writes nothing either, and the block below says why that
+  second condition exists and what it costs.
 
   **The `trap ''` line is there for the `chmod` and the `/bin/rm`, not for the shell, and
   saying why makes clear that recording is not enough here.** Everywhere else in this entry
@@ -2113,8 +2198,10 @@ the spec pull request's range above still blocks review.
   observable rather than inferred from what it left behind.** Both branches end with the run
   directory gone, and "gone" is not enough to tell them apart: an empty output directory is
   equally consistent with no parent ever existing and with a parent that started and had not
-  yet created its sandbox. So the `EXIT` trap writes exactly one line, and only when
-  `entry_signal` is set — an exit with no signal behind it writes nothing:
+  yet created its sandbox. So the `EXIT` trap writes exactly one line, and only when two
+  things are both true: `entry_signal` is set, so an exit with no signal behind it writes
+  nothing, and the entry's stderr is a kind of object a write to it cannot block on, which
+  the block after this one states, measures and justifies:
 
   ```
   entry-signal: <NAME> no-parent
@@ -2131,10 +2218,110 @@ the spec pull request's range above still blocks review.
   That ordering is deliberate and it is the same rule the parent's handler follows: bash's
   `printf` writes to whatever descriptor the caller gave the entry as stderr, and a write
   to a full pipe blocks, so a line written first could hang the entry with the parent still
-  alive and the run directory still on disk. Written last, a hung write can only delay the
-  exit status; it can never delay the cleanup or the forward. Nothing is lost for the test
-  that asserts the line, because R10 reads it from a plain file in the test's own scratch,
-  where a write cannot block. It does not conflict with this requirement's claim that the entry passes the
+  alive and the run directory still on disk. Written last, it cannot delay the cleanup or
+  the forward.
+
+  **Last position is necessary and it is not sufficient, and the sentence that said it was
+  is withdrawn here.** An earlier round of this spec finished the argument above with "a
+  hung write can only delay the exit status", and that is too kind to it by one word. A
+  `printf` into a pipe that is full and that nobody is draining does not return at all.
+  The entry therefore never reaches its own `exit`, so the `128 + signal` this requirement
+  promises is never produced, and the caller's `wait` on the entry never returns either:
+  the run directory is gone, the resolver is dead, everything this path exists to
+  guarantee has already happened, and the caller is hung on a courtesy. Position fixes the
+  ordering. It does nothing about the block. So the line is conditional as well as last.
+
+  **The entry writes the line only where a write cannot block, and omits it everywhere
+  else.** The parent has a clean answer to this and the entry cannot use it: the parent
+  sets `O_NONBLOCK` for one `write(2)` and accepts a short write (R2), and bash 3.2 has no
+  way to set a file status flag on a descriptor at all — no `fcntl` builtin, no flag on
+  `printf`, and no redirection form that reopens an inherited descriptor non-blocking. So
+  the entry cannot make the write safe and must instead decline to make it when it is not.
+  It asks what stderr is:
+
+  ```
+  if [ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]; then
+      printf 'entry-signal: %s no-parent\n' "$entry_signal" >&2   # or the forwarded form
+  fi
+  ```
+
+  A terminal, a regular file and a character device are the three kinds of stderr whose
+  write completes without anyone on the other end: a tty consumes what is sent to it, a
+  regular file is written by the kernel with no reader in the picture, and `/dev/null` and
+  its relatives discard. A pipe, a FIFO or a socket is the case that can wait forever, and
+  there the line is omitted. Nothing else changes — the branch is still decided, the
+  status is still `128 + signal`, the chmod and the removal still ran before this point.
+
+  **The `/dev/fd/2` tests had to be measured rather than assumed, because the question is
+  whether they see the underlying object or the `/dev/fd` entry itself.** Measured,
+  bash 3.2.57 on `arm64-apple-darwin` (`Darwin 27.0.0`), one probe run per kind of stderr:
+
+  ```
+  stderr is         [ -t 2 ]  -f /dev/fd/2  -c /dev/fd/2  -p /dev/fd/2  -S /dev/fd/2
+  regular file         no         yes            no            no            no
+  /dev/null            no         no             yes           no            no
+  tty (pty)            yes        no             yes           no            no
+  pipe                 no         no             no            yes           no
+  FIFO                 no         no             no            yes           no
+  unix socket          no         no             no            no            yes
+  closed (2>&-)        no         no             no            no            no
+  ```
+
+  Every row resolves to the underlying object, which is what the rule needs. On Linux
+  `/dev/fd` is a symlink to `/proc/self/fd` and the tests follow it to the same objects;
+  the plan re-measures there rather than inheriting this table, and R10's suite runs on
+  both platforms, so both are exercised.
+
+  **The condition is a list of three safe answers and not a list of unsafe ones, and that
+  is the whole of its safety argument.** Anything the three tests do not recognise —
+  the socket row, a closed descriptor, a platform whose `/dev/fd` is absent or answers
+  something nobody predicted — falls to the `else` and omits. So the worst outcome of a
+  wrong guess about an object this spec did not enumerate is a missing courtesy line, and
+  never a hung entry. Getting that the other way round, with a blacklist of pipes and
+  sockets, would make every unanticipated object a write.
+
+  **Measured, so the rule is not an argument about what ought to happen.** On the same
+  bash: with the entry's stderr on a pipe pre-filled to capacity (65536 bytes on
+  `Darwin 27.0.0`, filled by a non-blocking writer until `EAGAIN` and then left, with the
+  read end open and never read), the unconditional `printf` never returns — the shell was
+  still alive five seconds later and had to be killed — while the same body under the
+  condition above exits `143` in 0.01 s, having written nothing. That is the failure and
+  the fix, one command apart.
+
+  **What is given up is named.** A caller who pipes the entry's stderr to a reader gets no
+  `entry-signal:` line, even when the reader is draining it and the write would have gone
+  straight through. No test can separate those two cases without performing the write that
+  is the hazard, so the conservative half is taken. It is the same trade the parent's line
+  already makes and is accepted for the same reason: the exit status and the cleanup are
+  what this requirement guarantees, and the line is a courtesy that says which branch
+  produced them (R9). The branch stays observable wherever anyone is positioned to read a
+  diagnostic at all — a terminal, or a file, which is where a caller that wants the line
+  should put stderr.
+
+  **The two halves of this component differ in exactly this one rule, and it is worth
+  saying so rather than leaving a reader to wonder why the parent has no such condition.**
+  The parent writes `runtime-pgid:` and `parent-signal:` from C, where `O_NONBLOCK` plus a
+  single `write(2)` makes the write itself incapable of waiting, so it writes on every kind
+  of stderr and accepts a truncated line or no line on a full pipe (R2). The entry writes
+  from bash, which cannot set the flag, so it decides by the kind of object and writes
+  nothing where the parent would have written best-effort. The guarantee is identical on
+  both sides — no diagnostic ever delays or prevents the termination — and only the means
+  differ, because the two languages have different tools for the same problem.
+
+  One reading note, so the condition does not have to be repeated at every mention.
+  Everywhere else in this spec — the checkpoints above, the three-step command rule, R2's
+  summary of the forwarded branch, R10's assertions — the shorthand "`128 + signal` and
+  the one `entry-signal:` line" appears. Read it with this condition attached: one line on
+  a stderr that can take one, and none on a stderr that cannot. The status half of that
+  shorthand is unconditional and is the half anything ever depends on.
+
+  Nothing is lost for the tests
+  that assert the line, and this is now load-bearing rather than incidental: R10 reads it
+  from a plain file in the test's own scratch in every case that asserts it, a regular file
+  is the first of the three kinds that write, so every one of those assertions stands
+  exactly as written. R10 also adds the case that proves the omission rule keeps the exit
+  promise — the entry signalled with its stderr on a full, undrained pipe, required to exit
+  `143` with `.run` gone. It does not conflict with this requirement's claim that the entry passes the
   child's stdout and stderr through unchanged: this is the entry's own line on the entry's
   own stderr, not a byte added to or removed from anything a child wrote — exactly the
   distinction the parent's line already relies on. R10's command-word allowlist is
@@ -3204,12 +3391,23 @@ the spec pull request's range above still blocks review.
   at one flag through descriptors of their own. The parent exiting takes its descriptor
   away and leaves the flag exactly as it set it. That matters on this path and nowhere
   else, because stderr here is inherited rather than opened: after the parent exits, the
-  entry's `EXIT` trap still writes its `entry-signal:` line to that same stderr and the
-  caller goes on using it afterwards (R1). If stderr is a pipe, a flag the parent left
-  behind turns those later writes into `EAGAIN`s and short writes the moment the pipe is
-  full — a truncated or missing `entry-signal:` line, and a caller whose own output starts
-  failing — which is the entry's diagnostic contract broken by the parent's convenience,
-  and on a descriptor the parent never owned. So the handler restores, and the restore is
+  entry writes on that same stderr and the caller goes on using it afterwards (R1).
+
+  **Which of those two the argument rests on changed this round, and the weaker half is
+  withdrawn rather than quietly kept.** The round that added this restore reached first
+  for the entry's own `entry-signal:` line: a flag left set turns that write into a short
+  write on a full pipe, so the entry's diagnostic contract is broken by the parent's
+  convenience. That example is gone. R1 now has the entry **omit** that line entirely when
+  stderr is a pipe, a FIFO or a socket, precisely so a bash `printf` cannot hang on one, so
+  a flag the parent left behind cannot truncate a line the entry is no longer writing
+  there. What survives is the half that was always the stronger of the two, and it is
+  enough on its own: **the caller**. Stderr is the caller's descriptor, handed in and
+  handed back; a flag the parent left set turns the caller's own later writes into
+  `EAGAIN`s and short writes the moment the pipe is full, and nothing entitles a program
+  the caller invoked to change the mode of a descriptor it owns and walk away. R10's pipe
+  variant asserts the flag on the test's own `dup` rather than the entry's line for exactly
+  this reason, which is why that case needs no rewriting now that the line it might have
+  asserted is not written on a pipe at all. So the handler restores, and the restore is
   made **unconditionally, including when the write failed or wrote nothing**, because the
   flag was set whatever the write did; it is the same single `fcntl` either way. It costs
   the termination nothing measurable: `fcntl` on the process's own descriptor neither
@@ -3255,7 +3453,12 @@ the spec pull request's range above still blocks review.
   `entry-signal: <NAME> forwarded <pid>` before exiting with the parent's status. The
   diagnostic is last there for the same reason it is last here: bash's `printf` to a stderr
   nobody is draining can block, and a line written first could hold up the forward the
-  parent is waiting for and the cleanup it exists to describe (R1). What this block adds is
+  parent is waiting for and the cleanup it exists to describe (R1). *Whether* it is written
+  at all is the one rule the two halves do not share, and R1 states it: the parent can make
+  its write non-blocking and so writes on every kind of stderr, the entry cannot and so
+  writes only where a write is incapable of blocking, omitting the line on a pipe, a FIFO
+  or a socket. Same guarantee, two languages, one difference in how it is reached.
+  What this block adds is
   that a forward landing in the pre-fork
   window now ends cleanly rather than ambiguously: the parent kills at most its own one
   pre-resolver child, then writes `parent-signal: TERM no-runtime`, and exits
@@ -3275,7 +3478,8 @@ the spec pull request's range above still blocks review.
   supervisor already does from the parent side (`:450`), the `pgid` assignment, and the
   `sigprocmask(SIG_SETMASK, &saved, NULL)` that ends the blocked-signal region those three
   sit in — **outside** that region, deliberately, for the reason the region's own block
-  gives above — and before it enters the poll loop, the parent writes exactly one line to
+  gives above, and under a short block of its own, for the reason two blocks below — and
+  before it enters the poll loop, the parent writes exactly one line to
   its own stderr:
 
   ```
@@ -3302,6 +3506,64 @@ the spec pull request's range above still blocks review.
   a non-blocking full pipe that loop is a spin rather than a write — nor a buffered
   `fprintf`, so the line is on the descriptor before the poll loop starts and a reader
   watching stderr sees it while the resolution is still running.
+
+  **Those calls run with `INT`, `TERM` and `HUP` blocked, and the block is part of the
+  sequence rather than a precaution wrapped around it.** The whole write is six statements
+  in this order and no other:
+
+  ```
+  sigprocmask(SIG_BLOCK, &three, &saved)
+  fcntl(STDERR_FILENO, F_GETFL, 0)                    -> flags
+  fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK)
+  write(STDERR_FILENO, buf, len)                      -> ignored
+  fcntl(STDERR_FILENO, F_SETFL, flags)
+  sigprocmask(SIG_SETMASK, &saved, NULL)
+  ```
+
+  The reason is the window between the third statement and the fifth. If one of the three
+  signals arrives in there, the handler runs, and the handler's own first act on stderr is
+  to read the flags so it can put them back before its `_exit` (above). What it reads is
+  the toggled value — `flags | O_NONBLOCK` is what is on the open file description at that
+  instant — so it takes the parent's half-finished edit for the original state, restores
+  *that*, and exits. The parent's own fifth statement never runs, because the handler does
+  not return. The flag the parent set for one line is then left set on a description the
+  entry and the caller share, which is precisely the failure the handler's restore exists
+  to prevent, arriving by the one route the restore cannot see: the restore is correct
+  about what it saved, and what it saved was wrong. Blocking the three across the sequence
+  closes it. No handler can run between the set and the restore, so the flags any handler
+  saves are always flags the parent was not part-way through changing, and the parent's own
+  restore always runs.
+
+  **This does not reintroduce what round 19 fixed, and the difference is which write is
+  inside the region.** Round 19 took this line *out* of the fork-publication block for a
+  real reason, which that block still states: a `write_all` in there can wait forever on a
+  full pipe, and a parent waiting inside a region where no handler can run is a parent that
+  never terminates its group. Two things are different here. The write is not that write —
+  it is one non-blocking `write(2)` that returns at once with a short count or `EAGAIN`,
+  never waiting for a reader, so nothing in these six statements can wait for anything.
+  And the region is not that region — the line still stands **outside** the fork block,
+  after the `sigprocmask(SIG_SETMASK, …)` that ends it, exactly where round 19 put it;
+  what it gains is a second, much shorter block that spans only its own three `fcntl`/
+  `write` statements. The rule the two rounds share is worth stating once so a plan does
+  not have to infer it from two decisions that look opposed: **no write that can block goes
+  inside a blocked-signal region, and no toggle of a shared file status flag goes outside
+  one.** Both lines of this component satisfy both halves.
+
+  **The rule is general, and the enumeration behind that claim is written down rather than
+  implied.** Every non-handler write the parent makes that toggles stderr's flags gets the
+  same six statements. Reading this spec for the three markers — `O_NONBLOCK`, `F_SETFL`
+  and a single unchecked `write(2)` — finds exactly two flag-toggling writes in the whole
+  parent, and this is the only one of them outside a handler. The other is the handler's
+  own `parent-signal:` line, which needs no `sigprocmask` of its own and is already
+  covered: each of the three `sigaction` installations carries an `sa_mask` of all three
+  signals (above), so the mask is held for the entire handler body, its `F_GETFL`, its
+  write and its `F_SETFL` included, and a sibling signal cannot re-enter it mid-toggle.
+  Every other stderr write the parent makes changes no flag at all — the `E_*` refusal
+  lines, the usage text, and the child's relayed bytes through `sanitized_error`
+  (`:118-165`) all go out through the copied `write_all` (`:164`) — so none of them is
+  inside this rule, and none of them needs to be. What the rule is for is the next one: a
+  plan that adds a flag-toggling diagnostic anywhere in the parent writes it the same six
+  ways, and R10 reads for that rather than for this one line.
 
   **Say plainly what that costs.** Because the write is best-effort, a caller draining
   stderr through a pipe that happens to be full at that moment can get a truncated line, or
@@ -5328,7 +5590,7 @@ the spec pull request's range above still blocks review.
   reviewer checks that all three `sigaction` calls set `sa_mask` to `SIGINT`, `SIGTERM` and
   `SIGHUP` and leave `SA_RESTART` unset, because a sibling signal re-entering a handler
   that is part-way through the kill and the reap is the other way this state can be raced,
-  and no test can put one there on demand either (R2). The five
+  and no test can put one there on demand either (R2). The six
   signal cases above
   are unchanged by the mask and must still pass exactly as written, which is the other
   half of the check: the mask changes *when* a pending signal is delivered, never which
@@ -5364,13 +5626,25 @@ the spec pull request's range above still blocks review.
   tools and the jq probe, R3's for the resolver child (R7). That one is on the list rather
   than in a case because the polluted-helper case above can only prove the variables it
   thought to set, where the grep covers the ones nobody has thought of yet.
+  **One more joins the list this round, and it is six consecutive statements in one
+  function.** The reviewer reads that the parent's `runtime-pgid:` write is
+  `sigprocmask(SIG_BLOCK, …)`, `fcntl(F_GETFL)`, `fcntl(F_SETFL, flags | O_NONBLOCK)`, one
+  `write(2)`, `fcntl(F_SETFL, flags)`, `sigprocmask(SIG_SETMASK, …)` in that order, with
+  nothing between the block and the restore that can wait on anything, and that the whole
+  sequence still stands *after* the fork region's own `sigprocmask(SIG_SETMASK, …)` rather
+  than back inside it (R2). It is a reading and not a case for the same reason the fork
+  and reap windows are: the failure needs a signal delivered in the few instructions
+  between two `fcntl`s, so a case aimed at it would pass by missing. The reviewer also
+  checks the rule behind it holds for the file as a whole — that the handler's own toggle
+  needs no `sigprocmask` because `sa_mask` already covers it, and that no other write in
+  the parent touches `F_SETFL` at all.
   The `kill -0` reading is on this list for the same reason the reaps are: the failure needs
   a signal to land in the instant between a reaping `wait` and the next statement, and a
   case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
   how the behaviour was established, and it is a measurement of the design rather than a
   case in the suite.
 
-  **The same is true of the diagnostics moving after the cleanup, and each of the five
+  **The same is true of the diagnostics moving after the cleanup, and each of the six
   cases was checked rather than assumed.** R2's handler and R1's `EXIT` trap write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
   the assertions above are worth re-reading in that order. This round's redesign of the
@@ -5389,7 +5663,13 @@ the spec pull request's range above still blocks review.
   `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the `EXIT` trap
   writes that line after the chmod and the removal and still before its `exit`, and the case
   already reads the file only after the entry has exited; the plain file it reads is also
-  why that last-position write cannot hang here at all (R1). The group-signal case added
+  why that last-position write cannot hang here at all, and — since this round — why the
+  line is written in this case rather than omitted, a regular file being the first of the
+  three kinds R1's condition admits (R1). That is true of every case above that asserts
+  the line, all of which redirect the entry's stderr into a plain file in the test's own
+  scratch; the choice was made for readability and now carries a second load, which is
+  stated here rather than left for someone to discover by moving one of them onto a pipe.
+  The new full-pipe case below is the deliberate opposite and asserts the absence. The group-signal case added
   this round reads the same line out of the same kind of plain file and the same sentence
   covers it; its extra assertion is a negative one, about an `E_RUNTIME` line the entry
   must never write on a signal path, which no ordering of the diagnostics can affect.
@@ -5435,7 +5715,45 @@ the spec pull request's range above still blocks review.
   surviving `dup`, measured on `Darwin 27.0.0`. The variant asserts nothing else: the
   `runtime-pgid:` read, the `SIGSTOP` freeze and the group assertions stay on the
   plain-file variant they already work on, where a non-blocking write can neither block
-  nor fail.
+  nor fail. Its assertion is untouched by R1's omission rule this round, and that was
+  checked rather than assumed: the variant asserts the *flag* on the test's own `dup`, not
+  a line, so the entry writing no `entry-signal:` line into that pipe changes nothing it
+  looks at.
+
+  **A sixth signal case puts the entry's stderr on a full pipe, and it is the case that
+  proves the omission rule rather than the line.** R1 has the entry omit its
+  `entry-signal:` line when stderr is a pipe, a FIFO or a socket, because a bash `printf`
+  into an undrained pipe never returns and the entry would then never reach the
+  `128 + signal` exit that is the actual promise. A case is owed for that, and it has to
+  be the hostile version: a pipe nobody reads *and that is already full*, because an empty
+  pipe takes a short line without blocking and would pass on the broken entry as readily
+  as on the fixed one — the same trap the pipe variant above avoids, in the other
+  direction.
+
+  So the test makes a pipe, keeps the read end open and never reads it, and fills it to
+  capacity with a writer that then exits: the writer sets `O_NONBLOCK` on its own copy of
+  the write end and writes until `EAGAIN`, which is the portable way to fill a pipe to
+  whatever that platform's capacity happens to be, and is a mode added to the same small C
+  probe the pipe variant already compiles rather than a second program. Capacity is
+  measured and not assumed — 65536 bytes on `Darwin 27.0.0`, measured the same way, and
+  the same at every write size from 1 byte to 65536 — and the plan measures Linux beside
+  it, though nothing in the case depends on the number: it fills until the kernel says
+  full. Then it runs the entry with that write end as stderr, polls the output directory
+  for `.run` the way the pre-parent case does, sends `SIGTERM`, and waits with the same
+  bounded timeout.
+
+  Three assertions. One: the entry exits `143`, inside the timeout — which is the whole
+  case, because an entry that writes unconditionally is still sitting in `printf` when the
+  timeout expires. Two: `.run` is gone and the output directory is completely empty, so
+  the omission bought the exit without costing the cleanup. Three: nothing the entry wrote
+  arrives in the pipe — the test drains the read end afterwards, past the filler bytes,
+  and requires no `entry-signal:` line, which is the positive check that the rule omitted
+  rather than that the write happened to fit. The behaviour under test was measured before
+  it was specified: on bash 3.2.57, `Darwin 27.0.0`, with a pipe pre-filled to 65536 bytes
+  and never drained, an unconditional `printf` to it had not returned after five seconds
+  and the shell had to be killed, while the same body guarded by
+  `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]` exited `143` in 0.01 s having written
+  nothing.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
@@ -5667,7 +5985,8 @@ Order, each step checkable before the next:
    runs between a `fork` and the publication of what it returned — and nothing else goes
    inside that region, the `runtime-pgid:` line being written after the restore rather than
    in there, because a stderr write that blocks with the three signals blocked would stop
-   the handler running at all; on the child's side the
+   the handler running at all (that line has a block of its own, which is a different
+   thing: a bounded sequence in which nothing can wait, R2); on the child's side the
    three dispositions are reset to `SIG_DFL` **first, while the three are still blocked**,
    with `SIGPIPE` reset beside them, and the same mask is restored only after that — the
    resets because the child runs C code before `execve` and a pending signal unblocked
@@ -5688,7 +6007,13 @@ Order, each step checkable before the next:
    `pgid` assignment and the mask restore — **outside** the blocked-signal region, and
    best-effort in the same way the handler's line is, with stderr made non-blocking for one
    `write(2)` and the saved flags put back by a second `fcntl` afterwards, and a short write
-   or `EAGAIN`/`EPIPE` ignored — and before the poll loop, so a reader can
+   or `EAGAIN`/`EPIPE` ignored, the whole `fcntl`/`write`/`fcntl` sequence run between a
+   `sigprocmask(SIG_BLOCK, &three, &saved)` and its matching
+   `sigprocmask(SIG_SETMASK, &saved, NULL)` so that no handler can fire mid-toggle, save
+   the non-blocking flags as the original and restore them as such — the rule being that
+   no blocking write goes inside a blocked region and no toggle of a shared file status
+   flag goes outside one, which every flag-toggling diagnostic the parent writes follows
+   (R2) — and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
    `E_RUNTIME` before the next. **The entry's own three statements, then the copied scrub
@@ -5809,7 +6134,12 @@ Order, each step checkable before the next:
    `entry-signal: <NAME> no-parent`, which is what R10's pre-parent case asserts — and it is
    the **last** step before the final exit, after the forward and after the removal, because bash's
    `printf` to a blocked pipe can hang and a diagnostic must not be able to delay the
-   cleanup or the forward (R1). No child of the entry's own is alive to race that removal because
+   cleanup or the forward; and it is written at all only when
+   `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]`, being omitted on a pipe, a FIFO or a
+   socket, because last position stops the write delaying the cleanup and does not stop it
+   hanging the entry short of the `128 + signal` exit and hanging the caller's wait with it
+   — bash cannot write non-blocking the way the parent's C can, so where the parent writes
+   best-effort the entry writes nothing (R1). No child of the entry's own is alive to race that removal because
    bash defers a trapped signal until the foreground command it is waiting on finishes,
    which also means the checkpoint can be reached up to one compile late — R1, R2;
    **then the pin check** — verify the jq passed as an argument
@@ -6081,6 +6411,25 @@ intent says for this change. Only after the operator's merge does
   handler's line goes out with one non-blocking `write(2)` whose failure is ignored, and the
   entry's `printf` is the last statement of its `EXIT` trap, before that trap's own `exit`.
 
+  This round takes both of those one step further, in the two places where "best-effort"
+  had been read as a property of *when* a write happens rather than of the write itself.
+  On the parent's side, the one flag-toggling diagnostic outside a handler — the
+  `runtime-pgid:` line — now sets and restores `O_NONBLOCK` with the three signals
+  blocked, because a handler firing between the set and the restore saves the toggled
+  flags, restores them as though they were the original, and `_exit`s, leaving the flag
+  set on a description the entry and the caller share; the handler's own line needed
+  nothing, its `sa_mask` already covering its whole body (R2). On the entry's side, last
+  position turns out not to be enough at all: bash has no way to write non-blocking, and a
+  `printf` into a full undrained pipe never returns, so the entry reaches neither its
+  `128 + signal` exit nor the caller's waiting `wait` — cleanup done, resolver dead,
+  caller hung on a courtesy. The entry therefore writes its line only where a write cannot
+  block (`[ -t 2 ]`, or a regular file or character device behind `/dev/fd/2`) and omits it
+  on a pipe, a FIFO or a socket (R1). The plan should carry the sharper rule: **a
+  diagnostic must be incapable of blocking, and where the language cannot make it so, it
+  is not written.** That is the one place the two shipped files legitimately differ, and
+  R10 covers each side its own way — a reading for the parent's six statements, a
+  full-pipe case for the entry's omission.
+
   One more thing about the entry's side belongs here, because it was a withdrawal rather
   than an addition. The entry's `INT`/`TERM`/`HUP` traps no longer
   do anything but record the signal's name; the forward, the cleanup, the diagnostic and
@@ -6252,7 +6601,9 @@ intent says for this change. Only after the operator's merge does
   first statements of `main`, so the diagnostic can never hold up the termination — and a
   `sigprocmask(SIG_BLOCK, …)` around every fork the parent performs with the matching
   `sigprocmask(SIG_SETMASK, …)` after the pid assignment and nothing else inside the region
-  with them — the `runtime-pgid:` line is written after that restore, not in there —
+  with them — the `runtime-pgid:` line is written after that restore, not in there, under a
+  second and much shorter block of its own that spans only its `fcntl`/`write(2)`/`fcntl`,
+  so a handler can never save the toggled flags as the original —
   and the same pair around every `waitpid` that can reap a tracked child, with the id set
   to `0` before the restore: each pre-resolver child's, and the copied supervisor's
   `:457`, `:493-494` and `:451-452`, the last of which is already inside the fork region —
@@ -6293,7 +6644,8 @@ intent says for this change. Only after the operator's merge does
   instead of inherited (R7). The ninth is this round's only change
   to the C file: the one `runtime-pgid: <n>` line the parent writes to its own stderr after
   the fork and after the mask restore, best-effort with the same non-blocking single
-  `write(2)` the handler's line uses, where the launcher writes nothing there and leaves the
+  `write(2)` the handler's line uses and with the three signals blocked across its two
+  `fcntl`s, where the launcher writes nothing there and leaves the
   resolver's process group unnamed, so anything downstream had to work it out from the
   process table (R2). The tenth is this round's only change to the C file: `umask(077)`
   among the first statements of `main`, where the launcher has no `umask` call anywhere in
