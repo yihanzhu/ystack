@@ -1,0 +1,76 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index bc7166a..b766c91 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -9,7 +9,7 @@ permissions:
+   contents: read
+ 
+ jobs:
+-  ci:
++  checks:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+@@ -93,14 +93,43 @@ jobs:
+             echo "no shell scripts yet"
+           fi
+ 
+-      - name: Test suite
++      - name: Sharding proof
+         run: |
+-          # Construction installs tests by filename; this fixed runner makes every
+-          # scripts/test/*.test.sh file part of required CI without workflow edits.
+-          bash scripts/test/run-all.sh
++          bash scripts/test/run-all-sharding.check.sh
+ 
+       - name: Rename gate
+         run: |
+           # Patrols tracked files for old names left over from the rename.
+           # Lines labeled legacy and scripts/test/ fixtures are exempt.
+           bash scripts/check-rename.sh
++
++  test:
++    runs-on: ubuntu-latest
++    strategy:
++      fail-fast: false
++      matrix:
++        shard: [1, 2, 3, 4, 5, 6]
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++
++      - name: Test suite
++        run: |
++          # Construction installs tests by filename; this fixed runner makes every
++          # scripts/test/*.test.sh file part of required CI without workflow edits.
++          bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
++
++  ci:
++    runs-on: ubuntu-latest
++    needs: [checks, test]
++    if: always()
++    steps:
++      - name: Gate
++        run: |
++          set -eu
++          echo "checks: ${{ needs.checks.result }}"
++          echo "test:   ${{ needs.test.result }}"
++          if [ "${{ needs.checks.result }}" != "success" ] \
++             || [ "${{ needs.test.result }}" != "success" ]; then
++            echo "ci gate FAILED"; exit 1
++          fi
++          echo "ci gate ok"
+diff --git a/AGENTS.md b/AGENTS.md
+index 8ed21e2..19ca4f6 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -84,7 +84,9 @@ Two goals drive the backlog:
+ - Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`; validators are
+   still to come.
+ - CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
+-  it is the hard merge gate.** Add real tests as code lands.
++  it is the hard merge gate.** Add real tests as code lands. Runs as a `checks` job,
++  six parallel `test` shards (`scripts/test/run-all.sh --shard <index>/<count>`), and
++  an aggregate `ci` job that is the one required check.
+   - **Shellcheck is pinned to `0.11.0`** (the `SHELLCHECK_VERSION` constant in
+     `ci.yml` is the single source of truth). CI downloads that exact static release and
+     verifies its release-asset SHA-256 and version before linting, so a runner-image bump
