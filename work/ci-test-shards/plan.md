@@ -1,0 +1,839 @@
+---
+spec-blob: 1d419e187315879e2bc52366b2be11a43b511ad4
+drafted: 2026-09-10
+---
+# Plan: ci-test-shards
+
+The spec (`work/ci-test-shards/spec.md`, blob above) is the contract and states all
+fourteen requirements in full. This plan says which files change, in what order,
+where in today's files, what can break, and how each requirement is proved. Where a
+step names a requirement id, that requirement's own wording is the detail to follow.
+Two of the seven files are constitution paths and are the operator's to commit;
+agents write only the proposed patch text for those.
+
+## Files that change
+
+Seven files, nothing else. Counts are net changed lines, honest estimates. The
+agent-authored files are listed in the order they are written, which is the order in
+Order of work below: the proof script comes before the runner, per Step 0.
+
+**Agent-authored, on `ystack/impl/ci-test-shards`:**
+
+- **`scripts/test/run-all-sharding.check.sh`** (new, ~230, mode `0755`). The focused
+  proof of R9, plus the shard-count equality assertion that guards R10. Its name ends
+  `.check.sh`, never `.test.sh`. Written and run first, against the unchanged runner
+  (Step 0).
+- **`scripts/test/run-all.sh`** (~70 net; the file is 21 lines today, about 90 after).
+  Argument and environment parsing, the `--list` mode, the round-robin filter, the
+  new selection line, the refusal paths. Discovery (line 15) and the four `GIT_*`
+  defaults (lines 5-8) are untouched. Edited only after the proof script's failing run
+  is recorded.
+- **`ci/required-files.txt`** (+1). One line appended at the very end, after today's
+  last line 401 (`docs/transition-kit.md`), becoming line 402.
+- **`RESTORE.md`** (~3). The **CI** bullet at lines 416-418 only.
+- **`proposals/ci-test-shards-shard-ci.patch`** (new, ~60). One unified diff holding
+  both operator-owned edits, per `proposals/README.md`. This is proposed text, not an
+  applied change.
+
+**Operator-authored, as the last permanent file change on the same branch:**
+
+- **`.github/workflows/ci.yml`** (~49 net). The three-job shape of R10.
+- **`AGENTS.md`** (+1). One sentence added to the CI bullet at line 86.
+
+Both come from `git apply proposals/ci-test-shards-shard-ci.patch`. Agents write the
+patch file; the operator applies and commits it. That is the whole reason this
+initiative is `risk: high`. His commit is the last *permanent* change, not literally
+the last commit: the two throwaway proof commits of Step 6 — the red-shard file added,
+then deleted — sit on top of it and leave nothing in the merged tree. The full order
+is the numbered list at the top of Order of work.
+
+### What does not change
+
+- **No `*.test.sh` file is added, removed, renamed or reordered.** The 62 suites stay
+  exactly as they are (R2, R3).
+- **The discovery line stays byte-for-byte.** `run-all.sh:15` keeps
+  `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh' -print | LC_ALL=C sort`
+  unreflowed. Three suites grep that exact string (R12), so nothing has to move.
+- **The branch ruleset.** `post_transition_ruleset` in `config/construction-mode.json`
+  is not opened. The required check stays the single name `ci` (R11).
+- **`on:` and `permissions:`** in `ci.yml` (lines 3-9) are copied through unchanged.
+- **The three non-test gate steps** in `ci.yml` — `Check required files exist`,
+  `Shellcheck (if any shell scripts)` and `Rename gate` — keep their text
+  byte-for-byte; they are moved into the `checks` job, not rewritten.
+- **The `Test suite` step is the one gate step that does change**, and only its `run`
+  line: `bash scripts/test/run-all.sh` becomes
+  `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`. That one line is the
+  point of the whole initiative, so it is not covered by the byte-for-byte claim
+  above. Everything else about the step is unchanged — same `name: Test suite`, same
+  `run: |` shell and the comment inside it, same default working directory, no `env:`
+  added — and it moves into the matrix `test` job.
+- **`ci/required-files.txt:89`** (`scripts/test/run-all.sh`) — the runner's path does
+  not change, so that line stays. `.github/workflows/ci.yml` is not in the manifest
+  and no entry is added for it.
+- **`RESTORE.md:419-424`**, the nested structure-check sub-bullet, stays as written:
+  that check still runs, now inside `checks`.
+- **`docs/transition.md:108`**, **`REVIEW.md:294`**, **`docs/transition-kit.md`**,
+  **`README.md`**, **`QUICKSTART.md`** — all still accurate (R13). Leave them alone.
+
+### Review size
+
+`review_size: standard`, no exception claimed. Distinct content to read is about 354
+net lines: 70 in the runner, 230 in the proof script, 49 in the workflow, one manifest
+line, four lines of docs. The `proposals/` patch adds ~60 more lines on disk, but they
+are the workflow and `AGENTS.md` text a second time, so they are read once. That fits
+the ~300-400 budget in `AGENTS.md` > PR rules. If the real diff lands over 400, stop
+and re-decide with the operator rather than splitting: the runner, its proof, and the
+workflow that calls them are one concern.
+
+## Order of work
+
+**The commit sequence, stated once.** Every step below assumes this order on
+`ystack/impl/ci-test-shards`:
+
+1. The coder's commits for the five agent-authored files (Steps 0-4).
+2. The PR is opened. Its first CI run is still the old serial workflow, so it is the
+   no-argument run; record it and the commit it ran on, `H0` (Step 5).
+3. The operator applies the patch and commits `.github/workflows/ci.yml` and
+   `AGENTS.md`. **This is the last permanent file change on the branch** (Step 6).
+4. The coder pushes one commit adding `scripts/test/zz-red.test.sh`. Call that head
+   `HR`, and record the red run against it (Step 6).
+5. The coder pushes a plain commit deleting that file and waits for green — never an
+   amend, never a force-push. Call that head `HD`.
+6. If nothing else needs fixing, `HD` is the final head, `HF`. The identity records go
+   in the PR body there: the `scripts/test` tree ids for `H0` and `HF` (R2), and for
+   the red run (R11) the one-line `HR`→`HD` delete, the `scripts/test` tree ids for
+   `HD` and `HF`, and the `ci.yml` blob ids for `HR` and `HF`.
+7. Review happens at `HF`, and the PR is squash-merged. Commits 4 and 5 cancel out,
+   so the red suite never reaches `main`.
+
+Commits 4 and 5 are throwaway proof commits, which is why the operator's commit is
+described everywhere here as the branch's last *permanent* change rather than its last
+commit. The spec words it the same way — "the last permanent file change on the
+branch" (`work/ci-test-shards/spec.md:258-259`).
+
+### Step 0 — the proof script first (R9)
+
+Write `scripts/test/run-all-sharding.check.sh` before touching the runner. Run it
+once against today's unchanged runner and write down what it reports — it must refuse
+at once, because no `--shard`/`--list` support exists yet. That refusing run is what
+proves the script tests something. Then Step 1 turns it green.
+
+**The first check is static, and it runs before the runner is invoked at all.**
+Today's `run-all.sh` takes no arguments and never inspects `"$@"` — checked against
+the file — so an unknown argument is not rejected, it is discarded. A
+`run-all.sh --list` today would therefore not fail; it would start the full serial
+suite and sit there for 80-90 minutes. So the script opens by grepping
+`scripts/test/run-all.sh` for two fixed strings only Step 1 can put there: the exact
+usage line
+
+    usage: run-all.sh [--shard <index>/<count>] [--list] (1 <= index <= count <= 16)
+
+matched with `grep -Fq` so its `<`, `>` and parens stay literal, and a `--list` case
+label (`--list)`). That second pattern begins with `--`, so it is passed as
+`grep -Fq -e '--list)'` — the `-e` form works on both BSD and GNU grep. Without the
+`-e`, grep reads the pattern as an option instead, and the precondition would keep
+refusing even after Step 1 lands. If either is absent it prints
+
+    error: run-all.sh does not implement --shard/--list yet
+
+to stderr, runs nothing, and exits `2`. Step 0's recorded failure is exactly that
+refusal — one line, under a second, no suite. **No invocation of `run-all.sh --list`
+is made anywhere before Step 1 lands**: not by this script, not by hand, not in Proof
+below.
+
+Shape: `#!/usr/bin/env bash`, `set -euo pipefail`, resolve `root` the same way
+`run-all.sh:4` does, one `mktemp -d` with a `trap` cleanup, and a small
+`check`/`fail` pair printing one line per assertion. It builds its own raw suite
+list, without asking the runner:
+
+    find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh' -print \
+      | LC_ALL=C sort | sed "s|^$root/||"
+
+That raw list is the oracle for everything below. R9 explains why: comparing shards
+only against the runner's own `--list` proves the runner agrees with itself, not that
+it is right. Assertions, in order:
+
+1. `--list` with no selector equals the raw list, line for line.
+2. `--shard 1/1 --list` equals `--list` with no selector.
+3. **Exact membership and order, shard by shard.** A loop `for n in $(seq 1 16)`, and
+   inside it `for i in $(seq 1 "$n")`. For each pair the script builds the *expected*
+   list for that shard from the raw list, applying R3's rule itself — suite `k`,
+   0-based in the raw list's sorted order, belongs to shard `(k % n) + 1`
+   (`work/ci-test-shards/spec.md:62-63`, quoted verbatim: "Suite `k` (0-based, in that
+   sorted order) belongs to shard `(k mod count) + 1`") — which over a file of the raw
+   list is one line:
+
+       awk -v i="$i" -v n="$n" '((NR - 1) % n) + 1 == i' raw.txt > expected.txt
+
+   Then it collects `--shard $i/$n --list` into `actual.txt` and asserts
+   `cmp -s expected.txt actual.txt`. `cmp` compares bytes in sequence, so this pins
+   the exact membership *and* the order, not just the set. On a mismatch the assertion
+   prints the shard and the first differing line from each file.
+   This is the assertion that catches a wrong rule. Union-and-disjoint checks alone
+   cannot: a runner that shifted every shard by one, or handed out six contiguous
+   chunks, still produces a complete disjoint partition and would pass them while
+   violating R3.
+4. The union and disjointness checks R9 names, over the same 136 index/count pairs in
+   the same two loops: every selected path appears in the raw list; the concatenation
+   of the `n` shards has no duplicate line (`sort` and `sort -u` of it are equal, which
+   is exactly pairwise disjointness plus no repeat inside a shard); and the sorted
+   concatenation equals the raw list. These are now *implied* by assertion 3 — an
+   exact per-shard match for every index of every count leaves no room for a gap or a
+   repeat — and they are kept anyway, for two reasons: R9 asks for them by name
+   (`work/ci-test-shards/spec.md:115-121`), and they are the assertion whose failure
+   message says "a suite went unrun" in one line, which is the thing a reader of a red
+   CI log wants first. They cost one `sort` per count.
+5. Every refusal of R5. For each bad value — `0/4`, `5/4`, `9/6`, `a/b`, `1/0`,
+   `1/17`, `1`, `/4`, `4/`, the empty string, a value with no slash — and for
+   `--shard` with no value after it: exit status is `2`, stderr is exactly the one
+   usage line, stdout is empty, and no suite ran (no `==> ` header). Run each twice,
+   once as the flag and once as `YSTACK_TEST_SHARD` — R5's last sentence applies the
+   same rule to the variable (`work/ci-test-shards/spec.md:79`). `9/6` is added to the
+   spec's list as the out-of-range analogue of `5/4`, because assertion 6 reuses it.
+6. **The flag wins, and the variable is never read.** Three cases, each compared line
+   for line against plain `--shard 1/6 --list`, and each expected to print that
+   flag-selected list and exit `0`:
+
+       YSTACK_TEST_SHARD=2/6 bash scripts/test/run-all.sh --shard 1/6 --list
+       YSTACK_TEST_SHARD=a/b bash scripts/test/run-all.sh --shard 1/6 --list
+       YSTACK_TEST_SHARD=9/6 bash scripts/test/run-all.sh --shard 1/6 --list
+
+   The well-formed first case only shows the flag is *preferred*. The two malformed
+   ones — a value with no numbers, and a well-shaped value out of range — are what show
+   the flag path does not read or validate the variable at all, which is what R1's
+   "the flag wins and the variable is ignored silently" requires
+   (`work/ci-test-shards/spec.md:32-35`). An implementation that validated the
+   environment before looking at the flag would pass the first case and refuse these
+   two. Assertion 5 has just proved those same two values *do* refuse when the flag is
+   absent, so the pair pins the precedence in both directions rather than one.
+7. `YSTACK_TEST_SHARD=3/6 ... --list` equals `--shard 3/6 --list`: the variable alone
+   selects the same set.
+8. **The workflow's shard count equals its matrix (R10).** The script reads
+   `.github/workflows/ci.yml` — reading a constitution path is allowed, only writing
+   one is not (`AGENTS.md:383-386`) — and looks for the run line
+   `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/<N>`. If that line is
+   present, then the `shard:` matrix list must be present too, its entries must be
+   exactly `1, 2, ... N` in that order, and `N` must equal how many entries there are.
+   Any mismatch — a short or long list, a gap, a reordering, a different `N`, a missing
+   matrix — fails the assertion, printing both values it read. R9's assertion list does
+   not name this one; it is an addition to that list, not a change to it, and the
+   invariant it guards is R10's (`work/ci-test-shards/spec.md:158-160`).
+   If no `--shard` run line is present, what that means depends on where the script is
+   running, so the script asks. Observe first that the old workflow never invokes this
+   script at all: its four steps are fixed, and the `Sharding proof` step arrives only
+   with the operator's sharded workflow. So under GitHub Actions the only thing that
+   can have started this script is the sharded workflow, and a serial `ci.yml` there
+   means the `--shard` run line was removed. The rule follows. When `GITHUB_ACTIONS`
+   is set — GitHub sets it to `true` — a missing `--shard` run line **fails** the
+   assertion, printing
+   `no --shard run line in ci.yml: the sharded test run line was removed`. When it is
+   not set the run is local — Step 0's pre-fix run, and the coder's runs while
+   building — and the serial case prints
+   `workflow is still serial: no --shard run line in ci.yml` and passes.
+   **That env check is not a hidden switch.** The branch that passes is unreachable
+   under CI, so no CI run can take it and no workflow shape can slip through the
+   `checks` job unenforced; and the two outcomes are recorded separately in the PR
+   body — the local serial line from the coder's run before the operator's commit, and
+   the CI equality line from the first sharded run (Proof items 1 and 13). The moment
+   the assertion becomes live is visible in the evidence rather than assumed.
+
+**Every runner call is bounded.** Once Step 1 lands, the precondition passes and the
+assertions above do invoke the runner. Each of those calls goes through a wall-clock
+bound, using the form this repo already uses for exactly this — macOS has no
+`timeout` or `gtimeout`, and `scripts/lib/` holds no shared helper, so it is the perl
+`alarm` idiom of `scripts/test/control-sandbox-policy.test.sh:114` and
+`scripts/test/deploy-rollback-gates.test.sh:187`:
+
+    /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 bash "$root/scripts/test/run-all.sh" --list
+
+A `--list` run executes no suite and returns in well under a second, so 60 seconds is
+pure headroom. SIGALRM makes the exit status `142`, and the script treats any timeout
+as a failed assertion reading `run-all.sh --list did not return within 60s (the
+runner started a suite)`. If some later change ever makes `--list` execute suites
+again, this proof goes red in a minute instead of hanging the job for an hour.
+
+It ends by printing a count of assertions passed and a final line
+`sharding proof: all checks passed`, and exits `0`. It runs in seconds: about 170
+`--list` and refusal invocations of a 90-line script, one `find`, 136 one-line `awk`
+runs over a 62-line file, and one read of `.github/workflows/ci.yml` — and `--list`
+executes no suite. Keep it `shellcheck -x -S style` clean at 0.11.0 — the workflow's
+`find . -name '*.sh'` sweep already covers it.
+
+### Step 1 — `scripts/test/run-all.sh` (R1, R2, R3, R5, R6, R7, R8)
+
+Insert parsing above today's line 10 (`count=0`), keep discovery where it is, and put
+the filter between discovery and the run loop.
+
+**Parsing.** Accept only `--shard <value>` and `--list`, each at most once. A second
+occurrence of either, the `--shard=1/6` equals-form, a `--shard` with nothing after
+it, and any unrecognised argument are all malformed. (The spec lists malformed
+*values*; treating unknown arguments the same way is this plan's decision, and it is
+what keeps R2 safe — nothing new can be silently accepted.)
+
+Read the environment as *set*, not as non-empty: `[ "${YSTACK_TEST_SHARD+x}" = x ]`.
+`YSTACK_TEST_SHARD=""` is therefore a given-but-empty value and refuses per R5, while
+an unset variable is the argument-less run of R2. **If the flag is given, the variable
+is neither read nor validated** — the flag branch must not look at its shape, its range
+or its existence. So `YSTACK_TEST_SHARD=a/b ... --shard 1/6` selects shard 1 of 6 and
+refuses nothing, even though that same value alone refuses. Validating the environment
+first and the flag second is the natural way to write this and it is wrong: it turns
+R1's "ignored silently" into a refusal (Step 0, assertion 6).
+
+**Validation.** The value must match `^[1-9][0-9]*/[1-9][0-9]*$` — this alone rejects
+`0/4`, `1/0`, `a/b`, `1`, `/4`, `4/`, the empty string and anything without a slash,
+and it also rejects leading zeros and whitespace. Then check `index <= count` and
+`count <= 16`, which rejects `5/4` and `1/17`. On any failure print exactly
+
+    usage: run-all.sh [--shard <index>/<count>] [--list] (1 <= index <= count <= 16)
+
+to stderr, nothing to stdout, and `exit 2` before any suite runs.
+
+**Discovery, unchanged.** Keep today's `while IFS= read -r ... done < <(find ... |
+LC_ALL=C sort)` construct and its `find` line verbatim. Change only the loop body:
+instead of printing and running, append each path to an array. Its length is `N`.
+
+**Filter.** If a selector was given, keep element `k` (0-based, in that sorted order)
+when `(k % count) + 1 == index` (R3). With no selector, keep everything. Call the
+kept count `m`.
+
+**The two zero cases, in this order.** If `N` is `0`, print the existing
+`error: no scripts/test/*.test.sh files found` to stderr and `exit 1` — same text,
+same code, same meaning as today (R8). Otherwise, if a selector was given and `m` is
+`0`, print `error: shard <i>/<n> selected no test scripts` to stderr and `exit 1`.
+Never print a passing line for zero suites. With `count <= 16` and 62 suites this
+second case cannot fire today, but it is handled.
+
+**Output.** In `--list` mode, print the `m` kept paths, one repo-relative path per
+line, in sorted order, and nothing else on stdout — no blank line, no selection line,
+no headers — then exit `0`. That is what makes the diff in Proof possible. Otherwise
+(running mode) print, with no leading blank line and only when a selector was given:
+
+    shard <i>/<n>: <m> of <N> test scripts selected
+
+then loop the kept paths printing today's `printf '\n==> %s\n'` header and running
+`bash "$test_file"`, and finish with today's `printf '\nall %s test scripts passed\n'`
+over `m`. With no selector `m == N`, no selection line prints, and the whole run is
+byte-identical to today, ending `all 62 test scripts passed` (R2, R7).
+
+### Step 2 — the manifest line (R9)
+
+Append `scripts/test/run-all-sharding.check.sh` as the last line of
+`ci/required-files.txt`, after line 401. The `scripts/*.sh` case in the workflow's
+structure check (today's `ci.yml:34-40`) then also enforces that the file is
+executable, which is why Step 0 sets mode `0755`.
+
+### Step 3 — `RESTORE.md` (R13)
+
+Rewrite the **CI** bullet at lines 416-418, in two or three sentences. Today it reads
+"comes from `.github/workflows/ci.yml` (structure check + shellcheck)". It must name
+the three jobs — `checks`, six parallel `test` shards, and the aggregate `ci` that
+stays the hard merge gate — and the `--shard <index>/<count>` flag each shard passes
+to `scripts/test/run-all.sh`. Keep the existing "hard merge gate" wording, keep
+"Don't copy its steps here — link to it", and do not touch the nested sub-bullet at
+419-424. `RESTORE.md` is not a constitution path, so this is an agent commit and it
+stays out of the `proposals/` patch.
+
+### Step 4 — `proposals/ci-test-shards-shard-ci.patch` (R10, R13)
+
+One unified diff, applyable with `git apply`, covering both operator-owned files. Its
+`AGENTS.md` half adds one sentence to the CI bullet at line 86, naming the three jobs
+and the shard flag, and leaves the pinned-shellcheck sub-bullet at 88-95 alone —
+`SHELLCHECK_VERSION` in `ci.yml` is still the single source of truth, now read by the
+`checks` job.
+
+Its `ci.yml` half replaces the single `ci` job (today's lines 11-106) with three,
+keeping `name:`, `on:` and `permissions:` (lines 1-9) exactly as they are:
+
+    jobs:
+      checks:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          - name: Check required files exist        # today's lines 17-45, verbatim
+          - name: Shellcheck (if any shell scripts) # today's lines 47-94, verbatim
+          - name: Sharding proof                    # new, the only added step
+            run: |
+              bash scripts/test/run-all-sharding.check.sh
+          - name: Rename gate                       # today's lines 102-106, verbatim
+
+      test:
+        runs-on: ubuntu-latest
+        strategy:
+          fail-fast: false
+          matrix:
+            shard: [1, 2, 3, 4, 5, 6]
+        steps:
+          - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          - name: Test suite              # today's 96-100, run line changed
+            run: |
+              bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
+
+      ci:
+        runs-on: ubuntu-latest
+        needs: [checks, test]
+        if: always()
+        steps:
+          - name: Gate
+            run: |
+              set -eu
+              echo "checks: ${{ needs.checks.result }}"
+              echo "test:   ${{ needs.test.result }}"
+              if [ "${{ needs.checks.result }}" != "success" ] \
+                 || [ "${{ needs.test.result }}" != "success" ]; then
+                echo "ci gate FAILED"; exit 1
+              fi
+              echo "ci gate ok"
+
+Five points the diff must get right. `Test suite` is the only one of the four gate
+steps whose text changes at all, and only its `run` line: it gains
+`--shard ${{ matrix.shard }}/6`, with name, shell and comment left alone. The other
+three are copied byte-for-byte into `checks`. The checkout step is repeated in
+`checks` and in `test` because each job starts with an empty workspace; without it the
+very first step cannot find `ci/required-files.txt`. The aggregate job gets no
+checkout — it opens no repository file. The aggregate job keeps the bare id `ci` and
+is given no `name:` key, so the check it reports is still literally `ci`. And the `6`
+in the matrix list and the `/6` in the run line are the same number — asserted by the
+proof script from the operator's commit onward, not left to the reader's eye (Step 0,
+assertion 8).
+
+The rationale paragraph for these two files goes in the implementation PR body, per
+`proposals/README.md`.
+
+### Step 5 — prove the agent-authored half, then push and open the PR
+
+Run everything in Proof below that does not need the new workflow. Steps 0-4 are then
+complete and the PR is openable with the operator's two files still missing.
+
+**Push and open the PR here, before the operator's commit. That order is required,
+not a preference.** The branch head still carries today's single serial `ci` job, so
+the PR's first CI run is the old shape and it runs `bash scripts/test/run-all.sh`
+with no argument. That is the only place the no-argument run happens end to end, and
+R2's byte-for-byte guarantee rests on it: its log must show 62 `==> ` headers and end
+`all 62 test scripts passed`. Record four
+things from that run in the PR body — the run's URL, the commit it ran on (call it
+`H0`; `AGENTS.md:409-411` requires every pasted proof to name its commit), the `ci`
+job's status, and its wall-clock time.
+
+**That run can never happen on the final head, so it is bound to the final head by
+content instead.** Step 6 adds the operator's two files and the red-shard pair, so the
+final head `HF` is a later commit than `H0` — and at `HF` the workflow is sharded, so
+a no-argument CI run is not producible there at all. What the run proves under R2 is
+discovery, order and count: the `==> ` headers and the `all 62 test scripts passed`
+line. Those depend on nothing but the runner and the set of suite files — that is, on
+the tree `scripts/test`. So the binding is a tree identity. At `HF` the coder records,
+in the PR body, the real output of both of
+
+    git rev-parse H0:scripts/test
+    git rev-parse HF:scripts/test
+
+and the two tree ids must be byte-identical. Git trees are content-addressed, so
+identical ids mean the runner and all 62 suites are the same bytes at both heads, and
+the recorded discovery, order and count would come out the same at `HF`. The
+operator's `ci.yml` and `AGENTS.md` commits touch nothing under `scripts/test`. The
+red-shard add-and-delete pair adds a file and then removes it, which returns the tree
+to the same id, so it does not break the binding either. Whether every suite still
+*passes* at `HF` is not left to the earlier run: that is exactly what the final head's
+own green sharded run shows.
+
+R2's other verification — `--list` compared against the raw discovery command — needs
+no binding, because it re-runs on every head. It is assertion 1 of
+`scripts/test/run-all-sharding.check.sh` (Step 0), and the `Sharding proof` step in the
+`checks` job runs that script on every push to the branch, `HF` included.
+
+Step 6 does not begin until that evidence is in the PR body. The manager reads it
+there first.
+
+### Step 6 — the operator's commit, then the red-shard proof
+
+**Precondition: Step 5's no-argument run is green and recorded in the PR body.** Once
+the operator's commit lands, every run on this branch is sharded, so that evidence can
+no longer be produced here, and there is no second PR to fall back on. If the workflow
+commit lands first and no such run happened, the only recovery is on this same branch
+and it is expensive: the operator reverts his workflow commit — those are his files —
+lets one CI run finish under the old shape, records it in the PR body the same way,
+then re-applies the workflow commit and waits for the sharded run to go green again.
+Three extra runs and two more operator turns for evidence Step 5 gets for free. That
+is why the manager checks this ordering before posting Step 6 at all, rather than
+treating it as something to repair afterwards.
+
+**Second precondition, checked at the end rather than the start: the binding still
+holds.** At the final head the two `scripts/test` tree ids from Step 5 must still
+match. If anything under `scripts/test` changed after `H0` — a review fix to the
+runner, a new suite, a tweak to the proof script — then the no-argument evidence is
+old proof on a new commit, which this repo treats as stale (`AGENTS.md:409-411`), and
+a fresh run is required before review. Two ways to get one, both on this branch and
+both the operator's: the revert-and-re-apply above, which buys one more old-shape CI
+run; or he runs `bash scripts/test/run-all.sh` with no arguments locally at the final
+head and pastes the 62 `==> ` headers and the `all 62 test scripts passed` line,
+naming that commit. Either way the tree-id pair is re-recorded against the new run's
+head. That local serial run is the one place in this plan where anybody runs the
+80-90 minute suite by hand, it is the operator's to run because it is 80-90 minutes of
+someone's machine, and it happens only if the binding broke. No agent runs it.
+
+The operator runs `git apply proposals/ci-test-shards-shard-ci.patch`, reviews the two
+files, commits and pushes them as the last permanent file change on
+`ystack/impl/ci-test-shards` — the two red-shard proof commits below follow it and
+cancel each other out, so nothing after his commit survives into the squashed commit.
+Only after that does CI exercise the new shape. He records the run's wall-clock
+duration in the PR body; the target is under 25 minutes (R14).
+
+**Then, once that run is green, the red-shard proof of the first risk below.** The
+spec asks for this one on the implementation PR itself — requirement 11 at
+`work/ci-test-shards/spec.md:171-188`, repeated in the risk note at `:327-332`. It
+needs a pull request run: `ci.yml`'s `on:` is `pull_request` and `push` to `main`
+only (lines 3-6, checked against the file), so pushing a scratch branch starts no run
+at all — there is nothing to watch go red. So it runs on **this** PR, the one open PR
+for this slug, as two ordinary commits on the implementation branch:
+
+1. From the implementation head — the operator's workflow commit, with its own CI
+   green — the coder pushes one commit adding a single file,
+   `scripts/test/zz-red.test.sh`, holding two lines, `#!/usr/bin/env bash` and
+   `exit 1`. It is a real `*.test.sh` file, so the runner discovers it like any
+   other, and `zz-` sorts last under `LC_ALL=C` — no other name in `scripts/test`
+   begins with `z`. That makes it element 63 of 63: 0-based index 62, and
+   `(62 % 6) + 1 = 3`. So it lands in **shard 3**, predictably, and exactly one shard
+   fails. The shebang is not decoration: without it the pinned shellcheck sweep in
+   `checks` reports SC2148 and `checks` goes red too, which would blur the one thing
+   this proves. Adding a 63rd suite also shifts the split to 11, 11, 11, 10, 10, 10;
+   that is expected and changes nothing but the counts in the logs.
+2. Wait for that run and record four things: `test (3)` red; the other five `test`
+   jobs green, which is `fail-fast: false` doing its job; `checks` green; and the
+   aggregate `ci` **red, not skipped**. The run's URL and the job list — `gh pr
+   checks` output, or a screenshot of it — go in the PR body, beside the duration
+   measurement.
+3. Push a second commit that deletes the file, and nothing else. A plain new commit:
+   never an amend, never a force-push. Call that head `HD`, and wait for the run to go
+   green again.
+
+The PR is squash-merged, so both commits collapse into the one squashed commit and
+neither the failing suite nor its deletion reaches `main`. A red intermediate head is
+expected here and is not a failure of the PR: review and the `merge-ready` decision
+are made at the final green head, with the recorded red run sitting in the body as the
+evidence.
+
+**The red run is bound to the final head the same way, by content — but by two files,
+not one.** Call the add commit `HR`, the head the red run actually ran on, named in the
+PR body beside the run's URL and the `gh pr checks` job list; `HD` is the delete commit
+right after it. `HR` is superseded before merge, so the evidence has to be tied to what
+ships. Two files decide the outcome this run demonstrates.
+`.github/workflows/ci.yml` decides whether `ci` runs when a shard fails and what it
+compares. And `scripts/test/run-all.sh` decides whether a failing suite makes its
+shard's job fail at all: the runner has to let that suite's non-zero status out, or
+`test (3)` goes green and the gate is never even asked. R11's promise that a green `ci`
+means every suite passed rests on that exit-code propagation as much as on the gate
+(`work/ci-test-shards/spec.md:168-171`), so a review fix to the runner would make this
+proof stale even with the workflow untouched.
+
+`HR` itself carries the throwaway suite, so its `scripts/test` tree can never equal
+`HF`'s. Bind through `HD` instead. At the final head the coder records, in the PR body,
+the real output of all of
+
+    git diff --name-status HR HD
+    git rev-parse HD:scripts/test
+    git rev-parse HF:scripts/test
+    git rev-parse HR:.github/workflows/ci.yml
+    git rev-parse HF:.github/workflows/ci.yml
+
+and three things must hold. The diff must be exactly one line, the deletion of
+`scripts/test/zz-red.test.sh` — so the delete commit took the red suite out and touched
+nothing else. The two tree ids must be identical, which makes the runner and all 62
+suites at the final head the same bytes that were running when `test (3)` went red. The
+two blob ids must be identical, which makes the gate that reported red byte-for-byte
+the gate that ships. Trees and blobs are content-addressed, so identical ids are
+identical bytes.
+
+If any commit after `HD` touches `scripts/test` or `.github/workflows/ci.yml` — a
+review fix to the runner is the likely one, a fix to the `if: always()` block the
+other — the records are stale and the proof is redone: another add-then-delete pair on
+top of that fix, with a new `HR` and `HD` and a fresh set of ids.
+
+So the final review reads all of these out of the PR body — the `scripts/test` tree ids
+for R2, and for R11 the one-line delete, the `HD`/`HF` tree ids and the `HR`/`HF` blob
+ids — not just the two run URLs. A pasted run with any of its identity records missing
+or unequal is stale proof, and the round is not clean.
+
+There is a cheaper complement, worth doing first, that is **not** a substitute: read
+the `ci` job in the workflow file on the branch and confirm by eye that it carries
+`if: always()` and compares `needs.checks.result` and `needs.test.result` against
+`success` explicitly. That is review of the text, not proof of the behaviour. Only a
+real run shows GitHub actually reporting `ci` red.
+
+## Spec amendment
+
+This plan used to carry a Deviations section; it no longer needs one. Plan review on
+PR #281, rounds 7 and 12, found the spec's "scratch branch" wording infeasible —
+`ci.yml` triggers on `pull_request` and `push` to `main` only, so a scratch branch
+starts no run — and its "last commit" wording inconsistent with the two throwaway
+proof commits that have to follow the operator's. The spec was amended through G2
+(PR #285, blob `1d419e18…`); this plan pins that blob above, and the two now agree.
+
+## Risks
+
+- **The aggregate `ci` job must not be skippable.** This is the riskiest detail here.
+  An ordinary `needs:` job is *skipped* when a dependency fails, and a skipped
+  required check leaves the gate ambiguous rather than red. `if: always()` makes the
+  job run regardless, and the explicit `needs.*.result != 'success'` comparisons turn
+  failed, cancelled *and* skipped dependencies into a red `ci`. For a matrix job
+  `needs.test.result` is `success` only when all six shards succeeded. Proved by
+  making one shard fail on the implementation PR itself, on a commit that is deleted
+  again before merge (Step 6, Proof last item). It has to be a PR run: the workflow's
+  `on:` triggers are `pull_request` and `push` to `main` only, so pushing any other
+  branch runs nothing and proves nothing, which is why the spec puts this proof on the
+  implementation PR. The red run therefore sits on a head that is superseded before
+  merge, so it is not left as old proof on a new commit: it is bound to the final head
+  by the `ci.yml` blob id *and* by the `scripts/test` tree id, the latter taken across
+  the delete commit because the red head carries the throwaway suite. The gate decides whether `ci` goes red when a shard
+  fails; the runner decides whether the failing suite made that shard's job fail in the
+  first place. Both have to be the shipping bytes for the recorded red run to prove
+  anything, so a review fix to either one means redoing it (Step 6, Proof item 14).
+- **One open PR for this slug, the whole way through.** Both awkward proofs — the
+  no-argument run and the red shard — run inside the single implementation PR rather
+  than a second one, because re-runs update the existing open PR and two PRs must
+  never be open for the same slug and stage (`AGENTS.md:389-392`). Nothing in this
+  plan opens another PR for `ci-test-shards`.
+- **Job naming versus the required check name.** The ruleset requires one check named
+  exactly `ci`. A job's check name is its `name:` if present, else its id, so the
+  aggregate job must keep the id `ci` and no `name:` key. `checks` and
+  `test (1)`..`test (6)` are new check names; they are not required and the ruleset
+  is untouched. Getting this wrong blocks merges rather than passing them falsely —
+  strict mode would wait forever for a check that never reports — but it would waste
+  a review round, so read the check names on the PR (Proof).
+- **Six appears twice and must stay equal, so it is machine-checked.** The matrix list
+  and the `/6` in the run line are independent text. If they ever disagree — matrix
+  `[1..6]` against `--shard .../8` — all six jobs can pass while shards 7 and 8 never
+  run, and `ci` goes green although not every suite passed. That is the one false-green
+  in this design, and it is exactly what a green required check is supposed to rule
+  out, so it is not left to review: assertion 8 of
+  `scripts/test/run-all-sharding.check.sh` reads `.github/workflows/ci.yml` and fails
+  unless the matrix list is exactly `1..N` in order for the same `N` the run line
+  passes (Step 0). The proof script is agent-authored and already runs in the `checks`
+  job, and `checks` is a `needs:` of `ci`, so the assertion gates every head. It also
+  refuses to be sidestepped by deleting the run line: a serial `ci.yml` is an accepted
+  answer only when `GITHUB_ACTIONS` is unset, that is on a local run before the
+  operator's commit. Under CI the assertion fails, because the old workflow never calls
+  this script — so a serial workflow seen from inside the sharded one can only mean the
+  run line was removed (Step 0, assertion 8). Pointing
+  it at a constitution path is fine: agents may not *write* `.github/**`, but nothing
+  stops them reading it (`AGENTS.md:383-386`), and the proof script writes nothing.
+  Rejected: leaving the equality to review, or filing it as a follow-up issue. The
+  invariant is the whole reason a green sharded `ci` can be trusted, a follow-up would
+  ship the false-green in the meantime, and the check is fifteen lines in a script this
+  PR is already adding.
+- **`--list` against today's runner would silently run the whole suite.** Today's
+  `run-all.sh` parses nothing — no `case`, no `"$@"` — so `--list` is not refused, it
+  is ignored, and the script falls through to the serial 80-90 minute run. This is
+  the failure mode that makes Step 0's ordering delicate: a proof script that simply
+  began asserting would look hung rather than failing, and on a CI runner it would
+  spend the whole job budget before anyone learned anything. Two guards, both in
+  Step 0: the static precondition, which refuses on the file's own text before any
+  invocation, so the pre-Step-1 run is instant; and the perl `alarm` bound on every
+  runner call afterwards, which turns "the runner started a suite" into a red
+  assertion in 60 seconds rather than a hang. Rejected: writing the proof script
+  against the finished runner and only then recording a failure, which is the
+  ordering R9 exists to forbid — the script has to fail before the fix exists.
+- **The shellcheck bootstrap runs once, not seven times.** It stays in `checks` only.
+  Checked before writing this: no suite invokes the `shellcheck` binary — all ~60
+  mentions across `scripts/test/*.test.sh` are `# shellcheck` directives — so the
+  shards need no install. Rejected: copying the pinned-shellcheck step into the
+  `test` job, which would download and verify the same tarball six more times per run
+  for nothing. Seven checkouts plus one shellcheck download is the duplicated setup
+  the spec accepts.
+- **Three suites pin the discovery string.**
+  `scripts/test/portable-core-result-facts.test.sh:724`,
+  `portable-core-stage-request.test.sh:1100` and
+  `portable-core-result-truth.test.sh:1023` each `grep -Fq` the exact `find` text out
+  of `run-all.sh`. Keeping line 15 unreflowed satisfies all three and nothing moves.
+  If a reflow ever becomes unavoidable, all three change in the same PR. Verified
+  those three line numbers against today's files.
+- **`.check.sh` sits outside the discovered set on purpose, and that has a cost.**
+  The name keeps it out of the `*.test.sh` glob, which is what preserves R2, but it
+  also means nothing runs it except the one workflow step. The manifest entry proves
+  the file exists and is executable, not that the workflow still calls it: delete the
+  `Sharding proof` step later and the proof goes quiet while every check stays green.
+  While the step exists, `checks` is a `needs:` of `ci`, so a red proof is a red gate.
+  Rejected: naming it `*.test.sh`, which would add a 63rd suite, change the
+  no-argument output and count, and breach both R2 and the accepted intent.
+- **The two operator files arrive after the five agent-authored ones, and that order
+  is a requirement.**
+  Before Step 6, a `pull_request` run uses the workflow file on the branch head —
+  which is still today's single serial `ci` job. So the PR's first CI run is the old
+  shape: it runs the required-files check (now including the new manifest line),
+  shellchecks both shell files, runs `bash scripts/test/run-all.sh` with no arguments,
+  and runs the rename gate. All of that passes, because the argument-less run is
+  byte-identical, so the branch is green — just still 80-90 minutes, and without the
+  sharding proof, which the old workflow has no step for. Run that proof locally
+  (Step 5). After Step 6 the new shape takes over.
+  That first old-shape run is the **only** full no-argument run this work gets from
+  CI: afterwards every run on the branch is sharded, and no agent runs the serial
+  suite locally. So pushing the five agent-authored files and opening the PR
+  before the operator's commit is a hard precondition (Step 5, Proof item 12), and the
+  manager reads the recorded run in the PR body before posting the operator's step. A
+  PR whose first CI run was already sharded has no running-mode evidence, and the only
+  recovery is the expensive one in Step 6 — the operator reverts his workflow commit on
+  this same branch, one run finishes under the old shape and is recorded, then he
+  re-applies it. That cost is why the ordering is checked before Step 6 is posted
+  rather than repaired after.
+  That run is also, necessarily, on an earlier head than the one that merges, so it is
+  bound to the final head by the `scripts/test` tree id rather than left as old proof
+  on a new commit (Step 5, Proof item 12). If that pair ever differs, the evidence is
+  stale and a fresh no-argument run is taken before review — the same
+  revert-and-re-apply, or the operator running the serial suite locally at the final
+  head.
+- **Shard membership drifts.** Round-robin over a sorted list means adding or renaming
+  one suite reshuffles everything after it, so the heaviest shard moves. Correctness
+  is unaffected — the partition property holds for any count from 1 to 16 — only the
+  time estimate is. Rejected: duration-balanced or bin-packed assignment, per R4; the
+  only durations on record are one local run and they drift with the runner.
+- **The margin is thin.** About 24 minutes against a 25-minute target, on an estimate
+  built from one local measurement of 56 suites; the heaviest shard is whichever holds
+  `evals-dashboard` (shard 5 of 6 today, confirmed). If a real run lands over, raise
+  the shard count; do not change the assignment rule.
+- **Rejected: parallelism inside the single job.** Running the suites under
+  `xargs -P` in one runner would interleave their output, make a failure hard to
+  attribute, and change the local no-argument run — breaching R2 to avoid a workflow
+  edit. A merge queue and any ruleset change are out of scope.
+
+## Proof
+
+Run from the repository root on `ystack/impl/ci-test-shards`. Agents do **not** run
+`bash scripts/test/run-all.sh` with no arguments locally — that is the 80-90 minute
+serial suite, and CI runs it for free on the PR's first run, under the unchanged
+workflow, before the operator's commit exists. That run is required, not incidental
+(Step 5), and item 12 below is where it is recorded, named by commit, and bound to the
+final head by tree identity. It is R2's second verification. The single exception is
+the operator's fallback in Step 6, taken only if that binding breaks.
+
+**The order of this list is binding and follows Order of work.** Item 1's first run
+happens in Step 0, against the unchanged `scripts/test/run-all.sh`, before Step 1
+edits it; every item after that needs the finished runner. Once Step 1 lands, the
+pre-fix run can no longer be produced here, so it is never left for later.
+
+1. **The focused proof (R1, R3, R5, R6, R9).** Two runs of the same command, in this
+   order.
+   **First, before the runner is edited (Step 0).**
+   `bash scripts/test/run-all-sharding.check.sh` against today's unchanged runner
+   prints `error: run-all.sh does not implement --shard/--list yet` to stderr, exits
+   `2` in under a second, and its output contains no `==> ` header — that last part is
+   what shows no suite ran. That failing run is what proves the script tests
+   something, so record the line, the status and the timing before touching
+   `scripts/test/run-all.sh`.
+   **Then, after Step 1.** The same command → one line per assertion, final line
+   `sharding proof: all checks passed`, exit `0`, a few seconds. The workflow is still
+   today's single serial job at this point, and this is a local run with
+   `GITHUB_ACTIONS` unset, so assertion 8 prints
+   `workflow is still serial: no --shard run line in ci.yml` and passes; item 13 is
+   where it has an equality to check. Copy that serial line into the PR body — it is
+   the only place it legitimately appears.
+   Both go in the PR body, the recorded refusal beside the green run.
+2. **Discovery and ordering are untouched (R2, R3).**
+
+       root=$(pwd -P)
+       diff <(bash scripts/test/run-all.sh --list) \
+            <(find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh' -print \
+                | LC_ALL=C sort | sed "s|^$root/||")
+
+   → no output, exit `0`. And `bash scripts/test/run-all.sh --list | wc -l` → `62`.
+3. **Refusals, and the flag beating a malformed variable (R1, R5).**
+   `bash scripts/test/run-all.sh --shard 0/4; echo $?` → the single usage line on
+   stderr, nothing on stdout, `2`. Repeat for `5/4`, `9/6`, `a/b`, `1/0`, `1/17`, `1`,
+   `/4`, `4/`, `''`, a value with no slash, and a bare `--shard` with nothing after it;
+   then repeat all of them as `YSTACK_TEST_SHARD=<value> bash
+   scripts/test/run-all.sh`. Then the other direction — the same two bad values with
+   the flag also given:
+
+       diff <(YSTACK_TEST_SHARD=a/b bash scripts/test/run-all.sh --shard 1/6 --list) \
+            <(bash scripts/test/run-all.sh --shard 1/6 --list)
+       diff <(YSTACK_TEST_SHARD=9/6 bash scripts/test/run-all.sh --shard 1/6 --list) \
+            <(bash scripts/test/run-all.sh --shard 1/6 --list)
+
+   → no output, exit `0` both times: the flag wins and the variable is not validated.
+   Item 1 asserts every one of these automatically.
+4. **Selection, membership and partition, by hand (R3, R7).**
+   `bash scripts/test/run-all.sh --shard 1/6 --list | wc -l` → `11`;
+   `--shard 3/6` → `10`. Today's split over 62 suites is 11, 11, 10, 10, 10, 10.
+   `bash scripts/test/run-all.sh --shard 1/1 --list | wc -l` → `62`. And the round-robin
+   rule itself, spot-checked on one shard the way assertion 3 checks all 136:
+
+       diff <(bash scripts/test/run-all.sh --shard 3/6 --list) \
+            <(bash scripts/test/run-all.sh --list | awk '((NR - 1) % 6) + 1 == 3')
+
+   → no output, exit `0`. Counts alone would not catch a shifted or chunked
+   assignment; this compares the paths in order. By hand it is fair to build the
+   expected side from `--list`, because item 2 has already pinned `--list` against the
+   raw `find`; assertion 3 uses its own raw list instead, as R9 requires.
+5. **The three pins still pass (R12).** Run each and expect exit `0`:
+   `bash scripts/test/portable-core-result-facts.test.sh`,
+   `bash scripts/test/portable-core-stage-request.test.sh`,
+   `bash scripts/test/portable-core-result-truth.test.sh`.
+6. **Lint at the pinned version.** `shellcheck --version` reports `0.11.0`, then
+   `shellcheck -x -S style scripts/test/run-all.sh scripts/test/run-all-sharding.check.sh`
+   → no output, exit `0`.
+7. **Schema guard.** `bash scripts/test/portable-core-schema.test.sh` → final line
+   `failures: 0`, exit `0`.
+8. **Rename gate.** `bash scripts/check-rename.sh` → no hits, exit `0`.
+9. **The manifest entry (R9).** `tail -1 ci/required-files.txt` →
+   `scripts/test/run-all-sharding.check.sh`, and
+   `[ -x scripts/test/run-all-sharding.check.sh ] && echo ok` → `ok`. The workflow's
+   structure check enforces both on every run; there is no standalone script for it.
+10. **The patch applies (R10, R13).**
+    `git apply --check proposals/ci-test-shards-shard-ci.patch` → no output, exit `0`.
+    Agents run `--check` only; they never apply it.
+11. **Scope.** `git diff --stat main` lists exactly five paths before Step 6 —
+    `scripts/test/run-all.sh`, `scripts/test/run-all-sharding.check.sh`,
+    `ci/required-files.txt`, `RESTORE.md`,
+    `proposals/ci-test-shards-shard-ci.patch` — and exactly seven after it, adding
+    `.github/workflows/ci.yml` and `AGENTS.md`.
+12. **The full no-argument run, bound to the final head (R2).** Required, and it
+    happens once: on the implementation PR's first CI run, under the unchanged
+    workflow, with the operator's commit not yet pushed (Step 5). Expect the old
+    single `ci` job green, its log showing 62 `==> ` headers and ending
+    `all 62 test scripts passed`. Record the run's URL, the commit it ran on (`H0`),
+    the `ci` job's status and its wall-clock time in the PR body. It cannot be re-run
+    at the final head, because the final head is sharded, so also record there the
+    real output of `git rev-parse H0:scripts/test` and
+    `git rev-parse HF:scripts/test`. The two tree ids must be identical — that is what
+    makes the earlier run current proof of the shipping tree instead of old proof on a
+    new commit. If they differ, the run is redone at the new head before review: the
+    revert-and-re-apply of Step 6, or the operator runs
+    `bash scripts/test/run-all.sh` with no arguments locally at the final head and
+    pastes the 62 headers and the count line, naming that commit. Step 6 does not
+    start until the run and `H0` are in the PR body; if the recording was missed
+    entirely, the only recovery is that same expensive path, described in Step 6.
+13. **The gate keeps its name and meaning (R11, R14), and the shard count is checked
+    against the matrix (R10).** On the PR after Step 6, the check list reads `ci`,
+    `checks`, and `test (1)` through `test (6)`; `ci` is green and is still the one
+    required check. The operator records that run's wall-clock duration in the PR body;
+    target under 25 minutes. This is also the first run where assertion 8 of the proof
+    script has something to compare: the `Sharding proof` step in `checks` now sees the
+    `--shard ${{ matrix.shard }}/6` run line and asserts the `shard:` list is exactly
+    `1..6` in order. Paste both lines in the PR body — the local
+    `workflow is still serial` line from item 1's post-Step-1 run, and this run's
+    equality line from CI — so the assertion is on record as live at the head that
+    merges and not merely present in the file. Under CI there is no third outcome: a
+    serial workflow here would fail the step rather than print the serial line.
+14. **A failing shard turns `ci` red — on this PR, then removed again (R11).** This
+    needs the new workflow, so it cannot be done before Step 6. It needs a PR run:
+    `ci.yml` runs on `pull_request` and on `push` to `main` only, so a push to any
+    other branch starts nothing, which is why the spec puts this proof on the
+    implementation PR. So the coder pushes one commit to the implementation branch
+    adding `scripts/test/zz-red.test.sh` (`#!/usr/bin/env bash`, then `exit 1`) — it
+    sorts last, so it lands in shard 3.
+    Expect `test (3)` red, the other five shards green (`fail-fast: false`), `checks`
+    green, and `ci` **red, not skipped**. Record that run's URL, the commit it ran on
+    (`HR`) and its job list (`gh pr checks` output) in the PR body, then push a second
+    commit deleting the file and wait for green — a plain commit, never an amend or a
+    force-push; call that head `HD`. `HR` is superseded before merge, so bind it by
+    both files the outcome depends on, the gate and the runner. At the final head also
+    record the real output of `git diff --name-status HR HD` — exactly one line, the
+    deletion of `scripts/test/zz-red.test.sh` — of `git rev-parse HD:scripts/test`
+    against `git rev-parse HF:scripts/test`, and of
+    `git rev-parse HR:.github/workflows/ci.yml` against
+    `git rev-parse HF:.github/workflows/ci.yml`. Identical blob ids mean the gate that
+    went red is byte-for-byte the gate that ships; identical tree ids mean the runner
+    that turned the failing suite into a failed shard job is the one that ships. If any
+    commit after `HD` touches `scripts/test` or the workflow, redo the add-then-delete
+    pair on top of that fix. The squash merge keeps both commits
+    off `main`, and the `merge-ready` decision is made at the final green head, where
+    review checks every one of these records — item 12's tree ids for R2, and the
+    delete diff, the tree pair and the blob pair for R11. Step 6 has the full
+    procedure. This is the direct proof of the first risk above.
