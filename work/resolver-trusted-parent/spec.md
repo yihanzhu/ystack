@@ -163,7 +163,13 @@ measured rather than guessed:
   `snprintf` was one statement. Nothing else changes: the `fcntl` pair, the write and the
   `_exit` were all on the list already, and the `runtime-pgid:` write keeps its
   `snprintf` because it is not in a handler. The forbidden-call list is a reading and a
-  grep in R10, not a line in the parent (R2).
+  grep in R10, not a line in the parent (R2). This round adds ~4 more, to **~1173**, all
+  of it the `reaped` flag the bounded wait now carries: the local and its initialisation
+  (~1), the `== target` test that sets it in place of the old `> 0` break (~1), and the
+  `if (!reaped)` guards after the loop — one around the single-pid branch's `SIGKILL` and
+  blocking reap, one around the group branch's blocking reap alone (~2). The group
+  branch's `SIGKILL` gains no guard and no line: it stays unconditional, which is the
+  half of this fix that costs nothing (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -302,7 +308,7 @@ measured rather than guessed:
   traps costs none at all: `wait_interrupted=1` was already counted as part of each of the
   three bodies when the flag went in, and this round only makes that normative everywhere
   the bodies are quoted (R1).
-- **Focused test ~1043 lines.** For scale, the existing resolution test is 746 lines and
+- **Focused test ~1049 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
@@ -389,13 +395,23 @@ measured rather than guessed:
   and what the marker file may hold; and the mid-run case's pipe variant at ~10 — the
   pipe, the background reader, the `dup` the test keeps, the rerun of the case body,
   and the `fcntl` probe, of which the probe is ~5 of C compiled beside the marker
-  library and the rest is shell (R2, R7), and this round's sixth signal case (~12): the
+  library and the rest is shell (R2, R7), and the sixth signal case (~12): the
   pipe, the fill-to-`EAGAIN` mode added to that same C probe (~3 — it already sets and
   reads flags on descriptor 3, so filling is a loop and an `errno` test rather than a new
   program), the entry run with the write end as its stderr, the `.run` poll and the
   `SIGTERM` reused from the pre-parent case, the bounded-timeout wait, and the three
   assertions — `143`, an empty output directory, and no `entry-signal:` line in what the
-  test drains off the read end afterwards (R1, R10).
+  test drains off the read end afterwards (R1, R10). This round adds ~6 more to that last
+  case, to **~1049** for the bullet, and the ~3 of the withdrawn `EAGAIN` fill mode
+  counted above is spent rather than returned — the probe keeps its flag-reading mode,
+  which the case now calls one more time, and loses the writing one. The ~6 are the
+  blocking filler in the background with its pid kept (~1), the fixed-delay wait and the
+  `kill -0` that requires the filler to still be there with the `ps -o state=` read for
+  its failure message and an outright case failure if the filler has exited (~3), the
+  `fcntl` probe run against the write end before launch with its `clear` assertion (~1),
+  and the teardown that kills the filler before it closes the pipe (~1). Nothing else in
+  the case moves: the entry run, the poll, the `SIGTERM`, the bounded wait and the three
+  assertions are the same statements they were (R1, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
@@ -751,6 +767,27 @@ of the four bullets is ~2708 (~1169 + ~436 + ~1043 + ~60) against the ~2420 the 
 derived from, about 12% above it and so still inside the ±15% the range expresses, so the
 implementation range is unchanged.
 
+This round adds ~10, in the C parent and the test and nothing in the entry, from two P2s
+that are both a setup step undoing the property the step after it meant to prove. **~4 in
+the parent**: the handler's `reaped` local with its initialisation, the `== target` test
+that sets it where the loop used to break on `> 0`, and the `if (!reaped)` guards after
+the loop — one over the single-pid branch's `SIGKILL` and blocking reap, one over the
+group branch's blocking reap alone, the group `SIGKILL` staying unguarded (R2). **~6 in
+the test**: the full-pipe case's filler becomes a background blocking writer with its pid
+kept (~1), a fixed-delay `kill -0` requires it to still be blocked with a `ps -o state=`
+read for the message and an outright failure if it has exited (~3), the `fcntl` probe
+gains a pre-launch run with its `clear` assertion (~1), and the teardown kills the filler
+before it closes the pipe (~1); the ~3 the withdrawn `EAGAIN` fill mode cost is spent
+rather than given back, because the probe keeps the flag-reading mode the case now calls
+one more time and only loses the writing one (R10). **Nothing in the entry**, and that is
+a claim rather than an omission: R1's omission rule is the thing under test and it is
+unchanged — what moved is how the test sets up the pipe it is tested on, plus a
+re-measurement of R1's own paragraph on a real `pipe(2)` behind a blocking filler, which
+is prose about the entry and not a statement in it. Nothing was made cheaper to
+compensate. The sum of the four bullets is ~2721 (~1173 + ~439 + ~1049 + ~60) against the
+~2420 the range is derived from, about 12% above it and so still inside the ±15% the range
+expresses, so the implementation range is unchanged.
+
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
 in another. It is not clean. The direct-parent cases in R10 build a run directory by
@@ -766,7 +803,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 7690 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 7878 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -891,14 +928,22 @@ so kept a writable descriptor outside the output root alive across the re-exec a
 every child, where closing every number above 2 without exception and letting bash
 relocate its own script input — with a refusal first if `ulimit -n` is below 64, which is
 where the relocation has no free number to use — shuts the write handle and keeps the
-entry running to its end, and this round the entry's signal traps setting the wait loop's
+entry running to its end, beside the entry's signal traps setting the wait loop's
 flag as part of recording the signal and that loop forwarding an already-recorded signal
 before each `wait` rather than only after an interrupted one, so a signal delivered while
 the entry sits in `wait` can no longer be read as the parent's own exit and one delivered
 before the loop began can no longer be left unsent while the entry blocks for the parent's
-whole natural life and then reports the status of a run nobody interrupted).
-**Evidence-based range for this spec pull request: 6537-8844 lines** — the measured
-7690 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+whole natural life and then reports the status of a run nobody interrupted, and this round
+the handler's bounded wait recording whether it actually reaped the target, so the
+single-pid branch stops sending a `SIGKILL` to a number the kernel took back a moment
+earlier while the group branch keeps sending its own unconditionally, the survivors that
+kill exists for being the one thing a handler has no safe way to check, beside the
+full-pipe case filling its pipe with a blocking writer rather than a non-blocking one, so
+the flag the old filler left behind on the shared open file description can no longer turn
+the entry's unconditional write into a fast `EAGAIN` and pass the single case in this
+suite that exists to catch that write).
+**Evidence-based range for this spec pull request: 6696-9060 lines** — the measured
+7878 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
@@ -906,7 +951,7 @@ range is the separate figure above and the two are never compared. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420; where each block of
+7173, then 7420, then 7690; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1784,13 +1829,53 @@ accepted-concern list at the top; and the re-derived size figures here and for t
 implementation, whose range does not move because the entry's ~3 is the whole
 implementation cost of the round.
 
+This round is +188 net over two P2s, and the two share a shape that is worth naming
+because it is not the usual one: each is a *setup* step that quietly undoes the property
+the step after it was going to prove. **About 50 go to the handler's `reaped` flag.** The
+bounded wait sets it when its `waitpid` returns the target, and the two branches then
+part company: the single-pid branch sends its `SIGKILL` and does its blocking reap only
+inside an `if (!reaped)`, because a pid that has already been reaped is back in the
+kernel's pool and signalling it is the stale-pid stranger-kill the rest of this design
+closes; the group branch sends `kill(-pgid, SIGKILL)` regardless, because survivors are
+the whole reason a group kill exists and a handler cannot run the process-table scan that
+would tell it there are none. The residual that leaves is written out rather than rounded
+off — a group id outlives its leader and is recycled only once every member has exited, so
+the group kill could reach a stranger only if the whole group emptied inside the one-second
+window *and* the kernel handed that exact number to a new group leader — and the
+non-handler survivor path from round 31 is cross-checked beside it, because that path
+*does* run the scan under the block and the difference between the two is deliberate.
+`target` becomes the leader's pid on the group branch, which is the same number `pgid`
+already holds. **About 115 go to the full-pipe case's filler.** The `O_NONBLOCK` filler is
+withdrawn with the reason stated plainly — a copy of the write end shares the open file
+description, the flag lives on the description, so that filler handed the entry a
+non-blocking stderr and an unconditional `printf` then failed fast with `EAGAIN` instead
+of hanging, which would have passed the case on a broken entry — and a blocking writer
+takes its place: `/bin/dd if=/dev/zero bs=65536 count=2` on the write end, a fixed-delay
+`kill -0` that requires the filler to still be blocked and fails the case outright if it
+has exited, a `clear` assertion from the round-32 `fcntl` probe *before* the entry is
+launched, and a teardown that kills the filler before closing the pipe. Both halves are
+measured rather than argued, and R1's own measurement paragraph is re-measured on a real
+`pipe(2)` behind a blocking filler for the same reason: the old filler blocks (still alive
+at one second and at two, `ps -o state=` `S`) and leaves the flags reading `clear`, the
+unconditional `printf` into that pipe is killed by a `perl alarm 3` at exit `142` with its
+write still outstanding, the guarded body exits `143` at once having written nothing, and
+the withdrawn filler reports `filled 65536 bytes, then EAGAIN`, leaves the probe reading
+`nonblock` and lets the same unconditional `printf` run straight on to its `exit 143`. The
+remaining ~23 are the ripples and the bookkeeping: Design step 1's branch clause and its
+wait clause; R10's proof-by-reading list, which now reads for the flag and for the
+asymmetry of the two guards, because the failure needs the kernel to reissue the pid in the
+instants between the loop's `waitpid` and the `kill` and so cannot be tested; the
+accepted-concern list at the top; and the re-derived size figures here and for the
+implementation, whose range does not move because +4 in the parent and +6 in the test leave
+the sum inside the ±15% it already expresses.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 6537-8844 lines**, which is this file's measured
-7690 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 6696-9060 lines**, which is this file's measured
+7878 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -2728,12 +2813,16 @@ the spec pull request's range above still blocks review.
   sockets, would make every unanticipated object a write.
 
   **Measured, so the rule is not an argument about what ought to happen.** On the same
-  bash: with the entry's stderr on a pipe pre-filled to capacity (65536 bytes on
-  `Darwin 27.0.0`, filled by a non-blocking writer until `EAGAIN` and then left, with the
-  read end open and never read), the unconditional `printf` never returns — the shell was
-  still alive five seconds later and had to be killed — while the same body under the
-  condition above exits `143` in 0.01 s, having written nothing. That is the failure and
-  the fix, one command apart.
+  bash: with the entry's stderr on a real `pipe(2)` filled to capacity (65536 bytes on
+  `Darwin 27.0.0`) by a **blocking** writer that is still sitting in its own `write`, with
+  the read end open and never read, the unconditional `printf` never returns — a `perl`
+  `alarm 3` had to kill it, exit `142`, with the write still outstanding — while the same
+  body under the condition above exits `143` at once, having written nothing. That is the
+  failure and the fix, one command apart. The filler has to be the blocking kind and this
+  round says so here as well as in R10: a filler that reaches for `O_NONBLOCK` sets that
+  flag on the open file description the entry is about to be handed, and the unconditional
+  `printf` then fails fast with `EAGAIN` instead of hanging, which measures nothing about
+  this rule at all.
 
   **What is given up is named.** A caller who pipes the entry's stderr to a reader gets no
   `entry-signal:` line, even when the reader is draining it and the write would have gone
@@ -4000,18 +4089,54 @@ the spec pull request's range above still blocks review.
   same reason. There is nothing a handler on its way to `_exit(128 + signal)` can do with
   either, so it checks neither; that is a requirement here rather than a note for the plan.
 
-  The handler then chooses on those two, in this order. If `pgid != 0`, it runs the group
-  sequence exactly as above: `kill(-pgid, SIGTERM)`, the bounded wait below,
-  `kill(-pgid, SIGKILL)`,
-  reap. Else if `pre_child != 0`, it signals that **one** pid and no group —
-  `kill(pre_child, SIGTERM)`, the same bounded wait, `kill(pre_child, SIGKILL)`, reap —
-  because a
-  digest tool or a `jq --version` is a single short-lived process with no group of its own
-  worth naming. Else there is nothing to kill, and the handler kills nothing. In all three
+  The handler then chooses on those two, in this order, and it carries one more piece of
+  state across the choice: a local `reaped`, `0` before the bounded wait below and `1` only
+  if that wait's `waitpid` actually returned the target. **The two branches spend that flag
+  differently, and the difference is the point of this round.**
+
+  If `pgid != 0`, it runs the group sequence: `kill(-pgid, SIGTERM)`, the bounded wait
+  below on the leader, then `kill(-pgid, SIGKILL)` **whether or not the leader was
+  reaped**, and then the final blocking reap only if `!reaped`. The group `SIGKILL` is
+  unconditional on purpose: survivors in the group are the entire reason a group kill
+  exists, the leader exiting says nothing about whether there are any, and the handler
+  cannot look — the process-table scan that would answer the question is not
+  async-signal-safe, so there is no way to ask from in here.
+
+  Else if `pre_child != 0`, it signals that **one** pid and no group —
+  `kill(pre_child, SIGTERM)`, the same bounded wait, and then, **only if `!reaped`**,
+  `kill(pre_child, SIGKILL)` followed by the blocking reap. If the bounded wait already
+  took the child, the handler sends nothing further and reaps nothing further, because
+  there is nothing left that belongs to this parent: the pid went back to the kernel at
+  that reap, it can be handed to any process on the machine by the next instruction, and
+  `kill(pre_child, SIGKILL)` after that is the stale-pid stranger-kill this whole signal
+  design exists to close — the same hazard the block-reap-zero-restore shape around every
+  main-flow reap closes, arriving here by a different route. A digest tool or a
+  `jq --version` is a single short-lived process with no group of its own worth naming, so
+  once it has been reaped the branch has nothing left to do.
+
+  Else there is nothing to kill, and the handler kills nothing. In all three
   cases it then writes its one `parent-signal:` line (below) and `_exit(128 + signal)` — in
   that order, killing and reaping before writing anything, for the reason the line's own
   block gives — and that status is the same one the group branch already produced and the
   same number the entry reports (R1).
+
+  **The residual the group branch keeps is stated rather than smoothed over.** A process
+  group id outlives its leader: the number stays allocated while any member of the group is
+  alive, and the kernel can only recycle it once every member has exited. So
+  `kill(-pgid, SIGKILL)` after the leader was reaped is not the single-pid hazard above.
+  For the group id to name strangers, the whole group would have to have emptied inside the
+  one-second grace window **and** the kernel would have to have handed that exact number to
+  a new process that then became a group leader of its own. That is far narrower than the
+  single-pid case, and it is not closable from inside a handler at all: closing it needs
+  the process-table scan, and the scan is not on the list a handler may call from. **The
+  two paths are deliberately different for exactly that reason.** The main flow *does* run
+  the scan, and round 31 arranged it so: the three-signal block opened before the reap at
+  `:457` stays held across the survivor check at `:460-462` and across the
+  `kill(-child, SIGKILL)` and `kill(child, SIGKILL)` at `:491-492`, with `pgid = 0` last
+  and the mask restored after it, so the scan runs where no handler can interleave with it.
+  The handler is the path that cannot scan, so it trades a much narrower stranger-kill
+  window for the guarantee that a surviving resolver group is killed; the main flow trades
+  the other way because it is able to.
 
   **"A brief wait" is not a specification, and this round makes it one, because the wait
   happens inside a signal handler.** Everything between the first `kill` and the `_exit`
@@ -4023,17 +4148,23 @@ the spec pull request's range above still blocks review.
   left to the plan:
 
   ```
+  reaped = 0;
   for (i = 0; i < 20; i++) {
-    if (waitpid(target, &st, WNOHANG) > 0) break;
+    if (waitpid(target, &st, WNOHANG) == target) { reaped = 1; break; }
     tv.tv_sec = 0; tv.tv_usec = 50000;
     select(0, NULL, NULL, NULL, &tv);
   }
   ```
 
   Twenty iterations of a 50 ms `select` with no descriptors in it — about one second in
-  all — ending early the moment the reap succeeds, and then the `SIGKILL` and the final
-  blocking reap whichever way the loop left. `target` is `-pgid` on the group branch and
-  `pre_child` on the other, and that is the only difference between the two.
+  all — ending early the moment the reap succeeds. `target` is the child's own pid on both
+  branches: `pgid` on the group branch, which is the same number as the leader's pid
+  because the parent assigns it from what the `fork` returned, and `pre_child` on the
+  other. What differs between the two is not the loop but what follows it, which the two
+  branches above state — the group branch sends its `SIGKILL` either way and reaps only
+  while `reaped` is `0`, the single-pid branch does neither once `reaped` is `1`. The flag
+  is a plain local and needs no `volatile sig_atomic_t`: it is written and read inside one
+  handler invocation and never shared with `main`.
 
   **Both of those calls are on the list, and the list is named here rather than left to be
   looked up.** POSIX.1-2017 (IEEE Std 1003.1-2017, XSH 2.4.3) is the standard this rests
@@ -6486,6 +6617,18 @@ the spec pull request's range above still blocks review.
   is named so the reviewer does not widen it: `snprintf` is legitimate in the parent's
   `runtime-pgid:` write and `nanosleep` is legitimate in the copied poll loop at `:488`, so
   the grep is scoped to the handler bodies and not to the file (R2).
+  **One more joins the list this round, and it is four lines inside those same bodies.**
+  The reviewer reads that the bounded wait sets a `reaped` flag when its `waitpid` returns
+  the target, and then that the two branches spend the flag differently: on the single-pid
+  branch the `kill(pre_child, SIGKILL)` and the blocking `waitpid` after the loop both sit
+  inside an `if (!reaped)`, and on the group branch the `kill(-pgid, SIGKILL)` sits
+  **outside** any such guard with only the blocking reap inside one. Both halves are the
+  check, in opposite directions: a guard missing from the single-pid branch signals a pid
+  the handler has already given back, and a guard wrongly added to the group branch leaves
+  a surviving resolver group alive. Neither is a case, for the reason the reaps above are
+  not — the failure needs the kernel to hand the reaped pid to another process in the few
+  instructions between the loop's `waitpid` and the `kill`, which nothing a test script
+  can arrange, so a case aimed at it would pass by missing (R2).
   The `kill -0` reading is on this list for the same reason the reaps are: the failure needs
   a signal to land in the instant between a reaping `wait` and the next statement, and a
   case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
@@ -6578,29 +6721,65 @@ the spec pull request's range above still blocks review.
   as on the fixed one — the same trap the pipe variant above avoids, in the other
   direction.
 
-  So the test makes a pipe, keeps the read end open and never reads it, and fills it to
-  capacity with a writer that then exits: the writer sets `O_NONBLOCK` on its own copy of
-  the write end and writes until `EAGAIN`, which is the portable way to fill a pipe to
-  whatever that platform's capacity happens to be, and is a mode added to the same small C
-  probe the pipe variant already compiles rather than a second program. Capacity is
-  measured and not assumed — 65536 bytes on `Darwin 27.0.0`, measured the same way, and
-  the same at every write size from 1 byte to 65536 — and the plan measures Linux beside
-  it, though nothing in the case depends on the number: it fills until the kernel says
-  full. Then it runs the entry with that write end as stderr, polls the output directory
-  for `.run` the way the pre-parent case does, sends `SIGTERM`, and waits with the same
-  bounded timeout.
+  **The filler has to be a blocking writer, and the `O_NONBLOCK` filler this spec used to
+  name is withdrawn this round, because it broke the very case it was setting up.** That
+  filler set `O_NONBLOCK` on its own copy of the write end and wrote until `EAGAIN`. A copy
+  of a descriptor shares the open file description, and `O_NONBLOCK` lives on the
+  description and not on the copy — so the filler handed the entry a *non-blocking* stderr,
+  and an unconditional `printf` into a full non-blocking pipe fails fast with `EAGAIN`
+  instead of hanging. The case would then have passed on an entry that never omitted the
+  diagnostic at all: pass by missing, in the one place in this section that exists to catch
+  the write. That was measured rather than reasoned about. On `Darwin 27.0.0` that filler
+  reports `filled 65536 bytes, then EAGAIN` and leaves the `fcntl` probe reading
+  `nonblock` on the write end the test still holds, and a `/bin/bash -c 'printf … >&2'` on
+  that descriptor comes back with a failing `printf` status immediately and runs straight
+  on to its `exit 143` — no wait at all.
 
-  Three assertions. One: the entry exits `143`, inside the timeout — which is the whole
+  So the test fills the pipe with a writer that **blocks**, and sets no flag on anything.
+  It makes the pipe, keeps the read end open and never reads it, and starts a background
+  writer that pushes more than the pipe can hold in ordinary blocking mode —
+  `dd if=/dev/zero bs=65536 count=2` with the write end as its stdout, at `/bin/dd` on
+  Darwin and at whichever of `/bin` and `/usr/bin` the platform keeps it in, or a bash
+  `printf` loop where the plan would rather not name a path at all — so that writer is
+  sitting in `write` from the moment the pipe is full and stays there. Capacity is measured and not assumed — 65536 bytes on `Darwin 27.0.0` — and the
+  plan measures Linux beside it, though nothing in the case depends on the number:
+  `count=2` at that block size is twice whatever the buffer holds on either platform.
+
+  **Waiting for "full" needs an observable, and the case uses the writer's own survival
+  rather than a guess.** A blocking filler that has not exited is a filler with bytes still
+  to place, which is the same statement as "the pipe is full" once it has written at least
+  the capacity. So the test waits a fixed short time after starting it and then requires
+  the writer to still be there — `kill -0` on its pid, with `ps -o state=` read for the
+  failure message, the same tool the stopped-parent case above already uses — and **fails
+  the case outright if the writer has exited**, because a filler that finished means the
+  pipe was never full and every assertion below would be measuring nothing. Both platforms
+  answer this the same way and neither answer needs a tool off R7's allowlist. Measured:
+  the blocking `dd` above is still alive at one second and still alive at two, `ps -o
+  state=` reports `S`, and it never exits at all while nobody drains the pipe.
+
+  **And the case asserts the mode before it launches the entry**, with the round-32 `fcntl`
+  probe the pipe variant already compiles: run against the write end, it must print
+  `clear`. That is the assertion that stops this case quietly turning back into the
+  withdrawn one — a filler that sets the flag, a plan that "optimises" the fill, a later
+  reader adding an `O_NONBLOCK` for speed. Measured on `Darwin 27.0.0`: `clear` before the
+  filler starts, and `clear` again with the pipe full and the filler blocked.
+
+  Then it runs the entry with that write end as stderr, polls the output directory for
+  `.run` the way the pre-parent case does, sends `SIGTERM`, and waits with the same bounded
+  timeout. At the end it tears down in the other order — kill the filler first, then close
+  the pipe — so no blocked writer is left behind in the test's own scratch.
+
+  Three assertions after that. One: the entry exits `143`, inside the timeout — which is the whole
   case, because an entry that writes unconditionally is still sitting in `printf` when the
   timeout expires. Two: `.run` is gone and the output directory is completely empty, so
   the omission bought the exit without costing the cleanup. Three: nothing the entry wrote
   arrives in the pipe — the test drains the read end afterwards, past the filler bytes,
   and requires no `entry-signal:` line, which is the positive check that the rule omitted
-  rather than that the write happened to fit. The behaviour under test was measured before
-  it was specified: on bash 3.2.57, `Darwin 27.0.0`, with a pipe pre-filled to 65536 bytes
-  and never drained, an unconditional `printf` to it had not returned after five seconds
-  and the shell had to be killed, while the same body guarded by
-  `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]` exited `143` in 0.01 s having written
+  rather than that the write happened to fit. The behaviour under test was measured on a
+  real `pipe(2)` behind a blocking filler before it was specified: on bash 3.2.57,
+  `Darwin 27.0.0`, an unconditional `printf` into that pipe was still in its write when a
+  `perl` `alarm 3` killed it three seconds later, exit `142`, while the same body guarded
+  by `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]` exited `143` at once having written
   nothing.
 
   The test also
@@ -6825,10 +7004,19 @@ Order, each step checkable before the next:
    before — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
    only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
-   `kill(-0, …)` in any of them. The wait between the `SIGTERM` and the `SIGKILL` is a
+   `kill(-0, …)` in any of them — and the two killing branches part company after the
+   wait: the group branch sends `kill(-pgid, SIGKILL)` whether or not the leader was
+   reaped, because survivors are what a group kill is for and a handler cannot run the
+   process-table scan that would tell it there are none, while the single-pid branch sends
+   `kill(pre_child, SIGKILL)` **only** when the wait did not already reap the child,
+   because a reaped pid is back in the kernel's pool and signalling it is the stranger-kill
+   the rest of this design closes (R2). The wait between the `SIGTERM` and the `SIGKILL` is a
    bounded loop of at most twenty iterations, each a `waitpid(target, &st, WNOHANG)` that
-   breaks out on a successful reap and a `select(0, NULL, NULL, NULL, &tv)` with `tv` at
-   50 ms — about a second in total, ending early — chosen because both calls are on the
+   sets a local `reaped` and breaks out when it returns the target, and a
+   `select(0, NULL, NULL, NULL, &tv)` with `tv` at
+   50 ms — about a second in total, ending early — with `target` the child's own pid on
+   both branches, `pgid` being the leader's pid so the group branch waits on the leader,
+   and `reaped` the flag the two post-loop shapes above read; chosen because both calls are on the
    POSIX.1-2017 async-signal-safe list and `nanosleep` and `usleep` are not, which rules
    out copying the poll loop's own `nanosleep` (`:488`) into handler context; every call
    in the three handler bodies is checked against that list by name, and `snprintf`,
