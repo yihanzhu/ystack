@@ -119,7 +119,15 @@ measured rather than guessed:
   `pgid = 0` inside the `observed == child` arm (~3); the limit path's blocking `waitpid`
   (`:493-494`) gets the same (~2); and the `setpgid`-failure reap (`:451-452`) gets only a
   mask restore before its `return 70`, being already inside the fork region (~1). Nothing
-  is added after the reap, because nothing there names a pid (R2).
+  is added after the reap, because nothing there names a pid (R2). This round adds ~12
+  more, to **~1139**: the startup close of inherited descriptors, among the first
+  statements of `main` before any fork — the `sysconf(_SC_OPEN_MAX)` read, the
+  `getrlimit(RLIMIT_NOFILE)` read and the smaller-of-the-two with its floor and ceiling
+  (~7), the `for` loop with its ignored `close` (~2), and the comment saying why neither
+  `closefrom` nor `close_range` is used, which a reviewer will otherwise ask about every
+  time they read it (~3). The `~15` the bullet above already counts for closing inherited
+  descriptors is the child's pre-`execve` close and is unchanged; this is the second
+  place, not the same one moved (R3, R5).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -209,8 +217,15 @@ measured rather than guessed:
   free, and so is the `wait_interrupted=1` each of the three traps gains — the same three
   lines, longer. There is no fifth initialisation to pay for either: `wait_interrupted` is
   only ever read after the loop's own clear, so it stays off the initialise-before-arming
-  list for the same reason `last_forwarded` does (R1).
-- **Focused test ~971 lines.** For scale, the existing resolution test is 746 lines and
+  list for the same reason `last_forwarded` does (R1). This round adds ~10 more, to
+  **~430**, in two places. ~6 are the startup close of inherited descriptors: the `for`
+  over the `/dev/fd/*` glob, the `${fd##*/}` strip, the one-line `case` that skips
+  non-digits and 0, 1 and 2, the `eval "exec ${fd}>&-"` with its `2>/dev/null`, and the
+  `done` (R1). ~4 are the job-table gate in the wait loop: the `case " $(jobs -l) "` line,
+  its `Running` arm, the `;;` and the `esac` wrapped around the `kill` that was already
+  there, plus the `if`/`break` for the not-interrupted branch moving to the top of the
+  body, which is the same statements re-ordered and costs nothing of its own (R1).
+- **Focused test ~996 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
@@ -263,7 +278,12 @@ measured rather than guessed:
   directory rather than one emptiness test), the two-umask case (~15 — a `umask 000` run
   and a `umask 777` run, the background poll that reads `.run`, `tmp` and `home` while
   `home` exists, its bounded retry, and the `umask 000` direct-parent invocation that reads
-  the parent's four sandbox modes), the pin-constant assertions over ten pins
+  the parent's four sandbox modes), the two inherited-descriptor cases (~25 — a shared
+  helper that makes the fifo, starts the background reader, opens the write end on
+  descriptor 7, starts the process under test, closes the test's own copy and reports
+  which of the two events came first, at ~12; the entry half with its `.run` poll and its
+  ordering assertion at ~7; and the parent half, which reuses the group-2 fixture builder
+  and reads for the `runtime-pgid:` line, at ~6), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
   and the pinned constant all agree, R1), the
   command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
@@ -278,9 +298,12 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2463 lines; the range above is that sum with ~15% headroom at both
-ends, and this round's ~22 — ~2 in the entry's wait loop and ~20 in the test — moved it
-by under one per cent, so the implementation range stands where it was.
+Those four bullets now sum to about 2625 lines. The range above is not re-derived from
+that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
+both ends, and every round since has recorded its own delta against that figure rather
+than moving the range for it. This round's ~47 — ~12 in the parent, ~10 in the entry and
+~25 in the test — takes the sum to about 8% above the ~2420, still well inside the ±15%
+the range expresses, so the implementation range stands where it was.
 It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
@@ -553,8 +576,26 @@ the entry says it forwarded to, and the assertion that exactly one `entry-signal
 was written naming the first signal (R10). Nothing in the C parent, which the finding does
 not reach: its handler already `_exit`s on the first signal it takes and holds its siblings
 under `sa_mask` (R2). Nothing was made cheaper to compensate. The sum of the four bullets
-is now ~2535 against the ~2420 the range is derived from, about 5% above it and so still
-well inside the ±15% the range expresses, so the implementation range is unchanged.
+was then ~2578 against the ~2420 the range is derived from, about 6% above it and so still
+well inside the ±15% the range expresses, so the implementation range was unchanged. (That
+round wrote the running total as ~2535; adding the four bullets as they stood gives ~2578,
+and the figure is corrected here rather than carried forward wrong.)
+
+This round adds ~47, and it touches all three files, from two P2s that have nothing to do
+with each other beyond both being a protection written one step too late. ~10 in the
+entry: the `/dev/fd/*` close loop among its first builtins (~6), and the
+`case " $(jobs -l) " in *" $parent_pid Running"*)` wrapped around the `kill` in the wait
+loop with the not-interrupted branch moved to the top of the loop body (~4) — a gate on a
+statement that already existed rather than a new mechanism (R1). ~12 in the C parent: the
+`close` loop from 3 to a ceiling among the first statements of `main`, with the
+`sysconf`/`getrlimit` pair that gives it that ceiling and the comment saying why neither
+`closefrom` nor `close_range` is portable enough to use (R5). ~25 in the test: the two
+inherited-descriptor cases and the fifo-and-reader helper they share (R10). Nothing was
+made cheaper to compensate — the job-table gate could in principle have paid for itself by
+retiring the `wait_interrupted` flag, and it does not, because the two answer different
+questions and the loop needs both. The sum of the four bullets is now ~2625 against the
+~2420 the range is derived from, about 8% above it and so still well inside the ±15% the
+range expresses, so the implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -571,7 +612,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 5448 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 5897 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -652,16 +693,22 @@ the same reason, beside the pin on the parent's own source exercised for the fir
 so the one check standing between an edited `trusted-launch.c` and a launched altered
 parent cannot be missing while the suite passes, beside the sentinel that proves the
 parent never signals the caller's process group placed in that group by turning job
-control off for its case, so it can no longer survive the mistake it exists to catch).
-**Evidence-based range for this spec pull request: 4631-6265 lines** — the measured
-5448 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+control off for its case, so it can no longer survive the mistake it exists to catch,
+and this round the entry's wait loop forwarding only while bash's own job table still
+lists the parent's job as running, so a signal that lands after the reap can no longer
+send a `kill` at a number the kernel may already have handed to somebody else, beside both
+shipped files closing every descriptor they inherited above 2 before they fork anything at
+all, so a caller's credential, socket or write handle outside the output root can no
+longer ride into a SHA tool, a compiler or a `cp` and be a write root nobody declared).
+**Evidence-based range for this spec pull request: 5012-6782 lines** — the measured
+5897 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153; where each block of
+5023, then 5153, then 5448; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1180,7 +1227,9 @@ interrupted wait for a parent that had exited `7`. The measurement paragraph is 
 around that: three columns per line — the flag, `jobs -p`, and what the old loop asked —
 so the candidate taken, the candidate rejected and the test withdrawn can be compared on
 the same events. `jobs -p` is recorded as workable and rejected on cost, which is the
-honest reason rather than a manufactured defect. The coincidence brings one new shipped
+honest reason rather than a manufactured defect — and the round after this one takes it
+after all, for the second of the two decisions the loop makes, so that verdict stands here
+as the history it is rather than as advice. The coincidence brings one new shipped
 line, the `[ "$status" -ne 127 ] || { … }` guard, and one new admission: in that instant
 the parent's own status can be lost and `128 + signal` is what the entry reports. A second
 admission replaces a claim — the forward-once rule used to end "pid reuse is impossible
@@ -1205,13 +1254,53 @@ zombie as fact, the accepted-concern list at the top, and the re-derived size fi
 and for the implementation, whose range does not move because the ~22 the entry and the
 test gain is under one per cent of the sum it comes from.
 
+This round is +449 net over two P2s, and both are the same shape as the last three
+rounds' findings: a defence that is in the right file and one step too late in it. About
+150 go to the entry's wait loop, and most of that is the two decisions being separated
+from each other. The loop now answers "should I leave" with the `wait_interrupted` flag —
+with the reviewer's rule written out, that an uninterrupted wait is a reaped parent and
+forwards nothing — and "should I forward" with `$(jobs -l)`, forwarding only while the
+parent's job is listed as `Running`, because the flag is set by a signal that lands after
+a reaping wait just as it is by one that cuts a wait short, and a `kill` on that path goes
+to a number the kernel may have handed to somebody else. The rest of the 150 is the
+evidence and the withdrawal: why the job table is immune to pid reuse where `kill -0` was
+not, the three job states measured and what each one means, the stopped-job reading that
+a script's `jobs` does not see, the re-run two-`TERM`, `INT`, exit-`42` and control
+variants with a `running=` column in place of the old `jobs -p=` one, a sixty-attempt
+coincidence run that caught the reviewer's case 27 times and forwarded on none of them,
+and the round-before-last's "workable, rejected on cost" verdict on the job table
+withdrawn in the open, with the subshell question it left hanging answered by measurement.
+The residual paragraph is rewritten rather than deleted: one `kill` in the instant between
+the table check and the `kill` itself, shown in the measurement as a line where the table
+said `Running` and the `kill -0` a breath later said the pid was gone. About 115 go to
+the inherited descriptors. Both shipped files now close everything above 2 before they
+fork anything: the entry with a `/dev/fd/*` glob, an all-digits check and an
+`eval "exec ${fd}>&-"`, because bash 3.2 has no `{fd}>&-`, measured with a fifo whose
+reader sees end-of-file before `.run` exists; the parent with a `close` loop from 3 to a
+ceiling from `sysconf(_SC_OPEN_MAX)` capped by `getrlimit(RLIMIT_NOFILE)`, with `closefrom`
+and `close_range` ruled out by name for not being portable to both pinned platforms. The
+resolver child's pre-`execve` close stays as the second line, R3's one-sentence claim says
+both, R5 confirms the four descriptors the parent deliberately holds are all opened after
+startup and so untouched, and R7 admits that its one-write-root claim had been resting on
+the caller's descriptor hygiene without saying so. About 85 go to R10: the two
+descriptor cases with the EOF-before-marker reasoning and the honest note that the
+parent's half is bounded by the resolver fork rather than the first fork, the
+repeated-signal case's statement that the table gate changes nothing it asserts and why,
+and three more lines on the proof-by-reading list. The remaining ~80 are the ripples and
+the bookkeeping: Design steps 1 and 2, the Copy-versus-adapt descriptor item growing
+rather than an eleventh being added — with the launcher verified to contain no startup
+close, no `closefrom`, no `close_range`, no `sysconf` and no `getrlimit` — the
+accepted-concern list at the top, and the re-derived size figures here and for the
+implementation, whose range does not move because the ~47 the three files gain is inside
+the ±15% band the range expresses.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 4631-6265 lines**, which is this file's measured
-5448 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 5012-6782 lines**, which is this file's measured
+5897 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1510,16 +1599,19 @@ the spec pull request's range above still blocks review.
   while :; do
     wait_interrupted=''
     wait "$parent_pid"; status=$?
-    if [ -n "$wait_interrupted" ]; then
-      [ "$status" -ne 127 ] || { entry_status=$((128 + $(kill -l "$entry_signal"))); break; }
-      [ "$entry_signal" = "$last_forwarded" ] || {
-        kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
-        last_forwarded=$entry_signal
-      }
-      continue
+    if [ -z "$wait_interrupted" ]; then
+      entry_status=$status
+      break
     fi
-    entry_status=$status
-    break
+    [ "$status" -ne 127 ] || { entry_status=$((128 + $(kill -l "$entry_signal"))); break; }
+    case " $(jobs -l) " in
+      *" $parent_pid Running"*)
+        [ "$entry_signal" = "$last_forwarded" ] || {
+          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
+          last_forwarded=$entry_signal
+        }
+        ;;
+    esac
   done
   ```
 
@@ -1550,12 +1642,49 @@ the spec pull request's range above still blocks review.
   `128 + signal` for the same signal (R2), so the two are frequently the same number.
   **`wait_interrupted` is what tells them apart**, and it is set by the same traps that
   record the name: the loop clears it immediately before each `wait`, so finding it set
-  afterwards means a trap ran while that `wait` was blocked and the wait was cut short —
-  loop round and wait again — and finding it empty means nothing interrupted this `wait`,
-  so it returned because the parent was reaped and `status` is the parent's own.
+  afterwards means a trap ran while that `wait` was blocked, and finding it empty means
+  nothing interrupted this `wait`, so it returned because the parent was reaped and
+  `status` is the parent's own.
   **`entry_status=$status; break`** therefore runs at one moment only, and the `EXIT`
   trap's removal of `.run` can never precede the parent's exit, however many signals
   arrive.
+
+  **Two separate decisions come out of that, and this round is where they stop being one.**
+  An earlier round wrote the loop as though the flag answered both, and it does not.
+
+  1. **Whether to leave the loop is the flag's decision, and an uninterrupted wait is a
+     reaped parent.** `[ -z "$wait_interrupted" ]` is the first test in the body, ahead of
+     everything else, and on it the entry records `status` as the parent's own and breaks.
+     Nothing is forwarded on that path, because there is nothing left to forward to: the
+     parent has been reaped, and `parent_pid` is a number bash has already given back.
+  2. **Whether to forward is bash's job table's decision, and only a job listed as
+     `Running` is forwarded to.** The flag cannot make this one. It says a trap ran while
+     that `wait` was blocked; it does not say the parent was alive when it ran. A signal
+     delivered after the `wait` has already reaped the parent but before the branch below
+     it runs sets the flag on a wait whose `status` is the parent's real status — the
+     reviewer's case, and the measurement below catches it 27 times in 60 — and a loop
+     that forwarded on the flag alone would `kill` a pid the shell has already reaped,
+     which after pid reuse is a signal at an unrelated process and is the very hazard the
+     surrounding text says this loop avoids. So the `kill` sits inside a
+     `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else.
+
+  **Why the job table and not something else.** It is the only thing in a shell that knows
+  the difference, and it is immune to pid reuse by construction: bash answers `jobs` from
+  its own table, and it removes a job from that table when it collects the status, so the
+  table can never be describing a stranger who happens to hold the same number — which is
+  exactly what `kill -0` on `parent_pid` does, and why no version of it survives in this
+  loop. `$(jobs -l)` is a subshell around a builtin, like `$(kill -l …)` two paragraphs
+  down, so it forks no external command and adds nothing to R7's command-word list or
+  R10's grep. The three states the match distinguishes are all measured below: a live
+  parent is `[1]+ <pid> Running …`, a parent bash has noticed but not yet been asked about
+  is `[1]+ <pid> Exit <n>`, and a parent whose status a `wait` has already collected is
+  absent from the table entirely. Only the first forwards; the other two loop round, and
+  the next `wait` is what ends the run. Two mechanism details the plan needs and this spec
+  measured rather than assumed: reading the table does **not** consume the saved status —
+  three `wait`s after two `$(jobs -l)` reads all returned the same `7` — and the pattern
+  matches on the pid-and-state pair `" <pid> Running"` rather than on the pid alone,
+  because the job line also carries the command text the entry launched the parent with,
+  where a bare pid could in principle appear as a substring of a path.
 
   **An earlier round of this spec used `kill -0 "$parent_pid"` as that discriminator, and
   it was wrong in both directions.** The claim it rested on was that an exited child stays
@@ -1577,13 +1706,13 @@ the spec pull request's range above still blocks review.
   gone from this loop, and no sentence anywhere in this spec claims it distinguishes a
   live parent from a reaped one.
 
-  **The coincidence case is the one the flag alone does not settle, and it is settled
-  honestly rather than silently.** If the parent exits in the same instant a signal lands,
-  the `wait` can return the parent's real status *and* have run a trap, so
-  `wait_interrupted` is set on a wait that was not really cut short. The loop forwards —
-  at a pid whose process has gone, which is normally `ESRCH` and discarded by the `|| :`,
-  and which is the one residual the forwarding paragraph below states rather than waves
-  away — and waits again, and what that next `wait` answers decides the
+  **The coincidence case is the one the flag alone does not settle, and it is what the
+  table check is for.** If the parent exits in the same instant a signal lands, the `wait`
+  can return the parent's real status *and* have run a trap, so
+  `wait_interrupted` is set on a wait that was not really cut short. The loop does not
+  forward there, because the table does not say `Running` — the job is `Exit <n>` or gone,
+  and the `case` falls through — so no `kill` is sent at a pid the shell has given back.
+  It waits again, and what that next `wait` answers decides the
   status. On the bash this entry ships against it answers with the parent's saved status,
   because bash 3.2 keeps a terminated job's status in its job table and hands it back to
   every `wait` that asks: the measurement below ran the coincidence sixty times and the
@@ -1596,10 +1725,13 @@ the spec pull request's range above still blocks review.
   unavailable, so the entry reports `128 + signal` for the first recorded signal — the
   same number the parent would have given had it died of the forwarded signal, and the
   number this requirement promises on every other signal path.
-  Nothing in the loop is an external command — `wait`, `kill`, `[` and `kill -l` are bash
-  builtins, and `$(kill -l "$entry_signal")` is a subshell around a builtin rather than a
-  `/bin/kill` — which is why the three-step rule above does not apply to it and why R7's
-  command-word list and R10's grep are untouched by it.
+  Nothing in the loop is an external command — `wait`, `kill`, `jobs`, `[` and `kill -l`
+  are bash
+  builtins, `case` is a reserved word, and `$(kill -l "$entry_signal")` and
+  `$(jobs -l)` are subshells around builtins rather than a
+  `/bin/kill` or a `/bin/ps` — which is why the three-step rule above does not apply to
+  them and why R7's
+  command-word list and R10's grep are untouched by them.
   `wait_interrupted` is deliberately outside the initialise-before-arming rule, for the
   same reason `last_forwarded` is: `set -u` bites on reads, and the only read of it is
   inside the loop, after the loop's own `wait_interrupted=''` has set it. The traps write
@@ -1607,13 +1739,16 @@ the spec pull request's range above still blocks review.
 
   **Forwarding is once per new signal, and a repeat is not re-forwarded.** The
   `[ "$entry_signal" = "$last_forwarded" ]` test is what makes that true: without it every
-  interrupted wait would send another `kill`, so a user holding `Ctrl-C` would produce a
+  interrupted wait with the parent still listed as `Running` would send another `kill`, so
+  a user holding `Ctrl-C` would produce a
   stream of signals at a parent that is already terminating. The guard does more than keep
-  the noise down, and this round is why. Bash reaps the parent the instant it exits, before
+  the noise down. Bash reaps the parent the instant it exits, before
   the `wait` that reports its status returns, so from that instant `parent_pid` is a number
   the kernel may give to anybody — and a `kill` the loop sends afterwards is a `kill` at
-  whatever now holds it. One forward per recorded name is what bounds that. The loop sends
-  at most one signal in the whole run, and it sends it on the first interrupted wait, which
+  whatever now holds it. One forward per recorded name is what bounds that, and the table
+  check above is what makes the bound narrow rather than merely finite. The loop sends
+  at most one signal in the whole run; it sends it on the first interrupted wait that finds
+  the parent's job listed as `Running`, which
   in every ordinary case is while the parent is still running its termination sequence.
   Since the traps keep the *first* name (above), `entry_signal` never changes
   after it is set, so in practice the loop forwards exactly once per run — but the
@@ -1621,20 +1756,24 @@ the spec pull request's range above still blocks review.
   every subsequent interrupted wait, not a second name.
 
   **What that leaves is one send in one instant, and it is stated rather than argued
-  away.** In the coincidence case above — the parent exiting by itself at the moment a
-  signal lands — the single forward goes out after bash has reaped the parent, so if the
-  kernel has already recycled the pid it reaches a stranger. Nothing inside the entry can
-  tell that case from an ordinary interrupted wait: the flag is set either way, the status
-  is the same number either way, and bash's job table still lists the pid either way, which
-  the measurement below shows directly. The residual is therefore real, and it is the
-  smallest version of itself: one `kill`, of the signal the caller sent, inside the window
-  between the parent's exit and the next statement of this loop, on a host that must
-  recycle that exact pid in that window. The `kill -0` loop this replaces had no such
-  bound — it re-sent on every interrupted wait, for as long as the pid answered, which
-  after the reap is a question about a stranger — so the change narrows the hazard the
-  reviewer raised rather than trading it for another. Closing it entirely needs a handle
+  away.** The table check moves the question from "is this pid answering" to "is this job
+  still mine and running", which no pid reuse can make true of a stranger — but it is a
+  check, and the `kill` is the statement after it. Between the two the parent can exit, be
+  reaped, and in theory have its pid recycled, and then the one `kill` goes to whoever now
+  holds the number. The measurement below shows that gap directly rather than describing
+  it: in the coincidence runs there are lines where the table said `Running` and the
+  `kill -0` taken immediately afterwards already said the pid was gone. The residual is
+  therefore real, and it is the smallest version of itself: one `kill`, of the signal the
+  caller sent, inside the window between one statement and the next, on a host that must
+  recycle that exact pid in that window. What this round removes from it is the whole
+  class of sends the old loop made *after* the reap was already visible: 27 of the 60
+  coincidence attempts below are interrupted waits where the table said the parent was
+  gone, and the loop this round writes sends nothing on any of them, where the previous
+  one sent on all of them. Closing the last instant entirely needs a handle
   the shell does not have: a pidfd, or a parent that reports its own exit through something
   other than its pid, and the second is the test-only channel this spec refuses everywhere.
+  It is closed properly on the parent's side, in C, where R2's block-reap-zero-restore rule
+  already means no handler can name a pid the kernel has taken back.
 
   Nothing is removed before that loop ends, which is the
   ordering the whole requirement exists for. On a forwarded signal the parent's own status
@@ -1651,18 +1790,18 @@ the spec pull request's range above still blocks review.
   exits, and the loop with a line printed at each iteration — was started in the
   background of a driving shell and sent two `TERM`s 0.5 s apart, the second landing while
   the stand-in parent was still inside its handler. Each printed line carries three
-  readings side by side, so the two candidate discriminators and the discredited one can
-  be compared on the same events: `interrupted=` is the flag, `jobs -p=` is bash's own job
-  table, and `kill -0=` is what the old loop asked.
+  readings side by side, so the two decisions the loop now makes and the test it no longer
+  uses can be compared on the same events: `interrupted=` is the flag that decides whether
+  to leave the loop, `running=` is the `" $parent_pid Running"` match against `$(jobs -l)`
+  that decides whether to forward, and `kill -0=` is what the loop two rounds ago asked.
 
   ```
   entry status=143
-  wait 1 returned 143; interrupted=[1]; jobs -p=[57406 ]; kill -0=yes; entry_signal=[TERM]
-  forwarded TERM to 57406
-  wait 2 returned 143; interrupted=[1]; jobs -p=[57406 ]; kill -0=yes; entry_signal=[TERM]
-  wait 3 returned 143; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[TERM]
+  wait 1 returned 143; interrupted=[1]; running=[yes]; kill -0=yes; entry_signal=[TERM]
+  forwarded TERM to 59783
+  wait 2 returned 143; interrupted=[1]; running=[yes]; kill -0=yes; entry_signal=[TERM]
+  wait 3 returned 143; interrupted=[]; running=[no]; kill -0=no; entry_signal=[TERM]
   parent marker at entry exit: present
-  entry-signal: TERM forwarded 57406
   ```
 
   (The status prints first for the same reason it does in the other measurement in this
@@ -1683,32 +1822,69 @@ the spec pull request's range above still blocks review.
   asynchronous child with `SIGINT` ignored when job control is off, and a signal ignored
   at entry cannot be trapped.) A run with no signal at all and a stand-in that exits `7` by
   itself is the control, and it takes one pass:
-  `wait 1 returned 7; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[]`, entry
+  `wait 1 returned 7; interrupted=[]; running=[no]; kill -0=no; entry_signal=[]`, entry
   status `7`.
 
-  **The coincidence was provoked and run sixty times, and it is what settled the choice.**
-  The stand-in was made to exit `7` on its own at 0.30 s and the driving shell sent one
-  `TERM` at 0.30 s; every one of the sixty attempts landed in the coincidence, and every
-  one of them came out like this:
+  **The coincidence was provoked and run sixty times, and it is what this round's finding
+  lives in.** The stand-in was made to exit `7` on its own at 0.30 s and the driving shell
+  sent one `TERM` at 0.31 s, which puts the signal in and around the window between the
+  parent's exit and the loop's next statement. Every attempt was classified by its first
+  wait, and the two classes were both hit:
 
   ```
-  wait 1 returned 143; interrupted=[1]; jobs -p=[57480 ]; kill -0=no; entry_signal=[TERM]
-  forwarded TERM to 57480
-  wait 2 returned 7; interrupted=[]; jobs -p=[]; kill -0=no; entry_signal=[TERM]
-  attempts=60  127-after-interrupt=0  interrupted-then-real-status=60  no-interrupt=0
+  delay=0.31 attempts=60
+    A interrupted+table-Running (forward sent)      = 33
+    B interrupted+table-not-Running (forward held)  = 27
+    C not interrupted (plain reap)                  = 0
+    127-after-interrupt = 0   final status 7 = 60   final status 143 = 0
+  --- representative B run (the reviewer's case) ---
+  wait 1 returned 7; interrupted=[1]; running=[no]; kill -0=no; entry_signal=[TERM]
+  not forwarding: job table does not say 64481 is Running
+  wait 2 returned 7; interrupted=[]; running=[no]; kill -0=no; entry_signal=[TERM]
+  parent marker at entry exit: present
+  entry status=7
+  --- representative A run ---
+  wait 1 returned 143; interrupted=[1]; running=[yes]; kill -0=no; entry_signal=[TERM]
+  forwarded TERM to 64517
+  wait 2 returned 7; interrupted=[]; running=[no]; kill -0=no; entry_signal=[TERM]
+  parent marker at entry exit: present
+  entry status=7
   ```
 
-  Read the first line again, because it is the whole finding: the wait returned `143`, the
-  flag was set, and `kill -0` already said `no` — the parent's pid was gone while the
-  parent's real status, `7`, was still waiting in bash's job table. The old loop reads that
-  `no` as "this wait reaped the parent", records `143` and exits on it, reporting a signal
-  death for a parent that exited `7` of its own accord. The flag reads it correctly, loops,
-  and the second wait hands back the `7`. No attempt produced a `127`, which is the other
+  Read the B run first, because it is the finding exactly as the reviewer stated it: the
+  wait returned `7` — the parent's *real* status — and the flag was set anyway, because
+  the `TERM` landed after that wait had reaped the parent and before the branch below it
+  ran. A loop that forwarded on the flag alone sends a `kill` there, at a pid the shell has
+  already given back. The table check holds it, the loop goes round, the second wait hands
+  back the same `7`, and the entry exits `7`. Twenty-seven of the sixty attempts were that
+  case; all sixty finished with the parent's own status.
+
+  Then read the A run, because it is the residual in one line: the table said `Running`,
+  the `kill -0` taken in the very next breath already said `no`. The parent exited between
+  the two reads. That is the window no shell can close, and it is why the paragraph above
+  states one send in one instant rather than none. What it is not is the old behaviour: the
+  forward is one, it goes out while the table still said the job was the entry's own and
+  running, and the twenty-seven B attempts produced no send at all.
+
+  No attempt produced a `127`, which is the other
   half of the measurement: bash 3.2 keeps a terminated job's status and returns it to every
-  `wait` that asks — a separate four-`wait` check on one reaped child returned `7` four
-  times with `jobs -p` empty throughout — so the `127` guard is dead code on this bash and
+  `wait` that asks — a separate three-`wait` check on one reaped child returned `7` three
+  times, and returned it after two `$(jobs -l)` reads of the same job, so consulting the
+  table does not consume the status the next `wait` needs — so the `127` guard is dead code
+  on this bash and
   is kept only for a bash that discards the status, where it is the difference between a
   correct `128 + signal` and a spin.
+
+  **The job table's three states were measured directly, on the same bash.** A background
+  child that exits `7` and has not been waited for is
+  `[1]+ 59741 Exit 7   ( sleep 1; exit 7 )` in `jobs -l`, is absent from `jobs -lr`, and is
+  gone from `jobs -l` entirely once a `wait` has collected it; while it runs it is
+  `[1]+ 59741 Running`. So the `" $parent_pid Running"` match is true of exactly the state
+  the forward is for. One state deserves naming because a reader will ask about it: a child
+  a `SIGSTOP` has stopped is *still* reported `Running` by a script's `jobs -l` — measured,
+  because a shell with job control off does not `waitpid` with `WUNTRACED` and so never
+  learns about the stop — and the entry never turns job control on, so a stopped-but-alive
+  parent is forwarded to rather than skipped, which is the answer this loop wants anyway.
 
   **The zombie claim the old loop rested on was checked on the same machine and is false
   for a bash-managed child.** A background child was allowed to exit and was never waited
@@ -1719,19 +1895,24 @@ the spec pull request's range above still blocks review.
   reports the status has returned. That is the reviewer's pid-reuse hazard, measured rather
   than reasoned about, and it is why no version of `kill -0` on `parent_pid` is kept here.
 
-  **The second candidate was measured beside the first and rejected on cost, not on
-  correctness.** The `jobs -p=` column above is bash's job table, and it tracked the flag
-  on every event in every run — populated whenever a status was still to come, empty on the
-  wait that delivered it, including in the coincidence where `kill -0` was already wrong. It
-  would work. It is not taken because reading it costs more than the flag does: `jobs -p`
-  has to be captured, and a `$(jobs -p)` is a subshell whose job-table inheritance is a
-  question this spec would then have to answer, while redirecting it to a file puts a write
-  in the middle of a signal path that must not touch the disk. The flag is one assignment in
-  each trap and one clear per iteration, and it asks the question directly — "was this wait
-  cut short" — instead of inferring it. The same script, with all three columns, is re-run
+  **The round before this one measured the job table beside the flag and then rejected it,
+  and that judgement is withdrawn here rather than quietly dropped.** It was rejected on
+  cost, and on one open question: a `$(jobs …)` is a subshell, and whether bash 3.2 keeps
+  the parent's job table visible inside that subshell was called a question this spec would
+  have to answer, with a file redirect as the alternative and a write on a signal path as
+  the reason not to. Both halves are settled now. The question has an answer and it was
+  measured: `$(jobs -l)` inside the entry's own shell lists the parent's job exactly as a
+  bare `jobs -l` does, in every state, so no file and no write are needed and the
+  disk stays out of it. And the cost was the wrong thing to weigh, because the two are not
+  alternatives: the flag answers "was this wait cut short", which is the question the
+  `break` needs, and the table answers "is the parent still mine and running", which is the
+  question the `kill` needs. This round buys the second answer for one `case` and one
+  command substitution, and keeps the first.
+  The same script, with all three columns, is re-run
   against the Linux CI image's `/bin/bash` while the plan is written, for the same reason
-  the other measurement is; the `127` guard is the one line whose behaviour could differ
-  there, and the plan records which way it went.
+  the other measurement is: bash 5 is not on the machine this was measured on. Two lines
+  could differ there and the plan records which way each went — the `127` guard, and the
+  rendering of `jobs -l`, whose `Running` word and pid column the `case` pattern depends on.
 
   **The two branches are `parent_pid` empty or not, and the main flow is what distinguishes
   them.** The traps go on ahead of the `mkdir` that creates the run directory, which is
@@ -1980,6 +2161,72 @@ the spec pull request's range above still blocks review.
   asserts the result rather than the line: the mode assertions on the run tree already
   check for 0700, and one case runs the entry with the caller's umask set to `000` and then
   to `777` and requires 0700 both times.
+
+  **Then, still before the first external command, the entry closes every descriptor above
+  2 that it inherited.** A caller hands the entry three descriptors it is meant to have —
+  stdin, stdout and stderr — and may hand it any number of others, because an open
+  descriptor is inherited across `fork` and across `exec` unless it is marked
+  close-on-exec, and nothing obliges a caller to mark anything. Those others are the
+  caller's, not the entry's: an open credential file, a socket to something the entry has
+  no business talking to, a write handle on a file outside the output root this
+  requirement spends pages validating. Every one of them is inherited by every child the
+  entry forks, and the entry forks a great many before the parent exists — the SHA-1 and
+  SHA-256 pins over ten files, two compiler invocations, the `cp` copies, the `jq
+  --version` probe, `/usr/bin/stat`, `/usr/bin/uname`, `/bin/mkdir`. A write handle
+  outside the output root, held open across the compiler, is a second write root that R7's
+  claim does not know about, and it is one nobody in this chain put there. So the entry
+  shuts them, and shuts them at the top rather than at the bottom:
+
+  ```
+  for fd in /dev/fd/*; do
+    fd=${fd##*/}
+    case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
+    eval "exec ${fd}>&-" 2>/dev/null
+  done
+  ```
+
+  **Each line of that is chosen for bash 3.2 and for forking nothing.** The enumeration is
+  a glob over `/dev/fd`, which is a directory of the calling process's own open
+  descriptors on both supported platforms, and a glob is the shell's own pathname
+  expansion — no `ls`, no `find`, nothing on R7's command-word list, and nothing that could
+  itself be the first external command this whole ordering exists to get ahead of. The
+  `case` throws away anything that is not all digits before it reaches `eval`, which is
+  what makes the `eval` safe: the only strings that get there are numbers the glob read out
+  of a directory of numbers, and 0, 1 and 2 are skipped because they are the caller's three
+  and passing them through is what R1's pass-through claim and R2's `entry-signal:` line
+  both depend on. The `eval` is needed rather than preferred — bash 3.2 has no `{fd}>&-`
+  form, so the descriptor number has to be substituted into the redirection word before the
+  shell parses it — and `2>/dev/null` absorbs the one ordinary failure, a number that named
+  a descriptor the glob itself was using and that is gone by the time the loop reaches it.
+  That descriptor is worth naming because a reader will see it in the measurement below:
+  reading `/dev/fd` opens a descriptor to do it, so the listing always contains one entry
+  that is the listing's own, and it does not survive the statement either way.
+
+  **What it buys, and what it does not.** Every pre-resolver child the entry forks now
+  starts with three descriptors, whatever the caller held: no credential, no socket, no
+  write handle outside the root reaches a SHA tool, a compiler, a `cp` or the jq probe, and
+  the single-write-root claim in R7 and the no-caller-state claim in R3 stop depending on
+  the caller's own hygiene. It does not replace the parent's close, which happens in the
+  resolver child before `execve` (R3) — that one is the last line of defence and stays
+  where it is — and it does not replace the parent's own startup close, which R5 now
+  requires for the same reason on the direct-parent path (an operator, or R10's group-2
+  cases, can start the parent with descriptors of their own). Two lines of defence, at the
+  two process boundaries that exist. The one thing neither closes is a descriptor the
+  caller marked close-on-exec, which needs no closing, and the entry's own first process
+  before this loop runs — the same residual the scrub has, for the same reason, and stated
+  in the same place.
+
+  **Measured, on the same bash 3.2.** A driving shell opened the write end of a fifo on
+  descriptor 7, started a script with it inherited, and had a reader watch for end-of-file.
+  With the loop above as the script's first statement, `fds before:
+  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3 /dev/fd/7` and `fds after:
+  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3` — descriptor 7 gone, and `/dev/fd/3` the
+  listing's own descriptor in both readings — and the reader saw EOF 0.3 s in, while the
+  script still had two seconds of work left to do. Without the loop the reader saw no EOF
+  until the script had exited, and in a third run, where the script forked a helper and
+  exited immediately, the reader saw no EOF until the *helper* exited three seconds later:
+  that third run is the finding in one observation, a forked child holding a caller's
+  descriptor open after the shell that inherited it has gone.
 
   **And the direct marker invocation is unsupported, which is the part that actually settles
   it.** There are two supported ways to run the entry: execute the file, so its
@@ -2799,7 +3046,10 @@ the spec pull request's range above still blocks review.
   `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and `YSTACK_RESOLVER_TEST_GIT_STOP` (`:686-689`)
   are never set by the shipped parent; the runtime refuses the launch if either appears
   alone (`scripts/lib/profile-resolution.sh:656-659`). No caller variable is copied
-  through, and the parent closes every inherited descriptor above 0/1/2 before `execve`.
+  through, and the parent closes every inherited descriptor above 0/1/2 twice over: once
+  among the first statements of `main`, before it forks anything at all, so no SHA tool
+  and no `jq --version` probe can inherit one either (R5), and again in the resolver child
+  before `execve`, which is the line of defence this requirement has always named.
 - **R4 — the same resource limits, unchanged.** In the child before `execve`
   (`portable-profile-resolution-launcher.c:388-398`): `RLIMIT_CPU` 300s, `RLIMIT_AS`
   536870912 (non-Darwin), `RLIMIT_FSIZE` 67108864, `RLIMIT_NOFILE` 64. In the supervisor
@@ -2947,6 +3197,66 @@ the spec pull request's range above still blocks review.
   anywhere after it. The entry sets the same umask (R1), so in the normal path the parent
   inherits 077 and sets it again; the call is there for the caller who drives the parent
   directly, which is the same caller every other check in this requirement exists for.
+
+  **And immediately after that, still before the first `fork`, the parent closes every
+  descriptor it inherited above 2.** R3 has always required the parent to close inherited
+  descriptors in the resolver child before `execve`, and that requirement stays — but it is
+  the last line of defence, not the first, and on its own it is too late. The parent forks
+  well before it launches the resolver: a SHA-1 tool per pinned file, the SHA-256 tool for
+  the jq, and the `jq --version` probe are all children of the parent, created while the
+  pin checks run. Every one of them inherits whatever the caller left open, because
+  inheritance across `fork` is the default and the caller's descriptors carry no
+  `FD_CLOEXEC` unless the caller set it. The entry closes them on its side (R1), but the
+  parent is not only reached through the entry: an operator running step 7 by hand drives
+  it directly, R10's whole group 2 drives it directly, and R5 exists precisely because the
+  parent must defend itself against a caller rather than trust one. A caller's credential
+  file, socket, or write handle outside the output root, inherited by a SHA tool the parent
+  forks, is a hole in the same two claims the child-side close protects: no caller state
+  reaches a helper (R3), and there is one write root (R7).
+
+  So the close goes where it can be checked — among the first statements of `main`, after
+  `umask(077)` and after the three `sigaction` installations, before the first pin, the
+  first fork and the first creation:
+
+  1. Determine the ceiling. `sysconf(_SC_OPEN_MAX)` is the portable answer and is available
+     on both platforms; the parent also reads `getrlimit(RLIMIT_NOFILE, &rl)` and uses
+     `rl.rlim_cur` where it is smaller and not `RLIM_INFINITY`, because a caller can raise
+     `_SC_OPEN_MAX` to something large and there is no reason to spin over descriptors the
+     process cannot hold. A sane floor and ceiling are applied so a hostile or absurd
+     limit cannot turn this into a long loop.
+  2. `for (int fd = 3; fd < ceiling; fd++) (void)close(fd);` — errors ignored, because
+     `EBADF` on a descriptor that was never open is the expected answer for most of the
+     range and the call has nothing else to report.
+
+  **Why not `closefrom` or `close_range`.** Neither is portable across the two platforms
+  this initiative pins. `closefrom(3)` is a BSD interface and is not in glibc on the Linux
+  side; `close_range(2)` is Linux-only and needs a kernel and a libc newer than this
+  initiative is willing to require. A `/dev/fd` enumeration is the other portable shape and
+  is what the entry uses, because a shell has no loop cheap enough to do it the other way;
+  the parent does not need it — a bounded `close` loop in C is a few instructions per
+  descriptor and asks nothing of the filesystem — and using the directory would mean the
+  parent's first act was an `opendir` on a path, which is exactly the shape R5 spends the
+  rest of its length replacing. If the plan finds the loop unacceptable on a host with a
+  very large limit, `/dev/fd` is the named fallback and the plan says so rather than
+  inventing a third.
+
+  **What the parent deliberately holds, and why none of it is affected.** Every descriptor
+  this requirement keeps open from check to use is opened *after* startup, by the parent
+  itself: the output-directory descriptor from the `O_DIRECTORY|O_NOFOLLOW` open, the
+  run-directory descriptor from the `openat` on `.run`, and the two `child.stdout` and
+  `child.stderr` descriptors the parent creates with `openat(..., O_CREAT | O_EXCL |
+  O_NOFOLLOW)` and later reads back through (all in this requirement, above). The close
+  loop runs before any of them exists, so it cannot take one away, and R7's read and write
+  lists are unchanged by it. Stdin, stdout and stderr are untouched, which is what R6's
+  byte-identical stdout and R2's `runtime-pgid:` and `parent-signal:` lines on stderr
+  depend on.
+  This is an extension of the second named deviation from the copied launcher rather than a
+  new one: the launcher has no startup close at all — verified, every one of its
+  `close` calls (`:91,102,109,127,424,427,434,441-442,448-449`) and both its `fclose`s
+  (`:214,217`) is on a descriptor or stream it
+  opened itself, and `closefrom`, `close_range`, `sysconf` and `getrlimit` do not appear in
+  its 702 lines — so the deviation that already said the parent closes inherited
+  descriptors rather than relying on `O_CLOEXEC` now says it does so at both ends.
 
   **Creating those two files fd-relative is only half of the fix, because the copied
   supervisor reads them back by path.** After the child exits it goes back to the two path
@@ -3263,6 +3573,19 @@ the spec pull request's range above still blocks review.
   per-user temp directory, attributable to the runtime's own `git`. That is the whole of the
   residual: one file, mode 0600, in a per-user directory, written by a process this spec
   leaves alone.
+
+  **One thing that claim used to depend on without saying so is the caller's descriptors,
+  and this round removes the dependency.** A write root is a claim about where the
+  processes in this tree can write, and an inherited descriptor is a place to write that no
+  path check can see: a caller who starts the entry, or the parent, with a write handle
+  open on descriptor 7 hands every child in the tree a second write root that nothing in
+  the lists above mentions. Nothing in this spec reads or writes such a descriptor
+  deliberately — but the claim is about what *can* be written, not about what the shipped
+  code intends, and a compiler or a `cp` that inherits one is a plausible accident rather
+  than a contrived one. Both shipped files now close every inherited descriptor above 2
+  before they fork anything (R1 for the entry, R5 for the parent), so the write lists above
+  are the whole of it whatever the caller held open, and R10 asserts the closes by
+  observation on both files.
 
   **That residual is no longer a deviation the spec is carrying on its own: it is an
   accepted exception the intent now names.** The operator decided DR-2 on 2026-09-10,
@@ -4137,6 +4460,58 @@ the spec pull request's range above still blocks review.
   other mode assertion runs under a suite that sets `umask 077` for itself the way
   `portable-profile-resolution.test.sh:5` does.
 
+  **A caller's inherited descriptor is closed at startup, and each shipped file gets its
+  own case, because each has its own startup.** A descriptor is the other process
+  attribute no environment scrub touches (R1, R5), and the failure it guards against is
+  silent: a run that is correct in every observable way while a caller's credential,
+  socket or write handle sits open inside every child the entry or the parent forks. Both
+  cases are built the same way. The test makes a fifo in its own scratch, starts a reader
+  on it in the background — `/bin/cat > /dev/null`, which returns when every writer has
+  closed — opens the write end on descriptor 7, starts the process under test with that
+  descriptor inherited, and then **closes its own copy of 7 immediately**, because while
+  the test itself holds a writer open the reader can never see end-of-file and the case
+  would assert nothing. From that moment the only writer is the process under test and
+  whatever it forks, so the reader returning is exactly the event "nobody in that tree
+  holds descriptor 7 any more".
+
+  - *The entry half.* Start the shipped entry on an ordinary successful resolution with
+    `7>` the fifo. The assertion is an **ordering**: the reader must return before
+    `<output>/.run` appears. The test watches both — the reader in the background setting
+    a flag, the output directory polled every few milliseconds the way the two-umask case
+    above already polls it — and fails if `.run` exists while the reader is still blocked.
+  - *The parent half.* Build a run directory by hand with the group-2 fixture builder and
+    invoke the parent directly with `7>` the same kind of fifo, with its stderr in a file
+    the test can read. The assertion is the same shape against the parent's own first
+    observable: the reader must return before the `runtime-pgid:` line appears in that
+    file.
+
+  **Why the ordering and not the descriptor itself is what gets asserted.** The obvious
+  test — look at the child's open descriptors — is not portable between the two platforms
+  (`/proc/<pid>/fd` on Linux, `lsof` on Darwin, and neither is on R7's allowlist for the
+  suite to depend on), and it is a sample: it can only say the descriptor was shut by the
+  time somebody looked. The EOF-before-marker observation needs no such tool, because the
+  kernel does the reporting, and it answers the question the finding actually asks, which
+  is *when*. Every implementation closes the descriptor eventually — process exit closes
+  everything — so a case that only checks "EOF arrives" passes on the bug. What
+  distinguishes a startup close from an exit close is that the EOF arrives while the
+  process is demonstrably still working, and `.run` and the `runtime-pgid:` line are the
+  two cheapest proofs of "still working" each file has: one is created by the entry's first
+  external command, the other is written by the parent after it has forked the resolver.
+  Be exact about what each half proves. The entry half is tight: `.run` comes from
+  `/bin/mkdir`, so EOF before it means the close preceded the entry's first fork of
+  anything, which is the requirement in R1 word for word. The parent half is looser, and
+  says so: `runtime-pgid:` is written after the resolver fork, which is well after the SHA
+  tools and the jq probe, so the case proves the close happened before the resolver
+  inherited anything and leaves "before the *first* fork" to the read of `main`'s opening
+  statements in the read-and-check sequence below. A tighter parent marker would need a
+  new line on stderr written between the close and the first pin, and this spec does not
+  add an observable to the shipped parent for a test's convenience.
+
+  The negative control is what makes both halves meaningful and it was measured while this
+  round was written, not assumed: with no startup close, a shell that forks a helper and
+  exits leaves the reader blocked until the *helper* exits — the descriptor outlives the
+  process that inherited it, which is the finding in one observation.
+
   **A signal mid-run is tested, and the test is deterministic because it freezes the
   resolver before signalling.** R2's group termination has no other proof, so the signal
   path has to run every time rather than whenever the timing happens to work out. The test
@@ -4277,6 +4652,21 @@ the spec pull request's range above still blocks review.
   variant too, because the traps keep the first name (R1). Nothing asserts what became of
   the second signal, because nothing observable should depend on it: the entry does not
   re-forward it and does not record it, and R1 says so in those words.
+
+  **The job-table check R1 adds this round changes nothing this case asserts, and that is
+  worth saying rather than leaving to be rediscovered.** The word `forwarded` in that line
+  is now conditional on `$(jobs -l)` listing the parent as `Running` at the moment of the
+  first interrupted wait, and in this case it always is: the parent is alive and inside its
+  `SIGTERM`-then-`SIGKILL` sequence against a group that has been `SIGSTOP`ped, which is
+  the slowest window this whole requirement has, and the case does not even signal until it
+  has read the parent's `runtime-pgid:` line. So the line still reads
+  `entry-signal: TERM forwarded <pid>`, and an implementation that gates the forward
+  correctly passes this case exactly as one that does not. The case the gate exists for is
+  the coincidence, where the parent exits on its own at the instant a signal lands, and no
+  test is written for it for the reason R1's measurement gives: provoking it needs the
+  signal to land inside a window a few instructions wide, so a case aimed at it would pass
+  by missing. That one is proved by reading, alongside the fork and reap windows the
+  read-and-check sequence below already covers.
 
   **And a third signal, sent to the whole group, with an honest statement of what it does
   and does not prove.** The window this round's other fix protects is the inside of the
@@ -4516,6 +4906,25 @@ the spec pull request's range above still blocks review.
   half of the check: the mask changes *when* a pending signal is delivered, never which
   branch the handler takes once it runs.
 
+  **Three more lines join that list this round, two of them positions and one of them a
+  guard.** The reviewer reads, in the parent, that the `close` loop from 3 to the ceiling
+  sits among the opening statements of `main` — after `umask(077)` and the three
+  `sigaction` calls, before the first pin check and therefore before the first `fork` —
+  because the descriptor case above proves the close precedes the *resolver* fork and
+  leaves the pre-resolver forks to this reading (R5). In the entry, the same reader checks
+  that the `/dev/fd/*` close loop sits after `umask 077` and before the first external
+  command, with the all-digits test ahead of its `eval` and 0, 1 and 2 skipped (R1); the
+  entry-side descriptor case does bound this one by observation, and the reading is what
+  catches a plan that keeps the loop and moves it. And in the entry's wait loop, the
+  reviewer checks that the only `kill` is inside the
+  `case " $(jobs -l) " in *" $parent_pid Running"*)` arm, that the not-interrupted branch
+  breaks without forwarding, and that no `kill -0` on `parent_pid` has come back anywhere
+  (R1). That last one is on this list for the same reason the reaps are: the failure needs
+  a signal to land in the instant between a reaping `wait` and the next statement, and a
+  case aimed at it would pass by missing — R1's sixty-attempt coincidence measurement is
+  how the behaviour was established, and it is a measurement of the design rather than a
+  case in the suite.
+
   **The same is true of the diagnostics moving after the cleanup, and each of the five
   cases was checked rather than assumed.** R2's handler and R1's `EXIT` trap write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
@@ -4718,7 +5127,15 @@ Order, each step checkable before the next:
    statements of `main`, before any check and before any creation, where the copied
    launcher has no `umask` call at all and relies on the test harness setting one
    (`portable-profile-resolution.test.sh:5`), so the modes below are the modes that appear
-   rather than the modes that were asked for (R5); and the sandbox's four entries —
+   rather than the modes that were asked for (R5); every descriptor above 2 that the
+   parent inherited is closed in the same opening run of statements, after that `umask`
+   and after the handler installations but before the first pin check and therefore before
+   the first `fork`, by a `close` loop from 3 to a ceiling taken from
+   `sysconf(_SC_OPEN_MAX)` and capped by `getrlimit(RLIMIT_NOFILE)` — not `closefrom` or
+   `close_range`, neither of which is portable to both pinned platforms — so that no SHA
+   tool, SHA-256 tool or `jq --version` probe the parent forks can inherit a caller's
+   credential, socket or write handle, with the resolver child's own pre-`execve` close
+   kept as the second line (R3, R5); and the sandbox's four entries —
    `home`, `tmp`,
    `child.stdout`, `child.stderr` — are created with `mkdirat` and `openat` relative to the
    output-directory descriptor the check opened, in place of the copied `mkdir` at
@@ -4798,6 +5215,12 @@ Order, each step checkable before the next:
    expand_aliases` as defence in depth, and `umask 077` last among them, copied from
    `materialize.sh:31`
    because the scrub resets variables and not the process umask (R1), and then, still
+   before the first external command, every inherited descriptor above 2 closed — the
+   numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
+   all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
+   has no `{fd}>&-` form — so that none of the pin checks, compiles, copies or probes the
+   entry forks below can inherit a caller's credential, socket or write handle outside the
+   output root (R1), and then, still
    before the first external command, the four variables every trap and checkpoint reads
    declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
    `parent_pid=''` — so that under `set -u` a signal-free run's first checkpoint and a
@@ -4859,18 +5282,23 @@ Order, each step checkable before the next:
    otherwise be reported as an `E_RUNTIME` refusal in place of the `128 + signal` exit and
    the `entry-signal:` line the caller is owed (R1). The two branches are `parent_pid`
    empty or not.
-   With a parent, the wait is a loop rather than a fixed pair of `wait` calls: each
-   `wait "$parent_pid"` that a trap interrupts returns `128 + signal` of its own with the
-   parent still alive, and the loop tells that apart from a wait that reaped the parent
-   with a `wait_interrupted` flag the three traps set and the loop clears before every
-   `wait` — not by asking about the pid, which after bash's own reap may belong to another
-   process entirely (R1). While the flag comes back set, the entry forwards the recorded
-   signal once with
-   `kill -"$entry_signal"` (a `last_forwarded` variable keeps a further interrupted wait
-   from re-sending it) and waits again; when it comes back clear, that wait's status
-   is the parent's own, and the entry records it in `entry_status`, breaks and exits. The
+   With a parent, the wait is a loop rather than a fixed pair of `wait` calls, and it makes
+   two separate decisions. **Whether to leave the loop** is the `wait_interrupted` flag's:
+   the three traps set it, the loop clears it before every `wait`, and a `wait` that comes
+   back with it clear was not cut short, so its status is the parent's own — the entry
+   records it in `entry_status`, breaks and exits, forwarding nothing, because the parent
+   has been reaped. **Whether to forward** is bash's job table's: while the flag comes back
+   set, the entry consults `$(jobs -l)` and sends `kill -"$entry_signal"` only if the
+   parent's job is listed as `Running`, because the flag says a trap ran and not that the
+   parent was alive when it ran — a signal landing after a `wait` has reaped the parent but
+   before the branch runs sets it too, and forwarding there is a `kill` at a pid the shell
+   has given back, which after pid reuse is a stranger's. A job listed `Exit`/`Done`, or
+   absent, is not forwarded to; a `last_forwarded` variable keeps a further interrupted
+   wait from re-sending; neither `jobs` nor `case` forks an external command, and no
+   version of `kill -0` on the pid survives anywhere in the loop (R1). The
    one wrinkle is a parent that exits in the same instant a signal lands, where the flag is
-   set on a wait that was not cut short: the loop waits once more, bash 3.2 hands back the
+   set on a wait that was not cut short: nothing is forwarded, the loop waits once more,
+   bash 3.2 hands back the
    parent's saved status, and the `[ "$status" -ne 127 ]` guard covers a bash that would
    instead have discarded it, reporting `128 + signal` and saying so (R1). So
    nothing is
@@ -5066,10 +5494,16 @@ intent says for this change. Only after the operator's merge does
   with a second `SIGTERM` — and, in a variant, a `SIGINT` — sent 100 ms after the first,
   while the parent is still working through its `SIGTERM`-then-`SIGKILL` sequence against
   the frozen group, and it is this round's find: the entry's wait on the parent is a loop
-  that ends only when the parent has actually been reaped, so the case polls the parent's
-  liveness against the existence of `.run` and fails on any sample that finds the run
-  directory gone with the parent still alive, and it asserts that the one
-  `entry-signal:` line still names the first signal (R1, R10). The third test drives the
+  that ends only when the parent has actually been reaped, so the case samples the
+  existence of `.run` against the appearance of the parent's own `parent-signal:` line and
+  fails on the first sample that finds the run directory gone with that line still
+  unwritten — it does not poll the parent's pid, which is the thing R1 has stopped
+  trusting — and it asserts that the one
+  `entry-signal:` line still names the first signal (R1, R10). This round adds the other
+  half of that distrust, on the shipped side rather than the test's: the loop forwards the
+  recorded signal only while bash's own job table still lists the parent's job as
+  `Running`, so a signal that lands after the reap cannot send a `kill` at a pid the kernel
+  may already have given to another process (R1). The third test drives the
   entry's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
   no group exists and there is nothing to forward to (R1) — by signalling as soon as `.run`
@@ -5267,7 +5701,13 @@ intent says for this change. Only after the operator's merge does
   result. Its marker file may hold one line for that first process and must hold no more, so
   the test asserts what the scrub and the re-exec actually buy and does not assert that the
   first process is clean. The entry is the first trusted process, not a shield in front of
-  an untrusted one.
+  an untrusted one. The inherited descriptors this round closes sit in exactly the same
+  place and carry exactly the same residual: they are shut among the entry's first
+  builtins, before any fork, so nothing the entry runs can inherit one — but the statements
+  ahead of that loop run with them still open, as they do with the caller's variables still
+  set, and the answer is the same answer. The parent closes its own at the top of `main`
+  for the caller who drives it directly (R5), which is the one case the entry's close
+  cannot cover.
 - **Copy versus adapt.** The test launcher is 702 lines, and far less of it is test
   scaffolding than a glance suggests: only the argv modes at `:547-631` and the two
   test-variable lines at `:686-689` are test-only, so the parent copies roughly 605 lines
@@ -5277,7 +5717,16 @@ intent says for this change. Only after the operator's merge does
   deviation line by line. Ten are already known in the parent: the mode-0644 check moves
   from the test
   into the parent; inherited descriptors above 2 are
-  closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens;
+  closed explicitly rather than relying on the launcher's `O_CLOEXEC` on its own opens —
+  and that item grows this round rather than an eleventh being added, because it is the
+  same deviation at a second point: the close now happens twice, once among the first
+  statements of `main` before any fork, with the ceiling from `sysconf(_SC_OPEN_MAX)`
+  capped by `getrlimit(RLIMIT_NOFILE)` and neither `closefrom` nor `close_range` used
+  because neither is portable across both pinned platforms, and once in the resolver child
+  before `execve` as before, where the launcher has no startup close anywhere in its 702
+  lines (verified: every `close` and `fclose` in the file is on a descriptor or stream it
+  opened itself, and `closefrom`, `close_range`, `sysconf` and `getrlimit` do not appear
+  at all), so the pre-resolver children it forks inherit whatever its caller held (R3, R5);
   the helper's run-directory and mode-0500 checks are new code with no counterpart in
   the test launcher, which simply trusts the path the test script hands it — and that item
   grows this round rather than an eleventh being added, because the output directory's
