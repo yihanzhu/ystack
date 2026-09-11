@@ -170,13 +170,19 @@ measured rather than guessed:
   and copied from the same file (`materialize.sh:31`), plus the comment that says why a
   scrub of variables does not cover a process attribute (R1). The round before this one
   added nothing here and the figure stayed at ~397: both of its findings were in the
-  parent and the test. This round adds ~8 more, to **~405**: every external command in the
+  parent and the test. The round before this one added ~8 more, to ~405: every external
+  command in the
   entry gains a captured status and a `checkpoint` ahead of its refusal in place of a
   `cmd || refuse` written beside it — one extra statement each across the ten pin checks,
   the two compiles and the two copies, which comes to fewer lines than fourteen because
   the `checkpoint` calls were counted in the figure above already and the refusals only
-  move (R1).
-- **Focused test ~922 lines.** For scale, the existing resolution test is 746 lines and
+  move (R1). This round adds ~4 more, to **~409**: the four empty initialisations
+  `entry_signal=''`, `run_created=''`, `entry_status=''` and `parent_pid=''`, placed among
+  the entry's first builtins after the `umask 077` and before any trap is installed, so
+  that `set -u` meets a set name at every checkpoint and in the `EXIT` trap on the paths
+  where nothing has written one (R1). Four assignments is the whole cost; the rule they
+  satisfy is stated in R1 and read in R10 rather than tested.
+- **Focused test ~928 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -219,7 +225,10 @@ measured rather than guessed:
   command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
   exclusion sets derived at run time,
   plus the downloader grep, which no longer needs a `git`-subcommand assertion now that
-  `git` is off the allowlist (~40),
+  `git` is off the allowlist, plus the `/usr/bin/awk` position assertion that comes with
+  awk moving to pass 1's data paths — every occurrence matched against the `cp` source
+  and the Darwin shim text, none in command position, and none at all in the C file
+  (~46),
   exit-status assertions (~15), harness
   boilerplate (~30), and the per-case temporary directory setup and teardown (~45).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
@@ -446,7 +455,8 @@ sum of the four bullets was then ~2484 against the ~2420 the range is derived fr
 3% above it and so still well inside the ±15% the range expresses, so the implementation
 range was unchanged.
 
-This round adds ~20, in the entry and the test, from one P2, and it is an ordering rule
+The round before this one added ~20, in the entry and the test, from one P2, and it is an
+ordering rule
 rather than a new mechanism. ~8 in the entry: every external command it runs — the ten pin
 checks, the two compiles and the two copies, and the `$(...)` substitutions among them —
 is written status first, `checkpoint` second, refusal third, in place of a `cmd || refuse`
@@ -457,9 +467,25 @@ foreground step, reusing the pre-parent case's poll, its bounded wait and its
 stderr-from-a-plain-file reading, and adding the assertion the case exists for — no
 `E_RUNTIME` line on a signalled run (R10). Nothing in the C parent, which the finding does
 not touch: the shape it forbids is a shell shorthand and the parent has no equivalent.
-Nothing was made cheaper to compensate. The sum of the four bullets is now ~2504 against
+Nothing was made cheaper to compensate. The sum of the four bullets was then ~2504 against
 the ~2420 the range is derived from, about 3.5% above it and so still well inside the ±15%
-the range expresses, so the implementation range is unchanged.
+the range expresses, so the implementation range was unchanged.
+
+This round adds ~10, in the entry and the test, from two P2s, and neither is a mechanism:
+one is four assignments, and the other moves a path from one side of an existing grep to
+the other. ~4 in the entry: `entry_signal`, `run_created`, `entry_status` and `parent_pid`
+declared empty among the first builtins, ahead of the `trap` builtins, so the first
+checkpoint of a signal-free run and the `EXIT` trap of a refusal that happens before the
+run directory exists read set names instead of aborting on an unbound one under `set -u`
+(R1). ~6 in the test: the `/usr/bin/awk` position assertion beside the allowlist grep —
+each occurrence in the entry matched against the `cp` source or the Darwin shim text, none
+of them in command position, and none at all in the C file (R10). Nothing in the C parent,
+which neither finding reaches: it names no awk and it has no shell variables to leave
+unset. Nothing was made cheaper to compensate, and `/usr/bin/awk` leaving the command-word
+list makes nothing dearer either, because the entry never ran it — what changes is which
+half of the grep holds it. The sum of the four bullets is now ~2514 against the ~2420 the
+range is derived from, about 4% above it and so still well inside the ±15% the range
+expresses, so the implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
 considered was the obvious one: the C parent in one pull request, the entry and the test
@@ -476,7 +502,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 4293 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 4476 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -526,17 +552,23 @@ satisfy the containment the check exists to prove, and this round the three sign
 installed with a mask that blocks all three of them, so a sibling signal can never re-enter
 a handler that is part-way through killing a group and reaping, beside the one signal test
 that could fail a correct implementation on a loaded runner now retrying that outcome
-instead of failing on it, and this round every external command in the entry ordered
+instead of failing on it, beside every external command in the entry ordered
 status first, checkpoint second, refusal third, so a command the caller's terminal signal
 killed can never be reported as an `E_RUNTIME` refusal in place of the signal exit it
-actually was, with a fourth signal case that signals the foreground group to prove it).
-**Evidence-based range for this spec pull request: 3649-4937 lines** — the measured
-4293 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+actually was, with a fourth signal case that signals the foreground group to prove it,
+and this round every variable the entry's traps, checkpoints and `EXIT` trap read
+initialised before any trap is installed, so the ordinary signal-free run cannot die on an
+unbound variable at its very first checkpoint, beside `/usr/bin/awk` reclassified from a
+command the entry may run to a path it only names, with the two positions it may stand in
+asserted, so an accidental host-awk invocation fails the allowlist grep instead of passing
+it).
+**Evidence-based range for this spec pull request: 3804-5148 lines** — the measured
+4476 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409, then 3642, then 3866, then 4013, then 4128; where each block of
+3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -885,7 +917,8 @@ its three assertions are labelled as the assertions of a proving attempt. The re
 figures here and for the implementation, whose range did not move because the ~8 the
 parent and the test gained is inside the rounding of the sum it is derived from.
 
-This round is +165 net over one P2, and it is an ordering rule rather than new
+The round before this one was +165 net over one P2, and it was an ordering rule rather
+than new
 ground: the entry's signal design was stated in full and its checkpoints were placed
 correctly, but nothing said what shape the commands *between* the checkpoints take, so a
 plan following the ordinary `cmd || refuse E_RUNTIME` shorthand would have reported an
@@ -914,13 +947,41 @@ command's status being turned into a refusal. So no existing line had to be rewr
 the finding is settled by stating the rule where the plan will read it rather than by
 fixing examples that were never there.
 
+This round is +183 net over two P2s, and both are the same kind of finding as the
+round before: a design stated correctly at the level of what happens, with one level below
+it left to a plan that could get it wrong. About 50 go to the entry's state variables.
+`set -u` is required of this entry and the checkpoint it requires reads `entry_signal`,
+but nothing had said where that name comes from on the run where no signal ever arrives —
+so R1 gains the block that initialises all four of `entry_signal`, `run_created`,
+`entry_status` and `parent_pid` empty among the first builtins, before the `trap` builtins,
+with `run` named as the fifth thing the `EXIT` trap reads and assigned rather than emptied,
+the rule written as one line for the plan to carry, and the `${var:-}` alternative rejected
+in the open for the two reasons it loses on — state a reviewer can see in one place, and a
+`set -u` still able to catch a misspelled name. About 70 go to `/usr/bin/awk`. It was on
+R7's command-word list and it should never have been: the entry copies the file in, or on
+Darwin writes a shim naming it, so the *runtime* can execute the copy from `.run`, and no
+shipped file runs host awk at all — so R7 loses the word, gains the paragraph saying where
+the path does appear and the companion paragraph setting the bound jq beside it as the
+opposite case (read, digested **and** run, by both files, through a variable rather than a
+path), and R10 moves the path into pass 1's data list and adds the position assertion that
+keeps the reclassification from weakening the grep it lives in. Both figures include the
+ripples that carry each fix to where it is checked rather than restating it — the
+checkpoint paragraph's clause on why its test is a read of a set variable, Design step 2's
+two clauses and R10's read-and-check sequence for the first; R7's read-claim list gaining
+awk as an input, its no-`awk`-process deviation bullet widening to say no awk process at
+all, and the two count sentences moving from sixteen to fifteen with the `git` sentence
+that cites them for the second. The remaining ~60 are the accepted-concern list at the top
+and the re-derived size figures here and for the implementation, whose range does not move
+because the ~10 the entry and the test gain is inside the rounding of the sum it is
+derived from.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 3649-4937 lines**, which is this file's measured
-4293 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 3804-5148 lines**, which is this file's measured
+4476 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2057-2783 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -984,6 +1045,41 @@ the spec pull request's range above still blocks review.
   the statement that follows that command. Acting in the main flow immediately after each
   command is therefore the same moment in time, reached from the one place where the
   entry's own variables are consistent.
+
+  **Every variable a trap, a checkpoint or the `EXIT` trap reads is initialised before any
+  trap is installed.** The entry runs under `set -u` (the three-step command rule below
+  states the full `set -uo pipefail`), so reading a name nothing has assigned is not an
+  empty string but a fatal error — and on the ordinary run, the one where no signal ever
+  arrives, nothing has assigned any of these names, because the only statements that write
+  them are the three trap bodies and the three places in the main flow that set the guard,
+  record the parent's pid and record its status — and every one of those sits after a read
+  that would already have happened.
+  The first `checkpoint` after the `mkdir` would evaluate `[ -z "$entry_signal" ]`
+  against an unset name and abort the entry there, before a single pin check, before either
+  compile and before the parent is launched. The `EXIT` trap is the same problem on every
+  refusal path: it reads `run_created`, then `entry_signal`, then `parent_pid` to choose
+  its line's second word, then `entry_status`, and an `E_RUNTIME` that happens before the
+  run directory exists reaches it with all four unassigned.
+
+  So the entry declares all four empty — `entry_signal=''`, `run_created=''`,
+  `entry_status=''`, `parent_pid=''` — among its first builtins, immediately after the
+  `umask 077` below and before it runs any external command, and the `trap … EXIT` line and
+  the three recording traps are installed after them. `run` is the fifth name the `EXIT`
+  trap reads, and it is not initialised empty but assigned, from the output root the entry
+  has by then validated; that assignment precedes the `trap` builtins for the same reason.
+  The rule is one line long and the plan should carry it as one: **no trap is installed
+  until every variable that trap, the checkpoint or the `EXIT` trap can read has been
+  assigned.**
+
+  The alternative was considered and is not taken: writing each read as
+  `${entry_signal:-}` and leaving the variables undeclared would satisfy `set -u` too. An
+  explicit initialisation is preferred for two reasons. It puts the entry's whole signal
+  state in one place a reviewer can see at a glance, which is what makes R10's read-check
+  of the arming order cheap — four assignments, then the `trap` lines, in that order on
+  the page. And a `${var:-}` written at every read is indistinguishable from a misspelled
+  name, so it switches off exactly the thing `set -u` is on for: with the defaults in
+  place, `${entry_signl:-}` is a silent empty string on every path rather than an error on
+  the first one.
 
   **The `EXIT` trap, which is now the only thing that touches the disk.** It runs on every
   exit path, signal or not, and does four things in this order: capture the status it was
@@ -1051,6 +1147,11 @@ the spec pull request's range above still blocks review.
   hands control to the `EXIT` trap, which does the cleanup, writes the line and supplies
   the status — `128 + signal` for the recorded name, because a checkpoint never records an
   `entry_status`. That is the same number every path through this requirement produces.
+  The function's test is a read of a set variable at every one of those call sites, and on
+  the normal run it is a read of the empty string every time: `entry_signal` is declared
+  empty among the entry's first builtins, ahead of the traps (above), which is what keeps
+  `set -u` from turning the first checkpoint of a signal-free run into a fatal unbound
+  variable.
 
   **Every external command the entry runs is written in three steps: status, then
   checkpoint, then refusal.** The usual shell shorthand — `cmd || refuse E_RUNTIME`, or
@@ -2557,7 +2658,10 @@ the spec pull request's range above still blocks review.
      remaining four hashed by the library itself at run time (`:711-714`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the request
      file and the repository-map file named on the command line; the jq binary supplied as
-     an argument; the caller's output directory; and the entry's own run directory.
+     an argument; `/usr/bin/awk`, which the entry reads on Linux for the one purpose of
+     copying it into the run directory, and does not read at all on Darwin, where it
+     writes a shim naming that path instead (below); the caller's output directory; and
+     the entry's own run directory.
 
      **The executables, listed exactly.** The previous round's list was short enough to be
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
@@ -2570,15 +2674,25 @@ the spec pull request's range above still blocks review.
      and `/usr/bin/mktemp` stopped being run at all (R1); then thirteen, when the entry
      gained `/usr/bin/env` — to build the explicit environment its pin
      checks, its two compiles and the parent launch all run under — and `/usr/bin/stat`, to
-     read the output root's owner and mode before writing anything there. **This round the
-     list moves in both directions**, which is a first: `/usr/bin/git` leaves it, because
+     read the output root's owner and mode before writing anything there. A later round
+     moved the list in both directions, which was a first: `/usr/bin/git` left it, because
      the blob ids are computed rather than asked for; `/bin/cat` and the platform's SHA-1
-     tool join it as that computation's two new commands; and the compiler becomes a
+     tool joined it as that computation's two new commands; and the compiler became a
      per-platform pair rather than a single path, since Darwin runs
      `/Library/Developer/CommandLineTools/usr/bin/clang` where `/usr/bin/cc` would be the
-     `xcrun` shim (R1). Counted the way R10's grep counts — one word per distinct absolute
-     path, so both compilers and all three digest tools count separately — that is
-     **sixteen command words**, and R10 lists the same sixteen, so the two can be checked
+     `xcrun` shim (R1). That took it to sixteen. **This round `/usr/bin/awk` leaves it**,
+     and the correction is to the twelve-count round above rather than to anything since:
+     that round found the ambiguity and resolved it the wrong way. Neither shipped file
+     ever runs host awk. The entry puts an awk inside `.run` so the *runtime* has one on
+     the `PATH` it is given — a copy on Linux, and on Darwin a two-line shim that names
+     the host path — and it is that entry in `.run` the resolver executes, long after the
+     entry has tightened the directory to 0500 — so
+     `/usr/bin/awk` is a data path in these two files, in the same class as the SDK root
+     and the `/proc` templates, and it is listed with them below and in R10's pass 1
+     rather than among the words either file may execute. Counted the way R10's grep
+     counts — one word per distinct absolute path, so both compilers and all three digest
+     tools count separately — that is
+     **fifteen command words**, and R10 lists the same fifteen, so the two can be checked
      against each other rather than drifting. Every external
      command either file runs, with the fixed absolute path it runs it by:
 
@@ -2602,12 +2716,13 @@ the spec pull request's range above still blocks review.
      compiler, which is `/usr/bin/cc` on Linux and
      `/Library/Developer/CommandLineTools/usr/bin/clang` on Darwin, where `/usr/bin/cc`
      would be the `xcrun` shim (R1); `/bin/cp`,
-     for the jq and awk copies; `/usr/bin/awk`,
-     read only in order to be copied in, because the runtime needs awk on its `PATH`;
+     for the jq and awk copies;
      `/usr/bin/printf`, for the `E_*` lines and, on Darwin, for writing the awk shim;
      `/bin/chmod`, for the 0500 pass and the trap's 0700 restore; `/bin/rm`, for the `tmp`
-     subdirectory and the run directory; `/bin/bash`, which is its own interpreter, the
-     target of its own re-exec (R1), and the Darwin awk shim's interpreter; the bound jq,
+     subdirectory and the run directory; `/bin/bash`, which is its own interpreter and the
+     target of its own re-exec (R1) — it is also the shebang of the Darwin awk shim, but
+     that line is text the entry writes and the *runtime* acts on, so it is not why
+     `/bin/bash` is listed here; the bound jq,
      for the `--version` probe; and the compiled parent
      inside the run directory, which it runs as its child. The order matters as much as the
      list: `/usr/bin/env` runs before `/usr/bin/uname`, and the builtin scrub ahead of it
@@ -2629,6 +2744,32 @@ the spec pull request's range above still blocks review.
      `/bin/mkdir`, at the mode they ask for because of the parent's own `umask(077)` (R5);
      and every mode and ownership check is an `fstat` on a descriptor the
      parent opened, not a call to `/usr/bin/stat`.
+
+     **Where `/usr/bin/awk` does appear, and why the bound jq is the opposite case.** The
+     entry's source names `/usr/bin/awk` in exactly two places, both of them argument
+     positions and neither of them a command. On Linux it is the source argument of the
+     copy — `/bin/cp /usr/bin/awk <run>/awk`, the shape the test uses at
+     `scripts/test/portable-profile-resolution.test.sh:136`. On Darwin it is text inside
+     the single-quoted string the entry hands to `/usr/bin/printf`, which writes the
+     two-line `#!/bin/bash` and `exec /usr/bin/awk "$@"` shim the test writes at `:138`;
+     that shim is executed by the *resolver*, out of `.run`, long after the entry has
+     tightened the directory to 0500, and the entry never runs it. Nothing else touches
+     the path: awk is not one of the ten computed blob-id pins and it is not the SHA-256
+     digest pin — that one is jq's — so it is not an input to either digest pipeline
+     either. R10's pass 1 therefore lists it with the data paths, and the assertion there
+     pins those two positions rather than only reclassifying the path, because a
+     classification on its own would let an accidental `/usr/bin/awk '{print $1}'` in
+     command position through the very grep that exists to catch it.
+
+     The bound jq is the opposite case, and the two are set side by side here so a plan
+     cannot conflate them. The entry both **reads** jq — `/bin/cp` copies it into `.run`
+     and the platform's SHA-256 tool digests it for the jq pin — and **runs** it, for the
+     `jq-1.6` `--version` probe; the parent runs its own probe on the same binary. So jq
+     stays a command word for both files while also being a data path, and that is not a
+     contradiction, only two uses of one file. It never reaches pass 1 of R10's grep in
+     either role, because neither file names it by an absolute path: the entry assigns it
+     from its own argument and the parent receives it as one, so pass 3 is what covers
+     it, by variable name.
 
      Seven choices inside that list are named because each is a place the shipped path
      deliberately differs from the code it copies:
@@ -2662,10 +2803,14 @@ the spec pull request's range above still blocks review.
        `shadow/v1/reproduce.sh:18` uses `/usr/bin/shasum -a 256` on both platforms, which
        is right on Darwin but not guaranteed on Linux, where `/usr/bin/sha256sum` is the
        native tool and `/usr/bin/shasum` ships only with perl. Hence the pair above.
-     - **No `awk` process is spawned to read a digest.** `reproduce.sh:18` pipes the
+     - **No `awk` process is spawned at all, to read a digest or for anything else.**
+       `reproduce.sh:18` pipes the
        SHA-256 tool through `/usr/bin/awk '{print $1}'`; the entry takes the first field
-       with a bash parameter expansion and the parent parses it in C, so awk is on this
-       list only as the file copied in for the runtime's benefit.
+       with a bash parameter expansion and the parent parses it in C. That was the last
+       place either shipped file would have run awk, so `/usr/bin/awk` is off the command
+       list entirely and appears only as the file copied in for the runtime's benefit —
+       the paragraph above says where, and R10's pass 1 and its position assertion are
+       what hold it there.
      - **No `mktemp`.** `shadow/v1/reproduce.sh:94-142` and the test script both make their
        scratch with `mktemp -d` under the caller's `TMPDIR`. The entry's run directory is
        the fixed `<output>/.run` instead (R1), so `/usr/bin/mktemp` is neither run nor
@@ -3199,10 +3344,14 @@ the spec pull request's range above still blocks review.
   into the microseconds between the two `mkdir` calls, which is a flaky test dressed as a
   deterministic one. A test-only hook inside the entry is the thing this spec refuses
   everywhere else. So the arming order is covered the way R2's mask window is: by reading,
-  with the plan quoting the four statements in order — the `trap` lines, then the `[ -e ]`
+  with the plan quoting the statements in order — the four empty initialisations
+  `entry_signal=''`, `run_created=''`, `entry_status=''` and `parent_pid=''`, then the
+  `trap` lines, then the `[ -e ]`
   refusal, then `/bin/mkdir -- "$run"` with the guard set from its captured status, then
   the two subdirectories — and the
-  reviewer checking that no statement between them can create `.run` without the guard,
+  reviewer checking that those four initialisations all precede the `trap` builtins, so
+  that no variable a trap, a checkpoint or the `EXIT` trap reads can be unset when `set -u`
+  meets it, that no statement between them can create `.run` without the guard,
   and that no signal trap body does anything but record a name. The status rule is part of
   what is read: a status above 128 with `.run` present sets the guard, because the producer
   was killed after it had created the directory (R1).
@@ -3547,10 +3696,12 @@ the spec pull request's range above still blocks review.
   the mechanism is settled here rather than left to the plan.** The list it checks against is
   R7's: `/bin/bash`,
   `/bin/mkdir`, `/bin/cp`, `/bin/chmod`, `/bin/rm`, `/bin/cat`, `/usr/bin/uname`,
-  `/usr/bin/awk`, `/usr/bin/printf`, `/usr/bin/env`,
+  `/usr/bin/printf`, `/usr/bin/env`,
   `/usr/bin/stat`, the compiler pair `/usr/bin/cc` and
   `/Library/Developer/CommandLineTools/usr/bin/clang`, and the three digest tools
-  `/usr/bin/shasum`, `/usr/bin/sha256sum` and `/usr/bin/sha1sum` — sixteen command words.
+  `/usr/bin/shasum`, `/usr/bin/sha256sum` and `/usr/bin/sha1sum` — fifteen command words.
+  `/usr/bin/awk` is deliberately not among them: neither shipped file executes host awk,
+  and pass 1 below classifies it as data and then says where it is allowed to stand.
   An earlier round of this spec described the sweep as "every absolute path under
   `/usr/bin`, `/bin` or `/Library/Developer/CommandLineTools/usr/bin`, and every bare command
   name", which is not something a test can be written from. Taken literally it fails on `cd`,
@@ -3564,16 +3715,35 @@ the spec pull request's range above still blocks review.
   shipped files do that.
 
   1. *Absolute-path tokens.* Every token beginning with `/` is extracted, and each one must
-     be either one of the sixteen words above or one of the four absolute paths these files
+     be either one of the fifteen words above or one of the five absolute paths these files
      name as data rather than as commands: the SDK root passed to `-isysroot`
      (`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, R1), the `PATH` value
      `/usr/bin:/bin` the entry writes into its own environment and into every `env -i` line,
-     and the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
+     the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
      (`portable-profile-resolution-launcher.c:178`) and the `/proc/%s/stat` template
-     (`:204`). Anything else fails, whatever prefix it carries. Matching on the leading slash
+     (`:204`) — and `/usr/bin/awk`, which the entry copies and names in the Darwin shim
+     text and never executes (R7). Anything else fails, whatever prefix it carries. Matching
+     on the leading slash
      rather than on a list of directories is the point: the Darwin compiler took the prefix
      set to three, and a grep that knew only the prefixes somebody told it about would
      silently pass a shipped file that had grown a fourth.
+
+     **And `/usr/bin/awk` gets a position assertion of its own, because a data
+     classification alone would weaken this invariant rather than strengthen it.** The
+     other four data paths cannot be run by accident — an SDK root, a `PATH` value, a
+     directory and a `printf` template are not executables — but awk is, and a slip back
+     to `reproduce.sh:18`'s `… | /usr/bin/awk '{print $1}'` would now pass pass 1 as a
+     listed data path and pass 2 as no bare word at all. So the test asserts the two
+     positions R7 enumerates and no others: every occurrence of `/usr/bin/awk` in the
+     entry is either the second word of a `/bin/cp` command whose third word is inside the
+     run directory, or inside the quoted shim text passed to `/usr/bin/printf`, and none
+     of them is the first word of a command — which is the same command-position
+     extraction pass 2 already performs, run a second time and asked for the opposite
+     answer. The C parent must not contain the token at all. That is what makes an
+     accidental host-awk invocation a CI failure rather than an allowlisted path in a new
+     place. The test may still run awk freely for its own parsing, the way the existing
+     test does at `scripts/test/portable-profile-resolution.test.sh:448-449`, for the
+     same reason it may run git: the sweeps cover the two shipped files only.
   2. *Bare words in command position, in the entry only.* The C file has none — it names its
      executables as string literals, which pass 1 already covers. The entry does, so the
      test takes the first word of each command in it and drops every name `compgen -b`
@@ -3611,7 +3781,13 @@ the spec pull request's range above still blocks review.
   can be checked by reading them. `bash -n` stays where it already is — the entry has to parse — and is no part
   of this invariant.
 
-  **The sixteen words do not move this round; the mechanism above is what moved.** Three
+  **This round the list loses a word, and it loses it to the other side of the same
+  grep.** `/usr/bin/awk` moves from the command words to pass 1's data paths, with the
+  position assertion above holding it there, because neither shipped file ever runs host
+  awk — the entry copies the file in, or on Darwin writes a shim that names it, so that
+  the runtime can execute the copy from `.run` (R7). Sixteen becomes fifteen, and it is
+  the first word to move since the mechanism above was settled; no round between the two
+  moved one. Three
   changes came with the round before it, all from the same two findings. `/usr/bin/git`
   **left the list**, because the two shipped files compute blob ids instead of running
   `git hash-object`. The Darwin compiler joined as
@@ -3635,7 +3811,7 @@ the spec pull request's range above still blocks review.
   assertion that no subcommand other than `hash-object` appeared. With git off the list
   entirely, `git` fails the allowlist exactly as the three downloaders do — bare `git` is a
   pass-2 word that is neither a builtin nor a reserved word, and `/usr/bin/git` is a pass-1
-  token that is not one of the sixteen — and the
+  token that is neither one of the fifteen nor one of the five data paths — and the
   subcommand assertion goes away — one fewer invariant to keep true by hand, and a
   stronger claim than the one it replaces. The test
   is shellcheck-clean,
@@ -3736,7 +3912,12 @@ Order, each step checkable before the next:
    marker word, the arity, and the scrub the marker branch re-runs as its own first
    statements — the same builtin scrub plus `builtin unalias -a` and `builtin shopt -u
    expand_aliases`, and `umask 077` last among them, copied from `materialize.sh:31`
-   because the scrub resets variables and not the process umask (R1) — with the clean path
+   because the scrub resets variables and not the process umask (R1), and then, still
+   before the first external command, the four variables every trap and checkpoint reads
+   declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
+   `parent_pid=''` — so that under `set -u` a signal-free run's first checkpoint and a
+   pre-directory refusal's `EXIT` trap read set names rather than aborting on an unbound
+   one (R1) — with the clean path
    refusing unless its first argument is the marker
    word (R1), and the direct marker invocation documented as unsupported. Everything below
    runs in that second process. Then: resolve the
@@ -3751,7 +3932,9 @@ Order, each step checkable before the next:
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
    (R1);
    then install the `EXIT`/`INT`/`TERM`/`HUP` traps **before** anything creates the run
-   directory, the three signal traps recording the signal's name in `entry_signal` and
+   directory — and after the four empty initialisations above and after `run` itself is
+   assigned from the validated output root, so nothing any trap reads is unset when it is
+   armed (R1) — the three signal traps recording the signal's name in `entry_signal` and
    doing nothing else, and the `EXIT` trap's removal guarded by a `run_created` variable
    that stays unset until the directory is the entry's own; then refuse a pre-existing
    `.run` with `[ -e ]`; then create the run directory `<output>/.run` at mode 0700 with a
