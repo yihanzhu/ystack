@@ -253,8 +253,8 @@ if [ -f "$workflow" ]; then
   run_line="$(grep -E 'bash scripts/test/run-all\.sh --shard \$\{\{ *matrix\.shard *\}\}/[0-9]+' "$workflow" || true)"
   if [ -n "$run_line" ]; then
     shard_n="$(printf '%s\n' "$run_line" | sed -E 's#.*--shard \$\{\{ *matrix\.shard *\}\}/([0-9]+).*#\1#')"
-    matrix_line="$(grep -E '^\s*shard:\s*\[' "$workflow" || true)"
-    matrix_list="$(printf '%s\n' "$matrix_line" | sed -E 's/^\s*shard:\s*\[([^]]*)\].*/\1/' | tr -d ' ')"
+    matrix_line="$(grep -E '^[[:space:]]*shard:[[:space:]]*\[' "$workflow" || true)"
+    matrix_list="$(printf '%s\n' "$matrix_line" | sed -E 's/^[[:space:]]*shard:[[:space:]]*\[([^]]*)\].*/\1/' | tr -d ' ')"
     expected_list="$(seq 1 "$shard_n" | paste -sd, -)"
     if [ -n "$matrix_line" ] && [ "$matrix_list" = "$expected_list" ]; then
       check "workflow shard count equals its matrix (N=$shard_n)" 0
