@@ -1,5 +1,5 @@
 ---
-spec-blob: 3338912efa042c62bf89c4a4500acc08fe2263df
+spec-blob: 1d419e187315879e2bc52366b2be11a43b511ad4
 drafted: 2026-09-10
 ---
 # Plan: ci-test-shards
@@ -108,10 +108,8 @@ workflow that calls them are one concern.
 
 Commits 4 and 5 are throwaway proof commits, which is why the operator's commit is
 described everywhere here as the branch's last *permanent* change rather than its last
-commit. The spec words it "the last commit on the implementation branch"
-(`work/ci-test-shards/spec.md:300-301`); this plan refines that to "last permanent
-change" for the same reason the red-shard proof moved off a scratch branch, and
-Deviations from the spec records it.
+commit. The spec words it the same way — "the last permanent file change on the
+branch" (`work/ci-test-shards/spec.md:258-259`).
 
 ### Step 0 — the proof script first (R9)
 
@@ -480,14 +478,12 @@ Only after that does CI exercise the new shape. He records the run's wall-clock
 duration in the PR body; the target is under 25 minutes (R14).
 
 **Then, once that run is green, the red-shard proof of the first risk below.** The
-spec asks for this one on a scratch branch — requirement 11 at
-`work/ci-test-shards/spec.md:168-173`, repeated in the risk note at `:311-313`. That
-is infeasible as written and this plan corrects it openly; Deviations from the spec
-below states the correction and how it is re-accepted. The reason: it needs a pull
-request run. `ci.yml`'s `on:` is `pull_request` and `push` to `main` only (lines 3-6,
-checked against the file), so pushing a scratch branch starts no run at all — there is
-nothing to watch go red. So it runs on **this** PR, the one open PR for this slug, as
-two ordinary commits on the implementation branch:
+spec asks for this one on the implementation PR itself — requirement 11 at
+`work/ci-test-shards/spec.md:171-188`, repeated in the risk note at `:327-332`. It
+needs a pull request run: `ci.yml`'s `on:` is `pull_request` and `push` to `main`
+only (lines 3-6, checked against the file), so pushing a scratch branch starts no run
+at all — there is nothing to watch go red. So it runs on **this** PR, the one open PR
+for this slug, as two ordinary commits on the implementation branch:
 
 1. From the implementation head — the operator's workflow commit, with its own CI
    green — the coder pushes one commit adding a single file,
@@ -525,7 +521,7 @@ compares. And `scripts/test/run-all.sh` decides whether a failing suite makes it
 shard's job fail at all: the runner has to let that suite's non-zero status out, or
 `test (3)` goes green and the gate is never even asked. R11's promise that a green `ci`
 means every suite passed rests on that exit-code propagation as much as on the gate
-(`work/ci-test-shards/spec.md:168-173`), so a review fix to the runner would make this
+(`work/ci-test-shards/spec.md:168-171`), so a review fix to the runner would make this
 proof stale even with the workflow untouched.
 
 `HR` itself carries the throwaway suite, so its `scripts/test` tree can never equal
@@ -562,35 +558,14 @@ the `ci` job in the workflow file on the branch and confirm by eye that it carri
 `success` explicitly. That is review of the text, not proof of the behaviour. Only a
 real run shows GitHub actually reporting `ci` red.
 
-## Deviations from the spec
+## Spec amendment
 
-One mechanism change and the wording change it forces, both stated openly rather than
-done quietly. Requirement 11 (`work/ci-test-shards/spec.md:168-173`) says the
-aggregate gate is verified "by failing one shard on a scratch branch", and the risk
-note at `:311-313` repeats it.
-That mechanism cannot work: `ci.yml`'s triggers are `pull_request` and `push` to
-`main` only (`.github/workflows/ci.yml:3-6`), so a scratch branch starts no workflow
-run whatsoever and there is nothing to watch go red. The spec's *intent* — deliberately
-fail one shard, see the one required check go red rather than skipped, and keep that
-failure off `main` — is met exactly. Only the mechanism changes: two ordinary commits
-on the single implementation PR, add then delete, squash-merged, with the red run
-bound to the final head by the `ci.yml` blob id and the `scripts/test` tree id
-(Step 6, Proof item 14).
-
-That correction has one knock-on wording change, recorded here for the same reason.
-The spec says the operator commits the two constitution-path files "as the last commit
-on the implementation branch" (`work/ci-test-shards/spec.md:300-301`). Because the
-red-shard proof now runs on this PR, two commits necessarily follow his — the
-red-shard add and its delete — so this plan reads that line as the last *permanent*
-file change on the branch. Those two cancel out and leave nothing in the squashed
-commit, so the spec's intent holds exactly: the operator's files land last and no
-agent commit changes them. The full sequence is the numbered list at the top of Order
-of work.
-
-Both corrections are submitted through this gate. Accepting this plan accepts the
-corrected proof strategy; yshifu records both on the intake issue when this plan
-merges, so the spec's wording is not silently overridden. The spec file itself is
-not edited — it is the accepted contract, and this plan does not rewrite its text.
+This plan used to carry a Deviations section; it no longer needs one. Plan review on
+PR #281, rounds 7 and 12, found the spec's "scratch branch" wording infeasible —
+`ci.yml` triggers on `pull_request` and `push` to `main` only, so a scratch branch
+starts no run — and its "last commit" wording inconsistent with the two throwaway
+proof commits that have to follow the operator's. The spec was amended through G2
+(PR #285, blob `1d419e18…`); this plan pins that blob above, and the two now agree.
 
 ## Risks
 
@@ -603,12 +578,11 @@ not edited — it is the accepted contract, and this plan does not rewrite its t
   making one shard fail on the implementation PR itself, on a commit that is deleted
   again before merge (Step 6, Proof last item). It has to be a PR run: the workflow's
   `on:` triggers are `pull_request` and `push` to `main` only, so pushing any other
-  branch runs nothing and proves nothing — which is why the spec's "scratch branch"
-  wording is corrected here (Deviations from the spec). The red run therefore sits on
-  a head that is superseded before merge, so it is not left as old proof on a new
-  commit: it is bound to the final head by the `ci.yml` blob id *and* by the
-  `scripts/test` tree id, the latter taken across the delete commit because the red
-  head carries the throwaway suite. The gate decides whether `ci` goes red when a shard
+  branch runs nothing and proves nothing, which is why the spec puts this proof on the
+  implementation PR. The red run therefore sits on a head that is superseded before
+  merge, so it is not left as old proof on a new commit: it is bound to the final head
+  by the `ci.yml` blob id *and* by the `scripts/test` tree id, the latter taken across
+  the delete commit because the red head carries the throwaway suite. The gate decides whether `ci` goes red when a shard
   fails; the runner decides whether the failing suite made that shard's job fail in the
   first place. Both have to be the shipping bytes for the recorded red run to prove
   anything, so a review fix to either one means redoing it (Step 6, Proof item 14).
@@ -840,10 +814,10 @@ pre-fix run can no longer be produced here, so it is never left for later.
 14. **A failing shard turns `ci` red — on this PR, then removed again (R11).** This
     needs the new workflow, so it cannot be done before Step 6. It needs a PR run:
     `ci.yml` runs on `pull_request` and on `push` to `main` only, so a push to any
-    other branch starts nothing — which is why the spec's "scratch branch" wording is
-    corrected here (Deviations from the spec). So the coder pushes one commit to the
-    implementation branch adding `scripts/test/zz-red.test.sh`
-    (`#!/usr/bin/env bash`, then `exit 1`) — it sorts last, so it lands in shard 3.
+    other branch starts nothing, which is why the spec puts this proof on the
+    implementation PR. So the coder pushes one commit to the implementation branch
+    adding `scripts/test/zz-red.test.sh` (`#!/usr/bin/env bash`, then `exit 1`) — it
+    sorts last, so it lands in shard 3.
     Expect `test (3)` red, the other five shards green (`fail-fast: false`), `checks`
     green, and `ci` **red, not skipped**. Record that run's URL, the commit it ran on
     (`HR`) and its job list (`gh pr checks` output) in the PR body, then push a second
