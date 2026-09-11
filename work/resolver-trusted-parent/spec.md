@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 single security-boundary component whose only honest proof runs the real resolver twice
 and compares the output.
 
-**Evidence-based range: 2057-2783 changed lines** (implementation). The derivation,
+**Evidence-based range: 2066-2796 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -187,8 +187,13 @@ measured rather than guessed:
   `last_forwarded` guard with its assignment beside the `kill`, and the `continue` and
   `break` — where two waits and one `kill` were three statements (R1). The traps changing
   from `entry_signal=NAME` to `: "${entry_signal:=NAME}"` costs nothing: the same three
-  lines in a different form.
-- **Focused test ~943 lines.** For scale, the existing resolution test is 746 lines and
+  lines in a different form. This round adds ~3 more, to **~418**, and all three are single
+  lines: `trap '' INT TERM HUP` as the first statement of the `EXIT` trap body, so the
+  `chmod` and the `/bin/rm` inherit the ignore; `case $- in *p*) ;; *) exit 78 ;; esac` as
+  the first statement of the marker branch; and the comment that says why a marker arrival
+  without `-p` is refused rather than scrubbed (R1). The `-p` added to the re-exec's
+  `/bin/bash` costs nothing — two characters on a line that was already there.
+- **Focused test ~951 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), eleven entry-level refusals in group 1 (~140 — the seven
@@ -196,7 +201,10 @@ measured rather than guessed:
   asserting the target was never written to), the entry-driven loader-variable pollution run
   with its marker library (~25 — the library, the two runs, and the at-most-one-line count
   assertion over the marker file), the forged clean-marker invocation with its
-  exported-function fixture and its marker-file assertion (~15), the
+  exported-function fixture and its marker-file assertion, in two halves this round
+  (~20 — the `-p` half as before at ~15, plus ~5 for the non-`-p` half: one run from a
+  clean environment, the exit-78 assertion and the untouched-output-directory
+  assertion), the
   polluted-compiler-environment block — poisoned-header
   fixture, two entry runs, two hand-built compiles whose digests are compared, and the
   control compile that proves the fixture poisonous (~55, of which ~20 is the Darwin
@@ -215,8 +223,9 @@ measured rather than guessed:
   in a variant a `SIGINT`, 100 ms after the first — the second signal, the sampler that
   polls the parent's pid against the existence of `.run` and fails on the first sample
   that finds the directory gone with the parent alive, the cross-check of that pid
-  against the `entry-signal:` line, the one-line count-and-name assertion, and the `set -m`
-  the `SIGINT` variant needs (~15) — the
+  against the `entry-signal:` line, the one-line count-and-name assertion, the `set -m`
+  both runs now need, and this round's third signal sent to the whole group 100 ms after
+  the second (~18) — the
   pre-parent one that signals as soon as `.run` appears and asserts the trap's own
   `entry-signal:` line, with a bounded wait for the deferred trap (~30), the group-signal
   one that runs the entry in a process group of its own, waits for a compile to be the
@@ -246,10 +255,10 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those sum to about 2420 lines; the range above is that sum with ~15% headroom at both
+Those sum to about 2431 lines; the range above is that sum with ~15% headroom at both
 ends. It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
-1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, and the
+1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -535,7 +544,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 4773 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 5023 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -598,14 +607,23 @@ it, and this round the entry's wait on the parent made a loop that ends only whe
 parent's pid has actually been reaped, with the signal forwarded once and the first name
 recorded kept, so a second `Ctrl-C` during the termination can no longer take an
 interrupted wait's status for the parent's and remove the run directory out from under a
-resolver that is still alive, with a fifth signal case that presses twice to prove it).
-**Evidence-based range for this spec pull request: 4057-5489 lines** — the measured
-4773 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+resolver that is still alive, with a fifth signal case that presses twice to prove it,
+and this round the entry's `EXIT` trap setting the three signals to ignore before it
+touches the disk, so the `chmod` and the `/bin/rm` it runs inherit the ignore and a third
+`Ctrl-C` can no longer stop the removal part-way and leave the run directory behind,
+beside the marker branch refusing outright unless it was reached in privileged mode, so
+the one door into the clean path is shut by a condition the supported invocations create
+rather than by a scrub the unsupported one could have shadowed, and the spec's claim for
+that scrub cut back to what it is).
+**Evidence-based range for this spec pull request: 4270-5776 lines** — the measured
+5023 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
-3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293; where each block of
+3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
+4773 (the round before this one appended none of its own, and both are restored here);
+where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1039,15 +1057,49 @@ bullet under Areas of concern with the entry half of the second-signal question 
 settled, the accepted-concern list at the top, and the re-derived size figures here and
 for the implementation.
 
+This round is +250 net over one P2 and one P3, and both findings are the same kind of
+thing: a protection written one process, or one statement, short of where it had to be.
+About 38 go to the P2, the cleanup's own signal disposition. The `EXIT` trap's body now
+runs `trap '' INT TERM HUP` after its status capture and ahead of its first external
+command, and most of those lines are the reason rather than the
+line: that `chmod` and `/bin/rm` are external commands a foreground-group signal reaches
+too, that a recording trap protects the shell and never the children it forks, that
+`SIG_IGN` is the one disposition inherited across `fork` and preserved across `exec`, the
+bash 3.2 measurement of a child surviving a group `TERM` with the line and dying without
+it, why nothing is lost by ignoring at a point where the signal has already been recorded,
+forwarded and the parent reaped, why `trap ''` and not `trap ':'`, and the measurement
+behind the one ordering that is not free — `trap` is a builtin, a builtin that succeeds
+sets `$?` to 0, so the status capture keeps first place and the ignore takes second.
+About 70 go to the
+P3, the marker branch. It stops trusting `builtin` — or anything else — before it knows
+how it was entered: the first statement is `case $- in *p*) ;; *) exit 78 ;; esac`, the
+re-exec gains the `-p` that makes that true on the supported path (a fourth named
+deviation from the copied materializer lines), and the measurement behind it is written
+out — `$-` under each of the four invocation forms, `BASH_ENV` read under the plain ones
+and not under `-p`, an exported function imported under the plain ones and not under `-p`,
+and, on the other side, an exported `exit` and an aliased `case` both shadowing the
+refusal in a non-privileged process, which is exactly why that invocation is outside the
+boundary. The rest of the P3 is subtraction: the spec stops saying the re-run scrub proves
+hostile functions and aliases were removed before validation and says it is a second layer
+on the arrivals the refusal admits. About 48 go to R10 — the forged-marker case split into
+a `-p` half whose claim is rewritten and a clean-environment non-`-p` half asserting exit
+78 and an untouched output directory, the repeated-signal case gaining a third signal to
+the whole group with an honest note that nothing makes it land inside the trap, and the
+read-and-check sequence gaining the `trap ''` line's position. The remaining ~94 are
+the ripples and the bookkeeping: Design step 2 on both fixes, R9's documentation line, the
+Copy-versus-adapt scrub item, the cleanup bullet and the entry's-first-process bullet
+under Areas of concern, the accepted-concern list at the top, and the re-derived size
+figures here and for the implementation.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 4057-5489 lines**, which is this file's measured
-4773 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 4270-5776 lines**, which is this file's measured
+5023 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
-2057-2783 changed lines derived at the top of this section belong to the *implementation*
+2066-2796 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -1171,8 +1223,11 @@ the spec pull request's range above still blocks review.
   the first one.
 
   **The `EXIT` trap, which is now the only thing that touches the disk.** It runs on every
-  exit path, signal or not, and does four things in this order: capture the status it was
-  entered with, because the `rm` and the `printf` below would otherwise overwrite `$?`;
+  exit path, signal or not, and does five things in this order: capture the status it was
+  entered with, because the `trap`, the `rm` and the `printf` below would otherwise
+  overwrite `$?`; then set `INT`, `TERM` and `HUP` to **ignore** with a bare
+  `trap '' INT TERM HUP`, which is the second statement of the trap body and stands ahead
+  of every external command in it;
   then, **if `run_created` is set**, `chmod 0700` the run directory and remove it and
   everything in it; then, **if `entry_signal` is set**, write the one `entry-signal:` line
   described below to the entry's own stderr; then exit. The
@@ -1180,6 +1235,41 @@ the spec pull request's range above still blocks review.
   directory is still 0700. With `run_created` unset the trap touches nothing on disk, which
   is the normal case for a refusal that happens before the directory exists. With
   `entry_signal` unset it writes nothing, which is every non-signal exit.
+
+  **The `trap ''` line is there for the `chmod` and the `/bin/rm`, not for the shell, and
+  saying why makes clear that recording is not enough here.** Everywhere else in this entry
+  a signal trap only records a name, because the shell is the thing at risk and the next
+  checkpoint is where it can act. Cleanup is the one place where that shape is wrong. A
+  caller's `Ctrl-C` goes to the whole foreground process group, so a signal arriving while
+  the trap is running is delivered to `chmod` and `/bin/rm` as well as to the entry — and a
+  recording trap does nothing for them, because a trap protects the shell that installed it
+  and never the children that shell forks. `/bin/rm` would die part-way through its
+  descent, the entry would exit, and the caller would be left with precisely the `.run`
+  directory this trap exists to remove. Ignoring is the one disposition that reaches the
+  children: `SIG_IGN` is inherited across `fork` and preserved across `exec`, so `chmod`
+  and `/bin/rm` start life with these three signals already ignored and run to completion
+  however many times the caller presses. Measured, bash 3.2: a `/bin/sh` child forked after
+  `trap '' INT TERM HUP` survives a `TERM` sent to its whole process group and prints its
+  last line, and the identical child without that line is killed before it gets there.
+  Nothing is given up by ignoring at this point in the entry's life — by the time the
+  `EXIT` trap runs, the first signal has been recorded, forwarded once and the parent
+  reaped (or there was never a parent to forward to), the exit status is already decided,
+  and the only thing a further signal can still do is break the removal. `trap ''` and not
+  `trap ':'` on purpose: the empty string is the ignore disposition, which children
+  inherit; a command, even a `:`, is a handler, and handlers are reset to the default in
+  the child.
+
+  **Second statement and not first, and the reason is measurable.** The status capture has
+  to come before it. `trap` is a builtin and a builtin that succeeds sets `$?` to 0, so a
+  trap body opening with `trap '' INT TERM HUP` has thrown away the status it was entered
+  with before it can read it — measured, bash 3.2: an `EXIT` trap that runs `trap ''` and
+  then reads `$?` sees `0` where the shell was exiting `7`, and the same trap with the two
+  statements the other way round sees `7`. Since the entry's `E_RUNTIME` refusals are
+  exactly the paths whose status the trap must pass through, first place belongs to the
+  capture, which is a plain assignment that starts no process and can lose nothing to a
+  signal. Everything the ignore is for stands after it, which is why the rule R10 reads is
+  a position relative to the cleanup rather than an absolute one: **the `trap ''` line
+  comes before the first external command of the trap body.**
 
   The status it exits with is three cases and no more: `entry_status`, when the main flow
   recorded one — which happens on exactly one path, the forwarded one below, where it is
@@ -1523,10 +1613,10 @@ the spec pull request's range above still blocks review.
 
   ```
   exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-    /bin/bash "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"
+    /bin/bash -p "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"
   ```
 
-  Three named deviations from the copied lines, and nothing else. The marker word is
+  Four named deviations from the copied lines, and nothing else. The marker word is
   `__resolve_profile_clean` in place of `__materialize_clean` (`:25,29`). And the arity
   differs: the materializer's caller-facing shape carries a leading subcommand word, so
   both of its invocations are eight arguments and `$1` alone tells them apart (`:22,25,29`),
@@ -1537,7 +1627,15 @@ the spec pull request's range above still blocks review.
   is `E_USAGE`. That keeps one of the materializer's two properties intact — the re-exec
   cannot re-enter the dirty path, because it always supplies the marker word. The other one
   it does not keep: a caller *can* enter the clean path, by supplying the marker word
-  themselves, and the third deviation below is what this spec does about that. Everything
+  themselves, and the third and fourth deviations below are what this spec does about that.
+  The third of the four is the `-p` on the re-exec's `/bin/bash`, where the materializer
+  writes a plain `/bin/bash` (`:27`): the entry's shebang is `#!/bin/bash -p` already,
+  and the flag is added here so that privileged mode survives the re-exec instead of being
+  dropped at the one hop that matters — the hop that lands on the marker branch, which is
+  where the fourth deviation then tests for it. It costs nothing else. Under `env -i` there
+  is no environment left for privileged mode to refuse, so `-p` changes no behaviour on
+  this path; what it changes is that `$-` carries a `p` in the second process, which is the
+  fact the branch can act on. Everything
   else is the same:
   `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
   re-exec is an `exec`, so no extra process is left behind. The literal
@@ -1548,25 +1646,82 @@ the spec pull request's range above still blocks review.
   validation, the pin checks, the compiles, the mode pass, the launch — runs in that second
   process, which was started with an empty environment.
 
-  **The third deviation: the marker branch re-runs the scrub as its first statements.**
-  Nothing stops a caller from invoking the entry as `/bin/bash <entry>
+  **The fourth deviation: the marker branch refuses unless it is in privileged mode, and
+  only then re-runs the scrub.** Nothing stops a caller from invoking the entry as
+  `/bin/bash <entry>
   __resolve_profile_clean <jq> <output> <request> <map>` — five arguments whose first is the
   marker word — and landing on the clean path directly. The marker word is a literal in a
   committed file, not a secret. What such a caller reaches is the clean path running in a
   process whose loader consumed *their* environment, because the re-exec, the only step that
   produces an environment built from nothing, is precisely the step the marker branch skips:
   it is the branch the re-exec arrives on. So the marker branch does not assume it was
-  reached through the re-exec. Its first two statements, before anything else in it, are
-  `builtin unalias -a` and `builtin shopt -u expand_aliases` — two lines the copied bytes do
-  not have, needed because the scrub unsets inherited functions and exported names and an
-  alias is neither. They go first because bash expands aliases as it reads each command, so
-  the reset has to run before the shell parses the rest of the branch. Then the builtin
-  scrub itself, re-run in full: `builtin unset -f` over `builtin compgen -A function`,
+  reached through the re-exec — it checks, and the check is its very first statement:
+
+  ```
+  case $- in *p*) ;; *) exit 78 ;; esac
+  ```
+
+  Both supported invocations set that flag. Executing the file starts bash from the
+  `#!/bin/bash -p` shebang; the documented direct form passes `-p` on the command line; and
+  the re-exec above now passes it too, which is the third deviation and the reason it
+  exists. So the branch's own arrival condition — privileged mode — is true on every path
+  this spec supports and false on the one it does not. Measured, bash 3.2 on
+  `arm64-apple-darwin`: with a `#!/bin/bash -p` shebang `$-` is `hpB`; with
+  `env -i … /bin/bash -p <script>` it is `hpB`; with a plain `#!/bin/bash` shebang or a
+  plain `/bin/bash <script>` it is `hB`. And privileged mode is worth having for itself,
+  not only as a marker: in the same measurement, a `BASH_ENV` pointing at a file that
+  echoes a line and defines an alias is executed under the plain forms and **not** read at
+  all under either `-p` form, and an exported function (`BASH_FUNC_evilfunc%%` in the
+  environment) is imported under the plain forms and **not** imported under either `-p`
+  form. That is the whole shape of the pollution this branch was scrubbing by hand.
+
+  The statement is written the way it is because of what has run before it, which is
+  nothing: `case`, `in` and `esac` are reserved words, and `$-` is a special parameter the
+  shell maintains itself, so the test itself runs no command and reads no variable the
+  entry has not been able to set. The one word in it that is neither is `exit`, a builtin
+  and therefore shadowable by a function of that name — which is not patched over here,
+  it is the subject of the paragraph after next, and the answer to it is that the only
+  arrival that can install such a function is the one this line turns away. `78` is a bare
+  literal for the same
+  no-state reason — no name has been assigned at that point, and under `set -u` a symbolic
+  `E_*` would be an unbound variable — and the number is chosen to be distinct from the
+  entry's
+  `E_USAGE` and `E_RUNTIME` status and from anything `128 + signal` can produce, so a test
+  asserting it cannot be satisfied by an ordinary refusal.
+
+  **Then the scrub, re-run in full, as defence in depth.** Immediately after the refusal
+  come `builtin unalias -a` and `builtin shopt -u expand_aliases` — two lines the copied
+  bytes do not have, needed because the scrub unsets inherited functions and exported names
+  and an alias is neither. They go before the rest because bash expands aliases as it reads
+  each command, so the reset has to run before the shell parses what follows. Then the
+  builtin scrub itself: `builtin unset -f` over `builtin compgen -A function`,
   `builtin unset` over `builtin compgen -e` except `PATH`, `PATH=/usr/bin:/bin`, `LC_ALL=C`,
-  `export PATH LC_ALL`. `builtin` prefixes every one of these, so a function of that name
-  cannot intercept the reset. The sibling specs treat this the same way — #268 and #273 both
+  `export PATH LC_ALL`. `builtin` prefixes every one of these, so on any invocation that
+  got past the refusal above no function of that name can intercept the reset. The sibling
+  specs treat this the same way — #268 and #273 both
   add the alias reset to their own marker branch for the same reason — and the plan should
   keep the three files' wording in step.
+
+  **What that scrub does and does not prove, stated plainly, because an earlier round of
+  this spec claimed more for it than it can carry.** On the supported invocations the
+  scrub is belt-and-braces over a shell that already refused to read `BASH_ENV` and already
+  refused to import functions, and it costs a handful of builtins to have the second layer.
+  On the unsupported one — `/bin/bash <entry> __resolve_profile_clean …` from a polluted,
+  non-privileged environment — the honest statement is that the refusal is the answer and
+  the scrub is not, because in that process a hostile environment gets to act *before* any
+  statement of the branch runs and can in principle shadow the refusal itself. Measured,
+  same shell: an exported function named `exit` is called instead of the builtin, so the
+  `exit 78` runs the caller's code and the branch continues; and a `BASH_ENV` that sets
+  `expand_aliases` and aliases the reserved word `case` makes the whole refusal expand to
+  something else entirely. Both of those need the plain form — under either `-p` form the
+  `BASH_ENV` is not read and the function is not imported, so both attacks are gone before
+  they start. This is not a hole being conceded for the first time: it is the same boundary
+  the paragraph below draws and the same one the Areas-of-concern bullet on the entry's
+  first process has drawn for several rounds — the entry's own loader runs under whoever
+  started it, and no statement inside the entry can unrun that. What changes this round is
+  that the spec stops describing the marker branch's scrub as proof that hostile functions
+  and aliases were removed before validation, and describes it as what it is: a second
+  layer on the invocations where the first layer already holds.
 
   **Then `umask 077`, as the last of the entry's first builtins and before anything at all
   is created.** The scrub above resets variables, functions and aliases; it does not reset
@@ -1599,13 +1754,18 @@ the spec pull request's range above still blocks review.
   `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <entry> <jq> <output> <request> <map>`.
   Invoking the marker word directly is neither, this spec makes no safety claim about it,
   and R9's documentation says so: the marker exists so the re-exec has somewhere to arrive,
-  not as a public entry point. It is worth being plain about what that caller gains —
+  not as a public entry point. What the branch does about it is the refusal above, and the
+  refusal draws the line in the one place a reader can check: a marker invocation carrying
+  `-p` is inside the boundary, because privileged mode is exactly the condition the
+  supported forms create and the polluted direct form cannot; a marker invocation without
+  it exits 78 having created nothing and read nothing. It is worth being plain about what
+  the caller who gets past that gains —
   nothing beyond their own process, which they already control. The environment they can
   pollute is the environment of a process they started themselves, and every claim this spec
   makes further in still holds: the parent is launched under `/usr/bin/env -i` and the
-  resolver's environment is built from empty (R3). The re-scrub is defence in depth against
-  one door into the clean path; the unsupported-form statement is the answer to the door
-  existing at all.
+  resolver's environment is built from empty (R3). The re-scrub is defence in depth on the
+  invocations the refusal admits; the refusal and the unsupported-form statement are the
+  answer to the door existing at all.
 
   **No nonce, and one sentence on why.** The obvious-looking fix — the dirty path mints a
   random token, passes it through the environment, and the clean path refuses unless the
@@ -3125,7 +3285,9 @@ the spec pull request's range above still blocks review.
   (`work/portable-profile-resolution/spec.md:256-257`), and repeats what the proof does and
   does not cover. `README.md:252` gets the updated resolver row. `RESTORE.md:43-46` counts
   the resolver files correctly. The entry's documentation states the two supported
-  invocation forms, says the marker word is not a public entry point, and names the Darwin
+  invocation forms — both of which carry `-p` — says the marker word is not a public entry
+  point and that a marker invocation without `-p` exits 78 without doing anything, and
+  names the Darwin
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
   `/usr/bin/cc`, and refuses `E_RUNTIME` when they are absent (R1). It also states that a
@@ -3381,9 +3543,14 @@ the spec pull request's range above still blocks review.
   inherited: they are absent from the child's environ even when both are set in the
   caller's.
 
-  **The forged clean-marker invocation is tested, and what it asserts is that the scrub
-  ran.** A caller can reach the clean path directly by supplying the marker word (R1), so
-  the test does exactly that: it runs `/bin/bash <entry> __resolve_profile_clean <jq>
+  **The forged clean-marker invocation is tested in two halves, and neither of them claims
+  the branch survives pollution.** A caller can reach the clean path directly by supplying
+  the marker word (R1), and R1 answers that with a refusal — the branch's first statement
+  exits 78 unless `$-` carries a `p` — plus a re-run of the scrub behind it. The two halves
+  test those two things separately, because they hold on different invocations.
+
+  *The supported half: the marker branch with `-p`, polluted.* It runs `/bin/bash -p
+  <entry> __resolve_profile_clean <jq>
   <output> <request> <map>` from a caller environment carrying exported shell functions
   named `pwd`, `cd` and `find` — each appending a line to a marker file and returning
   success — alongside a `BASH_ENV` that would define an alias and the same polluted
@@ -3391,15 +3558,28 @@ the spec pull request's range above still blocks review.
   validation runs `(cd -P "$out" && pwd)`, and `cd` and `pwd` are builtins that a function
   of the same name shadows, which is how a wrong output root could be made to compare equal
   to itself. Two assertions: the resolution succeeds with stdout byte-identical to an
-  ordinary clean run's, and the marker file was never created — so the re-run scrub's
-  `unset -f` removed those functions before the first check that could have used one. The
-  alias half is belt-and-braces, since bash imports no alias through the environment and a
-  non-interactive shell does not expand aliases unless something turns that on; the fixture
-  keeps the `BASH_ENV` anyway, because `#!/bin/bash -p` is bypassed on this invocation form
-  — the caller starts bash themselves. What the case deliberately does not assert is that
-  the run is *safe*: the direct marker form is unsupported (R1), the process's loader has
-  already read the caller's variables by then, and the claim is only that the clean path
-  adds no trust in the environment it was handed.
+  ordinary clean run's, and the marker file was never created. Say exactly what that
+  proves, because it is less than an earlier round of this spec claimed for it: on this
+  invocation privileged mode already refused to import those functions and already refused
+  to read that `BASH_ENV`, so the assertion covers the branch's behaviour on a supported
+  arrival — the scrub that runs behind the refusal is a second layer, and the case shows
+  the two layers together leaving nothing for a hijacked `cd` to do. It does **not** show
+  that the scrub would have removed hostile functions before validation on an arrival where
+  the shell had imported them; nothing in this suite shows that, and R1 no longer says it.
+
+  *The unsupported half: the marker branch without `-p`, clean.* It runs
+  `/bin/bash <entry> __resolve_profile_clean <jq> <output> <request> <map>` — no `-p` — and
+  asserts the exit status is exactly 78 and the output directory is untouched, with no
+  `.run` and no entry of any kind created in it. This half runs from a **clean**
+  environment on purpose. The assertion is about the refusal line and nothing else: adding
+  pollution here would make the case's own result depend on whether the pollution could
+  shadow `case` or `exit`, which R1 says outright it can in a non-privileged process, so a
+  polluted version of this case would be asserting against the very thing that is out of
+  the boundary. What the pair of cases establishes together is the boundary itself — the
+  supported arrivals behave, and the unsupported arrival is turned away before it touches
+  anything — not that the unsupported arrival is safe. It is not, the direct marker form
+  without `-p` is unsupported (R1), and the process's loader has already read the caller's
+  variables before any statement of the entry runs.
 
   **A polluted compiler environment is tested too, because ignoring `$CC` was never the
   whole of it.** The entry compiles under the `env -i` line quoted verbatim in R1, and the
@@ -3558,9 +3738,14 @@ the spec pull request's range above still blocks review.
   reviewer checking that those four initialisations all precede the `trap` builtins, so
   that no variable a trap, a checkpoint or the `EXIT` trap reads can be unset when `set -u`
   meets it, that no statement between them can create `.run` without the guard,
-  and that no signal trap body does anything but record a name. The status rule is part of
-  what is read: a status above 128 with `.run` present sets the guard, because the producer
-  was killed after it had created the directory (R1).
+  and that no signal trap body does anything but record a name. One more line joins that
+  list this round, and it is a position rather than a value: **the `EXIT` trap's body runs
+  `trap '' INT TERM HUP` after its status capture and ahead of the first external command
+  the trap runs** — ahead of the `chmod` and ahead of the `/bin/rm` — which is what makes
+  those two inherit the ignore rather than the caller's third `Ctrl-C`, with the capture
+  first because `trap` would otherwise clobber the status (R1). The status rule is
+  part of what is read too: a status above 128 with `.run` present sets the guard, because
+  the producer was killed after it had created the directory (R1).
   What the four cases above still carry is everything downstream of that: case 2 proves
   the `EXIT` trap is armed and removes a `.run` that holds `tmp` and `home` and no compiled
   file,
@@ -3694,13 +3879,16 @@ the spec pull request's range above still blocks review.
   So the test runs the mid-run case a second time, identically, up to the point where it
   signals: same fixture, same live read of the `runtime-pgid:` line, same `SIGSTOP` on the
   group with the same two requirements before it proceeds. Then it sends `SIGTERM` to the
-  entry, waits 100 ms, and sends a **second** `SIGTERM`. A variant sends `SIGINT` as the
-  second signal instead, and that variant needs the entry in a process group of its own —
-  `set -m` in the test shell, the way the group-signal case below already does it —
-  because a shell starts an asynchronous child with `SIGINT` ignored when job control is
-  off, and a signal ignored at entry cannot be trapped at all; R1's measurement records
-  that, and a variant that skipped the detail would assert against a signal the entry
-  never received.
+  entry, waits 100 ms, sends a **second** `SIGTERM`, waits 100 ms more, and sends a
+  **third** — that last one to the entry's whole process group rather than to its pid, for
+  the reason the last paragraph of this case gives. A variant sends `SIGINT` as the
+  second signal instead. Both runs need the entry in a process group of its own —
+  `set -m` in the test shell, the way the group-signal case below already does it — the
+  variant because a shell starts an asynchronous child with `SIGINT` ignored when job
+  control is off, and a signal ignored at entry cannot be trapped at all (R1's measurement
+  records that, and a variant that skipped the detail would assert against a signal the
+  entry never received), and every run because the third signal is aimed at a group and
+  would otherwise be aimed at the test's.
 
   It asserts the same three observable ends as the mid-run case — `pgrep -g <n>` finds no
   process and `kill -0` on the group fails, the output directory holds no `.run`, and the
@@ -3735,6 +3923,28 @@ the spec pull request's range above still blocks review.
   variant too, because the traps keep the first name (R1). Nothing asserts what became of
   the second signal, because nothing observable should depend on it: the entry does not
   re-forward it and does not record it, and R1 says so in those words.
+
+  **And a third signal, sent to the whole group, with an honest statement of what it does
+  and does not prove.** The window this round's other fix protects is the inside of the
+  `EXIT` trap: a signal landing there reaches the `chmod` and the `/bin/rm` as well as the
+  shell, which is why the trap ignores all three before it runs either (R1). So the case
+  sends a third signal — `TERM` to the entry's whole process group, the way a terminal
+  sends one, which is what puts it in front of the cleanup's children rather than only the
+  shell — a further 100 ms after the second. Both runs therefore need the entry in a
+  process group of its own, so the `set -m` the `SIGINT` variant already required now
+  covers the plain repeated-`TERM` run too; without it the third signal would reach the
+  test's own shell. Then the case asserts nothing new: the same
+  `.run`-is-gone, dead-group, status-`143` and one-`entry-signal:`-line assertions the case
+  already makes, all of which a broken cleanup fails, since a `/bin/rm` stopped part-way
+  leaves the run directory behind. What the case cannot do is guarantee the third signal
+  lands *inside* the trap rather than before or after it. Making that deterministic needs a
+  slow removal — a run tree large enough that `rm` takes visible time, or a pause inside
+  the trap — and the second is the test-only hook this spec refuses everywhere, while the
+  first buys minutes of CI time for a race it still would not pin down. So the coverage is
+  split and said out loud: the third signal is a cheap extra shot at the window on every
+  run, and the actual proof is the read above — the `trap ''` line precedes the first
+  external command of the trap body — beside the two repeated-signal assertions, which
+  already fail loudly on the neighbouring bug.
 
   **A signal that arrives before the parent exists is tested as its own case, because the
   entry's other branch is reachable.** The traps are installed ahead of the `mkdir` that
@@ -4179,11 +4389,16 @@ Order, each step checkable before the next:
    `E_RUNTIME` before the next. **Scrub, then re-exec, before any external command** — the
    builtins-only scrub copied verbatim from
    `adapters/local-git-materializer/v1/materialize.sh:4-13` under the same `#!/bin/bash -p`
-   shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash
+   shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
-   marker word, the arity, and the scrub the marker branch re-runs as its own first
-   statements — the same builtin scrub plus `builtin unalias -a` and `builtin shopt -u
-   expand_aliases`, and `umask 077` last among them, copied from `materialize.sh:31`
+   marker word, the arity, the `-p` that carries privileged mode across the re-exec where
+   the materializer drops it, and what the marker branch does as its own first
+   statements — `case $- in *p*) ;; *) exit 78 ;; esac`, so an arrival that is not one of
+   the two supported invocations is turned away before anything else in the branch is
+   parsed, and only then the same builtin scrub plus `builtin unalias -a` and `builtin
+   shopt -u
+   expand_aliases` as defence in depth, and `umask 077` last among them, copied from
+   `materialize.sh:31`
    because the scrub resets variables and not the process umask (R1), and then, still
    before the first external command, the four variables every trap and checkpoint reads
    declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
@@ -4223,7 +4438,12 @@ Order, each step checkable before the next:
    and `home` subdirectories inside it for compiler scratch and the compiler's `HOME`,
    at 0700 by that same umask, a failure of either refusing `E_RUNTIME` into the trap that
    is by then already armed.
-   That `EXIT` trap captures the status it was entered with, then
+   That `EXIT` trap captures the status it was entered with, then sets `INT`, `TERM` and
+   `HUP` to ignore with a bare `trap '' INT TERM HUP` — that order, because `trap` is a
+   builtin and would otherwise overwrite the status, and this order still puts the line
+   ahead of every external command in the body, so the `chmod` and the `/bin/rm`
+   below inherit the ignore and a further signal to the foreground group cannot stop the
+   removal half-done (R1); then
    removes the whole run directory whenever the guard is set (chmodding the directory
    back to 0700 first,
    because by launch time it is 0500 and a 0500 directory will not let its entries be
@@ -4546,7 +4766,17 @@ intent says for this change. Only after the operator's merge does
   128, which means the caller's group signal killed `mkdir` after it had created the
   directory. So there is no ordering in which a
   failed `tmp` or `home` creation, or a signal arriving just after `.run` appears, finds
-  the directory on disk and nothing registered to remove it (R1). `SIGKILL` on the entry cannot be
+  the directory on disk and nothing registered to remove it (R1). This round closes the
+  last version of that hole, and it was on the inside of the trap rather than in front of
+  it: the `chmod` and the `/bin/rm` are external commands, a terminal signal goes to the
+  whole foreground group, and a trap that only records a name protects the shell and not
+  its children — so a third `Ctrl-C` could stop the removal part-way and leave behind the
+  directory the trap exists to remove. The `EXIT` trap now runs `trap '' INT TERM HUP`
+  straight after its status capture and before it touches the disk, and an ignored
+  disposition is the one thing children inherit, so
+  both commands run to completion however many signals arrive (R1). Nothing is given up by
+  ignoring there: by then the signal has been recorded, forwarded once and the parent
+  reaped, and the exit status is already decided. `SIGKILL` on the entry cannot be
   forwarded either, so in that case the parent keeps running and its own handlers never
   fire — the resolver group is reaped by the parent's normal exit rather than by a signal,
   which is the right outcome, but nothing removes the run directory afterwards.
@@ -4586,6 +4816,24 @@ intent says for this change. Only after the operator's merge does
   the caller started it, its loader read the caller's variables, and any injected library
   has already run by the time the scrub's first line executes. The scrub stops that from
   spreading; it cannot unrun it.
+
+  This round makes the marker branch stop pretending otherwise, which is the same
+  statement applied to the one door that bypasses the re-exec. That branch used to open
+  with `builtin unalias -a` and the re-run scrub and let the reader conclude the branch had
+  cleaned house before it validated anything. It had not, and it could not: a process
+  started as plain `/bin/bash <entry> __resolve_profile_clean …` from a polluted
+  environment has already imported the caller's exported functions and already sourced
+  their `BASH_ENV` before the first `builtin` is parsed, so a function or alias named
+  `builtin` — or `exit`, or the reserved word `case` — is in place ahead of the scrub that
+  was supposed to remove it. The fix is a refusal rather than a better scrub: the branch's
+  first statement is `case $- in *p*) ;; *) exit 78 ;; esac`, both supported invocations
+  set `-p` (the shebang, and now the re-exec too), and privileged mode is precisely the
+  state in which bash reads no `BASH_ENV` and imports no function, so on every arrival the
+  branch admits, the pollution is gone before the branch begins (R1). The scrub stays
+  behind the refusal as a second layer, and the spec now says that is all it is. The
+  residual is unchanged and is the same one this bullet has always carried: a caller who
+  starts the entry from a hostile environment is inside the boundary, and the refusal turns
+  that caller away rather than defeating them.
 
   So the claim, in the words the plan must use: **the parent must be started by a trusted
   process — the entry when used as designed, or the operator's own shell for the step-7 run
@@ -4701,8 +4949,10 @@ intent says for this change. Only after the operator's merge does
   builtins-only environment scrub, the empty-environment re-exec and the `umask 077` that
   follows them taken from
   `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29,31`, deviating from *those*
-  lines in the marker word, the arity, and the scrub the marker branch re-runs as its own
-  first statements with two alias-reset lines the copied bytes do not have (R1) — the umask
+  lines in the marker word, the arity, the `-p` added to the re-exec's `/bin/bash`, and the
+  marker branch's own first statements — the `case $- in *p*) ;; *) exit 78 ;; esac`
+  refusal, and behind it the scrub re-run with two alias-reset lines the copied bytes do
+  not have (R1) — the umask
   is copied unchanged, in the same position relative to the scrub and ahead of the first
   thing created — where the
   test script and
