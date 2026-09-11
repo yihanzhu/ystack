@@ -277,7 +277,19 @@ measured rather than guessed:
   assumed, and the reason is that the measurement moved the rule: comparing against
   `${BASH_SOURCE[0]}` by pathname would have been the single line that decision costed,
   and it does not work on Darwin, so the reference has to be opened and closed (R1).
-- **Focused test ~1033 lines.** For scale, the existing resolution test is 746 lines and
+  This round takes ~1 back off, to **~436**, and it is the first entry-side figure in
+  this list that goes *down*. All three statements above come out — the reference open,
+  the `-ef` skip and the reference close (−3) — because a skip that cannot see a
+  descriptor's access mode keeps a caller's writable handle on the entry script alive;
+  and the headroom precondition goes in above the loop in their place:
+  `nofile=$(ulimit -n)` with the `case` that maps `unlimited` and unparsable answers on
+  the same line (~1) and the `[ "$nofile" -ge 64 ]` with its one `E_RUNTIME` line and
+  exit (~1). Removing `3` from the `case` arm gives back the one character it cost. The
+  comment is a replacement rather than an addition and costs nothing: the line that said
+  why the reference existed now says why the precondition does and why nothing above 2 is
+  skipped, which is the one line that stops a later reader deleting a statement that
+  looks like ceremony and re-introducing a skip that looks like care (R1).
+- **Focused test ~1043 lines.** For scale, the existing resolution test is 746 lines and
   `scripts/test/shadow-slice.test.sh` is 622. R10 is now at the same scale as both:
   jq provisioning the `shadow-slice` way (~30), request and map fixtures (~40), the two
   resolutions plus `cmp` (~30), twelve entry-level refusals in group 1 (~155 — the eleven
@@ -330,12 +342,19 @@ measured rather than guessed:
   directory rather than one emptiness test), the two-umask case (~15 — a `umask 000` run
   and a `umask 777` run, the background poll that reads `.run`, `tmp` and `home` while
   `home` exists, its bounded retry, and the `umask 000` direct-parent invocation that reads
-  the parent's four sandbox modes), the two inherited-descriptor cases (~25 — a shared
+  the parent's four sandbox modes), the inherited-descriptor cases (~35 — a shared
   helper that makes the fifo, starts the background reader, opens the write end on
   descriptor 7, starts the process under test, closes the test's own copy and reports
   which of the two events came first, at ~12; the entry half with its `.run` poll and its
-  ordering assertion at ~7; and the parent half, which reuses the group-2 fixture builder
-  and reads for the `runtime-pgid:` line, at ~6), the pin-constant assertions over ten pins
+  ordering assertion at ~7; the parent half, which reuses the group-2 fixture builder
+  and reads for the `runtime-pgid:` line, at ~6; and this round's two further entry runs
+  at ~10 — the same-file variant, which copies the entry into the test's scratch, adds
+  `8>>` that copy beside the fifo on 7 and asserts the copy's size and digest afterwards
+  as well as the ordering, at ~5, and the headroom pair, one run at `ulimit -n 63`
+  asserting the `E_RUNTIME` line, the non-zero exit and an output root that stays empty
+  and one at `ulimit -n 64` asserting the ordinary byte-identical success, at ~5, both of
+  them reusing the helper and the `.run` poll rather than bringing machinery of their
+  own, R1), the pin-constant assertions over ten pins
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
   and the pinned constant all agree, R1), the
   command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
@@ -683,7 +702,12 @@ bounded `waitpid(…, WNOHANG)`/`select` loop that replaces the handler's unspec
 table and a hand-written decimal routine because `snprintf` is not async-signal-safe
 (~12). ~4 in the entry: the reference open on descriptor 3, the `-ef` skip, the close and
 the comment that keeps the three from being tidied away, which together stop the close
-loop shutting the descriptor bash reads the script from. Nothing in the test, and that is
+loop shutting the descriptor bash reads the script from. **All four of those entry lines
+are withdrawn by the round after this one, and the claim below about the test is
+withdrawn with them**: the skip could not tell a caller's read-only handle on the entry
+script from a write handle on it, so the entry now closes every descriptor above 2 with
+no exception and pays a headroom precondition instead, and the test does gain cases for
+it. Nothing in the test, and that is
 a claim rather than an omission — the entry-side descriptor case is unchanged except for
 one condition on its fixture that the fifo already satisfies, and both new properties are
 on R10's proof-by-reading list for reasons that section gives: a handler's undefined
@@ -693,6 +717,25 @@ Re-derived from the four bullets as they now stand rather than carried forward �
 running total above had not been re-added since two rounds moved the bullets under it —
 the sum is ~2699 (~1169 + ~437 + ~1033 + ~60) against the ~2420 the range is derived
 from, about 12% above it and so still inside the ±15% the range expresses, so the
+implementation range is unchanged.
+
+This round adds ~9, in the entry and the test and nothing in the C parent, from one P2 in
+exactly the place the round above put its own fix: the close loop's one exception. **−1 in
+the entry**, which is the first negative figure in this list. Three statements come out —
+the reference open on descriptor 3, the `-ef /dev/fd/3` skip and the reference close — and
+two go in above the loop: `nofile=$(ulimit -n)` with the `case` that maps `unlimited` and
+unparsable answers, and the `[ "$nofile" -ge 64 ]` refusal that writes one `E_RUNTIME`
+line and exits. The comment on the block is reworded rather than added to. **~10 in the
+test**, in two runs that reuse the fifo-and-reader helper and the `.run` poll the suite
+already has: the same-file variant, which runs a copy of the entry with `8>>` that copy
+open beside the fifo on 7 and asserts the copy's size and digest as well as the ordering
+(~5), and the headroom pair at `ulimit -n 63` and `64` (~5). **Nothing in the parent**,
+and that is a claim rather than an omission: the parent's startup close is a C `close`
+loop over a numeric range with no `/dev/fd` glob, no shell `eval` and no script
+descriptor to protect, so the finding does not reach it and R5 is unchanged. Nothing was
+made cheaper to compensate, though the entry paid for its own fix and then some. The sum
+of the four bullets is ~2708 (~1169 + ~436 + ~1043 + ~60) against the ~2420 the range is
+derived from, about 12% above it and so still inside the ±15% the range expresses, so the
 implementation range is unchanged.
 
 **That is well over ~1200 lines, and the recommendation is still one pull request.** The seam
@@ -710,7 +753,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 7173 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 7420 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -818,25 +861,34 @@ between the set and the restore can no longer save the toggled flags, restore th
 original and leave a shared descriptor non-blocking behind it, beside the entry's own
 diagnostic omitted wherever bash cannot write it without the risk of never returning, so
 a caller who pipes stderr into a reader that is not draining gets the `128 + signal` exit
-this path promises rather than a finished cleanup and a hung entry, and this round the
-entry's close loop made to skip the descriptor bash is reading the script from, by an
+this path promises rather than a finished cleanup and a hung entry, and the round before
+this one the entry's close loop made to skip the descriptor bash is reading the script
+from, by an
 identity test against a reference the entry opens on its own script rather than by the
 pathname comparison that is measurably false on Darwin, so a caller with a low
-`RLIMIT_NOFILE` can no longer make the entry stop part-way through itself and exit `0`
+`RLIMIT_NOFILE` could no longer make the entry stop part-way through itself and exit `0`
 having done nothing, beside every call in the parent's three signal handlers held to the
 POSIX.1-2017 async-signal-safe list by name, so the wait between the `SIGTERM` and the
 `SIGKILL` and the line that reports the branch cannot be written with the `nanosleep` and
 the `snprintf` the rest of the file may use and deadlock the process in the middle of the
-cleanup they exist to describe).
-**Evidence-based range for this spec pull request: 6097-8249 lines** — the measured
-7173 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+cleanup they exist to describe, and this round that skip withdrawn and replaced by a
+descriptor-headroom refusal above the loop, because an identity test on the open file
+cannot tell a caller's read-only handle on the entry script from a write handle on it and
+so kept a writable descriptor outside the output root alive across the re-exec and into
+every child, where closing every number above 2 without exception and letting bash
+relocate its own script input — with a refusal first if `ulimit -n` is below 64, which is
+where the relocation has no free number to use — shuts the write handle and keeps the
+entry running to its end).
+**Evidence-based range for this spec pull request: 6307-8533 lines** — the measured
+7420 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767; where each block of
+5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
+7173; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1586,8 +1638,12 @@ would have parsed, read correctly, done nothing on one of the two shipped platfo
 been true on the one CI runs. What works is comparing two `/dev/fd` entries against each
 other, so the entry opens its own script on descriptor 3 and the loop skips 3 and anything
 `-ef` it, with 3 chosen because bash's script descriptor is the top of the table and never
-below 4 in any environment where bash starts at all. The rest of those lines are the
-honest edges: the one descriptor this keeps open that it did not open (a caller's own
+below 4 in any environment where bash starts at all. **The round after this one withdraws
+that skip and everything in the next sentence that rests on it**, because the "honest
+edge" it names turned out to be the finding: an identity test on the open file cannot see
+a descriptor's access mode, so the survivor is not reliably read-only and the skip
+preserved a caller's *write* handle on the entry script across the re-exec. The rest of
+those lines are the honest edges: the one descriptor this keeps open that it did not open (a caller's own
 handle on the entry's script, read-only, none of the three things the loop exists to
 stop), the two rejected alternatives with the measurement that rejects each, the `79`
 refusal when the reference cannot be opened, and the `exec`-with-`2>/dev/null` trap —
@@ -1619,13 +1675,64 @@ accepted-concern list at the top, and the re-derived size figures here and for t
 implementation — whose running total is re-added from the four bullets rather than
 carried forward, because it had not been since two rounds moved them.
 
+This round is +247 net over one P2, and it is the unusual case where a round takes a
+line *out* of a shipped file and puts the argument for its absence in. About 100 go to
+R1's close loop, and almost all of it is measurement, because the decision rests on a
+bash internal rather than on anything documented. The finding was that the round-34
+`-ef /dev/fd/3` skip preserves a caller's descriptor on `resolve-profile.sh` whatever
+mode it was opened in, so a write handle outside the output root survives the loop and
+reaches the re-exec and every child. The skip is withdrawn rather than tightened, and the
+lines say why a tightening was available on one platform and refused: `[ -w /dev/fd/N ]`
+discriminates open mode correctly on Darwin — measured, `--w-------` against `-r--r--r--`
+on one 0644 file with `7>>` and `8<` — and follows the symlink to the file's own
+permission bits on Linux, which is where CI runs, and this spec has already had to take
+back one rule that behaved differently on its two platforms. With the skip gone the loop
+closes bash's own script descriptor, and the lines that make that safe rather than lucky
+are the relocation: `check_bash_input` calling `save_bash_input` with
+`fcntl(fd, F_DUPFD, 10)`, named so a plan can confirm it on the CI image's bash; the
+argument that a relocation target is free at that instant and therefore either absent
+from the glob's snapshot or already closed by the loop, which holds whatever order the
+loop runs in; the lexicographic glob order spelled out anyway (`10`, `11`, …, `2`, `255`,
+`3`) because a reader will check it against the traces; and the traces themselves, on a
+70 KiB script with a marker on its last line and the caller holding 4, 5, 7, 10 and 11
+with 7 a write handle on the running script — every caller descriptor shut, the same-file
+write handle with them, the marker printed, the file byte-identical, and the relocation
+visible at `/dev/fd/12`. The rest of R1's lines are the precondition and its price. The
+hazard re-measured with it removed: marker at `ulimit -n 14` and above, silent truncation
+with exit `0` at 13 and 12, and `SIGSEGV` with status `139` at 11 — the middle of which is
+the outcome no refusal in this spec covers. The floor of 64 justified as margin rather
+than as a threshold, since the threshold moves with the caller's own descriptors and with
+the one or two numbers the closing statement is itself holding (measured: `10` is taken
+inside `eval … 2>/dev/null`, which is why the relocation lands on 11, 12 or 13 and not on
+10). The `case` that maps `unlimited` and unparsable answers, because
+`[ unlimited -ge 64 ]`
+is not a false comparison but an error that would refuse the roomiest environment there
+is. And the one cost stated rather than rounded away: `nofile=$(ulimit -n)` forks, which
+is one bash child above the close holding the caller's descriptors — detected by the thing
+that makes it visible, a `/dev/fd` listing inside the substitution that shows the caller's
+five and not bash's `255`. About 40 go to R10: two new entry runs (the same-file variant
+with `8>>` a copy of the entry beside the fifo, and the `ulimit -n 63`/`64` pair with its
+empty-output-root assertion), the round-34 fixture condition withdrawn with the exception
+that made it necessary, and the proof-by-reading list's two round-34 entries *replaced*
+rather than added to — the reviewer now reads for the absence of a fourth pattern in the
+`case` arm and for the precondition's position. The remaining ~55 are the ripples and the
+bookkeeping: Design step 2 and the Copy-versus-adapt entry item, where the precondition is
+a fourth above-the-scrub statement rather than growth in a third and the loop's own text
+shrinks; the statement counts that follow from that, three becoming four in five places
+and six opening steps becoming seven; the Areas-of-concern descriptor bullet, which now
+names the one fork above the close instead of claiming none; round 34's two accounting
+paragraphs marked where each recorded something this round withdraws; the accepted-concern
+list at the top; and the re-derived size figures here and for the implementation, whose
+range does not move because −1 in the entry and +10 in the test leave the sum at about 12%
+of the ~2420 it is derived from.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 6097-8249 lines**, which is this file's measured
-7173 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 6307-8533 lines**, which is this file's measured
+7420 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1728,8 +1835,9 @@ the spec pull request's range above still blocks review.
   run directory exists reaches it with all four unassigned.
 
   So the entry declares all four empty — `entry_signal=''`, `run_created=''`,
-  `entry_status=''`, `parent_pid=''` — among its first builtins, after the six opening
-  steps below — the `-p` refusal, the `umask 077`, the descriptor close, the scrub, the
+  `entry_status=''`, `parent_pid=''` — among its first builtins, after the seven opening
+  steps below — the `-p` refusal, the `umask 077`, the descriptor-headroom precondition,
+  the descriptor close, the scrub, the
   re-exec and the marker branch — and before it runs any external command, and the
   `trap … EXIT` line and
   the three recording traps are installed after them. `run` is the fifth name the `EXIT`
@@ -2446,9 +2554,10 @@ the spec pull request's range above still blocks review.
   the output root's owner and mode, and in the order an earlier round used `/usr/bin/git`
   and `/usr/bin/cc` ran too, every one of them an absolute path executed while the caller's
   loader variables were still in the entry's own environment and therefore inherited. That
-  is why the scrub sits ahead of every external command. Why three statements of the
+  is why the scrub sits ahead of every external command. Why four statements of the
   entry's own sit ahead of the *scrub* is a later correction, and the next three blocks
-  are its reasons.
+  are its reasons — the last of them covering two statements, because the headroom
+  precondition and the close loop it guards make no sense apart.
 
   **First statement in the file: the entry refuses any arrival that is not in privileged
   mode.** Nothing stops a caller from invoking the entry as `/bin/bash <entry>
@@ -2485,9 +2594,9 @@ the spec pull request's range above still blocks review.
   environment) is imported under the plain forms and **not** imported under either `-p`
   form. That is the whole shape of the pollution the scrub below was written against — and
   because this line turns those arrivals away, every statement after it runs in a shell
-  that imported no function and read no `BASH_ENV`. That is what lets the next two
+  that imported no function and read no `BASH_ENV`. That is what lets the next three
   statements run ahead of the scrub instead of behind it: there is nothing there to shadow
-  `umask`, `eval`, `exec`, or the `case` that guards the `eval`.
+  `umask`, `ulimit`, `printf`, `eval`, `exec`, or either `case`.
 
   The statement is written the way it is because of what has run before it, which is
   nothing: `case`, `in` and `esac` are reserved words, and `$-` is a special parameter the
@@ -2524,7 +2633,7 @@ the spec pull request's range above still blocks review.
   before its first creation (`adapters/local-git-materializer/v1/materialize.sh:31`) — and
   the only deviation is where it stands: the entry sets it above the copied scrub rather
   than below it, so that it is set in the first process as well as the second, and so that
-  the three statements the entry adds of its own stand together at the top where a reader
+  the four statements the entry adds of its own stand together at the top where a reader
   can check the order in one glance. `umask` is a bash builtin, so it forks nothing and
   keeps its place among the statements that run before the first fork of any kind. R10
   asserts the result rather than the line: the mode assertions on the run tree already
@@ -2547,154 +2656,215 @@ the spec pull request's range above still blocks review.
   shuts them, and shuts them at the top rather than at the bottom:
 
   ```
-  exec 3<"${BASH_SOURCE[0]}" || exit 79
+  nofile=$(ulimit -n); case $nofile in unlimited) nofile=1024 ;; ''|*[!0-9]*) nofile=0 ;; esac
+  [ "$nofile" -ge 64 ] || { printf 'E_RUNTIME\n' >&2; exit 1; }
   for fd in /dev/fd/*; do
     fd=${fd##*/}
-    case $fd in ''|*[!0-9]*|0|1|2|3) continue ;; esac
-    [ "/dev/fd/$fd" -ef /dev/fd/3 ] && continue
+    case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
     eval "exec ${fd}>&-" 2>/dev/null
   done
-  eval 'exec 3<&-' 2>/dev/null
   ```
 
-  **The first and last lines of that are this round's, and without them the loop can shut
-  the descriptor bash is reading the script from.** Bash does not read a script the way it
-  reads a here-document. It opens the file, keeps it open on a descriptor of its own, and
-  reads on as it executes — so a loop that closes every descriptor above 2 finds that one
-  too, because it is a descriptor above 2 and nothing about the numbers tells it apart.
-  What follows was measured rather than reasoned, on bash 3.2.57 on `arm64-apple-darwin`
-  (`Darwin 27.0.0`), and the measurements changed the shape of the fix twice.
+  **Nothing above 2 is skipped, and the exception the round before this one added is
+  withdrawn.** That round had the entry open its own script on descriptor 3 and skip any
+  descriptor `-ef` it, so the loop could not shut the descriptor bash reads the script
+  from. The test is an identity test on the open file and it does exactly what it says,
+  which is the whole problem: `-ef` compares device and inode, and it cannot see how a
+  descriptor was opened. A caller holding `resolve-profile.sh` open **for writing** on
+  some other number is the same file by that test, so the skip preserved that descriptor
+  — and preserved it across the re-exec and into every child below. That is a write
+  handle on a path outside the output root, inherited by the compiler, which is one of
+  the exact three things the paragraph above says the loop exists to stop. The round-34
+  sentence calling the survivor "a read-only handle on a file every child below could
+  open by name in any case" is **withdrawn**. It was true of the case that round
+  measured and false in general, and a classification that is only sometimes right is
+  worse than none, because it tells the next reader the descriptor has been thought
+  about.
+
+  **The skip cannot be repaired, only removed, and the reason is the same platform split
+  that shaped it.** The obvious patch is to keep the identity test and add an access-mode
+  test, skipping only a same-file descriptor that is read-only. On Darwin that works and
+  it is measured: with `7>>` and `8<` on one 0644 file, `/bin/ls -l` reports `--w-------`
+  for `/dev/fd/7` and `-r--r--r--` for `/dev/fd/8`, and the builtins agree — `[ -w
+  /dev/fd/7 ]` is true and `[ -r /dev/fd/7 ]` false, `[ -w /dev/fd/8 ]` false and
+  `[ -r /dev/fd/8 ]` true. `fdesc` is reporting the descriptor's own open mode. On Linux
+  `/dev/fd/N` is a symlink into `/proc/self/fd` and `[ -w ]` follows it to the file, so
+  the answer is the file's permission bits and a read-only descriptor on a writable file
+  answers *yes* — the mirror image of the `-ef` split one paragraph up, and this time the
+  platform it is wrong on is the one CI runs. This spec has already written one rule that
+  behaved differently on its two platforms and had to take it back a round later; it is
+  not writing a second. There is no mode test in bash 3.2 that is right on both, and the
+  loop does not need one, because — as the rest of this block measures — closing bash's
+  own script descriptor is safe by bash's design.
 
   **Where the descriptor is.** Under both supported invocations — the `#!/bin/bash -p`
   shebang and `/bin/bash -p <entry>` — bash puts the script on `255`, and `$0` and
   `${BASH_SOURCE[0]}` are the path the caller wrote either way. `255` is not a constant: it
   is the top of the descriptor table, and with `RLIMIT_NOFILE` lowered the number follows
   it down — 63 at `ulimit -n 64`, 15 at 16, 11 at 12, 9 at 10. It is also close-on-exec,
-  verified by running `/bin/ls /dev/fd` from inside the script and seeing the listing's own
-  descriptors and nothing else, so it never reaches anything the entry `exec`s and is not
-  itself one of the descriptors this loop exists to shut.
+  which this round measured twice rather than once, because the answer is what the second
+  bash depends on: a `/bin/ls /dev/fd` from inside the script lists the listing's own
+  descriptors and nothing else, and a small C helper run as a child, asking
+  `fcntl(fd, F_GETFD)` for each number, reports `EBADF` for `11`, `12`, `13` and `255`
+  and finds exactly `0`, `1` and `2` open. So bash's script descriptor never reaches
+  anything the entry `exec`s and is not itself one of the descriptors this loop exists to
+  shut.
 
-  **What closing it does is not what the finding that raised this said, and it is worse.**
-  Closing it does not usually make bash fail. Bash notices that the descriptor being closed
-  is the one its script buffer sits on and duplicates the buffered stream onto another:
-  with the loop running unguarded and a caller holding 4-14, 20 and 254, `before` listed
-  the script on 255 and `after` listed it on 12, a second run of the same loop moved it to
-  13, and a 68 KiB script with the loop at the top reached its final line every time. The
-  relocation needs a free descriptor to move to, though, and under a tight `RLIMIT_NOFILE`
-  there is not one. At `ulimit -n 12` the script sat on 11, the loop closed it, the
-  relocation left no high descriptor in the listing at all and printed nothing, and the
-  script stopped at the end of what bash had already buffered — the marker at the end never
-  printed and the exit status was **`0`**. At 10, 9 and 8 the same thing happened with
-  `redirection error: cannot duplicate fd: Invalid argument` on stderr first, and the status
-  was still `0`. That is the hazard stated exactly: not a failure, a silent truncation that
-  reports success. For this entry it would mean skipping the scrub, the re-exec, every
-  check below and the whole resolution, and exiting `0` with nothing done — worse than any
-  refusal this requirement defines, and worse than the "bash fails while reading the rest of
-  the file" the finding described. A caller does not have to be hostile to arrange it:
-  `RLIMIT_NOFILE` is inherited like every other process attribute, and this requirement's
-  whole premise is that nothing obliges a caller to leave one alone.
+  **So the loop closes it, and bash moves its own input out of the way first.** This is
+  the design, not a happy accident. When a redirection or a close targets the descriptor
+  bash is reading the script from, bash notices before performing it and relocates the
+  buffered input: `check_bash_input` in `input.c` calls `save_bash_input`, which
+  duplicates the stream with `fcntl(fd, F_DUPFD, 10)` — the lowest free number at or
+  above 10 — and reads on from there. That is the 255 → 12 → 13 relocation the round
+  before this one measured while arguing *against* relying on it. Measured again this
+  round, on a 70 KiB script (72,677 bytes) with the loop as its fourth statement and a
+  marker on its last line, started with the caller holding descriptors 4, 5, 7, 10 and
+  11 — and with 7 opened `>>` on the running script itself, so the write-mode same-file
+  case the finding describes is the one under test:
 
-  **The obvious test for the descriptor does not work on one of the two platforms, and that
-  is measured too.** The natural rule is to skip any descriptor that is the script:
-  `[ "/dev/fd/$fd" -ef "${BASH_SOURCE[0]}" ]`, with `-ef` a bash builtin that compares
-  `st_dev` and `st_ino` and so forks nothing. On Darwin it is **false for the script's own
-  descriptor**, and false for every other one, so the rule would parse, read correctly and
-  do nothing at all. `/dev/fd` there is an `fdesc` filesystem rather than a symlink farm:
-  `stat` on `/dev/fd/1` reports the underlying file's type, mode and inode — `Regular File`,
-  `--w-------`, `ino=1282180223` — and `fdesc`'s own device number, `dev=886325431`, where
-  the file on disk is `dev=16777230`. `-ef` needs both halves and only gets one. On Linux,
-  where `/dev/fd` is a symlink to `/proc/self/fd` and `stat` follows through to the real
-  file, the same expression is true — so the pathname form is not merely weak, it is a rule
-  that behaves differently on the two platforms this spec ships to, and CI runs the one
-  where it happens to work. That is the worst kind of rule to write down, and it is why the
-  measurement came before the wording.
+  ```
+  fds before: /dev/fd/0 /dev/fd/1 /dev/fd/10 /dev/fd/11 /dev/fd/2 /dev/fd/255 \
+              /dev/fd/3 /dev/fd/4 /dev/fd/5 /dev/fd/7
+  visiting 10 … 11 … 255 … 3 … 4 … 5 … 7
+  fds after:  /dev/fd/0 /dev/fd/1 /dev/fd/12 /dev/fd/2 /dev/fd/3
+  child /dev/fd via ls: 0 1 2 3 4
+  MARKER-END reached
+  exit status: 0
+  script file unchanged (72677 bytes)
+  ```
 
-  **What does work is comparing two `/dev/fd` entries against each other, which is why the
-  entry opens its own script first.** Both sides of the comparison are then the same kind of
-  object on both platforms: on Darwin two `fdesc` nodes carrying the same inode and the same
-  device, on Linux two symlinks resolving to the same file. Measured on Darwin, with the
-  entry's own open of the script on descriptor 3 and a caller holding an unrelated file on
-  7, `-ef /dev/fd/3` answered *same* for 255 and for 3 and *diff* for 0, 1, 2, 7 and the
-  glob's own — the discrimination the loop needs, and the one the pathname form could not
-  give. With the two lines in place, the same 68 KiB script across the same sweep of
-  `ulimit -n` values — 10, 12, 16, 64, 256 — kept its script descriptor in the `after`
-  listing and printed its last line every time, while the caller's 4, 5 and 7 were shut on
-  the ordinary run.
+  Every caller descriptor gone, the script read to its last line, the same-file write
+  handle shut with the rest, and the file itself byte-for-byte what it was — `/dev/fd/12`
+  is bash's relocated input and `/dev/fd/3` is the listing's own, which is why the
+  `after` line has five entries and the entry's children see three.
 
-  **Why descriptor 3, and why that is a measurement and not a guess.** The reference has to
-  go somewhere, and it must not be a number bash could be using for the script. It cannot
-  be: the script descriptor is the top of the table and the bottom of the table is where the
-  entry has room. At `ulimit -n 5`, 6 and 7 the script sat on 4, 5 and 6, and at 4 bash
-  cannot start at all — it fails to open its own script and dies before the first line runs.
-  So 3 is below bash's own in every environment where bash runs, and the entry takes it. If
-  the caller had a descriptor there it is destroyed rather than closed, which is the same
-  outcome the loop was going to give it one statement later. The glob moves up out of the
-  way by itself: with 3 held, the `/dev/fd` listing opens on 4, and the `case` skips 3 while
-  the loop's attempt on the glob's own number fails harmlessly into `2>/dev/null` exactly as
-  it did before.
+  **Why the relocation target can never be a number the loop goes on to close, whatever
+  order it runs in.** The `for` list is expanded once, before the first pass of the body,
+  so the loop works from a snapshot of the descriptors that were open at that instant. A
+  relocation target is by definition a number that was *free* at the moment bash asked
+  for it. A free number is either one that was never in the snapshot — in which case the
+  loop never names it — or one that was in the snapshot and has already been closed by
+  the loop, which is the only thing that could have freed it; and the loop visits each
+  number once and never goes back. Either way the relocated descriptor is out of reach.
+  The iteration order is worth spelling out even though the argument does not rest on it,
+  because a reader will want to check it against the listings above: `/dev/fd/*` is a
+  glob, so the numbers arrive in **lexicographic** order, not numeric — `10`, `11`, …,
+  `19`, `2`, `20`, …, `25`, `255`, `26`, …, `3`, `4`. `255` therefore lands in the middle,
+  after `25` and before `26` and `3`, which is exactly where the trace above shows it.
+  Measured against the worst arrangement of it: with the caller holding 10 through 25 so
+  that sixteen numbers at the relocation base are closed before `255` is reached, the
+  script relocated to `12` — already visited, six numbers earlier — and ran to its last
+  line.
 
-  **The exactness claim, and the one descriptor it keeps open that it did not open.** The
-  test is an identity test on the open file, not a guess about a number, so the only
-  descriptor it can wrongly skip is one that really is the entry's own script — which means
-  a caller that hands the entry a descriptor on `resolve-profile.sh` itself. That descriptor
-  survives the loop, and this spec says so plainly rather than claiming a clean sweep: it is
-  a read-only handle on a file every child below could open by name in any case, it is none
-  of the three things the loop exists to stop (a credential, a socket, a write handle
-  outside the output root), and the alternative — giving up the ability to tell it from
-  bash's own — costs the entry the rest of the file. Measured: with the caller holding the
-  entry's own script on 6 and an unrelated file on 7, 7 was shut, 6 was skipped and visible
-  in a child's `/dev/fd`, and the script ran to its end.
+  **The target is at or above 10 but not reliably 10, and the reason matters for the
+  precondition.** Measured: a bare `exec 255>&-` relocates to `11`, the same close
+  wrapped as `eval 'exec 255>&-' 2>/dev/null` relocates to `12`, and a second pass over
+  the loop moves it to `13`. The statement performing the close is holding one or two
+  saved descriptors in that range at the moment it runs — `10` is visibly taken inside
+  `eval … 2>/dev/null`, which is bash saving the stderr it is about to redirect, at the
+  same `F_DUPFD` base of 10. So bash does not need one free number at or above 10, it
+  needs two or three, and a fix that budgeted for exactly one would be tuned to a bash
+  version rather than to a rule.
 
-  **The alternatives were rejected for reasons the measurements give rather than on taste.**
-  Skipping the number 255 outright is a guess about bash internals, and a wrong one: the
-  sweep above shows the number is `RLIMIT_NOFILE - 1` capped at 255, so a fixed 255 protects
-  nothing in exactly the low-limit environments where the failure is silent. Closing only
-  below some bound — 3 to 63, say — leaves every caller descriptor above it open, which is
-  this requirement inverted. Leaning on bash's relocation is the third, and it is the one
-  this round actually tested: it works wherever the table has headroom and loses the script
-  without a word where it does not, so it is a behaviour to record and not a behaviour to
-  depend on.
+  **With no headroom the relocation fails, and the failure is silent or worse.** This is
+  the hazard the round before this one found, re-measured here against the same 70 KiB
+  script with the precondition removed: at `ulimit -n 14` and above the marker printed;
+  at 13 and at 12 the script stopped at the end of what bash had already buffered, the
+  marker never printed, and the exit status was **`0`**; at 11 bash died of **`SIGSEGV`**
+  and the status was `139`. The middle of those is the one no refusal in this spec covers
+  — an entry that skips the scrub, the re-exec, every check below and the whole
+  resolution, and reports success. The crash is ugly but at least it is loud. Neither is
+  hypothetical from the entry's point of view: `RLIMIT_NOFILE` is inherited like every
+  other process attribute, and this requirement's whole premise is that nothing obliges a
+  caller to leave one alone.
 
-  **Two details of the shape are load-bearing and a plan can get either wrong.** The
-  `2>/dev/null` on the loop's `eval` is attached to the `eval`, where it is a temporary
-  redirection the shell undoes when `eval` returns, while the `exec` inside the quoted
-  string is what makes the close permanent — which is why the reference's own close is
-  written `eval 'exec 3<&-' 2>/dev/null` in the same shape, and why **neither `exec` may
-  carry a bare `2>/dev/null` of its own**. Measured: `exec 3<"${BASH_SOURCE[0]}" 2>/dev/null`
-  opens the script on 3 *and points the shell's own stderr at `/dev/null` for the rest of the
-  run*, because a redirection on an `exec` with no command is a redirection of the shell — a
-  line written to suppress one possible error message would silently delete every diagnostic
-  below it, the `E_*` refusals included. So the reference's open carries no redirection at
-  all and its one ordinary failure is allowed to print. The residual that leaves is small and
-  stated: under a pathological `RLIMIT_NOFILE` — 10 or below, where bash is already failing
-  to relocate — the close can put one `redirection error: cannot duplicate fd` line on stderr
-  that the `eval`'s redirection does not catch. The entry still runs to its end there, and
-  the line is noise on a run the caller has already crippled.
+  **So the entry refuses before it closes anything, and 64 is the floor.** The precondition
+  reads the soft limit with `ulimit -n`, which is a bash builtin (`type -t ulimit` answers
+  `builtin`), and writes one `E_RUNTIME` line and exits non-zero if the answer is below
+  64. The number is picked with margin rather than at the edge, and the margin is the
+  point: the measured failure threshold on this machine and this script is 14, but that
+  threshold is not a constant — it moves with how many descriptors the caller left open,
+  with how many saved descriptors the closing statement itself is holding, and with the
+  bash version's own `F_DUPFD` bookkeeping, none of which the entry can see from where it
+  stands. 64 is the smallest round number well clear of every measurement in this block,
+  it is far above the two or three free numbers at or above 10 that the relocation
+  actually needs, and it leaves room for the handful of files the entry opens afterwards
+  — the pinned jq, the ten pin reads, the two compiles, the copies. It is also not a
+  limitation in practice: the ordinary soft limit is 256 on Darwin and 1024 on Linux, and
+  a caller at 63 has done something deliberate. `unlimited` passes, an unparsable answer
+  refuses, and both are mapped in the `case` rather than left to `[` to decide, because
+  `[` cannot decide either one. Measured: `[ unlimited -ge 64 ]` does not answer false, it
+  writes `[: unlimited: integer expression expected` on stderr and returns `2`, so a bare
+  `[ "$(ulimit -n)" -ge 64 ] || refuse` would refuse an *unlimited* descriptor table — the
+  one environment with the most headroom of all — and would put a bash diagnostic on the
+  caller's stderr while doing it. Mapping `unlimited` to a number and everything
+  unparsable to `0` turns both into ordinary comparisons. Measured: at `ulimit -n 256`
+  and at `ulimit -n 64` the same script closes every caller descriptor and reaches its
+  marker; at `ulimit -n 63` it writes `E_RUNTIME`, exits non-zero, and closes nothing.
 
-  **A failed open refuses, and `79` is a bare literal for the reason `78` above is one.** If
-  the entry cannot open `${BASH_SOURCE[0]}` the loop has no reference, every comparison is
-  false, and the next statement shuts the script — so the entry stops instead of proceeding
-  into the failure this whole block exists to prevent. The condition is not hypothetical:
-  it is the same condition the re-exec below meets when it runs `/bin/bash -p "$script_path"`
-  on a path that has been replaced or unlinked under it, so refusing here turns a silent
-  truncation into a distinct status two statements earlier. `79` is written as a number
-  because no name has been assigned at that point and a symbolic `E_*` would be unbound under
-  `set -u`, and it is distinct from `78`, from the entry's `E_USAGE` and `E_RUNTIME` status
-  and from anything `128 + signal` can produce, so a test asserting it cannot be satisfied by
-  anything else. One ordering point, because a reader will look for it: this open uses
-  `${BASH_SOURCE[0]}` before the absolute-path check the re-exec depends on
-  (`materialize.sh:23-24`), and it does not need that check. It opens for reading, from the
-  first statements of the file, where nothing has changed directory yet, so a relative
-  `${BASH_SOURCE[0]}` resolves to the same file bash is already reading — which is the
-  only property the comparison uses. The absolute check exists because `exec … /bin/bash -p
-  "$script_path"` happens later and under a different environment, and it stays exactly
-  where it is.
+  **The precondition costs one fork, and that is said here rather than discovered later.**
+  `nofile=$(ulimit -n)` is a command substitution, and bash 3.2 forks for it — measured
+  by the thing that makes it visible: the `/dev/fd` listing taken inside the substitution
+  shows the caller's 4, 5, 7, 10 and 11 and does **not** show `255`, so it is a different
+  descriptor table, which is a different process, and bash does not hand its script
+  descriptor to it. That child therefore holds the caller's descriptors for the duration
+  of one builtin, before the loop that shuts them. Three things bound what that costs.
+  It execs nothing, so no program of the caller's or anyone else's runs in it. Nothing of
+  the caller's can run in it at all: the `-p` refusal above means bash imported no
+  function and read no `BASH_ENV`, so `ulimit` is the builtin and not something wearing
+  its name. And it is over before the loop's first pass, which is long before
+  `/bin/mkdir` creates `.run`, so R10's entry-side ordering assertion — end-of-file on
+  the caller's descriptor before `.run` appears — is unaffected, which the measurements
+  in that section confirm rather than assume. The fork-free alternative was considered
+  and rejected: probing the limit by opening a high descriptor (`exec 63</dev/null` and
+  refusing if it fails) needs no substitution, but it writes to a descriptor number bash
+  may itself be using at exactly the low limits the check exists for, and it provokes the
+  relocation it is trying to establish there is room for. Paying one forkless-of-exec
+  bash child to avoid that is the better trade, and it is the only fork anywhere above
+  the scrub.
 
-  **The re-exec side needs nothing of its own.** The second bash opens the script again on a
-  descriptor of its own, the three opening statements run again there, and the loop's
-  reference and its test find and skip it by exactly the same comparison. Measured end to
-  end: the dirty process listed the caller's 7 and 8 and shut both, the clean process listed
-  only its own, and the marker at the end of the clean path printed.
+  **The `2>/dev/null` belongs to the `eval` and must not be written on an `exec`.** The
+  redirection on the loop's `eval` is a temporary one the shell undoes when `eval`
+  returns, while the `exec` inside the quoted string is what makes the close permanent.
+  An `exec` with no command is a redirection *of the shell*: `exec 9>&- 2>/dev/null`
+  would shut descriptor 9 and point the shell's own stderr at `/dev/null` for the rest of
+  the run, deleting every diagnostic below it, the `E_*` refusals included. That trap is
+  smaller this round than last — there is no longer an `exec` of the entry's own outside
+  the `eval` for a plan to attach two characters to — but it survives on the `eval`'s own
+  line, where a plan tidying up a stray error message could move the redirection inside
+  the quotes. The residual left by keeping it outside is small and stated: under a
+  pathological `RLIMIT_NOFILE` the close can put one `redirection error: cannot duplicate
+  fd` line on stderr that the `eval`'s redirection does not catch — and the precondition
+  above now refuses those environments before the loop runs at all, so the residual is
+  narrower than it was.
+
+  **The re-exec side needs nothing of its own, and the close-on-exec measurement is why.**
+  Bash's script descriptor does not cross an `exec`, relocated or not, so the second bash
+  starts with 0, 1, 2 and a fresh open of the script on its own high number; it inherits
+  nothing from the first bash's table except what the first bash deliberately passes. The
+  first bash's *own* relocated input is close-on-exec too — the `fcntl(F_GETFD)` helper
+  above reports `EBADF` for it in a child — so there is no stray same-file descriptor to
+  reason about on the far side, and even if some bash version left one there, the second
+  bash's own loop closes every number above 2 without exception and shuts it. Measured
+  end to end with the full re-exec form, `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C
+  /bin/bash -p "$0" __clean`, and the caller's 4, 5, 7, 10 and 11 open with 7 a write
+  handle on the script: the first process listed `255` plus the caller's five and shut
+  all five, the second process listed only `0`, `1`, `2`, its own `255` and the glob's
+  own, the second bash's marker printed, the script's last line printed, and the exit
+  status was `0`.
+
+  **What the plan confirms on the other platform, named as one thing to check.** Every
+  measurement in this block is bash 3.2.57 on `arm64-apple-darwin` (`Darwin 27.0.0`). CI
+  runs `ubuntu-latest`, whose bash is 5.x, and the property the loop rests on is a bash
+  internal rather than a documented interface. So the plan carries one confirmation, and
+  it is specific: on the CI image's bash, that closing the descriptor bash is reading the
+  script from relocates the input instead of truncating the read — the function to look
+  for by name is `save_bash_input`, reached through `check_bash_input`, with its
+  `fcntl(fd, F_DUPFD, 10)`. The confirmation is a run, not a source read: the same
+  70 KiB-script-with-a-marker shape used here, at the image's default limit and at
+  `ulimit -n 64`, asserting the marker prints. If some bash there does not relocate, the
+  precondition is not the fix and the requirement changes rather than the number, which
+  is why this is a plan step and not a line in the test.
 
   **The position is half the requirement, and an earlier round of this spec had it wrong.**
   That round put the loop after the copied scrub and after the re-exec, on the marker
@@ -2710,12 +2880,14 @@ the spec pull request's range above still blocks review.
   root (`work/resolver-trusted-parent/intent.md:36-44`). Putting the loop above both closes
   that: nothing this entry forks or execs, on either path, has ever held a descriptor the
   loop did not shut first. The loop then runs a second time in the process the re-exec
-  lands in, where it finds 0, 1, 2, its own reference, that second bash's script descriptor
-  and the glob's own, and shuts nothing — one open, one glob and a handful of builtins,
-  which is cheaper than a condition that would skip the whole block and one fewer thing for
-  a reader to have to check.
+  lands in, where it finds 0, 1, 2, that second bash's script descriptor and the glob's
+  own — measured: `0`, `1`, `2`, `255`, `3` — and shuts the script descriptor, which that
+  bash relocates exactly as the first one did. One substitution, one glob and a handful
+  of builtins, which is cheaper than a condition that would skip the whole block and one
+  fewer thing for a reader to have to check.
 
-  **Each line of it is chosen for bash 3.2 and for forking nothing.** The enumeration is
+  **Each line of it is chosen for bash 3.2, and the loop itself forks nothing.** The
+  enumeration is
   a glob over `/dev/fd`, which is a directory of the calling process's own open
   descriptors on both supported platforms, and a glob is the shell's own pathname
   expansion — no `ls`, no `find`, nothing on R7's command-word list, and nothing that could
@@ -2724,11 +2896,14 @@ the spec pull request's range above still blocks review.
   what makes the `eval` safe: the only strings that get there are numbers the glob read out
   of a directory of numbers, and 0, 1 and 2 are skipped because they are the caller's three
   and passing them through is what R1's pass-through claim and R2's `entry-signal:` line
-  both depend on. `3` is skipped in the same `case` arm because it is the entry's own
-  reference and the loop must not shut what it is comparing against, and the `-ef` line
-  behind that arm is a builtin test on device and inode — no `stat`, no external command,
-  nothing forked — which is the only reason a per-descriptor comparison can stand this
-  early in the file at all. Running ahead of the scrub costs that `eval` nothing, and the refusal at
+  both depend on. Nothing else is skipped: there is no fourth
+  pattern in that arm and no test behind it, which is the round-35 change and the reason
+  the arm is now three patterns and a number shorter than the block it replaces. The
+  precondition above it is the one statement here that is not free — `$(ulimit -n)` forks
+  a bash child, accounted for in its own paragraph above — and `ulimit`, `printf` and
+  `[` are builtins, so it execs nothing and stays ahead of the entry's first external
+  command like everything else at the top. Running ahead of the scrub costs that `eval`
+  nothing, and the refusal at
   the top is the reason it can: `eval`, `exec` and `continue` are builtins and `case`,
   `in`, `esac`, `for`, `do` and `done` are reserved words, and on every arrival that gets
   this far bash imported no function and read no `BASH_ENV`, so there is no `eval` of the
@@ -2753,17 +2928,20 @@ the spec pull request's range above still blocks review.
   cases, can start the parent with descriptors of their own). Two lines of defence, at the
   two process boundaries that exist. The one thing neither closes is a descriptor the
   caller marked close-on-exec, which needs no closing, and the entry's own first process
-  before this loop runs — which is now two statements wide, a `case` on `$-` and a `umask`,
-  neither of which forks, execs, opens or reads anything. The residual that remains there
-  is the loader's, the same one the scrub has, and it is stated in the same place.
+  before the loop's first pass — which is now three statements wide, a `case` on `$-`, a
+  `umask` and the headroom precondition. The first two fork nothing, exec nothing, open
+  nothing and read nothing; the third forks one bash child for its command substitution,
+  which execs nothing and is gone before the loop starts, and that is the whole of the
+  exposure above the close, stated exactly rather than rounded to zero. The residual that
+  remains there is the loader's, the same one the scrub has, and it is stated in the same
+  place.
 
   **Measured, on the same bash 3.2.** A driving shell opened the write end of a fifo on
   descriptor 7, started a script with it inherited, and had a reader watch for end-of-file.
   With the loop above as the script's first statement, `fds before:
   /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3 /dev/fd/7` and `fds after:
   /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3` — descriptor 7 gone, and `/dev/fd/3` the
-  listing's own descriptor in both readings, this round's reference having been opened and
-  closed again between them — and the reader saw EOF 0.3 s in, while the
+  listing's own descriptor in both readings — and the reader saw EOF 0.3 s in, while the
   script still had two seconds of work left to do. Without the loop the reader saw no EOF
   until the script had exited, and in a third run, where the script forked a helper and
   exited immediately, the reader saw no EOF until the *helper* exited three seconds later:
@@ -2814,9 +2992,10 @@ the spec pull request's range above still blocks review.
   there
   is no environment left for privileged mode to refuse, so `-p` changes no behaviour on
   this path; what it changes is that `$-` carries a `p` in the second process, which is the
-  fact that refusal acts on. The fourth is the three statements the entry puts above the
+  fact that refusal acts on. The fourth is the four statements the entry puts above the
   copied scrub, none of which the copied file has in that position — the `case $-` refusal,
-  the `umask 077` lifted from `:31`, and the descriptor close — together with the marker
+  the `umask 077` lifted from `:31`, the descriptor-headroom precondition and the
+  descriptor close — together with the marker
   branch's own re-run of the scrub behind two alias-reset builtins, below. Everything
   else is the same:
   `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
@@ -5481,8 +5660,10 @@ the spec pull request's range above still blocks review.
   own case, because each has its own startup.** A descriptor is the other process
   attribute no environment scrub touches (R1, R5), and the failure it guards against is
   silent: a run that is correct in every observable way while a caller's credential,
-  socket or write handle sits open inside every child the entry or the parent forks. Both
-  cases are built the same way. The test makes a fifo in its own scratch, starts a reader
+  socket or write handle sits open inside every child the entry or the parent forks. There
+  are five runs — four on the entry and one on the parent, two of the entry's added this
+  round — and every one of them is built on the same helper. The test makes a fifo in its
+  own scratch, starts a reader
   on it in the background — `/bin/cat > /dev/null`, which returns when every writer has
   closed — opens the write end on descriptor 7, starts the process under test with that
   descriptor inherited, and then **closes its own copy of 7 immediately**, because while
@@ -5491,20 +5672,53 @@ the spec pull request's range above still blocks review.
   whatever it forks, so the reader returning is exactly the event "nobody in that tree
   holds descriptor 7 any more".
 
-  - *The entry half.* Start the shipped entry on an ordinary successful resolution with
-    `7>` the fifo. The assertion is an **ordering**: the reader must return before
-    `<output>/.run` appears. The test watches both — the reader in the background setting
-    a flag, the output directory polled every few milliseconds the way the two-umask case
-    above already polls it — and fails if `.run` exists while the reader is still blocked.
-    The assertions are unchanged this round, and one condition on the fixture is added
-    because the loop now has an exception: **the object on descriptor 7 must not be the
-    entry's own script.** A fifo in the test's own scratch already satisfies that, so
-    nothing about the case as written moves — it is written down so that a later round
-    which swaps the fifo for some other object cannot pick the one object the loop is
-    required to skip and turn a correct implementation into a failure it would take a long
-    time to explain (R1).
-  - *The parent half.* Build a run directory by hand with the group-2 fixture builder and
-    invoke the parent directly with `7>` the same kind of fifo, with its stderr in a file
+  - *The entry half, first run: an unrelated object.* Start the shipped entry on an
+    ordinary successful resolution with `7>` the fifo. The assertion is an **ordering**:
+    the reader must return before `<output>/.run` appears. The test watches both — the
+    reader in the background setting a flag, the output directory polled every few
+    milliseconds the way the two-umask case above already polls it — and fails if `.run`
+    exists while the reader is still blocked.
+    The round-34 condition on the fixture — *the object on descriptor 7 must not be the
+    entry's own script* — is **withdrawn with the exception that made it necessary**. The
+    loop skips nothing above 2 now, so there is no object a correct implementation is
+    required to keep open, and the fixture is free again.
+  - *The entry half, second run: the caller's descriptor is the entry script itself,
+    opened for writing.* This is the case the round-34 skip would have failed and the
+    reason that skip is gone, so it is a run of its own rather than a note. The test
+    copies the shipped entry into its own scratch, runs **that copy** so nothing touches
+    the file in the repository, and starts it with two descriptors: `7>` the fifo, as
+    above, and `8>>` the copy it is running. The append is deliberate and it is safe —
+    opening a file for append does not modify it while nothing writes — and it is the
+    shape a caller would have if it were, say, logging into the same file it launches.
+    Three assertions. The ordering assertion is the one above and is unchanged:
+    end-of-file on the fifo before `<output>/.run` appears, which is the observable this
+    suite has and a regular file does not give it. The resolution assertion: the run
+    completes normally and produces the same profile bytes as the ordinary case, so a
+    loop that refused, hung or truncated on the same-file descriptor fails here. And the
+    file assertion: the copy's size and SHA-256 are unchanged afterwards, which is what
+    catches a close loop that manages to write through the descriptor it is shutting.
+    Be exact about what this proves and what it does not. It does not prove descriptor 8
+    was closed — no portable observable in this suite can say that about a regular file,
+    which is the same limitation the paragraph below gives for looking at a child's open
+    descriptors. It proves the entry behaves correctly in the presence of that
+    descriptor, and it stands beside the *reading* on R10's proof-by-reading list that
+    the loop's `case` has three patterns and no test behind it, which is what actually
+    establishes that 8 is shut. Those two together are the whole coverage, and saying so
+    is better than an assertion that looks stronger than it is (R1).
+  - *The entry half, third and fourth runs: descriptor headroom.* Start the entry with
+    the caller's soft descriptor limit at `ulimit -n 63` — the test sets it in the
+    subshell it launches from, which is how a caller would — and assert three things:
+    exactly one `E_RUNTIME` line on stderr, a non-zero exit, and **an output root that is
+    still empty**, with no `<output>/.run` at any point, polled the same way the two-umask
+    case polls it. The third is the one that matters: the refusal has to happen before the
+    close loop, which is before the first external command, so a plan that puts the
+    precondition anywhere below the loop passes the first two assertions and fails this
+    one. A fourth run at `ulimit -n 64` takes the boundary from the other side: the same
+    resolution succeeds, byte-identical, so the floor is a floor and not a wall. Both
+    numbers are measured in R1 — at 63 the entry refuses and closes nothing, at 64 it
+    closes every caller descriptor and runs to its end (R1).
+  - *The parent half, one run.* Build a run directory by hand with the group-2 fixture
+    builder and invoke the parent directly with `7>` the same kind of fifo, with its stderr in a file
     the test can read. The assertion is the same shape against the parent's own first
     observable: the reader must return before the `runtime-pgid:` line appears in that
     file.
@@ -5957,19 +6171,30 @@ the spec pull request's range above still blocks review.
   the round-30 wording allowed a plan to get wrong while still satisfying every word of
   it; the
   entry-side descriptor case does bound this one by observation, and the reading is what
-  catches a plan that keeps the loop and moves it. **Two more join it there this round,
-  both inside that same loop.** The reviewer reads that the entry opens its own script on
-  descriptor 3 immediately above the loop, that the loop skips 3 and skips any descriptor
-  for which `[ "/dev/fd/$fd" -ef /dev/fd/3 ]` holds, and that the reference is closed
-  after it — because a loop missing either line shuts the descriptor bash reads the script
-  from, and the failure that follows is a *silent* truncation with exit status `0` that no
-  assertion in this suite would catch: every case here reads output or a status, and the
-  truncated entry produces neither an error nor a diagnostic (R1). And the same reader
-  checks that neither of those two `exec` statements carries a bare `2>/dev/null` — the
-  loop's suppression belongs to its `eval`, and the same two characters on an `exec` with
+  catches a plan that keeps the loop and moves it. **Two joined it there the round before this
+  one and both are replaced this round, because the thing to read changed.** Those two
+  were the reference open on descriptor 3 and the `-ef /dev/fd/3` skip; R1 withdraws both,
+  so reading for them would now fail a correct implementation. What the reviewer reads
+  instead is the absence: that the loop's `case` arm is exactly `''|*[!0-9]*|0|1|2` —
+  three patterns for the caller's three descriptors and two for junk, **no fourth number
+  and no test of any kind behind the arm** — because any skip at all is a descriptor that
+  reaches the re-exec and every child below, and `-ef` in particular cannot tell a
+  caller's read-only handle on the entry script from a write handle on it. This is the
+  reading that covers descriptor 8 in the same-file case above, which no assertion there
+  can reach. And the reviewer reads that the headroom precondition stands between
+  `umask 077` and the loop — `nofile=$(ulimit -n)`, the `case` mapping `unlimited` and
+  unparsable answers, and one `E_RUNTIME` refusal below 64 — because a loop that runs
+  without it shuts the descriptor bash reads the script from in an environment where bash
+  cannot relocate, and the failure that follows is a *silent* truncation with exit status
+  `0` that no assertion in this suite would catch: every case here reads output or a
+  status, and the truncated entry produces neither an error nor a diagnostic. The
+  `ulimit -n 63` case above bounds the refusal by observation; what the reading adds is
+  the *position*, which that case can only bound from one side. And the same reader
+  checks that the `2>/dev/null` is on the loop's `eval` and not inside the quoted `exec`
+  — the same two characters on an `exec` with
   no command point the shell's own stderr at `/dev/null` for the rest of the run, taking
   every `E_*` line below with it. That one is a grep as much as a reading, and it is on
-  the list because it is the kind of line a plan adds while tidying up a stray error
+  the list because it is the kind of line a plan moves while tidying up a stray error
   message (R1). And in the entry's wait loop, the
   reviewer checks that the only `kill` is inside the
   `case " $(jobs -l) " in *" $parent_pid Running"*)` arm, that the not-interrupted branch
@@ -6403,23 +6628,30 @@ Order, each step checkable before the next:
    (R2) — and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
-   `E_RUNTIME` before the next. **The entry's own three statements, then the copied scrub
+   `E_RUNTIME` before the next. **The entry's own four statements, then the copied scrub
    and re-exec, and only then anything external.** First
    `case $- in *p*) ;; *) exit 78 ;; esac` as the first statement in the file, so an
    arrival that is not one of the two supported invocations is turned away before anything
    else is parsed, and so that everything below it runs in a shell that imported no
    function and read no `BASH_ENV`. Then `umask 077`, copied from
    `adapters/local-git-materializer/v1/materialize.sh:31` but set here rather than after
-   the scrub, because the scrub resets variables and not the process umask (R1). Then
-   every inherited descriptor above 2 closed — the
+   the scrub, because the scrub resets variables and not the process umask (R1). Then the
+   descriptor-headroom precondition: `nofile=$(ulimit -n)` with a `case` mapping
+   `unlimited` to a number and anything unparsable to `0`, then one `E_RUNTIME` line and a
+   non-zero exit if the result is below 64, because the loop below closes the descriptor
+   bash reads the script from and bash needs free numbers at or above 10 to relocate its
+   input onto — and with no headroom it truncates the script and exits `0`, or crashes
+   (R1). Then
+   every inherited descriptor above 2 closed, with **no exception of any kind** — the
    numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
-   all digits and not 0, 1, 2 or 3 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
-   has no `{fd}>&-` form, and with the entry's own script opened on descriptor 3 by an
-   `exec 3<"${BASH_SOURCE[0]}"` immediately above the loop (refusing `79` if that fails),
-   a `[ "/dev/fd/$fd" -ef /dev/fd/3 ]` skip inside it so the loop cannot shut the
-   descriptor bash is reading the script from, and an `eval 'exec 3<&-' 2>/dev/null` after
-   it; neither `exec` carries a bare `2>/dev/null`, which on a command-less `exec` would
-   redirect the shell's own stderr for the rest of the run — placed here, ahead of the scrub and the re-exec, because the
+   all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
+   has no `{fd}>&-` form. Bash's own script descriptor is closed with the rest and bash
+   relocates it (`save_bash_input`), which is why the precondition comes first and why the
+   round-34 reference-open-and-skip is gone: `-ef` cannot tell a caller's read-only handle
+   on the entry script from a write handle on it, and the skip preserved both. The
+   `2>/dev/null` stays on the `eval` and must not move onto the `exec` inside it, which on
+   a command-less `exec` would redirect the shell's own stderr for the rest of the run —
+   placed here, ahead of the scrub and the re-exec, because the
    scrub's two process substitutions fork bash children and the re-exec runs
    `/usr/bin/env` and a second bash, all of which would otherwise inherit whatever the
    caller left open, and so that none of the pin checks, compiles, copies or probes the
@@ -6430,12 +6662,12 @@ Order, each step checkable before the next:
    shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
    marker word, the arity, the `-p` that carries privileged mode across the re-exec where
-   the materializer drops it, and the three statements above that the copied file does not
+   the materializer drops it, and the four statements above that the copied file does not
    have in that position — and then the marker branch, which re-runs the same builtin
    scrub plus `builtin unalias -a` and `builtin shopt -u expand_aliases` as defence in
-   depth (R1). The three opening statements run again in the second process, where the
-   close loop finds nothing above 2 to shut but its own reference and that second bash's
-   script descriptor, and skips both by the same test. Then, still
+   depth (R1). The four opening statements run again in the second process, where the
+   close loop finds nothing above 2 but that second bash's script descriptor and shuts it,
+   and that bash relocates in turn. Then, still
    before the first external command, the four variables every trap and checkpoint reads
    declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
    `parent_pid=''` — so that under `set -u` a signal-free run's first checkpoint and a
@@ -6940,11 +7172,21 @@ intent says for this change. Only after the operator's merge does
   result. Its marker file may hold one line for that first process and must hold no more, so
   the test asserts what the scrub and the re-exec actually buy and does not assert that the
   first process is clean. The entry is the first trusted process, not a shield in front of
-  an untrusted one. The inherited descriptors this round closes sit in exactly the same
+  an untrusted one. The inherited descriptors the entry closes sit in exactly the same
   place and carry exactly the same residual: they are shut among the entry's first
-  builtins, before any fork, so nothing the entry runs can inherit one — but the statements
-  ahead of that loop run with them still open, as they do with the caller's variables still
-  set, and the answer is the same answer. The parent closes its own at the top of `main`
+  builtins, before any external command, so nothing the entry runs can inherit one — but
+  the statements ahead of that loop run with them still open, as they do with the caller's
+  variables still set, and the answer is the same answer. This round makes one of those
+  statements a fork, and the honest form of the residual has to say so: the headroom
+  precondition's `nofile=$(ulimit -n)` is a command substitution, so exactly one bash
+  child exists above the close holding whatever the caller left open. It execs nothing,
+  it runs one builtin, nothing of the caller's can run inside it (the `-p` refusal above
+  it means no imported function and no `BASH_ENV`), and it is gone before the loop's
+  first pass. It is still a process that briefly held a caller's credential or socket,
+  and the reason the spec pays it is stated where the precondition is: the alternative is
+  a close loop that truncates the entry and exits `0` in a low-`RLIMIT_NOFILE`
+  environment, which is a failure the whole requirement is written to prevent and no test
+  here can see. The parent closes its own at the top of `main`
   for the caller who drives it directly (R5), which is the one case the entry's close
   cannot cover.
 - **Copy versus adapt.** The test launcher is 702 lines, and far less of it is test
@@ -7089,20 +7331,25 @@ intent says for this change. Only after the operator's merge does
   lines in the marker word, the arity, the `-p` added to the re-exec's `/bin/bash`, the
   marker branch's re-run of the scrub with two alias-reset lines the copied bytes do
   not have, and — this round, and this is a change of position rather than of text — the
-  three statements the entry puts *above* the copied scrub: the
+  four statements the entry puts *above* the copied scrub: the
   `case $- in *p*) ;; *) exit 78 ;; esac` refusal, which was on the marker branch and is
   now the first statement in the file; the `umask 077`, copied unchanged from `:31` but
-  set before the scrub instead of after it; and the `/dev/fd/*` close loop, which has no
-  counterpart in the copied file at all and has to precede it, because the copied scrub's
-  two process substitutions (`:5-10`) fork bash children and the copied re-exec (`:22-29`)
-  execs `env` and a second bash, and each of those would otherwise inherit a caller's
-  descriptor above 2 — and that third statement grows this round rather than a fourth
-  being added, because it is the same block gaining the two lines that keep it from
-  shutting the descriptor bash reads the script from: an `exec 3<"${BASH_SOURCE[0]}"`
-  above it with a `79` refusal, and an `-ef /dev/fd/3` skip inside it, with the reference
-  closed again below. The materializer has nothing of the kind to deviate from — it closes
-  no descriptors anywhere in its own opening statements — so this is new code in a new
-  position rather than copied lines altered. The copied bytes are untouched by all three;
+  set before the scrub instead of after it; the descriptor-headroom precondition, which
+  is this round's and is a fourth statement rather than growth in a third, because it
+  refuses on a condition of its own (`ulimit -n` below 64) and has to stand before the
+  close rather than inside it; and the `/dev/fd/*` close loop, which has no
+  counterpart in the copied file at all and has to precede the scrub, because the copied
+  scrub's two process substitutions (`:5-10`) fork bash children and the copied re-exec
+  (`:22-29`) execs `env` and a second bash, and each of those would otherwise inherit a
+  caller's descriptor above 2. The loop's own text *shrinks* this round by three
+  statements: the round-34 reference open, its `-ef` skip and its close are withdrawn,
+  because `-ef` compares device and inode and so kept a caller's *writable* handle on the
+  entry script alive across the re-exec and into every child — the loop now skips nothing
+  above 2 and closes bash's own script descriptor with the rest, which bash survives by
+  relocating its input. The materializer has nothing of the kind to deviate from — it
+  closes no descriptors anywhere in its own opening statements and reads no resource
+  limit — so this is new code in a new position rather than copied lines altered. The
+  copied bytes are untouched by all four;
   what moved is what
   stands in front of them (R1) — where the
   test script and
