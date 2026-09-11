@@ -18,7 +18,7 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Evidence-based range: 2075-2807 changed lines** (implementation). The derivation,
+**Evidence-based range: 2091-2829 changed lines** (implementation). The derivation,
 measured rather than guessed:
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
@@ -37,10 +37,13 @@ measured rather than guessed:
   remaining ~75 lines — the argv shape check, `child_argv`, and the whole environment
   construction R3 lists — are copied. New code on top of that: copied-from headers (~15),
   the output-path and run-directory arguments that replace `YSTACK_TEST_SANDBOX` (~30),
-  the runtime mode-0644 and blob checks (~45), the blob checks for the other two files
-  of the parent-pinned subset — `scripts/lib/profile-resolution.sh` and
-  `resolver/v1/profile-resolution.jq`, sharing the runtime's blob-id helper, so ~30 for
-  the repository-root derivation, two constants and two comparisons — the parent's own jq
+  the runtime mode-0644 and blob checks (~45), the blob checks for the other seven files
+  of the parent-pinned set — `scripts/lib/profile-resolution.sh`,
+  `resolver/v1/profile-resolution.jq` and the five jq modules, sharing the runtime's
+  blob-id helper, so ~30 for
+  the repository-root derivation, two constants and two comparisons in the round that
+  wrote this line and ~25 more from round 40 for the five modules, itemised at the end of
+  this bullet — the parent's own jq
   digest and `jq-1.6`
   checks (~40), the three `fstat` run-directory checks in R5 (~90), the caller
   output-directory check (~60 — it is no longer a plain emptiness test but an `fdopendir`
@@ -182,7 +185,18 @@ measured rather than guessed:
   skip (~8), the `E_RUNTIME` refusal when that `opendir` fails (~2), and the ceiling
   changing to `rlim_max`-or-`sysconf` with the 65536 cap (~2). The ~7 the round above
   counts for the soft-limit arithmetic is spent rather than returned: the `getrlimit`
-  read stays and only which field it takes changes (R5).
+  read stays and only which field it takes changes (R5). This round adds ~25 more, to
+  **~1228**, all of it the parent-pinned set widening from three files to all eight: the
+  five module blob-id constants and the five module names beside them (~10, ten one-line
+  initialisers), the parent's own copies of the library's generation-id and schema-major
+  constants (~2), the `snprintf` that builds each module path from the repository root and
+  those two and the loop that walks the five names calling the blob-id helper the parent
+  already has, with one refusal serving all five (~12), and one more `E_RUNTIME` message
+  string naming the module pin (~1). The digest helper itself, the fork and reap wrappers,
+  the fixed `envp` and the header-and-bytes construction are all counted above and are
+  reused unchanged — the five extra children run through the same shared wrapper the
+  round that blocked the reaps already paid for, which is why five more forks cost nothing
+  here beyond the loop that starts them (R5, R7).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -286,7 +300,11 @@ measured rather than guessed:
   [ -c /dev/fd/2 ]` and its `fi` around the `EXIT` trap's one `printf` (~2), and the
   comment saying why a pipe is omitted rather than written to, which is the one line that
   stops a later reader deleting the condition as redundant (~1). The `printf` itself was
-  counted rounds ago and only gains an indent (R1). This round adds ~4 more, to **~437**,
+  counted rounds ago and only gains an indent (R1). (Round 40 cuts that condition to the
+  single `[ -f /dev/fd/2 ]` and adds **nothing** here: two tests come off one line, the
+  `if` and the `fi` stay, and the comment is reworded to say why a terminal is omitted as
+  well as a pipe. The figure stands at ~433 for this item and the entry's total does not
+  move for it.) This round adds ~4 more, to **~437**,
   all four inside the close loop: the `exec 3<"${BASH_SOURCE[0]}" || exit 79` above it
   (~1), the `[ "/dev/fd/$fd" -ef /dev/fd/3 ] && continue` inside it (~1), the
   `eval 'exec 3<&-' 2>/dev/null` below it (~1), and the comment saying why the reference
@@ -341,7 +359,9 @@ measured rather than guessed:
   `xcrun_db` before-and-after assertion — the state recorded as absent, or as a size, an
   mtime and a digest, with no skip either way, R1), a shared
   hand-built run-directory helper for the direct-parent cases (~15) and the nineteen
-  group-2 cases on top of it (~150, the overlong-value case now building a near-`PATH_MAX`
+  group-2 cases on top of it — twenty-one after the two module-pin cases this round's
+  delta at the end of this bullet adds —
+  (~150, the overlong-value case now building a near-`PATH_MAX`
   directory tree rather than naming a long path, and the two new `.run` containment cases —
   the symlinked `.run` and the regular-file `.run` — each asserting the refusal and an
   untouched target), the group-3 runtime refusal (~10),
@@ -386,7 +406,8 @@ measured rather than guessed:
   asserting the `E_RUNTIME` line, the non-zero exit and an output root that stays empty
   and one at `ulimit -n 64` asserting the ordinary byte-identical success, at ~5, both of
   them reusing the helper and the `.run` poll rather than bringing machinery of their
-  own, R1), the pin-constant assertions over ten pins
+  own, R1), the pin-constant assertions over thirteen pins — eighteen after this round's
+  five, counted in the delta at the end of this bullet —
   (~35 — each one now a three-way check that the computed id, `git hash-object`'s answer
   and the pinned constant all agree, R1), the
   command-word allowlist grep in its three sweeps, with the `compgen -b` and `compgen -k`
@@ -437,29 +458,46 @@ measured rather than guessed:
   EOF-before-`runtime-pgid:` assertion the first run makes, whose helper and polling it
   reuses whole), and pass 1's awk position assertion widening to the C file (~3 — the two
   literals it may appear as, and the requirement that it appear in no `execve` argument
-  array) (R5, R10).
+  array) (R5, R10). This round adds ~15 more, to **~1084**, in three places: the two new
+  group-2 cases for the parent's module pins (~8 — the edited `schema.jq` in the copied
+  tree with the unedited-library assertion beside it that proves the parent found the path
+  from its own constants, and the sibling case whose library carries a changed generation
+  constant and is refused on the library's own pin, both of them reusing the group's
+  shared fixture builder and its two standard assertions), the pin-constant assertion
+  growing from thirteen ids to eighteen and gaining the two generation-constant
+  comparisons (~5 — the parent's five module pins joining the loop, and one `grep` each
+  for the generation id and the schema major against the library's own lines), and the
+  comment beside the group-2 fixture builder saying the group is the only legitimate user
+  of the direct-invocation shape (~2) (R5, R10).
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2730 lines. The range above is not re-derived from
-that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
-both ends, and every round since has recorded its own delta against that figure rather
-than moving the range for it. This round's ~50 is ~30 in the parent and ~20 in the test,
-with nothing in the entry — the entry already copies both tool files and already
-enumerates `/dev/fd`, so both of this round's shipped-code findings land on the C half —
-and it takes the sum to
-about 13% above the ~2420, still
-inside the ±15%
-the range expresses, so the implementation range stands where it was. It is the largest
-single-round delta since the run directory moved inside the output root, and the reason is
-the same: unlike most rounds here, these findings change what the shipped parent does
-rather than what the spec says about it. The round before this one added ~18, ~3 in the
-parent, ~3 in the entry and ~12 in the test, and took the sum to about 11%; the one before
-that added ~33, ~8 in the parent and ~25 in the test, and took it to about 10%.
-It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
+Those four bullets now sum to about 2811 lines — added as they stand, ~1228 + ~439 +
+~1084 + ~60, rather than carried forward: the round before this one wrote the running
+total as ~2730 and adding its own four bullets gave ~2771, so the figure is corrected here
+in the same way an earlier round corrected ~2535 to ~2578. **And this round the
+implementation range moves, for the first time in fourteen rounds.** The convention held
+until now was that the range is not re-derived from the sum each round: it was the ~2441
+of the round it was set in, with ±15% at
+both ends, and every round since recorded its own delta against that figure rather
+than moving the range for it. This round's ~40 is ~25 in the parent and ~15 in the test,
+with nothing in the entry and nothing in the docs bullet beyond its own rounding — the
+entry already pins all eight loaded files and already writes its diagnostic under a
+condition, so the widening lands on the C half and the narrowing costs no statements at
+all — and it takes the sum to ~2811, which is four lines past the 2807 top of the
+standing range. Four lines is not a real overrun and pretending it is inside the band
+would be worse than moving the band, so the base becomes ~2460 and the range **2091-2829
+changed lines**, which the top of this section and the waiver record in the same figures.
+Nothing about the derivation changes; one addition took the sum over the edge of a band
+that had absorbed thirteen rounds of deltas, and the honest move is to say so rather than
+to round the sum down to fit. The round before this one added ~50, ~30 in the parent and
+~20 in the test, and took the sum to about 13% above its base; the one before
+that added ~18, ~3 in the
+parent, ~3 in the entry and ~12 in the test, and took the sum to about 11%.
+It grew from 1350-1800 thirteen rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
 1972-2668, then 1985-2685, then 2036-2754, then 2053-2777, then 2057-2783, then
-2066-2796, and the
+2066-2796, then 2075-2807, and the
 growth is itemised
 above rather than absorbed: ~90 more in the parent (the two extra blob pins, the request
 and map check, the signal handlers), ~25 more in the entry (eight more pins), and ~155
@@ -837,14 +875,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7006-9478 lines** — this file's measured 8242 lines plus or minus 15%, rounded. That
+**7341-9933 lines** — this file's measured 8637 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 8242 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 8637 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -995,13 +1033,21 @@ soft limit as a ceiling nowhere, so a descriptor opened high and left above a lo
 `RLIMIT_NOFILE` can no longer ride into every digest tool the parent forks, beside the
 documentation's promise of an `entry-signal:` line carrying the same omission condition R1
 states, so a caller who pipes stderr is no longer told to expect a line the entry
-deliberately does not write).
+deliberately does not write, and this round the parent pinning every one of the eight
+files the runtime executes or evaluates rather than three of them, with direct invocation
+stated as test-only and unsupported beside it, so an edited jq module can no longer reach
+the runtime through a caller who skipped the entry and the one thing that path still lacks
+— the helper's provenance, which no binary pin could give it — is named as the reason the
+entry is the only supported launch, beside the entry's own diagnostic narrowed to a
+regular file alone, so the line can no longer be written to a terminal whose output is
+flow-controlled or whose pty master nobody is reading and hang the exit the whole signal
+path exists to deliver).
 The same record again here, where the count it rests on is derived, on its own line:
 
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**7006-9478 lines** — this file's measured 8242 lines plus or minus 15%, rounded. That
+**7341-9933 lines** — this file's measured 8637 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1014,7 +1060,7 @@ range is the separate figure above. It was
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
 5023, then 5153, then 5448, then 5897, then 6140, then 6415, then 6767, then
-7173, then 7420, then 7690, then 7878, then 7914; where each block of
+7173, then 7420, then 7690, then 7878, then 7914, then 8242; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1719,10 +1765,15 @@ the entry never reaches `128 + signal` and the caller's `wait` never returns eit
 the cleanup already done and the whole promise of the path unkept for the sake of a
 courtesy. Bash 3.2 cannot set `O_NONBLOCK`, so there is no version of the parent's fix to
 copy, and the decision is to write the line only where a write cannot block — a terminal,
-a regular file, a character device — and omit it on a pipe, a FIFO or a socket. Most of
+a regular file, a character device — and omit it on a pipe, a FIFO or a socket.
+**Round 40 narrows that set to the regular file alone**, because a terminal's write can
+block too — flow control, an unread pty master — so the condition this paragraph records
+as three tests is one test from that round on, and the interactive case it admitted is the
+half that was wrong. Most of
 those lines are what makes that a decision rather than a hunch: the measured table of
 what `[ -t 2 ]`, `-f /dev/fd/2` and `-c /dev/fd/2` answer for each of seven kinds of
-stderr, the argument that the condition is a whitelist so an unrecognised object omits
+stderr — which round 40 keeps as its own evidence, reading one column of it — the
+argument that the condition is a whitelist so an unrecognised object omits
 rather than writes, the measurement that an unconditional `printf` into a 65536-byte
 full pipe had not returned after five seconds while the guarded one exited `143` in
 0.01 s, the cost stated plainly (a draining pipe loses the line too, and no test can tell
@@ -1988,7 +2039,10 @@ FIFO or a socket, so an implementation following R1 would have shipped documenta
 was false for every piped caller. The line now carries R1's condition in the same
 three-and-three words, and R1's own reading note says why this one mention writes the
 condition out instead of taking the shorthand: a reading note settles things inside the
-spec and settles nothing for someone reading the shipped documentation.
+spec and settles nothing for someone reading the shipped documentation. (Round 40 cuts
+R1's condition to the one `[ -f /dev/fd/2 ]` test, so the documentation line it fixes
+carries one kind rather than three-and-three; the rule that the documentation states the
+condition in full rather than promising the line is this round's and is unchanged.)
 The remaining ~61 are the ripples and the bookkeeping: two more entries on the
 proof-by-reading list — the enumeration being first, its refusal existing at all, and the
 two new checks standing before the `fork`, none of which a case in this suite can reach;
@@ -1997,17 +2051,69 @@ from five runs to six; the accepted-concern list at the top; and the re-derived 
 figures here and for the implementation, whose range does not move because +30 in the
 parent and +20 in the test leave the sum inside the ±15% it already expresses.
 
+This round is +395 net over one P1 and one P2, and the two are unrelated except in
+both being a claim that was true of the object it named and false of the one beside it.
+**About 240 go to the launch boundary.** The P1 was that `trusted-launch`, invoked
+directly — which this spec said the operator and R10 both do — gets files 1, 2 and 3
+pinned and nothing else, so a caller-owned 0500 helper or an edited jq module could pass
+every parent check and then be executed or evaluated by the runtime. The fix is two moves
+and needs both. **The parent's pin list widens from three files to all eight the runtime
+executes or evaluates**, using the same SHA-1 blob-id children it already runs for three —
+eight children where three ran, each under the fixed `envp` and inside the same
+block-fork-publish and block-reap-zero shape — so an edited module is now refused by the
+parent as well as by the entry. The reason an earlier round gave for not doing this is
+withdrawn on a reading of the library rather than on an argument: the generation id it
+said the parent
+could not reach is a *constant* in the library
+(`scripts/lib/profile-resolution.sh:5,11`), so the parent carries its own copy, builds the
+five module paths from it, and cannot drift from the library's own because it pins the
+library's blob id. **And direct parent invocation becomes test-only and unsupported**,
+stated in R5, carried into R7's direct-parent paragraph, R9's documentation, R10's group 2
+and its operator Darwin recipe — which is rewritten so every run in it goes through the
+entry — Areas of concern and Out of scope. The reason it cannot be made equivalent is
+said plainly instead of implied: the helper is a compiled binary whose bytes no constant
+can name, so a direct caller who builds `.run` can put any 0500 helper in it, and only the
+entry, compiling from a pinned source into a directory it made, establishes that
+provenance. The boundary is documentary and says so — the parent detects nothing about who
+started it, because every marker it could test is one a caller controls, which is R1's
+own reason for refusing a nonce on the marker word — and R10's group 2 is its only
+legitimate user, which the test says in a comment beside the shared fixture builder.
+**About 85 go to the entry's diagnostic.** The P2 was that the `entry-signal:` line's
+condition admitted a terminal and a character device beside a regular file, and a
+terminal write can block: a tty's output queue is finite, `IXON` flow control stops it
+draining, and an unread pty master fills as a pipe does — so the `128 + signal` exit and
+the caller's `wait` were still behind a write that might never return, on the one kind of
+stderr an interactive caller actually has. The condition becomes `[ -f /dev/fd/2 ]` alone
+in R1, R9's documentation line, R10's cases, Design step 2 and the Areas-of-concern
+bullet; the measured seven-row table from round 33 stays exactly as it is, because the new
+rule is one column of it read on its own; and what is given up is named — a terminal and
+`/dev/null` lose the line, `/dev/null` only to keep the rule one test wide, with the exit
+status and the parent's `parent-signal:` line remaining the record. R10's cases already
+read the line from a plain file, so not one assertion moves. The remaining ~69 are
+the ripples and the bookkeeping: R7's read list noting that the set of files read does
+not change and only which process reads them does; the pin-constant assertion going from
+thirteen blob ids to eighteen and gaining the two generation-constant comparisons; two
+new group-2 cases and one group-1 case reclassified as the entry's half of a pin the
+parent now holds too; Design step 1's pin clause; the Copy-versus-adapt pin item growing
+rather than an eleventh deviation being added; a new Areas-of-concern bullet for the
+boundary itself and the maintenance bullet re-counted; round 33's and round 39's
+accounting paragraphs marked where each recorded something this round narrows; the
+accepted-concern list at the top; and the re-derived size figures here and for the
+implementation — where the range does move this round, because +25 in the parent and +15
+in the test take the sum four lines past the top of the standing band, and moving the band
+is more honest than rounding the sum down to fit it.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 7006-9478 lines**, which is this file's measured
-8242 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 7341-9933 lines**, which is this file's measured
+8637 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2075-2807 changed lines derived at the top of this section belong to the *implementation*
+2091-2829 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -2902,20 +3008,39 @@ the spec pull request's range above still blocks review.
   It asks what stderr is:
 
   ```
-  if [ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]; then
+  if [ -f /dev/fd/2 ]; then
       printf 'entry-signal: %s no-parent\n' "$entry_signal" >&2   # or the forwarded form
   fi
   ```
 
-  A terminal, a regular file and a character device are the three kinds of stderr whose
-  write completes without anyone on the other end: a tty consumes what is sent to it, a
-  regular file is written by the kernel with no reader in the picture, and `/dev/null` and
-  its relatives discard. A pipe, a FIFO or a socket is the case that can wait forever, and
-  there the line is omitted. Nothing else changes — the branch is still decided, the
-  status is still `128 + signal`, the chmod and the removal still ran before this point.
+  **A regular file is the only kind of stderr this entry writes to, and it is one test, not
+  three.** An earlier round of this spec admitted a terminal and a character device beside
+  it — `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]` — on the reasoning that a tty
+  consumes what is sent to it and `/dev/null` discards. The `/dev/null` half is true and
+  the tty half is not. A terminal write is flow-controlled: a tty's output queue is
+  finite, `IXON` flow control or a `Ctrl-S` at the keyboard stops it draining, and a pty
+  whose master nobody is reading fills exactly the way a pipe does — the master side of a
+  pty *is* a buffer with a reader that may not be there. So `printf` to a terminal can sit
+  in its write as long as a `printf` to a full pipe can, and the `128 + signal` exit and
+  the caller's `wait` are behind it in both cases. That is the whole of the guarantee this
+  requirement exists for, and it is not worth a courtesy line.
 
-  **The `/dev/fd/2` tests had to be measured rather than assumed, because the question is
-  whether they see the underlying object or the `/dev/fd` entry itself.** Measured,
+  So terminals and character devices come out of the safe set, and the condition is the
+  single test `[ -f /dev/fd/2 ]`. A regular file is safe for a reason that has no reader in
+  it at all: the kernel writes the bytes into the file, there is no queue to fill and
+  nobody on the other end whose absence could matter. `/dev/null` is harmless too and
+  loses the line anyway, because the rule stays simple: one test with one reason behind it
+  beats two more tests whose reasons have to be re-argued every time somebody reads them,
+  and nothing is lost by omitting a line that was going to be discarded. A pipe, a FIFO, a
+  socket, a terminal, `/dev/null` and anything else all fall to the `else`. Nothing else
+  changes — the branch is still decided, the status is still `128 + signal`, the chmod and
+  the removal still ran before this point.
+
+  **The `/dev/fd/2` test had to be measured rather than assumed, because the question is
+  whether it sees the underlying object or the `/dev/fd` entry itself.** The table below
+  is the measurement the round that wrote the three-test condition made, and it is kept
+  as it stands rather than trimmed to the one column the rule now reads: it is what the
+  new rule is drawn *from*. Measured,
   bash 3.2.57 on `arm64-apple-darwin` (`Darwin 27.0.0`), one probe run per kind of stderr:
 
   ```
@@ -2929,18 +3054,25 @@ the spec pull request's range above still blocks review.
   closed (2>&-)        no         no             no            no            no
   ```
 
-  Every row resolves to the underlying object, which is what the rule needs. On Linux
-  `/dev/fd` is a symlink to `/proc/self/fd` and the tests follow it to the same objects;
+  Every row resolves to the underlying object, which is what the rule needs. Read the
+  `-f /dev/fd/2` column on its own and it says exactly what the condition now says: yes on
+  the regular file, no on every other row, including the tty — a terminal is a character
+  device and was never a regular file, so dropping the `-t 2` and `-c` tests takes the tty
+  and `/dev/null` rows out of the writing set and moves no other row. On Linux
+  `/dev/fd` is a symlink to `/proc/self/fd` and the test follows it to the same objects;
   the plan re-measures there rather than inheriting this table, and R10's suite runs on
   both platforms, so both are exercised.
 
-  **The condition is a list of three safe answers and not a list of unsafe ones, and that
-  is the whole of its safety argument.** Anything the three tests do not recognise —
-  the socket row, a closed descriptor, a platform whose `/dev/fd` is absent or answers
+  **The condition is one safe answer and not a list of unsafe ones, and that
+  is the whole of its safety argument.** Anything the test does not recognise —
+  the tty row, the socket row, a closed descriptor, a platform whose `/dev/fd` is absent
+  or answers
   something nobody predicted — falls to the `else` and omits. So the worst outcome of a
   wrong guess about an object this spec did not enumerate is a missing courtesy line, and
   never a hung entry. Getting that the other way round, with a blacklist of pipes and
-  sockets, would make every unanticipated object a write.
+  sockets, would make every unanticipated object a write — and the tty row is the proof
+  that the blacklist would have been wrong, because a terminal is precisely the object
+  everyone's intuition puts on the safe side.
 
   **Measured, so the rule is not an argument about what ought to happen.** On the same
   bash: with the entry's stderr on a real `pipe(2)` filled to capacity (65536 bytes on
@@ -2954,15 +3086,24 @@ the spec pull request's range above still blocks review.
   `printf` then fails fast with `EAGAIN` instead of hanging, which measures nothing about
   this rule at all.
 
-  **What is given up is named.** A caller who pipes the entry's stderr to a reader gets no
+  **What is given up is named, and this round it is more than it was.** A caller who pipes
+  the entry's stderr to a reader gets no
   `entry-signal:` line, even when the reader is draining it and the write would have gone
   straight through. No test can separate those two cases without performing the write that
-  is the hazard, so the conservative half is taken. It is the same trade the parent's line
+  is the hazard, so the conservative half is taken. **And now a caller at a terminal gets
+  no line either, nor does one who sends stderr to `/dev/null`** — the interactive case is
+  the one a reader will miss most, because it is where a person watching a `Ctrl-C` would
+  like to be told which branch ran, and it is given up anyway for the reason above: a
+  terminal's write can wait, and no test can tell a draining tty from a stopped one
+  without performing the write. `/dev/null` loses the line for no reason of its own, only
+  to keep the rule one test wide. It is the same trade the parent's line
   already makes and is accepted for the same reason: the exit status and the cleanup are
   what this requirement guarantees, and the line is a courtesy that says which branch
-  produced them (R9). The branch stays observable wherever anyone is positioned to read a
-  diagnostic at all — a terminal, or a file, which is where a caller that wants the line
-  should put stderr.
+  produced them (R9). The branch stays observable exactly where a caller who wants it
+  should put stderr — a regular file, which is what R10 does in every case that asserts
+  the line, and what the documentation tells a caller to do (R9). The exit status and, on
+  the forwarded branch, the parent's own `parent-signal:` line remain the record
+  everywhere else; nothing that anything depends on is behind this condition.
 
   **The two halves of this component differ in exactly this one rule, and it is worth
   saying so rather than leaving a reader to wonder why the parent has no such condition.**
@@ -2972,26 +3113,32 @@ the spec pull request's range above still blocks review.
   from bash, which cannot set the flag, so it decides by the kind of object and writes
   nothing where the parent would have written best-effort. The guarantee is identical on
   both sides — no diagnostic ever delays or prevents the termination — and only the means
-  differ, because the two languages have different tools for the same problem.
+  differ, because the two languages have different tools for the same problem. One visible
+  consequence is worth stating so nobody reads it as a bug: on an interrupted launch at a
+  terminal the caller sees the parent's `parent-signal:` line and no `entry-signal:` line
+  beside it, because the parent's write cannot wait and the entry's could.
 
   One reading note, so the condition does not have to be repeated at every mention.
   Everywhere else in this spec — the checkpoints above, the three-step command rule, R2's
   summary of the forwarded branch, R10's assertions — the shorthand "`128 + signal` and
-  the one `entry-signal:` line" appears. Read it with this condition attached: one line on
-  a stderr that can take one, and none on a stderr that cannot. The status half of that
+  the one `entry-signal:` line" appears. Read it with this condition attached: one line
+  when stderr is a regular file, and none on any other kind of stderr. The status half of that
   shorthand is unconditional and is the half anything ever depends on. One mention does
   **not** take the shorthand, deliberately: R9's documentation requirement writes the
   condition out in full, because that line is a promise to a caller reading the entry's
   documentation rather than a cross-reference between two requirements, and a caller who
-  pipes stderr and then goes looking for a line the docs promised has been told something
+  pipes stderr, or watches at a terminal, and then goes looking for a line the docs
+  promised has been told something
   untrue. A reading note settles it inside the spec; it settles nothing for a reader of the
   shipped documentation.
 
   Nothing is lost for the tests
   that assert the line, and this is now load-bearing rather than incidental: R10 reads it
-  from a plain file in the test's own scratch in every case that asserts it, a regular file
-  is the first of the three kinds that write, so every one of those assertions stands
-  exactly as written. R10 also adds the case that proves the omission rule keeps the exit
+  from a plain file in the test's own scratch in every case that asserts it, and a regular
+  file is the only kind that writes, so every one of those assertions stands
+  exactly as written. That was true when the condition admitted three kinds and it is
+  true of the one, which is why narrowing the rule this round moves no assertion in the
+  suite: the cases were already reading the only kind that survives. R10 also adds the case that proves the omission rule keeps the exit
   promise — the entry signalled with its stderr on a full, undrained pipe, required to exit
   `143` with `.run` gone. It does not conflict with this requirement's claim that the entry passes the
   child's stdout and stderr through unchanged: this is the entry's own line on the entry's
@@ -3386,8 +3533,9 @@ the spec pull request's range above still blocks review.
   on the caller's own hygiene. It does not replace the parent's close, which happens in the
   resolver child before `execve` (R3) — that one is the last line of defence and stays
   where it is — and it does not replace the parent's own startup close, which R5 now
-  requires for the same reason on the direct-parent path (an operator, or R10's group-2
-  cases, can start the parent with descriptors of their own). Two lines of defence, at the
+  requires for the same reason on the direct-parent path (R10's group-2 cases start the
+  parent with descriptors of their own, and the parent tests nothing about who started
+  it). Two lines of defence, at the
   two process boundaries that exist. The one thing neither closes is a descriptor the
   caller marked close-on-exec, which needs no closing, and the entry's own first process
   before the loop's first pass — which is now three statements wide, a `case` on `$-`, a
@@ -3567,8 +3715,12 @@ the spec pull request's range above still blocks review.
   shipped file runs `git` at all. In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
   library it sources, the resolver jq program, and the five jq modules the core contract
-  imports. Pinning the whole set is the entry's job alone; the parent later re-checks only
-  the first three of them (the parent-pinned subset, R5). The pinned constants carry a
+  imports. The parent re-checks all eight of them for itself (the parent-pinned set, R5),
+  so the entry is not the only process that holds the loaded set to its committed bytes.
+  What stays the entry's alone is the two C sources and, with them, the helper's
+  provenance: the parent can pin no binary, so the compile from a pinned source into a
+  directory the entry made is the only thing that says where the helper's bytes came from
+  — which is why the entry is the only supported launch (R5). The pinned constants carry a
   `# pinned at <commit>` header naming the commit they were read from, and the focused
   test asserts they equal the working tree's blob ids, so a source edit that forgets the
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
@@ -4002,8 +4154,10 @@ the spec pull request's range above still blocks review.
   most of the parent's life.** The entry records the parent's pid the instant it starts the
   parent and forwards from that moment on (R1), but the parent does not fork the resolver
   first: it runs its own pre-resolver work ahead of the `fork` — the blob-id pins for the
-  three files of the parent-pinned subset, the jq SHA-256 digest and the `jq-1.6`
-  `--version` probe (R5, R7) — and every R5 refusal happens in that same stretch. So a
+  eight files of the parent-pinned set, the jq SHA-256 digest and the `jq-1.6`
+  `--version` probe (R5, R7) — and every R5 refusal happens in that same stretch. That
+  stretch is longer this round, ten children rather than five, which changes nothing about
+  the branches below and does mean a forwarded signal is more likely to land in it. So a
   forwarded `TERM` can reach a parent that has no child process group at all. Written as
   `kill(-pgid, SIGTERM)` with nothing guarding it, that handler would signal whatever
   `-pgid` happened to name, and with `pgid` unset or zero that is not the resolver: it is
@@ -4658,8 +4812,9 @@ the spec pull request's range above still blocks review.
   refuses before `execve` when: the runtime file is not a regular non-symlink absolute
   path (`:635`) **or its mode is not 0644** — today that assertion lives only in the test
   (`portable-profile-resolution.test.sh:608-614`), and moving it into the parent is a
-  named deviation; any file in the parent-pinned subset — files 1, 2 and 3 of the loaded
-  set below, and no others — does not match its pinned blob id; the jq at the bound path
+  named deviation; any file in the parent-pinned set — all eight of the loaded files below,
+  which is every file the runtime executes or evaluates, and no others — does not match
+  its pinned blob id; the jq at the bound path
   does not match the pinned SHA-256 for the platform or does not answer `jq-1.6`
   (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
   `shadow/v1/reproduce.sh:113-118`), or is not the run directory's own `jq`; the `awk`
@@ -4796,9 +4951,12 @@ the spec pull request's range above still blocks review.
   of the harness, not of the launcher, and exactly the kind of thing that must not be left
   behind in the harness when the code ships. So this is a named deviation from the copied
   file: one call, before any check and before any creation, with no `chmod` or `fchmod`
-  anywhere after it. The entry sets the same umask (R1), so in the normal path the parent
-  inherits 077 and sets it again; the call is there for the caller who drives the parent
-  directly, which is the same caller every other check in this requirement exists for.
+  anywhere after it. The entry sets the same umask (R1), so on the supported path the parent
+  inherits 077 and sets it again; the call is there because the parent may not assume it
+  was started by the entry, which is the assumption every other check in this requirement
+  also declines to make — the boundary statement below says the entry is the only
+  *supported* launch and says in the same breath that the parent detects nothing about
+  which caller it has.
 
   **And immediately after that, still before the first `fork`, the parent closes every
   descriptor it inherited above 2.** R3 has always required the parent to close inherited
@@ -4808,9 +4966,11 @@ the spec pull request's range above still blocks review.
   the jq, and the `jq --version` probe are all children of the parent, created while the
   pin checks run. Every one of them inherits whatever the caller left open, because
   inheritance across `fork` is the default and the caller's descriptors carry no
-  `FD_CLOEXEC` unless the caller set it. The entry closes them on its side (R1), but the
-  parent is not only reached through the entry: an operator running step 7 by hand drives
-  it directly, R10's whole group 2 drives it directly, and R5 exists precisely because the
+  `FD_CLOEXEC` unless the caller set it. The entry closes them on its side (R1), and that
+  is not enough, for the reason the boundary statement below gives: the entry is the only
+  launch this spec *supports*, and the parent has no way to tell that it was the caller —
+  R10's whole group 2 drives the parent directly, no marker the parent could check would
+  be out of a caller's reach, and R5 exists precisely because the
   parent must defend itself against a caller rather than trust one. A caller's credential
   file, socket, or write handle outside the output root, inherited by a SHA tool the parent
   forks, is a hole in the same two claims the child-side close protects: no caller state
@@ -5008,7 +5168,8 @@ the spec pull request's range above still blocks review.
   Files 4 through 7 are already pinned by blob inside the library itself
   (`scripts/lib/profile-resolution.sh:711-714`, against the constants at `:7-10`), and
   those pins are worth something only once the library that holds them is itself pinned.
-  So the set has two owners, and which one owns what is stated once here and used in
+  So the set has three owners — the entry, the parent and the library — and which one owns
+  what is stated once here and used in
   those words everywhere else in this spec. **The entry pins the git blob id of every
   file in that set** — 1, 2, 3, the five modules of 8, and its own two C sources — as
   constants carrying the same `# pinned at <commit>` header, checked before any compile
@@ -5018,37 +5179,110 @@ the spec pull request's range above still blocks review.
   refusal on that status, never a `|| refuse` beside the command — so a pin check that a
   terminal `Ctrl-C` killed exits `128 + signal` with an `entry-signal:` line rather than
   reporting a blob mismatch that did not happen. **The parent
-  re-pins exactly files 1, 2 and 3, and nothing else; call those three the parent-pinned
-  subset.** All three are reachable from the runtime path the parent is handed, using the
+  re-pins all eight of the loaded files — 1, 2, 3 and the five modules of 8 — and nothing
+  else; call those eight the parent-pinned set.** Files 1, 2 and 3 are reachable from the
+  runtime path the parent is handed, using the
   runtime's own `${dir%/resolver/v1}` repository-root rule
-  (`resolver/v1/profile-resolve-runtime.sh:9-10`), and a mismatch on any of the three is
-  `E_RUNTIME` before `execve`. The parent does not re-pin the five modules, because
-  reaching them needs the generation id, which lives in the library; those five are
-  entry-owned. Every sentence in this spec about a parent blob refusal says "the
-  parent-pinned subset (files 1-3)" and means only those three — the parent never claims
-  to check the loaded set.
+  (`resolver/v1/profile-resolve-runtime.sh:9-10`), and a mismatch on any of the eight is
+  `E_RUNTIME` before `execve`.
 
-  **What a caller who drives the parent directly loses.** That caller — the group-2 test
-  cases in R10, or an operator who invokes `trusted-launch` without the entry — gets the
-  parent-pinned subset and no other pin. Files 4 through 7 are still covered, because the
-  library's own blob checks fire at run time
-  (`scripts/lib/profile-resolution.sh:711-714`) and the parent's pin of file 2 is what
-  makes those checks trustworthy. The five module bodies are the actual gap: in that path
-  nothing checks their content at all — `scripts/core-contract.sh:250-259` checks only
-  that each one exists and is not a symlink. So the residual is exact: bypass the entry
-  and the modules are unpinned. R10 states it in those terms rather than implying the
-  parent covers the set. The focused test asserts every pinned constant equals the working
+  **The five modules are reachable too, and an earlier round of this spec said they were
+  not.** That round's reason was that reaching them needs the generation id and the
+  generation id lives in the library, so the parent would have to trust the library to
+  find the files whose content it wanted to check. The id does live there and that is not
+  an obstacle, because it lives there as a **constant**:
+  `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
+  (`scripts/lib/profile-resolution.sh:5,11`) are committed text that nothing computes at
+  run time, and the library builds the generation root from them by plain concatenation
+  (`:710`). So the parent carries its own copy of both as constants beside its blob pins
+  and builds `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
+  five names `contracts.jq:1-5` imports — `schema.jq`, `profile_graph.jq`,
+  `stage_request.jq`, `result_facts.jq`, `result_truth.jq` — from the same repository root
+  it already derives. It reads nothing out of the library to do it.
+
+  Two of the library's constants therefore appear in the parent as well, and they cannot
+  silently disagree with the library's own, because the parent pins file 2's blob id: a
+  library whose generation constant has moved is a library with a different blob id, and
+  that refusal fires before any module path is built. The two copies are consistent or the
+  run is refused, and which one is stale does not matter to the outcome. That is the same
+  argument the library's own pins rest on, one level out.
+
+  Every sentence in this spec about a parent blob refusal says "the parent-pinned set (the
+  eight loaded files)" and means those eight — the parent now claims the whole set the
+  runtime executes or evaluates, and nothing beyond it.
+
+  **The helper is the one thing the parent cannot pin, and that is the whole of what is
+  left.** File 9 is a compiled binary: its bytes are whatever this machine's compiler
+  produced from the pinned source, they differ between machines of the same platform, and
+  no constant in a committed C file can name them — the same reason `.run/awk` is checked
+  by byte comparison rather than by a digest pin (below), except that there is no
+  host-provided reference copy of the helper to compare against either. So the parent's
+  claim on the helper is what it has always been: a regular, non-symlink, caller-owned
+  mode-0500 file inside a run directory the parent has proved is the output root's own
+  `.run`.
+
+  **The cost of the widening, stated rather than waved at.** The parent runs the platform's
+  SHA-1 tool once per pinned file, so it forks eight children where it forked three: five
+  more short-lived `execve`s, each under the fixed `PATH=/usr/bin:/bin`, `LC_ALL=C` `envp`
+  R7 requires of every child the parent runs, and each inside the block-fork-publish and
+  block-reap-zero regions R2 requires — the same shape, five more instances of it. Nothing
+  else about them is new: same tool, same `blob <size>\0` header and file bytes written to
+  the tool's stdin, same hex comparison, same refusal. Five forks and five reaps on a path
+  that already pays three, against a module edit the parent now refuses for itself instead
+  of trusting a caller to have been the entry.
+
+  **What a caller who drives the parent directly still loses.** Not a pin any more: files
+  1, 2, 3 and the five modules are the parent's own, and files 4 through 7 are covered by
+  the library's own blob checks at run time
+  (`scripts/lib/profile-resolution.sh:711-714`), which the parent's pin of file 2 is what
+  makes trustworthy. What such a caller loses is the helper's **provenance**, and it is
+  not a gap the parent can close. Every check the parent makes on the helper is
+  satisfiable by a caller who built `.run` themselves: a 0500 helper of their own,
+  compiled from anything at all, sitting in a 0500 directory they created inside a 0700
+  output root they own. Only the entry establishes where those bytes came from, because
+  only the entry compiles the helper from a blob-pinned source into a directory it made a
+  moment earlier and tightened before anything else could write there (R1). A binary
+  cannot be pinned, so the provenance has to come from the process that made it.
+
+  **So the only supported launch is the entry, and a direct `trusted-launch` invocation is
+  a test harness.** The supported way to resolve a profile is
+  `resolver/v1/resolve-profile.sh`, under the two invocation forms R1 names and no others.
+  Invoking `trusted-launch` directly is the shape R10's group 2 drives to prove the
+  parent's own refusals, and it is unsupported for every other purpose: it is not a
+  documented interface, not how the operator runs step 7 or takes the Darwin measurement
+  (R10 rewrites that recipe around the entry), and not a shortcut for a caller who would
+  rather skip the compile. R9's documentation says so, Out of scope records it as a thing
+  this initiative deliberately does not provide, and R10's group 2 carries a comment
+  saying its cases are the only legitimate user of the shape they drive.
+
+  **The parent does not try to detect direct invocation, and this boundary is documentary
+  for that reason.** Anything the parent could test is something the caller controls: a
+  variable the entry sets is a variable a caller can set, a marker argument is a word in a
+  committed file, a parent-pid or process-group shape is a shape a caller can arrange, and
+  a nonce would travel through the same argv the caller writes. This spec has already
+  refused that kind of check once, in R1's marker-word paragraph, and refuses it here for
+  the same reason: a check a caller can satisfy is theatre, and shipping one would make
+  the parent look like it enforced something it does not. What the parent enforces is
+  every check in this requirement, on every caller, with no supported-caller fast path
+  anywhere in it — which is what keeps it a boundary rather than a second copy of the
+  entry's checks that happens to agree with them. What makes the entry the only supported
+  launch is the helper provenance the entry alone can give, stated in the shipped
+  documentation and in this spec, and the test suite is the boundary statement's only
+  legitimate exception.
+
+  The focused test asserts every pinned constant equals the working
   tree's `git hash-object` output — the test may run git, the shipped files may not (R1) —
   so an edit that forgets a pin fails CI rather than
   shipping.
 
-  What this buys, plainly: the trusted set is explicit and finite. Go through the entry
-  and the launch is exactly these committed bytes or it is nothing; go straight to the
-  parent and it is the parent-pinned subset plus whatever the library checks for itself.
-  What it costs: any change to
-  resolver code moves pins in the same pull request, and a new core generation moves five
-  module pins at once. That cost is the repository's existing pattern, paid in the library
-  today (`scripts/lib/profile-resolution.sh:7-10,711-714`).
+  What this buys, plainly: the trusted set is explicit, finite, and the same set on both
+  sides of the boundary — whichever process is asked, the answer for the eight loaded
+  files is the committed bytes or nothing. What it costs: any change to
+  resolver code moves pins in two files in the same pull request rather than one, and a
+  new core generation moves five module pins in each of them plus the generation-id
+  constant the parent now carries. That cost is the repository's existing pattern, paid in
+  the library today (`scripts/lib/profile-resolution.sh:7-10,711-714`), and it is now paid
+  twice over.
 
   **The helper's run-directory checks, and what they are worth.** The runtime executes
   the helper *by path*: `scripts/lib/profile-resolution.sh:209` runs
@@ -5144,9 +5378,12 @@ the spec pull request's range above still blocks review.
   **And the check is the parent's, not the entry's, even though the entry already copies
   both files.** The entry puts the jq and the awk into `.run` and tightens them to 0500
   before it launches anything (R1), so on the supported path neither refusal ever fires.
-  They exist for the caller every other check in this requirement exists for: the direct
-  `trusted-launch` invocation, which R10's group 2 drives and which an operator running
-  step 7 by hand drives as well. A contract the parent states has to hold without the
+  They exist for the same reason every other check in this requirement exists: the parent
+  does not know which caller started it and does not try to find out. The direct
+  `trusted-launch` invocation is unsupported outside R10's group 2 (the boundary statement
+  below), and "unsupported" is a statement about what this spec provides, not a refusal the
+  parent performs — so every check here has to hold on a caller the documentation told not
+  to exist. A contract the parent states has to hold without the
   entry, or the parent is not a boundary — it is a second copy of the entry's checks that
   happens to agree with them.
 
@@ -5362,8 +5599,12 @@ the spec pull request's range above still blocks review.
      `resolver/v1/profile-resolution.jq`, `scripts/core-contract.sh`, the generation's
      `core-ingress.sh`, `contracts.jq` and five jq modules, and
      `core/v2/generation-registry.json` — eight of them read by the entry to be hashed,
-     the three that form the parent-pinned subset read again by the parent to be hashed
-     (and the runtime file among those three also mode-checked), the
+     **the same eight read again by the parent to be hashed**, which is this round's one
+     widening of who reads what rather than of what is read: the parent-pinned set is now
+     the whole loaded set and not three of it, so the five module bodies are opened by the
+     parent as well as by the entry, at paths the parent builds from its own copies of the
+     library's generation-id and schema-major constants (R5)
+     (and the runtime file among those eight also mode-checked), the
      remaining four hashed by the library itself at run time (`:711-714`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the request
      file and the repository-map file named on the command line; the jq binary supplied as
@@ -5373,10 +5614,14 @@ the spec pull request's range above still blocks review.
      entry writes a two-line shim naming that path and the parent compares against that
      same two-line string held as a constant, so neither opens the host binary at all
      (below); the caller's output directory; and
-     the entry's own run directory. That is the round's one widening of this list and it is
+     the entry's own run directory. `/usr/bin/awk` was the previous round's one widening of
+     this list and it is
      a read of a fixed path in the same class as the ones already here, not a new kind of
      read: no content of it leaves the parent, and the only thing the parent does with the
-     bytes is compare them.
+     bytes is compare them. **This round widens nothing at all** — the list of files is the
+     same list, and only the column saying which process reads which of them moves, because
+     the five modules the entry alone used to hash are now hashed by the parent too. Same
+     paths, same one-way use of the bytes, one more reader.
 
      **The executables, listed exactly.** The previous round's list was short enough to be
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
@@ -5449,7 +5694,9 @@ the spec pull request's range above still blocks review.
 
      *The parent, `resolver/v1/trusted-launch.c`* — `/bin/bash`, `execve`d with the fixed
      argv R2 gives (`portable-profile-resolution-launcher.c:652-657,701`); the same
-     per-platform SHA-1 tool, for the computed blob ids of the parent-pinned subset — and
+     per-platform SHA-1 tool, run once for each of the eight files of the parent-pinned
+     set — eight children this round where three ran before, the widening R5 states and
+     costs — and
      it needs neither `stat` nor `cat` for that, having the size from its own `fstat` and
      writing the header and the bytes to the tool's stdin itself; the same per-platform
      SHA-256 tool,
@@ -5463,10 +5710,14 @@ the spec pull request's range above still blocks review.
      **Every one of those three is `execve`d with a fixed environment the parent writes,
      never with the one it was handed.** They run *before* the resolver's clean
      environment exists — R3 builds that array for the resolver child and for nothing
-     else — so on the direct-parent path, where an operator running step 7 by hand or
-     R10's whole group 2 starts the parent itself, the caller's environment would
-     otherwise be standing in front of the SHA-1 tool, the SHA-256 tool and the jq probe
-     at the exact moment the pins decide whether this run is trustworthy. On Darwin that
+     else — so on the direct-parent path, which R10's group 2 drives and which R5 states
+     is supported for that and nothing else, the caller's environment would
+     otherwise be standing in front of the eight SHA-1 runs, the SHA-256 tool and the jq
+     probe
+     at the exact moment the pins decide whether this run is trustworthy. The rule holds on
+     the supported path too, and for a reason worth keeping: the entry launches the parent
+     under exactly this environment, so the fixed array is what the parent was meant to
+     have and not a defence against its own launcher. On Darwin that
      is not a hypothetical: `/usr/bin/shasum` is a perl script — `#!/usr/bin/perl` on its
      first line — so `PERL5LIB` naming a directory the caller controls, or a `PERL5OPT`
      with a `-M` in it, runs the caller's code inside the digest tool before the tool
@@ -5703,7 +5954,18 @@ the spec pull request's range above still blocks review.
   accepted resolver spec's "a production trusted parent is not implemented" sentence
   (`work/portable-profile-resolution/spec.md:256-257`), and repeats what the proof does and
   does not cover. `README.md:252` gets the updated resolver row. `RESTORE.md:43-46` counts
-  the resolver files correctly. The entry's documentation states the two supported
+  the resolver files correctly. **And the documentation says, in both files, that the entry
+  is the only supported way to launch this component.** `docs/components.md` names
+  `resolver/v1/resolve-profile.sh` as the launch and says that
+  `resolver/v1/trusted-launch.c` is not an interface: running the compiled parent without
+  the entry is a test harness for `scripts/test/resolver-trusted-launch.test.sh` and is
+  unsupported for anything else. It says why in one sentence rather than asserting it — the
+  parent can pin every file the runtime loads but cannot pin a compiled binary, so only
+  the entry, which compiles the helper from a blob-pinned source into a directory it made
+  itself, establishes where the helper's bytes came from (R5). And it says plainly that the
+  parent does not detect direct invocation and performs every one of its checks on every
+  caller, so a direct run that succeeds is not a supported configuration and is not
+  evidence that one exists. The entry's documentation states the two supported
   invocation forms — both of which carry `-p` — says the marker word is not a public entry
   point and that any invocation without `-p`, marker word or not, exits 78 at the entry's
   first statement without doing anything, and
@@ -5715,11 +5977,14 @@ the spec pull request's range above still blocks review.
   so a caller whose stderr is a pipe it is not draining may not see it (R2) — and that an
   interrupted one prints one `parent-signal: <NAME> group <pgid>` or
   `parent-signal: <NAME> no-runtime` line, and beside it the entry's own `entry-signal:`
-  line **when stderr is a regular file, a terminal or a character device, and no such line
-  at all when it is a pipe, a FIFO or a socket** — the same condition R1 states and in the
-  same three-and-three words, because the documentation was the one place that promised the
+  line **only when stderr is a regular file, and no such line at all otherwise — a
+  terminal, `/dev/null`, a pipe, a FIFO and a socket all lose it** — the same condition R1
+  states and in the same words, because the documentation was the one place that promised the
   line unconditionally and an implementation following R1 would have made it false for
-  every piped caller. So the documentation carries the condition rather than the promise, and
+  every piped caller, and now for every caller at a terminal too. It says the plain thing a
+  caller needs to do about it — redirect stderr to a file if you want the line — and says
+  that the exit status and the parent's own `parent-signal:` line are the record in every
+  other case. So the documentation carries the condition rather than the promise, and
   output on stderr is not by itself a failure signal — the exit status is the result. Both new
   files plus the new test are appended at the END of `ci/required-files.txt`. The accepted
   resolver spec itself is not edited.
@@ -5737,7 +6002,9 @@ the spec pull request's range above still blocks review.
   id no longer matches its pin; an edited `resolver/v1/trusted-launch.c`, the parent's own
   source, the same way; an edited `scripts/lib/profile-resolution.sh` and an
   edited `resolver/v1/profile-resolution.jq`, same thing; an edited jq module under
-  the generation's `modules/` directory, which the entry pins and the parent does not
+  the generation's `modules/` directory, which the entry pins and which the parent pins
+  too from this round — so this case proves the entry's copy of that pin, and group 2
+  below proves the parent's, where the previous round had nothing to put in group 2 at all
   (R5); an output path too long to hold the run
   directory, refused by the entry's own length guard before anything is created (R1), which
   is the entry-side half of the overlong case group 2 drives at the parent; and five
@@ -5801,9 +6068,10 @@ the spec pull request's range above still blocks review.
   compiles first and checks afterwards.
 
   **The parent cannot catch this for itself, which is why the entry has to.** The
-  parent-pinned subset R5 defines is three files — `scripts/lib/profile-resolution.sh`,
-  `resolver/v1/profile-resolution.jq` and the runtime — and its own source is not among
-  them and cannot be. By the time the parent runs it *is* the compiled result of that
+  parent-pinned set R5 defines is the eight loaded files, and its own source is not among
+  them and cannot be — the widening this round makes to that set does not reach this case
+  and could not: the two C sources stay entry-owned however many loaded files the parent
+  takes on. By the time the parent runs it *is* the compiled result of that
   source; a check it made would be a check the altered parent performs on itself, with the
   altered constant the same edit could carry. The entry is the last process in the chain
   that sees the source as an input rather than as itself, so this pin is the only place the
@@ -5850,16 +6118,41 @@ the spec pull request's range above still blocks review.
   copy of that check. For each case the test makes an empty mode-0700 output directory,
   builds `<output>/.run` inside it by hand the way the entry would, compiles the parent and
   the helper into it, tightens the modes, and then invokes the parent directly — one case
-  each for:
+  each for the list below.
+
+  **This group is the only legitimate user of the shape it drives, and the test says so in
+  a comment beside the shared fixture builder.** R5 states that the entry is the only
+  supported launch and that a direct `trusted-launch` invocation is a test harness and
+  nothing else, so these cases are the reason that shape exists at all. The comment says
+  the three things a reader needs: the cases exist to prove the parent's own refusals,
+  which is the only way to prove them; a hand-built `.run` gives a helper no provenance,
+  which is exactly why the shape is unsupported outside this file; and nothing in the
+  shipped files detects the difference, so a passing group 2 is not permission for anyone
+  else to launch the parent this way.
 
   - a runtime file whose blob id does not match the pin (one byte changed);
   - a runtime file at mode 0755 instead of 0644, the check the parent takes over from the
     test script (R5);
   - a `scripts/lib/profile-resolution.sh` whose blob id does not match the pin, and a
     `resolver/v1/profile-resolution.jq` whose blob id does not match the pin — the two
-    sourced-and-evaluated files that, with the runtime file above, are the whole
-    parent-pinned subset (R5), reached by handing the parent a runtime path inside a copied
+    sourced-and-evaluated files that, with the runtime file above, are the first three of
+    the parent-pinned set (R5), reached by handing the parent a runtime path inside a copied
     repository tree whose library or jq program has been edited;
+  - **an edited jq module under the generation's `modules/` directory** — one byte changed
+    in a copy of `schema.jq`, in the same copied tree — which is this round's case and the
+    other five names rotated across runs would prove nothing more, so one module is edited
+    and the reading covers the loop that walks all five. It is the case the previous round
+    could not write, because the modules were entry-owned then and the parent passed them
+    without looking; it is here now because R5 widens the parent-pinned set to all eight
+    loaded files. Its extra assertion is the one that says the parent found the file by
+    itself: the parent is handed nothing but the runtime path, the library in the copied
+    tree is *unedited*, and the refusal still names a blob mismatch — so the generation id
+    and schema major the parent used to build the module path came from its own constants
+    and not from anything it read out of the tree. A sibling case makes the same point from
+    the other side: a copied tree whose library has had its `PROFILE_RESOLUTION_CORE_GENERATION`
+    constant changed is refused on the *library's* blob pin, before any module path is
+    built, which is what keeps the parent's two copies of that constant from drifting
+    unnoticed (R5);
   - a jq whose SHA-256 does not match the platform pin;
   - a jq that does not answer `jq-1.6`;
   - **a valid pinned jq that is not the run directory's own.** The run directory is built
@@ -5957,14 +6250,20 @@ the spec pull request's range above still blocks review.
   `.run` entry. So the refusal asserted here is the length guard's alone, not the
   containment check's.
 
-  What group 2 also shows, by omission, is the residual R5 states: a caller who reaches the
-  parent directly has only the parent-pinned subset — files 1, 2 and 3 — so there is no
-  module pin anywhere in that path. Files 4 through 7 still get the library's own blob
-  checks at run time (`scripts/lib/profile-resolution.sh:711-714`), which the parent's pin
-  of file 2 is what makes worth having; the five module bodies get only existence and
-  non-symlink (`scripts/core-contract.sh:250-259`). The edited-module case therefore sits
-  in group 1, driven through the entry, and the test comment says why it cannot sit in
-  group 2.
+  What group 2 also shows, by omission, is the residual R5 states, and the shape of it
+  changed this round. **The module gap is gone**: a caller who reaches the parent directly
+  now gets all eight loaded files pinned by the parent itself, files 4 through 7 get the
+  library's own blob checks at run time (`scripts/lib/profile-resolution.sh:711-714`),
+  which the parent's pin of file 2 is what makes worth having, and the edited-module case
+  above is the proof — the previous round could only put that case in group 1 and had to
+  say why it could not sit here. **What is left by omission is the helper's provenance.**
+  Every case in this group builds `.run` by hand, compiles the helper into it and tightens
+  it, and the parent accepts that helper on owner, mode and containment alone: no case
+  here proves, or could prove, that those bytes came from the pinned source, because
+  nothing the parent checks distinguishes them from bytes the fixture chose. That is the
+  residual R5 names, and it is also the whole reason the entry is the only supported
+  launch — the group proves the parent's refusals and proves, by what it cannot assert,
+  why driving the parent this way outside this file is unsupported.
 
   **Group 3 — a runtime refusal, labelled as one.** A malformed request document is not an
   R5 case at all: the parent accepts it as a canonical regular file and passes the path
@@ -6133,15 +6432,29 @@ the spec pull request's range above still blocks review.
      earlier round of this spec asserted that `xcrun_db` came back *unchanged* across a full
      entry run, and that assertion is wrong for this half, because this half runs a real
      resolution and the runtime behind it runs git. So the recipe is a difference, not an
-     equality, and it is written out here because the operator runs it by hand:
+     equality, and it is written out here because the operator runs it by hand.
 
-     - Before the run, record two things in the per-user temp directory — the directory
+     **Every run in this recipe goes through the entry, and this round says so as a rule
+     rather than leaving it to the word "resolution".** The operator's measurement is
+     `resolver/v1/resolve-profile.sh` with a pinned jq and a fresh empty mode-0700 output
+     directory, exactly as a real resolution is run, and nothing in it invokes
+     `trusted-launch` directly — not this half, and not half 2 below, which runs the
+     compile line alone and launches no parent at all. That matters beyond tidiness: a
+     hand-built `.run` gives the helper no provenance (R5), so an operator who drove the
+     parent directly would be measuring the Darwin cache behaviour of a launch this spec
+     does not support, and the same applies to step 7 by hand, which is the entry with the
+     operator's own arguments and not the parent. An earlier round of this spec described
+     the direct invocation as something an operator does; R5 now states that the entry is
+     the only supported launch, and this recipe is written the same way.
+
+     - Before the entry run, record two things in the per-user temp directory — the
+       directory
        `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports: the state of `xcrun_db` itself,
        which is either *absent* or *present with a size, an mtime and a SHA-1 of its bytes*
        (**absent is a state, not a reason to skip** — a skip there would throw away the
        strongest evidence available), and a listing of the whole directory with each entry's
        name, size and mtime.
-     - Run the resolution. Then record both again.
+     - Run the resolution through the entry. Then record both again.
      - The case passes when the only difference between the two listings is `xcrun_db` —
        created where it was absent, or changed in any of size, mtime and digest where it was
        present — and nothing else in the directory is new or modified. **Any other new or
@@ -6170,6 +6483,9 @@ the spec pull request's range above still blocks review.
      The test builds a run directory by hand as group 2 already does and runs the `env -i`
      compile line of R1 into it twice — once from a clean caller environment, once from the
      polluted one — then compares the two binaries' SHA-256 digests, which must be equal.
+     Nothing here launches the parent: the half compiles and hashes, which is why it can
+     borrow group 2's fixture builder without borrowing group 2's unsupported invocation
+     (R5).
      They should be: both compiles use the same pinned sources, the same fixed flags, the
      same fixed compiler path for the platform and an environment that is identical by
      construction, and the
@@ -6987,9 +7303,10 @@ the spec pull request's range above still blocks review.
   `entry-signal: TERM no-parent` line and no `runtime-pgid:` line, because the `EXIT` trap
   writes that line after the chmod and the removal and still before its `exit`, and the case
   already reads the file only after the entry has exited; the plain file it reads is also
-  why that last-position write cannot hang here at all, and — since this round — why the
-  line is written in this case rather than omitted, a regular file being the first of the
-  three kinds R1's condition admits (R1). That is true of every case above that asserts
+  why that last-position write cannot hang here at all, and why the
+  line is written in this case rather than omitted, a regular file being the one kind
+  R1's condition admits — the only kind, since this round narrowed it from three (R1).
+  That is true of every case above that asserts
   the line, all of which redirect the entry's stderr into a plain file in the test's own
   scratch; the choice was made for readability and now carries a second load, which is
   stated here rather than left for someone to discover by moving one of them onto a pipe.
@@ -7112,15 +7429,33 @@ the spec pull request's range above still blocks review.
   real `pipe(2)` behind a blocking filler before it was specified: on bash 3.2.57,
   `Darwin 27.0.0`, an unconditional `printf` into that pipe was still in its write when a
   `perl` `alarm 3` killed it three seconds later, exit `142`, while the same body guarded
-  by `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]` exited `143` at once having written
-  nothing.
+  by `[ -f /dev/fd/2 ]` exited `143` at once having written
+  nothing. (That measurement was made against the three-test condition the round before
+  this one wrote; the pipe row answers `no` to all three, so narrowing the condition to
+  the one test leaves the measured outcome and this case unchanged.) **The case is not
+  widened to a terminal, and the reason is that it cannot be.** R1 drops terminals from
+  the writing set because a tty's output can be flow-controlled and a pty master may go
+  unread, and a case that stopped a pty from draining would be asserting the absence of a
+  line on an object whose readiness this suite cannot pin down any more reliably than the
+  interactive caller can. The pipe case proves the mechanism — the condition omits, and
+  the exit still happens — and the terminal is covered by the reading, which is that the
+  condition is exactly `[ -f /dev/fd/2 ]` with no `-t` and no `-c` beside it.
 
   The test also
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
-  entry-pinned, and separately, in the parent, the three constants of the parent-pinned
-  subset. **And it asserts the computed id equals `git hash-object` for every one of those
-  files.** Neither shipped file runs git any more; each builds the blob id from a size and a
+  entry-pinned, and separately, in the parent, **the eight constants of the parent-pinned
+  set**, where three used to stand. Two more constants join that assertion this round and
+  are not blob ids: the generation id and the schema major the parent carries so it can
+  build the five module paths for itself, each required to equal the library's own
+  `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
+  (`scripts/lib/profile-resolution.sh:5,11`) read out of the working tree — a one-line
+  comparison each, and the thing that fails CI when a new core generation moves the
+  library's copy and not the parent's. **And it asserts the computed id equals
+  `git hash-object` for every one of those
+  files** — eighteen pinned blob ids now rather than thirteen, ten in the entry and eight
+  in the parent, with all eight loaded files pinned in both places and asserted on both
+  sides rather than once and assumed. Neither shipped file runs git any more; each builds the blob id from a size and a
   SHA-1 (R1), and the only thing keeping that construction honest is checking it against
   the tool it replaces. So for each pinned file the test computes the id the way the entry
   does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
@@ -7327,10 +7662,18 @@ Order, each step checkable before the next:
    place of their `const char *path`, `lseek` it to zero and keep the copied `read` loop,
    losing their own `open`/`close` bookkeeping; the two descriptors are opened `O_RDWR`
    rather than `O_WRONLY` so the parent can read back through them (R5). Two blocks here have no counterpart in the
-   copied source and are written fresh: the blob-id pins for the three loaded files the
-   parent re-checks (the runtime, `scripts/lib/profile-resolution.sh` and
-   `resolver/v1/profile-resolution.jq`, all located from the runtime path with the
-   runtime's own repository-root rule, `resolver/v1/profile-resolve-runtime.sh:9-10`), and
+   copied source and are written fresh: the blob-id pins for all eight loaded files the
+   parent re-checks (the runtime, `scripts/lib/profile-resolution.sh`,
+   `resolver/v1/profile-resolution.jq` and the five jq modules — the first three located
+   from the runtime path with the
+   runtime's own repository-root rule, `resolver/v1/profile-resolve-runtime.sh:9-10`, and
+   the five from that same root plus the parent's own constant copies of the library's
+   `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
+   (`scripts/lib/profile-resolution.sh:5,11`), each asserted against the library's own in
+   R10 and kept honest at run time by the parent's pin of the library itself, so the parent
+   reads nothing out of the tree to find them — eight SHA-1 children where three ran, each
+   under the fixed `envp` and inside the same block-fork-publish and block-reap-zero
+   regions as the rest, R5), and
    the `INT`/`TERM`/`HUP` handlers that terminate the child's process group with
    `kill(-pgid, SIGTERM)` then `kill(-pgid, SIGKILL)`, reap, and exit `128 + signal` (R2).
    Those handlers are installed as the first statements of `main`, before any pin or digest
@@ -7563,9 +7906,12 @@ Order, each step checkable before the next:
    the **last** step before the final exit, after the forward and after the removal, because bash's
    `printf` to a blocked pipe can hang and a diagnostic must not be able to delay the
    cleanup or the forward; and it is written at all only when
-   `[ -t 2 ] || [ -f /dev/fd/2 ] || [ -c /dev/fd/2 ]`, being omitted on a pipe, a FIFO or a
-   socket, because last position stops the write delaying the cleanup and does not stop it
-   hanging the entry short of the `128 + signal` exit and hanging the caller's wait with it
+   `[ -f /dev/fd/2 ]` — one test and nothing beside it, so the line is omitted on a
+   terminal, on `/dev/null` and on a pipe, a FIFO or a socket alike, because last position
+   stops the write delaying the cleanup and does not stop it
+   hanging the entry short of the `128 + signal` exit and hanging the caller's wait with it,
+   and a terminal's write can wait as surely as a pipe's when its output is flow-controlled
+   or its pty master is not being read
    — bash cannot write non-blocking the way the parent's C can, so where the parent writes
    best-effort the entry writes nothing (R1). No child of the entry's own is alive to race that removal because
    bash defers a trapped signal until the foreground command it is waiting on finishes,
@@ -7647,6 +7993,16 @@ intent says for this change. Only after the operator's merge does
 - Profiles other than `profiles/default/v1` in the focused test.
 - Shadow driver or input-assembler wiring (#264).
 - A committed binary or a pinned binary digest.
+- **A supported way to launch the parent without the entry.** R5 states the boundary: the
+  only supported launch is `resolver/v1/resolve-profile.sh` under its two invocation
+  forms, and invoking `trusted-launch` directly is a test harness for R10's group 2 and
+  nothing else. Making direct invocation supported would mean giving the parent a way to
+  establish the helper's provenance for itself, and a compiled binary cannot be pinned by a
+  constant, so it would mean either committing a binary (the bullet above) or moving the
+  compile into the parent — a different component from the one this spec ships. Nothing
+  here provides a documented direct-invocation interface, a test-only marker that would
+  let the parent recognise the entry, or a mode in which the parent relaxes a check for a
+  caller it trusts.
 - Fetching, installing, caching or vendoring jq; the caller supplies the pinned binary.
 - Launch-evidence records, profile activation, or any live-qualification claim.
 - **Closing the same-uid swap window on the helper — the recommended follow-up, not done
@@ -7676,6 +8032,23 @@ intent says for this change. Only after the operator's merge does
   spec says the boundary begins in the trusted parent
   (`work/portable-profile-resolution/spec.md:217-262`). A mistake here does not produce a
   wrong answer; it produces an answer that looks right without the boundary behind it.
+- **The boundary has one supported entrance, and the statement is documentary rather than
+  enforced.** R5 settles this: the only supported launch is
+  `resolver/v1/resolve-profile.sh` under its two invocation forms, a direct
+  `trusted-launch` invocation is a test harness for R10's group 2 and unsupported
+  otherwise, and R9's documentation and Out of scope both say so. The reason is one thing
+  the parent cannot do for itself. It now pins every file the runtime executes or
+  evaluates — all eight, not three (R5) — but the helper is a compiled binary, and no
+  constant in a committed C file can name a binary's bytes, so a caller who builds `.run`
+  themselves can put a 0500 helper of their own in it and pass every check the parent
+  makes. Only the entry, compiling from a blob-pinned source into a directory it created
+  and tightened, says where those bytes came from. **And the parent deliberately does not
+  detect the difference**: every marker it could test is one the caller controls, the same
+  reason R1 gives for refusing a nonce on the marker word, so a detection would be theatre
+  and would make the parent look like it enforced a boundary it does not. The plan must
+  carry this in these words and must not describe the direct path as "blocked", "refused"
+  or "detected": what is true is that it is unsupported, that every check still runs on it,
+  and that what it lacks is provenance rather than a refusal.
 - **What the proof covers after this lands, exactly.** The shipped parent's output equals
   the test launcher's output for the default profile request, and the refusals enumerated
   in R10's three groups fire — those cases, not "every R5 refusal" in the abstract. Two
@@ -7723,15 +8096,23 @@ intent says for this change. Only after the operator's merge does
   must repeat these limits in these words rather than imply the check is stronger than it
   is; no wording in the plan may say the parent "binds" or "guarantees" what the runtime
   executes.
-- **Pinning the whole loaded set is real maintenance.** Ten pinned blob ids across two
-  files, each of which must move in the same pull request as the code it pins, and a new
-  core generation moves five at once. What it buys is that the trusted set stops being
+- **Pinning the whole loaded set is real maintenance, and it costs more this round than
+  last.** Eighteen pinned blob ids across two
+  files — ten in the entry, eight in the parent — each of which must move in the same pull
+  request as the code it pins, and a new
+  core generation moves ten of them at once plus the generation-id constant the parent now
+  carries beside the library's own. What it buys is that the trusted set stops being
   implicit — today nothing pins `scripts/lib/profile-resolution.sh` or
   `resolver/v1/profile-resolution.jq`, so pinning the runtime alone proves only that a
   dozen lines of `source` chain are the committed ones. The defence against a forgotten
   pin is the CI assertion in R10, and it is worth saying that the defence is one test.
-  Worth saying too: only three of the ten are re-checked by the parent — the parent-pinned
-  subset — so the module pins exist only on the path that goes through the entry.
+  Worth saying too, and it is the change: **all eight loaded files are now re-checked by
+  the parent**, where three were, so no pin exists only on the path through the entry any
+  more and an edited jq module is refused by either process. The entry keeps two pins of
+  its own, the C sources, and those are what no widening of the parent's set can reach.
+  The duplication is the cost and it is deliberate: all eight loaded files are pinned
+  twice, so a change to any one of them moves a constant in two committed files, and the
+  assertion that the two agree is a test rather than a mechanism.
 - **Signals are the newest code in the most sensitive place.** Group termination on
   `INT`/`TERM`/`HUP` (R2) is copied from nothing — the test launcher installs no handler
   at all — so it gets none of the benefit of the "copy what is already proved" argument
@@ -7858,8 +8239,15 @@ intent says for this change. Only after the operator's merge does
   `printf` into a full undrained pipe never returns, so the entry reaches neither its
   `128 + signal` exit nor the caller's waiting `wait` — cleanup done, resolver dead,
   caller hung on a courtesy. The entry therefore writes its line only where a write cannot
-  block (`[ -t 2 ]`, or a regular file or character device behind `/dev/fd/2`) and omits it
-  on a pipe, a FIFO or a socket (R1). The plan should carry the sharper rule: **a
+  block, and this round that set is exactly one kind of object: a regular file behind
+  `[ -f /dev/fd/2 ]`, with the line omitted everywhere else (R1). The three-kind condition
+  an earlier round wrote admitted a terminal and a character device beside it, and the
+  terminal half was wrong — a tty's output queue is finite, `IXON` flow control stops it
+  draining, and an unread pty master fills exactly as a pipe does, so the interactive case
+  was the one with a hang still in it. `/dev/null` is harmless and loses the line anyway,
+  to keep the rule one test wide. What the caller keeps in every case is the exit status
+  and, on the forwarded branch, the parent's own `parent-signal:` line.
+  The plan should carry the sharper rule: **a
   diagnostic must be incapable of blocking, and where the language cannot make it so, it
   is not written.** That is the one place the two shipped files legitimately differ, and
   R10 covers each side its own way — a reading for the parent's six statements, a
@@ -7997,8 +8385,9 @@ intent says for this change. Only after the operator's merge does
   a close loop that truncates the entry and exits `0` in a low-`RLIMIT_NOFILE`
   environment, which is a failure the whole requirement is written to prevent and no test
   here can see. The parent closes its own at the top of `main`
-  for the caller who drives it directly (R5), which is the one case the entry's close
-  cannot cover.
+  because it cannot know it was started by the entry (R5), which is the one case the
+  entry's close cannot cover — the direct invocation is unsupported and the parent detects
+  nothing about it, so the close has to be there anyway.
 - **Copy versus adapt.** The test launcher is 702 lines, and far less of it is test
   scaffolding than a glance suggests: only the argv modes at `:547-631` and the two
   test-variable lines at `:686-689` are test-only, so the parent copies roughly 605 lines
@@ -8040,8 +8429,14 @@ intent says for this change. Only after the operator's merge does
   `strlen` guard at `:662-665`, the `strrchr` that cuts the directory off at `:667-672`
   and the `PATH` it builds from the result at `:673-677`, and it never looks at `awk` at
   all (verified: the token does not appear in its 702 lines); the blob pins
-  for the runtime, `scripts/lib/profile-resolution.sh` and
-  `resolver/v1/profile-resolution.jq` are new (R5); the request and repository-map
+  for the eight loaded files — the runtime, `scripts/lib/profile-resolution.sh`,
+  `resolver/v1/profile-resolution.jq` and the five jq modules — are new, and that item
+  grows this round rather than an eleventh being added, because it is the same new block
+  with five more entries in it: the modules join the three the item already named, and
+  with them two non-blob constants the parent carries so it can build their paths, its own
+  copies of the library's generation id and schema major, which R10 asserts against the
+  library's own. There is nothing to copy for any of it — the launcher pins nothing at all
+  (R5); the request and repository-map
   arguments get a regular-non-symlink check where the launcher checks only the leading
   slash (`portable-profile-resolution-launcher.c:636`); the `INT`/`TERM`/`HUP`
   handlers with process-group termination are new (R2) — and that item grows again this
