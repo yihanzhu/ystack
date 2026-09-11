@@ -127,7 +127,14 @@ measured rather than guessed:
   `closefrom` nor `close_range` is used, which a reviewer will otherwise ask about every
   time they read it (~3). The `~15` the bullet above already counts for closing inherited
   descriptors is the child's pre-`execve` close and is unchanged; this is the second
-  place, not the same one moved (R3, R5).
+  place, not the same one moved (R3, R5). This round adds ~4 more, to **~1143**: the
+  blocked region around the resolver's reap now runs on through the copied survivor check
+  and the copied group kill, so the `sigprocmask(SIG_SETMASK, …)` and the `pgid = 0` move
+  out of the `observed == child` arm and to after the `stopped != STOP_NONE` block, which
+  needs one restore at the clean exit that leaves the loop without survivors and one after
+  the group kill, plus the matching block on the limit path's entry at `:491` where a pair
+  already stood inside it (~4). The copied statements themselves are untouched; this is
+  the mask around them (R2).
 - **Entry shell ~380 lines.** `shadow/v1/reproduce.sh:94-142` does the closest existing
   subset — self and repository-root resolution, platform case, jq digest pin, its own
   `mktemp -d` scratch,
@@ -185,7 +192,8 @@ measured rather than guessed:
   come to about ten lines more than what came out (R1). The round after that added ~2 more,
   to **~397**: `umask 077` in the marker branch, beside the scrub it already re-runs there
   and copied from the same file (`materialize.sh:31`), plus the comment that says why a
-  scrub of variables does not cover a process attribute (R1). The round before this one
+  scrub of variables does not cover a process attribute (R1) — round 31 moves that line
+  above the scrub and out of the branch, which is a position and costs nothing here. The round before this one
   added nothing here and the figure stayed at ~397: both of its findings were in the
   parent and the test. The round before this one added ~8 more, to ~405: every external
   command in the
@@ -195,7 +203,8 @@ measured rather than guessed:
   the `checkpoint` calls were counted in the figure above already and the refusals only
   move (R1). This round adds ~4 more, to **~409**: the four empty initialisations
   `entry_signal=''`, `run_created=''`, `entry_status=''` and `parent_pid=''`, placed among
-  the entry's first builtins after the `umask 077` and before any trap is installed, so
+  the entry's first builtins after the `umask 077` and the descriptor close and before any
+  trap is installed, so
   that `set -u` meets a set name at every checkpoint and in the `EXIT` trap on the paths
   where nothing has written one (R1). Four assignments is the whole cost; the rule they
   satisfy is stated in R1 and read in R10 rather than tested. This round adds ~6 more, to
@@ -298,11 +307,12 @@ measured rather than guessed:
 - **Docs and manifest ~60 lines.** `docs/components.md:33-39`, the `README.md:252` row,
   `RESTORE.md:43-46`, and three lines appended to `ci/required-files.txt`.
 
-Those four bullets now sum to about 2625 lines. The range above is not re-derived from
+Those four bullets now sum to about 2629 lines. The range above is not re-derived from
 that sum each round: it is the ~2420 of the round it was set in, with ~15% headroom at
 both ends, and every round since has recorded its own delta against that figure rather
-than moving the range for it. This round's ~47 — ~12 in the parent, ~10 in the entry and
-~25 in the test — takes the sum to about 8% above the ~2420, still well inside the ±15%
+than moving the range for it. This round's ~4 is all in the parent — the entry's change is
+a reordering of statements it already has and the test gains nothing — and it takes the
+sum to about 9% above the ~2420, still well inside the ±15%
 the range expresses, so the implementation range stands where it was.
 It grew from 1350-1800 twelve rounds ago, then 1560-2120, then 1580-2130, then
 1650-2240, then 1790-2420, then 1836-2484, then 1866-2524, then 1925-2605, then
@@ -479,9 +489,10 @@ The round before this one added ~19, and for once it touched all three files fro
 finding. ~2 in
 the C parent: `umask(077)` among the first statements of `main`, so the `mkdirat` and
 `openat` modes the parent asks for are the modes that appear on its four sandbox entries
-(R5). ~2 in the entry: `umask 077` in the marker branch beside the scrub it already re-runs
-there, copied from `materialize.sh:31`, because a scrub that resets variables, functions
-and aliases does not reset a process attribute and neither does an `env -i` re-exec (R1).
+(R5). ~2 in the entry: `umask 077` beside the scrub, copied from `materialize.sh:31`,
+because a scrub that resets variables, functions
+and aliases does not reset a process attribute and neither does an `env -i` re-exec —
+placed in the marker branch when it was written and moved above the scrub in round 31 (R1).
 ~15 in the test: the two-umask case — the entry run under `umask 000` and the one under
 `umask 777`, the background poll that reads `.run`, `tmp` and `home` while `home` still
 exists, the bounded retry that poll needs, and the direct-parent invocation under
@@ -612,7 +623,7 @@ boundary once.
 **Size exception for this spec pull request (the artifact PR, not the implementation).**
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 5897 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 6140 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -699,16 +710,24 @@ lists the parent's job as running, so a signal that lands after the reap can no 
 send a `kill` at a number the kernel may already have handed to somebody else, beside both
 shipped files closing every descriptor they inherited above 2 before they fork anything at
 all, so a caller's credential, socket or write handle outside the output root can no
-longer ride into a SHA tool, a compiler or a `cp` and be a write root nobody declared).
-**Evidence-based range for this spec pull request: 5012-6782 lines** — the measured
-5897 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
+longer ride into a SHA tool, a compiler or a `cp` and be a write root nobody declared,
+and this round the parent keeping the resolver's process-group id live until the survivor
+check and any kill of that group are finished, so a signal that lands while the parent is
+walking the process table can no longer take the nothing-to-kill branch and leave a
+surviving resolver group behind, beside the entry's descriptor close moving ahead of the
+copied scrub and the re-exec, with the privileged-mode refusal moved to the first
+statement in the file to make that safe, so nothing the entry forks or execs — the
+scrub's own process substitutions and the `env` and second bash included — ever holds a
+descriptor the close did not shut first).
+**Evidence-based range for this spec pull request: 5219-7061 lines** — the measured
+6140 lines plus or minus 15%, rounded. This is the artifact pull request's own range,
 recorded again in the waiver at the end of this section; the implementation pull request's
 range is the separate figure above and the two are never compared. It was
 553 lines and 470-636 fourteen rounds ago, then 783, then 847, then 1012, then 1202, then
 1503, then 1764, then 1955, then 2245, then 2512, then 2636, then 2933, then 3168, then
 3295, then 3409, then 3642, then 3866, then 4013, then 4128, then 4293, then 4476, then
 4773 — one round appended none of its own and both were restored the round after — then
-5023, then 5153, then 5448; where each block of
+5023, then 5153, then 5448, then 5897; where each block of
 growth went is worth naming so it can be checked rather than taken on trust. The 230 lines
 of that first big round were its three findings: about 65 enumerating the runtime's loaded
 set with its
@@ -1158,7 +1177,9 @@ behind the one ordering that is not free — `trap` is a builtin, a builtin that
 sets `$?` to 0, so the status capture keeps first place and the ignore takes second.
 About 70 go to the
 P3, the marker branch. It stops trusting `builtin` — or anything else — before it knows
-how it was entered: the first statement is `case $- in *p*) ;; *) exit 78 ;; esac`, the
+how it was entered: the branch's first statement is
+`case $- in *p*) ;; *) exit 78 ;; esac` — round 31 moved that same line to the top of the
+file, so read this as where it was put first rather than where it is — the
 re-exec gains the `-p` that makes that true on the supported path (a fourth named
 deviation from the copied materializer lines), and the measurement behind it is written
 out — `$-` under each of the four invocation forms, `BASH_ENV` read under the plain ones
@@ -1198,7 +1219,11 @@ name the old `pgid`, the streaming and classification read descriptors rather th
 processes, and the one place the reaped number is still used — the copied survivor check
 immediately after `observed == child` — is named as a read whose worst case is a
 misclassified exit, kept as copied on the supervisor's local `child` and explicitly not
-"fixed" by reaching for a `pgid` that is `0` by then. The earlier `ESRCH`/`ECHILD`
+"fixed" by reaching for a `pgid` that is `0` by then. That last sentence is the part of
+this round that did not survive: round 31 found that the same survivor check is where the
+cleared `pgid` does damage, and moved the check — and the group kill behind it — inside
+the block, with the clear last. Read this paragraph as the history of the reap rule, not
+as the current ordering. The earlier `ESRCH`/`ECHILD`
 sentence is corrected rather than kept: the ids are never stale, so the error no longer
 stands for a pid that might belong to a stranger, only for a child that died between the
 handler's read and its `kill` and is a zombie this parent owns. The remaining ~71 are the
@@ -1294,13 +1319,56 @@ accepted-concern list at the top, and the re-derived size figures here and for t
 implementation, whose range does not move because the ~47 the three files gain is inside
 the ±15% band the range expresses.
 
+This round is +243 net over one P1 and one P2, and both are the previous two rounds'
+own fixes found to be one statement out of place. About 95 go to the P1 in R2. The
+blocked region around the resolver's reap now runs on through the copied survivor check
+at `:460-462` and, when that check finds survivors, through the copied
+`kill(-child, SIGKILL)` and `kill(child, SIGKILL)` at `:491-492` and the wait behind them,
+with `pgid = 0` last and the mask restored after it. Most of those lines are the failure
+being written out rather than the rule, because the rule is a moved statement: round 28
+cleared `pgid` the instant the reap returned, so a signal delivered during the
+process-table scan took the handler's `no-runtime` branch and left a surviving resolver
+group running while the entry removed `.run` — the exact outcome the whole requirement
+exists to prevent, reached this time through the one case the previous round's fix had
+turned into a blind spot. The cost is stated rather than skipped: the handler waits for
+one `process_group_count` walk on every normal exit, and rarely for a group `SIGKILL` as
+well. The limit path is checked for the same ordering and written out beside it so the two
+cannot drift, and the copied code's own pid-reuse exposure between `:457` and `:491-492` is
+named honestly as unchanged rather than left to be discovered. Round 28's accounting
+paragraph, which recorded the survivor read as kept-as-copied and explicitly not fixed, is
+marked as history rather than left standing. About 90 go to the P2 in R1, and most of
+that is a reordering with its reason. The entry's `/dev/fd/*` close loop moves ahead of
+the copied scrub and the re-exec, because the scrub's two `done < <(builtin compgen …)`
+process substitutions fork bash children and the re-exec execs `/usr/bin/env` and a second
+bash, so a caller's credential, socket or write handle was live in four processes before
+the point R10 observes it shut. Two statements move with it: the `case $-` privileged-mode
+refusal goes from the marker branch to the first statement in the file, which is what
+makes it safe to run `eval` and the rest before the scrub — no imported function, no
+`BASH_ENV` alias — and now covers the plain four-argument arrival as well as the forged
+marker one; and `umask 077` goes above the scrub with them. Nothing shipped is added: the
+copied bytes are untouched and only their position relative to the entry's own three
+statements changes, which is recorded that way in Copy-versus-adapt. R10 keeps the
+EOF-before-marker case and gains the honest note that its tightness dates from this round
+rather than the last, plus the close-precedes-the-scrub-and-the-re-exec line on the
+proof-by-reading list. The C parent's half of the same question was checked and is clean:
+`umask` and `sigaction` fork nothing, so its startup close really is before its first
+child. The remaining ~58 are the ripples and the bookkeeping: Design steps 1 and 2,
+the Copy-versus-adapt handler and entry-copy items growing rather than new deviations
+being added, R1's initialise-before-arming paragraph, R7's command-list note on what runs
+before the scrub, R9's documentation line, R10's
+forged-marker paragraph, two earlier rounds' accounting paragraphs marked where they
+recorded a position that has since moved, the handler's contract sentence gaining the
+word "group", the accepted-concern list at the top, and the re-derived size
+figures here and for the implementation, whose range does not move because the parent's
+~4 is the whole implementation cost of the round.
+
 This waives only the soft line signal for this artifact pull request, and
 `work/README.md:71-73` requires the two things it is waived against to be recorded rather
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 5012-6782 lines**, which is this file's measured
-5897 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 5219-7061 lines**, which is this file's measured
+6140 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. That is the *spec* pull request's range and nothing else's: the
 2075-2807 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
@@ -1403,8 +1471,10 @@ the spec pull request's range above still blocks review.
   run directory exists reaches it with all four unassigned.
 
   So the entry declares all four empty — `entry_signal=''`, `run_created=''`,
-  `entry_status=''`, `parent_pid=''` — among its first builtins, immediately after the
-  `umask 077` below and before it runs any external command, and the `trap … EXIT` line and
+  `entry_status=''`, `parent_pid=''` — among its first builtins, after the six opening
+  steps below — the `-p` refusal, the `umask 077`, the descriptor close, the scrub, the
+  re-exec and the marker branch — and before it runs any external command, and the
+  `trap … EXIT` line and
   the three recording traps are installed after them. `run` is the fifth name the `EXIT`
   trap reads, and it is not initialised empty but assigned, from the output root the entry
   has by then validated; that assignment precedes the `trap` builtins for the same reason.
@@ -1999,27 +2069,211 @@ the spec pull request's range above still blocks review.
   by name from `compgen -b`. R10's pre-parent case asserts this line, and that assertion is
   the case.
 
-  **The entry's first statements scrub its environment with builtins, and then it re-execs
-  itself with an empty one. Only after that does it run any external command.** An earlier
-  round of this spec put `/usr/bin/env -i` in front of the pin checks, both compiles and
-  the parent launch and stopped there, which is not early enough for a reason worth stating
-  plainly: `/usr/bin/env` is itself an external process, so the loader honours the caller's
-  `LD_PRELOAD` and `LD_LIBRARY_PATH` on the way to running `env` — the very command that
-  was supposed to remove them. Nor is `env` the first external command in that order.
-  `/usr/bin/uname` runs for the platform case, `/usr/bin/stat` for the output root's owner
-  and mode, and in the order an earlier round used `/usr/bin/git` and `/usr/bin/cc` ran too,
-  every one of them an absolute path executed while the caller's loader variables were
-  still in the entry's own environment and therefore inherited.
+  **The entry's own first statements come before the copied ones, and no external command
+  runs before any of them.** The order is fixed, and each position below says why it is
+  where it is: the privileged-mode refusal, then `umask 077`, then the close of every
+  inherited descriptor above 2, then the builtins-only scrub copied from the materializer,
+  then the empty-environment re-exec, then the marker branch — and only after all six the
+  platform case, the output-root validation, the pin checks, the compiles and the launch.
+  An earlier round of this spec put `/usr/bin/env -i` in front of the pin checks, both
+  compiles and the parent launch and stopped there, which is not early enough for a reason
+  worth stating plainly: `/usr/bin/env` is itself an external process, so the loader
+  honours the caller's `LD_PRELOAD` and `LD_LIBRARY_PATH` on the way to running `env` —
+  the very command that was supposed to remove them. Nor is `env` the first external
+  command in that order. `/usr/bin/uname` runs for the platform case, `/usr/bin/stat` for
+  the output root's owner and mode, and in the order an earlier round used `/usr/bin/git`
+  and `/usr/bin/cc` ran too, every one of them an absolute path executed while the caller's
+  loader variables were still in the entry's own environment and therefore inherited. That
+  is why the scrub sits ahead of every external command. Why three statements of the
+  entry's own sit ahead of the *scrub* is a later correction, and the next three blocks
+  are its reasons.
 
-  So the entry begins with a scrub that forks nothing, copied verbatim from the
-  materializer's clean entry (`adapters/local-git-materializer/v1/materialize.sh:4-13`):
+  **First statement in the file: the entry refuses any arrival that is not in privileged
+  mode.** Nothing stops a caller from invoking the entry as `/bin/bash <entry>
+  __resolve_profile_clean <jq> <output> <request> <map>` — five arguments whose first is
+  the marker word — and landing on the clean path directly. The marker word is a literal in
+  a committed file, not a secret. What such a caller reaches is the clean path running in a
+  process whose loader consumed *their* environment, because the re-exec below, the only
+  step that produces an environment built from nothing, is precisely the step a marker
+  arrival skips: it is the branch the re-exec lands on. The same caller can also come in
+  the plain four-argument way, `/bin/bash <entry> <jq> <output> <request> <map>`, with
+  `BASH_ENV` read and exported functions imported before the entry's first line is parsed.
+  So the entry does not assume it was started in a shape it can defend — it checks, and
+  the check is the first statement in the file, ahead of everything else:
+
+  ```
+  case $- in *p*) ;; *) exit 78 ;; esac
+  ```
+
+  Both supported invocations set that flag. Executing the file starts bash from the
+  `#!/bin/bash -p` shebang; the documented direct form passes `-p` on the command line; and
+  the re-exec below passes it too, which is the third deviation from the copied lines and
+  the reason it exists. So the entry's own arrival condition — privileged mode — is true on
+  every path this spec supports and false on the one it does not. An earlier round of this
+  spec put this same statement on the marker branch alone, which answered the forged-marker
+  arrival and left the plain four-argument one to the scrub; it is at the top now because
+  the two statements below it depend on it, and one line covers both arrivals where two
+  would otherwise be needed. Measured, bash 3.2 on
+  `arm64-apple-darwin`: with a `#!/bin/bash -p` shebang `$-` is `hpB`; with
+  `env -i … /bin/bash -p <script>` it is `hpB`; with a plain `#!/bin/bash` shebang or a
+  plain `/bin/bash <script>` it is `hB`. And privileged mode is worth having for itself,
+  not only as a marker: in the same measurement, a `BASH_ENV` pointing at a file that
+  echoes a line and defines an alias is executed under the plain forms and **not** read at
+  all under either `-p` form, and an exported function (`BASH_FUNC_evilfunc%%` in the
+  environment) is imported under the plain forms and **not** imported under either `-p`
+  form. That is the whole shape of the pollution the scrub below was written against — and
+  because this line turns those arrivals away, every statement after it runs in a shell
+  that imported no function and read no `BASH_ENV`. That is what lets the next two
+  statements run ahead of the scrub instead of behind it: there is nothing there to shadow
+  `umask`, `eval`, `exec`, or the `case` that guards the `eval`.
+
+  The statement is written the way it is because of what has run before it, which is
+  nothing: `case`, `in` and `esac` are reserved words, and `$-` is a special parameter the
+  shell maintains itself, so the test itself runs no command and reads no variable the
+  entry has not been able to set. The one word in it that is neither is `exit`, a builtin
+  and therefore shadowable by a function of that name — which is not patched over here,
+  it is the subject of the scrub paragraph below, and the answer to it is that the only
+  arrival that can install such a function is the one this line turns away. `78` is a bare
+  literal for the same
+  no-state reason — no name has been assigned at that point, and under `set -u` a symbolic
+  `E_*` would be an unbound variable — and the number is chosen to be distinct from the
+  entry's
+  `E_USAGE` and `E_RUNTIME` status and from anything `128 + signal` can produce, so a test
+  asserting it cannot be satisfied by an ordinary refusal.
+
+  **Then `umask 077`, before anything at all is created and before anything at all is
+  forked.** The scrub below resets variables, functions and aliases; it does not reset
+  the process umask, which is not a variable and is inherited across `exec` like any other
+  process attribute, so the `env -i` re-exec does not clear it either. That matters because
+  every mode this requirement states is a mode a `mkdir` *requests*, and the umask is what
+  the kernel subtracts from it. Left alone it breaks the run tree in two opposite
+  directions. A permissive caller umask — `umask 000` is the ordinary case, and it costs
+  nothing to arrange — makes `/bin/mkdir -- "$run"` create `.run` at 0777 and the `tmp` and
+  `home` subdirectories at 0777 with it, so a directory this spec requires to be 0700 is
+  world-writable for the whole compile, which is exactly the window in which the compiled
+  binaries are written and before the 0500 pass tightens anything. A restrictive one —
+  `umask 777` is the extreme, but anything with the owner bits set does it — makes the same
+  `mkdir` create a directory the entry cannot then enter or write, so the very next step
+  fails and, worse, the `EXIT` trap's removal of a directory it cannot traverse fails with
+  it. Setting `umask 077` once removes both: `/bin/mkdir -- "$run"` under it yields exactly
+  0700 with no separate `chmod`, and the same holds for the `tmp` and `home` subdirectories
+  and for every file the entry creates afterwards. The line is copied, not invented — the
+  materializer's clean branch sets the same umask immediately after its own scrub and
+  before its first creation (`adapters/local-git-materializer/v1/materialize.sh:31`) — and
+  the only deviation is where it stands: the entry sets it above the copied scrub rather
+  than below it, so that it is set in the first process as well as the second, and so that
+  the three statements the entry adds of its own stand together at the top where a reader
+  can check the order in one glance. `umask` is a bash builtin, so it forks nothing and
+  keeps its place among the statements that run before the first fork of any kind. R10
+  asserts the result rather than the line: the mode assertions on the run tree already
+  check for 0700, and one case runs the entry with the caller's umask set to `000` and then
+  to `777` and requires 0700 both times.
+
+  **Then, before the copied scrub and before the re-exec, the entry closes every descriptor
+  above 2 that it inherited.** A caller hands the entry three descriptors it is meant to
+  have — stdin, stdout and stderr — and may hand it any number of others, because an open
+  descriptor is inherited across `fork` and across `exec` unless it is marked
+  close-on-exec, and nothing obliges a caller to mark anything. Those others are the
+  caller's, not the entry's: an open credential file, a socket to something the entry has
+  no business talking to, a write handle on a file outside the output root this
+  requirement spends pages validating. Every one of them is inherited by every child the
+  entry forks, and the entry forks a great many before the parent exists — the SHA-1 and
+  SHA-256 pins over ten files, two compiler invocations, the `cp` copies, the `jq
+  --version` probe, `/usr/bin/stat`, `/usr/bin/uname`, `/bin/mkdir`. A write handle
+  outside the output root, held open across the compiler, is a second write root that R7's
+  claim does not know about, and it is one nobody in this chain put there. So the entry
+  shuts them, and shuts them at the top rather than at the bottom:
+
+  ```
+  for fd in /dev/fd/*; do
+    fd=${fd##*/}
+    case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
+    eval "exec ${fd}>&-" 2>/dev/null
+  done
+  ```
+
+  **The position is half the requirement, and an earlier round of this spec had it wrong.**
+  That round put the loop after the copied scrub and after the re-exec, on the marker
+  branch, which reads like the top of the file and is not. The scrub's two loops take their
+  input from process substitutions — `done < <(builtin compgen -A function)` and
+  `done < <(builtin compgen -e)` (`materialize.sh:5-10`) — and bash forks a child for each
+  one, so two bash children run with the caller's descriptors still open; and the re-exec
+  below then runs `/usr/bin/env` and a second `/bin/bash` (`:22-29`), both of which inherit
+  them across the `exec` as well. On a supported entry invocation with one extra descriptor
+  open, a credential, a socket or a write handle would therefore be exposed in four
+  processes before the point R10 observes it shut, which is the boundary the intent draws
+  in the words this spec is written against — no credentials, no writes outside the output
+  root (`work/resolver-trusted-parent/intent.md:36-44`). Putting the loop above both closes
+  that: nothing this entry forks or execs, on either path, has ever held a descriptor the
+  loop did not shut first. The loop then runs a second time in the process the re-exec
+  lands in, where it finds 0, 1, 2 and the glob's own descriptor and shuts nothing — one
+  glob and a handful of builtins, which is cheaper than a condition that would skip it and
+  one fewer thing for a reader to have to check.
+
+  **Each line of it is chosen for bash 3.2 and for forking nothing.** The enumeration is
+  a glob over `/dev/fd`, which is a directory of the calling process's own open
+  descriptors on both supported platforms, and a glob is the shell's own pathname
+  expansion — no `ls`, no `find`, nothing on R7's command-word list, and nothing that could
+  itself be the first external command this whole ordering exists to get ahead of. The
+  `case` throws away anything that is not all digits before it reaches `eval`, which is
+  what makes the `eval` safe: the only strings that get there are numbers the glob read out
+  of a directory of numbers, and 0, 1 and 2 are skipped because they are the caller's three
+  and passing them through is what R1's pass-through claim and R2's `entry-signal:` line
+  both depend on. Running ahead of the scrub costs that `eval` nothing, and the refusal at
+  the top is the reason it can: `eval`, `exec` and `continue` are builtins and `case`,
+  `in`, `esac`, `for`, `do` and `done` are reserved words, and on every arrival that gets
+  this far bash imported no function and read no `BASH_ENV`, so there is no `eval` of the
+  caller's to be called instead and no alias of the caller's to rewrite the line before it
+  is parsed. The `eval` is needed rather than preferred — bash 3.2 has no `{fd}>&-`
+  form, so the descriptor number has to be substituted into the redirection word before the
+  shell parses it — and `2>/dev/null` absorbs the one ordinary failure, a number that named
+  a descriptor the glob itself was using and that is gone by the time the loop reaches it.
+  That descriptor is worth naming because a reader will see it in the measurement below:
+  reading `/dev/fd` opens a descriptor to do it, so the listing always contains one entry
+  that is the listing's own, and it does not survive the statement either way.
+
+  **What it buys, and what it does not.** Every child the entry forks and every process it
+  execs now starts with three descriptors, whatever the caller held: no credential, no
+  socket, no write handle outside the root reaches the scrub's two process substitutions,
+  the `env` and second bash of the re-exec, a SHA tool, a compiler, a `cp` or the jq probe,
+  and the single-write-root claim in R7 and the no-caller-state claim in R3 stop depending
+  on the caller's own hygiene. It does not replace the parent's close, which happens in the
+  resolver child before `execve` (R3) — that one is the last line of defence and stays
+  where it is — and it does not replace the parent's own startup close, which R5 now
+  requires for the same reason on the direct-parent path (an operator, or R10's group-2
+  cases, can start the parent with descriptors of their own). Two lines of defence, at the
+  two process boundaries that exist. The one thing neither closes is a descriptor the
+  caller marked close-on-exec, which needs no closing, and the entry's own first process
+  before this loop runs — which is now two statements wide, a `case` on `$-` and a `umask`,
+  neither of which forks, execs, opens or reads anything. The residual that remains there
+  is the loader's, the same one the scrub has, and it is stated in the same place.
+
+  **Measured, on the same bash 3.2.** A driving shell opened the write end of a fifo on
+  descriptor 7, started a script with it inherited, and had a reader watch for end-of-file.
+  With the loop above as the script's first statement, `fds before:
+  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3 /dev/fd/7` and `fds after:
+  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3` — descriptor 7 gone, and `/dev/fd/3` the
+  listing's own descriptor in both readings — and the reader saw EOF 0.3 s in, while the
+  script still had two seconds of work left to do. Without the loop the reader saw no EOF
+  until the script had exited, and in a third run, where the script forked a helper and
+  exited immediately, the reader saw no EOF until the *helper* exited three seconds later:
+  that third run is the finding in one observation, a forked child holding a caller's
+  descriptor open after the shell that inherited it has gone.
+
+  **Then the scrub, copied verbatim, with nothing of the caller's left for its own children
+  to inherit.** It comes from the materializer's clean entry
+  (`adapters/local-git-materializer/v1/materialize.sh:4-13`):
   `builtin unset -f` over every name `builtin compgen -A function` reports, then
   `builtin unset` over every name `builtin compgen -e` reports except `PATH`, then
   `PATH=/usr/bin:/bin`, `LC_ALL=C` and `export PATH LC_ALL`. Builtins only — no `env`, no
-  `uname`, no subprocess of any kind — so there is no window in which an external command
-  runs under a caller-set variable. The shebang comes over with it, `#!/bin/bash -p`
+  `uname`, no external command of any kind — so there is no window in which an external
+  command runs under a caller-set variable. It is not free of *processes*, though, and the
+  block above is where that matters: its two `while … done < <(builtin compgen …)` loops
+  are process substitutions and bash forks a child for each, which is a fork with no `exec`
+  behind it and, now that the close has already run, with nothing of the caller's to carry.
+  The shebang comes over with it, `#!/bin/bash -p`
   (`materialize.sh:1`), because privileged mode is what stops bash from sourcing `BASH_ENV`
-  before the scrub's first line.
+  before the entry's first line — and it is the condition the refusal at the top tests for.
 
   A scrub in the current shell does not undo what the current shell's own loader already
   did, so the entry then re-execs itself under an empty environment, adapting the
@@ -2041,15 +2295,19 @@ the spec pull request's range above still blocks review.
   is `E_USAGE`. That keeps one of the materializer's two properties intact — the re-exec
   cannot re-enter the dirty path, because it always supplies the marker word. The other one
   it does not keep: a caller *can* enter the clean path, by supplying the marker word
-  themselves, and the third and fourth deviations below are what this spec does about that.
-  The third of the four is the `-p` on the re-exec's `/bin/bash`, where the materializer
+  themselves, and the third and fourth deviations are what this spec does about that.
+  The third is the `-p` on the re-exec's `/bin/bash`, where the materializer
   writes a plain `/bin/bash` (`:27`): the entry's shebang is `#!/bin/bash -p` already,
   and the flag is added here so that privileged mode survives the re-exec instead of being
-  dropped at the one hop that matters — the hop that lands on the marker branch, which is
-  where the fourth deviation then tests for it. It costs nothing else. Under `env -i` there
+  dropped at the one hop that matters — the hop into the second process, where the refusal
+  at the top of the file runs again and tests for it. It costs nothing else. Under `env -i`
+  there
   is no environment left for privileged mode to refuse, so `-p` changes no behaviour on
   this path; what it changes is that `$-` carries a `p` in the second process, which is the
-  fact the branch can act on. Everything
+  fact that refusal acts on. The fourth is the three statements the entry puts above the
+  copied scrub, none of which the copied file has in that position — the `case $-` refusal,
+  the `umask 077` lifted from `:31`, and the descriptor close — together with the marker
+  branch's own re-run of the scrub behind two alias-reset builtins, below. Everything
   else is the same:
   `$script_path` comes from `${BASH_SOURCE[0]}` and must be absolute (`:23-24`), and the
   re-exec is an `exec`, so no extra process is left behind. The literal
@@ -2060,58 +2318,17 @@ the spec pull request's range above still blocks review.
   validation, the pin checks, the compiles, the mode pass, the launch — runs in that second
   process, which was started with an empty environment.
 
-  **The fourth deviation: the marker branch refuses unless it is in privileged mode, and
-  only then re-runs the scrub.** Nothing stops a caller from invoking the entry as
-  `/bin/bash <entry>
-  __resolve_profile_clean <jq> <output> <request> <map>` — five arguments whose first is the
-  marker word — and landing on the clean path directly. The marker word is a literal in a
-  committed file, not a secret. What such a caller reaches is the clean path running in a
-  process whose loader consumed *their* environment, because the re-exec, the only step that
-  produces an environment built from nothing, is precisely the step the marker branch skips:
-  it is the branch the re-exec arrives on. So the marker branch does not assume it was
-  reached through the re-exec — it checks, and the check is its very first statement:
-
-  ```
-  case $- in *p*) ;; *) exit 78 ;; esac
-  ```
-
-  Both supported invocations set that flag. Executing the file starts bash from the
-  `#!/bin/bash -p` shebang; the documented direct form passes `-p` on the command line; and
-  the re-exec above now passes it too, which is the third deviation and the reason it
-  exists. So the branch's own arrival condition — privileged mode — is true on every path
-  this spec supports and false on the one it does not. Measured, bash 3.2 on
-  `arm64-apple-darwin`: with a `#!/bin/bash -p` shebang `$-` is `hpB`; with
-  `env -i … /bin/bash -p <script>` it is `hpB`; with a plain `#!/bin/bash` shebang or a
-  plain `/bin/bash <script>` it is `hB`. And privileged mode is worth having for itself,
-  not only as a marker: in the same measurement, a `BASH_ENV` pointing at a file that
-  echoes a line and defines an alias is executed under the plain forms and **not** read at
-  all under either `-p` form, and an exported function (`BASH_FUNC_evilfunc%%` in the
-  environment) is imported under the plain forms and **not** imported under either `-p`
-  form. That is the whole shape of the pollution this branch was scrubbing by hand.
-
-  The statement is written the way it is because of what has run before it, which is
-  nothing: `case`, `in` and `esac` are reserved words, and `$-` is a special parameter the
-  shell maintains itself, so the test itself runs no command and reads no variable the
-  entry has not been able to set. The one word in it that is neither is `exit`, a builtin
-  and therefore shadowable by a function of that name — which is not patched over here,
-  it is the subject of the paragraph after next, and the answer to it is that the only
-  arrival that can install such a function is the one this line turns away. `78` is a bare
-  literal for the same
-  no-state reason — no name has been assigned at that point, and under `set -u` a symbolic
-  `E_*` would be an unbound variable — and the number is chosen to be distinct from the
-  entry's
-  `E_USAGE` and `E_RUNTIME` status and from anything `128 + signal` can produce, so a test
-  asserting it cannot be satisfied by an ordinary refusal.
-
-  **Then the scrub, re-run in full, as defence in depth.** Immediately after the refusal
-  come `builtin unalias -a` and `builtin shopt -u expand_aliases` — two lines the copied
-  bytes do not have, needed because the scrub unsets inherited functions and exported names
-  and an alias is neither. They go before the rest because bash expands aliases as it reads
+  **The marker branch re-runs the scrub in full, as defence in depth.** First on that
+  branch come `builtin unalias -a` and `builtin shopt -u expand_aliases` — two lines the
+  copied bytes do not have, needed because the scrub unsets inherited functions and
+  exported names and an alias is neither. They go before the rest because bash expands
+  aliases as it reads
   each command, so the reset has to run before the shell parses what follows. Then the
   builtin scrub itself: `builtin unset -f` over `builtin compgen -A function`,
   `builtin unset` over `builtin compgen -e` except `PATH`, `PATH=/usr/bin:/bin`, `LC_ALL=C`,
   `export PATH LC_ALL`. `builtin` prefixes every one of these, so on any invocation that
-  got past the refusal above no function of that name can intercept the reset. The sibling
+  got past the refusal at the top of the file no function of that name can intercept the
+  reset. The sibling
   specs treat this the same way — #268 and #273 both
   add the alias reset to their own marker branch for the same reason — and the plan should
   keep the three files' wording in step.
@@ -2123,110 +2340,19 @@ the spec pull request's range above still blocks review.
   On the unsupported one — `/bin/bash <entry> __resolve_profile_clean …` from a polluted,
   non-privileged environment — the honest statement is that the refusal is the answer and
   the scrub is not, because in that process a hostile environment gets to act *before* any
-  statement of the branch runs and can in principle shadow the refusal itself. Measured,
+  statement of the file runs and can in principle shadow the refusal itself. Measured,
   same shell: an exported function named `exit` is called instead of the builtin, so the
-  `exit 78` runs the caller's code and the branch continues; and a `BASH_ENV` that sets
+  `exit 78` runs the caller's code and the file carries on; and a `BASH_ENV` that sets
   `expand_aliases` and aliases the reserved word `case` makes the whole refusal expand to
   something else entirely. Both of those need the plain form — under either `-p` form the
   `BASH_ENV` is not read and the function is not imported, so both attacks are gone before
   they start. This is not a hole being conceded for the first time: it is the same boundary
   the paragraph below draws and the same one the Areas-of-concern bullet on the entry's
   first process has drawn for several rounds — the entry's own loader runs under whoever
-  started it, and no statement inside the entry can unrun that. What changes this round is
-  that the spec stops describing the marker branch's scrub as proof that hostile functions
-  and aliases were removed before validation, and describes it as what it is: a second
-  layer on the invocations where the first layer already holds.
-
-  **Then `umask 077`, as the last of the entry's first builtins and before anything at all
-  is created.** The scrub above resets variables, functions and aliases; it does not reset
-  the process umask, which is not a variable and is inherited across `exec` like any other
-  process attribute, so the `env -i` re-exec does not clear it either. That matters because
-  every mode this requirement states is a mode a `mkdir` *requests*, and the umask is what
-  the kernel subtracts from it. Left alone it breaks the run tree in two opposite
-  directions. A permissive caller umask — `umask 000` is the ordinary case, and it costs
-  nothing to arrange — makes `/bin/mkdir -- "$run"` create `.run` at 0777 and the `tmp` and
-  `home` subdirectories at 0777 with it, so a directory this spec requires to be 0700 is
-  world-writable for the whole compile, which is exactly the window in which the compiled
-  binaries are written and before the 0500 pass tightens anything. A restrictive one —
-  `umask 777` is the extreme, but anything with the owner bits set does it — makes the same
-  `mkdir` create a directory the entry cannot then enter or write, so the very next step
-  fails and, worse, the `EXIT` trap's removal of a directory it cannot traverse fails with
-  it. Setting `umask 077` once removes both: `/bin/mkdir -- "$run"` under it yields exactly
-  0700 with no separate `chmod`, and the same holds for the `tmp` and `home` subdirectories
-  and for every file the entry creates afterwards. The line is copied, not invented — the
-  materializer's clean branch sets the same umask in the same position
-  (`adapters/local-git-materializer/v1/materialize.sh:31`), immediately after its own scrub
-  and before its first creation — and `umask` is a bash builtin, so it forks nothing and
-  keeps its place among the statements that run before the first external command. R10
-  asserts the result rather than the line: the mode assertions on the run tree already
-  check for 0700, and one case runs the entry with the caller's umask set to `000` and then
-  to `777` and requires 0700 both times.
-
-  **Then, still before the first external command, the entry closes every descriptor above
-  2 that it inherited.** A caller hands the entry three descriptors it is meant to have —
-  stdin, stdout and stderr — and may hand it any number of others, because an open
-  descriptor is inherited across `fork` and across `exec` unless it is marked
-  close-on-exec, and nothing obliges a caller to mark anything. Those others are the
-  caller's, not the entry's: an open credential file, a socket to something the entry has
-  no business talking to, a write handle on a file outside the output root this
-  requirement spends pages validating. Every one of them is inherited by every child the
-  entry forks, and the entry forks a great many before the parent exists — the SHA-1 and
-  SHA-256 pins over ten files, two compiler invocations, the `cp` copies, the `jq
-  --version` probe, `/usr/bin/stat`, `/usr/bin/uname`, `/bin/mkdir`. A write handle
-  outside the output root, held open across the compiler, is a second write root that R7's
-  claim does not know about, and it is one nobody in this chain put there. So the entry
-  shuts them, and shuts them at the top rather than at the bottom:
-
-  ```
-  for fd in /dev/fd/*; do
-    fd=${fd##*/}
-    case $fd in ''|*[!0-9]*|0|1|2) continue ;; esac
-    eval "exec ${fd}>&-" 2>/dev/null
-  done
-  ```
-
-  **Each line of that is chosen for bash 3.2 and for forking nothing.** The enumeration is
-  a glob over `/dev/fd`, which is a directory of the calling process's own open
-  descriptors on both supported platforms, and a glob is the shell's own pathname
-  expansion — no `ls`, no `find`, nothing on R7's command-word list, and nothing that could
-  itself be the first external command this whole ordering exists to get ahead of. The
-  `case` throws away anything that is not all digits before it reaches `eval`, which is
-  what makes the `eval` safe: the only strings that get there are numbers the glob read out
-  of a directory of numbers, and 0, 1 and 2 are skipped because they are the caller's three
-  and passing them through is what R1's pass-through claim and R2's `entry-signal:` line
-  both depend on. The `eval` is needed rather than preferred — bash 3.2 has no `{fd}>&-`
-  form, so the descriptor number has to be substituted into the redirection word before the
-  shell parses it — and `2>/dev/null` absorbs the one ordinary failure, a number that named
-  a descriptor the glob itself was using and that is gone by the time the loop reaches it.
-  That descriptor is worth naming because a reader will see it in the measurement below:
-  reading `/dev/fd` opens a descriptor to do it, so the listing always contains one entry
-  that is the listing's own, and it does not survive the statement either way.
-
-  **What it buys, and what it does not.** Every pre-resolver child the entry forks now
-  starts with three descriptors, whatever the caller held: no credential, no socket, no
-  write handle outside the root reaches a SHA tool, a compiler, a `cp` or the jq probe, and
-  the single-write-root claim in R7 and the no-caller-state claim in R3 stop depending on
-  the caller's own hygiene. It does not replace the parent's close, which happens in the
-  resolver child before `execve` (R3) — that one is the last line of defence and stays
-  where it is — and it does not replace the parent's own startup close, which R5 now
-  requires for the same reason on the direct-parent path (an operator, or R10's group-2
-  cases, can start the parent with descriptors of their own). Two lines of defence, at the
-  two process boundaries that exist. The one thing neither closes is a descriptor the
-  caller marked close-on-exec, which needs no closing, and the entry's own first process
-  before this loop runs — the same residual the scrub has, for the same reason, and stated
-  in the same place.
-
-  **Measured, on the same bash 3.2.** A driving shell opened the write end of a fifo on
-  descriptor 7, started a script with it inherited, and had a reader watch for end-of-file.
-  With the loop above as the script's first statement, `fds before:
-  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3 /dev/fd/7` and `fds after:
-  /dev/fd/0 /dev/fd/1 /dev/fd/2 /dev/fd/3` — descriptor 7 gone, and `/dev/fd/3` the
-  listing's own descriptor in both readings — and the reader saw EOF 0.3 s in, while the
-  script still had two seconds of work left to do. Without the loop the reader saw no EOF
-  until the script had exited, and in a third run, where the script forked a helper and
-  exited immediately, the reader saw no EOF until the *helper* exited three seconds later:
-  that third run is the finding in one observation, a forked child holding a caller's
-  descriptor open after the shell that inherited it has gone.
+  started it, and no statement inside the entry can unrun that. What the spec stopped doing
+  two rounds ago, and still does not do, is describe the marker branch's scrub as proof
+  that hostile functions and aliases were removed before validation; it is what it is, a
+  second layer on the invocations where the first layer already holds.
 
   **And the direct marker invocation is unsupported, which is the part that actually settles
   it.** There are two supported ways to run the entry: execute the file, so its
@@ -2234,7 +2360,7 @@ the spec pull request's range above still blocks review.
   `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p <entry> <jq> <output> <request> <map>`.
   Invoking the marker word directly is neither, this spec makes no safety claim about it,
   and R9's documentation says so: the marker exists so the re-exec has somewhere to arrive,
-  not as a public entry point. What the branch does about it is the refusal above, and the
+  not as a public entry point. What the entry does about it is the refusal above, and the
   refusal draws the line in the one place a reader can check: a marker invocation carrying
   `-p` is inside the boundary, because privileged mode is exactly the condition the
   supported forms create and the polluted direct form cannot; a marker invocation without
@@ -2731,9 +2857,11 @@ the spec pull request's range above still blocks review.
     a reader who has seen the line knows the handler will take the group branch, and a
     handler that runs in the gap between the restore and the line still finds `pgid` set and
     kills the group. It goes back to `0` the way it was set — under the three-signal block,
-    before the mask is restored — at whichever `waitpid` reaps the resolver, so it is
-    non-zero exactly while a resolver this parent owns exists. The reap block below says
-    that once for both variables.
+    before the mask is restored — but not at the instant of the reap: the block that covers
+    the reap covers the survivor check and any kill of the surviving group with it, and the
+    clear comes last, so `pgid` is non-zero for exactly as long as anything of the
+    resolver's group can still be there to kill. The reap block below says that once for
+    both variables.
   - `pre_child` is a second `volatile sig_atomic_t` holding the pid of the pre-resolver
     child that is running right now: each SHA-1 tool invocation, the SHA-256 tool, and the
     jq `--version` probe. It is set in the parent immediately after that child's `fork`,
@@ -2837,39 +2965,104 @@ the spec pull request's range above still blocks review.
   alternative on offer is the stranger-kill above.
 
   For the resolver the same shape wraps every `waitpid` in the copied supervisor that can
-  reap it, and there are three. The poll loop's `waitpid(child, &status, WNOHANG)` (`:457`):
-  block, call it, and when it returns the child, set `pgid = 0` before restoring the mask.
-  Everything else in that loop runs **outside** the block: the survivor check at
-  `:460-462` that follows the reap, the `process_group_count` and address-space scans at
-  `:469-483`, the clock check at `:484-487` and the `nanosleep` at `:488`. So
-  responsiveness is exactly what it was, and each blocked window is the microseconds of one
-  non-blocking `waitpid` and one assignment. The limit path's
-  `while (waitpid(child, &status, 0) < 0 && errno == EINTR)` (`:493-494`), which follows
-  `kill(-child, SIGKILL)` and `kill(child, SIGKILL)` (`:491-492`): the same block around it,
-  `pgid = 0` before the restore — and there the block costs nothing at all, because the
+  reap it, and there are three — with one extension the pre-resolver children do not need,
+  because the resolver is the only child of this parent that leads a group. **The blocked
+  region around the resolver's reap does not end at the reap. It runs on through the
+  survivor check and through any kill of the surviving group that check provokes, and
+  `pgid` is cleared last of all.** The poll loop's
+  `waitpid(child, &status, WNOHANG)` (`:457`): block, call it, and when it returns the
+  child, stay blocked for the survivor scan the copied loop runs on the next line —
+  `process_group_count(child) > 0U`
+  (`portable-profile-resolution-launcher.c:460-462`), which sets `stopped = STOP_PROCESS`
+  and breaks — and, when that scan finds survivors, stay blocked through the kill the
+  copied code then performs for it: `kill(-child, SIGKILL)` and `kill(child, SIGKILL)`
+  (`:491-492`), with the wait behind them (`:493-494`). Only after that `pgid = 0`, and
+  only then `sigprocmask(SIG_SETMASK, &saved, NULL)`.
+
+  An earlier round of this spec cleared `pgid` the moment the reap returned and left the
+  survivor check outside the block, and that left open the one case this whole requirement
+  exists for. The resolver exits having spawned something that is still in its process
+  group; an `INT`, `TERM` or `HUP` delivered while the parent is walking the process table
+  finds `pgid == 0`, takes the handler's `no-runtime` branch, kills nothing and
+  `_exit`s — and the surviving group keeps running while the entry's wait returns on a
+  parent that is gone and its `EXIT` trap removes `.run` from under it. Keeping `pgid` live
+  to the end of the cleanup closes it from both sides. While the three signals are blocked
+  no handler runs at all, so saying that a handler in there would read a non-zero `pgid`
+  and take the group branch is a statement about what the variable means rather than about
+  anything that happens; and after the restore, a signal that was pending finds `pgid == 0`
+  only once there is nothing of that group left for it to have killed.
+
+  **Say the cost plainly: the handler is delayed by one process-table scan, and rarely by
+  one group kill as well.** `process_group_count` is a `/proc` walk on Linux (`:177-231`)
+  and a `proc_listallpids` sweep with a `getpgid` per pid on Darwin (`:233-265`), so on
+  every normal exit a forwarded signal now waits for one of those before the handler can
+  run — milliseconds, and the same scan this loop was already running once per poll
+  interval. On the rare path where the scan finds survivors it waits for the group
+  `SIGKILL` and the wait behind it too, which is as long as the kernel takes. That is
+  accepted rather than papered over, because the alternative is the gap above and the
+  handler exists precisely to leave nothing of the resolver behind.
+
+  **The limit path is checked for the same ordering and made to match, so the two cannot
+  drift.** The `while (waitpid(child, &status, 0) < 0 && errno == EINTR)` at `:493-494` is
+  what the
+  loop's other breaks reach — the process, memory and time limits at `:465-487` — and it
+  follows the same `kill(-child, SIGKILL)` and `kill(child, SIGKILL)` (`:491-492`). An
+  earlier round of this spec put the block around that wait alone and left the two kills
+  in front of it outside, which is the same shape of mistake in a milder place: nothing
+  there reads a cleared `pgid`, because the clear came after the wait, but the two
+  arrangements would have been written differently for no reason a reader could see. So
+  the block goes around all of it: `sigprocmask(SIG_BLOCK, …)` before the two kills, the
+  wait,
+  `pgid = 0`, then the restore. Both paths therefore leave the block at the same statement
+  with the same thing true — the group is gone and `pgid` is `0` — and a plan has no
+  ordering left to choose between. On this path the block costs nothing at all, because the
   group has just been sent `SIGKILL` and the wait is as long as the kernel takes to finish
-  killing it. The `setpgid`-failure path's `kill(child, SIGKILL)` and
+  killing it.
+
+  Everything else in the poll loop still runs **outside** the block: the
+  `process_group_count` and address-space scans at `:469-483`, the clock check at
+  `:484-487` and the `nanosleep` at `:488`. So responsiveness while the resolver is running
+  is exactly what it was, and the one window this round widens is at the end of its life,
+  where the thing being waited for is the cleanup itself. The `setpgid`-failure path's
+  `kill(child, SIGKILL)` and
   `waitpid(child, &status, 0)` (`:451-452`) needs no block of its own: it sits inside the
   fork-and-publish region above, before `pgid` has ever been assigned, so it reaps under a
   block already held and leaves `pgid` at `0`. All it has to do is restore the mask before
   it returns 70.
 
-  **After the resolver is reaped, no code path may use the old `pgid` for a kill.** There is
-  none to remove: everything after the loop is the exit classification and the streaming
-  back — `empty_regular_file`, `stream_file` and `sanitized_error` (`:504-531`), which after
-  R5's change read the descriptors the parent already holds and name no process at all. One
-  place does still use the reaped number, and it is a read rather than a kill:
-  `process_group_count(child)` at `:460-462`, the survivor check the copied loop runs the
-  moment `observed == child`. It stays as copied, on the supervisor's own local `child` and
-  not on the shared `pgid`, and the worst case is honest and small — a recycled pid whose
-  new owner happens to lead a group would turn a clean exit into `E_LIMIT process-limit`,
-  which misreports this run rather than touching anyone else's. That is the copied
-  supervisor's own behaviour, unchanged here, and the plan should not reach for `pgid` to
-  "fix" it: `pgid` is `0` by then on purpose.
+  **After `pgid` goes back to `0`, no code path may use the old value for a kill.** The
+  rule reads against the clear rather than against the reap, because the clear is now the
+  last statement of the cleanup instead of the first thing after the `waitpid`. Between
+  the reap and the clear are the survivor check and the group kill above, which name that
+  group on purpose and are the reason the block was extended. After the clear there is the
+  exit classification and the streaming back — `empty_regular_file`, `stream_file` and
+  `sanitized_error` (`:504-531`), which after R5's change read the descriptors the parent
+  already holds and name no process at all. So there is nothing to remove.
+
+  The survivor check and the two kills keep using the supervisor's own local `child`
+  rather than the shared `pgid`, exactly as copied; the variable that must not be read
+  stale is the one the *handler* reads, and the block is what settles that. The copied
+  code's own exposure is unchanged and is better stated here than discovered later: the
+  pid is reaped at `:457` and read again at `:460` and killed at `:491-492`, so a kernel
+  that recycled the number in that span would let a stranger's group turn this run's clean
+  exit into `E_LIMIT process-limit` and, when the scan reports survivors, receive a
+  `SIGKILL` meant for the resolver's. That is the copied supervisor's behaviour and this
+  round neither widens nor narrows it — the same handful of instructions, now with the
+  three signals blocked across them — and it is a different hazard from the one the block
+  exists for, which is about a handler reading an id the parent has already given back.
+  The plan should not reach for `pgid` to "fix" it: `pgid` is `0` only once that whole
+  sequence is done, and that is the point.
 
   With those rules the handler's contract below needs no change and is finally true rather
-  than nearly true: a non-zero `pgid` or `pre_child` always names a process this parent
-  owns, running or a zombie it has not reaped. The handler still ignores the result of its
+  than nearly true, with one word chosen carefully: a non-zero `pgid` always names a
+  process **group** this parent owns, and a non-zero `pre_child` a process it owns,
+  running or a zombie it has not reaped. The group is the right unit, because the point of
+  the extended block is the window in which the leader has been reaped and members of its
+  group may still be alive — `pgid` is non-zero across that window on purpose, and the
+  group branch is the branch it should select there, which is the property being
+  preserved rather than an event that occurs, since the mask keeps every handler out of
+  that window. The handler
+  still ignores the result of its
   `kill` and of its reap, and the reason is narrower than an earlier round of this spec
   gave. The ids are never stale, so `ESRCH` no longer stands for "this number may belong to
   someone else now". It stands for the one case left: the child exited between the handler's
@@ -3216,7 +3409,12 @@ the spec pull request's range above still blocks review.
 
   So the close goes where it can be checked — among the first statements of `main`, after
   `umask(077)` and after the three `sigaction` installations, before the first pin, the
-  first fork and the first creation:
+  first fork and the first creation. The C half has no version of the ordering problem R1
+  fixes this round on the entry's side, and it is worth confirming rather than assuming:
+  `umask` and `sigaction` are system calls that create no process, `main` is entered with
+  nothing forked, and the loop is the parent's own third statement, so there is no
+  equivalent of the shell's process substitutions or its re-exec sitting between the start
+  of the process and the close (R1):
 
   1. Determine the ceiling. `sysconf(_SC_OPEN_MAX)` is the portable answer and is available
      on both platforms; the parent also reads `getrlimit(RLIMIT_NOFILE, &rl)` and uses
@@ -3827,8 +4025,11 @@ the spec pull request's range above still blocks review.
        `env`'s, `uname`'s, `stat`'s, `cat`'s, the SHA tools' and the compiler's. Both are
        handled the same way — by
        naming the whole environment rather than clearing the part somebody remembered — and
-       the scrub is first because an `env -i` prefix cannot protect the `env` that carries
-       it (R1). This is a named deviation from the test, and the scrub and re-exec are
+       the scrub is first among the external-facing steps because an `env -i` prefix
+       cannot protect the `env` that carries
+       it, with only the entry's own three builtins-and-keywords statements ahead of it —
+       the `-p` refusal, the `umask` and the descriptor close, none of which runs a
+       command (R1). This is a named deviation from the test, and the scrub and re-exec are
        copied verbatim and adapted from
        `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29`.
 
@@ -3904,7 +4105,8 @@ the spec pull request's range above still blocks review.
   does not cover. `README.md:252` gets the updated resolver row. `RESTORE.md:43-46` counts
   the resolver files correctly. The entry's documentation states the two supported
   invocation forms — both of which carry `-p` — says the marker word is not a public entry
-  point and that a marker invocation without `-p` exits 78 without doing anything, and
+  point and that any invocation without `-p`, marker word or not, exits 78 at the entry's
+  first statement without doing anything, and
   names the Darwin
   prerequisite: the Command Line Tools must be installed, because the entry compiles with
   `/Library/Developer/CommandLineTools/usr/bin/clang` rather than the `xcrun` shim at
@@ -4207,8 +4409,10 @@ the spec pull request's range above still blocks review.
 
   **The forged clean-marker invocation is tested in two halves, and neither of them claims
   the branch survives pollution.** A caller can reach the clean path directly by supplying
-  the marker word (R1), and R1 answers that with a refusal — the branch's first statement
-  exits 78 unless `$-` carries a `p` — plus a re-run of the scrub behind it. The two halves
+  the marker word (R1), and R1 answers that with a refusal — the entry's first statement
+  exits 78 unless `$-` carries a `p`, which this round moved from the marker branch to the
+  top of the file and which the marker arrival therefore still meets — plus a re-run of
+  the scrub behind it. The two halves
   test those two things separately, because they hold on different invocations.
 
   *The supported half: the marker branch with `-p`, polluted.* It runs `/bin/bash -p
@@ -4499,7 +4703,13 @@ the spec pull request's range above still blocks review.
   external command, the other is written by the parent after it has forked the resolver.
   Be exact about what each half proves. The entry half is tight: `.run` comes from
   `/bin/mkdir`, so EOF before it means the close preceded the entry's first fork of
-  anything, which is the requirement in R1 word for word. The parent half is looser, and
+  anything, which is the requirement in R1 word for word. That sentence is only true from
+  this round on, and the case is unchanged for it: with the loop where round 30 put it,
+  the scrub's two process substitutions forked before the close, and the reader would
+  still have seen EOF before `.run` as soon as those short-lived children exited — a pass
+  on the bug. The close now precedes every fork and every `exec` the entry performs, so
+  what the case observes and what R1 requires are finally the same statement. The parent
+  half is looser, and
   says so: `runtime-pgid:` is written after the resolver fork, which is well after the SHA
   tools and the jq probe, so the case proves the close happened before the resolver
   inherited anything and leaves "before the *first* fork" to the read of `main`'s opening
@@ -4890,7 +5100,15 @@ the spec pull request's range above still blocks review.
   `waitpid` on a tracked id — each pre-resolver child's, and the supervisor's `:457`,
   `:493-494` and `:451-452` — sits inside a
   `sigprocmask(SIG_BLOCK, …)`/`sigprocmask(SIG_SETMASK, …)` pair that also sets that id to
-  `0` before the restore, and that no `kill` anywhere after a reap names the old `pgid`. A
+  `0` before the restore, and that no `kill` anywhere after that clear names the old
+  `pgid`. On the resolver's two cleanup paths the same reading has one more thing to
+  confirm, and it is the ordering rather than the pair: that the block opened before
+  `:457` is still held across the survivor check at `:460-462` and across the
+  `kill(-child, SIGKILL)`/`kill(child, SIGKILL)` at `:491-492` and the wait at `:493-494`
+  that a positive scan reaches, with `pgid = 0` after all of it and the restore after
+  that — and the same on the limit path, which enters at `:491` — so that no arrangement
+  of those statements leaves a handler able to read `0` while the group is still there
+  (R2). A
   test cannot do better here than it can on the fork window, and for a harder reason: the
   failure needs the kernel to hand the reaped pid to some other process on the machine at
   the instant a signal arrives, which nothing a test script can do makes happen, so a case
@@ -4912,8 +5130,12 @@ the spec pull request's range above still blocks review.
   `sigaction` calls, before the first pin check and therefore before the first `fork` —
   because the descriptor case above proves the close precedes the *resolver* fork and
   leaves the pre-resolver forks to this reading (R5). In the entry, the same reader checks
-  that the `/dev/fd/*` close loop sits after `umask 077` and before the first external
-  command, with the all-digits test ahead of its `eval` and 0, 1 and 2 skipped (R1); the
+  that the `/dev/fd/*` close loop sits after the `case $-` refusal and `umask 077` and
+  before the first external command, with the all-digits test ahead of its `eval` and 0, 1
+  and 2 skipped (R1) — and, this round, that it also precedes the copied scrub's first
+  process substitution and the `exec /usr/bin/env` of the re-exec, which is the position
+  the round-30 wording allowed a plan to get wrong while still satisfying every word of
+  it; the
   entry-side descriptor case does bound this one by observation, and the reading is what
   catches a plan that keeps the loop and moves it. And in the entry's wait loop, the
   reviewer checks that the only `kill` is inside the
@@ -5170,8 +5392,13 @@ Order, each step checkable before the next:
    child of this one — the same block-reap-zero-restore shape around each of the three
    `waitpid`s in the copied supervisor that can reap the resolver (`:457` in the poll loop,
    `:493-494` on the limit path, and `:451-452`, which is already inside the fork region and
-   needs only the mask restored before it returns), with the rest of the poll loop
-   (`:460-488`) left outside the block — with three branches on
+   needs only the mask restored before it returns), except that on the resolver's two
+   cleanup paths the region does not end at the reap: it carries on through the survivor
+   check at `:460-462` and, when that finds survivors, through the `kill(-child, SIGKILL)`
+   and `kill(child, SIGKILL)` at `:491-492` and the wait behind them, with `pgid = 0` last
+   and the restore after it, so no handler can ever see `0` while part of that group is
+   still alive — the rest of the poll loop (`:469-488`) staying outside the block as
+   before — with three branches on
    them: the group sequence when `pgid != 0`, `SIGTERM`-then-`SIGKILL` on that one pid when
    only `pre_child != 0`, and nothing to kill otherwise, never `kill(0, …)` or
    `kill(-0, …)` in any of them. Every `fork` the parent performs — the resolver's
@@ -5201,26 +5428,33 @@ Order, each step checkable before the next:
    or `EAGAIN`/`EPIPE` ignored — and before the poll loop, so a reader can
    identify the resolver's process group without guessing at the process table (R2).
 2. **`resolver/v1/resolve-profile.sh`** — in this order, each step refusing with
-   `E_RUNTIME` before the next. **Scrub, then re-exec, before any external command** — the
+   `E_RUNTIME` before the next. **The entry's own three statements, then the copied scrub
+   and re-exec, and only then anything external.** First
+   `case $- in *p*) ;; *) exit 78 ;; esac` as the first statement in the file, so an
+   arrival that is not one of the two supported invocations is turned away before anything
+   else is parsed, and so that everything below it runs in a shell that imported no
+   function and read no `BASH_ENV`. Then `umask 077`, copied from
+   `adapters/local-git-materializer/v1/materialize.sh:31` but set here rather than after
+   the scrub, because the scrub resets variables and not the process umask (R1). Then
+   every inherited descriptor above 2 closed — the
+   numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
+   all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
+   has no `{fd}>&-` form — placed here, ahead of the scrub and the re-exec, because the
+   scrub's two process substitutions fork bash children and the re-exec runs
+   `/usr/bin/env` and a second bash, all of which would otherwise inherit whatever the
+   caller left open, and so that none of the pin checks, compiles, copies or probes the
+   entry forks below can inherit a caller's credential, socket or write handle outside the
+   output root (R1). Only then the
    builtins-only scrub copied verbatim from
-   `adapters/local-git-materializer/v1/materialize.sh:4-13` under the same `#!/bin/bash -p`
+   `materialize.sh:4-13` under the same `#!/bin/bash -p`
    shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
    marker word, the arity, the `-p` that carries privileged mode across the re-exec where
-   the materializer drops it, and what the marker branch does as its own first
-   statements — `case $- in *p*) ;; *) exit 78 ;; esac`, so an arrival that is not one of
-   the two supported invocations is turned away before anything else in the branch is
-   parsed, and only then the same builtin scrub plus `builtin unalias -a` and `builtin
-   shopt -u
-   expand_aliases` as defence in depth, and `umask 077` last among them, copied from
-   `materialize.sh:31`
-   because the scrub resets variables and not the process umask (R1), and then, still
-   before the first external command, every inherited descriptor above 2 closed — the
-   numbers enumerated by a `/dev/fd/*` glob, which forks nothing, each one checked to be
-   all digits and not 0, 1 or 2 before `eval "exec ${fd}>&-"` shuts it, because bash 3.2
-   has no `{fd}>&-` form — so that none of the pin checks, compiles, copies or probes the
-   entry forks below can inherit a caller's credential, socket or write handle outside the
-   output root (R1), and then, still
+   the materializer drops it, and the three statements above that the copied file does not
+   have in that position — and then the marker branch, which re-runs the same builtin
+   scrub plus `builtin unalias -a` and `builtin shopt -u expand_aliases` as defence in
+   depth (R1). The three opening statements run again in the second process, where the
+   close loop finds nothing above 2 to shut. Then, still
    before the first external command, the four variables every trap and checkpoint reads
    declared empty — `entry_signal=''`, `run_created=''`, `entry_status=''`,
    `parent_pid=''` — so that under `set -u` a signal-free run's first checkpoint and a
@@ -5756,8 +5990,12 @@ intent says for this change. Only after the operator's merge does
   with them — the `runtime-pgid:` line is written after that restore, not in there —
   and the same pair around every `waitpid` that can reap a tracked child, with the id set
   to `0` before the restore: each pre-resolver child's, and the copied supervisor's
-  `:457`, `:493-494` and `:451-452`, the last of which is already inside the fork region,
-  plus the rest of the poll loop at `:460-488` deliberately left outside the block —
+  `:457`, `:493-494` and `:451-452`, the last of which is already inside the fork region —
+  and on the resolver's two cleanup paths that region reaches past the reap, over the
+  copied survivor check at `:460-462` and the copied `kill(-child, SIGKILL)` and
+  `kill(child, SIGKILL)` at `:491-492`, with `pgid = 0` after them and the restore after
+  that, so the copied statements are unchanged and only the mask around them is new, the
+  rest of the poll loop at `:469-488` deliberately left outside the block —
   plus the child's own `SIG_DFL` resets before that restore rather than after it — where the
   launcher forks at `:432` with no mask at all and contains no `sigprocmask`, no
   `sigaction` and no `signal()` anywhere in its 702 lines (verified: none of the three
@@ -5819,16 +6057,21 @@ intent says for this change. Only after the operator's merge does
   `/usr/bin/stat` is run for the owner and mode of that directory and for the pinned
   files' sizes, a command neither
   copied file runs. The eighth is the one item in this whole list
-  that is a copy rather than new code — just from a third file: the entry opens with the
-  builtins-only environment scrub, the empty-environment re-exec and the `umask 077` that
-  follows them taken from
+  that is a copy rather than new code — just from a third file: the entry carries the
+  builtins-only environment scrub, the empty-environment re-exec and the `umask 077` from
   `adapters/local-git-materializer/v1/materialize.sh:1,4-13,22-29,31`, deviating from *those*
-  lines in the marker word, the arity, the `-p` added to the re-exec's `/bin/bash`, and the
-  marker branch's own first statements — the `case $- in *p*) ;; *) exit 78 ;; esac`
-  refusal, and behind it the scrub re-run with two alias-reset lines the copied bytes do
-  not have (R1) — the umask
-  is copied unchanged, in the same position relative to the scrub and ahead of the first
-  thing created — where the
+  lines in the marker word, the arity, the `-p` added to the re-exec's `/bin/bash`, the
+  marker branch's re-run of the scrub with two alias-reset lines the copied bytes do
+  not have, and — this round, and this is a change of position rather than of text — the
+  three statements the entry puts *above* the copied scrub: the
+  `case $- in *p*) ;; *) exit 78 ;; esac` refusal, which was on the marker branch and is
+  now the first statement in the file; the `umask 077`, copied unchanged from `:31` but
+  set before the scrub instead of after it; and the `/dev/fd/*` close loop, which has no
+  counterpart in the copied file at all and has to precede it, because the copied scrub's
+  two process substitutions (`:5-10`) fork bash children and the copied re-exec (`:22-29`)
+  execs `env` and a second bash, and each of those would otherwise inherit a caller's
+  descriptor above 2. The copied bytes are untouched by all three; what moved is what
+  stands in front of them (R1) — where the
   test script and
   `reproduce.sh` scrub nothing at all and run every command under the caller's own
   environment.
