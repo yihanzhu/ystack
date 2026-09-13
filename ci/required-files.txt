@@ -399,3 +399,4 @@ scripts/test/maintenance-loop.test.sh
 # Operating-mode transition proposal
 docs/transition.md
 docs/transition-kit.md
+scripts/test/run-all-sharding.check.sh
