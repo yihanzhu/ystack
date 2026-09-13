@@ -98,7 +98,9 @@ def config_pins_ok:
        "profiles/default/v1/manifests/deterministic-verifier.json":manifest_pins.verifier}[$path]) end) as $pin |
     $pin != null and $claim.value_sha256 == $pin);
 
-def claim_kind_ok: $claim[0].kind == "execution_environment_claim";
+def claim_kind_ok:
+  if ($claim[0] | type) == "object" then $claim[0].kind == "execution_environment_claim"
+  else false end;
 def claim_id_ok:
   ($claim[0].id | type == "string" and
    test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z"));

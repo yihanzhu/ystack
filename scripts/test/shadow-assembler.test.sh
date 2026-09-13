@@ -352,6 +352,10 @@ expect_error shape-claim-kind E_SHAPE fixture.target "$tmp/source.git" "$commit"
 expect_error shape-claim-id E_SHAPE "${good[@]:0:7}" "$tmp/bad-id-claim.json"
 "$jq_bin" -S -c '.body.bindings[0].binding.role="unknown"' "$resolved_profile" > "$tmp/bad-shape-resolved.json"
 expect_error shape-resolved E_SHAPE "${good[@]:0:5}" "$tmp/bad-shape-resolved.json" "$jq_bin" "$claim"
+for claim_value in '[]' true 42 '"text"' null; do
+  printf '%s\n' "$claim_value" > "$tmp/nonobject-claim.json"
+  expect_error "shape-claim-$claim_value" E_SHAPE "${good[@]:0:7}" "$tmp/nonobject-claim.json"
+done
 lookalike_dir="$tmp/lookalike-dir"
 /bin/mkdir -p "$lookalike_dir/manifests"
 /bin/cp "$profile_dir/producer-config.json" "$lookalike_dir/"
@@ -551,9 +555,9 @@ trap cleanup_trap EXIT
 /bin/mkdir -m 0700 "$run_root" || emit_error E_RUNTIME
   "$stage_dir/input.json" >/dev/null 2>&1 || emit_error E_RELATION
   record_destination "$output_dir/$name"
-  /bin/mv "$stage_dir/$name" "$output_dir/$name"
+  /bin/mv "$stage_dir/$name" "$output_dir/$name" 2>/dev/null || emit_error E_RUNTIME
 record_destination "$output_dir/input.json"
-/bin/mv "$stage_dir/input.json" "$output_dir/input.json"
+/bin/mv "$stage_dir/input.json" "$output_dir/input.json" 2>/dev/null || emit_error E_RUNTIME
 committed=yes
 ORDER
 order=()
@@ -615,6 +619,54 @@ printf 'whole output\n' > "$newline_name"
 /bin/bash "$tmp/cleanup-driver.sh" "$tmp/cleanup-owned" "$newline_name" "$tmp/never-moved"
 [ ! -e "$newline_name" ] && [ ! -d "$tmp/cleanup-owned" ] || fail cleanup-path-boundary
 pass 'cleanup handles recorded newline paths and destinations not yet moved'
+# Run exact production steps with missing inputs; no shipped hook or live-window claim.
+cat > "$tmp/fault-lines" <<'FAULT_LINES'
+/bin/cat "$finished_input" 2>/dev/null > "$stage_dir/input.json.tmp" || emit_error E_RUNTIME
+/bin/mv "$stage_dir/input.json.tmp" "$stage_dir/input.json" 2>/dev/null || emit_error E_RUNTIME
+    "$jq_bin" -r ".${staged_filters[$staged_index]}" "$input_out" 2>/dev/null > "$stage_dir/$name.tmp" || emit_error E_RUNTIME
+    "$jq_bin" -S -c ".${staged_filters[$staged_index]}" "$input_out" 2>/dev/null > "$stage_dir/$name.tmp" || emit_error E_RUNTIME
+  /bin/mv "$stage_dir/$name.tmp" "$stage_dir/$name" 2>/dev/null || emit_error E_RUNTIME
+  /bin/mv "$stage_dir/$name" "$output_dir/$name" 2>/dev/null || emit_error E_RUNTIME
+/bin/mv "$stage_dir/input.json" "$output_dir/input.json" 2>/dev/null || emit_error E_RUNTIME
+FAULT_LINES
+fault_index=0
+while IFS= read -r fault_line; do
+  fault_index=$((fault_index + 1))
+  fault_position=$(line_of "$fault_line")
+  fault_out="$tmp/fault-$fault_index"
+  mkdir -m 700 "$fault_out" "$fault_out/run" "$fault_out/run/stage"
+  printf 'previous completed companion\n' > "$fault_out/previous"
+  {
+    printf 'set -euo pipefail\n'
+    sed -n '/^emit_error() {$/,/^}$/p' "$assembler"
+    sed -n '/^record_destination() {$/,/^}$/p' "$assembler"
+    sed -n '/^cleanup_trap() {$/,/^}$/p' "$assembler"
+    cat <<'FAULT_SETUP'
+output_dir=$1
+run_root="$output_dir/run"
+stage_dir="$run_root/stage"
+finished_input="$run_root/missing-input"
+input_out="$run_root/missing-json"
+jq_bin=$2
+name=companion
+staged_filters=(value.input)
+staged_index=0
+committed=no
+committed_destinations=()
+record_destination "$output_dir/previous"
+trap cleanup_trap EXIT
+FAULT_SETUP
+    if [ "$fault_index" -ge 6 ]; then
+      sed -n "$((fault_position - 1))p" "$assembler"
+    fi
+    sed -n "${fault_position}p" "$assembler"
+  } > "$tmp/io-fault.sh"
+  fault_status=0
+  /bin/bash "$tmp/io-fault.sh" "$fault_out" "$jq_bin" > "$tmp/fault.stdout" 2> "$tmp/fault.stderr" || fault_status=$?
+  [ "$fault_status" -ne 0 ] && [ "$(cat "$tmp/fault.stderr")" = E_RUNTIME ] || fail "io-fault-$fault_index-status"
+  [ ! -s "$tmp/fault.stdout" ] && [ -z "$(find "$fault_out" -mindepth 1 -print -quit)" ] || fail "io-fault-$fault_index-cleanup"
+  pass "extracted I/O step $fault_index at line $fault_position returns E_RUNTIME and cleans recorded outputs"
+done < "$tmp/fault-lines"
 pass "source order: physical=${order[0]} purity=${order[1]} trap=${order[2]} mkdir=${order[3]} validate=${order[4]} moves=${order[6]},${order[8]} committed=${order[9]}"
 
 # 0.7 — the driver run.

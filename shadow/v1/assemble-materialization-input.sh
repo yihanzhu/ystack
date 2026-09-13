@@ -418,8 +418,8 @@ size_ok "$finished_input" 8388608
 
 stage_dir="$run_root/stage"
 /bin/mkdir -m 0700 "$stage_dir" || emit_error E_RUNTIME
-/bin/cat "$finished_input" > "$stage_dir/input.json.tmp"
-/bin/mv "$stage_dir/input.json.tmp" "$stage_dir/input.json"
+/bin/cat "$finished_input" 2>/dev/null > "$stage_dir/input.json.tmp" || emit_error E_RUNTIME
+/bin/mv "$stage_dir/input.json.tmp" "$stage_dir/input.json" 2>/dev/null || emit_error E_RUNTIME
 staged_filters=(value.pair_refs.stage_request_ref value.pair_refs.resolved_profile_ref
   value.decision_texts.finish value.decision_texts.verify
   value.decision_texts.output_contract value.decision_texts.policy)
@@ -430,11 +430,11 @@ staged_index=0
 while [ "$staged_index" -lt 6 ]; do
   name=${staged_names[$staged_index]}
   if [ "${staged_forms[$staged_index]}" = raw ]; then
-    "$jq_bin" -r ".${staged_filters[$staged_index]}" "$input_out" > "$stage_dir/$name.tmp"
+    "$jq_bin" -r ".${staged_filters[$staged_index]}" "$input_out" 2>/dev/null > "$stage_dir/$name.tmp" || emit_error E_RUNTIME
   else
-    "$jq_bin" -S -c ".${staged_filters[$staged_index]}" "$input_out" > "$stage_dir/$name.tmp"
+    "$jq_bin" -S -c ".${staged_filters[$staged_index]}" "$input_out" 2>/dev/null > "$stage_dir/$name.tmp" || emit_error E_RUNTIME
   fi
-  /bin/mv "$stage_dir/$name.tmp" "$stage_dir/$name"
+  /bin/mv "$stage_dir/$name.tmp" "$stage_dir/$name" 2>/dev/null || emit_error E_RUNTIME
   staged_index=$((staged_index + 1))
 done
 
@@ -447,9 +447,9 @@ for name in stage-request-ref.json resolved-profile-ref.json \
   finish-condition.txt verification-instructions.txt \
   output-contract-decision.txt policy-decision.txt; do
   record_destination "$output_dir/$name"
-  /bin/mv "$stage_dir/$name" "$output_dir/$name"
+  /bin/mv "$stage_dir/$name" "$output_dir/$name" 2>/dev/null || emit_error E_RUNTIME
 done
 record_destination "$output_dir/input.json"
-/bin/mv "$stage_dir/input.json" "$output_dir/input.json"
+/bin/mv "$stage_dir/input.json" "$output_dir/input.json" 2>/dev/null || emit_error E_RUNTIME
 committed=yes
 committed_destinations=()
