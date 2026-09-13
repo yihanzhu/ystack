@@ -400,3 +400,6 @@ scripts/test/maintenance-loop.test.sh
 docs/transition.md
 docs/transition-kit.md
 scripts/test/run-all-sharding.check.sh
+
+# Current operator-led Roadmap decision
+work/roadmap-program-authorization/decision.md
