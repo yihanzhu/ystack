@@ -982,14 +982,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8502-11504 lines** — this file's measured 10003 lines plus or minus 15%, rounded. That
+**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10003 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10025 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1187,7 +1187,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8502-11504 lines** — this file's measured 10003 lines plus or minus 15%, rounded. That
+**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2528,8 +2528,8 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8502-11504 lines**, which is this file's measured
-10003 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8521-11529 lines**, which is this file's measured
+10025 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -2796,7 +2796,7 @@ the spec pull request's range above still blocks review.
   jq and awk copies, and immediately before the parent is launched. A bare `exit` there
   hands control to the `EXIT` trap, which does the cleanup, writes the line and supplies
   the status — `128 + signal` for the recorded name, because a checkpoint never records an
-  `entry_status`. That is the same number every path through this requirement produces.
+  `entry_status`. This is the no-parent checkpoint status; a reaped parent retains its own status.
   The function's test is a read of a set variable at every one of those call sites, and on
   the normal run it is a read of the empty string every time: `entry_signal` is declared
   empty among the entry's first builtins, ahead of the traps (above), which is what keeps
@@ -2807,10 +2807,12 @@ the spec pull request's range above still blocks review.
   trap body that assigns nothing because `entry_signal` is no longer empty. The status and
   the line are the first signal's in every case.
 
-  **Every external command the entry runs is written in three steps: status, then
-  checkpoint, then refusal.** The usual shell shorthand — `cmd || refuse E_RUNTIME`, or
+  **Every external command in the pre-parent main flow uses three steps: status,
+  checkpoint, then refusal.** The parent launch/wait and the `EXIT` trap follow their
+  separate fixed sequences. Cleanup never calls `checkpoint`: after ignoring signals,
+  it attempts chmod and removal, handles the diagnostic, then selects the exit status. The usual shell shorthand — `cmd || refuse E_RUNTIME`, or
   any `||` that turns a non-zero status straight into an error — is **forbidden** for
-  every external command in this entry, and the reason is the same bash rule the
+  every external command in that pre-parent main flow, for the same bash rule the
   checkpoints rest on. A `Ctrl-C` at a terminal signals the whole foreground process
   group, so the SHA-1 pipeline, the compile or the `cp` the entry happens to be waiting on
   receives the signal too and dies on it. That command's status is then non-zero *because
@@ -2841,7 +2843,7 @@ the spec pull request's range above still blocks review.
   the substitution's output in its own statement, capture that statement's status,
   `checkpoint`, and only then judge the status. A substitution is a foreground child like
   any other and a group signal reaches it the same way; that is the same lesson the
-  withdrawn `run_created=$(…)` guard taught, applied to every command rather than to one.
+  withdrawn `run_created=$(…)` guard taught, applied throughout that pre-parent flow.
   The `mkdir` block above already reads in this order, and is written out there only
   because its status test has three cases rather than two — it is the worked example of
   this rule, not an exception to it.
@@ -2983,7 +2985,7 @@ the spec pull request's range above still blocks review.
     own, which is not a state this entry can reach: it records the pid from `$!` on the
     statement that starts the parent and never clears it. It is an internal error rather
     than an arrival, and the entry treats it as the signal path it is on — `entry_status`
-    is `128 + <signum of entry_signal>`, the same number every other signal path produces —
+    is `128 + <signum of entry_signal>` for this internal-error fallback —
     rather than passing `127` off as somebody's exit status.
 
   That last rung is all that survives of the earlier `127` rule, which said a `127` after
@@ -3497,11 +3499,10 @@ the spec pull request's range above still blocks review.
   sets `parent_pid` immediately after starting the parent and never clears it, so the
   no-parent form cannot be written while a parent is alive.
 
-  Both paths exit rather than re-raising the signal, which is a deliberate choice over the
-  more idiomatic reset-and-re-raise: an explicit `exit` makes the entry's status on a signal
-  the same number in every path through this requirement — `128 + signal`, the same rule the
-  normal path already uses for a child that died on a signal — and that number is what R10
-  asserts.
+  Both paths use an explicit exit rather than re-raising the signal. The no-parent
+  checkpoint returns `128 + signal`. Once the parent has been reaped, the entry returns
+  that parent's actual status, including a natural `7` or `42`; signal termination
+  produces `128 + signal` only when that is the reaped status. R10 covers both cases.
 
   No child of the entry's own is alive when the no-parent removal runs, and the reason is
   bash's own deferral rule rather than anything about process groups. An earlier round of
@@ -3693,7 +3694,9 @@ the spec pull request's range above still blocks review.
   summary of the forwarded branch, R10's assertions — the shorthand "`128 + signal` and
   the one `entry-signal:` line" appears. Read it with this condition attached: one line
   when stderr is a regular file, and none on any other kind of stderr. The status half of that
-  shorthand is unconditional and is the half anything ever depends on. One mention does
+  shorthand applies only to the no-parent checkpoint path or when it is the parent's
+  actual reaped status. Other parent statuses remain unchanged. Diagnostic suppression
+  never changes that status selection. One mention does
   **not** take the shorthand, deliberately: R9's documentation requirement writes the
   condition out in full, because that line is a promise to a caller reading the entry's
   documentation rather than a cross-reference between two requirements, and a caller who
@@ -4417,6 +4420,22 @@ the spec pull request's range above still blocks review.
   that third run is the finding in one observation, a forked child holding a caller's
   descriptor open after the shell that inherited it has gone.
 
+  **Capture the self path before the scrub.** After the descriptor-close loop and
+  before the copied scrub, use the shell-validated `PWD` to construct the self path:
+
+  ```
+  case ${BASH_SOURCE[0]} in
+    /*) script_path=${BASH_SOURCE[0]} ;;
+    *)  script_path=$PWD/${BASH_SOURCE[0]} ;;
+  esac
+  builtin export -n script_path
+  ```
+
+  The final builtin removes any inherited export attribute from `script_path`.
+  Thus the unchanged exported-variable scrub removes `PWD` but retains this local
+  value. Do not recompute the join after the scrub. Both the first process and the
+  marker process perform this capture; it adds no fork, external command or cwd change.
+
   **Then the scrub, copied verbatim, with nothing of the caller's left for its own children
   to inherit.** It comes from the materializer's clean entry
   (`adapters/local-git-materializer/v1/materialize.sh:4-13`):
@@ -4467,29 +4486,10 @@ the spec pull request's range above still blocks review.
   descriptor close — together with the marker
   branch's own re-run of the scrub behind two alias-reset builtins, below.
 
-  **The fifth is `$script_path`: the entry makes its own path absolute instead of refusing
-  a relative one.** The materializer writes the check as a refusal —
-  `script_path=${BASH_SOURCE[0]}` and then
-  `case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac` (`:23-24`) — and the
-  re-exec does need an absolute path, because it runs the second bash from a process whose
-  working directory the caller chose and `exec` carries no `cd` with it. But the
-  materializer is a component other code calls by an absolute path, and the entry is
-  something a person runs from a repository root. Keeping the refusal would mean
-  `resolver/v1/resolve-profile.sh <jq> <output> <request> <map>` — the most ordinary way
-  anyone will ever type it — exits `E_USAGE` for a reason no message explains, so the entry
-  turns the relative form into an absolute one with builtins only, in the same place and in
-  the same `case`:
-
-  ```
-  case ${BASH_SOURCE[0]} in
-    /*) script_path=${BASH_SOURCE[0]} ;;
-    *)  script_path=$PWD/${BASH_SOURCE[0]} ;;
-  esac
-  ```
-
-  Four lines where the copied file has one, no command run and no variable read that the
-  shell does not maintain itself, and it sits where the refusal sat — after the argument
-  count and before the `exec`, still ahead of every external command.
+  **The fifth is `$script_path`: the entry accepts a relative self path.** The capture
+  above makes it absolute before the scrub removes `PWD`. After checking the argument
+  count, the re-exec uses that retained local value. No self-path join runs here.
+  The supported repo-root invocation remains `resolver/v1/resolve-profile.sh ...`.
 
   **Why `$PWD` is trustworthy enough to build a path from, measured rather than assumed.**
   `PWD` is an ordinary exported variable and a caller can set it to anything, `-p` or not:
@@ -6302,7 +6302,13 @@ the spec pull request's range above still blocks review.
     `st_ino`. Same mechanism as the `.run` containment check above and for the same
     reason: nothing is resolved twice and no symlink is followed on either side, so an
     equal answer means one object rather than two names that agree at the moment of
-    asking. A jq anywhere else is `E_RUNTIME`. The SHA-256 pin and the `jq-1.6` probe
+    asking. File identity alone is insufficient: a hardlink elsewhere has the same inode
+    but gives the runtime a different tool-directory string. Require the argument's
+    basename to be exactly `jq`. Open its containing directory without following
+    symlinks, using the same descriptor walk as the run-directory containment check,
+    and require its `st_dev` and `st_ino` to equal checked `run_fd`. Keep the file
+    identity check too. A missing directory, basename mismatch or either identity
+    mismatch is `E_RUNTIME` before any fork. The SHA-256 pin and the `jq-1.6` probe
     still run on it — descriptor identity is a further condition, not a replacement for
     either.
   - **`.run/awk` is verified the way the helper is.** Opened
@@ -6807,7 +6813,9 @@ the spec pull request's range above still blocks review.
      digest pin — that one is jq's — so it is not an input to either digest pipeline
      either. **This round the parent's source names it too, in one place, and that place
      is not a command either.** It is the string literal the Linux arm of the `.run/awk`
-     verification opens `O_RDONLY|O_NOFOLLOW` to read the expected bytes from (R5); the
+     verification opens with `O_RDONLY|O_CLOEXEC`, follows the trusted platform symlinks,
+     and requires a regular file by `fstat` before reading (R5). The caller-supplied
+     `.run/awk` still uses `O_NOFOLLOW`. The
      Darwin arm names it once more inside the two-line constant it compares against
      instead, which is text the parent reads out of `.run` and never runs, exactly as the
      entry's copy of that text is text the entry writes and never runs. R10's pass 1
@@ -7177,8 +7185,8 @@ the spec pull request's range above still blocks review.
 
   **The three-step shape above is not new here and this round is only where it reaches
   this paragraph.** R1's rule — run the command with its status captured, then
-  `checkpoint`, then the refusal — has been normative for every external command in the
-  entry since round 24, and it names the `uname` reads among the substitutions it covers.
+  `checkpoint`, then the refusal — applies to external commands in the pre-parent
+  main flow, and it names the `uname` reads among the substitutions it covers.
   This paragraph nevertheless went on showing the shorthand it forbids,
   `case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in …`, and an implementer copying the
   shape from the place that *specifies the shape* would have written a `case` whose word
@@ -7265,6 +7273,11 @@ the spec pull request's range above still blocks review.
     before the `fork`. The case has to relax the 0500 mode to write the file and set it
     back, which is a fixture detail worth naming so nobody reads the case as also testing
     the mode: the mode assertions are the bullets below, and this one is about bytes;
+  - a hardlink to the genuine `.run/jq` placed at a sibling directory's `jq`, with
+    executable marker `awk` beside it. Assert the two jq paths have identical device
+    and inode, then pass the sibling path directly to the parent. Require `E_RUNTIME`
+    before fork and no marker execution; run that awk separately as the positive
+    control. This isolates directory binding from the existing different-copy test;
   - a request path that is not absolute, a repository-map path that is not absolute,
     a request path that is a symlink to a real request, and a repository-map path that
     is a symlink — four cases, because the copied
@@ -7542,9 +7555,11 @@ the spec pull request's range above still blocks review.
   types.** One run of `resolver/v1/resolve-profile.sh <jq> <output> <request> <map>` —
   relative, no leading `./`, from the repository root, with a clean environment and a
   `PWD` the shell derived itself — completes with the same byte-identical output the
-  absolute run produces and the same empty output root after cleanup. It is one case and it
+  absolute run produces. After cleanup the output root contains exactly `home`, `tmp`,
+  `child.stdout`, and `child.stderr`, with `.run` absent, as for absolute-path success.
+  It is one case and it
   proves two things at once: that the committed mode makes the shebang launch work, and
-  that R1's `$PWD` join hands the re-exec an absolute path the second bash can open.
+  that R1's pre-scrub self-path capture survives the scrub and supplies an absolute path.
   Measured ahead of writing it, bash 3.2 on `arm64-apple-darwin`: the relative form reaches
   the clean path with `$-` of `hpB` and `$0` absolute, exactly as the absolute form does.
   There is deliberately **no** bogus-`PWD` case beside it, and the reason is the
@@ -8815,9 +8830,14 @@ the spec pull request's range above still blocks review.
      rest). Deriving both sets at run time from `/bin/bash` rather than hard-coding them is
      the choice this spec makes, and the reason is drift: `/bin/bash` is the same interpreter
      the entry runs under, so the exclusion set is exactly that shell's and cannot fall out
-     of step with a list somebody typed into the test. What must remain after those two drops
-     is **nothing at all**, because every external command the entry runs it runs by absolute
-     path — so any surviving bare word is either a `PATH` search or a new external command,
+     of step with a list somebody typed into the test. Also allow the closed local
+     function set `checkpoint` and `refuse`: require one definition of each, inspect
+     both bodies with the same three passes, reject redefinition or unsetting after
+     definition, and require every call to follow its definition. A missing definition,
+     any other local function name, or an unresolved bare command fails. These are
+     local calls, not external executables. After these three exclusions nothing may
+     remain: every external command must still use an accepted absolute path,
+     so any surviving bare word is an unresolved command or a `PATH` search,
      which is precisely what this invariant exists to catch. Variable expansions in command
      position (`"$compiler"`, the chosen SHA tool, the bound jq, the compiled parent inside
      the run directory) are not bare words and are not swept here; pass 3 covers them.
@@ -9101,18 +9121,17 @@ Order, each step checkable before the next:
    `/usr/bin/env` and a second bash, all of which would otherwise inherit whatever the
    caller left open, and so that none of the pin checks, compiles, copies or probes the
    entry forks below can inherit a caller's credential, socket or write handle outside the
-   output root (R1). Only then the
+   output root (R1). Next capture `script_path` from `BASH_SOURCE[0]` and the
+   shell-validated `PWD`, then `builtin export -n script_path` so the subsequent scrub
+   retains this local variable while removing `PWD` (R1). Only then the
    builtins-only scrub copied verbatim from
    `materialize.sh:4-13` under the same `#!/bin/bash -p`
    shebang (`:1`), then `exec /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
    "$script_path" __resolve_profile_clean "$1" "$2" "$3" "$4"`, adapted from `:22-29` in the
    marker word, the arity, the `-p` that carries privileged mode across the re-exec where
    the materializer drops it, the four statements above that the copied file does not
-   have in that position, and `$script_path` *made* absolute where the materializer
-   refuses a relative one — `case ${BASH_SOURCE[0]} in /*) script_path=${BASH_SOURCE[0]}
-   ;; *) script_path=$PWD/${BASH_SOURCE[0]} ;; esac`, builtins only, in the position
-   `:23-24`'s refusal held, so that a repo-root `resolver/v1/resolve-profile.sh …` runs
-   instead of exiting `E_USAGE` and the `exec` still gets the absolute path it needs
+   have in that position, and the absolute `$script_path` captured before the scrub.
+   The re-exec uses that retained value without reading the now-unset `PWD`
    (R1) — and then the marker branch, which re-runs the same builtin
    scrub plus `builtin unalias -a` and `builtin shopt -u expand_aliases` as defence in
    depth (R1). The four opening statements run again in the second process, where the
@@ -9176,7 +9195,9 @@ Order, each step checkable before the next:
    signal, at
    a `checkpoint` — `[ -z "$entry_signal" ] || exit` — placed after the `mkdir`, after each
    pin check, after each compile, after the copies and immediately before the launch, and
-   again around the wait on the parent. Every external command in this entry — each pin
+   around the wait on the parent through its separate wait algorithm. The `EXIT` trap
+   never calls `checkpoint`; it completes its ordered cleanup and status selection.
+   Every external command in the pre-parent main flow — each pin
    check, both compiles, both copies, and every `$(...)` that runs a tool — is written in
    three statements rather than two: run it with its status captured, then `checkpoint`,
    then the refusal on that captured status. `cmd || refuse` is forbidden here, because a
@@ -9605,9 +9626,9 @@ intent says for this change. Only after the operator's merge does
   dies on it and returns non-zero *because of the signal*; the refusal beside the command
   then fires first and the caller gets an `E_RUNTIME` line instead of `128 + signal` and
   the `entry-signal:` line — the wrong cause, and the signal lost. So R1 requires the
-  three-step shape of every external command in the entry, `$(...)` substitutions
+  three-step shape of each external command in the pre-parent main flow, substitutions
   included: capture the status, `checkpoint`, then refuse. The plan should treat
-  "no external command is followed by `|| refuse`" as a rule of the entry beside the
+  "no pre-parent external command is followed directly by `|| refuse`" beside the
   trap-body rule above, and R10's group-signal case is what proves it from outside,
   by asserting that no `E_RUNTIME` line appears on a signalled run.
 - **Cleanup is best-effort, and the extra process is the price.** Waiting instead of
@@ -9691,8 +9712,9 @@ intent says for this change. Only after the operator's merge does
   that caller away rather than defeating them.
 
   So the claim, in the words the plan must use: **the parent must be started by a trusted
-  process — the entry when used as designed, or the operator's own shell for the step-7 run
-  — and the entry must itself be started by a trusted process for the same reason, because
+  process — the supported entry. For the step-7 run the operator's trusted shell starts
+  that entry, which starts the parent. Direct-parent invocations remain test-only.
+  The entry must itself be started by a trusted process for the same reason, because
   its first process has no loader-variable defence either. A parent, or an entry, invoked
   from a hostile environment has none at all.** R10 tests it at exactly that boundary and
   nowhere else: loader variables are
