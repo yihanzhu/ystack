@@ -982,14 +982,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8461-11447 lines** — this file's measured 9954 lines plus or minus 15%, rounded. That
+**8502-11504 lines** — this file's measured 10003 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 9954 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10003 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1187,7 +1187,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8461-11447 lines** — this file's measured 9954 lines plus or minus 15%, rounded. That
+**8502-11504 lines** — this file's measured 10003 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2528,8 +2528,8 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8461-11447 lines**, which is this file's measured
-9954 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8502-11504 lines**, which is this file's measured
+10003 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -2557,9 +2557,12 @@ the spec pull request's range above still blocks review.
   `HUP`, and those three traps do one thing only, and do it in two statements: they record
   the *first* signal's name in an `entry_signal` variable and set the `wait_interrupted`
   flag the wait loop below reads. Everything else happens in the main flow afterwards, at the
-  checkpoints set out below. When a parent exists the entry **forwards the same signal to
-  the parent, waits for the parent to exit, and only then** lets the `EXIT` trap remove the
-  run directory, and it exits `128 + signal`. That order is the whole point: the parent,
+  checkpoints set out below. When the parent is still listed as `Running`, the entry forwards the first
+  recorded signal at most once, waits for the parent to exit, and only then lets the
+  `EXIT` trap remove the run directory. If the parent has already exited before the
+  forwarding check, the entry preserves its actual exit status, including `7` or `42`,
+  as the wait loop below requires. The entry preserves the parent's actual reaped status. If the parent
+  terminates because of the signal, that status is `128 + signal`. That order is the whole point: the parent,
   not the entry, terminates the resolver's process group (R2), so the entry must never
   remove the run directory while a resolver could still be running out of it. A bash `wait`
   interrupted by a trapped signal returns at once with `128 + signal` of its own rather
@@ -2632,11 +2635,8 @@ the spec pull request's range above still blocks review.
   alternative — record the latest — was considered and is not taken, because it makes
   every one of those observables depend on when the caller's second press landed relative
   to a compile, which is exactly the kind of scheduling-dependent output a test cannot
-  assert. The cost is named rather than hidden: the signals the entry actually forwards
-  may differ from the name on the line, since a later `INT` is delivered to the entry and
-  recorded nowhere. R10 tolerates that by construction — it asserts exactly one
-  `entry-signal:` line naming the **first** signal, and asserts nothing at all about a
-  later one.
+  assert.  Later signals set `wait_interrupted` again but never replace or re-forward the
+  first signal. R10 asserts one `entry-signal:` line naming that first signal.
 
   **Every variable a trap, a checkpoint or the `EXIT` trap reads is initialised before any
   trap is installed.** The entry runs under `set -u` (the three-step command rule below
@@ -3163,7 +3163,7 @@ the spec pull request's range above still blocks review.
   produced it, and every read of it is below that assignment in the same branch, so no
   trap, no checkpoint and no `EXIT` trap can ever read it at all.
 
-  **Forwarding is once per new signal, and a repeat is not re-forwarded.** The
+  **Forwarding is at most once, using the first recorded signal.** The
   `[ "$entry_signal" != "$last_forwarded" ]` test is what makes that true: without it every
   pass with the parent still listed as `Running` would send another `kill`, so
   a user holding `Ctrl-C` would produce a
@@ -3176,7 +3176,7 @@ the spec pull request's range above still blocks review.
   the noise down. Bash reaps the parent the instant it exits, before
   the `wait` that reports its status returns, so from that instant `parent_pid` is a number
   the kernel may give to anybody — and a `kill` the loop sends afterwards is a `kill` at
-  whatever now holds it. One forward per recorded name is what bounds that, and the table
+  whatever now holds it. At most one forward in the run is what bounds that, and the table
   check above is what makes the bound narrow rather than merely finite. The loop sends
   at most one signal in the whole run; it sends it on the first pass that finds a recorded
   name it has not already forwarded and the parent's job listed as `Running`, which is the
@@ -3184,7 +3184,7 @@ the spec pull request's range above still blocks review.
   recorded before the loop began — and which
   in every ordinary case is while the parent is still running its termination sequence.
   Since the traps keep the *first* name (above), `entry_signal` never changes
-  after it is set, so in practice the loop forwards exactly once per run — but the
+  after it is set, so the loop can attempt forwarding at most once per run — but the
   comparison is not therefore redundant, because what it suppresses is the re-forward on
   every subsequent pass, not a second name.
 
@@ -5773,7 +5773,8 @@ the spec pull request's range above still blocks review.
   `shadow/v1/reproduce.sh:113-118`), or is not the run directory's own `jq`; the `awk`
   beside it in that directory is not a regular caller-owned mode-0500 file holding the
   bytes the entry put there — the bound-tool-root block below specifies those last two in
-  full; the helper fails the run-directory checks below;
+  full; the run directory holds any entry other than the exact four the block below
+  enumerates, or is missing one of them; the helper fails the run-directory checks below;
   any allowlisted value is not an absolute
   regular path, or is too long for the fixed buffer it is copied into (`:641`, `:662-665`
   — a guard that is reachable for the output path and, for the reason R10 gives,
@@ -5794,8 +5795,8 @@ the spec pull request's range above still blocks review.
   the parent creates `home` and `tmp` there (`:645-647`, which the parent replaces with
   `mkdirat` on the descriptor that check opened, below), so a refused run leaves the output
   directory exactly as it found it; and the `.run` identity comparison runs before the
-  helper, binary, run-directory, jq-identity and awk checks below, for the reason the
-  block after this one gives.
+  helper, binary, run-directory, jq-identity, awk and run-directory-listing checks below,
+  for the reason the block after this one gives.
 
   **That containment check is descriptor identity, and it follows no symlink anywhere.**
   An earlier round of this spec wrote it as a string comparison of two `realpath` answers,
@@ -6310,8 +6311,13 @@ the spec pull request's range above still blocks review.
     helper bullet above requires — and its bytes must be the bytes the entry put there.
     The parent needs no digest tool for that and starts no process: it reads both sides
     in full through descriptors it opened, compares the sizes first and then the bytes.
-    On Linux the other side is `/usr/bin/awk` itself, opened `O_RDONLY|O_NOFOLLOW`,
-    because that is what the entry copied in (`/bin/cp /usr/bin/awk <run>/awk`, R1, R7).
+    On Linux compare against `/usr/bin/awk`, opened with `O_RDONLY|O_CLOEXEC`
+    and required by `fstat` to be a regular file before reading. Follow this platform
+    path's symlinks: Debian and Ubuntu commonly route it through `/etc/alternatives`,
+    and the entry's `/bin/cp` follows the same links. Keep `O_NOFOLLOW` for `.run/awk`,
+    which is caller-supplied. This relies on the trusted platform installation;
+    the regular-file check does not promise to prevent a blocking open if that trusted
+    installation has replaced `/usr/bin/awk` with a FIFO.
     On Darwin the entry writes a two-line shim instead — `#!/bin/bash` and
     `exec /usr/bin/awk "$@"`, 35 bytes — so the other side is that string, held in the
     parent as a constant, which is the stronger of the two comparisons. It is a byte
@@ -6323,10 +6329,14 @@ the spec pull request's range above still blocks review.
   proved to be `.run/jq`, the runtime's `${YSTACK_RESOLVER_JQ%/*}` is `.run`, so
   `$profile_resolution_bound_tool_root/awk` is `.run/awk` — the file the parent has just
   read end to end — and `PATH=<.run>:/usr/bin:/bin` names a 0500 directory whose whole
-  content is the four files the parent has now checked. There is no fifth entry for a
-  `PATH` search to reach, because the output-directory rule admits exactly `.run` and the
-  run directory holds exactly those four files and no subdirectory at launch (R1). The
-  caller's `awk` is then unreachable by either route, the derived one and the `PATH` one.
+  content is the four files the parent has now checked.  There is no fifth entry for a
+  `PATH` search to reach: after identity checks and before `fork`, the parent lists
+  `.run` using `fdopendir` on a `dup` of the already checked `run_fd`. Skipping only
+  `.` and `..`, require exactly four distinct names: `trusted-launch`, the last
+  component of the helper argument, `jq`, and `awk`. A missing name, any extra entry
+  (including a directory), a helper basename collision, or a listing error refuses
+  with `E_RUNTIME`. The check is required for direct-parent invocations too; the
+  parent's trust cannot depend on assuming that the entry assembled this directory.
 
   **And the check is the parent's, not the entry's, even though the entry already copies
   both files.** The entry puts the jq and the awk into `.run` and tightens them to 0500
@@ -6599,15 +6609,25 @@ the spec pull request's range above still blocks review.
      to compare it byte for byte against the `awk` it finds there (R5), while on Darwin the
      entry writes a two-line shim naming that path and the parent compares against that
      same two-line string held as a constant, so neither opens the host binary at all
-     (below); the caller's output directory; and
-     the entry's own run directory. `/usr/bin/awk` was the previous round's one widening of
+     (below); the caller's output directory; the entry's own run directory; and
+     **`/dev/fd`, enumerated by both shipped files**, which this round adds to the list
+     rather than leaving it to be discovered in the code (the paragraph after this item
+     states it in full). `/usr/bin/awk` was an earlier round's one widening of
      this list and it is
      a read of a fixed path in the same class as the ones already here, not a new kind of
      read: no content of it leaves the parent, and the only thing the parent does with the
-     bytes is compare them. **This round widens nothing at all** — the list of files is the
-     same list, and only the column saying which process reads which of them moves, because
+     bytes is compare them. **The round that widened the parent-pinned set to eight files
+     widened this list not at all** — the list of files was the
+     same list, and only the column saying which process reads which of them moved, because
      the five modules the entry alone used to hash are now hashed by the parent too. Same
      paths, same one-way use of the bytes, one more reader.
+
+     Both shipped files enumerate `/dev/fd` to close inherited descriptors. The entry
+     also checks the file type of `/dev/fd/2` before its diagnostic. Neither reads
+     descriptor contents. If enumeration fails, the parent refuses with `E_RUNTIME`
+     before creating output; the entry refuses on the unmatched `/dev/fd/*` glob as
+     R1 requires. These are host-state and metadata reads, included in this boundary.
+
 
      **The executables, listed exactly.** The previous round's list was short enough to be
      wrong. It named seven — the compiler, `/bin/bash`, `/bin/mkdir`, `/bin/cp`,
@@ -7245,8 +7265,9 @@ the spec pull request's range above still blocks review.
     before the `fork`. The case has to relax the 0500 mode to write the file and set it
     back, which is a fixture detail worth naming so nobody reads the case as also testing
     the mode: the mode assertions are the bullets below, and this one is about bytes;
-  - a request path that is not absolute, a request path that is a symlink to a real
-    request, and a repository-map path that is a symlink — three cases, because the copied
+  - a request path that is not absolute, a repository-map path that is not absolute,
+    a request path that is a symlink to a real request, and a repository-map path that
+    is a symlink — four cases, because the copied
     launcher checks only the leading slash on those two arguments
     (`portable-profile-resolution-launcher.c:636`) and the regular-non-symlink check on
     them is new code;
@@ -7258,6 +7279,14 @@ the spec pull request's range above still blocks review.
   - a compiled parent binary in the run directory whose mode is not 0500;
   - a helper outside the run directory it was given, a helper whose mode is not 0500, and
     a run directory whose mode is not 0500;
+  - direct-parent `.run` name-set cases: an extra executable `cat` that prints a marker,
+    an extra directory, a missing helper, and a helper argument whose basename collides
+    with `jq`. Each refuses with `E_RUNTIME`, no `runtime-pgid:` line, no marker
+    execution, and unchanged output/run entry sets. Run the marker script separately
+    as a positive control;
+  - a `.run/awk` symlink, a directory in its place, and a wrong-mode copy, separately
+    from the existing byte-tampering case;
+  - an output path that is itself a symlink to an otherwise valid output directory;
   - an output directory holding an entry other than `.run`; one whose mode is not 0700;
     one whose `.run` is not the run directory the parent was handed — a decoy `.run`
     beside an equally well-built run directory somewhere else; one whose only entry `.run`
@@ -7274,6 +7303,19 @@ the spec pull request's range above still blocks review.
     what the test built. The last three of these five are the containment check R5 adds now
     that the run directory lives in the output root; the first two are the entry-set and
     mode halves of the same output-directory rule.
+
+  **Output ownership is tested with injected metadata, not a cross-user filesystem run.**
+  An unprivileged test cannot portably create and open another user's mode-0700 directory.
+  Compile a test-only translation unit including the unchanged parent source and
+  interposing `fstat`. Identify the valid fixture output directory by its real device
+  and inode. For that object alone, preserve every returned field except `st_uid`,
+  replacing it with a different uid. Every other call returns the real metadata.
+  Invoke the parent directly. Assert that the interposition was reached, only
+  `E_RUNTIME` appears on stderr, no runtime starts, and directory contents stay unchanged.
+  A control with the real uid must succeed. Keep this harness entirely in the test;
+  no shipped switch, environment flag, uid parameter, privilege change or ownership
+  mutation is allowed. It proves the parent's output-ownership refusal branch under
+  injected metadata. It does not claim a real cross-user launch.
 
   Each case asserts the parent's own `E_*` line on stderr and a non-zero exit, so it fails
   if a check is ever quietly left to the entry. Every refusal in this group happens before
@@ -8698,15 +8740,22 @@ the spec pull request's range above still blocks review.
   shipped files do that.
 
   1. *Absolute-path tokens.* Every token beginning with `/` is extracted, and each one must
-     be either one of the fifteen words above or one of the five absolute paths these files
+     be either one of the fifteen words above or one of the six absolute paths these files
      name as data rather than as commands: the SDK root passed to `-isysroot`
      (`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, R1), the `PATH` value
      `/usr/bin:/bin` the entry writes into its own environment and into every `env -i` line,
      the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
      (`portable-profile-resolution-launcher.c:178`) and the `/proc/%s/stat` template
-     (`:204`) — and `/usr/bin/awk`, which the entry copies and names in the Darwin shim
+     (`:204`) — `/usr/bin/awk`, which the entry copies and names in the Darwin shim
      text, and which the parent opens on Linux and names in its own copy of that shim
-     text, neither of them ever executing it (R5, R7). Anything else fails, whatever
+     text, neither of them ever executing it (R5, R7) — and, this round, the `/dev/fd`
+     family both files use to enumerate their own descriptors: the entry's `/dev/fd/*`
+     glob word, the quoted `'/dev/fd/*'` literal in the unmatched-glob `case`, the
+     `[ -f /dev/fd/2 ]` test behind its one diagnostic, and the parent's `opendir("/dev/fd")`
+     argument (R1, R5, R7). Allow exactly `/dev/fd`, `/dev/fd/*`, and `/dev/fd/2`
+     as data tokens after stripping shell quoting; use no prefix match. The literal
+     glob spelling is one fixed allowed token. Command-position checks still reject
+     executing any of these words. Anything else fails, whatever
      prefix it carries. Matching
      on the leading slash
      rather than on a list of directories is the point: the Darwin compiler took the prefix
@@ -8823,7 +8872,7 @@ the spec pull request's range above still blocks review.
   assertion that no subcommand other than `hash-object` appeared. With git off the list
   entirely, `git` fails the allowlist exactly as the three downloaders do — bare `git` is a
   pass-2 word that is neither a builtin nor a reserved word, and `/usr/bin/git` is a pass-1
-  token that is neither one of the fifteen nor one of the five data paths — and the
+  token that is neither one of the fifteen nor one of the six data paths — and the
   subcommand assertion goes away — one fewer invariant to keep true by hand, and a
   stronger claim than the one it replaces. The test
   is shellcheck-clean,
