@@ -1,3 +1,5 @@
+import "profile_graph" as graph;
+
 # pinned from profiles/default/v1 at 4965175d0edeeec8ba746609e585b053be03e075
 # Digests of the bytes as committed. Requirement 3 (yihanzhu/ystack#262) pins
 # these so a look-alike default profile is refused by bytes, not by name.
@@ -11,7 +13,6 @@ def manifest_pins:
    publisher:"e780e0ceb0a305928d6c1fec127cfc6db0140cf2e48b3921e23e59d942419029",
    reviewer:"2f1ceaacd455e6cadc09f2762c6735eab48b91890240b6031af3db744a1175c4",
    verifier:"58f65eeac7dc8292e48adf6e1d0e8235d5a19c92521993c74b7b3368bb3f36fe"};
-def pinned_digests: [profile_pin,producer_config_pin] + (manifest_pins | [.[]]);
 
 # Fixed decision-record texts this component owns (requirement 6). Each is
 # committed as its own output file and its digest is the real SHA-256 of the
@@ -67,26 +68,35 @@ def manifest_pairs:
   manifest_slots | map({content:.doc,sha256:$manifest_sha256[.role]}) |
   sort_by(.content.id);
 
-def digest_checks_ok:
-  $profile_sha256 == profile_pin and
-  $producer_config_sha256 == producer_config_pin and
-  ($manifest_sha256.ci == manifest_pins.ci) and
-  ($manifest_sha256.forge == manifest_pins.forge) and
-  ($manifest_sha256.producer == manifest_pins.producer) and
-  ($manifest_sha256.publisher == manifest_pins.publisher) and
-  ($manifest_sha256.reviewer == manifest_pins.reviewer) and
-  ($manifest_sha256.verifier == manifest_pins.verifier);
+def digest_mismatch:
+  ([{path:"profile.json",actual:$profile_sha256,expected:profile_pin},
+    {path:"producer-config.json",actual:$producer_config_sha256,expected:producer_config_pin}] +
+   ([{role:"ci",name:"github-actions-ci"},{role:"forge",name:"local-git-materializer"},
+     {role:"producer",name:"claude-code-producer"},{role:"publisher",name:"dormant-publisher"},
+     {role:"reviewer",name:"codex-native-reviewer"},{role:"verifier",name:"deterministic-verifier"}] |
+     map({path:("manifests/"+.name+".json"),actual:$manifest_sha256[.role],expected:manifest_pins[.role]}))) |
+  map(select(.actual != .expected) | .path) | .[0];
 
 # Requirement 16: every present config_source in the supplied resolved
 # profile — each binding's own and every tool_sources[].config_source — must
 # carry one of requirement 3's pinned digests. Today exactly one is present
 # (the producer's, pinned to producer-config.json), but the rule is general.
-def present_config_source_digests:
+def present_config_sources:
   ([$resolved_profile[0].body.bindings[] | .config_source] +
    [$resolved_profile[0].body.bindings[] | .tool_sources[]? | .config_source]) |
-  map(select(.state == "present") | .value.value_sha256);
+  map(select(.state == "present") | .value);
 def config_pins_ok:
-  present_config_source_digests | all(.[]; . as $d | pinned_digests | index($d) != null);
+  present_config_sources | all(.[];
+    . as $claim | ($claim.source.location.value // "") as $path |
+    (if $path == "profiles/default/v1/producer-config.json" then producer_config_pin
+     elif $path == "profiles/default/v1/profile.json" then profile_pin
+     else ({"profiles/default/v1/manifests/github-actions-ci.json":manifest_pins.ci,
+       "profiles/default/v1/manifests/local-git-materializer.json":manifest_pins.forge,
+       "profiles/default/v1/manifests/claude-code-producer.json":manifest_pins.producer,
+       "profiles/default/v1/manifests/dormant-publisher.json":manifest_pins.publisher,
+       "profiles/default/v1/manifests/codex-native-reviewer.json":manifest_pins.reviewer,
+       "profiles/default/v1/manifests/deterministic-verifier.json":manifest_pins.verifier}[$path]) end) as $pin |
+    $pin != null and $claim.value_sha256 == $pin);
 
 def claim_kind_ok: $claim[0].kind == "execution_environment_claim";
 def claim_id_ok:
@@ -189,13 +199,23 @@ def request_body($binding):
    required_evidence_kinds:["deterministic"],
    requested_at:$requested_at};
 
-def request_document:
+def precheck:
   if ($profile[0].id != "profile.default.v1") then refuse("E_PROFILE")
-  elif (digest_checks_ok | not) then refuse("E_PROFILE")
+  elif digest_mismatch != null then refuse("E_PROFILE " + digest_mismatch)
+  elif (($profile[0] | graph::profile_shape_ok) and
+        ($resolved_profile[0] | graph::resolved_profile_shape_ok) and
+        (manifest_slots | all(.[]; .doc | graph::adapter_manifest_shape_ok)) | not)
+    then refuse("E_SHAPE")
   elif (config_pins_ok | not) then refuse("E_PROFILE")
   elif (claim_kind_ok | not) then refuse("E_SHAPE")
   elif (claim_id_ok | not) then refuse("E_SHAPE")
-  else
+  elif (graph::profile_set_ok({content:$profile[0],sha256:$profile_sha256};
+      {content:$resolved_profile[0],sha256:$resolved_profile_sha256};manifest_pairs) | not)
+    then refuse("E_RELATION")
+  else ok_value(null) end;
+
+def request_document:
+  precheck as $check | if $check.ok | not then $check else
     forge_binding as $binding |
     ok_value({schema_version:2,kind:"stage_request",
       id:"request.shadow-input-assembler",body:request_body($binding)})
@@ -234,7 +254,8 @@ def pair_refs:
      {schema_version:2,kind:"resolved_profile",id:$resolved_profile[0].id,
       sha256:$resolved_profile_sha256}};
 
-if $phase == "request" then request_document
+if $phase == "check" then precheck
+elif $phase == "request" then request_document
 elif $phase == "input" then
   ok_value({input:input_document,decision_texts:decision_texts,
     pair_refs:pair_refs})

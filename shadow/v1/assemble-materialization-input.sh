@@ -41,9 +41,9 @@ if [ "$1" = assemble ]; then
     "$9" "${10}"
 fi
 [ "$1" = __assemble_clean ] || emit_error E_USAGE
+# copy-end materialize.sh:22-29
 builtin unalias -a
 builtin shopt -u expand_aliases
-# copy-end materialize.sh:22-29
 
 # Requirement 1's nine positional arguments, the verb already consumed above.
 repository_id=$2
@@ -156,10 +156,9 @@ generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\\(g-[0-9a-f]\\{64\\}\\)'\$/\\1/p" "$core") ||
   emit_error E_RUNTIME
 [[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || emit_error E_RUNTIME
-"$jq_bin" -e --arg generation "$generation" '
-  [.[] | select(.generation_id == $generation and
-    .semantic_identity == "core.contracts.v2")] | length == 1
-' "$registry" >/dev/null || emit_error E_RUNTIME
+printf '%s\n' "$generation" | "$jq_bin" -e --slurpfile registry "$registry" -R \
+  ". as \$g | \$registry[0] | [.[] | select(.generation_id == \$g and .semantic_identity == \"core.contracts.v2\")] | length == 1" \
+  >/dev/null || emit_error E_RUNTIME
 modules="$repo_root/core/v2/generations/$generation/modules"
 [ -d "$modules" ] && [ ! -L "$modules" ] || emit_error E_RUNTIME
 
@@ -177,10 +176,6 @@ case "$time_answer" in
   *) emit_error E_RUNTIME ;;
 esac
 
-# 2.3 — the eight profile documents are pinned by digest (requirement 3), so
-# their bound is checked first and canonical form follows from a pin match;
-# the resolved profile and the claim are not pinned, so they get the full
-# BOM/parse/one-value/canonical treatment reproduce.sh's canonical_json gives.
 size_ok() {
   local bytes
   bytes=$(/usr/bin/wc -c < "$1" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
@@ -188,23 +183,19 @@ size_ok() {
   [ "$bytes" -le "$2" ] || emit_error E_LIMIT
 }
 canonical_json() {
-  local raw=$1 bom
+  local raw=$1 bom canonical
   bom=$(/usr/bin/od -An -tx1 -N3 "$raw" 2>/dev/null | /usr/bin/tr -d ' \n') ||
     emit_error E_RUNTIME
   [ "$bom" != efbbbf ] || emit_error E_PARSE
   "$jq_bin" . "$raw" >/dev/null 2>&1 || emit_error E_PARSE
   [ "$("$jq_bin" -s 'length' "$raw" 2>/dev/null)" -eq 1 ] || emit_error E_PARSE
-  "$jq_bin" -S -c . "$raw" > "$raw.canonical-check" 2>/dev/null || emit_error E_PARSE
-  if /usr/bin/cmp -s "$raw" "$raw.canonical-check"; then
-    /bin/rm -f -- "$raw.canonical-check"
-  else
-    /bin/rm -f -- "$raw.canonical-check"
-    emit_error E_CANONICAL
-  fi
+  # The sentinel preserves the canonical trailing newline without writing beside caller inputs.
+  canonical=$("$jq_bin" -S -c . "$raw" 2>/dev/null && printf '.') || emit_error E_RUNTIME
+  printf '%s' "${canonical%.}" | /usr/bin/cmp -s "$raw" - || emit_error E_CANONICAL
 }
 
-manifest_count=$(/usr/bin/find "$profile_dir/manifests" -mindepth 1 -maxdepth 1 \
-  -type f 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
+manifest_count=$(/usr/bin/find "$profile_dir/manifests" -mindepth 1 -maxdepth 1 2>/dev/null |
+  /usr/bin/wc -l | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
 [ "$manifest_count" -eq 6 ] || emit_error E_PROFILE
 
 size_ok "$profile_dir/profile.json" 1048576
@@ -214,50 +205,67 @@ for manifest_name in $manifest_names; do
 done
 size_ok "$resolved_profile_file" 8388608
 size_ok "$claim_file" 1048576
+for required in "$profile_dir/profile.json" "$profile_dir/producer-config.json" "$profile_dir/manifests/"*.json; do
+  canonical_json "$required"
+done
 canonical_json "$resolved_profile_file"
 canonical_json "$claim_file"
 
 profile_sha256=$(sha256_path "$profile_dir/profile.json")
 producer_config_sha256=$(sha256_path "$profile_dir/producer-config.json")
-manifest_sha256=$("$jq_bin" -c -n \
-  --arg ci "$(sha256_path "$profile_dir/manifests/github-actions-ci.json")" \
-  --arg forge "$(sha256_path "$profile_dir/manifests/local-git-materializer.json")" \
-  --arg producer "$(sha256_path "$profile_dir/manifests/claude-code-producer.json")" \
-  --arg publisher "$(sha256_path "$profile_dir/manifests/dormant-publisher.json")" \
-  --arg reviewer "$(sha256_path "$profile_dir/manifests/codex-native-reviewer.json")" \
-  --arg verifier "$(sha256_path "$profile_dir/manifests/deterministic-verifier.json")" \
-  '{ci:$ci,forge:$forge,producer:$producer,publisher:$publisher,reviewer:$reviewer,
-    verifier:$verifier}')
+manifest_sha256=$(printf '%s\n' \
+  "ci=$(sha256_path "$profile_dir/manifests/github-actions-ci.json")" \
+  "forge=$(sha256_path "$profile_dir/manifests/local-git-materializer.json")" \
+  "producer=$(sha256_path "$profile_dir/manifests/claude-code-producer.json")" \
+  "publisher=$(sha256_path "$profile_dir/manifests/dormant-publisher.json")" \
+  "reviewer=$(sha256_path "$profile_dir/manifests/codex-native-reviewer.json")" \
+  "verifier=$(sha256_path "$profile_dir/manifests/deterministic-verifier.json")" | \
+  "$jq_bin" -R -s -c 'split("\n") | map(select(length>0) | split("=") | {key:.[0],value:.[1]}) | from_entries')
 resolved_profile_sha256=$(sha256_path "$resolved_profile_file")
 claim_sha256=$(sha256_path "$claim_file")
+
+common_args=(-n -L "$modules"
+  --arg repository_id "$repository_id" --arg commit_id "$source_commit"
+  --arg requested_at "$requested_at" --arg profile_sha256 "$profile_sha256"
+  --arg producer_config_sha256 "$producer_config_sha256"
+  --argjson manifest_sha256 "$manifest_sha256"
+  --arg resolved_profile_sha256 "$resolved_profile_sha256"
+  --arg claim_sha256 "$claim_sha256"
+  --slurpfile profile "$profile_dir/profile.json"
+  --slurpfile resolved_profile "$resolved_profile_file"
+  --slurpfile claim "$claim_file"
+  --slurpfile manifest_ci "$profile_dir/manifests/github-actions-ci.json"
+  --slurpfile manifest_forge "$profile_dir/manifests/local-git-materializer.json"
+  --slurpfile manifest_producer "$profile_dir/manifests/claude-code-producer.json"
+  --slurpfile manifest_publisher "$profile_dir/manifests/dormant-publisher.json"
+  --slurpfile manifest_reviewer "$profile_dir/manifests/codex-native-reviewer.json"
+  --slurpfile manifest_verifier "$profile_dir/manifests/deterministic-verifier.json")
+check_result=$("$jq_bin" "${common_args[@]}" --arg hash_algorithm "$source_algorithm" --arg tree_id '' --arg phase check --arg stage_request_sha256 '' \
+  --slurpfile stage_request "$profile_dir/profile.json" -f "$program") || emit_error E_RUNTIME
+check_error=$(printf '%s' "$check_result" | "$jq_bin" -r '.error // empty') || emit_error E_RUNTIME
+[ -z "$check_error" ] || emit_error "$check_error"
 
 # 2.4 — run_root's path is computed, the trap installed, and only then the
 # directory created (requirement 18): a signal between mkdir and trap would
 # otherwise leave a directory nothing is watching.
 run_root="$output_dir/.ystack-assemble-run"
 committed=no
-committed_destinations=""
+committed_destinations=()
 record_destination() {
-  committed_destinations="${committed_destinations}${1}
-"
+  committed_destinations+=("$1")
 }
 cleanup_trap() {
-  if [ "$committed" != yes ] && [ -n "$committed_destinations" ]; then
-    printf '%s' "$committed_destinations" | while IFS= read -r destination; do
+  if [ "$committed" != yes ]; then
+    for destination in ${committed_destinations[@]+"${committed_destinations[@]}"}; do
       [ -z "$destination" ] || [ ! -e "$destination" ] || /bin/rm -f -- "$destination"
     done
   fi
   [ -n "${run_root:-}" ] && [ -d "$run_root" ] && /bin/rm -rf -- "$run_root"
   return 0
 }
-on_signal() {
-  trap - EXIT INT TERM HUP
-  cleanup_trap
-  kill -s "$1" "$$"
-}
-trap 'on_signal INT' INT
-trap 'on_signal TERM' TERM
-trap 'on_signal HUP' HUP
+trap 'cleanup_trap; trap - INT; kill -s INT "$$"' INT
+trap 'cleanup_trap; trap - TERM; kill -s TERM "$$"' TERM
+trap 'cleanup_trap; trap - HUP; kill -s HUP "$$"' HUP
 trap cleanup_trap EXIT
 /bin/mkdir -m 0700 "$run_root" || emit_error E_RUNTIME
 
@@ -387,30 +395,9 @@ hash_algorithm=$("${git_env[@]}" /usr/bin/git --no-replace-objects \
 tree_id=$("${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$source_git_dir" \
   rev-parse "$source_commit^{tree}" 2>/dev/null) || emit_error E_RUNTIME
 
-# shadow/v1/materialization-input.jq: first the stage request, whose bytes
-# must be finished before they can be digested, then the finished input
-# built around that digest. The two calls share every argument but the
-# phase and the stage-request digest.
-common_args=(-n -L "$modules"
-  --arg repository_id "$repository_id" --arg hash_algorithm "$hash_algorithm"
-  --arg commit_id "$source_commit" --arg tree_id "$tree_id"
-  --arg requested_at "$requested_at" --arg profile_sha256 "$profile_sha256"
-  --arg producer_config_sha256 "$producer_config_sha256"
-  --argjson manifest_sha256 "$manifest_sha256"
-  --arg resolved_profile_sha256 "$resolved_profile_sha256"
-  --arg claim_sha256 "$claim_sha256"
-  --slurpfile profile "$profile_dir/profile.json"
-  --slurpfile resolved_profile "$resolved_profile_file"
-  --slurpfile claim "$claim_file"
-  --slurpfile manifest_ci "$profile_dir/manifests/github-actions-ci.json"
-  --slurpfile manifest_forge "$profile_dir/manifests/local-git-materializer.json"
-  --slurpfile manifest_producer "$profile_dir/manifests/claude-code-producer.json"
-  --slurpfile manifest_publisher "$profile_dir/manifests/dormant-publisher.json"
-  --slurpfile manifest_reviewer "$profile_dir/manifests/codex-native-reviewer.json"
-  --slurpfile manifest_verifier "$profile_dir/manifests/deterministic-verifier.json")
-
+# Digest the completed request before embedding its reference in the input.
 request_out="$run_root/request-out.json"
-"$jq_bin" "${common_args[@]}" --arg phase request --arg stage_request_sha256 '' \
+"$jq_bin" "${common_args[@]}" --arg hash_algorithm "$hash_algorithm" --arg tree_id "$tree_id" --arg phase request --arg stage_request_sha256 '' \
   --slurpfile stage_request "$profile_dir/profile.json" -f "$program" \
   > "$request_out" || emit_error E_RUNTIME
 request_ok=$("$jq_bin" -r '.ok' "$request_out") || emit_error E_RUNTIME
@@ -420,22 +407,19 @@ stage_request_raw="$run_root/stage-request.json"
 stage_request_sha256=$(sha256_path "$stage_request_raw")
 
 input_out="$run_root/input-out.json"
-"$jq_bin" "${common_args[@]}" --arg phase input \
+"$jq_bin" "${common_args[@]}" --arg hash_algorithm "$hash_algorithm" --arg tree_id "$tree_id" --arg phase input \
   --arg stage_request_sha256 "$stage_request_sha256" \
   --slurpfile stage_request "$stage_request_raw" -f "$program" \
   > "$input_out" || emit_error E_RUNTIME
 
-# 2.7 — size check, then stage, then commit (requirement 18). The finished
-# input is measured before anything is staged. The five smaller outputs
-# stage first, each `> name.tmp && mv name.tmp name`; input.json is kept out
-# of that loop because it alone needs the size check and moves out last.
 finished_input="$run_root/input.json"
 "$jq_bin" -S -c '.value.input' "$input_out" > "$finished_input" || emit_error E_RUNTIME
 size_ok "$finished_input" 8388608
 
 stage_dir="$run_root/stage"
 /bin/mkdir -m 0700 "$stage_dir" || emit_error E_RUNTIME
-/bin/mv "$finished_input" "$stage_dir/input.json"
+/bin/cat "$finished_input" > "$stage_dir/input.json.tmp"
+/bin/mv "$stage_dir/input.json.tmp" "$stage_dir/input.json"
 staged_filters=(value.pair_refs.stage_request_ref value.pair_refs.resolved_profile_ref
   value.decision_texts.finish value.decision_texts.verify
   value.decision_texts.output_contract value.decision_texts.policy)
@@ -468,6 +452,4 @@ done
 record_destination "$output_dir/input.json"
 /bin/mv "$stage_dir/input.json" "$output_dir/input.json"
 committed=yes
-committed_destinations=""
-
-exit 0
+committed_destinations=()
