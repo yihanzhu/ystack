@@ -399,6 +399,7 @@ scripts/test/maintenance-loop.test.sh
 # Operating-mode transition proposal
 docs/transition.md
 docs/transition-kit.md
+scripts/test/run-all-sharding.check.sh
 
 # Inactive shadow materialization input assembler
 shadow/v1/assemble-materialization-input.sh
