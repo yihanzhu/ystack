@@ -16,9 +16,12 @@ reviewed policy PR is merged. No runtime installation or activation is included.
 - Accepted Roadmap source blob: `4bb0fff1ee11c20441cc16182337f762300ac0f2`.
 - Accepted north-star source blob: `d2bbe82a8b2a1bb14fde1c50995f7ecec9b58013`.
 
-The source blobs pin the agreed product scope. This PR adds an authorization note to
-ROADMAP.md without changing its goals or acceptance standards; its resulting blob
-is therefore different. A future product-scope change still needs the operator.
+The source blobs pin the agreed product scope. ROADMAP.md stays byte-identical: the
+shipped profiles bind its exact digest as an authority input. The current-session
+delegation belongs in AGENTS.md, REVIEW.md and this record, not in that product
+input. The first CI attempt caught a redundant Roadmap note; its removal preserves
+the profile bindings and all tests. A future product-scope change still needs the
+operator. This does not change the shipped profile publisher or live self-host rules.
 The manager verified its session identity through CODEX_THREAD_ID and directly
 received the decision. This file preserves that evidence; it cannot appoint a new
 manager or authorize a future session by itself.
@@ -48,8 +51,8 @@ No live yshifu sync, profile selection or construction-mode change occurs here.
 
 ## Bounded transition authorization
 
-The same direct decision authorizes this limited AGENTS.md/REVIEW.md/ROADMAP.md rule
-change and necessary restore records, with independent review and all required CI
+The same direct decision authorizes this limited governance rule change and
+necessary restore records, with independent review and all required CI
 before the named manager merges it. No protection bypass is permitted. These are the
 only policy changes this bootstrap may make; a broader change returns to the operator.
 

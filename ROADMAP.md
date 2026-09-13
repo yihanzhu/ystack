@@ -4,14 +4,6 @@ This document records the direction between the north star and individual
 `work/<slug>/` initiatives. It preserves the architecture decisions that future
 specs and plans must follow. It is not an implementation plan by itself.
 
-For the current operator-led Codex program, the direct decision recorded in
-`work/roadmap-program-authorization/decision.md` supplies continuing authorization
-within this Roadmap and the north star. AGENTS.md and REVIEW.md preserve independent
-artifact acceptance, exact-head/base review and required CI while replacing repeated
-human stage and merge decisions. This does not broaden product scope or authorize
-live activation, new credentials, deployment or real-target execution. It does not
-reactivate construction mode or transfer authority to other agents or repositories.
-
 While the ystack-self `config/construction-mode.json` record is active and matches
 this file's Git blob, the numbered rollout is also the bounded program authorization
 for inactive repository construction. Each change remains one reviewable Roadmap
