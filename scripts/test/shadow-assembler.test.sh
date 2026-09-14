@@ -379,6 +379,10 @@ expect_error profile-lookalike-default "E_PROFILE profile.json" fixture.target "
   2026-09-10T00:00:00Z "$lookalike_dir" "$tmp/lookalike-resolved.json" "$jq_bin" "$claim"
 "$jq_bin" -S -c '.id="profile.other.v1"' "$profile_dir/profile.json" > "$lookalike_dir/profile.json"
 expect_error profile-wrong-id E_PROFILE "${good[@]:0:4}" "$lookalike_dir" "${good[@]:5}"
+for profile_value in '[]' true 42 '"text"' null; do
+  printf '%s\n' "$profile_value" > "$lookalike_dir/profile.json"
+  expect_error "profile-root-$profile_value" E_PROFILE "${good[@]:0:4}" "$lookalike_dir" "${good[@]:5}"
+done
 "$jq_bin" -S -c '(.body.bindings[]|select(.binding.role=="producer")|.config_source.value.value_sha256)="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
   "$resolved_profile" > "$tmp/config-swapped.json"
 expect_error profile-config-digest E_PROFILE "${good[@]:0:5}" "$tmp/config-swapped.json" "$jq_bin" "$claim"

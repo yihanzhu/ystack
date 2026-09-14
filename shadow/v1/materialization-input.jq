@@ -202,7 +202,8 @@ def request_body($binding):
    requested_at:$requested_at};
 
 def precheck:
-  if ($profile[0].id != "profile.default.v1") then refuse("E_PROFILE")
+  if ($profile[0] | type) != "object" then refuse("E_PROFILE")
+  elif ($profile[0].id != "profile.default.v1") then refuse("E_PROFILE")
   elif digest_mismatch != null then refuse("E_PROFILE " + digest_mismatch)
   elif (($profile[0] | graph::profile_shape_ok) and
         ($resolved_profile[0] | graph::resolved_profile_shape_ok) and
