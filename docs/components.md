@@ -291,6 +291,25 @@ does not fit is listed as deferred. Scanner recovery actions and reasons remain
 data in the plan. The filter does not dispatch, schedule, execute recovery, write
 state, use a credential or network, activate a profile, publish, or touch a target.
 
+## Inactive durable delivery ledger
+
+`orchestrator/v1/delivery-ledger.py` persists the existing planner's delivery
+ledger in a dedicated owned local store. Initialize, read and conditional update
+use a fixed direct Python entry. Canonical exports carry actual SHA256 references.
+The planner itself still only validates reference shape and matching identity.
+
+All calls hold one permanent flock. A single process writes bounded loose Git
+objects and publishes one exact-old-tip ref update by atomic rename. Full history
+validation precedes read, replay and new updates. Exact replay survives a lost
+reply; retained crash residue counts toward all resource limits. No automatic
+cleanup, arbitrary Git writer, subprocess, network or provider action is included.
+
+See [the delivery ledger guide](delivery-ledger.md) for the exact invocation,
+state transitions, limits, recovery boundary and restoration requirements.
+The focused `scripts/test/orchestrator-delivery-ledger.test.sh` covers actual
+public transitions, independent Git/jq/planner checks and held crash boundaries.
+The component remains inactive and grants no qualification or target authority.
+
 ## Inactive GitHub forge normalizer payload
 
 `adapters/github-forge/v1/normalize.jq` validates one untrusted GitHub
