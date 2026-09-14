@@ -401,6 +401,9 @@ docs/transition.md
 docs/transition-kit.md
 scripts/test/run-all-sharding.check.sh
 
+# Current operator-led Roadmap decision
+work/roadmap-program-authorization/decision.md
+
 # Inactive shadow materialization input assembler
 shadow/v1/assemble-materialization-input.sh
 shadow/v1/materialization-input.jq
