@@ -413,11 +413,13 @@ check_identity_record_writes() {
   for stage in header file source; do
     if ! (
       fired=0
+      # shellcheck disable=SC2329
       printf() {
         case "$stage:$1" in
           header:'native identity '*|file:'native file '*|source:'native source '*)
             if [ "$fired" -eq 0 ]; then fired=1; return 1; fi ;;
         esac
+        # shellcheck disable=SC2059
         builtin printf "$@"
       }
       if record_runtime_identities write-negative > "$resolver_tmp/identity-write.$stage"; then
