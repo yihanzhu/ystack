@@ -589,9 +589,9 @@ class Store:
                         request["expected_tip"] == prior_tip and request["update_id"] not in update_ids)
                 update_ids.add(request["update_id"])
                 expected = transition(prior_ledger, request, "E_STORE")
-            require(docs["ledger.json"] == expected)
+            require(canonical(docs["ledger.json"]) == canonical(expected))
             receipt = make_receipt(verb, request, expected)
-            require(docs["receipt.json"] == receipt)
+            require(canonical(docs["receipt.json"]) == canonical(receipt))
             self.history.append((commit, request, members["ledger.json"], receipt))
             prior_ledger = expected
             prior_tip = commit

@@ -81,6 +81,7 @@ def canonical(value):
 
 
 def record(group, name, condition):
+    remaining()
     if not condition:
         raise AssertionError("%s: %s" % (group, name))
     GROUPS[group] += 1
@@ -103,12 +104,56 @@ def stop_owned(child):
         child.wait(timeout=1)
 
 
-def captured(argv, cwd, env, data=None, timeout=120, limits=(524288, 64)):
-    if time.monotonic() - START > 1800:
-        raise AssertionError("whole focused suite deadline")
-    with subprocess.Popen(argv, cwd=str(cwd), env=env,
-                          stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+def remaining(deadline=None):
+    end = min(START + 1800, deadline if deadline is not None else START + 1800)
+    value = end - time.monotonic()
+    assert value > 0, "focused suite or child deadline"
+    return value
+
+
+def close_fd(owned, fd):
+    owned.remove(fd)
+    os.close(fd)
+
+
+def cleanup(children, descriptors, selector=None):
+    original = sys.exc_info()[1]
+    errors = []
+    def attempt(operation):
+        try:
+            operation()
+        except BaseException as error:
+            errors.append(repr(error))
+    while descriptors:
+        fd = descriptors.pop()
+        attempt(lambda: os.close(fd))
+    for child in children:
+        if child.stdin is not None and not child.stdin.closed:
+            attempt(child.stdin.close)
+    for child in children:
+        attempt(lambda: stop_owned(child))
+    for child in children:
+        for stream in (child.stdout, child.stderr):
+            if stream is not None and not stream.closed:
+                attempt(stream.close)
+    if selector is not None:
+        attempt(selector.close)
+    if errors:
+        print("ledger cleanup failures:", errors, "original:", repr(original), file=sys.stderr, flush=True)
+        if original is None:
+            raise AssertionError("unconfirmed owned cleanup: " + repr(errors))
+
+
+def captured(argv, cwd, env, data=None, timeout=120, limits=(524288, 64), deadline=None):
+    deadline = min(START + 1800, deadline if deadline is not None else START + 1800, time.monotonic() + timeout)
+    remaining(deadline)
+    children = []
+    selector = None
+    try:
+        child = subprocess.Popen(argv, cwd=str(cwd), env=env,
+                                 stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        children.append(child)
         selector = selectors.DefaultSelector()
         result = [bytearray(), bytearray()]
         for index, stream in enumerate((child.stdout, child.stderr)):
@@ -120,31 +165,26 @@ def captured(argv, cwd, env, data=None, timeout=120, limits=(524288, 64)):
             os.set_blocking(child.stdin.fileno(), False)
             selector.register(child.stdin, selectors.EVENT_WRITE, 2)
         offset = 0
-        deadline = time.monotonic() + timeout
-        try:
-            while selector.get_map():
-                if time.monotonic() >= deadline:
-                    raise AssertionError("child deadline: " + repr(argv))
-                for key, _ in selector.select(0.05):
-                    if key.data == 2:
-                        count = os.write(key.fd, data[offset:offset + 65536])
-                        offset += count
-                        if offset == len(data):
-                            selector.unregister(key.fileobj)
-                            key.fileobj.close()
-                        continue
-                    block = os.read(key.fd, min(65536, limits[key.data] + 1 - len(result[key.data])))
-                    if not block:
+        while selector.get_map():
+            for key, _ in selector.select(min(0.05, remaining(deadline))):
+                if key.data == 2:
+                    count = os.write(key.fd, data[offset:offset + 65536])
+                    assert 0 < count <= min(65536, len(data) - offset)
+                    offset += count
+                    if offset == len(data):
                         selector.unregister(key.fileobj)
-                    else:
-                        result[key.data].extend(block)
-                        if len(result[key.data]) > limits[key.data]:
-                            raise AssertionError("child output cap")
-            status = child.wait(timeout=max(0.01, deadline - time.monotonic()))
-        finally:
-            selector.close()
-            stop_owned(child)
+                        key.fileobj.close()
+                    continue
+                block = os.read(key.fd, min(65536, limits[key.data] + 1 - len(result[key.data])))
+                if not block:
+                    selector.unregister(key.fileobj)
+                else:
+                    result[key.data].extend(block)
+                    assert len(result[key.data]) <= limits[key.data], "child output cap"
+        status = child.wait(timeout=remaining(deadline))
         return status, bytes(result[0]), bytes(result[1])
+    finally:
+        cleanup(children, [], selector)
 
 
 def request(kind="read", **fields):
@@ -163,11 +203,11 @@ def key(**fields):
     return result
 
 
-def invoke(store, verb, value, raw=None):
+def invoke(store, verb, value, raw=None, deadline=None):
     path = ROOT / ("request-%d.json" % time.monotonic_ns())
     path.write_bytes(canonical(value) if raw is None else raw)
     return captured([PYTHON, "-I", "-S", "-B", PRODUCT, verb, str(store), str(path)],
-                    store, environment(store))
+                    store, environment(store), deadline=deadline)
 
 
 def new_store(name):
@@ -208,7 +248,12 @@ def refused(store, verb, value, code=None, group="P1", name="refusal", raw=None)
 
 def inventory(root):
     result = {}
-    for path in [root] + sorted(root.rglob("*")):
+    paths = [root]
+    for path in root.rglob("*"):
+        remaining()
+        paths.append(path)
+    for path in sorted(paths):
+        remaining()
         state = path.lstat()
         relative = str(path.relative_to(root))
         value = [stat.S_IFMT(state.st_mode), stat.S_IMODE(state.st_mode), state.st_size if path.is_file() else 0]
@@ -228,7 +273,14 @@ def update(tip, ordinal=1, action="record-delivery", update_id="update.test", de
 
 def copy_store(source, name):
     destination = ROOT / name
-    shutil.copytree(source, destination)
+    remaining()
+    def copied_file(source_path, target_path):
+        remaining()
+        result = shutil.copy2(source_path, target_path)
+        remaining()
+        return result
+    shutil.copytree(source, destination, copy_function=copied_file)
+    remaining()
     os.chmod(destination, 0o700)
     return destination
 
@@ -239,6 +291,7 @@ def raw_object(kind, content):
 
 
 def object_put(store, kind, content):
+    remaining()
     oid, compressed, raw = raw_object(kind, content)
     directory = store / "repository.git" / "objects" / oid[:2]
     directory.mkdir(mode=0o700, exist_ok=True)
@@ -617,6 +670,23 @@ def invalid_stores(base, initial):
         return canonical(ledger)
     rewrite_tip(wrong_count, {"ledger.json": corrupt_count})
     refused(wrong_count, "read", request(), "E_STORE", "P5", "valid-shape forged transition")
+    for index, fields in enumerate((("schema_version",), ("body", "ledger_contract", "declared_entry_count"),
+                                    ("body", "entries", 0, "delivery_count"),
+                                    ("body", "entries", 0, "delivery_key", "attempt_number"))):
+        store = copy_store(base, "stored-bool-%d" % index)
+        if index > 1:
+            good(store, "apply-update", update(initial["current_tip"]), "P5", "stored bool real update seed")
+        def boolean_field(data):
+            document = json.loads(data)
+            container = document
+            for field in fields[:-1]:
+                container = container[field]
+            assert type(container[fields[-1]]) is int and container[fields[-1]] in (0, 1)
+            container[fields[-1]] = bool(container[fields[-1]])
+            return canonical(document)
+        rewrite_tip(store, {"ledger.json": boolean_field})
+        refused(store, "read", request(), "E_STORE", "P5", "real Git closure boolean integer %d" % index)
+        refused(store, "initialize", request("initialize"), "E_STORE", "P5", "boolean history replay %d" % index)
     changes = {
         "tree-mode": lambda data: data.replace(b"100644", b"100755", 1),
         "tree-name": lambda data: data.replace(b"ledger.json", b"Ledger.json", 1),
@@ -718,7 +788,12 @@ def event(operation, path, extra=None):
     payload = json.dumps(data, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     if len(payload) > 2048:
         os._exit(90)
-    saved["write"](event_fd, payload)
+    offset = 0
+    while offset < len(payload):
+        count = saved["write"](event_fd, payload[offset:])
+        if not 0 < count <= len(payload) - offset:
+            os._exit(92)
+        offset += count
     if pause and os.read(release_fd, 1) != b"x":
         os._exit(91)
 
@@ -814,13 +889,17 @@ OBSERVER_PATH = ROOT / "observer.py"
 OBSERVER_PATH.write_text(OBSERVER)
 
 
-def physical_counts(store):
-    paths = [store] + list(store.rglob("*"))
+def physical_counts(store, deadline=None):
+    paths = [store]
+    for path in store.rglob("*"):
+        remaining(deadline)
+        paths.append(path)
     objects = 0
     regular = 0
     inflated = 0
     temps = 0
     for path in paths:
+        remaining(deadline)
         state = path.lstat()
         if stat.S_ISREG(state.st_mode):
             regular += state.st_size
@@ -836,70 +915,84 @@ def physical_counts(store):
 
 def observed(store, verb, value, name, kill_at=None, short=0, fault="", busy=False, interfere=None, pause=True):
     assert pause or (kill_at is None and not busy and interfere is None)
+    deadline = min(START + 1800, time.monotonic() + 120)
+    remaining(deadline)
     path = ROOT / (name + ".request.json")
     path.write_bytes(canonical(value))
-    event_r, event_w = os.pipe()
-    release_r, release_w = os.pipe()
-    argv = [PYTHON, "-I", "-S", "-B", str(OBSERVER_PATH), PRODUCT, str(store), verb,
-            str(path), str(event_w), str(release_r), str(short), fault, "1" if pause else "0"]
-    child = subprocess.Popen(argv, cwd=store, env=environment(store), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             pass_fds=(event_w, release_r))
-    os.close(event_w)
-    os.close(release_r)
-    selector = selectors.DefaultSelector()
-    result = [bytearray(), bytearray(), bytearray()]
-    for fd, index in ((child.stdout.fileno(), 0), (child.stderr.fileno(), 1), (event_r, 2)):
-        os.set_blocking(fd, False)
-        selector.register(fd, selectors.EVENT_READ, index)
+    descriptors = []
+    children = []
+    selector = None
     rows = []
+    result = [bytearray(), bytearray(), bytearray()]
     killed = False
-    deadline = time.monotonic() + 120
-    last_event = time.monotonic()
+    status = None
     try:
+        event_r, event_w = os.pipe()
+        descriptors.extend((event_r, event_w))
+        release_r, release_w = os.pipe()
+        descriptors.extend((release_r, release_w))
+        argv = [PYTHON, "-I", "-S", "-B", str(OBSERVER_PATH), PRODUCT, str(store), verb,
+                str(path), str(event_w), str(release_r), str(short), fault, "1" if pause else "0"]
+        child = subprocess.Popen(argv, cwd=store, env=environment(store), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 pass_fds=(event_w, release_r))
+        children.append(child)
+        close_fd(descriptors, event_w)
+        close_fd(descriptors, release_r)
+        selector = selectors.DefaultSelector()
+        for fd, index in ((child.stdout.fileno(), 0), (child.stderr.fileno(), 1), (event_r, 2)):
+            os.set_blocking(fd, False)
+            selector.register(fd, selectors.EVENT_READ, index)
+        last_event = time.monotonic()
         while selector.get_map():
-            assert time.monotonic() < deadline, "observed invocation deadline"
-            assert time.monotonic() - last_event < 30, "missing observation acknowledgment"
-            for selected, _ in selector.select(0.05):
-                data = os.read(selected.fd, 65536 if selected.data < 2 else 2048)
+            event_deadline = min(deadline, last_event + 30)
+            for selected, _ in selector.select(min(0.05, remaining(event_deadline))):
+                index = selected.data
+                cap = (524288, 64, 2048)[index]
+                size = cap - len(result[index]) + (0 if index == 2 else 1)
+                assert size > 0, "observation record exceeds bound"
+                data = os.read(selected.fd, min(65536, size))
                 if not data:
+                    assert index != 2 or not result[2], "incomplete observation at EOF"
                     selector.unregister(selected.fd)
                     continue
-                result[selected.data].extend(data)
-                assert len(result[selected.data]) <= (524288 if selected.data == 0 else 4096 if selected.data == 2 else 64)
-                if selected.data != 2:
+                result[index].extend(data)
+                assert len(result[index]) <= cap, "observed output cap"
+                if index != 2:
                     continue
                 while b"\n" in result[2]:
                     line, _, rest = result[2].partition(b"\n")
                     result[2] = bytearray(rest)
-                    assert len(line) + 1 <= 2048
                     item = json.loads(line)
                     assert item["sequence"] == len(rows) + 1
-                    item["inventory"] = physical_counts(store) if pause else None
-                    rows.append(item)
                     last_event = time.monotonic()
+                    event_deadline = min(deadline, last_event + 30)
+                    item["inventory"] = physical_counts(store, event_deadline) if pause else None
+                    rows.append(item)
                     if interfere:
                         interfere(item)
+                        remaining(event_deadline)
                     if busy and item["locked"]:
-                        status, out, err = invoke(store, "read", request())
-                        assert status != 0 and not out and err == b"E_BUSY\n", (item, status, err)
+                        code, out, err = invoke(store, "read", request(), deadline=event_deadline)
+                        assert code != 0 and not out and err == b"E_BUSY\n", (item, code, err)
                     if kill_at is not None and item["sequence"] == kill_at:
                         assert child.poll() is None
                         child.kill()
-                        child.wait(timeout=1)
+                        child.wait(timeout=min(1, remaining(event_deadline)))
                         killed = True
                     elif pause:
-                        os.write(release_w, b"x")
-        status = child.wait(timeout=1)
+                        remaining(event_deadline)
+                        assert os.write(release_w, b"x") == 1
+                assert len(result[2]) < 2048, "unterminated observation exceeds bound"
+        status = child.wait(timeout=remaining(deadline))
     finally:
-        selector.close()
-        stop_owned(child)
-        os.close(event_r)
-        os.close(release_w)
-        child.stdout.close()
-        child.stderr.close()
-    (ROOT / (name + ".events.json")).write_text(json.dumps(rows, indent=2) + "\n")
-    print("ledger actual observation:", json.dumps({"name": name, "status": status, "events": rows}, sort_keys=True), flush=True)
+        try:
+            cleanup(children, descriptors, selector)
+        finally:
+            (ROOT / (name + ".events.json")).write_text(json.dumps(rows, indent=2) + "\n")
+            print("ledger actual observation:", json.dumps({"name": name, "status": status,
+                  "returncode": children[0].returncode if children else None,
+                  "events": rows}, sort_keys=True), flush=True)
     if kill_at is not None:
         assert killed, "requested kill boundary absent"
     return status, bytes(result[0]), bytes(result[1]), rows
@@ -984,56 +1077,53 @@ os.execve(sys.argv[2],sys.argv[2:],dict(os.environ))
     children = []
     controls = []
     values = []
+    selector = None
+    deadline = min(START + 1800, time.monotonic() + 120)
+    remaining(deadline)
     try:
         for i in range(2):
             value = update(tips[i], update_id="concurrent.%d" % i)
             path = ROOT / ("concurrent-%d.json" % i)
             path.write_bytes(canonical(value))
             values.append(value)
+            remaining(deadline)
             read_fd, write_fd = os.pipe()
+            controls.extend((read_fd, write_fd))
             children.append(subprocess.Popen([PYTHON, "-I", "-S", "-B", str(worker), str(read_fd),
                                              PYTHON, "-I", "-S", "-B", PRODUCT, "apply-update", str(store), str(path)],
                                             cwd=store, env=environment(store), pass_fds=(read_fd,),
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
-            os.close(read_fd)
-            controls.append(write_fd)
-        for fd in controls:
-            os.write(fd, b"g")
-            os.close(fd)
-        controls = []
+            close_fd(controls, read_fd)
+        while controls:
+            fd = controls[-1]
+            remaining(deadline)
+            assert os.write(fd, b"g") == 1
+            close_fd(controls, fd)
         buffers = [[bytearray(), bytearray()] for _ in children]
         selector = selectors.DefaultSelector()
-        deadline = time.monotonic() + 120
-        try:
-            for index, child in enumerate(children):
-                for stream_index, stream in enumerate((child.stdout, child.stderr)):
-                    os.set_blocking(stream.fileno(), False)
-                    selector.register(stream, selectors.EVENT_READ, (index, stream_index))
-            while selector.get_map():
-                assert time.monotonic() < deadline, "concurrent public deadline"
-                for selected, _ in selector.select(0.05):
-                    index, stream_index = selected.data
-                    buffer = buffers[index][stream_index]
-                    cap = 524288 if stream_index == 0 else 64
-                    data = os.read(selected.fd, min(65536, cap + 1 - len(buffer)))
-                    if not data:
-                        selector.unregister(selected.fileobj)
-                    else:
-                        buffer.extend(data)
-                        assert len(buffer) <= cap, "concurrent output cap"
-            results = [(child.wait(timeout=max(0.01, deadline - time.monotonic())), bytes(buffers[index][0]), bytes(buffers[index][1])) for index, child in enumerate(children)]
-        finally:
-            selector.close()
+        for index, child in enumerate(children):
+            for stream_index, stream in enumerate((child.stdout, child.stderr)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, (index, stream_index))
+        while selector.get_map():
+            for selected, _ in selector.select(min(0.05, remaining(deadline))):
+                index, stream_index = selected.data
+                buffer = buffers[index][stream_index]
+                cap = 524288 if stream_index == 0 else 64
+                data = os.read(selected.fd, min(65536, cap + 1 - len(buffer)))
+                if not data:
+                    selector.unregister(selected.fileobj)
+                else:
+                    buffer.extend(data)
+                    assert len(buffer) <= cap, "concurrent output cap"
+        results = [(child.wait(timeout=remaining(deadline)), bytes(buffers[index][0]), bytes(buffers[index][1])) for index, child in enumerate(children)]
         winners = [i for i, item in enumerate(results) if item[0] == 0]
         record("P7", "exactly one public publisher", len(winners) == 1)
         loser = 1 - winners[0]
         record("P7", "loser busy or stale", results[loser][2] in (b"E_BUSY\n", b"E_STALE\n") and not results[loser][1])
         refused(store, "apply-update", values[loser], "E_STALE", "P7", "deliberate stale retry")
     finally:
-        for fd in controls:
-            os.close(fd)
-        for child in children:
-            stop_owned(child)
+        cleanup(children, controls, selector)
     competing = copy_store(base, "cas-competing")
     other = good(competing, "apply-update", update(initial["current_tip"], update_id="competing"), "P7")
     target = copy_store(base, "cas-target")
@@ -1123,8 +1213,8 @@ def resource_cases(base, initial):
             index = 3 if compressible else 2
             if totals[index] > threshold:
                 break
-            remaining = threshold + 1 - totals[index]
-            length = min(270304, max(64, remaining - (13 if compressible else 40)))
+            needed = threshold + 1 - totals[index]
+            length = min(270304, max(64, needed - (13 if compressible else 40)))
             content = (("%016x" % number).encode() + b"x" * (length - 16)) if compressible else os.urandom(length)
             object_put(store, "blob", content)
             totals = physical_counts(store)
@@ -1138,6 +1228,7 @@ def resource_cases(base, initial):
     fanout = partial / "repository.git/objects/00"
     fanout.mkdir(mode=0o700, exist_ok=True)
     for number in range(493):
+        remaining()
         (fanout / ("tmp_obj_retained_%03d" % number)).write_bytes(b"")
     totals = physical_counts(partial)
     record("P6", "empty partial temps charged full inflated size", totals[4] == 493 and totals[3] > threshold and totals[2] < 1048576)
@@ -1161,6 +1252,7 @@ def resource_cases(base, initial):
         object_put(store, "blob", ("cap-final-%d" % number).encode())
     root = store / "repository.git/objects"
     for number in range(256):
+        remaining()
         (root / ("%02x" % number)).mkdir(mode=0o700, exist_ok=True)
     totals = physical_counts(store)
     record("P6", "valid high-entry closed layout", totals[0] == 8192 and len(list(root.iterdir())) == 256 and totals[1] == 5 + 4 + 256 + 8192)
@@ -1245,6 +1337,7 @@ def private_boundaries(base, initial):
         module.zlib.compressobj = original_compressor
     oversized = copy_store(base, "oversized-directory")
     for number in range(16385):
+        remaining()
         (oversized / ("unknown%05d" % number)).mkdir(mode=0o700)
     refused(oversized, "read", request(), None, "P6", "actual oversized directory")
     for label, raw in (("content-over", b"blob 270305\0" + b"x" * 270305),
@@ -1529,6 +1622,7 @@ resource_cases(base, initial)
 growth_and_bootstrap(base, initial)
 private_boundaries(base, initial)
 
+remaining()
 for group, count in GROUPS.items():
     if not count:
         raise AssertionError("required proof group not executed: " + group)
