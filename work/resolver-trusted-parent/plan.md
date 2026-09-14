@@ -1,6 +1,6 @@
 ---
-spec-blob: c67b978a5408b2507406111ce4bdadf6ed4dc598
-drafted: 2026-09-13
+spec-blob: 859fb6f0709364e0e6c487f62db74f1d2138d3e4
+drafted: 2026-09-14
 ---
 
 # Plan: resolver-trusted-parent
@@ -9,7 +9,7 @@ Tracks #271. The accepted spec is the complete contract, including the retained
 R1 and R10 detail. This plan selects the files, construction order and proof; it
 does not replace that detail with a smaller acceptance set.
 
-At base `09a8f796ec14066f2b440ae51eb04deb21a5a940`, the accepted spec records
+At base `5888b72881c06d588a131017838b2434d4f439ce`, the accepted spec records
 `risk: high` and its intent link equals
 `eaa322c405502cc0ca7c453814ca0f005f11b48f`. Gate mode is `artifact-high`.
 This plan-only PR requires independent review, required CI and accepted publication
@@ -19,6 +19,10 @@ follow AGENTS.md's exact-base refresh/reaffirmation rule if default moved.
 The implementation branch is `ystack/impl/resolver-trusted-parent`; code starts
 only after that gate and the manager's verified build claim. The plan author
 neither implements nor accepts this plan. Implementation uses `Closes #271`.
+The existing implementation attempt remains paused. After this amendment is
+accepted, the manager must reconcile its exact preserved head and dirty test draft,
+merge the accepted main normally and verify the refreshed tuple before authorizing
+resumption. This plan amendment does not discard WIP or itself authorize resume.
 
 ## Files that change
 
@@ -26,24 +30,33 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
 | Path | Work | Estimated changed lines |
 | --- | --- | ---: |
-| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1075 |
-| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 380 |
-| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1049 |
+| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1075-1228 |
+| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 380-447 |
+| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1367-1447 |
 | `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
 | `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
 | `README.md` | Resolver index row | 2 |
 | `RESTORE.md` | Resolver restoration and proof | 18 |
 | `ci/required-files.txt` | Append both shipped files and focused test | 5 |
 
-`review_size: accepted-exception`, **2100-2841 changed lines**, is already
-accepted in the spec for this one implementation concern. The ~2566 total above
-uses the spec's measured source spans and test estimate; it is not a measured
-implementation. The 702-line existing launcher supplies about 605 copied lines;
-the existing resolution suite supplies fixture/bootstrap patterns, not permission
-to omit cases. Choose the specified platform SHA tools; do not add a C digest
-implementation. Measure additions, deletions and net separately when full tests
-land and at final head. No compressed code, reduced tests or component/test split
-to meet the band. An unexplained overrun returns to the plan gate before more code.
+`review_size: accepted-exception`, **2850-3200 changed lines**, is accepted in
+the spec for this one implementation concern. The projected table total is
+2884-3184, not measured implementation. Parent/entry intervals retain the earlier
+plan estimates and the spec's later cumulative estimates. Other paths total 62.
+The paused test draft measures 1242 lines; it is incomplete and unaccepted proof.
+Its projected 1367-1447 includes 70-100 added lines for native Darwin directory/cache
+attribution and isolated compile-cache proof, 15-25 for observing all four run files
+and the run directory at 0500, and 40-80 net lines to replace the incomplete 74-line
+source sweep with the accepted exact-role and lexical checks. These additions are
+estimates of unwritten work, not measurements. The accepted band rounds the total
+outward; it does not permit dropping another discovered proof obligation.
+
+The 702-line existing launcher supplies about 605 copied lines; existing test
+fixtures are reuse, not permission to omit cases. Choose the specified platform
+SHA tools; do not add a C digest implementation. Measure additions, deletions and
+net separately when full tests land and at final head. No compressed code, reduced
+tests or component/test split to meet the band. An unexplained overrun returns to
+the artifact gate before more code.
 The spec's separate 8521-11529 artifact range does not apply to this plan or code.
 
 Do not change the resolver runtime, library, jq program, native helper, core files,
@@ -294,7 +307,9 @@ The ledger must explicitly cover:
   environment and R10's Darwin alternative.
 - All four cleanup outcomes, entry umasks 000 and 777, direct-parent umask 000
   proving its own reset, and observed temporary/final modes under R10's bounded
-  observation attempts. Cover all eight descriptor scenarios:
+  observation attempts. Observe .run, .run/tmp and .run/home at 0700, all four run
+  files and .run at 0500, and final sandbox directories/capture files at 0700/0600.
+  Cover all eight descriptor scenarios:
   six entry cases and two parent cases, including exhausted headroom and high
   descriptors above a lowered soft limit. Preserve R10's distinction between
   observed behavior and source-order proof.
@@ -330,6 +345,36 @@ Derive builtin/reserved names from `/bin/bash`; shell local functions are exactl
 Fix the command-variable names as `compiler`, `sha1_tool`, `sha256_tool`, `jq_bin`,
 `parent_bin`, assigned by platform/arguments/owned run path; no default expansion
 or other command variable is permitted. Review their values separately.
+
+Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
+`ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
+in every required scrub including the marker branch, and the unique signal
+forwarding kill in the job-table Running arm above wait. Check those source roles
+and positions, not only an occurrence count. Reject every other command/descriptor,
+input or append redirection, variable sink, prefix path, C pathname or execve
+argument using that target. It is neither an executable nor a general data member.
+Keep the redirect outside eval's quoted exec; persistent stderr suppression remains
+forbidden. Existing refusals and diagnostics must not be newly suppressed.
+
+Implement small inspectable lexical/role extraction for all three passes:
+
+- Classify only the required self-path `/*)` case pattern as a non-path pattern;
+  still inspect its arm's commands. Keep both actual `/dev/fd/*` roles inventoried.
+- Distinguish C slash characters, division and comments from pathname strings;
+  a C root string used as a path remains forbidden, and /proc strings remain checked.
+- Inspect absolute values inside quoted arguments and shell/C assignments, including
+  the exact PATH value. Never exempt a whole assignment to hide an absolute value.
+- Do not manufacture host paths from dynamic joins, parameter patterns or `%s/home`,
+  `%s/child.stdout` and `%s:/usr/bin:/bin` suffixes. Preserve dynamic value review.
+- Classify the fixed Darwin shim as written/verified data under the existing awk
+  position checks. Inspect executable trap/eval strings and commands within command
+  and process substitutions, including jobs, kill and compgen. Quoting is no exemption.
+- Extract command positions rather than case patterns, for-list data, function
+  declarations or redirection operands. Keep commands behind exec/env and assignment
+  substitutions visible, plus the existing function and variable restrictions.
+
+No full parser or linter AST supplies this invariant. Review extraction coverage
+against the actual shipped source shapes; a broad quoted-token skip is forbidden.
 
 In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
 `resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
@@ -409,7 +454,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
 - `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
-  `git diff --numstat <base> HEAD` — report additions/deletions/net against 2100-2841.
+  `git diff --numstat <base> HEAD` — report additions/deletions/net against 2850-3200.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
 - R10 pin-liveness checks compare all eighteen source pins and all three non-blob
   constants: parent generation and entry generation equal the accepted library
