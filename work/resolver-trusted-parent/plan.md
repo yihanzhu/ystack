@@ -1,5 +1,5 @@
 ---
-spec-blob: b81fc2dcbf0358e3c796300b640170425bda511c
+spec-blob: c67b978a5408b2507406111ce4bdadf6ed4dc598
 drafted: 2026-09-13
 ---
 
@@ -9,10 +9,11 @@ Tracks #271. The accepted spec is the complete contract, including the retained
 R1 and R10 detail. This plan selects the files, construction order and proof; it
 does not replace that detail with a smaller acceptance set.
 
-At base `cfc8eab4a19cec0c136a29ceb257dfee350b5bb3`, the accepted spec records
+At base `09a8f796ec14066f2b440ae51eb04deb21a5a940`, the accepted spec records
 `risk: high` and its intent link equals
 `eaa322c405502cc0ca7c453814ca0f005f11b48f`. Gate mode is `artifact-high`.
-This plan-only PR requires independent review, required CI and operator merge.
+This plan-only PR requires independent review, required CI and accepted publication
+under AGENTS.md's current operator-led Roadmap program.
 Record the fetched merge-containing default as `plan-base`; before first code,
 follow AGENTS.md's exact-base refresh/reaffirmation rule if default moved.
 The implementation branch is `ystack/impl/resolver-trusted-parent`; code starts
@@ -21,20 +22,21 @@ neither implements nor accepts this plan. Implementation uses `Closes #271`.
 
 ## Files that change
 
-Exactly seven implementation paths; the plan itself changes only in its plan PR.
+Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
 | Path | Work | Estimated changed lines |
 | --- | --- | ---: |
 | `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1075 |
 | `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 380 |
 | `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1049 |
+| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
 | `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
 | `README.md` | Resolver index row | 2 |
 | `RESTORE.md` | Resolver restoration and proof | 18 |
 | `ci/required-files.txt` | Append both shipped files and focused test | 5 |
 
 `review_size: accepted-exception`, **2100-2841 changed lines**, is already
-accepted in the spec for this one implementation concern. The ~2564 total above
+accepted in the spec for this one implementation concern. The ~2566 total above
 uses the spec's measured source spans and test estimate; it is not a measured
 implementation. The 702-line existing launcher supplies about 605 copied lines;
 the existing resolution suite supplies fixture/bootstrap patterns, not permission
@@ -47,7 +49,8 @@ The spec's separate 8521-11529 artifact range does not apply to this plan or cod
 Do not change the resolver runtime, library, jq program, native helper, core files,
 profiles, existing test launcher or fixtures, shadow components, workflows or any
 accepted intent/spec/plan during implementation. Shipped files never read the test
-path. The new test may use existing fixture helpers and create temporary drivers.
+path. The schema test changes only its two exact consumer-list additions below.
+The new test may use existing fixture helpers and create temporary drivers.
 
 ## Order of work
 
@@ -153,9 +156,11 @@ The eight pins are `resolver/v1/profile-resolve-runtime.sh`,
 Take the exact `PORTABLE_CORE_GENERATION` selected by the accepted, pinned
 `scripts/core-contract.sh`, equal to the accepted library's
 `PROFILE_RESOLUTION_CORE_GENERATION`, and schema major `2` from its
-`PROFILE_RESOLUTION_SCHEMA_MAJOR`. Copy those constants into the parent; do not
-read untrusted library text at runtime to discover a module path. The library's
-existing four wrapper/registry/ingress/contracts pins remain its own, justified
+`PROFILE_RESOLUTION_SCHEMA_MAJOR`. Copy ordinary generation constants into both
+parent and entry, and the schema-major constant into the parent. Do not encode or
+assemble the generation to evade the source inventory, or add an unused entry
+schema-major constant. Do not read untrusted library text at runtime to discover
+a module path. The library's existing four wrapper/registry/ingress/contracts pins remain its own, justified
 by its outer pin.
 
 Create `home`, `tmp`, `child.stdout`, `child.stderr` relative to checked output fd;
@@ -279,13 +284,17 @@ The ledger must explicitly cover:
   fstat interposition for matching output dev/ino ownership, with a reached assertion
   and real-uid control; no shipped hook. Require no runtime-pgid and no side effects.
 - Runtime-owned malformed request; explicit-env/no-copy comparisons and polluted
-  helper inputs with negative control; forged marker halves; relative entry; both
+  helper inputs with negative control; the privileged clean-marker invocation with
+  exported pwd/cd/find and BASH_ENV pollution must succeed without markers, while
+  a clean nonprivileged marker invocation exits 78 without writes; relative entry; both
   supported invocation forms; compiler pollution and direct binary comparisons.
   Keep both controlled compiler outputs digest-identical; no nondeterminism relaxation
   is selected. Preserve Linux loader-marker allowance only for the initial process
   and Darwin's allowed zero; helper/runtime markers fail. Check exact Linux runtime
   environment and R10's Darwin alternative.
-- All four cleanup outcomes, both caller umasks, and all eight descriptor scenarios:
+- All four cleanup outcomes, entry umasks 000 and 777, direct-parent umask 000
+  proving its own reset, and observed temporary/final modes under R10's bounded
+  observation attempts. Cover all eight descriptor scenarios:
   six entry cases and two parent cases, including exhausted headroom and high
   descriptors above a lowered soft limit. Preserve R10's distinction between
   observed behavior and source-order proof.
@@ -298,9 +307,10 @@ The ledger must explicitly cover:
   the shared-group sentinel with asserted PGID equality, and the duplicate stderr
   open-description check that O_NONBLOCK was restored. The full-pipe case uses R10's blocking filler,
   survival observation and descriptor-mode assertion, not an O_NONBLOCK substitute.
-- Eighteen three-way blob checks (computed digest, Git answer, constant), the two
-  generation/schema constants, all named source/mechanism checks and native Darwin
-  write attribution. Root-owned output's root-run skip is only the explicit R10
+- Eighteen three-way blob checks (computed digest, Git answer, constant), three
+  non-blob constant checks: parent generation, parent schema major and entry
+  generation. Include all named source/mechanism checks and native Darwin write
+  attribution. Root-owned output's root-run skip is only the explicit R10
   ownership exception, printed as such; missing timing/platform proof is not a pass.
 
 Before fixing signal-case timeouts, measure one complete compile on each proof
@@ -320,6 +330,13 @@ Derive builtin/reserved names from `/bin/bash`; shell local functions are exactl
 Fix the command-variable names as `compiler`, `sha1_tool`, `sha256_tool`, `jq_bin`,
 `parent_bin`, assigned by platform/arguments/owned run path; no default expansion
 or other command variable is permitted. Review their values separately.
+
+In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
+`resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
+`scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, the
+sorted exact comparison and the indexed tracked-byte scan. No wildcard, generation
+change or other schema-test change is permitted. Stage the complete implementation
+before running this test so its indexed-byte proof includes both new consumers.
 
 Update docs at the existing resolver sections, not new conflicting instructions.
 State both supported forms, 100755 entry, direct-parent test-only boundary, CLT
@@ -382,19 +399,24 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
 - `bash scripts/test/portable-profile-resolution.test.sh` — unchanged resolver and
   fixture launcher regression suite; byte-identical resolved-profile stdout through
   test launcher and shipped public entry for the default request.
-- `bash scripts/test/portable-core-schema.test.sh` — zero failures.
+- `bash scripts/test/portable-core-schema.test.sh` — zero failures against the
+  staged final implementation bytes. Verify the two exact consumer additions and
+  unchanged existing list, indexed scan and exact comparison in the final diff.
 - `shellcheck --version` must report 0.11.0; then
   `find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck -x -S style`.
   Keep both new shell files shellcheck-clean without weakening the lint gate.
 - `bash scripts/test/v2-check-rename.test.sh`; `bash scripts/check-rename.sh`;
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
-- `git diff --name-only <base> HEAD` — exactly seven implementation paths above;
+- `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
   `git diff --numstat <base> HEAD` — report additions/deletions/net against 2100-2841.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
-- R10 pin-liveness checks compare all eighteen source pins and both generation/major
-  constants to working-tree values. No historical Git object is needed by CI's check.
-- Source review records every copied span's comparison and each named deviation;
+- R10 pin-liveness checks compare all eighteen source pins and all three non-blob
+  constants: parent generation and entry generation equal the accepted library
+  generation, and parent schema major equals its accepted library counterpart.
+  No historical Git object is needed by CI's pin check.
+- Run the required mechanical comparisons of copied spans and command sweeps;
+  retain their results. Source review records each comparison and named deviation;
   it reads unsupported-platform and unreachable jq-length guards, host readers,
   handler-safe call inventory, masked fork/reap/diagnostic sequences and entry ordering.
   Do not label these readings as executed negative cases or sandbox qualification.
