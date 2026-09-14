@@ -39,13 +39,16 @@ SIGNAL_DESCENDANT_PID=
 CONTROL_CONTEXT=0
 CONTROL_PHASE=inactive
 CONTROL_FAILURE=
+CONTROL_DETAIL=
 CONTROL_SIGNAL=
 CONTROL_JOB=
 CONTROL_JOB_ACQUIRED=0
 CONTROL_WAIT_ACTIVE=0
 CONTROL_WAIT_INTERRUPTED=0
+CONTROL_WAIT_ATTEMPTED=0
 CONTROL_WAIT_STATUS=
 CONTROL_WAIT_STATUS_STATE=unconfirmed
+CONTROL_WAIT_CAPTURE=
 CONTROL_POSSIBLY_RELEASED=0
 CONTROL_RETAIN_SCRATCH=0
 CONTROL_GATE_OPEN=0
@@ -53,6 +56,7 @@ CONTROL_GATE_PATH=
 CONTROL_CASE_PATH=
 CONTROL_IDENTITY_PATH=
 CONTROL_MONITOR_WAS=off
+HANDOFF_CONTROL_ROOT=
 TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || exit 1
 [[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 1
 group_alive() {
@@ -120,7 +124,7 @@ managed_dispatch() {
   if [ "$CONTROL_CONTEXT" -eq 1 ]; then
     if [ "$cause" != EXIT ]; then
       [ -n "$CONTROL_SIGNAL" ] || CONTROL_SIGNAL=$cause
-      [ -n "$CONTROL_FAILURE" ] || CONTROL_FAILURE=signal
+      control_record_failure signal trapped-signal
       if [ "$CONTROL_WAIT_ACTIVE" -eq 1 ]; then
         CONTROL_WAIT_INTERRUPTED=1
       fi
@@ -596,16 +600,18 @@ managed_launch_group() {
 control_enter() {
   [ "$CONTROL_CONTEXT" -eq 0 ] && [ "$CONTROL_JOB_ACQUIRED" -eq 0 ] ||
     fail 'control context entry'
-  CONTROL_CONTEXT=1
   CONTROL_PHASE=entered
   CONTROL_FAILURE=
+  CONTROL_DETAIL=
   CONTROL_SIGNAL=
   CONTROL_JOB=
   CONTROL_JOB_ACQUIRED=0
   CONTROL_WAIT_ACTIVE=0
   CONTROL_WAIT_INTERRUPTED=0
+  CONTROL_WAIT_ATTEMPTED=0
   CONTROL_WAIT_STATUS=
   CONTROL_WAIT_STATUS_STATE=unconfirmed
+  CONTROL_WAIT_CAPTURE=
   CONTROL_POSSIBLY_RELEASED=0
   CONTROL_RETAIN_SCRATCH=1
   CONTROL_GATE_OPEN=0
@@ -613,6 +619,7 @@ control_enter() {
   CONTROL_CASE_PATH=
   CONTROL_IDENTITY_PATH=
   case $- in *m*) CONTROL_MONITOR_WAS=on ;; *) CONTROL_MONITOR_WAS=off ;; esac
+  CONTROL_CONTEXT=1
 }
 
 control_phase() {
@@ -625,18 +632,25 @@ control_phase() {
 }
 
 control_record_failure() {
-  [ -n "$CONTROL_FAILURE" ] || CONTROL_FAILURE=$1
+  case "$1" in
+    signal|operation|identity|release|wait|retirement|observation|diagnostic) ;;
+    *) return 1 ;;
+  esac
+  if [ -z "$CONTROL_FAILURE" ]; then
+    CONTROL_FAILURE=$1
+    CONTROL_DETAIL=${2:-none}
+  fi
 }
 
 control_pending() {
   [ -z "$CONTROL_SIGNAL" ] || {
-    control_record_failure signal
+    control_record_failure signal pending-signal
     return 1
   }
 }
 
 control_identity_read() {
-  PERL5LIB= PERLLIB= PERL5OPT= /usr/bin/perl -MFcntl=O_RDONLY,O_NONBLOCK,O_NOFOLLOW \
+  PERL5LIB='' PERLLIB='' PERL5OPT='' /usr/bin/perl -MFcntl=O_RDONLY,O_NONBLOCK,O_NOFOLLOW \
     -MPOSIX=S_ISREG -e '
       use strict;
       use warnings;
@@ -662,7 +676,10 @@ control_identity_present() {
   if [ -e "$1" ] || [ -L "$1" ]; then
     return 0
   fi
-  [ ! -e "$1" ] && [ ! -L "$1" ]
+  if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+    return 1
+  fi
+  return 2
 }
 
 control_launch_job() {
@@ -691,12 +708,14 @@ control_remove_gate() {
 }
 
 control_release_job() {
-  control_phase release-possible || return 1
+  local problem=0
+  control_phase release-possible || problem=1
   CONTROL_POSSIBLY_RELEASED=1
-  /usr/bin/printf '%s\n' verified >&7 || return 1
-  control_close_gate || return 1
-  control_remove_gate || return 1
-  control_phase wait-only
+  /usr/bin/printf '%s\n' verified >&7 || problem=1
+  control_close_gate || problem=1
+  control_remove_gate || problem=1
+  control_phase wait-only || problem=1
+  [ "$problem" -eq 0 ]
 }
 
 control_abort_job() {
@@ -707,6 +726,9 @@ control_abort_job() {
   [ -z "$CONTROL_GATE_PATH" ] || /bin/rm -f -- "$CONTROL_GATE_PATH" || :
 }
 
+control_wait_before_wait() { :; }
+control_wait_observe() { :; }
+control_wait_capture() { CONTROL_WAIT_CAPTURE=$1; }
 control_wait_job() {
   local status
   [ "$CONTROL_JOB_ACQUIRED" -eq 1 ] || return 1
@@ -714,12 +736,18 @@ control_wait_job() {
   while :; do
     CONTROL_WAIT_INTERRUPTED=0
     CONTROL_WAIT_ACTIVE=1
+    CONTROL_WAIT_ATTEMPTED=1
+    control_wait_before_wait || return 1
     status=0
-    builtin wait "$CONTROL_JOB" || status=$?
+    wait "$CONTROL_JOB" || status=$?
     CONTROL_WAIT_ACTIVE=0
+    control_wait_observe "$status" "$CONTROL_WAIT_INTERRUPTED" || :
     if [ "$CONTROL_WAIT_INTERRUPTED" -eq 1 ]; then
       continue
     fi
+    CONTROL_WAIT_CAPTURE=
+    control_wait_capture "$status" || return 1
+    status=$CONTROL_WAIT_CAPTURE
     [ "$status" -ne 127 ] || return 1
     CONTROL_WAIT_STATUS=$status
     CONTROL_WAIT_STATUS_STATE=confirmed
@@ -736,14 +764,15 @@ control_retire_job() {
 
 control_excerpt() {
   local path=$1
-  [ -f "$path" ] || return 0
-  /usr/bin/perl -e '
+  PERL5LIB='' PERLLIB='' PERL5OPT='' /usr/bin/perl \
+    -MFcntl=O_RDONLY,O_NONBLOCK,O_NOFOLLOW -MPOSIX=S_ISREG -e '
     use strict;
     use warnings;
     my ($path) = @ARGV;
-    open(my $fh, "<", $path) or exit 1;
-    binmode($fh);
-    my $count = read($fh, my $text, 256);
+    sysopen(my $fh, $path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) or exit 1;
+    my @stat = stat($fh);
+    @stat && S_ISREG($stat[2]) or exit 2;
+    my $count = sysread($fh, my $text, 256);
     defined($count) or exit 2;
     close($fh) or exit 3;
     $text =~ s/([^\x20-\x7e])/sprintf("\\x%02x", ord($1))/ge;
@@ -752,16 +781,16 @@ control_excerpt() {
 }
 
 control_diagnostic() {
-  local identity_excerpt= events_excerpt= stderr_excerpt= record
+  local identity_excerpt='' events_excerpt='' stderr_excerpt='' record
   identity_excerpt=$(control_excerpt "${CONTROL_IDENTITY_PATH:-}") || identity_excerpt=read-error
   events_excerpt=$(control_excerpt "${control_events:-}") || events_excerpt=read-error
   stderr_excerpt=$(control_excerpt "${control_stderr:-}") || stderr_excerpt=read-error
   record=$(/usr/bin/printf \
-    'credential-handoff: phase=%s outcome=%s signal=%s acquired=%s wait=%s possible_release=%s identity=%s events=%s stderr=%s' \
-    "$CONTROL_PHASE" "${CONTROL_FAILURE:-unknown}" "${CONTROL_SIGNAL:-none}" \
+    'credential-handoff: phase=%s outcome=%s detail=%s signal=%s acquired=%s wait=%s possible_release=%s identity=%s events=%s stderr=%s' \
+    "$CONTROL_PHASE" "${CONTROL_FAILURE:-operation}" "${CONTROL_DETAIL:-none}" "${CONTROL_SIGNAL:-none}" \
     "$CONTROL_JOB_ACQUIRED" "${CONTROL_WAIT_STATUS_STATE}:${CONTROL_WAIT_STATUS:-none}" \
     "$CONTROL_POSSIBLY_RELEASED" "$identity_excerpt" "$events_excerpt" "$stderr_excerpt") || return 1
-  PERL5LIB= PERLLIB= PERL5OPT= /usr/bin/perl -e '
+  PERL5LIB='' PERLLIB='' PERL5OPT='' /usr/bin/perl -e '
     use strict;
     use warnings;
     my $text = <STDIN>;
@@ -771,14 +800,16 @@ control_diagnostic() {
 }
 
 control_reconcile_failure() {
-  control_record_failure "$1"
+  control_record_failure operation "$1" || :
   CONTROL_RETAIN_SCRATCH=1
   if [ "$CONTROL_JOB_ACQUIRED" -eq 1 ]; then
     if [ "$CONTROL_POSSIBLY_RELEASED" -eq 0 ]; then
       control_abort_job
     fi
     case "$CONTROL_PHASE" in wait-only) ;; *) CONTROL_PHASE=wait-only ;; esac
-    if control_wait_job; then
+    if [ "$CONTROL_WAIT_ATTEMPTED" -eq 1 ]; then
+      CONTROL_WAIT_STATUS_STATE=unconfirmed
+    elif control_wait_job; then
       control_retire_job || control_record_failure retirement
     else
       CONTROL_WAIT_STATUS_STATE=unconfirmed
@@ -805,8 +836,8 @@ run_setup_controls() {
   local control_root="$tmp/setup-controls" functions name signal code status started elapsed
   local child reported group function_name attempt signals control_events launches mutations
   local helpers reconciled event_kind leader expected_launches expected_helpers expected_error
-  local control_owner='' observers term_count cont_count kill_count
-  local identity_fields identity_status field_status control_stderr
+  local observers term_count cont_count kill_count
+  local identity_fields identity_status identity_presence field_status control_stderr
   /bin/mkdir "$control_root"
   functions="$control_root/functions.sh"
   : >"$functions"
@@ -815,7 +846,12 @@ run_setup_controls() {
     managed_end_operation managed_terminate managed_dispatch managed_clear_attempt \
     managed_inspect_scratch managed_preserve_output coordinate_input_setup \
     terminate_input_race group_alive managed_gate_remove managed_launch_group \
-    start_input_race stop_at_owned_marker fail; do
+    start_input_race stop_at_owned_marker control_enter control_phase \
+    control_record_failure control_pending control_identity_read control_identity_present \
+    control_launch_job control_restore_monitor control_close_gate control_remove_gate \
+    control_release_job control_abort_job control_wait_job control_retire_job control_excerpt \
+    control_wait_before_wait control_wait_observe control_wait_capture \
+    control_diagnostic control_reconcile_failure control_complete fail; do
     declare -f "$function_name" >>"$functions"
   done
   cat >"$control_root/fixture.sh" <<'FIXTURE'
@@ -846,9 +882,9 @@ SETUP_SIGNAL= WAIT_INTERRUPTED=0 WAIT_STATUS=0 LOCAL_REAP_ACTIVE=0 LOCAL_REAP_PI
 INPUT_RACE_PID= INPUT_RACE_PGID= STOPPED_MARKER_PATH= PROBE_RESULT=error
 INPUT_RACE_OUT= INPUT_RACE_ERR= LAUNCH_GROUP=
 SIGNAL_CHILD_PID= SIGNAL_CHILD_PGID= SIGNAL_DESCENDANT_PID=
-CONTROL_CONTEXT=0 CONTROL_PHASE=inactive CONTROL_FAILURE= CONTROL_SIGNAL=
-CONTROL_JOB= CONTROL_JOB_ACQUIRED=0 CONTROL_WAIT_ACTIVE=0 CONTROL_WAIT_INTERRUPTED=0
-CONTROL_WAIT_STATUS= CONTROL_WAIT_STATUS_STATE=unconfirmed CONTROL_POSSIBLY_RELEASED=0
+CONTROL_CONTEXT=0 CONTROL_PHASE=inactive CONTROL_FAILURE= CONTROL_DETAIL= CONTROL_SIGNAL=
+CONTROL_JOB= CONTROL_JOB_ACQUIRED=0 CONTROL_WAIT_ACTIVE=0 CONTROL_WAIT_INTERRUPTED=0 CONTROL_WAIT_ATTEMPTED=0
+CONTROL_WAIT_STATUS= CONTROL_WAIT_STATUS_STATE=unconfirmed CONTROL_WAIT_CAPTURE= CONTROL_POSSIBLY_RELEASED=0
 CONTROL_RETAIN_SCRATCH=0 CONTROL_GATE_OPEN=0 CONTROL_GATE_PATH= CONTROL_CASE_PATH=
 CONTROL_IDENTITY_PATH= CONTROL_MONITOR_WAS=off
 startup_exit() {
@@ -858,7 +894,7 @@ startup_exit() {
   exec 7>&- 2>/dev/null || :
   exit "$status"
 }
-trap 'startup_exit 92' EXIT
+trap 'startup_exit $?' EXIT
 trap 'startup_exit 129' HUP
 trap 'startup_exit 130' INT
 trap 'startup_exit 143' TERM
@@ -869,15 +905,67 @@ identity_tmp="$tmp/identity.tmp"
 identity_final="$tmp/identity"
 [ ! -e "$identity_tmp" ] && [ ! -L "$identity_tmp" ] &&
   [ ! -e "$identity_final" ] && [ ! -L "$identity_final" ] || exit 90
-exec 6>"$identity_tmp" || exit 90
-printf '%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90
-exec 6>&- || exit 90
-mv "$identity_tmp" "$identity_final" || exit 90
+identity_mode=${CONTROL_IDENTITY_MODE:-valid}
+case "$identity_mode" in
+  symlink) ln -s identity.missing "$identity_final" || exit 90 ;;
+  fifo) mkfifo "$identity_final" || exit 90 ;;
+  directory) mkdir "$identity_final" || exit 90 ;;
+  *)
+    exec 6>"$identity_tmp" || exit 90
+    case "$identity_mode" in
+      hold-open)
+        printf '%s\n' opened >&10 || exit 90
+        hold_token=
+        IFS= read -r -t 1 hold_token <&11 || exit 90
+        [ "$hold_token" = continue ] || exit 90
+        printf '%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      hold-partial)
+        printf '%s ' "$$" >&6 || exit 90
+        printf '%s\n' partial >&10 || exit 90
+        hold_token=
+        IFS= read -r -t 1 hold_token <&11 || exit 90
+        [ "$hold_token" = continue ] || exit 90
+        printf '%s\n' "$TEST_PGID" >&6 || exit 90 ;;
+      valid|read-failure) printf '%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      empty) : ;;
+      strict-partial) printf '%s ' "$$" >&6 || exit 90 ;;
+      missing-lf) printf '%s %s' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      extra-field) printf '%s %s extra\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      extra-line) printf '%s %s\nextra\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      nul) printf '%s %s\0\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      oversize) /usr/bin/perl -e 'print "1" x 65' >&6 || exit 90 ;;
+      leading-zero) printf '0%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      signed) printf '+%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      cr) printf '%s %s\r\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      alternate-separator) printf '%s\t%s\n' "$$" "$TEST_PGID" >&6 || exit 90 ;;
+      pid-mismatch) printf '%s %s\n' "$(( $$ + 1 ))" "$TEST_PGID" >&6 || exit 90 ;;
+      pgid-mismatch) printf '%s %s\n' "$$" "$(( TEST_PGID + 1 ))" >&6 || exit 90 ;;
+      outer-group) printf '%s %s\n' "$$" "$CONTROL_OUTER_PGID" >&6 || exit 90 ;;
+      *) exit 90 ;;
+    esac
+    exec 6>&- || exit 90
+    /bin/mv "$identity_tmp" "$identity_final" || exit 90
+    ;;
+esac
+case "$identity_mode" in hold-open|hold-partial) exec 10>&- 11>&- || exit 90 ;; esac
 token=
 gate_status=0
-IFS= read -r -t "${CONTROL_GATE_SECONDS:-3}" token <&7 || gate_status=$?
+gate_seconds=3
+if [ "${CONTROL_PRIVATE_PROOF:-0}" = 1 ]; then
+  case "${CONTROL_GATE_SECONDS:-3}" in 1|3) gate_seconds=${CONTROL_GATE_SECONDS:-3} ;; *) exit 90 ;; esac
+fi
+[ "${CONTROL_CHILD_AFTER_RELEASE:-}" != gate-read-failure ] || exec 7<&-
+IFS= read -r -t "$gate_seconds" token <&7 || gate_status=$?
 exec 7>&- || exit 91
 [ "$gate_status" -eq 0 ] && [ "$token" = verified ] || exit 91
+if [ "${CONTROL_WAIT_PROOF:-0}" -ge 1 ]; then
+  printf '%s\n' wait-child-ready >&14 || exit 91
+  wait_token=
+  IFS= read -r -t 1 wait_token <&15 || exit 91
+  [ "$wait_token" = wait-child-continue ] || exit 91
+  printf '%s\n' wait-child-continued >&14 || exit 91
+  if [ "$CONTROL_WAIT_PROOF" -eq 1 ]; then exec 14>&- 15>&- || exit 91; fi
+fi
 trap - EXIT HUP INT TERM
 injected=0 launches=0 helpers=0 physical_waits=0 logical_reaps=0 probes=0
 cleanup() { event "exit-state $SETUP_LIFECYCLE $SETUP_OPERATION $LOCAL_REAP_ACTIVE"; }
@@ -885,6 +973,13 @@ trap 'managed_dispatch EXIT' EXIT
 trap 'managed_dispatch HUP' HUP
 trap 'managed_dispatch INT' INT
 trap 'managed_dispatch TERM' TERM
+case "${CONTROL_CHILD_AFTER_RELEASE:-}" in
+  natural-HUP) trap - HUP; /bin/kill -HUP "$$" ;;
+  natural-INT)
+    trap - INT
+    exec /usr/bin/perl -e '$SIG{INT} = "DEFAULT"; kill INT, $$; select undef, undef, undef, 1; exit 90' ;;
+  natural-TERM) trap - TERM; /bin/kill -TERM "$$" ;;
+esac
 save() {
   local text
   text=$(declare -f "$1")
@@ -928,6 +1023,14 @@ managed_lifecycle() {
   event "lifecycle $1"
   if [ "$1" = owned-live ]; then
     event "owned $INPUT_RACE_PID $INPUT_RACE_PGID"
+    if [ "${CONTROL_WAIT_PROOF:-0}" -eq 2 ]; then
+      printf '%s\n' wait-child-ready-2 >&14 || exit 91
+      wait_token_2=
+      IFS= read -r -t 1 wait_token_2 <&15 || exit 91
+      [ "$wait_token_2" = wait-child-continue-2 ] || exit 91
+      printf '%s\n' wait-child-continued-2 >&14 || exit 91
+      exec 14>&- 15>&- || exit 91
+    fi
     [ "$case_name" != admission ] || inject
     if [ "$case_name" = release-error ]; then exec 8>&-; fi
   fi
@@ -1055,7 +1158,7 @@ case "$case_name" in
     managed_lifecycle owned-live
     managed_terminate
     exit 92 ;;
-  absence|group-reap|helper-return|pre-wait|retired-probe|probe-*|wait127-group|wait-natural|wait-interrupt)
+  absence|proof-*|group-reap|helper-return|pre-wait|retired-probe|probe-*|wait127-group|wait-natural|wait-interrupt)
     managed_enter
     managed_operation launching
     start_input_race fixture "$tmp/scratch" unused
@@ -1074,6 +1177,413 @@ coordinate_input_setup fixture "$tmp/scratch" unused
 event mutation
 exit 0
 CONTROL
+  cat >"$control_root/proof-worker.sh" <<'PROOF_WORKER'
+#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+umask 077
+base=$1
+proof_name=$2
+identity_mode=$3
+operation=$4
+proof_signal=$5
+source "$base/functions.sh"
+proof="$base/proofs/$proof_name"
+events="$proof/events"
+child_name="proof-$proof_name"
+child="$base/$child_name-none"
+child_events="$child/events"
+event() { printf '%s\n' "$*" >>"$events"; }
+fail() { event "worker-failure $1"; printf 'worker-failure: %s\n' "$1" >&2; exit 70; }
+SETUP_CONTEXT=0 SETUP_OPERATION=none SETUP_LIFECYCLE=empty SETUP_OUTCOME=
+SETUP_SIGNAL= WAIT_INTERRUPTED=0 WAIT_STATUS=0 LOCAL_REAP_ACTIVE=0 LOCAL_REAP_PID=
+INPUT_RACE_PID= INPUT_RACE_PGID= STOPPED_MARKER_PATH= PROBE_RESULT=error
+INPUT_RACE_OUT= INPUT_RACE_ERR= LAUNCH_GROUP=
+SIGNAL_CHILD_PID= SIGNAL_CHILD_PGID= SIGNAL_DESCENDANT_PID=
+CONTROL_CONTEXT=0 CONTROL_PHASE=inactive CONTROL_FAILURE= CONTROL_DETAIL= CONTROL_SIGNAL=
+CONTROL_JOB= CONTROL_JOB_ACQUIRED=0 CONTROL_WAIT_ACTIVE=0 CONTROL_WAIT_INTERRUPTED=0 CONTROL_WAIT_ATTEMPTED=0
+CONTROL_WAIT_STATUS= CONTROL_WAIT_STATUS_STATE=unconfirmed CONTROL_WAIT_CAPTURE= CONTROL_POSSIBLY_RELEASED=0
+CONTROL_RETAIN_SCRATCH=0 CONTROL_GATE_OPEN=0 CONTROL_GATE_PATH= CONTROL_CASE_PATH=
+CONTROL_IDENTITY_PATH= CONTROL_MONITOR_WAS=off
+TEST_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
+[[ "$$" =~ ^[1-9][0-9]*$ ]] && [[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 90
+printf '%s %s\n' "$$" "$TEST_PGID" >"$proof/worker-identity.tmp"
+mv "$proof/worker-identity.tmp" "$proof/worker-identity"
+worker_token=
+IFS= read -r -t 3 worker_token <&7 || exit 91
+exec 7>&-
+[ "$worker_token" = verified ] || exit 91
+cleanup() { :; }
+eval "$(declare -f managed_dispatch | sed '1s/managed_dispatch/actual_managed_dispatch/')"
+managed_dispatch() {
+  local cause=$1
+  actual_managed_dispatch "$cause"
+  if [ "$CONTROL_CONTEXT" -eq 1 ] && [ "$cause" != EXIT ]; then
+    event "outer-signal $cause $$"
+  fi
+}
+trap 'managed_dispatch EXIT' EXIT
+trap 'managed_dispatch HUP' HUP
+trap 'managed_dispatch INT' INT
+trap 'managed_dispatch TERM' TERM
+
+coordinator=
+boundary() {
+  local answer= status=0
+  [ "$proof_signal" != none ] || return 0
+  printf '%s\n' "$1" >&12 || return 1
+  IFS= read -r -t 1 answer <&13 || status=$?
+  if [ "$status" -ne 0 ] && [ -n "$CONTROL_SIGNAL" ]; then
+    status=0
+    IFS= read -r -t 1 answer <&13 || status=$?
+  fi
+  [ "$status" -eq 0 ] && [ "$answer" = delivered ]
+}
+
+start_coordinator() {
+  local requests=1 proof_pid proof_group
+  [ "$proof_signal" != none ] || return 0
+  [ "$operation" != wait-reentry-second ] || requests=2
+  proof_pid=$(ps -o pid= -p $$ | tr -d ' ')
+  proof_group=$(ps -o pgid= -p $$ | tr -d ' ')
+  [ "$proof_pid" = "$$" ] && [ "$proof_group" = "$TEST_PGID" ] ||
+    fail coordinator-identity
+  (
+    request_count=0
+    while [ "$request_count" -lt "$requests" ]; do
+      request=
+      IFS= read -r -t 3 request <&12 || exit 1
+      [ -n "$request" ] || exit 1
+      current_pid=$(ps -o pid= -p "$proof_pid" | tr -d ' ') || exit 1
+      current_group=$(ps -o pgid= -p "$proof_pid" | tr -d ' ') || exit 1
+      [ "$current_pid" = "$proof_pid" ] && [ "$current_group" = "$proof_group" ] || exit 1
+      if [ "$operation" = signal-wait ] || [ "$operation" = wait-reentry-second ]; then
+        child_ready=
+        IFS= read -r -t 2 child_ready <&14 || exit 1
+        case "$request_count:$child_ready" in
+          0:wait-child-ready)
+            printf '%s\n' wait-child-continue >&15 || exit 1 ;;
+          1:wait-child-ready-2)
+            printf '%s\n' wait-child-continue-2 >&15 || exit 1 ;;
+          *) exit 1 ;;
+        esac
+        child_continued=
+        IFS= read -r -t 2 child_continued <&14 || exit 1
+        case "$request_count:$child_continued" in
+          0:wait-child-continued|1:wait-child-continued-2) ;;
+          *) exit 1 ;;
+        esac
+      fi
+      /bin/kill -"$proof_signal" "$proof_pid" || exit 1
+      printf '%s\n' delivered >&13 || exit 1
+      request_count=$((request_count + 1))
+    done
+  ) &
+  coordinator=$!
+  event "coordinator $coordinator"
+}
+
+finish_coordinator() {
+  [ -z "$coordinator" ] || wait "$coordinator" || fail coordinator
+}
+
+launch_observer() {
+  local incoming=$1
+  trap - DEBUG
+  event "launch-before-owner $incoming"
+  boundary launch-before-owner || fail launch-observer
+  OBSERVED_LAUNCH_JOB=$incoming
+}
+
+retirement_observer() {
+  local saved=$1
+  trap - DEBUG
+  event "wait-before-retirement $saved"
+  boundary wait-before-retirement || fail retirement-observer
+  [ "$CONTROL_WAIT_STATUS" = "$saved" ] || fail wait-status-changed
+}
+
+instrumented_launch_job() {
+  trap 'case "$BASH_COMMAND" in "CONTROL_JOB=\$!") launch_observer "$!" ;; esac' DEBUG
+  /bin/bash "$1" "$2" "$3" "$4" >"$5" 2>"$6" &
+  CONTROL_JOB=$!
+  trap - DEBUG
+  CONTROL_JOB_ACQUIRED=1
+}
+
+PROOF_WAIT_REQUESTS=0
+PROOF_WAIT_LIMIT=0
+PROOF_WAIT_RESULTS=
+PROOF_WAIT_COORDINATION=ok
+case "$operation" in
+  signal-wait) PROOF_WAIT_LIMIT=1 ;;
+  wait-reentry-second) PROOF_WAIT_LIMIT=2 ;;
+esac
+control_wait_before_wait() {
+  if [ "$PROOF_WAIT_REQUESTS" -lt "$PROOF_WAIT_LIMIT" ]; then
+    /usr/bin/printf '%s\n' "wait-$PROOF_WAIT_REQUESTS" >&12 ||
+      PROOF_WAIT_COORDINATION=request-write
+    PROOF_WAIT_REQUESTS=$((PROOF_WAIT_REQUESTS + 1))
+  fi
+  return 0
+}
+control_wait_observe() {
+  PROOF_WAIT_RESULTS="${PROOF_WAIT_RESULTS}${PROOF_WAIT_RESULTS:+ }$1:$2"
+  event "direct-wait $CONTROL_JOB $((PROOF_WAIT_REQUESTS - 1)) $1 $2" ||
+    PROOF_WAIT_COORDINATION=event-write
+  return 0
+}
+control_wait_capture() {
+  case "$operation" in
+    status-127) CONTROL_WAIT_CAPTURE=127 ;;
+    status-capture-failure) return 1 ;;
+    *) CONTROL_WAIT_CAPTURE=$1 ;;
+  esac
+}
+proof_wait_validate() {
+  local answer= ack_status=0 ack_count=0 expected_signal_status
+  [ "$PROOF_WAIT_COORDINATION" = ok ] || return 1
+  [ "$PROOF_WAIT_REQUESTS" -eq "$PROOF_WAIT_LIMIT" ] || return 1
+  while [ "$ack_count" -lt "$PROOF_WAIT_LIMIT" ]; do
+    answer=
+    ack_status=0
+    IFS= read -r -t 1 answer <&13 || ack_status=$?
+    event "direct-wait-ack $ack_count $ack_status ${answer:-empty}" || return 1
+    [ "$ack_status" -eq 0 ] && [ "$answer" = delivered ] || return 1
+    ack_count=$((ack_count + 1))
+  done
+  case "$proof_signal" in HUP) expected_signal_status=129 ;;
+    INT) expected_signal_status=130 ;; TERM) expected_signal_status=143 ;;
+    *) return 1 ;;
+  esac
+  case "$PROOF_WAIT_LIMIT:$PROOF_WAIT_RESULTS" in
+    "1:$expected_signal_status:1 0:0"|\
+    "2:$expected_signal_status:1 $expected_signal_status:1 0:0") ;;
+    *) return 1 ;;
+  esac
+}
+
+control_enter
+CONTROL_CASE_PATH=$child
+CONTROL_IDENTITY_PATH="$child/identity"
+CONTROL_GATE_PATH="$proof/start"
+control_stderr="$proof/child.stderr"
+control_events=$child_events
+/bin/mkdir "$child" "$child/scratch" || fail child-directory
+: >"$child_events"
+: >"$proof/child.stdout"
+: >"$control_stderr"
+/usr/bin/mkfifo "$CONTROL_GATE_PATH" || fail gate
+exec 7<>"$CONTROL_GATE_PATH" || fail gate-open
+CONTROL_GATE_OPEN=1
+case "$identity_mode" in hold-open|hold-partial)
+  /usr/bin/mkfifo "$proof/publish-ack" "$proof/publish-go"
+  exec 10<>"$proof/publish-ack" 11<>"$proof/publish-go"
+  ;;
+esac
+case "$operation" in
+  gate-expiry|abort-write-failure|release-write-empty|release-write-prefix)
+    export CONTROL_GATE_SECONDS=1 ;;
+esac
+export CONTROL_IDENTITY_MODE=$identity_mode
+export CONTROL_OUTER_PGID=$TEST_PGID
+export CONTROL_PRIVATE_PROOF=1
+case "$operation" in gate-read-failure) export CONTROL_CHILD_AFTER_RELEASE=gate-read-failure ;;
+  natural-*) export CONTROL_CHILD_AFTER_RELEASE=$operation ;;
+esac
+control_phase prepared || fail prepare
+if [ "$proof_signal" != none ]; then
+  /usr/bin/mkfifo "$proof/signal-request" "$proof/signal-ack" || fail signal-fifos
+  exec 12<>"$proof/signal-request" 13<>"$proof/signal-ack" || fail signal-open
+fi
+case "$operation" in
+  signal-wait|wait-reentry-second)
+    /usr/bin/mkfifo "$proof/wait-child-ready" "$proof/wait-child-go" || fail wait-fifos
+    exec 14<>"$proof/wait-child-ready" 15<>"$proof/wait-child-go" || fail wait-open
+    if [ "$operation" = wait-reentry-second ]; then export CONTROL_WAIT_PROOF=2
+    else export CONTROL_WAIT_PROOF=1; fi ;;
+esac
+start_coordinator
+if [ "$operation" = signal-before-launch ]; then
+  boundary before-launch || fail boundary
+  finish_coordinator
+  [ "$CONTROL_JOB_ACQUIRED" -eq 0 ] || fail unexpected-child
+  event 'terminal signal-before-launch'
+  exit 64
+fi
+set -m
+if [ "$operation" = signal-after-launch ]; then
+  OBSERVED_LAUNCH_JOB=
+  instrumented_launch_job "$base/control.sh" "$base" "$child_name" none \
+    "$proof/child.stdout" "$control_stderr"
+  [ "$OBSERVED_LAUNCH_JOB" = "$CONTROL_JOB" ] ||
+    fail "launch-owner-changed:$OBSERVED_LAUNCH_JOB:$CONTROL_JOB"
+else
+  control_launch_job "$base/control.sh" "$base" "$child_name" none \
+    "$proof/child.stdout" "$control_stderr"
+fi
+control_phase launched || fail launched
+control_restore_monitor || fail monitor
+event "launched $CONTROL_JOB"
+if [ "$operation" = signal-after-capture ]; then boundary after-capture || fail boundary; fi
+case "$identity_mode" in
+  hold-open|hold-partial)
+    publication=
+    IFS= read -r -t 1 publication <&10 || fail publication-ack
+    [ ! -e "$CONTROL_IDENTITY_PATH" ] && [ ! -L "$CONTROL_IDENTITY_PATH" ] ||
+      fail premature-final
+    event "publication-held $publication"
+    printf '%s\n' continue >&11 || fail publication-continue
+    exec 10>&- 11>&- || fail publication-close
+    ;;
+esac
+presence=1
+attempt=0
+while [ "$presence" -eq 1 ] && [ "$attempt" -lt 100 ]; do
+  presence=0
+  control_identity_present "$CONTROL_IDENTITY_PATH" || presence=$?
+  [ "$presence" -le 1 ] || fail identity-inspection
+  [ "$presence" -ne 0 ] || break
+  sleep 0.01
+  attempt=$((attempt + 1))
+done
+[ "$presence" -eq 0 ] || fail identity-absent
+identity_status=0
+fields=$(control_identity_read "$CONTROL_IDENTITY_PATH") || identity_status=$?
+if [ "$identity_mode" = read-failure ]; then
+  identity_status=0
+  fields=$(PERL5LIB= PERLLIB= PERL5OPT= /usr/bin/perl -e '
+    use strict; use warnings;
+    open(my $fh, "<", $ARGV[0]) or exit 1;
+    close($fh) or exit 2;
+    my $count=sysread($fh,my $text,1);
+    exit defined($count) ? 3 : 4;
+  ' "$CONTROL_IDENTITY_PATH") || identity_status=$?
+fi
+if [ "$identity_status" -ne 0 ]; then
+  control_record_failure identity strict-reader || :
+  event abort-attempt
+  control_reconcile_failure identity-invalid
+  finish_coordinator
+  [ "$CONTROL_WAIT_STATUS_STATE" = confirmed ] || fail invalid-unconfirmed
+  event "terminal identity-invalid $identity_status $CONTROL_WAIT_STATUS"
+  exit 64
+fi
+reported= group=
+IFS=' ' read -r reported group <<<"$fields" || fail identity-fields
+if [ "$reported" != "$CONTROL_JOB" ] || [ "$group" != "$CONTROL_JOB" ] ||
+   [ "$group" = "$TEST_PGID" ]; then
+  control_record_failure identity identity-mismatch || :
+  event abort-attempt
+  control_reconcile_failure identity-mismatch
+  finish_coordinator
+  event 'terminal identity-mismatch'
+  exit 64
+fi
+control_phase identified || fail identified
+case "$operation" in
+  signal-before-release) boundary before-release || fail boundary ;;
+esac
+if [ -n "$CONTROL_FAILURE" ]; then
+  control_reconcile_failure signaled-before-release
+  finish_coordinator
+  event 'terminal signal-before-release'
+  exit 64
+fi
+case "$operation" in
+  abort-write-failure)
+    control_close_gate || :
+    /usr/bin/printf '%s\n' abort >&7 2>/dev/null || :
+    control_record_failure release abort-write || : ;;
+  gate-expiry)
+    control_record_failure release gate-expiry || : ;;
+  release-write-empty)
+    CONTROL_POSSIBLY_RELEASED=1
+    control_close_gate || :
+    /usr/bin/printf '%s' verified >&7 2>/dev/null || :
+    control_record_failure release write-before-bytes || : ;;
+  release-write-prefix)
+    CONTROL_POSSIBLY_RELEASED=1
+    /usr/bin/printf '%s' ver >&7 || :
+    control_record_failure release write-prefix || :
+    control_close_gate || : ;;
+  *)
+    CONTROL_POSSIBLY_RELEASED=1
+    event release-attempt
+    /usr/bin/printf '%s\n' verified >&7 || control_record_failure release write
+    case "$operation" in signal-after-write|signal-after-delivery)
+      boundary "$operation" || fail boundary ;;
+    esac
+    case "$operation" in release-full-failure)
+      control_record_failure release full-delivery || : ;;
+    esac
+    case "$operation" in signal-during-close) boundary during-close || fail boundary ;; esac
+    control_close_gate || control_record_failure release close
+    case "$operation" in signal-during-remove) boundary during-remove || fail boundary ;; esac
+    control_remove_gate || control_record_failure release remove
+    ;;
+esac
+CONTROL_PHASE=wait-only
+wait_ok=0
+case "$operation" in
+  signal-wait|wait-reentry-second) control_wait_job && wait_ok=1 ;;
+  *) control_wait_job && wait_ok=1 ;;
+esac
+if [ "$wait_ok" -eq 1 ]; then
+  saved_status=$CONTROL_WAIT_STATUS
+  case "$operation" in
+    signal-after-wait)
+      trap 'case "$BASH_COMMAND" in control_retire_job*) retirement_observer "$saved_status" ;; esac' DEBUG ;;
+  esac
+  control_retire_job || control_record_failure retirement retire
+  trap - DEBUG
+  [ "$CONTROL_WAIT_STATUS" = "$saved_status" ] || fail saved-wait-status
+else
+  saved_status=unconfirmed
+  case "$operation" in
+    status-127) control_record_failure wait status-127 || : ;;
+    status-capture-failure) control_record_failure wait status-capture || : ;;
+    *) control_record_failure wait unconfirmed || : ;;
+  esac
+fi
+proof_evidence_ok=1
+case "$operation" in
+  signal-wait|wait-reentry-second) proof_wait_validate || proof_evidence_ok=0 ;;
+esac
+finish_coordinator
+[ "$proof_evidence_ok" -eq 1 ] || fail wait-proof-evidence
+event "wait $saved_status $CONTROL_WAIT_STATUS_STATE"
+if [ "$operation" = gate-read-failure ] && [ "$saved_status" = 91 ]; then
+  control_record_failure release gate-read || :
+fi
+if [ -f "$child_events" ] && grep -q '^owned ' "$child_events" &&
+   grep -q '^completed$' "$child_events"; then event descendant-confirmed; fi
+case "$operation" in
+  observation-error) control_record_failure observation injected || : ;;
+  missing-events) /bin/rm -f "$child_events"; control_record_failure observation missing-events || : ;;
+  malformed-events) printf '%s\n' malformed >"$child_events";
+    control_record_failure observation malformed-events || : ;;
+  file-error-after-reap) /bin/rm -f "$child_events";
+    control_record_failure observation post-reap || : ;;
+  diagnostic-error) control_record_failure diagnostic injected || : ;;
+esac
+if [ -n "$CONTROL_FAILURE" ]; then
+  CONTROL_RETAIN_SCRATCH=1
+  control_diagnostic >>"$proof/diagnostic" 2>&1 || :
+  event "terminal $CONTROL_FAILURE"
+  exit 64
+fi
+[ "$CONTROL_WAIT_STATUS_STATE" = confirmed ] || fail wait-state
+case "$operation" in natural-HUP) [ "$CONTROL_WAIT_STATUS" -eq 129 ] || fail natural-status ;;
+  natural-INT) [ "$CONTROL_WAIT_STATUS" -eq 130 ] || fail natural-status ;;
+  natural-TERM) [ "$CONTROL_WAIT_STATUS" -eq 143 ] || fail natural-status ;;
+  *) [ "$CONTROL_WAIT_STATUS" -eq 0 ] || fail child-status ;;
+esac
+event success
+trap - EXIT HUP INT TERM
+exit 0
+PROOF_WORKER
+  /bin/chmod 0500 "$control_root/proof-worker.sh"
   for name in coordinator-success coordinator-exhaust coordinator-error coordinator-cleanup \
     entry admission classification observer-return next-before next-after local-error \
     local-reap release-error inspect-error preserve-error group-reap helper-return \
@@ -1086,13 +1596,16 @@ CONTROL
     esac
     for signal in $signals; do
       control_enter
+      control_pending || setup_control_fail "$name control pre-setup signal"
       code="$control_root/$name-$signal"
       CONTROL_CASE_PATH=$code
       CONTROL_IDENTITY_PATH="$code/identity"
       control_events="$code/events"
       control_stderr="$control_root/$name-$signal.stderr"
-      started=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
-      /bin/mkdir "$code" "$code/scratch" || setup_control_fail "$name control directory"
+      started=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time') ||
+        setup_control_fail "$name control start time"
+      /bin/mkdir "$CONTROL_CASE_PATH" "$CONTROL_CASE_PATH/scratch" ||
+        setup_control_fail "$name control directory"
       : >"$control_events" || setup_control_fail "$name control events"
       : >"$control_root/$name-$signal.stdout" || setup_control_fail "$name control stdout"
       : >"$control_stderr" || setup_control_fail "$name control stderr"
@@ -1101,19 +1614,24 @@ CONTROL
       /usr/bin/mkfifo "$CONTROL_GATE_PATH" || setup_control_fail "$name control gate"
       exec 7<>"$CONTROL_GATE_PATH" || setup_control_fail "$name control gate open"
       CONTROL_GATE_OPEN=1
+      control_pending || setup_control_fail "$name control pre-launch signal"
       set -m || setup_control_fail "$name monitor enable"
       control_launch_job "$control_root/control.sh" "$control_root" "$name" "$signal" \
         "$control_root/$name-$signal.stdout" "$control_stderr"
       child=$CONTROL_JOB
-      control_owner=$child
       control_phase launched || setup_control_fail "$name control launch phase"
       control_restore_monitor || setup_control_fail "$name monitor restore"
       attempt=0
-      while ! control_identity_present "$CONTROL_IDENTITY_PATH" && [ "$attempt" -lt 100 ]; do
-        /bin/sleep 0.01
+      identity_presence=1
+      while [ "$identity_presence" -eq 1 ] && [ "$attempt" -lt 100 ]; do
+        identity_presence=0
+        control_identity_present "$CONTROL_IDENTITY_PATH" || identity_presence=$?
+        [ "$identity_presence" -le 1 ] || setup_control_fail "$name control identity inspection"
+        [ "$identity_presence" -ne 0 ] || break
+        /bin/sleep 0.01 || setup_control_fail "$name control identity poll"
         attempt=$((attempt + 1))
       done
-      control_identity_present "$CONTROL_IDENTITY_PATH" || setup_control_fail "$name control identity"
+      [ "$identity_presence" -eq 0 ] || setup_control_fail "$name control identity"
       identity_fields=
       identity_status=0
       identity_fields=$(control_identity_read "$CONTROL_IDENTITY_PATH") || identity_status=$?
@@ -1133,9 +1651,10 @@ CONTROL
       control_wait_job || setup_control_fail "$name control wait unconfirmed"
       status=$CONTROL_WAIT_STATUS
       control_retire_job || setup_control_fail "$name control retirement"
-      control_owner=
+      [ -z "$CONTROL_FAILURE" ] || setup_control_fail "$name control terminal cause"
       elapsed=$(/usr/bin/perl -MTime::HiRes=time -e \
-        'printf "%.3f", time-$ARGV[0]' "$started")
+        'printf "%.3f", time-$ARGV[0]' "$started") ||
+        setup_control_fail "$name control elapsed time"
       code="$control_root/$name-$signal"
       [ ! -d "$code.moved" ] || code="$code.moved"
       [ -f "$code/events" ] || setup_control_fail "$name missing control events"
@@ -1271,6 +1790,175 @@ CONTROL
       control_complete || setup_control_fail "$name control completion"
     done
   done
+  HANDOFF_CONTROL_ROOT=$control_root
+}
+
+run_handoff_proofs() {
+  local proof_root="$HANDOFF_CONTROL_ROOT/proofs" proof name identity operation signal expected
+  local worker worker_group identity_status identity_presence identity_fields reported group
+  local status attempt monitor_was proof_count=0 proof_names="$tmp/handoff-proof.names"
+  /bin/mkdir "$proof_root" || fail 'handoff proof root'
+  CONTROL_RETAIN_SCRATCH=1
+  : >"$proof_names" || fail 'handoff proof ledger'
+  while IFS='|' read -r name identity operation signal expected; do
+    [ -n "$name" ] || continue
+    proof="$proof_root/$name"
+    /bin/mkdir "$proof" || fail "$name proof directory"
+    : >"$proof/events" || fail "$name proof events"
+    : >"$proof/worker.stdout" || fail "$name worker stdout"
+    : >"$proof/worker.stderr" || fail "$name worker stderr"
+    /usr/bin/mkfifo "$proof/worker-start" || fail "$name worker gate"
+    exec 7<>"$proof/worker-start" || fail "$name worker gate open"
+    case $- in *m*) monitor_was=on ;; *) monitor_was=off ;; esac
+    set -m || fail "$name worker monitor"
+    /bin/bash "$HANDOFF_CONTROL_ROOT/proof-worker.sh" "$HANDOFF_CONTROL_ROOT" \
+      "$name" "$identity" "$operation" "$signal" \
+      >"$proof/worker.stdout" 2>"$proof/worker.stderr" &
+    worker=$!
+    if [ "$monitor_was" = on ]; then set -m; else set +m; fi
+    worker_group=$(/bin/ps -o pgid= -p "$worker" 2>/dev/null | /usr/bin/tr -d ' ') ||
+      fail "$name worker group"
+    [ "$worker_group" = "$worker" ] && [ "$worker_group" != "$TEST_PGID" ] ||
+      fail "$name worker isolation"
+    attempt=0
+    identity_presence=1
+    while [ "$identity_presence" -eq 1 ] && [ "$attempt" -lt 100 ]; do
+      identity_presence=0
+      control_identity_present "$proof/worker-identity" || identity_presence=$?
+      [ "$identity_presence" -le 1 ] || fail "$name worker identity inspection"
+      [ "$identity_presence" -ne 0 ] || break
+      /bin/sleep 0.01 || fail "$name worker identity poll"
+      attempt=$((attempt + 1))
+    done
+    [ "$identity_presence" -eq 0 ] || fail "$name worker identity absent"
+    identity_status=0
+    identity_fields=$(control_identity_read "$proof/worker-identity") || identity_status=$?
+    [ "$identity_status" -eq 0 ] || fail "$name worker identity invalid"
+    reported='' group=''
+    IFS=' ' read -r reported group <<<"$identity_fields" || fail "$name worker identity fields"
+    [ "$reported" = "$worker" ] && [ "$group" = "$worker_group" ] ||
+      fail "$name worker identity mismatch"
+    /usr/bin/printf '%s\n' verified >&7 || fail "$name worker release"
+    exec 7>&- || fail "$name worker gate close"
+    /bin/rm -- "$proof/worker-start" || fail "$name worker gate remove"
+    status=0
+    builtin wait "$worker" || status=$?
+    [ "$status" -eq "$expected" ] || fail "$name worker status $status"
+    [ -f "$proof/events" ] || fail "$name proof events missing"
+    [ "$(/usr/bin/grep -c "^launched " "$proof/events" || :)" -le 1 ] ||
+      fail "$name repeated child launch"
+    case "$operation" in
+      signal-before-launch)
+        [ "$(/usr/bin/grep -c "^launched " "$proof/events" || :)" -eq 0 ] ||
+          fail "$name unexpected child" ;;
+      *)
+        [ "$(/usr/bin/grep -c "^launched " "$proof/events" || :)" -eq 1 ] ||
+          fail "$name missing child" ;;
+    esac
+    if [ "$expected" -eq 0 ]; then
+      /usr/bin/grep -q '^success$' "$proof/events" || fail "$name missing success"
+      [ ! -e "$proof/diagnostic" ] || fail "$name unexpected diagnostic"
+    else
+      /usr/bin/grep -q '^terminal ' "$proof/events" || fail "$name missing terminal"
+      if [ -f "$proof/diagnostic" ]; then
+        [ "$(/usr/bin/wc -c <"$proof/diagnostic" | /usr/bin/tr -d ' ')" -le 2048 ] ||
+          fail "$name diagnostic bound"
+        /usr/bin/grep -q '^credential-handoff: phase=' "$proof/diagnostic" ||
+          fail "$name diagnostic prefix"
+      fi
+    fi
+    case "$operation" in
+      release-full-failure|signal-after-write|signal-after-delivery|signal-during-close|\
+      signal-during-remove|signal-wait|signal-after-wait|file-error-after-reap|\
+      diagnostic-error|status-127|status-capture-failure|observation-error|missing-events|\
+      malformed-events|wait-reentry-second)
+        /usr/bin/grep -q '^release-attempt$' "$proof/events" ||
+          fail "$name missing release attempt" ;;
+    esac
+    case "$operation" in
+      release-full-failure|signal-after-write|signal-after-delivery|signal-during-close|\
+      signal-during-remove|signal-wait|signal-after-wait|file-error-after-reap|\
+      diagnostic-error|observation-error|wait-reentry-second)
+        /usr/bin/grep -q '^descendant-confirmed$' "$proof/events" ||
+          fail "$name descendant evidence" ;;
+    esac
+    /usr/bin/printf '%s\n' "$name" >>"$proof_names" || fail "$name proof ledger write"
+    proof_count=$((proof_count + 1))
+    pass "handoff-proof $name"
+  done <<'HANDOFF_PROOFS'
+publication-hold-open|hold-open|normal|none|0
+publication-hold-partial|hold-partial|normal|none|0
+final-empty|empty|normal|none|64
+final-strict-partial|strict-partial|normal|none|64
+final-missing-lf|missing-lf|normal|none|64
+final-extra-field|extra-field|normal|none|64
+final-extra-line|extra-line|normal|none|64
+final-nul|nul|normal|none|64
+final-oversize|oversize|normal|none|64
+final-symlink|symlink|normal|none|64
+final-fifo|fifo|normal|none|64
+final-directory|directory|normal|none|64
+final-read-failure|read-failure|normal|none|64
+final-leading-zero|leading-zero|normal|none|64
+final-signed|signed|normal|none|64
+final-cr|cr|normal|none|64
+final-alternate-separator|alternate-separator|normal|none|64
+final-pid-mismatch|pid-mismatch|normal|none|64
+final-pgid-mismatch|pgid-mismatch|normal|none|64
+final-outer-group|outer-group|normal|none|64
+launch-HUP-before-launch|valid|signal-before-launch|HUP|64
+launch-INT-before-launch|valid|signal-before-launch|INT|64
+launch-TERM-before-launch|valid|signal-before-launch|TERM|64
+launch-HUP-before-owner|valid|signal-after-launch|HUP|64
+launch-INT-before-owner|valid|signal-after-launch|INT|64
+launch-TERM-before-owner|valid|signal-after-launch|TERM|64
+launch-HUP-after-capture|valid|signal-after-capture|HUP|64
+launch-INT-after-capture|valid|signal-after-capture|INT|64
+launch-TERM-after-capture|valid|signal-after-capture|TERM|64
+gate-abort-write-failure|valid|abort-write-failure|none|64
+gate-expiry|valid|gate-expiry|none|64
+gate-write-before-bytes|valid|release-write-empty|none|64
+gate-write-prefix|valid|release-write-prefix|none|64
+gate-write-full-line|valid|release-full-failure|none|64
+release-HUP-before-write|valid|signal-before-release|HUP|64
+release-INT-before-write|valid|signal-before-release|INT|64
+release-TERM-before-write|valid|signal-before-release|TERM|64
+release-HUP-after-write|valid|signal-after-write|HUP|64
+release-INT-after-write|valid|signal-after-write|INT|64
+release-TERM-after-write|valid|signal-after-write|TERM|64
+release-HUP-after-delivery|valid|signal-after-delivery|HUP|64
+release-INT-after-delivery|valid|signal-after-delivery|INT|64
+release-TERM-after-delivery|valid|signal-after-delivery|TERM|64
+release-HUP-during-close|valid|signal-during-close|HUP|64
+release-INT-during-close|valid|signal-during-close|INT|64
+release-TERM-during-close|valid|signal-during-close|TERM|64
+release-HUP-during-remove|valid|signal-during-remove|HUP|64
+release-INT-during-remove|valid|signal-during-remove|INT|64
+release-TERM-during-remove|valid|signal-during-remove|TERM|64
+wait-HUP-pending|valid|signal-wait|HUP|64
+wait-INT-pending|valid|signal-wait|INT|64
+wait-TERM-pending|valid|signal-wait|TERM|64
+wait-HUP-before-retirement|valid|signal-after-wait|HUP|64
+wait-INT-before-retirement|valid|signal-after-wait|INT|64
+wait-TERM-before-retirement|valid|signal-after-wait|TERM|64
+wait-natural-HUP|valid|natural-HUP|none|0
+wait-natural-INT|valid|natural-INT|none|0
+wait-natural-TERM|valid|natural-TERM|none|0
+wait-file-error-after-reap|valid|file-error-after-reap|none|64
+wait-diagnostic-error|valid|diagnostic-error|none|64
+unconfirmed-status-127|valid|status-127|none|64
+unconfirmed-status-capture|valid|status-capture-failure|none|64
+unconfirmed-observation|valid|observation-error|none|64
+unconfirmed-missing-events|valid|missing-events|none|64
+unconfirmed-malformed-events|valid|malformed-events|none|64
+timing-delayed-publication|hold-open|delayed-publication|none|0
+timing-gate-read-failure|valid|gate-read-failure|none|64
+timing-second-wait-signal|valid|wait-reentry-second|TERM|64
+HANDOFF_PROOFS
+  [ "$proof_count" -eq 68 ] || fail 'handoff proof count'
+  [ "$(LC_ALL=C /usr/bin/sort -u "$proof_names" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 68 ] ||
+    fail 'handoff proof names'
+  CONTROL_RETAIN_SCRATCH=0
 }
 
 start_input_race() {
@@ -2058,4 +2746,6 @@ if [ "$INPUT_RACE_STATUS" -ne 143 ] || [ -s "$tmp/final-cleanup.out" ] ||
 fi
 pass 'final signal keeps cleanup armed and removes scratch before output'
 
+[ "$passes" -eq 99 ] || fail 'original control ledger count'
+run_handoff_proofs
 /usr/bin/printf 'control credential policy: %s passed\n' "$passes"
