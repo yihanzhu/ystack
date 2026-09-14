@@ -99,8 +99,11 @@ with older ledger bytes. A later concurrent commit belongs to a later read.
 
 Support local Linux and Darwin filesystems with atomic same-filesystem rename,
 exclusive file creation, reliable advisory flock and Git ref locking. The caller
-and cooperating writers run as one trusted UID. Process termination can leave the
-old or new complete committed view; unpublished objects never count as an update.
+and cooperating writers run as one trusted UID. After supported process termination,
+a previously valid initialized store must reopen to the complete readable old or
+new committed view; unpublished objects never count as an update. Unexpected runtime
+residue is failed platform support, not a newly permitted unreadable-store outcome.
+Only partial initialization before its first committed ref may return E_INCOMPLETE.
 This does not claim survival of power loss, disk failure, filesystem rollback,
 root or hostile same-UID edits. Git hashes are not signatures.
 
@@ -150,12 +153,25 @@ is introduced. An operator can preserve and investigate a blocked store separate
 
 ### R6. Required proof
 
+Before G2 selection, finite authorized disposable plumbing research may assess the
+fixed tool, exact environment, minimal layout, representative object/tree/commit/ref
+operations, observed modes and actual in-flight lock-FD retention. These observations
+are tool feasibility evidence only, not public application, peak-allocation or
+all-platform proof. G2 does not require writing the application before its plan.
+After G2 and the separate high-risk plan gate, implementation acceptance requires
+all actual public-entry proofs below on the supported platforms. Finite research
+cannot replace or weaken any of them.
+
 Keep the complete existing planner suite. In fresh processes, pass actual exports
 to the unchanged planner for empty first dispatch, pending redelivery without an
 extra slot, failed redelivery, acknowledgment suppression and pending keys absent
 from the observation. Independently hash exported ledger bytes. Demonstrate that
 an intentionally wrong reference can pass the planner's shape gate while storage's
 own closure/reference validation refuses corruption; do not change planner claims.
+Read, exact update/init replay and pre-admission refusal must validate the real
+bounded inventory and complete committed closure without spawning Git, creating
+objects or changing application file bytes/shape. This is not a claim about kernel
+access-time bookkeeping. At capacity, these actual public paths remain available.
 
 Cover every R3 allowed/refused edge, late acknowledgment, obsolete failure, all key
 fields, counts 1/999/1000/1001, entries 0/128/129, equal/increasing/backdated times,
@@ -200,6 +216,22 @@ Retain the original actual before-ref and after-ref lost-response proofs as well
 
 Use real temporary repositories and actual Git. No product test switches, sleeps
 that guess a race window, synthetic successful publication, network or real target.
+Use the exact selected Git path/environment and complete application root, including
+all root entries, in cold/fresh and reused cases. Record actual executable/platform
+identities and invalidate affected evidence when they change. Prove temporary names,
+simultaneous allocation and all-writer lock lifetime, not just final clean snapshots.
+No extra root entry, auxiliary cache, outside-store application scratch or unprotected
+writer is supported. A missing mechanism or unexpected effect fails the proof.
+
+Exercise the actual chosen Python public invocation, not only imported functions or
+a toy Git parent. It must use an explicitly identified existing trusted interpreter
+with isolated startup, disabled site customization and disabled import bytecode
+writes (Python's -I -S -B modes), and no caller-controlled import/search path. The
+plan records the supported absolute invocation and interpreter identity. Verify
+startup/imports do not write the source checkout, target or undeclared application
+locations. Git-free paths alone are not proof that Python startup is write-free.
+No install, startup-write exception or new interpreter-selection authority follows.
+
 Run boundary proofs on supported Linux and Darwin; source reading alone is not
 crash or concurrency evidence. Existing CI, shellcheck 0.11.0, schema and rename
 checks remain required. Tests must report uncertainty or fail, never skip a required
@@ -296,24 +328,54 @@ Git child writes use umask 077; unsupported emitted modes refuse before publicat
 The implementation defines exact fixed metadata bytes for this layout, rejects unknown
 config rather than overriding it, and validates it before invoking Git.
 
-Use a fixed absolute local Git executable selected for the supported host, with
-explicit repository argument and an empty-start environment: fixed PATH/locale,
-HOME disabled, GIT_CONFIG_NOSYSTEM, system/global config disabled, no replacements,
-no lazy fetch, no terminal prompts and no inherited Git/config/credential variables.
-Disable hooks explicitly and invoke only object/hash/tree/commit reading/writing
-and direct-ref plumbing; no checkout, filter, revision expression from input, shell,
-remote or credential discovery. Git subprocesses have a 10-second timeout and
-bounded stdout/stderr; expiry refuses with publication uncertainty resolved on reopen.
-Linux uses /usr/bin/git; Darwin uses /usr/bin/git with already installed developer
-tools. Missing tools refuse, never install or select a PATH substitute.
+Use exactly `/usr/bin/git` on Linux and
+`/Library/Developer/CommandLineTools/usr/bin/git` on Darwin. Require the already
+installed trusted executable; no fallback, PATH lookup, xcrun/xcode-select discovery,
+DEVELOPER_DIR override, public tool selector or installation. Direct invocation does
+not by itself prove absence of helper/cache writes. Unsupported behavior refuses.
+
+Build each Git environment from empty with exactly these values:
+
+| Variable | Value |
+| --- | --- |
+| PATH | /usr/bin:/bin |
+| LANG and LC_ALL | C |
+| HOME | /dev/null |
+| TMPDIR | validated absolute physical store root |
+| GIT_CONFIG_NOSYSTEM | 1 |
+| GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL | /dev/null |
+| GIT_NO_REPLACE_OBJECTS | 1 |
+| GIT_NO_LAZY_FETCH | 1 |
+| GIT_TERMINAL_PROMPT | 0 |
+| GIT_ATTR_NOSYSTEM | 1 |
+
+Only commit creation additionally receives GIT_AUTHOR_NAME/GIT_COMMITTER_NAME as
+`ystack ledger`, GIT_AUTHOR_EMAIL/GIT_COMMITTER_EMAIL as `ledger@invalid`, and
+GIT_AUTHOR_DATE/GIT_COMMITTER_DATE as `2000-01-01T00:00:00Z`. These are fixed inert
+metadata, not authority. No other caller environment or tool-selection value survives.
+
+Pass the explicit repository argument and fixed `-c core.hooksPath=/dev/null`.
+Invoke only fixed object/hash/tree/commit and direct-ref plumbing, never checkout,
+filters, caller revision expressions, a shell, remote or credential discovery.
+TMPDIR does not permit a third root entry: xcrun_db or any other auxiliary file
+is unsupported, not a new allowance. HOME/TMPDIR are not filesystem confinement.
+Git subprocesses retain the 10-second timeout, bounded output and inherited-lock
+cleanup rules above; reopening resolves uncertain publication.
+
+Python performs bounded direct-tip, loose-object and complete-chain validation for
+read, exact replay and every pre-admission refusal. These paths never invoke Git or
+a write-time tool probe. Only separately admitted initialization or an unseen valid
+update can start Git. Do not replace required OID, canonical-byte, digest, identity
+or transition checks with unchecked file output or a general Git parsing API.
 
 Each commit tree has exactly `identity.json`, `request.json`, `ledger.json` and
 `receipt.json`, regular blobs with Git mode 100644. Identity binds protocol,
 store_id, ledger_id and initialization_id and never changes. The root commit holds
 the initialize request and empty ledger. Each later commit has exactly one parent
 and one R3 update. Receipt excludes its own commit OID, avoiding a hash cycle.
-Use fixed private author/committer identity and timestamp, and a fixed commit message;
-only tree and parent determine changing commit content. No ambient Git identity.
+Use the fixed author/committer metadata above and the commit message
+`ystack delivery ledger` followed by one LF. Only tree and parent determine changing
+commit content. Verify actual Git serialization against the existing commit cap.
 Recompute object OIDs, raw canonical bytes, genuine digests, identity, every
 transition and each receipt through the entire captured chain on each call.
 Unreachable objects count toward limits but never supply replay or current state.
