@@ -731,6 +731,17 @@ while IFS= read -r output; do
 done < <(/usr/bin/find "$tmp" -type f -name '*.out' -print)
 pass 'no claim-only path can synthesize satisfied'
 
+setup_control_script="$tmp/setup-coordinator-control.sh"
+{
+  /usr/bin/printf '%s\n' '#!/bin/bash' 'set -euo pipefail'
+  declare -f coordinate_input_setup || :
+  /usr/bin/printf '%s\n' 'coordinate_input_setup miss-then-success unused unused'
+} >"$setup_control_script"
+setup_control_status=0
+/bin/bash "$setup_control_script" >"$tmp/setup-control.stdout" \
+  2>"$tmp/setup-control.stderr" || setup_control_status=$?
+[ "$setup_control_status" -eq 0 ] || fail 'coordinator miss-then-success control'
+
 forged_duty="$tmp/forged-duty.json"
 "$jq_bin" -S -c '.body.reason_ids=["forged"] | .body.verdict="violated"' \
   "$duty" >"$forged_duty"
