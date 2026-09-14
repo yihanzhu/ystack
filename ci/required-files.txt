@@ -211,6 +211,11 @@ control/v1/sandbox.jq
 control/v1/evaluate-sandbox.sh
 scripts/test/control-sandbox-policy.test.sh
 
+# Sandbox boundary decision records
+work/real-sandbox-boundary/intent.md
+work/real-sandbox-boundary/spec.md
+work/real-sandbox-boundary/plan.md
+
 # Inactive credential policy and evaluator
 control/v1/credential-policy.json
 control/v1/credential-policy-decision.json
