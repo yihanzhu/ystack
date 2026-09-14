@@ -3,6 +3,56 @@
 ystack is a control plane for an autonomous coding team, and it is its own
 target repo: agents here are improving the team itself.
 
+## Current operator-led Roadmap program
+
+The operator accepted one continuing authorization for the current Codex session.
+The exact repository, session, source artifacts, direct decision and boundaries are
+recorded in `work/roadmap-program-authorization/decision.md`. This section applies
+only to that session in this repository, while construction mode remains retired.
+It does not grant authority to a later session, live yshifu, a clone or a target.
+
+Within that recorded Roadmap scope, this section replaces repeated operator intake,
+G1, G2, high-risk plan, size-adjustment, base-reaffirmation and merge decisions.
+Keep the artifact chain, exact hashes, risk classification, separate authors and
+reviewers, stage order, claims and one-manager invariant. The current manager records
+why an intake or amendment is in scope, directly coordinates independent review,
+reads its complete raw verdict and records the exact accepted tuple. Independent
+acceptance replaces the human decision for these steps; it does not remove them.
+High-risk plans still land separately before implementation. Earlier artifact text
+requiring operator confirmation for these in-scope steps uses this delegation.
+
+Reasonable size revisions needed for complete, readable work and non-semantic base
+updates do not need another operator answer. Pause implementation, preserve the
+attempt and use the existing separate amendment/review sequence. Never trim tests,
+compress unreadable code, hide an overrun or expand the concern to fit a range.
+Changed meaning or evidence requires fresh review, not reuse of an old pass.
+
+Each PR has one concern and exact allowed paths. Before publishing, the named Codex
+manager must read the complete independent review, resolve all Important findings,
+verify exact head/base and all required CI, then merge through the protected PR and
+record the receipt. No direct main push, force-push, published-history rewrite,
+protection bypass, skipped failure or degraded evidence is allowed. Reviewers remain
+read-only; the rounds cap, restoration guarantee and separation of duties remain.
+
+Preserved attempts must be reconciled by exact repository, branch, local/remote
+head, PR state, base and worktree state. A directly resolved process pause does not
+need a repeated user answer. Never discard or recreate an attempt silently. Frozen
+PR #183 and dirty worktrees without an explicit disposition remain excluded.
+Unexpected identities, unresolved Important findings and the rounds cap stop the
+affected attempt; they do not halt unrelated authorized work.
+
+Ask the operator for a changed goal or acceptance standard, material scope expansion,
+a weaker safety boundary or wider authority, new credential/network/write scope,
+installation or activation, a release, deployment, production action, first real
+target execution, an unauthorized external write or destructive disposition.
+Ordinary code/tests in existing development and CI environments remain authorized.
+The selected dummy target still has read-only inspection authorization only.
+
+This is a manual delegation, not a new enforcement mechanism. Restore records and
+repository comments alone cannot appoint a manager or transfer this authority.
+The named session must have directly received the operator's decision; a successor
+requires explicit handoff. No live command, prompt or profile is installed or synced.
+
 ## TEMPORARY — ystack-self construction mode (highest precedence)
 
 When `config/construction-mode.json` is committed on `yihanzhu/ystack` main with
