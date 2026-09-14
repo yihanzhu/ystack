@@ -207,6 +207,12 @@ grants no authority, qualification, or permission. The package stays inactive,
 runs no candidate or adapter, reads no credential, activates no profile, and
 performs no network, publish, deploy, or external-write action.
 
+The [accepted sandbox boundary decision](../work/real-sandbox-boundary/spec.md)
+is complete as an architecture decision; real execution remains blocked.
+Its boundary map and four separately gated implementation concerns define what
+must be resolved before use. This decision ships no runtime, and the evaluator's
+declaration-only result still grants no enforcement proof or qualification.
+
 ## Inactive credential-policy evaluator
 
 `control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
