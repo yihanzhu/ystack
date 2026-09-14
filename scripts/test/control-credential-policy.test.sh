@@ -707,14 +707,24 @@ control_remove_gate() {
   [ -z "$CONTROL_GATE_PATH" ] || /bin/rm -- "$CONTROL_GATE_PATH"
 }
 
+control_release_before_write() { :; }
+control_release_write() { /usr/bin/printf '%s\n' verified >&7; }
+control_release_after_write() { :; }
+control_release_before_close() { :; }
+control_release_before_remove() { :; }
 control_release_job() {
   local problem=0
   control_phase release-possible || problem=1
   CONTROL_POSSIBLY_RELEASED=1
-  /usr/bin/printf '%s\n' verified >&7 || problem=1
+  control_release_before_write || problem=1
+  control_release_write || problem=1
+  control_release_after_write || problem=1
+  control_release_before_close || problem=1
   control_close_gate || problem=1
+  control_release_before_remove || problem=1
   control_remove_gate || problem=1
   control_phase wait-only || problem=1
+  [ -z "$CONTROL_FAILURE" ] || problem=1
   [ "$problem" -eq 0 ]
 }
 
@@ -836,7 +846,7 @@ run_setup_controls() {
   local control_root="$tmp/setup-controls" functions name signal code status started elapsed
   local child reported group function_name attempt signals control_events launches mutations
   local helpers reconciled event_kind leader expected_launches expected_helpers expected_error
-  local observers term_count cont_count kill_count
+  local observers term_count cont_count kill_count generated_control
   local identity_fields identity_status identity_presence field_status control_stderr
   /bin/mkdir "$control_root"
   functions="$control_root/functions.sh"
@@ -849,7 +859,9 @@ run_setup_controls() {
     start_input_race stop_at_owned_marker control_enter control_phase \
     control_record_failure control_pending control_identity_read control_identity_present \
     control_launch_job control_restore_monitor control_close_gate control_remove_gate \
-    control_release_job control_abort_job control_wait_job control_retire_job control_excerpt \
+    control_release_before_write control_release_write control_release_after_write \
+    control_release_before_close control_release_before_remove control_release_job \
+    control_abort_job control_wait_job control_retire_job control_excerpt \
     control_wait_before_wait control_wait_observe control_wait_capture \
     control_diagnostic control_reconcile_failure control_complete fail; do
     declare -f "$function_name" >>"$functions"
@@ -958,6 +970,10 @@ fi
 IFS= read -r -t "$gate_seconds" token <&7 || gate_status=$?
 exec 7>&- || exit 91
 [ "$gate_status" -eq 0 ] && [ "$token" = verified ] || exit 91
+if [ "${CONTROL_DELIVERY_PROOF:-0}" -eq 1 ]; then
+  printf '%s\n' gate-consumed >&16 || exit 91
+  exec 16>&- || exit 91
+fi
 if [ "${CONTROL_WAIT_PROOF:-0}" -ge 1 ]; then
   printf '%s\n' wait-child-ready >&14 || exit 91
   wait_token=
@@ -1340,6 +1356,46 @@ control_wait_capture() {
     *) CONTROL_WAIT_CAPTURE=$1 ;;
   esac
 }
+control_release_before_write() {
+  event release-attempt || return 1
+}
+control_release_write() {
+  case "$operation" in
+    release-write-empty)
+      control_close_gate || :
+      /usr/bin/printf '%s\n' verified >&7 2>/dev/null
+      ;;
+    release-write-prefix)
+      /usr/bin/printf '%s' ver >&7
+      control_record_failure release write-prefix || :
+      return 1
+      ;;
+    *) /usr/bin/printf '%s\n' verified >&7 ;;
+  esac
+}
+control_release_after_write() {
+  local delivery=''
+  case "$operation" in
+    signal-after-write) boundary after-write || return 1 ;;
+    signal-after-delivery)
+      IFS= read -r -t 1 delivery <&16 || return 1
+      [ "$delivery" = gate-consumed ] || return 1
+      exec 16>&- || return 1
+      event delivery-confirmed || return 1
+      boundary after-delivery || return 1
+      ;;
+    release-full-failure)
+      control_record_failure release full-delivery || :
+      return 1
+      ;;
+  esac
+}
+control_release_before_close() {
+  [ "$operation" != signal-during-close ] || boundary during-close
+}
+control_release_before_remove() {
+  [ "$operation" != signal-during-remove ] || boundary during-remove
+}
 proof_wait_validate() {
   local answer= ack_status=0 ack_count=0 expected_signal_status
   [ "$PROOF_WAIT_COORDINATION" = ok ] || return 1
@@ -1402,6 +1458,10 @@ case "$operation" in
     exec 14<>"$proof/wait-child-ready" 15<>"$proof/wait-child-go" || fail wait-open
     if [ "$operation" = wait-reentry-second ]; then export CONTROL_WAIT_PROOF=2
     else export CONTROL_WAIT_PROOF=1; fi ;;
+  signal-after-delivery)
+    /usr/bin/mkfifo "$proof/delivery-ack" || fail delivery-fifo
+    exec 16<>"$proof/delivery-ack" || fail delivery-open
+    export CONTROL_DELIVERY_PROOF=1 ;;
 esac
 start_coordinator
 if [ "$operation" = signal-before-launch ]; then
@@ -1497,33 +1557,15 @@ case "$operation" in
     control_record_failure release abort-write || : ;;
   gate-expiry)
     control_record_failure release gate-expiry || : ;;
-  release-write-empty)
-    CONTROL_POSSIBLY_RELEASED=1
-    control_close_gate || :
-    /usr/bin/printf '%s' verified >&7 2>/dev/null || :
-    control_record_failure release write-before-bytes || : ;;
-  release-write-prefix)
-    CONTROL_POSSIBLY_RELEASED=1
-    /usr/bin/printf '%s' ver >&7 || :
-    control_record_failure release write-prefix || :
-    control_close_gate || : ;;
   *)
-    CONTROL_POSSIBLY_RELEASED=1
-    event release-attempt
-    /usr/bin/printf '%s\n' verified >&7 || control_record_failure release write
-    case "$operation" in signal-after-write|signal-after-delivery)
-      boundary "$operation" || fail boundary ;;
-    esac
-    case "$operation" in release-full-failure)
-      control_record_failure release full-delivery || : ;;
-    esac
-    case "$operation" in signal-during-close) boundary during-close || fail boundary ;; esac
-    control_close_gate || control_record_failure release close
-    case "$operation" in signal-during-remove) boundary during-remove || fail boundary ;; esac
-    control_remove_gate || control_record_failure release remove
+    release_ok=0
+    control_release_job && release_ok=1
+    if [ "$release_ok" -eq 0 ] && [ -z "$CONTROL_FAILURE" ]; then
+      control_record_failure release release-operation || :
+    fi
     ;;
 esac
-CONTROL_PHASE=wait-only
+case "$CONTROL_PHASE" in wait-only) ;; *) CONTROL_PHASE=wait-only ;; esac
 wait_ok=0
 case "$operation" in
   signal-wait|wait-reentry-second) control_wait_job && wait_ok=1 ;;
@@ -1559,13 +1601,17 @@ fi
 if [ -f "$child_events" ] && grep -q '^owned ' "$child_events" &&
    grep -q '^completed$' "$child_events"; then event descendant-confirmed; fi
 case "$operation" in
-  observation-error) control_record_failure observation injected || : ;;
+  observation-error)
+    /usr/bin/perl -e 'print "x" x 4096' >"$control_stderr" || fail diagnostic-source
+    control_record_failure observation injected || : ;;
   missing-events) /bin/rm -f "$child_events"; control_record_failure observation missing-events || : ;;
   malformed-events) printf '%s\n' malformed >"$child_events";
     control_record_failure observation malformed-events || : ;;
   file-error-after-reap) /bin/rm -f "$child_events";
     control_record_failure observation post-reap || : ;;
-  diagnostic-error) control_record_failure diagnostic injected || : ;;
+  diagnostic-error)
+    /bin/mkdir "$proof/diagnostic" || fail diagnostic-destination
+    control_record_failure diagnostic injected || : ;;
 esac
 if [ -n "$CONTROL_FAILURE" ]; then
   CONTROL_RETAIN_SCRATCH=1
@@ -1584,6 +1630,10 @@ trap - EXIT HUP INT TERM
 exit 0
 PROOF_WORKER
   /bin/chmod 0500 "$control_root/proof-worker.sh"
+  for generated_control in "$functions" "$control_root/control.sh" \
+    "$control_root/proof-worker.sh"; do
+    /bin/bash -n "$generated_control" || fail 'generated control parser'
+  done
   for name in coordinator-success coordinator-exhaust coordinator-error coordinator-cleanup \
     entry admission classification observer-return next-before next-after local-error \
     local-reap release-error inspect-error preserve-error group-reap helper-return \
@@ -1796,7 +1846,8 @@ PROOF_WORKER
 run_handoff_proofs() {
   local proof_root="$HANDOFF_CONTROL_ROOT/proofs" proof name identity operation signal expected
   local worker worker_group identity_status identity_presence identity_fields reported group
-  local status attempt monitor_was proof_count=0 proof_names="$tmp/handoff-proof.names"
+  local status attempt monitor_was release_count expected_release wait_count expected_wait
+  local proof_child_events proof_count=0 proof_names="$tmp/handoff-proof.names"
   /bin/mkdir "$proof_root" || fail 'handoff proof root'
   CONTROL_RETAIN_SCRATCH=1
   : >"$proof_names" || fail 'handoff proof ledger'
@@ -1855,6 +1906,25 @@ run_handoff_proofs() {
         [ "$(/usr/bin/grep -c "^launched " "$proof/events" || :)" -eq 1 ] ||
           fail "$name missing child" ;;
     esac
+    release_count=$(/usr/bin/grep -c '^release-attempt$' "$proof/events" || :)
+    expected_release=1
+    case "$identity" in valid|hold-open|hold-partial) ;; *) expected_release=0 ;; esac
+    case "$operation" in
+      signal-before-launch|signal-after-launch|signal-after-capture|signal-before-release|\
+      abort-write-failure|gate-expiry) expected_release=0 ;;
+    esac
+    [ "$release_count" -eq "$expected_release" ] || fail "$name release count"
+    wait_count=$(/usr/bin/grep -c '^direct-wait ' "$proof/events" || :)
+    expected_wait=1
+    case "$operation" in signal-before-launch) expected_wait=0 ;;
+      signal-wait) expected_wait=2 ;; wait-reentry-second) expected_wait=3 ;;
+    esac
+    [ "$wait_count" -eq "$expected_wait" ] || fail "$name direct wait count"
+    proof_child_events="$HANDOFF_CONTROL_ROOT/proof-$name-none/events"
+    if [ "$expected_release" -eq 0 ] && [ -f "$proof_child_events" ]; then
+      ! /usr/bin/grep -Eq '^(owned |completed$)' "$proof_child_events" ||
+        fail "$name unexpected evaluator"
+    fi
     if [ "$expected" -eq 0 ]; then
       /usr/bin/grep -q '^success$' "$proof/events" || fail "$name missing success"
       [ ! -e "$proof/diagnostic" ] || fail "$name unexpected diagnostic"
@@ -1867,6 +1937,14 @@ run_handoff_proofs() {
           fail "$name diagnostic prefix"
       fi
     fi
+    case "$operation" in
+      observation-error)
+        [ -f "$proof/child.stderr" ] &&
+          [ "$(/usr/bin/wc -c <"$proof/child.stderr" | /usr/bin/tr -d ' ')" -eq 4096 ] ||
+          fail "$name retained full stderr" ;;
+      diagnostic-error)
+        [ -d "$proof/diagnostic" ] || fail "$name actual diagnostic error" ;;
+    esac
     case "$operation" in
       release-full-failure|signal-after-write|signal-after-delivery|signal-during-close|\
       signal-during-remove|signal-wait|signal-after-wait|file-error-after-reap|\
@@ -1881,6 +1959,14 @@ run_handoff_proofs() {
       diagnostic-error|observation-error|wait-reentry-second)
         /usr/bin/grep -q '^descendant-confirmed$' "$proof/events" ||
           fail "$name descendant evidence" ;;
+    esac
+    if [ "$expected" -eq 0 ] && [ "$identity" != valid ]; then
+      /usr/bin/grep -q '^descendant-confirmed$' "$proof/events" ||
+        fail "$name successful publication descendant evidence"
+    fi
+    case "$operation" in signal-after-delivery)
+      [ "$(/usr/bin/grep -c '^delivery-confirmed$' "$proof/events" || :)" -eq 1 ] ||
+        fail "$name delivery acknowledgment" ;;
     esac
     /usr/bin/printf '%s\n' "$name" >>"$proof_names" || fail "$name proof ledger write"
     proof_count=$((proof_count + 1))
