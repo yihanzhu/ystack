@@ -348,7 +348,7 @@ resolver_identity_source_blob() {
 
 record_runtime_identities() {
   local phase=$1 path identity
-  printf 'native identity phase=%s platform=%s\n' "$phase" "$resolver_platform"
+  printf 'native identity phase=%s platform=%s\n' "$phase" "$resolver_platform" || return 1
   for path in /usr/bin/uname /bin/dd /usr/bin/od /bin/bash "$resolver_selected_git" \
       "$resolver_bound_jq" "$resolver_bin/launcher" "$resolver_bin/nofollow-snapshot" \
       "$resolver_runtime" "$resolver_library" "$resolver_helper_source" \
@@ -356,14 +356,14 @@ record_runtime_identities() {
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
     identity=$(sha256_file "$path") || return 1
     [[ "$identity" =~ ^[0-9a-f]{64}$ ]] || return 1
-    printf 'native file %s %s\n' "$identity" "$path"
+    printf 'native file %s %s\n' "$identity" "$path" || return 1
   done
   for path in scripts/lib/profile-resolution.sh resolver/v1/profile-resolve-runtime.sh \
       resolver/v1/profile-resolution.jq resolver/v1/nofollow-snapshot.c \
       scripts/test/portable-profile-resolution-launcher.c; do
     identity=$(resolver_identity_source_blob "$path") || return 1
     [[ "$identity" =~ ^[0-9a-f]{40}$ ]] || return 1
-    printf 'native source %s %s\n' "$identity" "$path"
+    printf 'native source %s %s\n' "$identity" "$path" || return 1
   done
 }
 case "$resolver_platform" in
@@ -408,7 +408,31 @@ check_identity_record_failures() {
     done
   done
 }
+check_identity_record_writes() {
+  local stage
+  for stage in header file source; do
+    if ! (
+      fired=0
+      printf() {
+        case "$stage:$1" in
+          header:'native identity '*|file:'native file '*|source:'native source '*)
+            if [ "$fired" -eq 0 ]; then fired=1; return 1; fi ;;
+        esac
+        builtin printf "$@"
+      }
+      if record_runtime_identities write-negative > "$resolver_tmp/identity-write.$stage"; then
+        exit 1
+      fi
+      [ "$fired" -eq 1 ]
+    ); then
+      printf 'FAIL: identity recorder masked %s write failure\n' "$stage" >&2
+      return 1
+    fi
+    printf 'identity write control ok: %s\n' "$stage"
+  done
+}
 check_identity_record_failures
+check_identity_record_writes
 record_runtime_identities before > "$resolver_tmp/identities.before"
 /bin/cat "$resolver_tmp/identities.before"
 
