@@ -342,27 +342,73 @@ esac
 "$resolver_compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
   "${resolver_loader_flags[@]}" "$resolver_loader_source" -o "$resolver_bin/loader-trap.dylib"
 
+resolver_identity_source_blob() {
+  /usr/bin/git -C "$resolver_root" hash-object "$1"
+}
+
 record_runtime_identities() {
-  local phase=$1 path
+  local phase=$1 path identity
   printf 'native identity phase=%s platform=%s\n' "$phase" "$resolver_platform"
   for path in /usr/bin/uname /bin/dd /usr/bin/od /bin/bash "$resolver_selected_git" \
       "$resolver_bound_jq" "$resolver_bin/launcher" "$resolver_bin/nofollow-snapshot" \
       "$resolver_runtime" "$resolver_library" "$resolver_helper_source" \
       "$resolver_launcher_source" "$resolver_root/resolver/v1/profile-resolution.jq"; do
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
-    printf 'native file %s %s\n' "$(sha256_file "$path")" "$path"
+    identity=$(sha256_file "$path") || return 1
+    [[ "$identity" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf 'native file %s %s\n' "$identity" "$path"
   done
   for path in scripts/lib/profile-resolution.sh resolver/v1/profile-resolve-runtime.sh \
       resolver/v1/profile-resolution.jq resolver/v1/nofollow-snapshot.c \
       scripts/test/portable-profile-resolution-launcher.c; do
-    printf 'native source %s %s\n' \
-      "$(/usr/bin/git -C "$resolver_root" hash-object "$path")" "$path"
+    identity=$(resolver_identity_source_blob "$path") || return 1
+    [[ "$identity" =~ ^[0-9a-f]{40}$ ]] || return 1
+    printf 'native source %s %s\n' "$identity" "$path"
   done
 }
 case "$resolver_platform" in
   Linux:x86_64) resolver_selected_git=/usr/bin/git ;;
   Darwin:*) resolver_selected_git=/Library/Developer/CommandLineTools/usr/bin/git ;;
 esac
+check_identity_record_failures() {
+  local stage mode output
+  for stage in sha256 source-oid; do
+    for mode in failed-status malformed uppercase empty; do
+      output="$resolver_tmp/identity-control.$stage.$mode"
+      if ! (
+        if [ "$stage" = sha256 ]; then
+          sha256_file() {
+            case "$mode" in
+              failed-status) printf '%064d\n' 0; return 1 ;;
+              malformed) printf '%s\n' short ;;
+              uppercase) printf '%s\n' FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF ;;
+              empty) : ;;
+            esac
+          }
+        else
+          resolver_identity_source_blob() {
+            case "$mode" in
+              failed-status) printf '%040d\n' 0; return 1 ;;
+              malformed) printf '%s\n' short ;;
+              uppercase) printf '%s\n' FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF ;;
+              empty) : ;;
+            esac
+          }
+        fi
+        if record_runtime_identities negative > "$output"; then exit 1; fi
+        case "$stage" in
+          sha256) ! /usr/bin/grep '^native file ' "$output" >/dev/null ;;
+          source-oid) ! /usr/bin/grep '^native source ' "$output" >/dev/null ;;
+        esac
+      ); then
+        printf 'FAIL: identity recorder accepted %s %s\n' "$stage" "$mode" >&2
+        return 1
+      fi
+      printf 'identity control ok: %s %s\n' "$stage" "$mode"
+    done
+  done
+}
+check_identity_record_failures
 record_runtime_identities before > "$resolver_tmp/identities.before"
 /bin/cat "$resolver_tmp/identities.before"
 
