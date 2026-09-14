@@ -58,9 +58,7 @@ import json
 import os
 import pathlib
 import shutil
-import struct
 import zlib
-import errno
 import importlib.util
 import selectors
 import signal
@@ -612,7 +610,7 @@ def invalid_stores(base, initial):
         rewrite_tip(store, {name: transform})
         refused(store, "read", request(), "E_STORE", "P5", "valid-shape forgery " + name)
     wrong_count = copy_store(base, "forged-count")
-    delivered = good(wrong_count, "apply-update", update(initial["current_tip"]), "P5", "forge-count real seed")
+    good(wrong_count, "apply-update", update(initial["current_tip"]), "P5", "forge-count real seed")
     def corrupt_count(data):
         ledger = json.loads(data)
         ledger["body"]["entries"][0]["delivery_count"] = 2
@@ -1463,7 +1461,7 @@ planner_cases(base, initial)
 invalid_stores(base, initial)
 crash_cases(base, initial)
 concurrency_cases(base, initial)
-maximum_entries, maximum_response = history_cases(base, initial)
+history_cases(base, initial)
 resource_cases(base, initial)
 growth_and_bootstrap(base, initial)
 private_boundaries(base, initial)
