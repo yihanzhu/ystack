@@ -413,3 +413,8 @@ work/roadmap-program-authorization/decision.md
 shadow/v1/assemble-materialization-input.sh
 shadow/v1/materialization-input.jq
 scripts/test/shadow-assembler.test.sh
+
+# Inactive durable delivery ledger
+orchestrator/v1/delivery-ledger.py
+scripts/test/orchestrator-delivery-ledger.test.sh
+docs/delivery-ledger.md
