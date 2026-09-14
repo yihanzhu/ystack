@@ -86,9 +86,9 @@ without new objects, another count or moving the tip. This applies after later
 updates, acknowledgment and full capacity. The same ID with different bytes is a
 conflict. Only an unseen update must name the captured current tip and pass R3.
 
-All publication uses the real Git direct-ref compare-and-swap against the exact
-old OID, never force replacement, merge or automatic retry on a new tip. A competing
-writer cannot overwrite another committed update. A busy store may refuse without
+All publication uses the private Git-compatible direct-ref compare-and-swap
+protocol below against the exact old OID, never force replacement, merge or
+automatic retry on a new tip. A competing writer cannot overwrite another committed update. A busy store may refuse without
 publication; this is distinct from a stale expected tip. Neither is automatic replay.
 
 A read captures exactly one tip, validates that commit's full retained chain and
@@ -125,9 +125,9 @@ require room simultaneously for eight additional object files, 32 filesystem ent
 in the object-file ceiling too. Refuse before any object creation if any reserve
 fails. The six new objects have these content caps: identity 1024, request 8192,
 ledger 262144, receipt 1024, tree 1024 and commit 1024 bytes. Their sum is 274432;
-six 32-byte headers bring the sum to 274624. Sequential Git calls create at most
-one additional temporary file at a time. Even charging that temporary file its
-full 270336 bytes gives 544960 inflated bytes, below the 1 MiB reserve. Shared
+six 32-byte headers bring the sum to 274624. The single Python writer creates
+at most one additional object temporary file at a time. Even charging that
+temporary file its full 270336 bytes gives 544960 inflated bytes, below the 1 MiB reserve. Shared
 existing identity/object bytes may reduce growth but never reduce admission reserve.
 
 For regular-file growth, budget each compressed complete object at content plus
@@ -135,10 +135,12 @@ header plus 1024 bytes of compression overhead. Doubling the six-object sum for
 conservative temporary duplication gives 561536 bytes; another 16384 bytes covers
 fixed metadata/ref files, below 1 MiB. Six possible fanout directories, six final
 objects, one simultaneous temporary and fixed repository/ref/lock entries fit the
-32-entry reserve, including initialization's minimal layout. Enforce each input
-cap before starting Git, and each observed file/output cap while reading. Require
-supported-Git tests to confirm compression, temporary-file count, emitted modes
-and metadata bounds. Unexpected behavior refuses; do not silently raise limits.
+32-entry reserve, including initialization's minimal layout. Build each bounded
+object's complete compressed bytes before its file is created; reject compressed
+length greater than content plus header plus 1024. Write only these prevalidated
+bytes in bounded chunks, retaining correct partial-write accounting. Require actual
+application tests on supported platforms to confirm temporary count, size high-water
+marks, modes and metadata bounds. Unexpected behavior refuses; never raise limits.
 Validate the actual resulting inventory before ref publication as a backstop, not
 a substitute for write admission. The writer cannot allocate huge output then check.
 At any capacity boundary, committed read and exact replay remain available without
@@ -153,9 +155,9 @@ is introduced. An operator can preserve and investigate a blocked store separate
 
 ### R6. Required proof
 
-Before G2 selection, finite authorized disposable plumbing research may assess the
-fixed tool, exact environment, minimal layout, representative object/tree/commit/ref
-operations, observed modes and actual in-flight lock-FD retention. These observations
+Before G2 selection, finite authorized disposable research may assess tool startup,
+minimal Git layout and object/ref compatibility. Earlier external-Git lock-FD
+observations remain historical evidence for that different writer mechanism. These observations
 are tool feasibility evidence only, not public application, peak-allocation or
 all-platform proof. G2 does not require writing the application before its plan.
 After G2 and the separate high-risk plan gate, implementation acceptance requires
@@ -185,7 +187,11 @@ releases their apply calls with that same captured expected tip; exactly one may
 publish. A busy loser is retried once as a separate deliberate stale-tip test, not
 as transaction recovery or retry-until-green, and must then refuse stale state.
 Also exercise the real CAS failure branch after a test-only intervening ref update
-that publishes a fully valid competing chain. Never replace CAS with a fake result.
+that publishes a fully valid competing chain. Build that chain through the actual
+application in a separate fixture, then perform a controlled test-only copy/ref
+publication before the actual CAS boundary. This is deliberate fixture interference,
+not support for production writers that ignore flock. Never replace CAS with a fake
+result or run Git against the application store.
 
 SIGKILL an actual writer after its real object writes and before real ref update,
 and separately after real ref publication but before stdout response. Private test
@@ -194,34 +200,71 @@ missing boundary acknowledgment fails. Reopen in fresh processes, assert exact
 old/new tip, history, digest and counts, then replay the lost-response request.
 Test lost initialization reply, partial initialization refusal, orphan accounting,
 full read/replay, stale locks and invalid config/ref/object/path state. Independently
-exercise physical bytes, inflated bytes, object count and filesystem entry reserve
+exercise reachable physical-byte, inflated-byte and object-count reserve
 exhaustion. In particular, create a valid store with compressible unreachable objects
 near the inflated ceiling but ample physical/object headroom. Require the actual
 new update to refuse before adding any object or temporary file, then require read
-and exact replay to succeed. Use the same preservation proof for each reserve. At refusal,
-prove previously committed bytes remain usable whenever the state is otherwise valid.
+and exact replay to succeed. Use that preservation proof for each reachable reserve.
+At refusal, prove committed bytes remain usable whenever the state is otherwise valid.
 
-Also kill the Python parent while a real write-capable Git child is still in
-flight, after proving that child owns the inherited lock. A private harness can
-use actual `git update-ref --stdin` start/update/prepare against the real ledger ref
-and prepared valid next commit, and wait for its real `prepare: ok` acknowledgment.
-Keep the command-input pipe open in the outer test supervisor so killing Python
-does not send EOF and accidentally finish Git. While Git is held before commit,
-kill Python and require a second real public caller to return E_BUSY with no object
-or ref mutation. The supervisor then sends commit or abort, drains acknowledgment
-and observes the child exit before reopening. Assert the corresponding complete
-new/old view and replay. This private command substitution exercises the unchanged
-Git spawn/descriptor protocol; no fake Git/lock result or product pause switch.
-Retain the original actual before-ref and after-ref lost-response proofs as well.
+The unchanged 16384-entry ceiling and 32-entry reserve are defensive but dominated
+by the closed layout: at most 8192 object/temp files, 256 fanouts, five fixed
+directories including root, and five fixed files including ledger.lock give 8458
+entries. Require an actual otherwise-valid high-entry-count fixture with complete
+enumeration/count checks and successful read/replay. Separately exercise the actual
+private entry-counter threshold at 16384/16385 and admission arithmetic at
+16352/16353 with explicitly synthetic counts; these are defensive-boundary tests,
+not valid-store exhaustion. An actual oversized malformed directory fixture must
+refuse without mutation. Do not add paths or alter any numeric ceiling to manufacture
+independent entry exhaustion; never call the malformed fixture valid/readable.
 
-Use real temporary repositories and actual Git. No product test switches, sleeps
-that guess a race window, synthetic successful publication, network or real target.
-Use the exact selected Git path/environment and complete application root, including
-all root entries, in cold/fresh and reused cases. Record actual executable/platform
-identities and invalidate affected evidence when they change. Prove temporary names,
-simultaneous allocation and all-writer lock lifetime, not just final clean snapshots.
-No extra root entry, auxiliary cache, outside-store application scratch or unprotected
-writer is supported. A missing mechanism or unexpected effect fails the proof.
+The application creates no subprocess, fork, worker thread, external writer or
+Git command. Its one Python process owns the permanent flock for every state
+mutation. While it is held at a proved real mutation boundary, a second real public
+caller must return E_BUSY without mutation. Kill the actual writer with SIGKILL,
+observe its exit, then reopen in a fresh process and verify the old/new view,
+permitted partial temporary/ref-lock residue, and replay. No surviving product
+writer is permitted. This replaces the external-Git prepared-child case because
+that child no longer exists; retain all ordinary before-ref/after-ref/init proofs.
+
+Observe real object creation, each actual partial write, close and rename, and
+ref-lock creation/write/close/rename. The implementation keeps these private bounded
+primitive boundaries explicit. A private test loader may execute the exact unchanged
+production source with its normal main entry and argv after wrapping those primitives.
+The wrapper calls the saved real operation, records the actual FD/path/byte count,
+and acknowledges the reached boundary over an outer-owned pipe before returning.
+The outer supervisor inventories the held store or kills that actual writer. A
+supplementary partial-write fixture limits the size passed to the real write; it
+must report the real return value, never fake a completed write. Test empty/partial/
+complete object temps and partial/complete ref locks, ordinary write/close/rename
+errors, and lost responses. Missing acknowledgment fails; no guessed race sleeps.
+
+Test-only instrumentation stays outside the shipped source: no product pause
+switch, environment selector or alternate public command. It may observe actual
+primitive calls, not replace transitions, CAS comparison, bytes, admission, lock
+results or publication with fake success. First run the identical instrumented
+entry without a pause/fault and compare its outcome, committed bytes and layout
+with the ordinary direct public invocation. Then exercise the real production
+entry logic at the acknowledged boundaries. These are instrumented application
+crash/peak tests, not evidence that an instrumented loader is the ordinary executable
+invocation. All ordinary success/refusal/startup cases also use the unmodified
+absolute public command below, without a loader or added observation descriptors.
+
+Prove the complete write-path inventory through source review plus actual operation
+observations, including real per-write byte high-water marks and simultaneous named
+files. All allocations are made by the one code-owned writer; no native Git child
+can create an unobserved temporary. Test-only audit hooks may reject/record process
+creation while executing ordinary code, but are supplementary to the closed source
+and actual lifecycle checks. Neither source review alone nor final snapshots alone
+are crash/concurrency/peak proof. Unexpected allocation, spawn, trace loss or missing
+mechanism fails. No auxiliary cache, extra root entry, undeclared application scratch
+or writer outside the permanent flock is supported.
+
+Use real disposable repositories and independently test Git interoperability as
+specified below, never execute Git against the application store under test. Check
+complete application roots in fresh and reused cases. Record executable/platform
+identities and invalidate affected evidence when they change. No network, real
+target, privileged observer, tracing-permission change or installation follows.
 
 Exercise the actual chosen Python public invocation, not only imported functions or
 a toy Git parent. It must use an explicitly identified existing trusted interpreter
@@ -241,8 +284,9 @@ supported-platform case because its boundary was missed.
 
 ### Private files and command contract
 
-Implement `orchestrator/v1/delivery-ledger.py` using Python 3 standard library and
-local Git plumbing. Add `scripts/test/orchestrator-delivery-ledger.test.sh` and
+Implement `orchestrator/v1/delivery-ledger.py` using Python 3 standard library
+and the private Git-compatible object/ref writer below. Add
+`scripts/test/orchestrator-delivery-ledger.test.sh` and
 `docs/delivery-ledger.md`; update `docs/components.md` and `ci/required-files.txt`.
 These five paths are the implementation scope. No shared storage framework or
 change to `delivery/v1/replay.py` is needed. Its bounded file reads and private flock
@@ -292,26 +336,17 @@ returns E_BUSY. Capture the tip only once after locking in ordinary calls. The
 concurrency test's private pre-lock observation barrier supplies the two requests'
 common expected tip without weakening production lock coverage.
 
-The Python owner and each exact trusted Git subprocess share the SAME flock open-file
-description. Keep its descriptor close-on-exec by default; pass only that lock FD,
-plus required standard input/output pipes, to the one Git child with close_fds and
-explicit pass_fds. No shell or unrelated child inherits it. Never call LOCK_UN: close
-owned copies only. Thus Python SIGKILL closes its copy but does not unlock while Git
-still owns the inherited copy. Calls are sequential, with at most one Git child.
-The supported Git executable must retain that descriptor throughout all its writes;
-prove this on Linux and Darwin, including any platform launcher. A platform that
-closes it or spawns a writer without it is unsupported and blocks acceptance rather
-than weakening parent-death recovery. The lock file itself is never unlinked.
-
-Normal errors and timeouts stop issuing commands, terminate and reap the exact Git
-child before closing the Python copy. After the existing 10-second command deadline,
-allow one SIGTERM and at most one second to reap, then one SIGKILL and at most one
-second to reap. These are subprocess cleanup bounds, not publication retries. If
-reap remains unconfirmed, report uncertainty and close only the parent's descriptor;
-the child's inherited copy must continue holding ownership while it remains alive.
-Never explicitly unlock, start another writer or claim a known nonpublication in
-that case. Reopen resolves the actual ref only after flock can be acquired. No
-finally handler is relied upon for SIGKILL.
+The one Python process owns all application writes and the permanent flock. Keep
+its descriptor close-on-exec; never fork, exec, spawn a subprocess or delegate writes
+to threads/helpers. No Git probe runs on any application path. Never call LOCK_UN;
+close the owned descriptor at the end, and never unlink the permanent lock file.
+SIGKILL ends that sole writer and closes its descriptors; no finally handler or
+child cleanup is needed to prevent later application writes. A busy reader/writer
+refuses immediately. Normal errors stop issuing writes, close owned descriptors and
+preserve permitted residue. An uncertain publication is resolved by reopening, not
+rollback, retry on another tip or cleanup. No new public wall-time guarantee is
+claimed for a blocked local filesystem syscall. The former external-Git command
+and child-reap deadlines apply only to isolated test-only Git commands below.
 
 Create a bare SHA-1 repository directly with the minimal required directories,
 fixed HEAD bytes `ref: refs/heads/ledger\n`, and fixed config containing only
@@ -324,58 +359,131 @@ are 0400 or 0600, all caller-owned regular files with no symlinks or external ha
 The only tolerated interrupted-write names are the ledger ref
 `refs/heads/ledger.lock` and Git loose-object `objects/HH/tmp_obj_*` files, each
 bounded by the object limit and inventory. They are not valid object identities.
-Git child writes use umask 077; unsupported emitted modes refuse before publication.
-The implementation defines exact fixed metadata bytes for this layout, rejects unknown
-config rather than overriding it, and validates it before invoking Git.
+The application uses umask 077 and explicit creation modes; unsupported observed
+modes refuse before publication. Define exact fixed metadata bytes and reject
+unknown configuration rather than overriding it. Git never interprets application
+configuration during a public operation.
 
-Use exactly `/usr/bin/git` on Linux and
-`/Library/Developer/CommandLineTools/usr/bin/git` on Darwin. Require the already
-installed trusted executable; no fallback, PATH lookup, xcrun/xcode-select discovery,
-DEVELOPER_DIR override, public tool selector or installation. Direct invocation does
-not by itself prove absence of helper/cache writes. Unsupported behavior refuses.
+Create fixed directories only with exclusive mkdir and mode 0700, charging each
+entry first; validate an existing permitted directory rather than replacing it.
+Empty valid fanouts left by an interrupted update remain counted and readable.
+During initialization only, create HEAD/config with exclusive no-follow regular
+0600 files, bounded precomputed bytes and the same actual short-write/close handling
+below. Charge their complete planned sizes before writing. Never rewrite existing
+metadata, even if partial. A death/error during initial metadata creation before
+the first committed ref leaves E_INCOMPLETE as already specified; this exception
+does not apply to an initialized store. Include these mkdir/open/write/close paths
+in actual boundary and peak tests, not only object/ref paths.
 
-Build each Git environment from empty with exactly these values:
+### Bounded private object and ref writer
 
-| Variable | Value |
-| --- | --- |
-| PATH | /usr/bin:/bin |
-| LANG and LC_ALL | C |
-| HOME | /dev/null |
-| TMPDIR | validated absolute physical store root |
-| GIT_CONFIG_NOSYSTEM | 1 |
-| GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL | /dev/null |
-| GIT_NO_REPLACE_OBJECTS | 1 |
-| GIT_NO_LAZY_FETCH | 1 |
-| GIT_TERMINAL_PROMPT | 0 |
-| GIT_ATTR_NOSYSTEM | 1 |
+Encode a Git object as its ASCII type, space, canonical decimal content length,
+NUL and exact content bytes. Its OID is SHA-1 of these complete raw bytes. The only
+written types are blob, tree and commit. Tree entries are the four fixed ASCII
+names in byte order identity.json, ledger.json, receipt.json, request.json. Each
+entry is ASCII `100644`, one space, name, NUL and its raw 20-byte OID, with no
+separator after the OID. No caller revision expression,
+pathspec, shell, filter or command is interpreted. Validate every content/header/
+compressed-size cap before creating its object file. Stream bounded source chunks
+into zlib, accumulate at most the permitted compressed length, and reject an excess
+rather than allocate an unbounded output buffer. Retain only the capped current
+object and bounded metadata; decoding and chain traversal keep the existing bounds.
+Charge the reserved growth before each create/write, including old residue, the
+current fully charged object temp, fanout and ref-lock allocation. The validated
+reserve cannot be spent twice; retain actual deltas until the operation ends.
 
-Only commit creation additionally receives GIT_AUTHOR_NAME/GIT_COMMITTER_NAME as
-`ystack ledger`, GIT_AUTHOR_EMAIL/GIT_COMMITTER_EMAIL as `ledger@invalid`, and
-GIT_AUTHOR_DATE/GIT_COMMITTER_DATE as `2000-01-01T00:00:00Z`. These are fixed inert
-metadata, not authority. No other caller environment or tool-selection value survives.
+Under the permanent flock, reuse an existing OID only after validating its exact
+raw content against the proposed object. A collision or malformed object refuses;
+never overwrite it. For an absent OID, create one permitted tmp_obj name in its
+fanout with exclusive no-follow creation and mode 0600. New names have prefix
+`tmp_obj_` plus 24 lowercase hex digits; try at most 32 exclusive names and refuse
+on exhaustion. Older permitted bounded tmp_obj names remain residue, not identity.
+Existing temp names are neither overwritten nor removed. Write only the prevalidated
+compressed bytes in chunks of at most 65536 bytes; advance only by the positive
+actual return count. Retry an interrupted write only when no bytes were reported;
+zero/invalid counts and ordinary errors refuse. Verify size/mode through the owned
+descriptor, close successfully, then atomically rename that complete temp to the absent final OID. No
+partial bytes ever receive a final object name. Only the current bounded file is
+in flight. Recheck final-path absence before rename; all cooperating writers hold
+the same flock throughout. This absence-check/rename contract relies on the stated
+cooperating-writer model, not hostile same-UID exclusion. No link-based publication
+or overwrite of an existing object is permitted. An error leaves a bounded permitted
+temp or complete unreachable object; there is no automatic residue cleanup. If a
+close fails or ownership is uncertain, stop publication and exit after bounded
+owned-descriptor handling; never retry a potentially closed/reused descriptor or
+continue writing on a guessed handle. Keep flock until all state descriptors are
+closed or the sole process exits.
 
-Pass the explicit repository argument and fixed `-c core.hooksPath=/dev/null`.
-Invoke only fixed object/hash/tree/commit and direct-ref plumbing, never checkout,
-filters, caller revision expressions, a shell, remote or credential discovery.
-TMPDIR does not permit a third root entry: xcrun_db or any other auxiliary file
-is unsupported, not a new allowance. HOME/TMPDIR are not filesystem confinement.
-Git subprocesses retain the 10-second timeout, bounded output and inherited-lock
-cleanup rules above; reopening resolves uncertain publication.
+After all objects and the complete next closure are validated and the actual store
+inventory is rechecked, exclusively create refs/heads/ledger.lock. Never remove or
+reuse an existing lock. While holding it, read the real direct ref again solely for
+the CAS comparison against the request's exact old OID (absence for zero init OID).
+This check does not replace the single captured tip used for history/read results.
+A mismatch preserves the competing committed view and refuses publication. Write
+exactly the new 40-hex OID plus LF to that regular 0600 lock with bounded short-write
+handling, close it, then atomically rename it over the direct ledger ref. This one
+rename is the only visibility point. The caller cannot select another ref; symbolic
+or packed refs are invalid. Success consumes the lock by rename; failure preserves
+it. Empty or partial bounded ref-lock bytes are allowed interrupted-write residue;
+read/replay validate the original committed ref/closure without parsing that lock
+as the current tip. Never truncate the final ref or object on an error path. An
+uncertain rename/response is settled by fresh public read/replay. No reflog, repair,
+pruning, background writer or force-update API exists.
 
-Python performs bounded direct-tip, loose-object and complete-chain validation for
-read, exact replay and every pre-admission refusal. These paths never invoke Git or
-a write-time tool probe. Only separately admitted initialization or an unseen valid
-update can start Git. Do not replace required OID, canonical-byte, digest, identity
-or transition checks with unchecked file output or a general Git parsing API.
+All supported product writers obey the permanent flock, including object creation.
+Compatibility with Git's ref-lock convention does not authorize concurrent arbitrary
+Git writers: their loose-object allocations would escape this store's accounting.
+
+### Test-only Git interoperability
+
+The application needs no Git executable or Git environment. Independent tests use
+only already installed `/usr/bin/git` on Linux and
+`/Library/Developer/CommandLineTools/usr/bin/git` on Darwin, with exact byte/platform
+identity recorded. No fallback, xcrun/xcode-select, DEVELOPER_DIR override, download
+or tool installation. Git runs only in a fresh private interoperability repository,
+never the active application store or a source/target checkout. With the application
+exited, copy only its validated object/ref/HEAD/config bytes into that separate
+fixture; log/inventory both fixtures separately. Git-created cache, ref locks or
+metadata cannot be attributed to or repair the application store.
+
+Build the test Git environment from empty: PATH=/usr/bin:/bin, LANG=C, LC_ALL=C,
+HOME=/dev/null, TMPDIR=that interoperability root, GIT_CONFIG_NOSYSTEM=1,
+GIT_CONFIG_SYSTEM=/dev/null, GIT_CONFIG_GLOBAL=/dev/null, GIT_NO_REPLACE_OBJECTS=1,
+GIT_NO_LAZY_FETCH=1, GIT_TERMINAL_PROMPT=0 and GIT_ATTR_NOSYSTEM=1. Supply explicit
+repository and `-c core.hooksPath=/dev/null`. Only test commit creation additionally
+supplies the exact fixed author/committer values below. Fixed object/tree/commit/ref
+plumbing only, no checkout, arbitrary command, source access or network.
+
+Require actual Git to read exact blob bytes, tree entries, commit metadata and
+parent history from application-produced fixtures and resolve the expected tip.
+Compare the application's encoded object OIDs against actual Git for complete and
+boundary fixtures. Independently create a valid chain through real Git, then use
+only a validated separate copy to test the real application reader. Also test actual
+Git refusal with a held conventional ref lock and wrong old OID in the private
+interoperability fixture. Those tests establish compatibility, not application CAS
+or recovery; real application cases remain mandatory. Git tests have bounded stdout/
+stderr, a ten-second command deadline, exact-child TERM/one-second reap then KILL/
+one-second reap, and fail on unconfirmed cleanup. No test child touches the application
+store or supplies its lock-lifetime proof.
+
+Python performs bounded direct-tip, loose-object and full-chain validation on every
+public path. Read, exact replay and pre-admission refusal create no objects and
+change no application bytes/shape. Do not replace OID, canonical-byte, digest,
+identity or transition checks with unchecked output or a general storage API.
 
 Each commit tree has exactly `identity.json`, `request.json`, `ledger.json` and
 `receipt.json`, regular blobs with Git mode 100644. Identity binds protocol,
 store_id, ledger_id and initialization_id and never changes. The root commit holds
 the initialize request and empty ledger. Each later commit has exactly one parent
 and one R3 update. Receipt excludes its own commit OID, avoiding a hash cycle.
-Use the fixed author/committer metadata above and the commit message
-`ystack delivery ledger` followed by one LF. Only tree and parent determine changing
-commit content. Verify actual Git serialization against the existing commit cap.
+Encode author and committer as `ystack ledger <ledger@invalid> 946684800 +0000`,
+in this exact commit content order: `tree <40hex>\n`, then for an update only
+`parent <40hex>\n`, then `author ` plus that fixed value and LF, `committer ` plus
+that fixed value and LF, one empty line, and `ystack delivery ledger\n`.
+There are no extra headers or signature. Only tree and parent determine changing
+commit content. Interoperability tests supply equivalent Git author/committer names,
+emails and `2000-01-01T00:00:00Z` dates and compare actual serialization under the
+unchanged commit cap.
 Recompute object OIDs, raw canonical bytes, genuine digests, identity, every
 transition and each receipt through the entire captured chain on each call.
 Unreachable objects count toward limits but never supply replay or current state.
@@ -397,10 +505,11 @@ supports exact initialization replay even after subsequent updates. A changed
 initialization request conflicts. Ordinary read/apply never initialize implicitly.
 
 Build and validate all next bytes first. Write the four blobs, tree and commit with
-bounded Git plumbing, then publish the one direct ref with no-deref and exact old
-OID (all-zero OID for initialization). The ref is the sole visibility point. Recheck
+the bounded private object writer, then publish the one direct ref with the exact
+old-OID ref-lock/rename protocol (all-zero OID for initialization). The ref is the
+sole visibility point. Recheck
 actual inventory before publication. CAS failure leaves only bounded unreachable
-objects; no response claims an update occurred. Git lock residue is preserved.
+objects and permitted ref-lock residue; no response claims an update occurred.
 No unpublished candidate is automatically adopted on reopening. Replaying a request
 whose earlier process stopped before publication is a new attempted update against
 its original expected tip; it may succeed only if that tip still matches.
