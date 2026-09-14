@@ -228,8 +228,8 @@ def public_protocol():
     return store, doc
 
 
-def good(store, verb, value, group="P1", name=None):
-    status, out, err = invoke(store, verb, value)
+def good(store, verb, value, group="P1", name=None, deadline=None):
+    status, out, err = invoke(store, verb, value, deadline=deadline)
     if status or err:
         raise AssertionError((group, name or verb, status, out, err))
     doc = json.loads(out)
@@ -970,7 +970,7 @@ def observed(store, verb, value, name, kill_at=None, short=0, fault="", busy=Fal
                     item["inventory"] = physical_counts(store, event_deadline) if pause else None
                     rows.append(item)
                     if interfere:
-                        interfere(item)
+                        interfere(item, event_deadline)
                         remaining(event_deadline)
                     if busy and item["locked"]:
                         code, out, err = invoke(store, "read", request(), deadline=event_deadline)
@@ -1128,16 +1128,20 @@ os.execve(sys.argv[2],sys.argv[2:],dict(os.environ))
     other = good(competing, "apply-update", update(initial["current_tip"], update_id="competing"), "P7")
     target = copy_store(base, "cas-target")
     changed = []
-    def interfere(row):
+    def interfere(row, deadline):
+        remaining(deadline)
         if row["operation"] == "open" and row["path"].endswith("/refs/heads/ledger.lock") and not changed:
             for path in (competing / "repository.git/objects").rglob("*"):
+                remaining(deadline)
                 dest = target / path.relative_to(competing)
                 if path.is_dir():
                     dest.mkdir(mode=0o700, exist_ok=True)
                 elif not dest.exists():
                     shutil.copyfile(path, dest)
                     os.chmod(dest, 0o600)
+            remaining(deadline)
             shutil.copyfile(competing / "repository.git/refs/heads/ledger", target / "repository.git/refs/heads/ledger")
+            remaining(deadline)
             changed.append(True)
     status, out, err, rows = observed(target, "apply-update", update(initial["current_tip"]), "cas-real", interfere=interfere)
     record("P7", "actual reread detects valid competing ref", changed and status != 0 and not out and err == b"E_STALE\n")
@@ -1565,10 +1569,11 @@ sys.exit(status)
 def growth_and_bootstrap(base, initial):
     store = new_store("bootstrap-race")
     competing = []
-    def acquire_before_creator(row):
+    def acquire_before_creator(row, deadline):
+        remaining(deadline)
         if row["operation"] == "open" and row["path"].endswith("/store.lock") and not competing:
             record("P7", "exclusive creator not yet flock owner", row["locked"] is False and list(store.iterdir()) == [store / "store.lock"])
-            competing.append(good(store, "initialize", request("initialize"), "P7", "second initializer acquires real lock"))
+            competing.append(good(store, "initialize", request("initialize"), "P7", "second initializer acquires real lock", deadline=deadline))
     status, out, err, rows = observed(store, "initialize", request("initialize"), "bootstrap-before-flock", interfere=acquire_before_creator)
     record("P7", "creator later replays committed initialization", status == 0 and not err and json.loads(out) == competing[0])
     record("P9", "creator wrote no repository state without flock", not any(row["operation"] in ("mkdir", "write", "rename", "replace") for row in rows))
