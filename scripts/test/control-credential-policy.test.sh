@@ -36,6 +36,23 @@ PROBE_RESULT=error
 SIGNAL_CHILD_PID=
 SIGNAL_CHILD_PGID=
 SIGNAL_DESCENDANT_PID=
+CONTROL_CONTEXT=0
+CONTROL_PHASE=inactive
+CONTROL_FAILURE=
+CONTROL_SIGNAL=
+CONTROL_JOB=
+CONTROL_JOB_ACQUIRED=0
+CONTROL_WAIT_ACTIVE=0
+CONTROL_WAIT_INTERRUPTED=0
+CONTROL_WAIT_STATUS=
+CONTROL_WAIT_STATUS_STATE=unconfirmed
+CONTROL_POSSIBLY_RELEASED=0
+CONTROL_RETAIN_SCRATCH=0
+CONTROL_GATE_OPEN=0
+CONTROL_GATE_PATH=
+CONTROL_CASE_PATH=
+CONTROL_IDENTITY_PATH=
+CONTROL_MONITOR_WAS=off
 TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || exit 1
 [[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 1
 group_alive() {
@@ -100,6 +117,19 @@ managed_terminate() {
 }
 managed_dispatch() {
   local cause=$1 status=1
+  if [ "$CONTROL_CONTEXT" -eq 1 ]; then
+    if [ "$cause" != EXIT ]; then
+      [ -n "$CONTROL_SIGNAL" ] || CONTROL_SIGNAL=$cause
+      [ -n "$CONTROL_FAILURE" ] || CONTROL_FAILURE=signal
+      if [ "$CONTROL_WAIT_ACTIVE" -eq 1 ]; then
+        CONTROL_WAIT_INTERRUPTED=1
+      fi
+      return
+    fi
+    CONTROL_RETAIN_SCRATCH=1
+    cleanup
+    return
+  fi
   if [ "$SETUP_CONTEXT" -eq 0 ]; then
     cleanup
     return
@@ -248,7 +278,11 @@ cleanup() {
   if [ -n "${SIGNAL_CHILD_PID:-}" ] || [ -n "${SIGNAL_CHILD_PGID:-}" ]; then
     terminate_input_race "$SIGNAL_CHILD_PID" "$SIGNAL_CHILD_PGID" || :
   fi
-  /bin/rm -rf -- "$tmp"
+  if [ "${CONTROL_RETAIN_SCRATCH:-0}" -eq 0 ]; then
+    /bin/rm -rf -- "$tmp"
+  else
+    /usr/bin/printf 'credential-handoff-retained: %s\n' "$tmp" >&2
+  fi
 }
 trap 'managed_dispatch EXIT' EXIT
 trap 'managed_dispatch HUP' HUP
@@ -559,18 +593,212 @@ managed_launch_group() {
     /usr/bin/tr -d ' ')
 }
 
+control_enter() {
+  [ "$CONTROL_CONTEXT" -eq 0 ] && [ "$CONTROL_JOB_ACQUIRED" -eq 0 ] ||
+    fail 'control context entry'
+  CONTROL_CONTEXT=1
+  CONTROL_PHASE=entered
+  CONTROL_FAILURE=
+  CONTROL_SIGNAL=
+  CONTROL_JOB=
+  CONTROL_JOB_ACQUIRED=0
+  CONTROL_WAIT_ACTIVE=0
+  CONTROL_WAIT_INTERRUPTED=0
+  CONTROL_WAIT_STATUS=
+  CONTROL_WAIT_STATUS_STATE=unconfirmed
+  CONTROL_POSSIBLY_RELEASED=0
+  CONTROL_RETAIN_SCRATCH=1
+  CONTROL_GATE_OPEN=0
+  CONTROL_GATE_PATH=
+  CONTROL_CASE_PATH=
+  CONTROL_IDENTITY_PATH=
+  case $- in *m*) CONTROL_MONITOR_WAS=on ;; *) CONTROL_MONITOR_WAS=off ;; esac
+}
+
+control_phase() {
+  case "$CONTROL_PHASE:$1" in
+    entered:prepared|prepared:launched|launched:identified|identified:release-possible|\
+    release-possible:wait-only|identified:wait-only|launched:wait-only|prepared:wait-only|\
+    wait-only:retired|retired:inspected|inspected:complete) CONTROL_PHASE=$1 ;;
+    *) return 1 ;;
+  esac
+}
+
+control_record_failure() {
+  [ -n "$CONTROL_FAILURE" ] || CONTROL_FAILURE=$1
+}
+
+control_pending() {
+  [ -z "$CONTROL_SIGNAL" ] || {
+    control_record_failure signal
+    return 1
+  }
+}
+
+control_identity_read() {
+  PERL5LIB= PERLLIB= PERL5OPT= /usr/bin/perl -MFcntl=O_RDONLY,O_NONBLOCK,O_NOFOLLOW \
+    -MPOSIX=S_ISREG -e '
+      use strict;
+      use warnings;
+      my ($path) = @ARGV;
+      sysopen(my $fh, $path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) or exit 2;
+      my @stat = stat($fh);
+      @stat && S_ISREG($stat[2]) or exit 3;
+      my $text = "";
+      while (length($text) < 65) {
+        my $count = sysread($fh, my $part, 65 - length($text));
+        defined($count) or exit 4;
+        last if $count == 0;
+        $text .= $part;
+      }
+      close($fh) or exit 5;
+      length($text) <= 64 or exit 6;
+      $text =~ /\A([1-9][0-9]*) ([1-9][0-9]*)\n\z/ or exit 7;
+      print "$1 $2\n" or exit 8;
+    ' "$1"
+}
+
+control_identity_present() {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    return 0
+  fi
+  [ ! -e "$1" ] && [ ! -L "$1" ]
+}
+
+control_launch_job() {
+  /bin/bash "$1" "$2" "$3" "$4" >"$5" 2>"$6" &
+  CONTROL_JOB=$!
+  CONTROL_JOB_ACQUIRED=1
+}
+
+control_restore_monitor() {
+  if [ "$CONTROL_MONITOR_WAS" = on ]; then
+    set -m
+  else
+    set +m
+  fi
+}
+
+control_close_gate() {
+  if [ "$CONTROL_GATE_OPEN" -eq 1 ]; then
+    exec 7>&- || return 1
+    CONTROL_GATE_OPEN=0
+  fi
+}
+
+control_remove_gate() {
+  [ -z "$CONTROL_GATE_PATH" ] || /bin/rm -- "$CONTROL_GATE_PATH"
+}
+
+control_release_job() {
+  control_phase release-possible || return 1
+  CONTROL_POSSIBLY_RELEASED=1
+  /usr/bin/printf '%s\n' verified >&7 || return 1
+  control_close_gate || return 1
+  control_remove_gate || return 1
+  control_phase wait-only
+}
+
+control_abort_job() {
+  if [ "$CONTROL_GATE_OPEN" -eq 1 ]; then
+    /usr/bin/printf '%s\n' abort >&7 || :
+    control_close_gate || :
+  fi
+  [ -z "$CONTROL_GATE_PATH" ] || /bin/rm -f -- "$CONTROL_GATE_PATH" || :
+}
+
+control_wait_job() {
+  local status
+  [ "$CONTROL_JOB_ACQUIRED" -eq 1 ] || return 1
+  CONTROL_RETAIN_SCRATCH=1
+  while :; do
+    CONTROL_WAIT_INTERRUPTED=0
+    CONTROL_WAIT_ACTIVE=1
+    status=0
+    builtin wait "$CONTROL_JOB" || status=$?
+    CONTROL_WAIT_ACTIVE=0
+    if [ "$CONTROL_WAIT_INTERRUPTED" -eq 1 ]; then
+      continue
+    fi
+    [ "$status" -ne 127 ] || return 1
+    CONTROL_WAIT_STATUS=$status
+    CONTROL_WAIT_STATUS_STATE=confirmed
+    break
+  done
+}
+
+control_retire_job() {
+  [ "$CONTROL_WAIT_STATUS_STATE" = confirmed ] || return 1
+  CONTROL_JOB_ACQUIRED=0
+  CONTROL_JOB=
+  control_phase retired
+}
+
+control_excerpt() {
+  local path=$1
+  [ -f "$path" ] || return 0
+  /usr/bin/perl -e '
+    use strict;
+    use warnings;
+    my ($path) = @ARGV;
+    open(my $fh, "<", $path) or exit 1;
+    binmode($fh);
+    my $count = read($fh, my $text, 256);
+    defined($count) or exit 2;
+    close($fh) or exit 3;
+    $text =~ s/([^\x20-\x7e])/sprintf("\\x%02x", ord($1))/ge;
+    print $text or exit 4;
+  ' "$path"
+}
+
+control_diagnostic() {
+  local identity_excerpt= events_excerpt= stderr_excerpt= record
+  identity_excerpt=$(control_excerpt "${CONTROL_IDENTITY_PATH:-}") || identity_excerpt=read-error
+  events_excerpt=$(control_excerpt "${control_events:-}") || events_excerpt=read-error
+  stderr_excerpt=$(control_excerpt "${control_stderr:-}") || stderr_excerpt=read-error
+  record=$(/usr/bin/printf \
+    'credential-handoff: phase=%s outcome=%s signal=%s acquired=%s wait=%s possible_release=%s identity=%s events=%s stderr=%s' \
+    "$CONTROL_PHASE" "${CONTROL_FAILURE:-unknown}" "${CONTROL_SIGNAL:-none}" \
+    "$CONTROL_JOB_ACQUIRED" "${CONTROL_WAIT_STATUS_STATE}:${CONTROL_WAIT_STATUS:-none}" \
+    "$CONTROL_POSSIBLY_RELEASED" "$identity_excerpt" "$events_excerpt" "$stderr_excerpt") || return 1
+  PERL5LIB= PERLLIB= PERL5OPT= /usr/bin/perl -e '
+    use strict;
+    use warnings;
+    my $text = <STDIN>;
+    defined($text) or exit 1;
+    print substr($text, 0, 2047), "\n" or exit 2;
+  ' <<<"$record"
+}
+
+control_reconcile_failure() {
+  control_record_failure "$1"
+  CONTROL_RETAIN_SCRATCH=1
+  if [ "$CONTROL_JOB_ACQUIRED" -eq 1 ]; then
+    if [ "$CONTROL_POSSIBLY_RELEASED" -eq 0 ]; then
+      control_abort_job
+    fi
+    case "$CONTROL_PHASE" in wait-only) ;; *) CONTROL_PHASE=wait-only ;; esac
+    if control_wait_job; then
+      control_retire_job || control_record_failure retirement
+    else
+      CONTROL_WAIT_STATUS_STATE=unconfirmed
+    fi
+  fi
+  control_diagnostic >&2 || :
+}
+
+control_complete() {
+  control_phase inspected || return 1
+  control_phase complete || return 1
+  CONTROL_CONTEXT=0
+  CONTROL_RETAIN_SCRATCH=0
+  CONTROL_CASE_PATH=
+  CONTROL_IDENTITY_PATH=
+  CONTROL_GATE_PATH=
+}
+
 setup_control_fail() {
-  if [ -n "${control_owner:-}" ]; then
-    /bin/kill -KILL "$control_owner" 2>/dev/null || :
-    wait "$control_owner" 2>/dev/null || :
-    control_owner=
-  fi
-  if [ -n "${control_events:-}" ] && [ -f "$control_events" ]; then
-    /bin/cat "$control_events" >&2
-  fi
-  if [ -n "${control_root:-}" ] && [ -f "$control_root/$name-$signal.stderr" ]; then
-    /bin/cat "$control_root/$name-$signal.stderr" >&2
-  fi
+  control_reconcile_failure "$1"
   fail "$1"
 }
 run_setup_controls() {
@@ -578,6 +806,7 @@ run_setup_controls() {
   local child reported group function_name attempt signals control_events launches mutations
   local helpers reconciled event_kind leader expected_launches expected_helpers expected_error
   local control_owner='' observers term_count cont_count kill_count
+  local identity_fields identity_status field_status control_stderr
   /bin/mkdir "$control_root"
   functions="$control_root/functions.sh"
   : >"$functions"
@@ -609,21 +838,47 @@ case_name=$2
 injected_signal=$3
 source "$base/functions.sh"
 tmp="$base/$case_name-$injected_signal"
-mkdir "$tmp" "$tmp/scratch"
 log="$tmp/events"
-: >"$log"
+[ -d "$tmp" ] && [ -d "$tmp/scratch" ] && [ -f "$log" ] || exit 89
 event() { printf '%s\n' "$*" >>"$log"; }
 SETUP_CONTEXT=0 SETUP_OPERATION=none SETUP_LIFECYCLE=empty SETUP_OUTCOME=
 SETUP_SIGNAL= WAIT_INTERRUPTED=0 WAIT_STATUS=0 LOCAL_REAP_ACTIVE=0 LOCAL_REAP_PID=
 INPUT_RACE_PID= INPUT_RACE_PGID= STOPPED_MARKER_PATH= PROBE_RESULT=error
 INPUT_RACE_OUT= INPUT_RACE_ERR= LAUNCH_GROUP=
 SIGNAL_CHILD_PID= SIGNAL_CHILD_PGID= SIGNAL_DESCENDANT_PID=
+CONTROL_CONTEXT=0 CONTROL_PHASE=inactive CONTROL_FAILURE= CONTROL_SIGNAL=
+CONTROL_JOB= CONTROL_JOB_ACQUIRED=0 CONTROL_WAIT_ACTIVE=0 CONTROL_WAIT_INTERRUPTED=0
+CONTROL_WAIT_STATUS= CONTROL_WAIT_STATUS_STATE=unconfirmed CONTROL_POSSIBLY_RELEASED=0
+CONTROL_RETAIN_SCRATCH=0 CONTROL_GATE_OPEN=0 CONTROL_GATE_PATH= CONTROL_CASE_PATH=
+CONTROL_IDENTITY_PATH= CONTROL_MONITOR_WAS=off
+startup_exit() {
+  local status=$1
+  trap - EXIT HUP INT TERM
+  exec 6>&- 2>/dev/null || :
+  exec 7>&- 2>/dev/null || :
+  exit "$status"
+}
+trap 'startup_exit 92' EXIT
+trap 'startup_exit 129' HUP
+trap 'startup_exit 130' INT
+trap 'startup_exit 143' TERM
 TEST_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 [[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 90
-printf '%s %s\n' "$$" "$TEST_PGID" >"$tmp/identity"
-IFS= read -r token <&7
-exec 7>&-
-[ "$token" = verified ] || exit 91
+[[ "$$" =~ ^[1-9][0-9]*$ ]] && [ "$$" = "$TEST_PGID" ] || exit 90
+identity_tmp="$tmp/identity.tmp"
+identity_final="$tmp/identity"
+[ ! -e "$identity_tmp" ] && [ ! -L "$identity_tmp" ] &&
+  [ ! -e "$identity_final" ] && [ ! -L "$identity_final" ] || exit 90
+exec 6>"$identity_tmp" || exit 90
+printf '%s %s\n' "$$" "$TEST_PGID" >&6 || exit 90
+exec 6>&- || exit 90
+mv "$identity_tmp" "$identity_final" || exit 90
+token=
+gate_status=0
+IFS= read -r -t "${CONTROL_GATE_SECONDS:-3}" token <&7 || gate_status=$?
+exec 7>&- || exit 91
+[ "$gate_status" -eq 0 ] && [ "$token" = verified ] || exit 91
+trap - EXIT HUP INT TERM
 injected=0 launches=0 helpers=0 physical_waits=0 logical_reaps=0 probes=0
 cleanup() { event "exit-state $SETUP_LIFECYCLE $SETUP_OPERATION $LOCAL_REAP_ACTIVE"; }
 trap 'managed_dispatch EXIT' EXIT
@@ -830,30 +1085,54 @@ CONTROL
       *) signals=none ;;
     esac
     for signal in $signals; do
+      control_enter
+      code="$control_root/$name-$signal"
+      CONTROL_CASE_PATH=$code
+      CONTROL_IDENTITY_PATH="$code/identity"
+      control_events="$code/events"
+      control_stderr="$control_root/$name-$signal.stderr"
       started=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
-      /usr/bin/mkfifo "$control_root/start"
-      exec 7<>"$control_root/start"
-      set -m
-      /bin/bash "$control_root/control.sh" "$control_root" "$name" "$signal" \
-        >"$control_root/$name-$signal.stdout" \
-        2>"$control_root/$name-$signal.stderr" &
-      child=$!
+      /bin/mkdir "$code" "$code/scratch" || setup_control_fail "$name control directory"
+      : >"$control_events" || setup_control_fail "$name control events"
+      : >"$control_root/$name-$signal.stdout" || setup_control_fail "$name control stdout"
+      : >"$control_stderr" || setup_control_fail "$name control stderr"
+      control_phase prepared || setup_control_fail "$name control prepare phase"
+      CONTROL_GATE_PATH="$control_root/start"
+      /usr/bin/mkfifo "$CONTROL_GATE_PATH" || setup_control_fail "$name control gate"
+      exec 7<>"$CONTROL_GATE_PATH" || setup_control_fail "$name control gate open"
+      CONTROL_GATE_OPEN=1
+      set -m || setup_control_fail "$name monitor enable"
+      control_launch_job "$control_root/control.sh" "$control_root" "$name" "$signal" \
+        "$control_root/$name-$signal.stdout" "$control_stderr"
+      child=$CONTROL_JOB
       control_owner=$child
-      set +m
+      control_phase launched || setup_control_fail "$name control launch phase"
+      control_restore_monitor || setup_control_fail "$name monitor restore"
       attempt=0
-      while [ ! -f "$control_root/$name-$signal/identity" ] && [ "$attempt" -lt 100 ]; do
+      while ! control_identity_present "$CONTROL_IDENTITY_PATH" && [ "$attempt" -lt 100 ]; do
         /bin/sleep 0.01
         attempt=$((attempt + 1))
       done
-      [ -f "$control_root/$name-$signal/identity" ] || setup_control_fail "$name control identity"
-      read -r reported group <"$control_root/$name-$signal/identity"
-      [ "$reported" = "$child" ] && [ "$group" = "$child" ] ||
+      control_identity_present "$CONTROL_IDENTITY_PATH" || setup_control_fail "$name control identity"
+      identity_fields=
+      identity_status=0
+      identity_fields=$(control_identity_read "$CONTROL_IDENTITY_PATH") || identity_status=$?
+      [ "$identity_status" -eq 0 ] || setup_control_fail "$name control identity invalid"
+      reported=
+      group=
+      field_status=0
+      IFS=' ' read -r reported group <<<"$identity_fields" || field_status=$?
+      [ "$field_status" -eq 0 ] && [ -n "$reported" ] && [ -n "$group" ] ||
+        setup_control_fail "$name control identity fields"
+      control_phase identified || setup_control_fail "$name control identity phase"
+      [ "$reported" = "$child" ] && [ "$group" = "$child" ] &&
+        [ "$group" != "$TEST_PGID" ] ||
         setup_control_fail "$name control shell ownership"
-      /usr/bin/printf '%s\n' verified >&7
-      exec 7>&-
-      /bin/rm "$control_root/start"
-      status=0
-      wait "$child" || status=$?
+      control_pending || setup_control_fail "$name control pending signal"
+      control_release_job || setup_control_fail "$name control release"
+      control_wait_job || setup_control_fail "$name control wait unconfirmed"
+      status=$CONTROL_WAIT_STATUS
+      control_retire_job || setup_control_fail "$name control retirement"
       control_owner=
       elapsed=$(/usr/bin/perl -MTime::HiRes=time -e \
         'printf "%.3f", time-$ARGV[0]' "$started")
@@ -989,6 +1268,7 @@ CONTROL
       /usr/bin/printf 'setup-control: %s %s elapsed=%ss launches=%s helpers=%s\n' \
         "$name" "$signal" "$elapsed" "$launches" "$helpers"
       pass "setup-control $name $signal"
+      control_complete || setup_control_fail "$name control completion"
     done
   done
 }
