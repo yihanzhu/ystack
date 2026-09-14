@@ -150,10 +150,13 @@ The eight pins are `resolver/v1/profile-resolve-runtime.sh`,
 `scripts/lib/profile-resolution.sh`, `resolver/v1/profile-resolution.jq`, and
 `schema.jq`, `profile_graph.jq`, `stage_request.jq`, `result_facts.jq`,
 `result_truth.jq` under `core/v2/generations/` plus the pinned generation's `modules/`.
-Take generation `g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43`
-and schema major `2` from the accepted library constants; do not read untrusted
-library text at runtime to discover a module path. The library's existing four
-wrapper/registry/ingress/contracts pins remain its own, justified by its outer pin.
+Take the exact `PORTABLE_CORE_GENERATION` selected by the accepted, pinned
+`scripts/core-contract.sh`, equal to the accepted library's
+`PROFILE_RESOLUTION_CORE_GENERATION`, and schema major `2` from its
+`PROFILE_RESOLUTION_SCHEMA_MAJOR`. Copy those constants into the parent; do not
+read untrusted library text at runtime to discover a module path. The library's
+existing four wrapper/registry/ingress/contracts pins remain its own, justified
+by its outer pin.
 
 Create `home`, `tmp`, `child.stdout`, `child.stderr` relative to checked output fd;
 use exclusive creation and retain descriptors through classification and streaming.
