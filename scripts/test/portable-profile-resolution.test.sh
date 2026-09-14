@@ -28,6 +28,78 @@ cleanup() {
 }
 trap cleanup EXIT
 
+
+resolver_component_count=0
+resolver_library="$resolver_root/scripts/lib/profile-resolution.sh"
+
+assert_runtime_directories() {
+  local sandbox=$1 directory inventory
+  for directory in "$sandbox/home" "$sandbox/tmp"; do
+    [ -d "$directory" ] && [ ! -L "$directory" ] || {
+      printf 'FAIL: missing real runtime directory %s\n' "$directory" >&2
+      return 1
+    }
+    inventory=$(/usr/bin/find "$directory" -mindepth 1 -print) || return 1
+    [ -z "$inventory" ] || {
+      printf 'FAIL: runtime residue in %s\n%s\n' "$directory" "$inventory" >&2
+      return 1
+    }
+  done
+}
+
+check_platform_component() {
+  local name=$1 bytes=$2 expected=$3 option=$4
+  local output="$resolver_tmp/component.$resolver_component_count"
+  if ! /bin/bash -s -- "$resolver_library" "$bytes" "$expected" "$option" \
+      > "$output" 2> "$output.stderr" <<'COMPONENT'
+set -eu
+library=$1 bytes=$2 expected=$3 option=$4
+set +o pipefail
+[ "$option" = off ] || set -o pipefail
+before=$(set +o)
+# shellcheck source=/dev/null
+source "$library"
+[ "$(set +o)" = "$before" ] || exit 90
+profile_resolution_platform_producer() { builtin printf '%b' "$bytes"; }
+profile_resolution_platform_file() { return 0; }
+exec 3>&2
+profile_resolution_git_path=/misleading/inherited
+if profile_resolution_initialize_git; then
+  [ -n "$expected" ] && [ "$profile_resolution_git_path" = "$expected" ] || exit 91
+else
+  [ -z "$expected" ] && [ -z "$profile_resolution_git_path" ] || exit 92
+fi
+[ "$(set +o)" = "$before" ] || exit 93
+COMPONENT
+  then
+    /bin/cat "$output.stderr" >&2
+    printf 'FAIL: platform component %s\n' "$name" >&2
+    return 1
+  fi
+  [ ! -s "$output" ] || return 1
+  if [ -n "$expected" ]; then
+    [ ! -s "$output.stderr" ] || return 1
+  else
+    builtin printf 'E_RUNTIME dependency\n' > "$output.expected"
+    /usr/bin/cmp -s "$output.expected" "$output.stderr" || return 1
+  fi
+  resolver_component_count=$((resolver_component_count + 1))
+  printf 'component ok %s - %s (%s)\n' "$resolver_component_count" "$name" "$option"
+}
+
+for resolver_component_option in off on; do
+  check_platform_component linux 'Linux x86_64\n' /usr/bin/git "$resolver_component_option"
+  check_platform_component darwin-intel 'Darwin x86_64\n' \
+    /Library/Developer/CommandLineTools/usr/bin/git "$resolver_component_option"
+  check_platform_component darwin-arm 'Darwin arm64\n' \
+    /Library/Developer/CommandLineTools/usr/bin/git "$resolver_component_option"
+  for resolver_bad_platform in '' 'Linux x86_64' 'Linux x86_64\n\n' \
+      'Linux x86_64\nextra' 'Linux arm64\n' 'FreeBSD x86_64\n' \
+      '\000Linux x86_64\n' 'Linux\000 x86_64\n' 'Linux x86_64\n\000'; do
+    check_platform_component malformed "$resolver_bad_platform" '' "$resolver_component_option"
+  done
+done
+
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -250,6 +322,7 @@ expect_failure() {
     /bin/cat "$resolver_stderr" >&2
     fail_case "$resolver_name error"
   }
+  assert_runtime_directories "$resolver_sandbox" || fail_case "$resolver_name cleanup"
   pass_case "$resolver_name"
 }
 
