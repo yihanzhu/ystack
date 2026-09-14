@@ -39,6 +39,32 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+The inactive runtime selects Git from one exact installed platform observation:
+`/usr/bin/uname -sm`. Linux x86_64 uses `/usr/bin/git`; Darwin x86_64 and arm64
+use `/Library/Developer/CommandLineTools/usr/bin/git`. The final uname, Git,
+`/bin/dd` and `/usr/bin/od` files must be regular, executable and not symlinks.
+Missing tools, another platform, malformed bytes or a failed pipeline refuse with
+`E_RUNTIME dependency`. There is no discovery, fallback or installer.
+
+The private observer passes at most 65 raw bytes through dd to od before shell
+capture, rejects more than 64, and matches the exact LF-terminated platform bytes.
+It checks every pipeline stage. The existing launcher deadline covers stalled tools;
+a separately sourced component call has no independent probe timeout.
+
+All five Git positions use the initialized selection. Existing object validation,
+source isolation, budgets, watchdog and empty runtime HOME/TMPDIR requirements remain.
+Native proof records the actual tested platform and executable hashes; mapping a
+platform does not qualify an untested architecture. Component controls do not replace
+native launcher evidence. The available native development proof is Darwin arm64;
+Linux x86_64 runs the complete suite in required CI. Darwin x86_64 needs its own
+actual run before qualification. The direct installed CLT Git must continue to meet the
+same behavior and cleanup contract; changed tools require fresh evidence.
+
+This dependency repair does not install or activate a runtime. The production trusted
+parent must separately reconcile its library pin and new fixed dependencies through
+its own artifact gates. No preserved parent work or proposed cache exception is
+accepted by this runtime change.
+
 ## Inactive default profile assembly
 
 `profiles/default/v1/` binds six default adapter packages to exact Git

@@ -17,13 +17,18 @@ resolver_download=''
 resolver_passed=0
 resolver_total=0
 resolver_fingerprint_counter=0
+resolver_suite_complete=0
 /bin/rm -f /tmp/ystack-profile-resolver-must-not-run
 
 cleanup() {
   if [ -n "$resolver_download" ] && [ -f "$resolver_download" ]; then
     /bin/rm -f -- "$resolver_download"
   fi
-  /bin/rm -rf -- "$resolver_tmp"
+  if [ "$resolver_suite_complete" -eq 1 ]; then
+    /bin/rm -rf -- "$resolver_tmp"
+  else
+    printf 'preserved failing fixture: %s\n' "$resolver_tmp" >&2
+  fi
   /bin/rm -f /tmp/ystack-profile-resolver-must-not-run
 }
 trap cleanup EXIT
@@ -48,43 +53,124 @@ assert_runtime_directories() {
 }
 
 check_platform_component() {
-  local name=$1 bytes=$2 expected=$3 option=$4
+  local name=$1 bytes=$2 expected=$3 option=$4 mode=${5:-normal} target=${6:-none}
   local output="$resolver_tmp/component.$resolver_component_count"
+  /bin/mkdir -m 700 "$output.files"
   if ! /bin/bash -s -- "$resolver_library" "$bytes" "$expected" "$option" \
-      > "$output" 2> "$output.stderr" <<'COMPONENT'
+      "$mode" "$target" "$output.files" > "$output" 2> "$output.stderr" <<'COMPONENT'
 set -eu
-library=$1 bytes=$2 expected=$3 option=$4
+library=$1 bytes=$2 expected=$3 option=$4 mode=$5 target=$6 files=$7
 set +o pipefail
 [ "$option" = off ] || set -o pipefail
+IFS=:
+before_ifs=$IFS
+[ "$option" = off ] || set -f
 before=$(set +o)
 # shellcheck source=/dev/null
-source "$library"
-[ "$(set +o)" = "$before" ] || exit 90
-profile_resolution_platform_producer() { builtin printf '%b' "$bytes"; }
-profile_resolution_platform_file() { return 0; }
+{
+  set -x
+  source "$library"
+  set +x
+} 2> "$files/source.trace"
+if /usr/bin/grep -E '/usr/bin/uname|/bin/dd|/usr/bin/od|/usr/bin/git|CommandLineTools' "$files/source.trace" >/dev/null; then
+  exit 88
+fi
+[ "$(set +o)" = "$before" ] || exit 89
+[ "$IFS" = "$before_ifs" ] || exit 90
+for function in producer reader encoder; do
+  declare -F "profile_resolution_platform_$function" >/dev/null || exit 90
+done
+# Keep the actual file predicate for tests against owned fixture types.
+predicate=$(declare -f profile_resolution_platform_file)
+eval "${predicate/profile_resolution_platform_file/profile_test_original_file}"
+: > "$files/regular"
+/bin/chmod 0500 "$files/regular"
+: > "$files/nonexecutable"
+/bin/chmod 0400 "$files/nonexecutable"
+/bin/mkdir "$files/directory"
+/bin/ln -s "$files/regular" "$files/symlink"
+profile_resolution_platform_file() {
+  printf '%s\n' "$1" >> "$files/predicates"
+  if [ "$1" = "$target" ]; then
+    profile_test_original_file "$files/$mode"
+  else
+    profile_test_original_file "$files/regular"
+  fi
+}
+profile_resolution_platform_producer() {
+  : > "$files/producer"
+  builtin printf '%b' "$bytes"
+  [ "$mode" != producer-fail ]
+}
+profile_resolution_platform_reader() {
+  : > "$files/reader"
+  /bin/dd bs=1 count=65 || return $?
+  [ "$mode" != reader-fail ]
+}
+profile_resolution_platform_encoder() {
+  : > "$files/encoder"
+  case "$mode" in
+    rendering-*)
+      /usr/bin/od -An -v -tu1 > "$files/raw-decimal" || return $?
+      printf '%s\n' "${mode#rendering-}"
+      ;;
+    *)
+      /usr/bin/od -An -v -tu1 > "$files/raw-decimal" || return $?
+      /bin/cat "$files/raw-decimal" || return $?
+      ;;
+  esac
+  [ "$mode" != encoder-fail ]
+}
 exec 3>&2
 profile_resolution_git_path=/misleading/inherited
 if profile_resolution_initialize_git; then
   [ -n "$expected" ] && [ "$profile_resolution_git_path" = "$expected" ] || exit 91
+  : > "$files/git-use"
 else
   [ -z "$expected" ] && [ -z "$profile_resolution_git_path" ] || exit 92
 fi
-[ "$(set +o)" = "$before" ] || exit 93
+[ "$(set +o)" = "$before" ] && [ "$IFS" = "$before_ifs" ] || exit 93
+if [ -n "$expected" ]; then
+  [ -f "$files/git-use" ] || exit 95
+else
+  [ ! -e "$files/git-use" ] || exit 96
+fi
+if [ "$mode" = repeat ]; then
+  bytes='unsupported\n'
+  if profile_resolution_initialize_git; then exit 97; fi
+  [ -z "$profile_resolution_git_path" ] || exit 98
+fi
+if [ -f "$files/raw-decimal" ]; then
+  IFS=$' \t\n'
+  count=0
+  for byte in $(/bin/cat "$files/raw-decimal"); do count=$((count + 1)); done
+  [ "$count" -le 65 ] || exit 99
+  printf '%s\n' "$count" > "$files/raw-count"
+fi
 COMPONENT
   then
     /bin/cat "$output.stderr" >&2
-    printf 'FAIL: platform component %s\n' "$name" >&2
+    printf 'FAIL: platform component %s (%s)\n' "$name" "$mode" >&2
     return 1
   fi
   [ ! -s "$output" ] || return 1
-  if [ -n "$expected" ]; then
+  if [ -n "$expected" ] && [ "$mode" != repeat ]; then
     [ ! -s "$output.stderr" ] || return 1
   else
     builtin printf 'E_RUNTIME dependency\n' > "$output.expected"
     /usr/bin/cmp -s "$output.expected" "$output.stderr" || return 1
   fi
+  case "$mode" in
+    normal|regular|repeat|*-fail|rendering-*)
+      for target in producer reader encoder; do [ -f "$output.files/$target" ] || return 1; done
+      ;;
+  esac
+  case "$name" in
+    bytes-64) [ "$(/bin/cat "$output.files/raw-count")" = 64 ] || return 1 ;;
+    bytes-65|bytes-long) [ "$(/bin/cat "$output.files/raw-count")" = 65 ] || return 1 ;;
+  esac
   resolver_component_count=$((resolver_component_count + 1))
-  printf 'component ok %s - %s (%s)\n' "$resolver_component_count" "$name" "$option"
+  printf 'component ok %s - %s (%s, %s)\n' "$resolver_component_count" "$name" "$option" "$mode"
 }
 
 for resolver_component_option in off on; do
@@ -95,10 +181,44 @@ for resolver_component_option in off on; do
     /Library/Developer/CommandLineTools/usr/bin/git "$resolver_component_option"
   for resolver_bad_platform in '' 'Linux x86_64' 'Linux x86_64\n\n' \
       'Linux x86_64\nextra' 'Linux arm64\n' 'FreeBSD x86_64\n' \
-      '\000Linux x86_64\n' 'Linux\000 x86_64\n' 'Linux x86_64\n\000'; do
+      '\000Linux x86_64\n' 'Linux\000 x86_64\n' 'Linux x86_64\n\000' \
+      'prefixLinux x86_64\n' 'Linux x86_64suffix\n' 'Darwin i386\n' \
+      'Linux x86_\n' 'L\303\255nux x86_64\n'; do
     check_platform_component malformed "$resolver_bad_platform" '' "$resolver_component_option"
   done
-done
+  for resolver_byte_count in 64 65 96; do
+    resolver_platform_bytes=''
+    for ((resolver_byte=0; resolver_byte<resolver_byte_count; resolver_byte++)); do
+      resolver_platform_bytes="${resolver_platform_bytes}x"
+    done
+    resolver_bytes_name="bytes-$resolver_byte_count"
+    [ "$resolver_byte_count" -ne 96 ] || resolver_bytes_name='bytes-long'
+    check_platform_component "$resolver_bytes_name" "$resolver_platform_bytes" '' "$resolver_component_option"
+  done
+  for resolver_failed_stage in producer reader encoder; do
+    check_platform_component pipeline-status 'Linux x86_64\n' '' \
+      "$resolver_component_option" "$resolver_failed_stage-fail"
+    check_platform_component pipeline-positive 'Linux x86_64\n' /usr/bin/git "$resolver_component_option"
+  done
+  for resolver_bad_decimal in x 00 01 -1 256 999 '76 105 *' ''; do
+    check_platform_component decimal-rendering 'Linux x86_64\n' '' \
+      "$resolver_component_option" "rendering-$resolver_bad_decimal"
+  done
+  for resolver_dependency in /usr/bin/uname /bin/dd /usr/bin/od /usr/bin/git; do
+    for resolver_file_state in missing directory nonexecutable symlink; do
+      check_platform_component file-predicate 'Linux x86_64\n' '' \
+        "$resolver_component_option" "$resolver_file_state" "$resolver_dependency"
+    done
+    check_platform_component file-positive 'Linux x86_64\n' /usr/bin/git \
+      "$resolver_component_option" regular "$resolver_dependency"
+  done
+  for resolver_file_state in missing directory nonexecutable symlink; do
+    check_platform_component darwin-file 'Darwin arm64\n' '' \
+      "$resolver_component_option" "$resolver_file_state" /Library/Developer/CommandLineTools/usr/bin/git
+  done
+  check_platform_component clear-second-failure 'Linux x86_64\n' /usr/bin/git \
+    "$resolver_component_option" repeat
+ done
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -222,6 +342,30 @@ esac
 "$resolver_compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
   "${resolver_loader_flags[@]}" "$resolver_loader_source" -o "$resolver_bin/loader-trap.dylib"
 
+record_runtime_identities() {
+  local phase=$1 path
+  printf 'native identity phase=%s platform=%s\n' "$phase" "$resolver_platform"
+  for path in /usr/bin/uname /bin/dd /usr/bin/od /bin/bash "$resolver_selected_git" \
+      "$resolver_bound_jq" "$resolver_bin/launcher" "$resolver_bin/nofollow-snapshot" \
+      "$resolver_runtime" "$resolver_library" "$resolver_helper_source" \
+      "$resolver_launcher_source" "$resolver_root/resolver/v1/profile-resolution.jq"; do
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    printf 'native file %s %s\n' "$(sha256_file "$path")" "$path"
+  done
+  for path in scripts/lib/profile-resolution.sh resolver/v1/profile-resolve-runtime.sh \
+      resolver/v1/profile-resolution.jq resolver/v1/nofollow-snapshot.c \
+      scripts/test/portable-profile-resolution-launcher.c; do
+    printf 'native source %s %s\n' \
+      "$(/usr/bin/git -C "$resolver_root" hash-object "$path")" "$path"
+  done
+}
+case "$resolver_platform" in
+  Linux:x86_64) resolver_selected_git=/usr/bin/git ;;
+  Darwin:*) resolver_selected_git=/Library/Developer/CommandLineTools/usr/bin/git ;;
+esac
+record_runtime_identities before > "$resolver_tmp/identities.before"
+/bin/cat "$resolver_tmp/identities.before"
+
 resolver_fixture="$resolver_tmp/fixture"
 PATH="$resolver_bin:/usr/bin:/bin" "$resolver_fixture_builder" "$resolver_fixture" \
   "$resolver_bound_jq" >/dev/null
@@ -289,9 +433,17 @@ run_resolver() {
   resolver_request=$2
   resolver_map=$3
   /bin/mkdir -m 700 "$resolver_sandbox"
+  local status=0
   YSTACK_TEST_SANDBOX="$resolver_sandbox" \
     "$resolver_bin/launcher" resolve "$resolver_runtime" "$resolver_bin/nofollow-snapshot" \
-    "$resolver_bound_jq" "$resolver_request" "$resolver_map"
+    "$resolver_bound_jq" "$resolver_request" "$resolver_map" || status=$?
+  assert_runtime_directories "$resolver_sandbox" || return 99
+  if [ "$status" -eq 0 ]; then
+    [ ! -s "$resolver_sandbox/child.stderr" ] || return 99
+  else
+    [ ! -s "$resolver_sandbox/child.stdout" ] || return 99
+  fi
+  return "$status"
 }
 
 pass_case() {
@@ -316,13 +468,21 @@ expect_failure() {
   if run_resolver "$resolver_tmp/sandbox.failure.$resolver_total" "$resolver_request" "$resolver_map" \
       > "$resolver_stdout" 2> "$resolver_stderr"; then
     fail_case "$resolver_name"
+  else
+    resolver_failure_status=$?
   fi
   [ ! -s "$resolver_stdout" ] || fail_case "$resolver_name emitted stdout"
   [ "$(/usr/bin/sed -n '1p' "$resolver_stderr")" = "$resolver_expected" ] || {
     /bin/cat "$resolver_stderr" >&2
     fail_case "$resolver_name error"
   }
+  builtin printf '%s\n' "$resolver_expected" > "$resolver_tmp/expected-error"
+  /usr/bin/cmp -s "$resolver_tmp/expected-error" "$resolver_stderr" &&
+    /usr/bin/cmp -s "$resolver_stderr" "$resolver_sandbox/child.stderr" &&
+    [ ! -s "$resolver_sandbox/child.stdout" ] || fail_case "$resolver_name raw diagnostic"
   assert_runtime_directories "$resolver_sandbox" || fail_case "$resolver_name cleanup"
+  printf 'native refusal status=%s token=%s raw_stderr_sha=%s home=empty tmp=empty stdout=empty\n' \
+    "$resolver_failure_status" "$resolver_expected" "$(sha256_file "$resolver_stderr")"
   pass_case "$resolver_name"
 }
 
@@ -366,6 +526,12 @@ expect_git_wall_failure() {
       /bin/cat "$resolver_wall_stderr" >&2
       fail_case 'Git wall watchdog token or duration'
     }
+  assert_runtime_directories "$resolver_wall_sandbox" || fail_case 'Git wall cleanup'
+  builtin printf 'E_LIMIT time-limit\n' > "$resolver_tmp/wall-expected"
+  /usr/bin/cmp -s "$resolver_wall_stderr" "$resolver_tmp/wall-expected" &&
+    /usr/bin/cmp -s "$resolver_wall_stderr" "$resolver_wall_sandbox/child.stderr" &&
+    [ ! -s "$resolver_wall_sandbox/child.stdout" ] || fail_case 'Git wall raw diagnostic'
+  printf 'native cleanup: Git wall elapsed=%s; home=empty; tmp=empty\n' "$resolver_wall_elapsed"
   pass_case 'Git wall watchdog kills and reaps the exact child'
 }
 
@@ -410,6 +576,7 @@ expect_internal_budget_failure() {
     # shellcheck source=/dev/null
     source "$resolver_root/scripts/lib/profile-resolution.sh"
     exec 3> "$resolver_budget_error"
+    profile_resolution_initialize_git || exit 1
     # shellcheck disable=SC2034
     profile_resolution_scratch=$resolver_budget_scratch
     profile_resolution_snapshots="$resolver_budget_scratch/snapshots.tsv"
@@ -444,6 +611,8 @@ expect_cache_reuse() {
     set +e
     # shellcheck source=/dev/null
     source "$resolver_root/scripts/lib/profile-resolution.sh"
+    exec 3>&2
+    profile_resolution_initialize_git || exit 1
     profile_resolution_scratch=$resolver_cache_scratch
     profile_resolution_snapshots="$resolver_cache_scratch/snapshots.tsv"
     /usr/bin/printf '%s\t%s\tidentity\tsha1\n' repo.profile \
@@ -584,15 +753,38 @@ pass_case 'cross-hash multi-repository resolution and real core validation'
 
 resolver_bare_output="$resolver_tmp/resolved.bare.json"
 run_resolver "$resolver_tmp/sandbox.bare" "$resolver_fixture/request.json" "$resolver_bare_map" \
-  > "$resolver_bare_output"
+  > "$resolver_bare_output" 2> "$resolver_tmp/bare.stderr"
+[ ! -s "$resolver_tmp/bare.stderr" ] || fail_case 'bare public stderr'
 /usr/bin/cmp -s "$resolver_output" "$resolver_bare_output" || fail_case 'bare repository determinism'
 pass_case 'bare repositories resolve the same exact graph'
 
 resolver_linked_output="$resolver_tmp/resolved.linked.json"
 run_resolver "$resolver_tmp/sandbox.linked" "$resolver_fixture/request.json" "$resolver_linked_map" \
-  > "$resolver_linked_output"
+  > "$resolver_linked_output" 2> "$resolver_tmp/linked.stderr"
+[ ! -s "$resolver_tmp/linked.stderr" ] || fail_case 'linked public stderr'
 /usr/bin/cmp -s "$resolver_output" "$resolver_linked_output" || fail_case 'linked worktree determinism'
 pass_case 'linked worktrees resolve the same exact graph'
+
+for resolver_layout in normal bare linked; do
+  case "$resolver_layout" in
+    normal) resolver_reuse_map="$resolver_fixture/map.json"; resolver_first_sandbox="$resolver_tmp/sandbox.success" ;;
+    bare) resolver_reuse_map=$resolver_bare_map; resolver_first_sandbox="$resolver_tmp/sandbox.bare" ;;
+    linked) resolver_reuse_map=$resolver_linked_map; resolver_first_sandbox="$resolver_tmp/sandbox.linked" ;;
+  esac
+  resolver_reuse_output="$resolver_tmp/reused.$resolver_layout.stdout"
+  resolver_reuse_error="$resolver_tmp/reused.$resolver_layout.stderr"
+  resolver_reuse_sandbox="$resolver_tmp/sandbox.reused.$resolver_layout"
+  run_resolver "$resolver_reuse_sandbox" "$resolver_fixture/request.json" "$resolver_reuse_map" \
+    > "$resolver_reuse_output" 2> "$resolver_reuse_error" || fail_case 'reused native layout'
+  /usr/bin/cmp -s "$resolver_output" "$resolver_reuse_output" &&
+    /usr/bin/cmp -s "$resolver_output" "$resolver_reuse_sandbox/child.stdout" &&
+    /usr/bin/cmp -s "$resolver_output" "$resolver_first_sandbox/child.stdout" &&
+    [ ! -s "$resolver_reuse_error" ] && [ ! -s "$resolver_first_sandbox/child.stderr" ] ||
+    fail_case 'fresh/reused canonical bytes or raw errors'
+  printf 'native reused %s: canonical_sha=%s home=empty tmp=empty raw_stderr=empty\n' \
+    "$resolver_layout" "$(sha256_file "$resolver_reuse_output")"
+done
+
 
 resolver_one_segment_output="$resolver_tmp/resolved.one-segment.json"
 run_resolver "$resolver_tmp/sandbox.one-segment" "$resolver_one_segment_request" \
@@ -811,9 +1003,22 @@ done
 }
 pass_case 'refs, config, and object stores remain byte-identical'
 
+record_runtime_identities after > "$resolver_tmp/identities.after"
+/bin/cat "$resolver_tmp/identities.after"
+/usr/bin/sed '1d' "$resolver_tmp/identities.before" > "$resolver_tmp/identities.before.files"
+/usr/bin/sed '1d' "$resolver_tmp/identities.after" > "$resolver_tmp/identities.after.files"
+/usr/bin/cmp -s "$resolver_tmp/identities.before.files" "$resolver_tmp/identities.after.files" ||
+  fail_case 'native source or tool identity changed'
+printf 'native raw resolved JSON begin\n'
+/bin/cat "$resolver_output"
+printf 'native raw resolved JSON end\n'
+printf 'original cases: %s; added component controls: %s; reused layouts: 3\n' \
+  "$resolver_passed" "$resolver_component_count"
 [ "$resolver_passed" -eq "$resolver_total" ] || exit 1
 printf 'portable profile resolution: %d/%d targeted cases passed\n' "$resolver_passed" "$resolver_total"
 printf 'supported tuple: %s; jq=%s; core=%s; helper-source=%s\n' \
   "$resolver_host" "$(sha256_file "$resolver_jq")" \
   "$(/usr/bin/git -C "$resolver_root" hash-object scripts/core-contract.sh)" \
   "$(sha256_file "$resolver_helper_source")"
+
+resolver_suite_complete=1
