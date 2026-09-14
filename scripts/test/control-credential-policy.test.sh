@@ -577,7 +577,7 @@ run_setup_controls() {
   local control_root="$tmp/setup-controls" functions name signal code status started elapsed
   local child reported group function_name attempt signals control_events launches mutations
   local helpers reconciled event_kind leader expected_launches expected_helpers expected_error
-  local control_owner=
+  local control_owner='' observers term_count cont_count kill_count
   /bin/mkdir "$control_root"
   functions="$control_root/functions.sh"
   : >"$functions"
@@ -717,6 +717,7 @@ managed_probe_command() {
       probe-error) printf error; return ;;
       probe-malformed) printf invalid; return ;;
       probe-exec) /nonexistent/credential-private-probe; return ;;
+      probe-status) printf absent; return 1 ;;
     esac
   fi
   actual_managed_probe_command "$1"
@@ -822,7 +823,7 @@ CONTROL
     entry admission classification observer-return next-before next-after local-error \
     local-reap release-error inspect-error preserve-error group-reap helper-return \
     pre-wait retired-probe reject-invalid reject-own absence probe-alive probe-error \
-    probe-malformed probe-exec probe-poll-error wait127-group wait127-local wait-natural wait-interrupt; do
+    probe-malformed probe-exec probe-status probe-poll-error wait127-group wait127-local wait-natural wait-interrupt; do
     case "$name" in
       entry|admission|classification|observer-return|next-before|next-after|local-reap|\
       group-reap|helper-return|pre-wait|retired-probe) signals='HUP INT TERM' ;;
@@ -919,6 +920,27 @@ CONTROL
             /usr/bin/grep -q 'setup cleanup unconfirmed' "$control_root/$name-$signal.stderr" &&
             ! /usr/bin/grep -q '^lifecycle retired$' "$control_events"; } ||
             setup_control_fail "$name unconfirmed cleanup" ;;
+      esac
+      observers=$(/usr/bin/grep -c '^observer$' "$control_events" || :)
+      case "$name" in
+        entry|admission|local-error|local-reap|wait127-local|release-error)
+          [ "$observers" -eq 0 ] || setup_control_fail "$name observed after terminal setup" ;;
+        classification|observer-return|next-before|next-after)
+          [ "$observers" -eq 1 ] || setup_control_fail "$name observer count" ;;
+        coordinator-error)
+          [ "$helpers:$reconciled" = 0:0 ] || setup_control_fail "$name unexpected cleanup" ;;
+        coordinator-cleanup)
+          [ "$helpers:$reconciled" = 1:0 ] || setup_control_fail "$name retried failed cleanup" ;;
+      esac
+      case "$name" in coordinator-*|entry|local-error|local-reap|wait127-local|reject-*) ;;
+        *)
+          term_count=$(/usr/bin/grep -c '^kill -TERM -- ' "$control_events" || :)
+          cont_count=$(/usr/bin/grep -c '^kill -CONT -- ' "$control_events" || :)
+          kill_count=$(/usr/bin/grep -c '^kill -KILL -- ' "$control_events" || :)
+          [ "$term_count:$cont_count" = "$helpers:$helpers" ] &&
+            [ "$kill_count" -le "$helpers" ] &&
+            [ "$(/usr/bin/grep -c '^logical-reap .* group$' "$control_events")" -eq "$helpers" ] ||
+            setup_control_fail "$name repeated signal or reap budget" ;;
       esac
       case "$name" in group-reap|local-reap|wait-interrupt)
         [ "$(/usr/bin/grep -c '^physical-wait ' "$control_events")" -ge 2 ] &&
@@ -1092,23 +1114,29 @@ stop_at_owned_marker() {
   [ -n "$marker" ] || {
     if [ "$selector" = setup-miss ]; then managed_terminate
     else terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :; fi
-    INPUT_RACE_PID=
-    INPUT_RACE_PGID=
+    if [ "$selector" = strict ]; then
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+    fi
     fail "$name marker timeout: $marker_name"
   }
   case "$marker" in "$scratch_root"/*/"$marker_name") ;; *)
     if [ "$selector" = setup-miss ]; then managed_terminate
     else terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :; fi
-    INPUT_RACE_PID=
-    INPUT_RACE_PGID=
+    if [ "$selector" = strict ]; then
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+    fi
     fail "$name marker escaped scratch"
   esac
   owner=$(/bin/cat "$marker")
   [ "$owner" = "$INPUT_RACE_PID" ] || {
     if [ "$selector" = setup-miss ]; then managed_terminate
     else terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :; fi
-    INPUT_RACE_PID=
-    INPUT_RACE_PGID=
+    if [ "$selector" = strict ]; then
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+    fi
     fail "$name marker owner mismatch"
   }
   /bin/kill -STOP -- "-$INPUT_RACE_PGID" || fail "$name stop evaluator group"
@@ -1126,8 +1154,10 @@ stop_at_owned_marker() {
   case "$state" in T*) ;; *)
     if [ "$selector" = setup-miss ]; then managed_terminate
     else terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :; fi
-    INPUT_RACE_PID=
-    INPUT_RACE_PGID=
+    if [ "$selector" = strict ]; then
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+    fi
     fail "$name evaluator group did not stop"
   esac
   if [ "$selector" = setup-miss ]; then
@@ -1144,8 +1174,7 @@ stop_at_owned_marker() {
   if [ -n "$forbidden_marker" ] &&
      /usr/bin/find "$scratch_root" -type f -name "$forbidden_marker" -print -quit |
        /usr/bin/grep -q .; then
-    if [ "$selector" = setup-miss ]; then managed_terminate
-    else terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :; fi
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
     fail "$name missed guarded window before $forbidden_marker"
