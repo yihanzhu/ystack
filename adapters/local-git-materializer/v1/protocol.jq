@@ -1,6 +1,7 @@
 import "schema" as schema;
 import "profile_graph" as profile;
 import "stage_request" as request;
+import "result_truth" as result;
 
 def exact($required; $optional):
   . as $value |
@@ -420,6 +421,42 @@ def stage_result:
     }
   else error("E_RESULT") end;
 
+def response_ok($input; $response; $verified; $receipt_utf8; $stage_result_sha256):
+  ($response | exact(
+    ["schema_version","kind","stage_result","payloads","authority",
+     "qualification","effects"];
+    [])) and
+  $response.schema_version == 1 and
+  $response.kind == "local_git_materialization_response" and
+  $response.authority == "none" and
+  $response.qualification == {
+    state:"unavailable",reason_id:"adapter.unqualified"
+  } and
+  $response.effects == ["caller-disposable-candidate-repository"] and
+  ($response.payloads | type == "array" and length == 1) and
+  $response.payloads[0] == {
+    content_id:"candidate.materialization.receipt",
+    media_type:"application/json",
+    sha256:$verified.sha256,
+    data:$receipt_utf8
+  } and
+  ($verified | verified_receipt_pair_ok) and
+  ($verified.content | schema::parsed_limits_ok) and
+  ($response.stage_result | schema::parsed_limits_ok) and
+  ($stage_result_sha256 | schema::sha256_ok) and
+  $response.stage_result.id == $input.attempt.result_id and
+  $response.stage_result.body.attempt_id == $input.attempt.attempt_id and
+  $response.stage_result.body.attempt_number == $input.attempt.attempt_number and
+  $response.stage_result.body.started_at == $input.attempt.started_at and
+  $response.stage_result.body.finished_at == $input.attempt.finished_at and
+  $response.stage_result.body.recorded_at == $input.attempt.recorded_at and
+  receipt_relations_ok($input;$verified.content) and
+  receipt_outcome_ok($verified.content;$response.stage_result.body.outcome.value) and
+  result::stage_run_ok(
+    $input.stage_request;
+    $input.resolved_profile;
+    {content:$response.stage_result,sha256:$stage_result_sha256});
+
 if $command == "validate-input" then input_ok
 elif $command == "contract" then
   . as $input |
@@ -432,4 +469,16 @@ elif $command == "patch" then
   if input_ok then payload_for(.;"input.producer-patch").data else error("E_INPUT") end
 elif $command == "receipt" then receipt
 elif $command == "stage-result" then stage_result
+elif $command == "validate-response" then
+  . as $bundle |
+  if ($bundle | exact(
+      ["input","response","verified_receipt","receipt_utf8",
+       "stage_result_sha256"];
+      [])) and
+     ($bundle.input | input_ok) and
+     ($bundle.receipt_utf8 | type == "string") and
+     response_ok(
+       $bundle.input;$bundle.response;$bundle.verified_receipt;
+       $bundle.receipt_utf8;$bundle.stage_result_sha256)
+  then true else false end
 else error("E_COMMAND") end

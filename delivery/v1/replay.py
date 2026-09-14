@@ -37,6 +37,13 @@ if LOADED_DRIVER_BYTES is None and __name__ == "__main__":
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_OBSERVATION_BYTES = 64 * 1024
+MAX_DELIVERY_KEY_BYTES = 4 * 1024
+MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_STAGE_RESULT_BYTES = 256 * 1024
+MAX_RECEIPT_BYTES = 64 * 1024
+MAX_JOURNAL_V2_BYTES = 8 * 1024 * 1024
+MAX_STDERR_BYTES = 64 * 1024
+MAX_JSON_DEPTH = 32
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
 GUARD_ACKNOWLEDGEMENT_SECONDS = 5
 MAX_GUARD_LINE_BYTES = 4096
@@ -75,12 +82,20 @@ class ReplayError(Exception):
     pass
 
 
+class ReplayConflict(ReplayError):
+    pass
+
+
 def digest_bytes(value):
     return hashlib.sha256(value).hexdigest()
 
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def canonical_document(value):
+    return canonical(value) + b"\n"
 
 
 def read_bytes(path, limit):
@@ -111,12 +126,59 @@ def read_bytes(path, limit):
 
 
 def parse_json(data):
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result:
+                raise ReplayError("input contains duplicate JSON members")
+            result[key] = value
+        return result
+
+    def reject_constant(_value):
+        raise ReplayError("input contains a non-finite number")
+
+    def check(value, depth=1):
+        if depth > MAX_JSON_DEPTH:
+            raise ReplayError("input exceeds its JSON depth limit")
+        if isinstance(value, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                raise ReplayError("input contains invalid Unicode")
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                check(key, depth + 1)
+                check(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                check(child, depth + 1)
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ReplayError("input is not JSON")
     try:
-        return json.loads(data)
+        text = data.decode("utf-8", errors="strict")
+        value = json.loads(text, object_pairs_hook=pairs, parse_constant=reject_constant)
+        check(value)
+        return value
+    except ReplayError:
+        raise
     except (ValueError, UnicodeDecodeError, RecursionError) as error:
         # Deeply nested input within the byte limit raises RecursionError; it is
         # still just input this program cannot accept, never a crash.
         raise ReplayError("input is not JSON") from error
+
+
+def exact_object(value, required):
+    return isinstance(value, dict) and set(value) == set(required)
+
+
+def integer(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def atomic_json_limited(path, value, limit):
+    encoded = canonical_document(value)
+    if len(encoded) > limit:
+        raise ReplayError("state journal exceeds its size limit")
+    atomic_bytes(path, encoded)
 
 
 def private_directory(path):
@@ -309,7 +371,33 @@ def materializer_package_identity(repository):
     return package
 
 
-def input_identity(input_value, input_sha, arguments, execution):
+def delivery_key(value, input_value):
+    if not exact_object(value, ("stage_key", "request_sha256", "operation", "attempt_number")):
+        raise ReplayError("delivery key is malformed")
+    stage_key = value.get("stage_key")
+    stage_fields = ("initiative_id", "workflow_id", "stage_id", "task_class_id")
+    if not exact_object(stage_key, stage_fields) or any(
+        not isinstance(stage_key.get(name), str) or not ACTOR.fullmatch(stage_key[name])
+        for name in stage_fields
+    ) or not isinstance(value.get("request_sha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", value["request_sha256"]) or \
+       value.get("operation") != "dispatch-stage" or \
+       not integer(value.get("attempt_number")) or value["attempt_number"] != 1:
+        raise ReplayError("delivery key is malformed")
+    try:
+        body = input_value["stage_request"]["content"]["body"]
+        expected = {name: body[name] for name in stage_fields}
+        attempt_number = input_value["attempt"]["attempt_number"]
+        request_sha = input_value["stage_request"]["sha256"]
+    except (KeyError, TypeError) as error:
+        raise ReplayError("delivery key cannot be related to the input") from error
+    if stage_key != expected or value["request_sha256"] != request_sha or \
+       attempt_number != 1 or value["attempt_number"] != attempt_number:
+        raise ReplayConflict("delivery key does not match the materialization input")
+    return value
+
+
+def input_identity(input_value, input_sha, arguments, execution, key=None):
     try:
         request = input_value["stage_request"]
         request_sha = request["sha256"]
@@ -358,19 +446,25 @@ def input_identity(input_value, input_sha, arguments, execution):
         )),
         "source_repository_id": arguments.source_repository_id,
     }
+    if key is not None:
+        identity["delivery_key"] = key
     identity["run_key"] = digest_bytes(canonical(identity))
     return identity
 
 
-def run_materializer(arguments, execution, input_path, identity, candidate_root=None, scratch_root=None):
-    candidate_root = Path(arguments.candidate_root).resolve() if candidate_root is None else candidate_root
-    scratch_root = Path(arguments.scratch_root).resolve() if scratch_root is None else scratch_root
-    command = [
+def materializer_command(arguments, execution, input_path, candidate_root, scratch_root):
+    return [
         str(execution / PACKAGE_FILES[0]), "materialize", str(input_path),
         arguments.source_repository_id, str(Path(arguments.source_git_dir).resolve()),
         str(candidate_root), str(scratch_root),
         str(execution / ".dependencies/object-closure"), str(execution / ".dependencies/jq"),
     ]
+
+
+def run_materializer(arguments, execution, input_path, identity, candidate_root=None, scratch_root=None):
+    candidate_root = Path(arguments.candidate_root).resolve() if candidate_root is None else candidate_root
+    scratch_root = Path(arguments.scratch_root).resolve() if scratch_root is None else scratch_root
+    command = materializer_command(arguments, execution, input_path, candidate_root, scratch_root)
     environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
     result = subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, check=False)
@@ -403,6 +497,161 @@ def run_materializer(arguments, execution, input_path, identity, candidate_root=
         }
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
         raise ReplayError("materializer response is malformed") from error
+
+
+def capture_materializer(arguments, execution, input_path):
+    command = materializer_command(
+        arguments, execution, input_path,
+        Path(arguments.candidate_root).resolve(), Path(arguments.scratch_root).resolve()
+    )
+    process = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout_descriptor = process.stdout.fileno()
+    stderr_descriptor = process.stderr.fileno()
+    streams = {stdout_descriptor: (process.stdout, MAX_RESPONSE_BYTES),
+               stderr_descriptor: (process.stderr, MAX_STDERR_BYTES)}
+    captured = {stdout_descriptor: bytearray(), stderr_descriptor: bytearray()}
+    exceeded = set()
+    try:
+        while streams:
+            readable, _, _ = select.select(list(streams), [], [])
+            for descriptor in readable:
+                stream, limit = streams[descriptor]
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    stream.close()
+                    del streams[descriptor]
+                    continue
+                remaining = limit + 1 - len(captured[descriptor])
+                if remaining > 0:
+                    captured[descriptor].extend(chunk[:remaining])
+                if len(captured[descriptor]) > limit or len(chunk) > remaining:
+                    exceeded.add(descriptor)
+        returncode = process.wait()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        for stream, _ in streams.values():
+            stream.close()
+    stdout = bytes(captured[stdout_descriptor])
+    stderr = bytes(captured[stderr_descriptor][:MAX_STDERR_BYTES])
+    if stdout_descriptor in exceeded:
+        raise ReplayError("materializer response exceeds its size limit")
+    if returncode != 0:
+        diagnostic = stderr.decode("utf-8", errors="replace").strip()
+        raise ReplayError("materialization did not complete" + (f": {diagnostic}" if diagnostic else ""))
+    return stdout
+
+
+def jq_canonical_document(execution, value):
+    encoded = canonical_document(value)
+    result = subprocess.run(
+        [str(execution / ".dependencies/jq"), "-S", "-c", "."],
+        input=encoded, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+    )
+    if result.returncode != 0:
+        raise ReplayError("fixed jq could not canonicalize stored evidence")
+    return result.stdout
+
+
+def validate_materializer_response(arguments, execution, input_path, identity, response_bytes):
+    if len(response_bytes) > MAX_RESPONSE_BYTES:
+        raise ReplayError("materializer response exceeds its size limit")
+    response = parse_json(response_bytes)
+    if not isinstance(response, dict):
+        raise ReplayError("materializer response is malformed")
+    try:
+        payload = response["payloads"][0]
+        receipt_utf8 = payload["data"]
+        stage_result = response["stage_result"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise ReplayError("materializer response is malformed") from error
+    if not isinstance(receipt_utf8, str):
+        raise ReplayError("materializer receipt is malformed")
+    try:
+        receipt_bytes = receipt_utf8.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise ReplayError("materializer receipt is malformed") from error
+    if len(receipt_bytes) > MAX_RECEIPT_BYTES:
+        raise ReplayError("materializer receipt exceeds its size limit")
+    receipt = parse_json(receipt_bytes)
+    receipt_sha = digest_bytes(receipt_bytes)
+    stage_bytes = jq_canonical_document(execution, stage_result)
+    if len(stage_bytes) > MAX_STAGE_RESULT_BYTES:
+        raise ReplayError("materializer stage result exceeds its size limit")
+    stage_sha = digest_bytes(stage_bytes)
+    verified = {"content": receipt, "sha256": receipt_sha}
+    generation = identity["materializer_package"]["generation_id"]
+    modules = execution / f"core/v2/generations/{generation}/modules"
+    input_value = parse_json(read_bytes(input_path, MAX_INPUT_BYTES))
+    validation_bundle = {
+        "input": input_value,
+        "response": response,
+        "verified_receipt": verified,
+        "receipt_utf8": receipt_utf8,
+        "stage_result_sha256": stage_sha,
+    }
+    with tempfile.TemporaryDirectory(prefix="ystack-replay-validation-") as temporary:
+        validation_path = Path(temporary) / "validation.json"
+        atomic_bytes(validation_path, canonical_document(validation_bundle))
+        command = [
+            str(execution / ".dependencies/jq"), "-e", "-L", str(modules),
+            "--arg", "command", "validate-response",
+            "-f", str(execution / "adapters/local-git-materializer/v1/protocol.jq"),
+            str(validation_path),
+        ]
+        checked = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                 env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, check=False)
+    if checked.returncode != 0:
+        raise ReplayError("materializer response does not match the frozen input")
+    candidate = receipt.get("candidate")
+    if not isinstance(candidate, dict):
+        raise ReplayError("materializer response candidate is malformed")
+    current = candidate_identity(arguments.candidate_root, identity["source_commit_id"])
+    expected = {
+        "candidate_commit_id": candidate.get("commit_id"),
+        "candidate_tree_id": candidate.get("tree_id"),
+        "candidate_parent_commit_id": candidate.get("parent_commit_id"),
+    }
+    if current != expected:
+        raise ReplayError("candidate repository does not match the materializer response")
+    changed = subprocess.run(
+        ["/usr/bin/git", f"--git-dir={Path(arguments.candidate_root).resolve() / 'repository.git'}",
+         "diff-tree", "--no-commit-id", "--name-only", "-r",
+         identity["source_commit_id"], expected["candidate_commit_id"]],
+        env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False
+    )
+    if changed.returncode != 0 or len(changed.stdout) > 2 * 1024 * 1024:
+        raise ReplayError("candidate changed-path evidence is unavailable")
+    paths = changed.stdout.splitlines()
+    if paths != sorted(set(paths)) or any(not path for path in paths):
+        raise ReplayError("candidate changed-path evidence is malformed")
+    try:
+        decoded_paths = [path.decode("utf-8", errors="strict") for path in paths]
+    except UnicodeDecodeError as error:
+        raise ReplayError("candidate changed-path evidence is malformed") from error
+    if any(safe_path(path) != path for path in decoded_paths):
+        raise ReplayError("candidate changed-path evidence is malformed")
+    changed_framing = jq_canonical_document(execution, decoded_paths)
+    if receipt.get("changed_paths") != {
+        "count": len(paths), "sha256": digest_bytes(changed_framing)
+    }:
+        raise ReplayError("candidate changed paths do not match the materializer response")
+    return ({
+        "response_sha256": digest_bytes(response_bytes),
+        "receipt_sha256": receipt_sha,
+        "candidate_commit_id": expected["candidate_commit_id"],
+        "candidate_tree_id": expected["candidate_tree_id"],
+        "candidate_parent_commit_id": expected["candidate_parent_commit_id"],
+    }, {
+        "schema_version": 1, "status": "stored",
+        "response_utf8": response_bytes.decode("utf-8"),
+        "response_sha256": digest_bytes(response_bytes),
+        "stage_result_sha256": stage_sha,
+        "receipt_sha256": receipt_sha,
+    }, stage_result, payload)
 
 
 def candidate_identity(candidate_root, source_commit):
@@ -578,7 +827,7 @@ def observation(path, kind, identity, candidate_commit_id, field):
 
 
 def validate_state(state, identity):
-    if not isinstance(state, dict) or state.get("schema_version") != 1 or \
+    if not isinstance(state, dict) or state.get("schema_version") not in {1, 2} or \
        state.get("kind") != "delivery_replay_state" or state.get("authority") != "none" or \
        state.get("qualification") != "unavailable":
         raise ReplayError("state journal is malformed")
@@ -655,12 +904,112 @@ def validate_state(state, identity):
             raise ReplayError("state journal publisher is malformed")
     if phase == "failed" and not isinstance(state.get("reason"), str):
         raise ReplayError("state journal failure is malformed")
+    if state["schema_version"] == 1:
+        if "delivery_key" in saved or "receiver_result" in state:
+            raise ReplayError("legacy state journal contains keyed result evidence")
+    else:
+        if not exact_object(saved.get("delivery_key"),
+                            ("stage_key", "request_sha256", "operation", "attempt_number")):
+            raise ReplayError("state journal delivery key is malformed")
+        receiver = state.get("receiver_result")
+        if not isinstance(receiver, dict) or receiver.get("schema_version") != 1 or \
+           receiver.get("status") not in {"pending", "stored"}:
+            raise ReplayError("state journal receiver result is malformed")
+        if receiver["status"] == "pending":
+            if receiver != {"schema_version": 1, "status": "pending"} or phase != "materializing":
+                raise ReplayError("state journal pending result is malformed")
+        elif not exact_object(receiver, (
+            "schema_version", "status", "response_utf8", "response_sha256",
+            "stage_result_sha256", "receipt_sha256"
+        )) or not isinstance(receiver["response_utf8"], str) or any(
+            not isinstance(receiver.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receiver[name])
+            for name in ("response_sha256", "stage_result_sha256", "receipt_sha256")
+        ):
+            raise ReplayError("state journal stored result is malformed")
+
+
+def read_journal(path):
+    encoded = read_bytes(path, MAX_JOURNAL_V2_BYTES)
+    value = parse_json(encoded)
+    if not isinstance(value, dict):
+        raise ReplayError("state journal is malformed")
+    version = value.get("schema_version")
+    if not integer(version) or version not in {1, 2}:
+        raise ReplayError("state journal version is unsupported")
+    if version == 1 and len(encoded) > MAX_OBSERVATION_BYTES:
+        raise ReplayError("state journal exceeds its size limit")
+    return value
+
+
+def write_journal(path, state):
+    limit = MAX_JOURNAL_V2_BYTES if state.get("schema_version") == 2 else MAX_OBSERVATION_BYTES
+    atomic_json_limited(path, state, limit)
+
+
+def root_empty(path):
+    root = Path(path)
+    if root.is_symlink() or not root.is_dir():
+        return False
+    try:
+        return next(root.iterdir(), None) is None
+    except OSError:
+        return False
 
 
 def result(state):
     print(json.dumps({"kind": "delivery_replay_receipt", "authority": "none",
                       "qualification": "unavailable", "offline_simulation": True,
                       "state": state}, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def unavailable_materialization(reason):
+    print(json.dumps({
+        "schema_version": 1,
+        "kind": "delivery_replay_materialization_result",
+        "status": "unavailable",
+        "reason_id": reason,
+        "authority": "none",
+        "qualification": "unavailable",
+        "offline_simulation": True,
+    }, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def stored_materialization(state, stage_result, payload):
+    print(json.dumps({
+        "schema_version": 1,
+        "kind": "delivery_replay_materialization_result",
+        "status": "stored",
+        "authority": "none",
+        "qualification": "unavailable",
+        "offline_simulation": True,
+        "delivery_key": state["identity"]["delivery_key"],
+        "run_key": state["identity"]["run_key"],
+        "response_utf8": state["receiver_result"]["response_utf8"],
+        "stage_result": {
+            "content": stage_result,
+            "sha256": state["receiver_result"]["stage_result_sha256"],
+        },
+        "receipt": payload,
+    }, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def validate_stored(arguments, execution, input_path, state):
+    receiver = state["receiver_result"]
+    try:
+        response_bytes = receiver["response_utf8"].encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise ReplayError("stored materializer response is not valid UTF-8") from error
+    if digest_bytes(response_bytes) != receiver["response_sha256"]:
+        raise ReplayError("stored materializer response digest changed")
+    materialization, validated_receiver, stage_result, payload = validate_materializer_response(
+        arguments, execution, input_path, state["identity"], response_bytes
+    )
+    if receiver != validated_receiver or state.get("materialization") != materialization or any(
+        state["identity"].get(name) != materialization[name]
+        for name in ("candidate_commit_id", "candidate_tree_id")
+    ):
+        raise ReplayError("stored materializer result does not match the journal")
+    return stage_result, payload
 
 
 def stop_if_interrupted(state, interrupted):
@@ -679,24 +1028,50 @@ def replay_locked(arguments, state_dir):
     interrupted = {"value": False}
     previous_term = signal.getsignal(signal.SIGTERM)
     previous_int = signal.getsignal(signal.SIGINT)
+    read_mode = getattr(arguments, "read_materialization_result", False)
+    delivery_key_path = getattr(arguments, "delivery_key", None)
     signal.signal(signal.SIGTERM, lambda *_: interrupted.__setitem__("value", True))
     signal.signal(signal.SIGINT, lambda *_: interrupted.__setitem__("value", True))
     try:
-        lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        if read_mode and (
+            arguments.review_observation is not None or arguments.publisher_observation is not None
+        ):
+            raise ReplayError("result read does not accept workflow observations")
+        lock_flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        if not read_mode:
+            lock_flags |= os.O_CREAT
+        lock_descriptor = os.open(lock_path, lock_flags, 0o600)
+        if not stat.S_ISREG(os.fstat(lock_descriptor).st_mode):
+            os.close(lock_descriptor)
+            raise ReplayError("replay lock is not a regular file")
         with os.fdopen(lock_descriptor, "a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            execution = create_execution_snapshot(repository, arguments, state_dir)
+            execution = state_dir / "execution" if read_mode else \
+                create_execution_snapshot(repository, arguments, state_dir)
+            if execution.is_symlink() or not execution.is_dir():
+                raise ReplayError("execution bundle is unavailable")
             sources_match = execution_sources_match(repository, arguments, execution)
             if not REPOSITORY_ID.fullmatch(arguments.source_repository_id):
                 raise ReplayError("source repository id is invalid")
             input_bytes = read_bytes(arguments.input, MAX_INPUT_BYTES)
             input_value = parse_json(input_bytes)
             input_sha = digest_bytes(input_bytes)
-            identity = input_identity(input_value, input_sha, arguments, execution)
+            supplied_key = None
+            if delivery_key_path is not None:
+                supplied_key = delivery_key(
+                    parse_json(read_bytes(delivery_key_path, MAX_DELIVERY_KEY_BYTES)), input_value
+                )
+                if jq_canonical_document(execution, input_value) != input_bytes:
+                    raise ReplayError("keyed materialization input is not canonical")
+            identity = input_identity(input_value, input_sha, arguments, execution, supplied_key)
             state = None
             if state_path.exists():
-                state = parse_json(read_bytes(state_path, MAX_OBSERVATION_BYTES))
+                state = read_journal(state_path)
                 validate_state(state, identity)
+                if (state["schema_version"] == 1 and supplied_key is not None) or \
+                   (state["schema_version"] == 2 and supplied_key is None):
+                    result({"phase": "stale", "reason": "journal format and delivery key conflict"})
+                    return 2
             if state is not None and any(state["identity"].get(name) != value for name, value in identity.items()):
                 result({"phase": "stale", "reason": "run identity changed"})
                 return 2
@@ -708,19 +1083,38 @@ def replay_locked(arguments, state_dir):
             if stop_if_interrupted(state, interrupted):
                 return 75
             fresh_run = state is None
+            if read_mode and fresh_run:
+                raise ReplayError("state journal is unavailable")
             if fresh_run:
-                state = {"schema_version": 1, "kind": "delivery_replay_state", "identity": identity,
+                version = 2 if supplied_key is not None else 1
+                state = {"schema_version": version, "kind": "delivery_replay_state", "identity": identity,
                          "phase": "materializing", "authority": "none", "qualification": "unavailable"}
+                if version == 2:
+                    state["receiver_result"] = {"schema_version": 1, "status": "pending"}
                 atomic_bytes(input_snapshot_path, input_bytes)
-                atomic_json(state_path, state)
+                write_journal(state_path, state)
             elif not input_snapshot_path.is_file() or input_snapshot_path.is_symlink() or (
                 digest_bytes(read_bytes(input_snapshot_path, MAX_INPUT_BYTES)) != identity["input_sha256"]
             ):
                 raise ReplayError("saved materialization input snapshot is unavailable")
+            if read_mode:
+                if state["schema_version"] == 1:
+                    unavailable_materialization("replay.legacy-result-unavailable")
+                    return 3
+                if state["receiver_result"]["status"] == "pending":
+                    unavailable_materialization("replay.materialization-result-missing")
+                    return 3
+                stage_result, payload = validate_stored(
+                    arguments, execution, input_snapshot_path, state
+                )
+                stored_materialization(state, stage_result, payload)
+                return 0
+            if state["schema_version"] == 2 and state["receiver_result"]["status"] == "stored":
+                validate_stored(arguments, execution, input_snapshot_path, state)
             if state["phase"] == "failed":
                 if state.get("recoverable"):
                     state["recovery"] = "start a new replay with fresh empty candidate, scratch, and state directories"
-                    atomic_json(state_path, state)
+                    write_journal(state_path, state)
                 result(state)
                 return 1
             if state["phase"] == "completed-offline":
@@ -743,21 +1137,36 @@ def replay_locked(arguments, state_dir):
                 result(state)
                 return 0
             if state["phase"] == "materializing":
+                if state["schema_version"] == 2 and not fresh_run and (
+                    not root_empty(arguments.candidate_root) or not root_empty(arguments.scratch_root)
+                ):
+                    unavailable_materialization("replay.materialization-result-missing")
+                    return 3
                 try:
                     # Only a resumed run may adopt a candidate that is already in
                     # the candidate root; a fresh run always goes through the
                     # materializer, whose root check refuses a pre-populated root.
-                    reconciled = None if fresh_run else reconcile_materialization(
-                        arguments, execution, input_snapshot_path, identity, state_dir
-                    )
-                    state["materialization"] = reconciled or run_materializer(
-                        arguments, execution, input_snapshot_path, identity
-                    )
+                    if state["schema_version"] == 2:
+                        response_bytes = capture_materializer(arguments, execution, input_snapshot_path)
+                        materialization, receiver, _, _ = validate_materializer_response(
+                            arguments, execution, input_snapshot_path, identity, response_bytes
+                        )
+                        state["materialization"] = materialization
+                        state["receiver_result"] = receiver
+                    else:
+                        reconciled = None if fresh_run else reconcile_materialization(
+                            arguments, execution, input_snapshot_path, identity, state_dir
+                        )
+                        state["materialization"] = reconciled or run_materializer(
+                            arguments, execution, input_snapshot_path, identity
+                        )
                 except ReplayError as error:
                     if stop_if_interrupted(state, interrupted):
                         return 75
+                    if state["schema_version"] == 2:
+                        raise
                     state.update({"phase": "failed", "recoverable": True, "reason": str(error)})
-                    atomic_json(state_path, state)
+                    write_journal(state_path, state)
                     result(state)
                     return 1
                 state["identity"].update({
@@ -765,7 +1174,7 @@ def replay_locked(arguments, state_dir):
                     "candidate_tree_id": state["materialization"]["candidate_tree_id"],
                 })
                 state["phase"] = "verifying"
-                atomic_json(state_path, state)
+                write_journal(state_path, state)
                 if stop_if_interrupted(state, interrupted):
                     return 75
             if state["phase"] == "verifying":
@@ -777,11 +1186,11 @@ def replay_locked(arguments, state_dir):
                     if stop_if_interrupted(state, interrupted):
                         return 75
                     state.update({"phase": "failed", "recoverable": False, "reason": str(error)})
-                    atomic_json(state_path, state)
+                    write_journal(state_path, state)
                     result(state)
                     return 1
                 state["phase"] = "review-wait"
-                atomic_json(state_path, state)
+                write_journal(state_path, state)
                 if stop_if_interrupted(state, interrupted):
                     return 75
             if state["phase"] == "review-wait":
@@ -797,12 +1206,12 @@ def replay_locked(arguments, state_dir):
                     return 0
                 if review["verdict"] != "clean":
                     state.update({"phase": "failed", "recoverable": False, "reason": "offline review did not report clean"})
-                    atomic_json(state_path, state)
+                    write_journal(state_path, state)
                     result(state)
                     return 1
                 state["review"] = review
                 state["phase"] = "publish-wait"
-                atomic_json(state_path, state)
+                write_journal(state_path, state)
             if state["phase"] == "publish-wait":
                 with hold_candidate_ref(arguments.candidate_root,
                                         state["materialization"]["candidate_commit_id"]):
@@ -829,12 +1238,12 @@ def replay_locked(arguments, state_dir):
                         return 0
                     if publisher["disposition"] != "offline-simulated":
                         state.update({"phase": "failed", "recoverable": False, "reason": "offline publisher disposition is invalid"})
-                        atomic_json(state_path, state)
+                        write_journal(state_path, state)
                         result(state)
                         return 1
                     state["publisher"] = publisher
                     state["phase"] = "completed-offline"
-                    atomic_json(state_path, state)
+                    write_journal(state_path, state)
                     result(state)
                     return 0
             result(state)
@@ -864,8 +1273,13 @@ def main():
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--review-observation")
     parser.add_argument("--publisher-observation")
+    parser.add_argument("--delivery-key")
+    parser.add_argument("--read-materialization-result", action="store_true")
     try:
         return replay(parser.parse_args())
+    except ReplayConflict as error:
+        print(f"delivery replay: {error}", file=sys.stderr)
+        return 2
     except (OSError, ReplayError) as error:
         print(f"delivery replay: {error}", file=sys.stderr)
         return 1

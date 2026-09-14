@@ -337,6 +337,54 @@ no_change_result="$tmp/no-change-result.json"
   "$no_change_result" >/dev/null || fail no-change-result-surface
 pass 'verified no-change receipt binds the no-change result'
 
+response="$tmp/response.json"
+"$jq_bin" -S -c -n --slurpfile result "$result" --rawfile receipt "$receipt" \
+  --arg receipt_sha "$(sha_file "$receipt")" '{
+    schema_version:1,kind:"local_git_materialization_response",
+    stage_result:$result[0],payloads:[{
+      content_id:"candidate.materialization.receipt",media_type:"application/json",
+      sha256:$receipt_sha,data:$receipt}],authority:"none",
+    qualification:{state:"unavailable",reason_id:"adapter.unqualified"},
+    effects:["caller-disposable-candidate-repository"]
+  }' > "$response"
+stage_result_sha=$(sha_file "$result")
+response_bundle="$tmp/response-bundle.json"
+"$jq_bin" -S -c -n --slurpfile input "$input" --slurpfile response "$response" \
+  --slurpfile receipt "$verified_receipt" --rawfile receipt_utf8 "$receipt" \
+  --arg stage_result_sha256 "$stage_result_sha" '{input:$input[0],response:$response[0],
+    verified_receipt:$receipt[0],receipt_utf8:$receipt_utf8,
+    stage_result_sha256:$stage_result_sha256}' > "$response_bundle"
+"$jq_bin" -e -L "$modules" --arg command validate-response \
+  -f "$protocol" "$response_bundle" >/dev/null ||
+  fail validate-response
+pass 'supplied response validates without generating replacement evidence'
+
+bad_response="$tmp/bad-response.json"
+"$jq_bin" -S -c '.effects += ["extra-effect"]' "$response" > "$bad_response"
+bad_response_bundle="$tmp/bad-response-bundle.json"
+"$jq_bin" -S -c --slurpfile response "$bad_response" '.response=$response[0]' \
+  "$response_bundle" > "$bad_response_bundle"
+if "$jq_bin" -e -L "$modules" --arg command validate-response \
+    -f "$protocol" "$bad_response_bundle" >/dev/null 2>&1; then
+  fail validate-response-effect
+fi
+pass 'response validator rejects added effect claims'
+
+bad_result_response="$tmp/bad-result-response.json"
+"$jq_bin" -S -c '.stage_result.body.attempt_number += 1' "$response" > "$bad_result_response"
+bad_result="$tmp/bad-result.json"
+"$jq_bin" -S -c '.stage_result' "$bad_result_response" > "$bad_result"
+bad_result_bundle="$tmp/bad-result-bundle.json"
+"$jq_bin" -S -c --slurpfile response "$bad_result_response" \
+  --arg sha "$(sha_file "$bad_result")" \
+  '.response=$response[0] | .stage_result_sha256=$sha' \
+  "$response_bundle" > "$bad_result_bundle"
+if "$jq_bin" -e -L "$modules" --arg command validate-response \
+    -f "$protocol" "$bad_result_bundle" >/dev/null 2>&1; then
+  fail validate-response-attempt
+fi
+pass 'response validator rejects a rehashed result relation mismatch'
+
 if "$jq_bin" -L "$modules" --arg command receipt --arg source_hash_algorithm sha1 \
     --arg source_commit INVALID --arg source_tree "$source_tree" \
     --arg candidate_commit "$source_commit" --arg candidate_tree "$source_tree" \
