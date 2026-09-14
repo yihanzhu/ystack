@@ -237,6 +237,71 @@ set -e
   "$tmp/legacy-read.out" >/dev/null || fail legacy-read
 pass 'version 1 remains unavailable as original result evidence'
 
+counter_wrapper="$tmp/counter-wrapper.py"
+cat > "$counter_wrapper" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path, counter, *arguments = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("replay", path)
+module = importlib.util.module_from_spec(spec)
+module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()
+exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
+original = module.capture_materializer
+def counted(*values):
+    with pathlib.Path(counter).open("a") as handle:
+        handle.write("invoked\n")
+    return original(*values)
+module.capture_materializer = counted
+sys.argv = [path] + arguments
+raise SystemExit(module.main())
+PY
+make_roots concurrent
+set_replay_args concurrent
+concurrent_args=("${replay_arguments[@]}")
+python3 "$counter_wrapper" "$replay" "$tmp/invocations" "${concurrent_args[@]}" \
+  > "$tmp/concurrent-1.out" &
+first=$!
+python3 "$counter_wrapper" "$replay" "$tmp/invocations" "${concurrent_args[@]}" \
+  > "$tmp/concurrent-2.out" &
+second=$!
+wait "$first"
+wait "$second"
+[ "$(wc -l < "$tmp/invocations" | tr -d ' ')" -eq 1 ] || fail concurrent-invocations
+"$jq_bin" -e '.state.receiver_result.status=="stored"' "$tmp/concurrent-1.out" >/dev/null ||
+  fail concurrent-first
+"$jq_bin" -e '.state.receiver_result.status=="stored"' "$tmp/concurrent-2.out" >/dev/null ||
+  fail concurrent-second
+pass 'concurrent matching deliveries serialize to one real materializer invocation'
+
+strict_state="$tmp/strict-state"
+strict_candidate="$tmp/strict-candidate"
+strict_scratch="$tmp/strict-scratch"
+for key_case in duplicate trailing bom ordinal boolean fraction; do
+  /bin/rm -rf -- "$strict_state" "$strict_candidate" "$strict_scratch"
+  /bin/mkdir -m 700 "$strict_state" "$strict_candidate" "$strict_scratch"
+  candidate_key="$tmp/key-$key_case.json"
+  case "$key_case" in
+    duplicate) /usr/bin/sed 's/"operation":"dispatch-stage"/"operation":"dispatch-stage","operation":"dispatch-stage"/' "$key" > "$candidate_key" ;;
+    trailing) { /bin/cat "$key"; printf '{}\n'; } > "$candidate_key" ;;
+    bom) { printf '\357\273\277'; /bin/cat "$key"; } > "$candidate_key" ;;
+    ordinal) "$jq_bin" -S -c '.delivery_ordinal=2' "$key" > "$candidate_key" ;;
+    boolean) "$jq_bin" -S -c '.attempt_number=true' "$key" > "$candidate_key" ;;
+    fraction) "$jq_bin" -S -c '.attempt_number=1.5' "$key" > "$candidate_key" ;;
+  esac
+  set +e
+  python3 "$replay" --input "$input" --delivery-key "$candidate_key" \
+    --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$strict_candidate" --scratch-root "$strict_scratch" \
+    --state-dir "$strict_state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected" > "$tmp/key-$key_case.out" 2>&1
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] && [ ! -e "$strict_state/run.json" ] || fail "strict-key-$key_case"
+done
+pass 'strict key parsing rejects duplicate, trailing, BOM, extra, boolean, and fractional data'
+
 wrapper="$tmp/crash-wrapper.py"
 cat > "$wrapper" <<'PY'
 import importlib.util
@@ -310,5 +375,28 @@ for point in before after; do
   fi
 done
 pass 'both synchronized process-crash windows preserve their distinct evidence state'
+
+bad_stored_response="$tmp/bad-stored-response.json"
+"$jq_bin" -S -c '.receiver_result.response_utf8 | fromjson |
+  .stage_result.body.attempt_number=2' "$tmp/stored-state/run.json" > "$bad_stored_response"
+bad_stored_stage="$tmp/bad-stored-stage.json"
+"$jq_bin" -S -c '.stage_result' "$bad_stored_response" > "$bad_stored_stage"
+"$jq_bin" -S -c --rawfile response "$bad_stored_response" \
+  --arg response_sha "$(sha_file "$bad_stored_response")" \
+  --arg stage_sha "$(sha_file "$bad_stored_stage")" '
+  .receiver_result.response_utf8=$response |
+  .receiver_result.response_sha256=$response_sha |
+  .receiver_result.stage_result_sha256=$stage_sha' \
+  "$tmp/stored-state/run.json" > "$tmp/stored-state/run.next"
+/bin/mv "$tmp/stored-state/run.next" "$tmp/stored-state/run.json"
+corrupt_before=$(sha_file "$tmp/stored-state/run.json")
+set +e
+python3 "$replay" "${stored_args[@]}" --read-materialization-result \
+  > "$tmp/corrupt-read.out" 2> "$tmp/corrupt-read.err"
+status=$?
+set -e
+[ "$status" -eq 1 ] && [ ! -s "$tmp/corrupt-read.out" ] &&
+  [ "$(sha_file "$tmp/stored-state/run.json")" = "$corrupt_before" ] || fail corrupt-stored
+pass 'rehashed corrupt result relations fail without changing retained bytes'
 
 printf 'replay materialization result: %s focused checks passed\n' "$passed"

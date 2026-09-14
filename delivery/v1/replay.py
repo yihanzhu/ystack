@@ -556,6 +556,46 @@ def jq_canonical_document(execution, value):
     return result.stdout
 
 
+def validate_keyed_input(execution, input_path, input_bytes, input_value):
+    if jq_canonical_document(execution, input_value) != input_bytes:
+        raise ReplayError("keyed materialization input is not canonical")
+    generation = materializer_package_identity(execution)["generation_id"]
+    modules = execution / f"core/v2/generations/{generation}/modules"
+    checked = subprocess.run([
+        str(execution / ".dependencies/jq"), "-e", "-L", str(modules),
+        "--arg", "command", "validate-input", "-f",
+        str(execution / "adapters/local-git-materializer/v1/protocol.jq"), str(input_path)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+       env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, check=False)
+    if checked.returncode != 0:
+        raise ReplayError("materialization input does not satisfy the fixed protocol")
+    pairs = [input_value.get("profile"), input_value.get("resolved_profile"),
+             input_value.get("stage_request")] + list(input_value.get("manifests", []))
+    if any(not exact_object(pair, ("content", "sha256")) or
+           digest_bytes(jq_canonical_document(execution, pair["content"])) != pair["sha256"]
+           for pair in pairs):
+        raise ReplayError("materialization input document digest is invalid")
+    verified = {item.get("input_id"): item for item in
+                input_value.get("trust_context", {}).get("verified_payloads", [])}
+    for payload in input_value.get("payloads", []):
+        item = verified.get(payload.get("input_id"))
+        if not isinstance(payload.get("data"), str) or not isinstance(item, dict) or \
+           not isinstance(item.get("sha256"), str) or \
+           digest_bytes(payload["data"].encode("utf-8")) != item["sha256"]:
+            raise ReplayError("materialization input payload digest is invalid")
+    try:
+        contract_id = input_value["stage_request"]["content"]["body"]["operation"]["arguments"][
+            "materialization_contract"
+        ]["input_id"]
+        contract_text = next(item["data"] for item in input_value["payloads"]
+                             if item["input_id"] == contract_id)
+        contract = parse_json(contract_text.encode("utf-8"))
+    except (KeyError, StopIteration, TypeError, UnicodeEncodeError) as error:
+        raise ReplayError("materialization contract is malformed") from error
+    if jq_canonical_document(execution, contract).decode("utf-8") != contract_text:
+        raise ReplayError("materialization contract is not canonical")
+
+
 def validate_materializer_response(arguments, execution, input_path, identity, response_bytes):
     if len(response_bytes) > MAX_RESPONSE_BYTES:
         raise ReplayError("materializer response exceeds its size limit")
@@ -657,6 +697,12 @@ def validate_materializer_response(arguments, execution, input_path, identity, r
 def candidate_identity(candidate_root, source_commit):
     repository = Path(candidate_root).resolve() / "repository.git"
     if not repository.is_dir() or repository.is_symlink():
+        return None
+    bare = subprocess.run(
+        ["/usr/bin/git", f"--git-dir={repository}", "rev-parse", "--is-bare-repository"],
+        env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False
+    )
+    if bare.returncode != 0 or bare.stdout != b"true\n":
         return None
     values = []
     for revision in ("refs/heads/candidate", "refs/heads/candidate^{tree}"):
@@ -908,6 +954,15 @@ def validate_state(state, identity):
         if "delivery_key" in saved or "receiver_result" in state:
             raise ReplayError("legacy state journal contains keyed result evidence")
     else:
+        allowed_state = {
+            "schema_version", "kind", "identity", "phase", "authority", "qualification",
+            "receiver_result", "materialization", "verification", "review", "publisher",
+            "recoverable", "reason", "recovery",
+        }
+        if set(state) - allowed_state or set(saved) - (set(identity) | {
+            "candidate_commit_id", "candidate_tree_id"
+        }):
+            raise ReplayError("state journal contains unknown keyed fields")
         if not exact_object(saved.get("delivery_key"),
                             ("stage_key", "request_sha256", "operation", "attempt_number")):
             raise ReplayError("state journal delivery key is malformed")
@@ -1061,8 +1116,7 @@ def replay_locked(arguments, state_dir):
                 supplied_key = delivery_key(
                     parse_json(read_bytes(delivery_key_path, MAX_DELIVERY_KEY_BYTES)), input_value
                 )
-                if jq_canonical_document(execution, input_value) != input_bytes:
-                    raise ReplayError("keyed materialization input is not canonical")
+                validate_keyed_input(execution, Path(arguments.input), input_bytes, input_value)
             identity = input_identity(input_value, input_sha, arguments, execution, supplied_key)
             state = None
             if state_path.exists():
