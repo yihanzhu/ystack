@@ -756,6 +756,42 @@ def invalid_stores(base, initial):
     nested.mkdir(mode=0o700)
     status, out, err = invoke(nested, "initialize", request("initialize"))
     record("P5", "checkout ancestry rejected", status != 0 and not out and not list(nested.iterdir()))
+    component_parent = ROOT / "component-alias"
+    physical_parent = ROOT / "component-physical"
+    physical_parent.mkdir(mode=0o700)
+    physical_store = physical_parent / "store"
+    shutil.copytree(base, physical_store)
+    component_parent.symlink_to(physical_parent, target_is_directory=True)
+    before = inventory(physical_store)
+    code, out, err = invoke(component_parent / "store", "read", request())
+    record("P5", "actual intermediate store symlink refuses", code == 1 and not out and err == b"E_STORE\n" and inventory(physical_store) == before)
+    request_dir = ROOT / "physical-request-directory"
+    request_dir.mkdir(mode=0o700)
+    input_path = request_dir / "read.json"
+    input_path.write_bytes(canonical(request()))
+    alias = ROOT / "request-component-alias"
+    alias.symlink_to(request_dir, target_is_directory=True)
+    before = inventory(base)
+    code, out, err = captured([PYTHON, "-I", "-S", "-B", PRODUCT, "read", str(base), str(alias / "read.json")], base, environment(base))
+    record("P5", "actual intermediate request symlink refuses", code == 1 and not out and err == b"E_INPUT\n" and inventory(base) == before and input_path.read_bytes() == canonical(request()))
+    enclave = new_store("source-overlap-enclave")
+    copied_root = enclave / "source"
+    copied_file = copied_root / "orchestrator/v1/delivery-ledger.py"
+    copied_file.parent.mkdir(parents=True, mode=0o700)
+    copied_file.write_bytes(pathlib.Path(PRODUCT).read_bytes())
+    record("P5", "overlap fixture exact unchanged source", file_digest(copied_file) == file_digest(PRODUCT))
+    nested_store = copied_root / "store"
+    nested_store.mkdir(mode=0o700)
+    input_path = ROOT / "overlap-request.json"
+    input_path.write_bytes(canonical(request("initialize")))
+    for label, selected in (("same", copied_root), ("descendant", nested_store), ("ancestor", enclave)):
+        assert not any((parent / ".git").exists() for parent in (selected, *selected.parents))
+        before = inventory(enclave)
+        code, out, err = captured([PYTHON, "-I", "-S", "-B", str(copied_file), "initialize", str(selected), str(input_path)], selected, environment(selected))
+        record("P5", "actual source overlap " + label, code == 1 and not out and err == b"E_STORE\n" and inventory(enclave) == before)
+    disjoint = new_store("copied-source-disjoint-control")
+    code, out, err = captured([PYTHON, "-I", "-S", "-B", str(copied_file), "initialize", str(disjoint), str(input_path)], disjoint, environment(disjoint))
+    record("P5", "unchanged copied source disjoint positive", code == 0 and not err and json.loads(out) == initial)
 
 
 OBSERVER = r'''
@@ -1382,24 +1418,80 @@ def private_boundaries(base, initial):
     record("P5", "device input rejected", captured([PYTHON, "-I", "-S", "-B", PRODUCT, "read", str(base), "/dev/null"], base, environment(base))[0] != 0)
 
 
-def tool_identity(path):
-    current = pathlib.Path(path)
+def file_digest(path, deadline=None):
+    remaining(deadline)
+    digest = hashlib.sha256()
+    with pathlib.Path(path).open("rb") as stream:
+        while True:
+            remaining(deadline)
+            block = stream.read(65536)
+            if not block:
+                break
+            digest.update(block)
+    remaining(deadline)
+    return digest.hexdigest()
+
+
+def trusted_runtime_state(state):
+    assert state.st_uid == 0, "interpreter path is not root owned"
+    if not stat.S_ISLNK(state.st_mode):
+        assert state.st_mode & 0o022 == 0, "interpreter path writable by group or others"
+
+
+def tool_identity(path, runtime=False, deadline=None):
+    remaining(deadline)
+    requested = pathlib.Path(path)
+    assert requested.is_absolute()
+    current = pathlib.Path("/")
+    pending = list(requested.parts[1:])
     links = []
-    for _ in range(16):
-        if not current.is_symlink():
-            break
-        target = os.readlink(current)
-        links.append({"path": str(current), "target": target})
-        current = pathlib.Path(target) if target.startswith("/") else current.parent / target
-    else:
-        raise AssertionError("tool symlink depth")
-    terminal = current.resolve(strict=True)
-    state = terminal.stat()
+    inspected = []
+    def inspect(candidate):
+        remaining(deadline)
+        state = candidate.lstat()
+        if runtime and sys.platform == "linux":
+            trusted_runtime_state(state)
+        inspected.append({"path": str(candidate), "device": state.st_dev,
+                          "inode": state.st_ino, "mode": state.st_mode,
+                          "uid": state.st_uid, "gid": state.st_gid})
+        return state
+    state = inspect(current)
+    while pending:
+        remaining(deadline)
+        part = pending.pop(0)
+        if part == "..":
+            current = current.parent
+            state = inspect(current)
+            continue
+        candidate = current / part
+        state = inspect(candidate)
+        if stat.S_ISLNK(state.st_mode):
+            assert not (runtime and sys.platform == "darwin" and not pending), "Darwin framework entry is a symlink"
+            assert len(links) < 16, "tool symlink depth"
+            target = os.readlink(candidate)
+            links.append({"path": str(candidate), "target": target})
+            target_path = pathlib.Path(target)
+            if target_path.is_absolute():
+                current = pathlib.Path("/")
+                inspect(current)
+                pending = list(target_path.parts[1:]) + pending
+            else:
+                pending = list(target_path.parts) + pending
+        else:
+            current = candidate
+            assert stat.S_ISDIR(state.st_mode) if pending else stat.S_ISREG(state.st_mode)
     assert stat.S_ISREG(state.st_mode)
-    return {"requested": path, "links": links, "terminal": str(terminal), "sha256": hashlib.sha256(terminal.read_bytes()).hexdigest()}
+    if runtime:
+        assert state.st_mode & 0o111, "interpreter is not executable"
+    digest = file_digest(current, deadline)
+    after = current.lstat()
+    assert (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns), "tool changed during hash"
+    return {"requested": path, "runtime": runtime, "links": links, "terminal": str(current),
+            "ancestry": inspected if runtime else [], "sha256": digest}
 
 
-def observation_metadata(path, content=False):
+def observation_metadata(path, content=False, deadline=None):
+    remaining(deadline)
     state = path.lstat()
     result = {"device": state.st_dev, "inode": state.st_ino,
               "mode": state.st_mode, "uid": state.st_uid, "gid": state.st_gid,
@@ -1408,46 +1500,157 @@ def observation_metadata(path, content=False):
     if stat.S_ISLNK(state.st_mode):
         result["link_target"] = os.readlink(path)
     elif content and stat.S_ISREG(state.st_mode):
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while True:
-                block = stream.read(65536)
-                if not block:
-                    break
-                digest.update(block)
-        result["sha256"] = digest.hexdigest()
+        result["sha256"] = file_digest(path, deadline)
         after = path.lstat()
         assert (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns), "file changed during observation"
     return result
 
 
-def startup_inventory(roots):
+def startup_inventory(roots, deadline=None):
     result = {}
     for root in roots:
+        remaining(deadline)
         pending = [root]
         while pending:
+            remaining(deadline)
             path = pending.pop()
             key = str(path)
             if key in result:
                 continue
-            result[key] = observation_metadata(path, content=True)
+            assert len(result) < 200000, "startup observation inventory cap"
+            result[key] = observation_metadata(path, content=True, deadline=deadline)
             if stat.S_ISDIR(result[key]["mode"]):
+                remaining(deadline)
                 with os.scandir(path) as entries:
-                    pending.extend(pathlib.Path(entry.path) for entry in entries)
-            if len(result) + len(pending) > 200000:
-                raise AssertionError("startup observation inventory cap")
+                    while True:
+                        remaining(deadline)
+                        entry = next(entries, None)
+                        if entry is None:
+                            break
+                        assert len(result) + len(pending) < 200000, "startup observation inventory cap"
+                        pending.append(pathlib.Path(entry.path))
     return result
 
 
-def ambient_inventory(root):
-    result = {str(root): observation_metadata(root)}
+def ambient_inventory(root, deadline=None):
+    remaining(deadline)
+    result = {str(root): observation_metadata(root, deadline=deadline)}
     with os.scandir(root) as entries:
-        for entry in entries:
+        while True:
+            remaining(deadline)
+            entry = next(entries, None)
+            if entry is None:
+                break
+            assert len(result) < 200000, "ambient observation inventory cap"
             path = pathlib.Path(entry.path)
-            result[str(path)] = observation_metadata(path)
-            if len(result) > 200000:
-                raise AssertionError("ambient observation inventory cap")
+            result[str(path)] = observation_metadata(path, deadline=deadline)
     return result
+
+
+def startup_boundary_controls():
+    global START
+    original_start = START
+    sample = list(pathlib.Path(PYTHON).lstat())
+    for label, mode, uid, accepted in (
+        ("root owner-write directory", stat.S_IFDIR | 0o755, 0, True),
+        ("root executable", stat.S_IFREG | 0o755, 0, True),
+        ("root symlink mode0777", stat.S_IFLNK | 0o777, 0, True),
+        ("non-root owner", stat.S_IFREG | 0o755, 1, False),
+        ("group writable directory", stat.S_IFDIR | 0o775, 0, False),
+        ("world writable executable", stat.S_IFREG | 0o757, 0, False),
+    ):
+        values = sample[:]
+        values[0], values[4] = mode, uid
+        passed = True
+        try:
+            trusted_runtime_state(os.stat_result(values))
+        except AssertionError:
+            passed = False
+        record("P11", "private Linux trust metadata " + label, passed == accepted)
+    if sys.platform == "darwin":
+        link = ROOT / "private-framework-entry-link"
+        link.symlink_to(PYTHON)
+        try:
+            tool_identity(str(link), runtime=True)
+        except AssertionError as error:
+            record("P11", "private Darwin final-entry symlink refuses", "framework entry is a symlink" in str(error))
+        else:
+            raise AssertionError("Darwin symlink admitted")
+    absent = ROOT / "expired-observation-must-not-access"
+    for label, operation in (
+        ("file", lambda: file_digest(absent, original_start - 1)),
+        ("metadata", lambda: observation_metadata(absent, content=True, deadline=original_start - 1)),
+        ("tree", lambda: startup_inventory([absent], original_start - 1)),
+        ("ambient", lambda: ambient_inventory(absent, original_start - 1)),
+        ("tool", lambda: tool_identity(str(absent), deadline=original_start - 1)),
+    ):
+        try:
+            operation()
+        except AssertionError as error:
+            record("P11", "expired shared budget before " + label + " access", "deadline" in str(error))
+        else:
+            raise AssertionError("expired observation continued")
+    content = ROOT / "observation-read-budget.bin"
+    content.write_bytes(b"x" * 131072)
+    original_open = pathlib.Path.open
+    reads = []
+    class ExpiringRead:
+        def __enter__(self):
+            self.stream = original_open(content, "rb")
+            return self
+        def read(self, amount):
+            global START
+            reads.append(amount)
+            data = self.stream.read(amount)
+            START = time.monotonic() - 1801
+            return data
+        def __exit__(self, *_args):
+            self.stream.close()
+    try:
+        pathlib.Path.open = lambda *_args, **_kwargs: ExpiringRead()
+        try:
+            file_digest(content)
+        except AssertionError as error:
+            assert "deadline" in str(error)
+        else:
+            raise AssertionError("read budget did not fail")
+    finally:
+        pathlib.Path.open = original_open
+        START = original_start
+    record("P11", "expired global budget prevents next real hash read", reads == [65536])
+    directory = ROOT / "observation-enumeration-budget"
+    directory.mkdir(mode=0o700)
+    for name in ("one", "two"):
+        (directory / name).write_bytes(b"")
+    original_scandir = os.scandir
+    steps = []
+    class ExpiringEntries:
+        def __enter__(self):
+            self.entries = original_scandir(directory)
+            return self
+        def __next__(self):
+            global START
+            entry = next(self.entries)
+            steps.append(entry.name)
+            START = time.monotonic() - 1801
+            return entry
+        def __exit__(self, *_args):
+            self.entries.close()
+    for label, operation in (("tree", lambda: startup_inventory([directory])),
+                             ("ambient", lambda: ambient_inventory(directory))):
+        steps.clear()
+        try:
+            os.scandir = lambda *_args: ExpiringEntries()
+            try:
+                operation()
+            except AssertionError as error:
+                assert "deadline" in str(error)
+            else:
+                raise AssertionError("enumeration budget did not fail")
+        finally:
+            os.scandir = original_scandir
+            START = original_start
+        record("P11", "expired global budget prevents next real " + label + " enumeration", len(steps) == 1)
 
 
 def direct_isolation(base, initial):
@@ -1462,15 +1665,15 @@ def direct_isolation(base, initial):
         path = ROOT / ("isolation-request-%d.json" % number)
         path.write_bytes(canonical(value))
         inputs.append((verb, path))
-    tool_before = {name: tool_identity(path) for name, path in (("python", PYTHON), ("Git", GIT), ("jq", JQ))}
+    tool_before = {name: tool_identity(path, runtime=name == "python", deadline=START + 1800) for name, path in (("python", PYTHON), ("Git", GIT), ("jq", JQ))}
     if sys.platform == "darwin":
         framework = pathlib.Path(PYTHON).parents[4] / "Python3"
-        tool_before["framework"] = tool_identity(str(framework))
+        tool_before["framework"] = tool_identity(str(framework), deadline=START + 1800)
     origins = json.loads((ROOT / "provenance.json").read_bytes())["origins"]
-    before = startup_inventory(roots)
-    ambient_before = ambient_inventory(temporary)
-    executable = hashlib.sha256(pathlib.Path(PYTHON).read_bytes()).hexdigest()
-    product = hashlib.sha256(pathlib.Path(PRODUCT).read_bytes()).hexdigest()
+    before = startup_inventory(roots, START + 1800)
+    ambient_before = ambient_inventory(temporary, START + 1800)
+    executable = file_digest(PYTHON, START + 1800)
+    product = file_digest(PRODUCT, START + 1800)
     records = []
     for number, (verb, path) in enumerate(inputs):
         argv = [PYTHON, "-I", "-S", "-B", PRODUCT, verb, str(store), str(path)]
@@ -1478,8 +1681,8 @@ def direct_isolation(base, initial):
         status, out, err = captured(argv, store, environment(store))
         records.append({"argv": argv, "environment": environment(store), "cwd": str(store), "stdin": "/dev/null", "elapsed_seconds": time.monotonic() - start, "status": status, "stdout_sha256": hashlib.sha256(out).hexdigest(), "stderr": err.decode("ascii")})
         record("P11", "actual isolated batch %d" % number, (status == 0 and not err and canonical(json.loads(out)) == out) if number < 5 else (status != 0 and not out and err == b"E_STALE\n"))
-    after = startup_inventory(roots)
-    ambient_after = ambient_inventory(temporary)
+    after = startup_inventory(roots, START + 1800)
+    ambient_after = ambient_inventory(temporary, START + 1800)
     changes = [path for path in before.keys() | after.keys() if before.get(path) != after.get(path)]
     unrelated = [path for path in changes if path != str(store) and not path.startswith(str(store) + "/")]
     ambient_changes = sorted(path for path in ambient_before.keys() | ambient_after.keys() if ambient_before.get(path) != ambient_after.get(path))
@@ -1502,9 +1705,9 @@ def direct_isolation(base, initial):
     print("ledger direct startup observation:", json.dumps(report, sort_keys=True), flush=True)
     record("P11", "complete application roots unchanged outside store", not unrelated)
     record("P11", "ambient depth-one entries and metadata stable", not ambient_changes)
-    record("P11", "identified tools and loaded origins stable", all(tool_identity(item["requested"]) == item for item in tool_before.values()) and all(hashlib.sha256(pathlib.Path(item["path"]).read_bytes()).hexdigest() == item["sha256"] for item in origins.values()))
+    record("P11", "identified tools and loaded origins stable", all(tool_identity(item["requested"], runtime=item["runtime"], deadline=START + 1800) == item for item in tool_before.values()) and all(file_digest(item["path"], START + 1800) == item["sha256"] for item in origins.values()))
     print("ledger actual tool identities:", json.dumps(tool_before, sort_keys=True), flush=True)
-    record("P11", "direct executable and source stable", hashlib.sha256(pathlib.Path(PYTHON).read_bytes()).hexdigest() == executable and hashlib.sha256(pathlib.Path(PRODUCT).read_bytes()).hexdigest() == product)
+    record("P11", "direct executable and source stable", file_digest(PYTHON, START + 1800) == executable and file_digest(PRODUCT, START + 1800) == product)
 
 
 def startup_cases(base, initial):
@@ -1561,8 +1764,8 @@ sys.exit(status)
     record("P11", "supplementary unchanged source startup", status == 0 and not err and json.loads(out)["current_tip"] == initial["current_tip"])
     record("P11", "actual isolated no-site no-bytecode flags", data["flags"] == {"isolated": 1, "no_site": 1, "dont_write_bytecode": 1})
     record("P11", "native dependencies identified", all(name in data["origins"] for name in ("_hashlib", "zlib", "fcntl")))
-    data["source_sha256"] = hashlib.sha256(pathlib.Path(PRODUCT).read_bytes()).hexdigest()
-    data["executable_sha256"] = hashlib.sha256(pathlib.Path(PYTHON).read_bytes()).hexdigest()
+    data["source_sha256"] = file_digest(PRODUCT, START + 1800)
+    data["executable_sha256"] = file_digest(PYTHON, START + 1800)
     print("ledger supplementary provenance:", json.dumps(data, sort_keys=True), flush=True)
 
 
@@ -1611,7 +1814,9 @@ def growth_and_bootstrap(base, initial):
 
 
 
+print("ledger initial interpreter identity:", json.dumps(tool_identity(PYTHON, runtime=True, deadline=START + 1800), sort_keys=True), flush=True)
 base, initial = protocol_cases()
+startup_boundary_controls()
 startup_cases(base, initial)
 direct_isolation(base, initial)
 print("ledger native startup observation window complete", flush=True)
