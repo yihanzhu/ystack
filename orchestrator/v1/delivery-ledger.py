@@ -294,10 +294,10 @@ def open_regular(path, code="E_STORE"):
         raise
 
 
-def read_file(path, cap, code="E_STORE"):
+def read_file(path, cap, code="E_STORE", single_link=False):
     descriptor, state = open_regular(path, code)
     try:
-        require(state.st_size <= cap, code)
+        require(state.st_size <= cap and (not single_link or state.st_nlink == 1), code)
         data = bytearray()
         while len(data) <= cap:
             block = os.read(descriptor, min(65536, cap + 1 - len(data)))
@@ -643,7 +643,8 @@ class Store:
             offset += count
         state = os.fstat(descriptor)
         require(stat.S_ISREG(state.st_mode) and state.st_uid == os.getuid()
-                and stat.S_IMODE(state.st_mode) == 0o600 and state.st_size == len(data), "E_IO")
+                and stat.S_IMODE(state.st_mode) == 0o600 and state.st_nlink == 1
+                and state.st_size == len(data), "E_IO")
 
     def write_closed(self, path, data):
         descriptor = self.create(path)
@@ -781,7 +782,7 @@ def main(argv):
         store = Store(root)
         physical(request_path, "E_INPUT")
         require(not overlaps(root, request_path), "E_INPUT")
-        request = parse(read_file(request_path, MAX_REQUEST, "E_INPUT"), MAX_REQUEST)
+        request = parse(read_file(request_path, MAX_REQUEST, "E_INPUT", single_link=True), MAX_REQUEST)
         validate_request(verb, request)
         store.acquire(verb == "initialize")
         result = canonical(store.execute(verb, request))

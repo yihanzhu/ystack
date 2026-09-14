@@ -673,6 +673,12 @@ def invalid_stores(base, initial):
             path.symlink_to(ROOT / "request-nonexistent")
         status, out, err = captured([PYTHON, "-I", "-S", "-B", PRODUCT, "read", str(base), str(path)], base, environment(base))
         record("P5", "nonregular input " + kind, status != 0 and not out)
+    hardlinked_input = ROOT / "hardlinked-request.json"
+    hardlinked_input.write_bytes(canonical(request()))
+    os.link(hardlinked_input, ROOT / "hardlinked-request-alias.json")
+    before = inventory(base)
+    status, out, err = captured([PYTHON, "-I", "-S", "-B", PRODUCT, "read", str(base), str(hardlinked_input)], base, environment(base))
+    record("P5", "actual externally hardlinked request refuses", status != 0 and not out and err == b"E_INPUT\n" and inventory(base) == before)
     checkout = ROOT / "checkout"
     checkout.mkdir(mode=0o700)
     (checkout / ".git").write_bytes(b"gitdir: unrelated\n")
@@ -1219,6 +1225,13 @@ def private_boundaries(base, initial):
             module.os.write = real_write
             os.close(fd)
         record("P8", "private write result " + outcome, (not refused_write and path.read_bytes() == b"actual-write" and len(attempts) == 2) if outcome == "interrupted" else (refused_write and path.read_bytes() == b"" and len(attempts) == 1))
+    path = ROOT / "private-new-state-linked"
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.link(path, ROOT / "private-new-state-alias")
+    try:
+        reject("new state link count", lambda: obj.write_all(fd, b"private-component"))
+    finally:
+        os.close(fd)
     original_compressor = module.zlib.compressobj
     class OversizedCompressor:
         def compress(self, data):
@@ -1289,21 +1302,39 @@ def tool_identity(path):
     return {"requested": path, "links": links, "terminal": str(terminal), "sha256": hashlib.sha256(terminal.read_bytes()).hexdigest()}
 
 
+def observation_metadata(path, content=False):
+    state = path.lstat()
+    result = {"device": state.st_dev, "inode": state.st_ino,
+              "mode": state.st_mode, "uid": state.st_uid, "gid": state.st_gid,
+              "nlink": state.st_nlink, "size": state.st_size,
+              "mtime_ns": state.st_mtime_ns, "ctime_ns": state.st_ctime_ns}
+    if stat.S_ISLNK(state.st_mode):
+        result["link_target"] = os.readlink(path)
+    elif content and stat.S_ISREG(state.st_mode):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while True:
+                block = stream.read(65536)
+                if not block:
+                    break
+                digest.update(block)
+        result["sha256"] = digest.hexdigest()
+        after = path.lstat()
+        assert (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns), "file changed during observation"
+    return result
+
+
 def startup_inventory(roots):
     result = {}
     for root in roots:
         pending = [root]
         while pending:
             path = pending.pop()
-            try:
-                state = path.lstat()
-            except FileNotFoundError:
-                raise AssertionError("startup observation changed during inventory: " + str(path))
             key = str(path)
             if key in result:
                 continue
-            result[key] = [state.st_dev, state.st_ino, stat.S_IFMT(state.st_mode), stat.S_IMODE(state.st_mode), state.st_size if stat.S_ISREG(state.st_mode) else 0, state.st_mtime_ns if not stat.S_ISDIR(state.st_mode) else 0]
-            if stat.S_ISDIR(state.st_mode):
+            result[key] = observation_metadata(path, content=True)
+            if stat.S_ISDIR(result[key]["mode"]):
                 with os.scandir(path) as entries:
                     pending.extend(pathlib.Path(entry.path) for entry in entries)
             if len(result) + len(pending) > 200000:
@@ -1311,11 +1342,23 @@ def startup_inventory(roots):
     return result
 
 
+def ambient_inventory(root):
+    result = {str(root): observation_metadata(root)}
+    with os.scandir(root) as entries:
+        for entry in entries:
+            path = pathlib.Path(entry.path)
+            result[str(path)] = observation_metadata(path)
+            if len(result) > 200000:
+                raise AssertionError("ambient observation inventory cap")
+    return result
+
+
 def direct_isolation(base, initial):
     store = new_store("isolated-direct-measurement")
     source = pathlib.Path(PRODUCT).parents[2]
     temporary = pathlib.Path(os.environ.get("TMPDIR", "/tmp")).resolve()
-    roots = [source, ROOT, temporary]
+    roots = [source, ROOT]
+    runtime_destinations = [store, source, ROOT]
     inputs = []
     original = update(initial["current_tip"])
     for number, (verb, value) in enumerate([("initialize", request("initialize")), ("read", request()), ("apply-update", original), ("read", request()), ("apply-update", original), ("apply-update", update(initial["current_tip"], update_id="isolation.stale"))]):
@@ -1328,6 +1371,7 @@ def direct_isolation(base, initial):
         tool_before["framework"] = tool_identity(str(framework))
     origins = json.loads((ROOT / "provenance.json").read_bytes())["origins"]
     before = startup_inventory(roots)
+    ambient_before = ambient_inventory(temporary)
     executable = hashlib.sha256(pathlib.Path(PYTHON).read_bytes()).hexdigest()
     product = hashlib.sha256(pathlib.Path(PRODUCT).read_bytes()).hexdigest()
     records = []
@@ -1338,10 +1382,29 @@ def direct_isolation(base, initial):
         records.append({"argv": argv, "environment": environment(store), "cwd": str(store), "stdin": "/dev/null", "elapsed_seconds": time.monotonic() - start, "status": status, "stdout_sha256": hashlib.sha256(out).hexdigest(), "stderr": err.decode("ascii")})
         record("P11", "actual isolated batch %d" % number, (status == 0 and not err and canonical(json.loads(out)) == out) if number < 5 else (status != 0 and not out and err == b"E_STALE\n"))
     after = startup_inventory(roots)
+    ambient_after = ambient_inventory(temporary)
     changes = [path for path in before.keys() | after.keys() if before.get(path) != after.get(path)]
     unrelated = [path for path in changes if path != str(store) and not path.startswith(str(store) + "/")]
-    print("ledger direct startup observation:", json.dumps({"roots": [str(root) for root in roots], "before_inventory_sha256": hashlib.sha256(canonical(before)).hexdigest(), "after_inventory_sha256": hashlib.sha256(canonical(after)).hexdigest(), "changed_paths": sorted(changes), "unexpected_paths": sorted(unrelated), "source_sha256": product, "executable_sha256": executable, "calls": records}, sort_keys=True), flush=True)
-    record("P11", "declared source scratch and per-user temp unchanged outside store", not unrelated)
+    ambient_changes = sorted(path for path in ambient_before.keys() | ambient_after.keys() if ambient_before.get(path) != ambient_after.get(path))
+    unobserved_subtrees = sorted(path for path, metadata in ambient_after.items() if path != str(temporary) and stat.S_ISDIR(metadata["mode"]) and not any(path == str(root) or path.startswith(str(root) + "/") for root in roots))
+    print("ledger complete startup before:", json.dumps(before, sort_keys=True), flush=True)
+    print("ledger complete startup after:", json.dumps(after, sort_keys=True), flush=True)
+    print("ledger ambient startup before:", json.dumps(ambient_before, sort_keys=True), flush=True)
+    print("ledger ambient startup after:", json.dumps(ambient_after, sort_keys=True), flush=True)
+    report = {"complete_roots": [str(root) for root in roots], "application_store": str(store),
+              "request_files": [str(path) for _, path in inputs], "target_fixtures": [],
+              "runtime_write_destinations_observed_recursively": [str(path) for path in runtime_destinations],
+              "ambient_root": str(temporary), "ambient_depth": 1,
+              "ambient_subtrees_not_observed_recursively": unobserved_subtrees,
+              "ambient_symlinks_not_followed": sorted(path for path, metadata in ambient_after.items() if stat.S_ISLNK(metadata["mode"])),
+              "boundary_basis": "Fixed isolated no-site no-bytecode Python; empty-start environment; cwd and TMPDIR are the store; closed source writes only the store. Source and all test/request paths are also observed completely. No additional native output destination has been identified for the selected imports. Foreign OS/application subtree contents are not observed and are not claimed unchanged or unwritable.",
+              "snapshot_limits": "Metadata and complete-root regular content hashes compare endpoints; they do not prove absence of every transient native write or global host writes. P8/P9 actual held-operation proof is separate.",
+              "changed_application_paths": sorted(changes), "unexpected_application_paths": sorted(unrelated),
+              "changed_ambient_entries": ambient_changes,
+              "source_sha256": product, "executable_sha256": executable, "calls": records}
+    print("ledger direct startup observation:", json.dumps(report, sort_keys=True), flush=True)
+    record("P11", "complete application roots unchanged outside store", not unrelated)
+    record("P11", "ambient depth-one entries and metadata stable", not ambient_changes)
     record("P11", "identified tools and loaded origins stable", all(tool_identity(item["requested"]) == item for item in tool_before.values()) and all(hashlib.sha256(pathlib.Path(item["path"]).read_bytes()).hexdigest() == item["sha256"] for item in origins.values()))
     print("ledger actual tool identities:", json.dumps(tool_before, sort_keys=True), flush=True)
     record("P11", "direct executable and source stable", hashlib.sha256(pathlib.Path(PYTHON).read_bytes()).hexdigest() == executable and hashlib.sha256(pathlib.Path(PRODUCT).read_bytes()).hexdigest() == product)
