@@ -229,6 +229,11 @@ credential-like environment value, grants no authority or qualification, activat
 no profile, and performs no candidate, adapter, network, publish, deploy, or
 external-write action.
 
+The three input-mutation tests allow at most three fully reconciled setups using
+that original evaluator. Only a proved missed setup window may retry; exhaustion
+fails. All original mutation, refusal, restoration and cleanup assertions remain
+required. This test setup grants no credentials, qualification or activation.
+
 ## Inactive evidence-integrity evaluator
 
 `control/v1/evaluate-evidence-integrity.sh` compares caller-supplied evidence
