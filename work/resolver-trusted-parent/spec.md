@@ -4666,6 +4666,13 @@ the spec pull request's range above still blocks review.
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
   compile.
 
+  The entry locates the five modules using an ordinary copied generation constant,
+  equal to `PORTABLE_CORE_GENERATION` in the accepted, pinned
+  `scripts/core-contract.sh` and `PROFILE_RESOLUTION_CORE_GENERATION` in the accepted
+  library. It does not discover the generation by reading untrusted library text at
+  runtime. Do not split or encode the constant to evade the generation inventory.
+  No unused entry schema-major constant is required.
+
   **The run directory lives inside the caller's output directory, so the caller's output
   path is the only write root.** The entry's positional arguments are
   `<jq> <output directory> <request> <repository map>`, and the run directory for this
@@ -6148,8 +6155,11 @@ the spec pull request's range above still blocks review.
   `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
   (`scripts/lib/profile-resolution.sh:5,11`) are committed text that nothing computes at
   run time, and the library builds the generation root from them by plain concatenation
-  (`:710`). So the parent carries its own copy of both as constants beside its blob pins
-  and builds `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
+  (`:710`). So the parent carries its own copy of both as constants beside its blob pins.
+  Its generation is an ordinary copied constant, also equal to the selected
+  `PORTABLE_CORE_GENERATION` in the accepted, pinned `scripts/core-contract.sh`;
+  do not split or encode it to evade the generation inventory. The parent builds
+  `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
   five names `contracts.jq:1-5` imports — `schema.jq`, `profile_graph.jq`,
   `stage_request.jq`, `result_facts.jq`, `result_truth.jq` — from the same repository root
   it already derives. It reads nothing out of the library to do it.
@@ -8715,13 +8725,16 @@ the spec pull request's range above still blocks review.
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, **the eight constants of the parent-pinned
-  set**, where three used to stand. Two more constants join that assertion this round and
-  are not blob ids: the generation id and the schema major the parent carries so it can
-  build the five module paths for itself, each required to equal the library's own
-  `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
-  (`scripts/lib/profile-resolution.sh:5,11`) read out of the working tree — a one-line
-  comparison each, and the thing that fails CI when a new core generation moves the
-  library's copy and not the parent's. **And it asserts the computed id equals
+  set**, where three used to stand. Three non-blob constants are checked separately:
+  the parent's generation and schema major, and the entry's generation. Compare the
+  parent and entry generation constants with `PROFILE_RESOLUTION_CORE_GENERATION`
+  in the accepted library and the selected `PORTABLE_CORE_GENERATION` in the accepted,
+  pinned `scripts/core-contract.sh`. Compare the parent schema major with the library's
+  `PROFILE_RESOLUTION_SCHEMA_MAJOR` (`scripts/lib/profile-resolution.sh:5,11`).
+  The focused test derives expected values from those existing sources; it adds no
+  generation literal of its own and needs no entry schema-major check. A changed
+  source constant without its consumer update fails CI. **And it asserts the computed
+  id equals
   `git hash-object` for every one of those
   files** — eighteen pinned blob ids now rather than thirteen, ten in the entry and eight
   in the parent, with all eight loaded files pinned in both places and asserted on both
@@ -8731,6 +8744,14 @@ the spec pull request's range above still blocks review.
   does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
   agree — three values, not two. The test may run git freely: it is not a shipped file, and
   the allowlist grep below covers the two shipped files only.
+
+  In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
+  `resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
+  `scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, sorted
+  exact-path comparison, and the scan of indexed tracked bytes. Change no other
+  behavior in that test. No wildcard, extra path, selected-generation change or
+  split/encoded literal is permitted. The focused test and full schema check must
+  pass together against committed/indexed implementation bytes.
 
   **The read allowlist is a grep, not a promise, it covers external command words only, and
   the mechanism is settled here rather than left to the plan.** The list it checks against is
@@ -8900,6 +8921,15 @@ the spec pull request's range above still blocks review.
   `scripts/test/v2-check-rename.test.sh`.
 
 ## Design
+
+Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
+`resolver/v1/resolve-profile.sh`, `scripts/test/resolver-trusted-launch.test.sh`,
+`scripts/test/portable-core-schema.test.sh`, `docs/components.md`, `README.md`,
+`RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
+exact generation-inventory additions required by R10. All other requirements and
+exclusions remain, including the eighteen blob-pin checks. The implementation
+review-size range remains 2100-2841 changed lines; measure the complete change and
+return to the artifact gate for an unexplained overrun, never reduce tests to fit.
 
 Order, each step checkable before the next:
 
@@ -9308,7 +9338,9 @@ Order, each step checkable before the next:
    and exit with the child's status (`128 + signal` if it was signalled). No step reaches
    the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
-4. **Docs and manifest** — R9, in the same pull request as the code.
+4. **`scripts/test/portable-core-schema.test.sh`** — add only the two exact shipped
+   generation consumers to its closed expected-hit list, as R10 requires.
+5. **Docs and manifest** — R9, in the same pull request as the code.
 
 **Distribution** (intent open question 2): build on every invocation from the committed C
 sources into a fresh private run directory, never cached and never reused. No binary is
