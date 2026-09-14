@@ -1272,6 +1272,42 @@ The read-only guards now run before the environment registry is consulted and be
 
 The recorded identity must describe this very run: its stage request and resolved profile references have to equal, by id and digest, the ones the materialization input carries, so an identity for another profile or request cannot be recorded over this run.
 
+## Inactive shadow materialization input assembler
+
+`shadow/v1/assemble-materialization-input.sh` builds the one
+`local_git_materialization_input` `shadow/v1/reproduce.sh` needs, for a real
+repository revision, from the real default profile
+(`profiles/default/v1/`). It does not resolve a profile: it takes an
+already-resolved profile document as an input and checks it against the
+supplied profile and manifests with the core v2 profile-graph rules. The only
+launcher of `resolver/v1/profile-resolve-runtime.sh` today is the one in
+`scripts/test/`, so today the only resolved profiles that exist are
+test-produced — the same trusted-parent gap the resolver note above already
+names.
+
+Two invocations are supported: executing the file so its `#!/bin/bash -p`
+shebang starts bash, or `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
+<script> assemble <repository-id> <source-git-dir> <commit-id>
+<attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
+<output-dir> <environment-claim-file>`. Invoking the `__assemble_clean` marker
+verb directly is not one of them and carries no safety claim. Tree content is
+the materializer's own check, not this component's, so a source that trips
+its tree scan comes back `materialization.refused` from the driver rather
+than a refusal from this component.
+
+The profile, the six shipped manifests, and the producer config are pinned by
+SHA-256 in `shadow/v1/materialization-input.jq`: any supplied document whose
+bytes differ from the shipped default is refused `E_PROFILE`, proven by
+digest rather than by name. Every repository-level source-purity predicate
+the local Git materializer applies is copied verbatim from
+`adapters/local-git-materializer/v1/materialize.sh`, so the two can never
+disagree about what a plain bare source repository is; the materializer's own
+tree-content scan is not duplicated. Run the focused proof with:
+
+```sh
+bash scripts/test/shadow-assembler.test.sh
+```
+
 ## Inactive maintenance loop
 
 `maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item
