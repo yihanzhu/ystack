@@ -18,8 +18,29 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Evidence-based range: 2100-2841 changed lines** (implementation). The derivation,
-measured rather than guessed:
+**Current evidence-based range: 2850-3200 changed lines** (implementation).
+This replaces the historical 2100-2841 band below without changing scope or proof.
+The paused 1242-line test draft is measured; it is not complete or passing proof.
+The current plan estimates parent/entry at 1075/380, while the retained cumulative
+spec estimate is 1228/447. Keeping both as an honest estimate interval, plus the
+measured test and 62 estimated documentation/manifest/schema-inventory lines,
+gives 2759-2979 before the missing proof is written.
+
+Allow an estimated 70-100 added test lines for native Darwin directory/cache
+attribution and isolated compile-cache checks; 15-25 for observing all four run
+files and the run directory at 0500 in the existing bounded mode case; and 40-80
+net lines for replacing the draft's incomplete 74-line sweep with the required
+role checks and lexical distinctions below. These are unwritten-work estimates,
+not measurements. The projected total is 2884-3184, rounded outward to 2850-3200.
+The three additions complete existing proof obligations; they add no component,
+permission or runtime behavior. Measure additions, deletions and net at the full
+implementation head. An unexplained overrun returns through the artifact gate;
+never compress code, drop proof or split off required tests to meet this band.
+
+The derivation below records historical source measurements and evolving estimates;
+its earlier ranges and running totals are historical, not the current size gate:
+
+**Historical evidence-based range: 2100-2841 changed lines** (implementation).
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
@@ -2533,7 +2554,7 @@ for this spec pull request is 8521-11529 lines**, which is this file's measured
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2100-2841 changed lines derived at the top of this section belong to the *implementation*
+2850-3200 changed lines derived at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -4666,6 +4687,13 @@ the spec pull request's range above still blocks review.
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
   compile.
 
+  The entry locates the five modules using an ordinary copied generation constant,
+  equal to `PORTABLE_CORE_GENERATION` in the accepted, pinned
+  `scripts/core-contract.sh` and `PROFILE_RESOLUTION_CORE_GENERATION` in the accepted
+  library. It does not discover the generation by reading untrusted library text at
+  runtime. Do not split or encode the constant to evade the generation inventory.
+  No unused entry schema-major constant is required.
+
   **The run directory lives inside the caller's output directory, so the caller's output
   path is the only write root.** The entry's positional arguments are
   `<jq> <output directory> <request> <repository map>`, and the run directory for this
@@ -6148,8 +6176,11 @@ the spec pull request's range above still blocks review.
   `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
   (`scripts/lib/profile-resolution.sh:5,11`) are committed text that nothing computes at
   run time, and the library builds the generation root from them by plain concatenation
-  (`:710`). So the parent carries its own copy of both as constants beside its blob pins
-  and builds `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
+  (`:710`). So the parent carries its own copy of both as constants beside its blob pins.
+  Its generation is an ordinary copied constant, also equal to the selected
+  `PORTABLE_CORE_GENERATION` in the accepted, pinned `scripts/core-contract.sh`;
+  do not split or encode it to evade the generation inventory. The parent builds
+  `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
   five names `contracts.jq:1-5` imports — `schema.jq`, `profile_graph.jq`,
   `stage_request.jq`, `result_facts.jq`, `result_truth.jq` — from the same repository root
   it already derives. It reads nothing out of the library to do it.
@@ -6633,6 +6664,14 @@ the spec pull request's range above still blocks review.
      descriptor contents. If enumeration fails, the parent refuses with `E_RUNTIME`
      before creating output; the entry refuses on the unmatched `/dev/fd/*` glob as
      R1 requires. These are host-state and metadata reads, included in this boundary.
+
+     The entry also performs the temporary stderr discard already required by R1:
+     exact `2>/dev/null` on the three ulimit rungs, descriptor-close eval, the two
+     unset forms in each required scrub (including the marker branch), and the
+     unique job-table-gated signal-forwarding kill. R10 checks those roles only.
+     This is no general data path, command permission or persistent write-root
+     allowance; no additional diagnostic may be suppressed. The redirection stays
+     outside eval's quoted exec, preserving the existing prohibition.
 
 
      **The executables, listed exactly.** The previous round's list was short enough to be
@@ -8715,13 +8754,16 @@ the spec pull request's range above still blocks review.
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, **the eight constants of the parent-pinned
-  set**, where three used to stand. Two more constants join that assertion this round and
-  are not blob ids: the generation id and the schema major the parent carries so it can
-  build the five module paths for itself, each required to equal the library's own
-  `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
-  (`scripts/lib/profile-resolution.sh:5,11`) read out of the working tree — a one-line
-  comparison each, and the thing that fails CI when a new core generation moves the
-  library's copy and not the parent's. **And it asserts the computed id equals
+  set**, where three used to stand. Three non-blob constants are checked separately:
+  the parent's generation and schema major, and the entry's generation. Compare the
+  parent and entry generation constants with `PROFILE_RESOLUTION_CORE_GENERATION`
+  in the accepted library and the selected `PORTABLE_CORE_GENERATION` in the accepted,
+  pinned `scripts/core-contract.sh`. Compare the parent schema major with the library's
+  `PROFILE_RESOLUTION_SCHEMA_MAJOR` (`scripts/lib/profile-resolution.sh:5,11`).
+  The focused test derives expected values from those existing sources; it adds no
+  generation literal of its own and needs no entry schema-major check. A changed
+  source constant without its consumer update fails CI. **And it asserts the computed
+  id equals
   `git hash-object` for every one of those
   files** — eighteen pinned blob ids now rather than thirteen, ten in the entry and eight
   in the parent, with all eight loaded files pinned in both places and asserted on both
@@ -8731,6 +8773,14 @@ the spec pull request's range above still blocks review.
   does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
   agree — three values, not two. The test may run git freely: it is not a shipped file, and
   the allowlist grep below covers the two shipped files only.
+
+  In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
+  `resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
+  `scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, sorted
+  exact-path comparison, and the scan of indexed tracked bytes. Change no other
+  behavior in that test. No wildcard, extra path, selected-generation change or
+  split/encoded literal is permitted. The focused test and full schema check must
+  pass together against committed/indexed implementation bytes.
 
   **The read allowlist is a grep, not a promise, it covers external command words only, and
   the mechanism is settled here rather than left to the plan.** The list it checks against is
@@ -8754,9 +8804,9 @@ the spec pull request's range above still blocks review.
   variable expansion standing where a command word goes. Three documented sweeps over both
   shipped files do that.
 
-  1. *Absolute-path tokens.* Every token beginning with `/` is extracted, and each one must
-     be either one of the fifteen words above or one of the six absolute paths these files
-     name as data rather than as commands: the SDK root passed to `-isysroot`
+  1. *Absolute-path tokens.* Extract fixed absolute pathname values in their source
+     roles as clarified below. Each must be one of the fifteen words above or an
+     exact data token at its permitted position. The data list includes the SDK root passed to `-isysroot`
      (`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, R1), the `PATH` value
      `/usr/bin:/bin` the entry writes into its own environment and into every `env -i` line,
      the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
@@ -8776,6 +8826,49 @@ the spec pull request's range above still blocks review.
      rather than on a list of directories is the point: the Darwin compiler took the prefix
      set to three, and a grep that knew only the prefixes somebody told it about would
      silently pass a shipped file that had grown a fourth.
+
+     **Temporary stderr discard, exact roles only.** Admit `/dev/null` solely as
+     the literal target of `2>/dev/null` on R1's three `ulimit -S -n` ladder rungs,
+     the descriptor-close `eval`, `builtin unset -f` and `builtin unset` in every
+     mandated scrub (including the full marker scrub), and the one forwarding
+     `kill` in the job-table Running arm above `wait`. Check each command's required
+     role and position, not a guessed total occurrence count. Preserve the original
+     command forms and all their existing ordering/behavior checks. Reject this
+     target on any other command, another descriptor, input/append redirection,
+     a variable-selected sink, a prefix such as `/dev/null/anything`, or any C
+     pathname or execve argument. It is not an executable or general data-list
+     member. In particular reject it inside eval's quoted `exec`: that would
+     persistently redirect the shell's stderr, which R1 already forbids.
+
+     **Source roles are explicit, not blanket exclusions.** The required `/*)`
+     self-path case arm is a pattern checking absoluteness, not an expanded host
+     pathname. Classify only that pattern role and still scan the arm's commands;
+     do not allow `/*` as a general data path. The `/dev/fd/*` for-list and quoted
+     unmatched-glob token remain the exact inventoried pathname roles above.
+     C `'/'` character tokens, division and comment delimiters are not pathname
+     string values. C `"/"` used as a pathname remains an unlisted root and fails;
+     `/proc` and `/proc/%s/stat` remain real data strings and are checked.
+
+     Inspect absolute values after assignment delimiters and quoting, including
+     `clean_path=/usr/bin:/bin`, `PATH=/usr/bin:/bin` and C environment strings.
+     Do not exempt whole assignment words. Separators in `$PWD/${BASH_SOURCE[0]}`,
+     `${fd##*/}`, `%s/child.stdout`, `%s/home` and `%s:/usr/bin:/bin` do not create
+     new fixed `/child.stdout`, `/home` or other host-root literals. Their dynamic
+     root/value provenance still requires the existing source and identity checks.
+     This does not hide a real absolute value in a quoted argument, assignment,
+     redirection or embedded executable body.
+
+     The fixed Darwin shim is data written and compared by these files; keep its
+     existing awk position checks rather than treating its text as a command the
+     entry executes. In contrast, inspect executable trap/eval bodies and command
+     substitutions, including jobs/kill and compgen process substitutions. Quoting
+     never makes executable bodies exempt. Passes 2 and 3 classify command roles,
+     not case patterns, for-list data, function declarations or redirection operands.
+     Commands behind exec/env, assignment substitutions and quoted executable
+     bodies remain covered. Preserve the runtime builtin/reserved sets, the two
+     local functions and their definition/call checks, and the five command-variable
+     names and no-default-expansion rule. Use small inspectable extraction and role
+     checks over these specified source shapes, not a full parser or linter AST.
 
      **And `/usr/bin/awk` gets a position assertion of its own, because a data
      classification alone would weaken this invariant rather than strengthen it.** The
@@ -8900,6 +8993,15 @@ the spec pull request's range above still blocks review.
   `scripts/test/v2-check-rename.test.sh`.
 
 ## Design
+
+Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
+`resolver/v1/resolve-profile.sh`, `scripts/test/resolver-trusted-launch.test.sh`,
+`scripts/test/portable-core-schema.test.sh`, `docs/components.md`, `README.md`,
+`RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
+exact generation-inventory additions required by R10. All other requirements and
+exclusions remain, including the eighteen blob-pin checks. The implementation
+review-size range is 2850-3200 changed lines; measure the complete change and
+return to the artifact gate for an unexplained overrun, never reduce tests to fit.
 
 Order, each step checkable before the next:
 
@@ -9308,7 +9410,9 @@ Order, each step checkable before the next:
    and exit with the child's status (`128 + signal` if it was signalled). No step reaches
    the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
-4. **Docs and manifest** — R9, in the same pull request as the code.
+4. **`scripts/test/portable-core-schema.test.sh`** — add only the two exact shipped
+   generation consumers to its closed expected-hit list, as R10 requires.
+5. **Docs and manifest** — R9, in the same pull request as the code.
 
 **Distribution** (intent open question 2): build on every invocation from the committed C
 sources into a fresh private run directory, never cached and never reused. No binary is
