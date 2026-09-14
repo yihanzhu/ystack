@@ -1669,7 +1669,8 @@ def direct_isolation(base, initial):
     if sys.platform == "darwin":
         framework = pathlib.Path(PYTHON).parents[4] / "Python3"
         tool_before["framework"] = tool_identity(str(framework), deadline=START + 1800)
-    origins = json.loads((ROOT / "provenance.json").read_bytes())["origins"]
+    provenance_before = json.loads((ROOT / "provenance.json").read_bytes())
+    origins = provenance_before["origins"]
     before = startup_inventory(roots, START + 1800)
     ambient_before = ambient_inventory(temporary, START + 1800)
     executable = file_digest(PYTHON, START + 1800)
@@ -1706,8 +1707,125 @@ def direct_isolation(base, initial):
     record("P11", "complete application roots unchanged outside store", not unrelated)
     record("P11", "ambient depth-one entries and metadata stable", not ambient_changes)
     record("P11", "identified tools and loaded origins stable", all(tool_identity(item["requested"], runtime=item["runtime"], deadline=START + 1800) == item for item in tool_before.values()) and all(file_digest(item["path"], START + 1800) == item["sha256"] for item in origins.values()))
+    after_provenance = ROOT / "provenance-after.json"
+    provenance_request = ROOT / "provenance-request.json"
+    status, out, err = captured([PYTHON, "-I", "-S", "-B", str(ROOT / "provenance.py"), PRODUCT, str(base), str(provenance_request), str(after_provenance), str(min(START + 1800, time.monotonic() + 120))], base, environment(base))
+    provenance_after = json.loads(after_provenance.read_bytes())
+    print("ledger supplementary provenance after:", json.dumps(provenance_after, sort_keys=True), flush=True)
+    record("P11", "supplementary provider and module identity stable", status == 0 and not err and json.loads(out)["current_tip"] == initial["current_tip"] and not provenance_after["errors"] and all(provenance_after[key] == provenance_before[key] for key in ("modules", "providers", "runtime", "origins", "flags", "version", "executable")))
     print("ledger actual tool identities:", json.dumps(tool_before, sort_keys=True), flush=True)
     record("P11", "direct executable and source stable", file_digest(PYTHON, START + 1800) == executable and file_digest(PRODUCT, START + 1800) == product)
+
+
+PROVENANCE_HELPERS = r'''def provenance_digest(path, deadline):
+ if time.monotonic() >= deadline: raise RuntimeError("provenance deadline")
+ digest=hashlib.sha256()
+ fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK|os.O_CLOEXEC)
+ try:
+  if os.fstat(fd).st_mode & 0o170000 != 0o100000: raise RuntimeError("nonregular provenance file")
+  while True:
+   if time.monotonic() >= deadline: raise RuntimeError("provenance deadline")
+   chunk=os.read(fd,65536)
+   if not chunk: break
+   digest.update(chunk)
+ finally: os.close(fd)
+ return digest.hexdigest()
+
+def module_identity(name,module,deadline):
+ if not isinstance(module,type(sys)):
+  return {"kind":"nonmodule","type_module":type(module).__module__,"type_name":type(module).__name__,"name":getattr(module,"__name__",None)}
+ spec=getattr(module,"__spec__",None)
+ origin=getattr(spec,"origin",None)
+ loader=getattr(spec,"loader",None)
+ frozen=sys.modules["_frozen_importlib"]
+ entry={"origin":origin,"spec_name":getattr(spec,"name",None),"loader":getattr(loader,"__module__","")+"."+getattr(loader,"__name__",type(loader).__name__),"kind":"unknown"}
+ path=getattr(module,"__file__",None)
+ if path:
+  entry["file"]={"path":path,"sha256":provenance_digest(path,deadline)}
+ if origin=="built-in" and loader is frozen.BuiltinImporter and name in sys.builtin_module_names:
+  entry["kind"]="builtin"
+ elif origin=="frozen" and loader is frozen.FrozenImporter and sys.modules["_imp"].is_frozen(getattr(spec,"name","")) and sys.modules.get(spec.name) is module:
+  entry["kind"]="frozen"
+ elif path and origin==path:
+  entry["kind"]="file"
+ elif name=="__main__" and module is sys.modules.get(name) and spec is None and path==globals().get("__file__"):
+  entry["kind"]="instrumentation"
+ return entry
+
+def provenance_errors(data):
+ errors=["unknown loaded module: "+name for name,entry in data["modules"].items() if entry["kind"]=="unknown"]
+ required={"errno","fcntl","hashlib","json","os","re","stat","sys","zlib"}
+ for algorithm,provider in data["providers"].items():
+  if algorithm not in ("sha1","sha256"): errors.append("unexpected provider algorithm")
+  for key in ("callable_module","type_module"):
+   name=provider.get(key)
+   if not name: errors.append(algorithm+" missing "+key)
+   else: required.add(name)
+ if set(data["providers"])!={"sha1","sha256"}: errors.append("missing hash provider")
+ for name in sorted(required):
+  entry=data["modules"].get(name)
+  if entry is None: errors.append("missing module: "+name); continue
+  if entry["kind"] not in ("file","builtin","frozen"): errors.append("unknown module: "+name)
+  if entry["kind"]=="file" and not entry.get("file"): errors.append("missing file: "+name)
+  if entry["kind"] in ("builtin","frozen") and not data.get("runtime"): errors.append("missing runtime: "+name)
+ return errors
+'''
+
+
+def provenance_controls():
+    namespace = {"hashlib": hashlib, "os": os, "sys": sys, "time": time}
+    exec(PROVENANCE_HELPERS, namespace)
+    identity = namespace["module_identity"]
+    validate = namespace["provenance_errors"]
+    deadline = min(START + 1800, time.monotonic() + 120)
+    native = identity("sys", sys, deadline)
+    frozen = identity("_frozen_importlib", sys.modules["_frozen_importlib"], deadline)
+    file = identity("json", json, deadline)
+    record("P11", "actual builtin identity", native["kind"] == "builtin")
+    record("P11", "actual frozen identity", frozen["kind"] == "frozen")
+    record("P11", "actual source identity hash", file["kind"] == "file" and file["file"]["sha256"] == file_digest(json.__file__, deadline))
+    names = ("errno", "fcntl", "hashlib", "json", "os", "re", "stat", "sys", "zlib")
+    data = {"modules": {name: native for name in names}, "providers": {name: {"callable_module": "hashlib", "type_module": "hashlib"} for name in ("sha1", "sha256")}, "runtime": {"synthetic": "validator control only"}}
+    for label, mutate in (
+        ("unknown extra loaded module", lambda d: d["modules"].update(unexpected={"kind": "unknown"})),
+        ("nonmodule cannot satisfy required module", lambda d: d["modules"].update(fcntl={"kind": "nonmodule"})),
+        ("missing required module", lambda d: d["modules"].pop("fcntl")),
+        ("unknown required origin", lambda d: d["modules"].update(zlib={"kind": "unknown"})),
+        ("unbound builtin", lambda d: d.pop("runtime")),
+        ("missing provider", lambda d: d["providers"].pop("sha256")),
+        ("unknown provider module", lambda d: d["providers"]["sha1"].update(type_module="missing")),
+        ("missing native file", lambda d: d["modules"].update(zlib={"kind": "file"}))):
+        bad = json.loads(json.dumps(data))
+        mutate(bad)
+        record("P11", "synthetic provenance rejects " + label, bool(validate(bad)))
+    false_builtin = type(sys)("not_registered")
+    false_builtin.__spec__ = type("Spec", (), {"origin": "built-in", "loader": sys.modules["_frozen_importlib"].BuiltinImporter})()
+    record("P11", "unregistered builtin origin refuses", identity("not_registered", false_builtin, deadline)["kind"] == "unknown")
+    false_frozen = type(sys)("false_frozen")
+    false_frozen.__spec__ = type("Spec", (), {"origin": "frozen", "name": "false_frozen", "loader": object()})()
+    record("P11", "false frozen loader refuses", identity("false_frozen", false_frozen, deadline)["kind"] == "unknown")
+    false_frozen.__spec__.loader = sys.modules["_frozen_importlib"].FrozenImporter
+    record("P11", "unregistered frozen name refuses real loader", identity("false_frozen", false_frozen, deadline)["kind"] == "unknown")
+    false_frozen.__spec__.name = "_frozen_importlib"
+    record("P11", "forged registered frozen identity refuses", identity("false_frozen", false_frozen, deadline)["kind"] == "unknown")
+    record("P11", "actual frozen alias preserves registered identity", identity("importlib._bootstrap", sys.modules["_frozen_importlib"], deadline)["kind"] == "frozen")
+    fifo = ROOT / "provenance-fifo"
+    os.mkfifo(fifo, 0o600)
+    try:
+        namespace["provenance_digest"](str(fifo), deadline)
+    except RuntimeError as error:
+        record("P11", "actual provenance FIFO refuses without blocking", str(error) == "nonregular provenance file")
+    else:
+        raise AssertionError("provenance FIFO accepted")
+    record("P11", "nonmodule alias is not module identity", identity("alias", object(), deadline)["kind"] == "nonmodule")
+    missing = type(sys)("missing")
+    missing.__file__ = str(ROOT / "missing-native-origin")
+    try:
+        identity("missing", missing, deadline)
+    except FileNotFoundError:
+        record("P11", "actual missing origin file refuses", True)
+    else:
+        raise AssertionError("missing provenance file accepted")
 
 
 def startup_cases(base, initial):
@@ -1739,34 +1857,46 @@ def startup_cases(base, initial):
                 os.environ[name] = value
     loader = ROOT / "provenance.py"
     provenance = ROOT / "provenance.json"
-    loader.write_text('''import hashlib,json,os,runpy,sys
-source,root,request,output=sys.argv[1:]
+    loader.write_text("import hashlib,json,os,runpy,sys,time\n" + PROVENANCE_HELPERS + '''source,root,request,output,deadline=sys.argv[1:]
+deadline=float(deadline)
 flags={name:getattr(sys.flags,name) for name in ("isolated","no_site","dont_write_bytecode")}
 sys.argv=[source,"read",root,request]
 try:
  runpy.run_path(source,run_name="__main__")
 except SystemExit as result:
  status=result.code
-origins={}
+providers={}
+for name in ("sha1","sha256"):
+ function=getattr(hashlib,name)
+ value=function(b"")
+ providers[name]={"callable_module":getattr(function,"__module__",None),"callable_name":getattr(function,"__name__",None),"type_module":type(value).__module__,"type_name":type(value).__name__,"empty_digest":value.hexdigest()}
+modules={}
+errors=[]
 for name,module in list(sys.modules.items()):
- path=getattr(module,"__file__",None)
- if path and os.path.isfile(path):
-  with open(path,"rb") as stream: digest=hashlib.sha256(stream.read()).hexdigest()
-  origins[name]={"path":path,"sha256":digest}
-with open(output,"w") as stream:
- json.dump({"flags":flags,"executable":sys.executable,"version":sys.version,"platform":list(os.uname()),"origins":origins},stream,sort_keys=True)
+ if module is None: continue
+ try: modules[name]=module_identity(name,module,deadline)
+ except (OSError,RuntimeError,TypeError) as error:
+  modules[name]={"kind":"unknown","error":str(error)}
+  errors.append(name+": "+str(error))
+runtime={"executable":{"path":sys.executable,"sha256":provenance_digest(sys.executable,deadline)}}
+if sys.platform=="darwin":
+ framework=os.path.normpath(os.path.join(os.path.dirname(sys.executable),"../../../..","Python3"))
+ runtime["framework"]={"path":framework,"sha256":provenance_digest(framework,deadline)}
+data={"flags":flags,"executable":sys.executable,"version":sys.version,"platform":list(os.uname()),"modules":modules,"providers":providers,"runtime":runtime,"origins":{name:entry["file"] for name,entry in modules.items() if "file" in entry}}
+data["errors"]=errors+provenance_errors(data)
+with open(output,"w") as stream: json.dump(data,stream,sort_keys=True)
 sys.exit(status)
 ''')
     path = ROOT / "provenance-request.json"
     path.write_bytes(canonical(request()))
-    status, out, err = captured([PYTHON, "-I", "-S", "-B", str(loader), PRODUCT, str(base), str(path), str(provenance)], base, environment(base))
+    status, out, err = captured([PYTHON, "-I", "-S", "-B", str(loader), PRODUCT, str(base), str(path), str(provenance), str(min(START + 1800, time.monotonic() + 120))], base, environment(base))
     data = json.loads(provenance.read_bytes())
     record("P11", "supplementary unchanged source startup", status == 0 and not err and json.loads(out)["current_tip"] == initial["current_tip"])
     record("P11", "actual isolated no-site no-bytecode flags", data["flags"] == {"isolated": 1, "no_site": 1, "dont_write_bytecode": 1})
-    record("P11", "native dependencies identified", all(name in data["origins"] for name in ("_hashlib", "zlib", "fcntl")))
     data["source_sha256"] = file_digest(PRODUCT, START + 1800)
     data["executable_sha256"] = file_digest(PYTHON, START + 1800)
     print("ledger supplementary provenance:", json.dumps(data, sort_keys=True), flush=True)
+    record("P11", "actual required module and hash provider identities", not data["errors"])
 
 
 def growth_and_bootstrap(base, initial):
@@ -1817,6 +1947,7 @@ def growth_and_bootstrap(base, initial):
 print("ledger initial interpreter identity:", json.dumps(tool_identity(PYTHON, runtime=True, deadline=START + 1800), sort_keys=True), flush=True)
 base, initial = protocol_cases()
 startup_boundary_controls()
+provenance_controls()
 startup_cases(base, initial)
 direct_isolation(base, initial)
 print("ledger native startup observation window complete", flush=True)
