@@ -105,6 +105,26 @@ or replace these bytes. The stored hashes bind the original response, the canoni
 extraction of its actual typed result, and the receipt's UTF-8 data respectively.
 The pre-existing materialization digest fields must agree with this record.
 
+Validate the typed journal structure before comparisons or phase dispatch. Journal
+and receiver schema versions are actual integers, never booleans. Phase, receiver
+status and source hash algorithm are strings before membership checks. Apply the
+same complete shape/type rules to supplied and stored delivery keys, including the
+four stage fields and integer attempt number. Dictionary equality alone cannot
+establish these types. Pending and stored records keep their exact separate shapes;
+unknown fields, invalid nested containers and missing required fields are errors.
+A pending record is valid only in `materializing`. A stored record always requires
+its matching materialization summary and candidate identities, even when a separate
+workflow failure set the phase to `failed`; a damaged stored record cannot become
+pending or trigger another execution.
+
+Validate optional version 2 fields whenever present, even if retrieval will not
+consume them. `recoverable` is boolean; `reason` and `recovery` are strings.
+Materialization, verification, review and publisher records retain their existing
+field meanings and exact typed shapes. Preserve valid stored-result retrieval after
+a separate workflow failure. Malformed nested data returns an ordinary diagnostic,
+never an uncaught indexing, membership, type or encoding exception. Reuse the
+existing validation boundaries; add no second schema framework or migration.
+
 The materializer returns the result as an object inside its response; it does not
 return a separately framed stage-result file. For the scanner pair, serialize that
 actual object with the frozen jq 1.6 `-S -c` form and one final newline, then hash
@@ -124,6 +144,7 @@ Use these inclusive byte limits; check encoded journal size before replacing it:
 | Version 2 journal, including escaped response | 8 MiB |
 | Version 1 journal and review/publisher observations | 64 KiB, unchanged |
 | Materializer stderr retained for a diagnostic | 64 KiB |
+| Read-only candidate changed-path inventory | 2 MiB |
 
 The larger journal ceiling accommodates JSON escaping of bounded response bytes;
 there is no repeated history or append-only response list. Keep the old version 1
@@ -132,11 +153,28 @@ read may inspect up to the version 2 ceiling before applying the correct limit.
 Reject unknown journal versions. Stream response capture with the stated ceiling;
 checking length only after an unbounded `subprocess.run(..., PIPE)` is insufficient
 for this new path. Drain or stop excessive diagnostic output without retaining it
-unboundedly. Do not add a retry policy or change materializer cleanup semantics.
+unboundedly. Any stdout byte beyond the materializer response ceiling makes capture
+fail; truncated bytes can never support a stored result. Excess stderr may be
+drained and discarded beyond its diagnostic ceiling without changing an otherwise
+successful materialization into a failure.
+
+Apply an actual bounded subprocess capture boundary to the fixed read-only Git
+tree-diff command before splitting, decoding, sorting or canonicalizing changed
+paths. Reject nonzero exit and any byte beyond the 2 MiB ceiling. A length check
+after unrestricted `subprocess.run(..., PIPE)` or `communicate()` is insufficient.
+Reuse one private bounded capture boundary for the fixed materializer and Git
+callers. Retain at most each stdout ceiling plus one over-limit sentinel byte,
+with bounded chunks and capped diagnostics. Drain concurrent pipes without deadlock;
+on failure drain/discard remaining bytes or stop the child while preserving existing
+cleanup semantics, close descriptors and reap the child. Overflow remains failure
+regardless of which cleanup route is used. No generic execution API, product fault
+flag, new retry policy or changed materializer cleanup contract is introduced.
 
 Strictly decode UTF-8 and one JSON document, without BOM, duplicate members,
-non-finite numbers or trailing data. Reject invalid Unicode, excess nesting above
-32, and malformed nested field types. Apply existing core parsed limits to typed
+non-finite numbers or trailing data. Reject non-finite parsed floats produced by
+exponent overflow, such as `1e999`, as well as named NaN/Infinity tokens. Do not let
+a non-finite value survive inside an unused optional journal field. Reject invalid
+Unicode, excess nesting above 32, and malformed nested field types. Apply existing core parsed limits to typed
 core documents; the response/receipt envelope has its own byte limits because it
 contains a raw receipt string. Use the existing nonblocking, no-follow,
 regular-file read boundary for journal, frozen input and key. Reject links, FIFOs,
@@ -169,6 +207,24 @@ evidence and output links through the core relation plus the fixed materializer
 protocol. It must be the supported completed change outcome; no-change still retains
 its receipt despite having no candidate output entry. Diagnostics, metadata and
 receipt references must match this fixed protocol, with no added evidence claims.
+
+The fixed materializer checks must be stricter than the generic core where the
+core deliberately admits other producers. Bind `reported_by` and execution facts
+to the existing request projection, and accept only the fixed successful result
+fields, completed status, permitted outcome and empty diagnostics. Construct the
+expected receipt reference only from its fixed content ID, `application/json`
+media type and verified raw receipt digest. A changed result has exactly one output
+with the requested output ID and that complete ref; no-change outputs are empty.
+Evidence is exactly one `evidence.local-git-materialization` item with deterministic
+kind, passed verdict and that complete `proof_ref`.
+
+Execution metadata is exactly deterministic. Provider, model, snapshot, effort,
+prompt and skills have the fixed not-applicable shapes. Tools is exactly recorded,
+with empty value and the same complete receipt `source_ref`; core-valid computed
+or unavailable alternatives are not this materializer's output. Reject different
+IDs, media types, digests, cardinalities and extra fields in all these fixed facts.
+Retain core result and receipt/input relation validation. Compare supplied facts;
+never call a result/receipt constructor to regenerate missing execution evidence.
 
 Reopening checks the stored response and extracted result hashes, raw receipt hash,
 all these relations, complete saved identity and frozen input, current execution
@@ -230,28 +286,60 @@ baseline; that spec expressly requires later profile changes to move these live
 pins in the same implementation PR. Its driver, test suite and accepted artifacts
 do not need changes for this update.
 
-For the preserved binding revision `15476b92860608f640a3d480170fd878af3f4b48`,
-the default profile digest is
-`0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179`
-and its local materializer manifest digest is
+The earlier package checkpoint `529069b731eb5738646928f6c6c07fe5bd61d927`
+contains materializer tree `efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff`. Its child,
+profile checkpoint `15476b92860608f640a3d480170fd878af3f4b48`, contains default
+profile digest `0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179`
+and local materializer manifest digest
 `4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065`.
-Verify those bytes from that actual commit before using it in the pinned-from
-header. The materializer package source revision
-`529069b731eb5738646928f6c6c07fe5bd61d927` predates the profile update and cannot
-supply this header's profile provenance. These are separate containing revisions,
-not a reason to change the already correct materializer package reference.
-Preserve both commits on the existing implementation history. Before implementation
-PR publication and merge, prove the named profile revision is published, retained
-and independently fetchable through the same repository source under the accepted
-source-retention procedure; do not rely on a dangling commit or guess a future merge ID.
+These remain historical facts in the preserved history. A corrected protocol
+changes the package tree and requires new source checkpoints and derived bindings;
+these old identities cannot describe the corrected implementation.
 
-Recheck the profile bytes after the separate plan gate and any base merge. If the
-same permitted package-binding maintenance changes them, recompute the two pins
-from the final committed profile bytes and use their actual containing revision;
-the plan must bind that exact tuple before this repair. Any change beyond the
-package references and manifest digests already allowed here returns to G2.
-Updating this shadow module does not alter the materializer package tree or either
-profile, so it introduces no recursive package or profile hash dependency.
+The separately accepted high-risk plan binds the preserved starting attempt and
+the following staged procedure. Future source OIDs are recorded only after their
+commits exist; the plan does not guess them. `S` and `B` below are explanatory
+labels for actual commits, not branch names, refs or product fields.
+
+1. After that plan lands and the manager reconciles the same paused attempt,
+   commit the corrected protocol as package checkpoint S on its existing history.
+   Record its actual full commit ID and package path, mode, type and tree object.
+   Publish by ordinary fast-forward push on the existing implementation branch.
+   The manager verifies remote head/ancestry and independently fetches exact S
+   into a fresh isolated history repository with depth one, no tags and unchanged
+   source/auth handling. Verify the exact commit and package object before use.
+2. Using that verified S, update only the permitted package fields in both
+   manifests, their linked profile bindings and canonical manifest hashes, and
+   the two independent assembly-test expectations. Commit the resulting profile
+   bytes as checkpoint B on the same history. Record its actual full commit ID.
+3. Publish that history and independently fetch exact B with the same isolation.
+   The manager verifies all four profile files' complete bytes and regular blob
+   modes, their canonical hashes, the unchanged S package tree, and the permitted
+   structural differences only. Record the exact S/B tuple, retaining branch and
+   complete fetch proof before the shadow update uses them.
+4. Set the two shadow constants to the verified canonical default file hashes
+   from B and its existing pinned-from header to actual B. Commit on the same
+   history. The shadow module lies outside the package and profile trees, so this
+   final dependent update changes neither source checkpoint's bytes.
+5. Before implementation PR publication and protected merge, require fresh exact
+   source fetch proof, ancestry and final package/profile/shadow consistency.
+   Retain both containing commits on the existing branch under the accepted
+   source-retention procedure. Do not depend on a dangling commit or invent a
+   future squash/merge ID. An intermediate source push is not green implementation
+   evidence, a release or permission to merge.
+
+This procedure records the actual downstream source tuple within an already
+accepted plan; it needs no extra plan amendment solely to learn the resulting
+commit IDs. A later same-scope protocol/profile change repeats the affected
+checkpoint and dependent checks before reuse, retaining the prior history and
+invalidating affected review/CI evidence. A change to design, allowed fields,
+paths, review size or safety boundaries returns through the affected artifact gate.
+No source checkpoint may substitute for final independent exact-head/base review.
+
+Keep the existing separate direct operator gate for the bounded repository-setting
+procedure needed to retain the branch after squash merge. This spec grants no
+setting write, new ref or weaker protection. The required single-merge window,
+raw setting/state evidence, restoration and failure recovery remain in force.
 
 ### Publication and the two crash windows
 
@@ -363,24 +451,50 @@ Tampered result refs, digest or attempt relations must be rejected by the real
 scanner, not merely by a test double. The scanner and planner product files do not
 need modification or special handling for replay receipts.
 
-Use real separate processes and explicit synchronization around journal publication
-to prove SIGKILL before publication with an existing candidate and after publication
-before any outward response. Also prove same-key redelivery, concurrent callers
-under the same lock, pending pre-effect restart, byte-identical retrieval, and no
-extra materializer invocation after storage. At each missing/corrupt/conflict case,
-compare journal, frozen input and candidate state before and after. Include changed
-and no-change candidates, root and ancestor source commits, and both supported Git
-object formats through owned disposable fixtures.
+The proof below is required, not a choice of examples. Keep real changed and
+no-change materializations, root and ancestor source commits, and both SHA-1 and
+SHA-256 through owned disposable fixtures. Positive persistence/retrieval proof
+must use actual fixed materializer output. Use separate processes for reopen and
+explicit synchronization with watchdogs for crash and concurrency tests.
 
-Cover key shape and every binding field; frozen-input and tool drift; result and
-receipt schema/digest/ref/attempt/source/candidate/outcome mismatches; duplicate
-members, invalid UTF-8, truncation, extra documents, unknown fields, missing payloads,
-booleans in integer slots, depth and every byte ceiling. Exercise oversized stdout
-and stderr while checking bounded capture. Validate legacy no-key behavior and
-refusal to retrofit a key; pending and stored version 2 records cannot escape via
-no-key invocation. Test publication I/O failure and response-write failure without
-losing prior usable state. Fault injection is test-only, following the existing
-loaded-driver wrapper pattern; no product environment flag bypass is added.
+| Boundary | Required cases and observable result |
+| --- | --- |
+| Key and journal types | All four stage fields, request hash, operation, attempt, missing/extra fields and ordinal; supplied and saved keys; wrong nested containers, bool versions/attempts and malformed phase/status/algorithm. Check exact ordinary-error versus valid-conflict exit, no traceback and no scanner-ready result. |
+| Strict JSON | Duplicate members, BOM, invalid UTF-8 and lone surrogates, truncation, trailing data/extra documents, non-finite spellings and exponent overflow, fractions in integer fields, depth 32/33. Exercise pending/stored journals and response/receipt parsing, including unused optional journal fields. |
+| Byte limits | Every inclusive ceiling above and one byte beyond, at the actual file read, stream capture, extracted-document or encoded-journal boundary. If a maximum-sized value cannot have a valid fixed semantic shape, prove the boundary separately and do not call it a valid materialization. |
+| Subprocess capture | Real finite subprocess pipes at and above the stdout limit, more-than-pipe-buffer stderr, concurrent stdout/stderr pressure, nonzero exit and injected read failure. Check retained-byte bounds, no deadlock, closed descriptors and reaped child. Include a rejected keyed Git-inventory overflow with full state preservation. |
+| Identity | Each saved identity field and frozen input/request/profile/manifest/payload, source repository/commit/tree/algorithm, verifier path/digest, loaded driver, materializer package/generation/files, jq and closure helper. Changed valid identity fails stale/conflict; malformed identity fails ordinarily. |
+| Result and receipt | Schema, full refs, IDs, all timestamps, attempt, source/candidate/parent, changed-path count/hash, performer/binding/environment/capability, outcome/output/evidence/metadata and extra claims. Test both raw digest corruption and fully rehashed relation mutations at direct protocol validation and persisted reopen. |
+| Pre-effect restart | A pending attempt with empty candidate/scratch roots may perform its first materialization once. Partial candidate or scratch content produces missing evidence without execution. Repeated unavailable reads/redeliveries preserve all bytes. |
+| Before-publication crash | After actual materializer return with a candidate present, pause before journal result publication; SIGKILL and wait for death. Reopen reports missing evidence without reconciliation, deletion, new attempt or invocation. |
+| After-publication crash | Pause after publication and before any outward response, record the actual captured response independently, assert stdout empty, SIGKILL and wait. Fresh retrieval must equal those original bytes, not merely have a stored status or result shape. |
+| Atomic I/O and reply | Inject stored-result publication write, flush, file-fsync, rename and post-rename directory-fsync failures; separately break outward output after successful publication. No failed writer claims stored success. Pre-replacement failures preserve prior usable bytes; after rename a fresh process validates actual state. Cover keyed interruption exit 75. |
+| Compatibility | Version 1 unavailable read and key-retrofit refusal; omitted key for both pending/stored version 2 delivery and read; legacy recovery never gains original-result evidence. Keep all unchanged legacy checks. |
+| Read and redelivery | Same-key and concurrent callers under one permanent lock cause one real materialization. Retrieval and matching redelivery preserve original bytes; retrieval leaves phase, bundle and lock inode unchanged, creates no missing state/lock/bundle, rejects observations, and works after a separate fixed-verifier failure. |
+| Scanner | Actual changed/no-change results classify terminal. Result-ref, digest and rehashed attempt-relation mutations fail through the real scanner. Do not modify scanner code or fabricate execution evidence. |
+
+For every missing, malformed, corrupt, conflicting or stale read/redelivery, snapshot
+journal, frozen input, execution bundle and candidate refs/objects before and after;
+include candidate/scratch contents in prepublication and capture failures. Inventory
+relative entries, types, modes, file bytes and link targets without following links.
+Verify the permanent lock inode separately. Exclude access timestamps and test logs
+outside the evidence roots, not durable evidence. Take the baseline after deliberate
+test mutation so the assertion detects product writes. No cleanup hides a failure.
+
+Keep an independent original-response oracle outside the state being tested. For
+relation mutations, recompute the full enclosing hash chain, including journal
+materialization summary hashes, not only receiver hashes. Receipt mutations also
+update payload hash and every unaffected receipt link. Leave only the intended
+semantic relation wrong; separate cases intentionally retain stale digests. Check
+fixed expected refs/facts independently rather than using the new response validator
+or a regenerated stage_result as its own expected-value oracle. Each table-driven
+case has a clear name and its own assertion, even when setup is shared.
+
+Fault injection is private to the existing test-only loaded-driver wrapper pattern.
+Target publication faults after real response capture, not incidental earlier
+snapshot writes. Synthetic stream children prove capture behavior only. Positive
+materialization still delegates to the real fixed implementation. No runtime flag,
+new fixture framework, copied exception or production testing interface is added.
 
 Run the new suite, all 40 replay checks, protocol and adapter suites, scanner and
 planner suites, both profile-assembly suites, the unchanged target-packaging,
@@ -402,27 +516,55 @@ failed full run into a pass. Obtain fresh complete runner and required CI eviden
 for the final exact implementation head/base; do not skip a suite, relax a digest
 check, widen a timeout or replace real assembly with a synthetic fixture to pass.
 
+The later full native run at paused head
+`45f306b3b7d8e6346393101e91005703adca58dc` was safely stopped with exit 143
+and preserved; it is not a pass. Keep its full output alongside the earlier
+exit-142 run and exit-1 shadow continuation. Run the complete final native runner
+without a PTY, with stdin closed and no inherited shard selector, retaining original
+logs, tool identities, head/base and actual exit. Require complete suite coverage
+and its successful terminal total without timeout increases or command shims.
+Final remote proof includes checks, all six test shards and aggregate CI with
+original logs, checkout parent/tree identity and complete tracked suite coverage.
+Artifact-only CI, focused passes and a green badge do not replace this proof.
+
 Documentation must explain full-directory restoration, format distinction, fixed
 limits, unavailable evidence, supported key scope, retrieval and inactive status.
 
-`review_size: accepted-exception`. Plan for an estimated 800–1,500 added plus
-removed implementation lines across these exact paths, including tests and docs.
-The paused implementation at `db685b5c7f38f4f105d2ac727e4934f6535a3c9b`
-measured 1,172 added plus removed lines across the eight original paths. The first
-binding repair at `15476b92860608f640a3d480170fd878af3f4b48` measures 1,202
-added plus removed lines across fourteen paths against its accepted base. Completing
-the dependency repair adds only the shadow module's two pins and provenance header,
-for fifteen exact paths. It is expected to fit the same estimate without dropping
-receiver or regression proof; the existing shadow suites need no edits.
-Recheck the actual complete diff after implementation; this does not waive an overrun.
-This is a planning estimate, not a measured future diff. The source baseline is an
-875-line replay, 435-line protocol, 1,152-line unchanged replay suite and 356-line
-protocol suite. Bounded capture, versioned validation, two process-crash proofs,
-negative relation cases and real scanner integration belong to the same persistence
-contract; splitting them would leave an unproved result boundary. The high-risk
-plan must allocate and justify that range using the actual design and later review
-must compare actual size. An overrun returns through the separate amendment gate;
-never shorten tests or compress code to meet it.
+`review_size: accepted-exception`. Plan for 2,000–3,000 added plus removed
+implementation lines across the same fifteen exact paths, including tests and docs.
+The earlier 800–1,500 estimate did not account for the complete accepted proof and
+validation obligations. The paused head
+`45f306b3b7d8e6346393101e91005703adca58dc` measures 1,171 additions and
+37 deletions, or 1,208 total, against
+`c332aaff66f116c2badf2adb408e39c887383697`. It contains incomplete validation
+and proof; its measured size is not evidence of completion. Its remote checkpoint
+is `0b662b0c5317c8d27a0331f7204fbe7b62353363`, with implementation PR absent.
+Preserve and freshly reconcile that same attempt before resume.
+
+| Area | Current added plus removed | Estimated complete diff |
+| --- | ---: | ---: |
+| Replay driver, typed validation and bounded capture | 524 | 640–800 |
+| Pure fixed materializer response validator | 49 | 85–125 |
+| Receiver suite with complete proof matrix | 410 | 1,050–1,450 |
+| Direct protocol relation tests | 48 | 180–300 |
+| README, component guide, recovery guide and restore entries | 141 | 141–165 |
+| Four profile files, two assembly tests and shadow pins/header | 36 | 36–50 |
+| Total | 1,208 | 2,132–2,890 |
+
+The 2,000–3,000 envelope allows modest variation around that allocation. Counts are
+final additions plus removals against the accepted base, not accumulated edit churn
+or per-file quotas. The new receiver suite's final length counts once. Reuse its
+private helpers and existing fixtures for named cases; introduce no duplicate test
+framework or product injection seam. Keep the unchanged 1,152-line legacy suite and
+all 40 checks. Recheck the full final diff and exact path set. The high-risk plan
+must allocate this range; final review must compare actual size and full proof.
+
+Bounded capture, exact result/journal validation, separate process-crash windows,
+atomic I/O failure proof, negative relations, preservation, real scanner integration
+and source binding consistency prove one persistence contract. Splitting off the
+missing checks would leave that boundary unproved. An overrun or changed concern
+returns through the separate amendment gate; never shorten tests, suppress cases,
+compress code or weaken evidence to meet the estimate.
 
 ## Out of scope
 
