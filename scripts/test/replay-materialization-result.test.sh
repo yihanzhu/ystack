@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -213,8 +214,10 @@ python3 "$replay" "${stored_args[@]}" --read-materialization-result \
   --review-observation "$key" > "$tmp/observation.out" 2> "$tmp/observation.err"
 status=$?
 set -e
-[ "$status" -eq 1 ] && grep -Fq 'does not accept workflow observations' "$tmp/observation.err" ||
+if [ "$status" -ne 1 ] ||
+   ! grep -Fq 'does not accept workflow observations' "$tmp/observation.err"; then
   fail read-observation
+fi
 pass 'read mode rejects workflow observations'
 
 make_roots legacy
@@ -232,9 +235,11 @@ set +e
 python3 "$replay" "${legacy_without_key[@]}" --read-materialization-result > "$tmp/legacy-read.out"
 status=$?
 set -e
-[ "$status" -eq 3 ] && "$jq_bin" -e '.status=="unavailable" and
-  .reason_id=="replay.legacy-result-unavailable" and (has("stage_result")|not)' \
-  "$tmp/legacy-read.out" >/dev/null || fail legacy-read
+if [ "$status" -ne 3 ] || ! "$jq_bin" -e '.status=="unavailable" and
+   .reason_id=="replay.legacy-result-unavailable" and (has("stage_result")|not)' \
+   "$tmp/legacy-read.out" >/dev/null; then
+  fail legacy-read
+fi
 pass 'version 1 remains unavailable as original result evidence'
 
 counter_wrapper="$tmp/counter-wrapper.py"
@@ -364,8 +369,11 @@ for point in before after; do
     python3 "$replay" "${crash_args[@]}" --read-materialization-result > "$tmp/before-read.out"
     status=$?
     set -e
-    [ "$status" -eq 3 ] && "$jq_bin" -e '.reason_id=="replay.materialization-result-missing"' \
-      "$tmp/before-read.out" >/dev/null || fail before-missing
+    if [ "$status" -ne 3 ] ||
+       ! "$jq_bin" -e '.reason_id=="replay.materialization-result-missing"' \
+         "$tmp/before-read.out" >/dev/null; then
+      fail before-missing
+    fi
     [ "$(git_clean --git-dir="$tmp/crash-before-candidate/repository.git" rev-parse refs/heads/candidate)" = "$candidate_before" ] ||
       fail before-candidate-mutated
   else
