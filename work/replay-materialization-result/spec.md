@@ -1,7 +1,7 @@
 ---
 intent-blob: eb68c51f1a9866599c8662e967fba8375ccfbf3e
 risk: high
-drafted: 2026-09-14
+drafted: 2026-09-15
 ---
 
 # Spec: Preserve real materialization results in the replay journal
@@ -211,6 +211,48 @@ contract. It does not add a package format, resolver fallback, qualification,
 capability, release, installation or activation. The existing owned disposable
 packaging test fixtures remain development proof only.
 
+### Shipped-default shadow digest bindings
+
+The default profile also has a direct byte-identity consumer in
+`shadow/v1/materialization-input.jq`. Update only its `profile_pin` constant,
+`manifest_pins.forge` constant, and the existing pinned-from provenance header.
+The two constants must equal SHA-256 of the final canonical default profile and
+local materializer manifest bytes. Retain the other six document pins, all decision
+text and digest pins, `digest_mismatch`, `config_pins_ok`, profile graph checks and
+every other predicate unchanged. The same fixed constants must continue to check
+both supplied document bytes and any corresponding resolved config source.
+Do not derive trusted pins from caller input, accept old and new digests
+interchangeably, replace exact equality with shape checks, or add a resolver fallback.
+
+This is the keep-in-sync update required by requirements 3 and 13 of the accepted
+`work/shadow-input-assembler/spec.md`. Its original digest table records its source
+baseline; that spec expressly requires later profile changes to move these live
+pins in the same implementation PR. Its driver, test suite and accepted artifacts
+do not need changes for this update.
+
+For the preserved binding revision `15476b92860608f640a3d480170fd878af3f4b48`,
+the default profile digest is
+`0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179`
+and its local materializer manifest digest is
+`4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065`.
+Verify those bytes from that actual commit before using it in the pinned-from
+header. The materializer package source revision
+`529069b731eb5738646928f6c6c07fe5bd61d927` predates the profile update and cannot
+supply this header's profile provenance. These are separate containing revisions,
+not a reason to change the already correct materializer package reference.
+Preserve both commits on the existing implementation history. Before implementation
+PR publication and merge, prove the named profile revision is published, retained
+and independently fetchable through the same repository source under the accepted
+source-retention procedure; do not rely on a dangling commit or guess a future merge ID.
+
+Recheck the profile bytes after the separate plan gate and any base merge. If the
+same permitted package-binding maintenance changes them, recompute the two pins
+from the final committed profile bytes and use their actual containing revision;
+the plan must bind that exact tuple before this repair. Any change beyond the
+package references and manifest digests already allowed here returns to G2.
+Updating this shadow module does not alter the materializer package tree or either
+profile, so it introduces no recursive package or profile hash dependency.
+
 ### Publication and the two crash windows
 
 Hold the existing permanent `replay.lock` across journal validation, delivery,
@@ -307,6 +349,7 @@ Implementation may change only:
 - `profiles/alternative/v1/profile.json`;
 - `scripts/test/default-profile-assembly.test.sh`;
 - `scripts/test/alternative-profile-assembly.test.sh`;
+- `shadow/v1/materialization-input.jq`, only the two pins and provenance header above;
 - `README.md`, `docs/components.md`, `docs/replay-materialization-result.md` (new);
 - `ci/required-files.txt`, appending the two new restore-critical files.
 
@@ -340,20 +383,37 @@ losing prior usable state. Fault injection is test-only, following the existing
 loaded-driver wrapper pattern; no product environment flag bypass is added.
 
 Run the new suite, all 40 replay checks, protocol and adapter suites, scanner and
-planner suites, both profile-assembly suites, the unchanged target-packaging suite,
-the complete existing test runner, structure validation and pinned Shellcheck 0.11.0.
+planner suites, both profile-assembly suites, the unchanged target-packaging,
+shadow-assembler and shadow-slice suites, the complete existing test runner,
+structure validation and pinned Shellcheck 0.11.0.
 Compare the four profile files structurally and require only the package revision,
 tree and linked manifest-digest changes described above. Verify that both manifests
 and both bindings name the same exact materializer package and that every other
 field is unchanged. Required CI and separate exact-head/base review remain mandatory.
+Run the unchanged shadow-assembler suite against the final real shipped default
+files. Require all eight live-pin assertions, canonical output and repeatability,
+SHA-1 and SHA-256 source cases, self-consistent lookalike refusal, config-source
+mismatch refusals, and its real assembler-to-shadow-driver run to pass. Verify the
+shadow module diff contains only the two constants and provenance header, with all
+six other profile pins and every validator unchanged. Preserve the failed proof
+from the paused head, including the real `E_PROFILE profile.json` refusal and the
+separate full-run timeout. Neither continuations nor focused passes turn that
+failed full run into a pass. Obtain fresh complete runner and required CI evidence
+for the final exact implementation head/base; do not skip a suite, relax a digest
+check, widen a timeout or replace real assembly with a synthetic fixture to pass.
+
 Documentation must explain full-directory restoration, format distinction, fixed
 limits, unavailable evidence, supported key scope, retrieval and inactive status.
 
 `review_size: accepted-exception`. Plan for an estimated 800–1,500 added plus
 removed implementation lines across these exact paths, including tests and docs.
 The paused implementation at `db685b5c7f38f4f105d2ac727e4934f6535a3c9b`
-measured 1,172 added plus removed lines across the eight original paths. The bounded binding and exact-pin test maintenance adds six paths;
-it is expected to fit the estimate without dropping receiver or regression proof.
+measured 1,172 added plus removed lines across the eight original paths. The first
+binding repair at `15476b92860608f640a3d480170fd878af3f4b48` measures 1,202
+added plus removed lines across fourteen paths against its accepted base. Completing
+the dependency repair adds only the shadow module's two pins and provenance header,
+for fifteen exact paths. It is expected to fit the same estimate without dropping
+receiver or regression proof; the existing shadow suites need no edits.
 Recheck the actual complete diff after implementation; this does not waive an overrun.
 This is a planning estimate, not a measured future diff. The source baseline is an
 875-line replay, 435-line protocol, 1,152-line unchanged replay suite and 356-line
