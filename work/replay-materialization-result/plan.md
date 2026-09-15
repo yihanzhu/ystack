@@ -1,5 +1,5 @@
 ---
-spec-blob: 466079bb084b8b58bd5d09bdca322d0b03d6ce15
+spec-blob: d4a803b0c27cd08d21c4d87458faf2fa76ec88ce
 drafted: 2026-09-15
 ---
 
@@ -11,8 +11,9 @@ Risk: high. Gate mode: `artifact-high`. Review size: `accepted-exception`.
 This plan covers one concern: retaining and retrieving the actual response of
 one keyed offline materialization in the existing replay journal.
 
-The amendment source base is `f7bc0dc641041e568b76dcb8185ec094d5730df3`,
-containing the accepted G2 amendment in PR #335. The accepted intent blob remains
+The amendment source base is `7b27356db62aabd34ca1726ed5d1ad261d4677b5`,
+containing the accepted shadow-binding G2 amendment in PR #339. The accepted
+intent blob remains
 `eb68c51f1a9866599c8662e967fba8375ccfbf3e`; the spec links to that exact blob.
 The separate plan amendment must land before implementation resumes. The current
 Roadmap program delegation in `work/roadmap-program-authorization/decision.md`
@@ -20,11 +21,25 @@ supplies the named manager's acceptance process. This draft neither accepts itse
 nor authorizes a second manager.
 
 The preserved implementation is `ystack/impl/replay-materialization-result` at
-`db685b5c7f38f4f105d2ac727e4934f6535a3c9b`, with a clean worktree and old
-base/plan-base `70d1a6a06f701514d56628653d48d59043b8672c`. Its recorded PR state
-is absent; intake #324 is paused with `claimed` and `needs-human`, without `ready`.
-These are the preserved facts, not a substitute for the manager's fresh server
-and worktree check. Keep this same attempt. Do not discard, recreate or rewrite it.
+local `15476b92860608f640a3d480170fd878af3f4b48`, clean, with old base/plan-base
+`ab26ca2a477afff6541220fde2107fd445904538`. Its recorded remote head is
+`529069b731eb5738646928f6c6c07fe5bd61d927`; PR state is absent. The local binding
+commit is the direct child of that published package-source commit. Intake #324
+is paused with `claimed` and `needs-human`, without `ready`. The prior accepted
+plan blob is `356b48a1a64b03678e3b89e56db53fecd98792c9`. Earlier implementation
+`db685b5c7f38f4f105d2ac727e4934f6535a3c9b` remains in the same history.
+These are preserved facts, not a substitute for fresh server and worktree checks.
+Keep this same attempt; do not discard, recreate or rewrite it.
+
+The saved full runner at the paused head failed with exit 142. Its corrected
+continuation later failed with `E_PROFILE profile.json` from the real shadow
+assembler because the newly bound default files differ from its old fixed pins.
+The 32-file proof index has SHA-256
+`968d286c1498d48069fe97e13cee87271364704b9d879dfac3dbd5ed8a2c6621`.
+Preserve that complete record, including the other harness failures and subsequent
+individual passes. Neither those passes nor G2's artifact-only CI prove this
+implementation complete. The remaining work is the ordinary shadow binding repair
+and fresh complete proof, plus any allowed receiver corrections evidence requires.
 
 ## Files that change
 
@@ -46,6 +61,7 @@ may change only these paths:
 | `profiles/alternative/v1/profile.json` | The same exact binding and manifest-digest update. |
 | `scripts/test/default-profile-assembly.test.sh` | Add a fixed materializer commit expectation and isolated exact fetch; retain all existing object and unrelated-pin proof. |
 | `scripts/test/alternative-profile-assembly.test.sh` | The same materializer proof, retaining the independent producer pin and every existing check. |
+| `shadow/v1/materialization-input.jq` | Only `profile_pin`, `manifest_pins.forge` and the existing pinned-from header; all predicates and other pins stay unchanged. |
 | `README.md` | Update the replay component entry and link the storage guide. |
 | `docs/components.md` | Describe keyed storage and retrieval alongside the existing offline replay. |
 | `docs/replay-materialization-result.md` | New invocation, limits, restoration and recovery guide. |
@@ -55,24 +71,24 @@ Keep `scripts/test/delivery-replay.test.sh` byte-identical, including all 40
 checks. Reuse its `local-git-materializer-fixtures.sh` builder without changing
 that builder. `run-all.sh` discovers the new `*.test.sh` automatically. No scanner,
 planner, core generation, materializer executable, workflow or constitution change
-is needed. Shipped profile changes are limited to the six dependency paths and
-fields above. Leave packaging validation and `target-packaging.test.sh` unchanged.
-All six dependency files already exist; only the two originally planned restore
-manifest entries are appended.
+is needed. Shipped profile changes are limited to the four JSON files and fields
+above, with corresponding maintenance in the two assembly tests. Leave packaging validation and `target-packaging.test.sh` unchanged.
+All seven dependency files already exist, including the shadow module already
+covered by the restore manifest. Only the two originally planned restore manifest
+entries are appended. Keep both shadow suites and the shadow shell driver unchanged.
 
 The accepted implementation envelope remains 800–1,500 added plus removed lines
-across these fourteen exact paths. The preserved implementation measures 1,172
-lines across the original eight paths: replay 524, protocol 49, new receiver tests
-410, direct protocol tests 48, documentation 139 and restore manifest 2. These are
-measurements of the paused attempt, not proof that its unfinished work passes.
+across these fifteen exact paths. The current paused implementation measures 1,168
+additions plus 34 deletions, or 1,202 added plus removed lines across fourteen paths
+against `ab26ca2a477afff6541220fde2107fd445904538`. The earlier eight-path
+implementation measured 1,172 lines. These are measurements, not passing evidence.
 
 | Work | Added plus removed lines |
 | --- | ---: |
-| Preserved implementation across the original eight paths | 1,172 measured |
-| Four canonical one-line JSON replacements | 8 expected |
-| Two explicit materializer commit/fetch test updates | 16–60 estimated |
-| Remaining receiver corrections and proof, if needed | 0–260 estimated |
-| Expected complete diff within the accepted envelope | 1,196–1,500 estimated |
+| Current implementation and completed six-path binding maintenance | 1,202 measured |
+| Two shadow digest constants and their containing-commit header | 6 expected |
+| Remaining receiver corrections and proof, if needed | 0–292 estimated |
+| Expected complete diff within the accepted envelope | 1,208–1,500 estimated |
 
 The remaining allocations explain how the necessary dependency work fits the
 accepted upper bound. They are not per-file quotas or permission to trim proof.
@@ -101,12 +117,20 @@ An unexpected identity or dirty state stops this attempt.
 
 Merge the newly accepted main into that same implementation branch without reset,
 rebase or force-push. Record the resulting actual head and verify a clean worktree,
-unchanged accepted artifact links and the current base. Before coder work, record a
+unchanged accepted artifact links and the current base. Verify both actual source
+commits remain ancestors, the materializer tree and all four profile bytes are
+unchanged from the preserved tuple below, and the two shadow pins still need the
+identified update. A change to that tuple pauses this repair for a separate plan
+amendment; any wider profile change also returns to G2. Before coder work, record a
 fresh matching build claim with `artifact-high/high/plan-refresh`, PR absent and
 this reconciled exact tuple; require `claimed` present and `needs-human` and `ready`
 absent. The coder does not edit the artifact chain. Prior implementation review
 evidence is stale. A later base move requires renewed exact-base checks and
 independent review; changed artifact meaning returns through the affected gate.
+
+Steps 1–5 retain the complete receiver implementation contract. Review and finish
+the existing implementation against them; do not restart it or replace evidence
+already present. Step 6 completes the missing dependency maintenance.
 
 ### 1. Separate keyed state from legacy replay before changing execution
 
@@ -296,66 +320,91 @@ existing interruption handling retains 75. No failure output includes a
 scanner-ready result. Result storage, a waiting replay exit and workflow
 completion remain distinct facts.
 
-### 6. Publish a real package source before synchronizing inactive bindings
+### 6. Complete the exact package, profile and shadow binding chain
 
-The response validator changes the bound materializer tree. At the preserved head,
-`adapters/local-git-materializer/v1` is mode `040000`, type `tree`, object
-`efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff`. The old profile tree is
-`277863b98b49e54e2cd826b3f32913fd49c51abf` at commit
-`a637451d4b3fbef6b516a9c08f68c0dde46a7059`. Packaging correctly refuses this
-mismatch. Update the ordinary bindings; do not weaken that refusal or move the
-validator to hide the package change.
+Keep the existing actual source identities separate:
 
-After reconciliation and any protocol corrections, select an actual commit on the
-preserved implementation history containing the final materializer tree. The paused
-head may supply it only if that exact tree remains correct. Otherwise commit the
-corrected protocol first and record the resulting real containing commit. Read its
-exact path, mode, type and object ID from Git and verify that the implementation's
-package tree equals it. This source commit predates the binding update, so no file
-needs its own commit ID or a future squash/merge ID.
+| Source fact | Exact value |
+| --- | --- |
+| Materializer package containing commit | `529069b731eb5738646928f6c6c07fe5bd61d927` |
+| Package path, mode and type | `adapters/local-git-materializer/v1`, `040000`, `tree` |
+| Package object ID | `efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff` |
+| Updated default profile containing commit | `15476b92860608f640a3d480170fd878af3f4b48` |
+| Default `profile.json` SHA-256 | `0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179` |
+| Default materializer manifest SHA-256 | `4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065` |
 
-The manager coordinates publication through the existing implementation branch in
-the existing source repository, using only an ordinary push of the preserved history.
-Record the exact published head and prove the selected source commit is reachable
-from it. Before accepting it as a binding, fetch that exact commit from the source
-into a fresh isolated history repository using the assembly suites' existing
-`history_fetch` boundary: depth one, no tags, unchanged source/auth handling. Verify
-the fetched commit ID and exact package path/mode/type/object. Local object existence
-or a remote-tracking ref alone does not prove source fetchability. An intermediate
-source push is not a green implementation or permission to merge it.
+The package anchor contains the old profiles; its child contains the new profile
+bindings. Read both revisions from Git to prove their contents, and require the
+current implementation to retain the exact package tree and four profile files
+from the corresponding revision. Do not replace the correct package anchor with
+the profile commit merely because its header needs a later provenance revision.
+No future squash/merge ID or self-referential file is needed.
 
-Then change only `body.package_ref.object_id` and
-`body.package_ref.revision.commit_id` in each materializer manifest. Use the same
-verified tree and containing commit for both. Serialize final manifest bytes with
-frozen jq 1.6 `-S -c` and one newline; hash those exact bytes. In each profile's sole
-`adapter.local-git-materializer.v1` binding, copy the identical package reference
-and update only `manifest_ref.sha256` to that manifest digest. Preserve canonical
-profile framing. All other package, prompt and config pins, manifest/profile fields,
-authority records, Roadmap digests, roles, principals, boundaries, capabilities,
-permissions, models and qualification behavior stay unchanged.
+The four profile files already implement the accepted repair. In each materializer
+manifest only `body.package_ref.object_id` and
+`body.package_ref.revision.commit_id` differ from the old base. Each profile's sole `adapter.local-git-materializer.v1` binding has
+the same package reference and the canonical manifest hash in `manifest_ref.sha256`.
+Both manifests and profiles use frozen jq 1.6 `-S -c` with one newline. Verify these
+facts and every other field unchanged: authority records, Roadmap digests, roles,
+principals, boundaries, capabilities, permissions, models and all other packages,
+prompts and config. Packaging correctly rejects stale trees or linked hashes;
+retain that validation.
 
-Give both assembly suites one fixed `materializer_package_commit` value taken from
-the independently checked source commit. Fetch it explicitly into their disposable
-history repositories and assert its exact commit, depth one and absence of tags.
-In each manifest loop, use that expectation only for
-`adapter.local-git-materializer.v1`; retain exact revision/path/mode/type/object
-checks. Preserve the common `package_commit` for all other applicable packages and
-prompts, and the alternative suite's independent `producer_package_commit`. Never
-read an expected commit back from the candidate manifest/profile or weaken checks
-to permit an arbitrary revision.
+Both assembly suites already carry an independent fixed
+`materializer_package_commit` equal to the package anchor above. Preserve their
+isolated exact fetch, depth-one/no-tags and revision/path/mode/type/object checks.
+Retain the common `package_commit` for all other applicable packages and prompts,
+and the alternative suite's independent `producer_package_commit`. Do not derive
+expected commits from the candidate manifests/profiles or allow arbitrary revisions.
 
-Commit the completed bindings and test maintenance on the same implementation
-branch before the unchanged packaging suite runs, because that suite packages actual
-HEAD. Verify the final HEAD's materializer tree still equals the recorded source
-and both profiles. Any subsequent materializer change requires another actual
-containing commit, publication/fetch verification and recomputed binding/digest/test
-links in this same order before fresh proof.
+After the plan merge and exact attempt reconciliation, the manager coordinates an
+ordinary fast-forward push of this same implementation history to its existing
+branch. Record the published head and require both containing commits to be
+ancestors. Independently fetch each exact containing commit into a fresh isolated
+history repository using the existing assembly `history_fetch` boundary: depth one,
+no tags and unchanged repository source/auth handling. For the package commit,
+verify exact commit/path/mode/type/object. For the profile commit, verify exact
+commit and both default documents as regular `100644` blobs, their complete bytes
+and SHA-256 values; compare all four profile files with current implementation.
+This must precede the implementation PR. Local object existence, a tracking ref or
+the older package-source fetch alone cannot prove the newer profile commit is
+fetchable. An intermediate source push is not passing implementation evidence.
 
-Retain the published implementation branch after squash merge, with the selected
-source commit still reachable; do not delete or rewrite it while bindings reference
-that source. The manager's fresh repository inspection reports
+Then update precisely three lines in `shadow/v1/materialization-input.jq`:
+
+- `profile_pin` becomes the default profile SHA-256 above.
+- `manifest_pins.forge` becomes the default materializer manifest SHA-256 above.
+- The existing `# pinned from profiles/default/v1 at <commit>` header names the
+  verified profile-containing commit `15476b92860608f640a3d480170fd878af3f4b48`.
+
+Retain the other six document pins, all decision text/digest pins, `digest_mismatch`,
+`config_pins_ok`, profile graph checks and every other predicate byte-for-byte.
+The two fixed constants continue to validate both supplied document bytes and the
+corresponding resolved config source. No caller-derived trusted pins, old/new
+alternative acceptance, shape-only check, fallback or sibling artifact rewrite is
+allowed. The accepted shadow spec's requirements 3 and 13 require this live-pin
+maintenance and its unchanged existing suite checks it.
+
+The module is loaded by path and has no downstream package or digest pin. It lies
+outside the materializer package and profile trees. Verify this three-line diff
+leaves those trees and profile bytes unchanged; it creates no recursive digest
+chain. Commit the repair on this same implementation branch before proof that
+packages actual HEAD. Recheck both source ancestors and their fetchability at the
+final head, before implementation PR publication and again before merge.
+
+If later accepted receiver corrections change the materializer tree, preserve the
+attempt and return through a separate plan amendment binding the replacement exact
+source/profile tuple before any later shadow repair. That amendment must retain
+actual containing commit → ordinary source publication → isolated exact fetch →
+canonical manifest/profile/test links → profile-containing commit → published/fetched
+profile provenance → shadow pins, in that order. No source change silently reuses
+these old expected digests. Wider profile meaning returns through G2.
+
+Retain the published implementation branch after squash merge, with both selected
+containing commits still reachable; do not delete or rewrite it while package or
+profile provenance references them. The manager's fresh repository inspection reports
 `delete_branch_on_merge: true`. Omitting a CLI deletion option does not prevent
-server deletion. A squash merge does not retain this original source commit in
+server deletion. A squash merge does not retain these original source commits in
 main's history, and a temporarily dangling object is not a restoration guarantee.
 
 The necessary retention procedure below requires the operator's separate direct
@@ -367,9 +416,10 @@ merge wait for this decision. Do not add another ref, change merge protection or
 use an unproved retained-PR-ref guarantee as a substitute.
 
 1. Prepare the complete exact-head/base implementation review and required green
-   CI. Record the source commit/tree, implementation branch and exact remote head.
-   Verify source ancestry and a fresh isolated exact fetch. Obtain operator approval
-   to change only `delete_branch_on_merge` from true to false for this one protected
+   CI. Record both containing commits, the package tree and profile digests,
+   implementation branch and exact remote head. Verify both source ancestors and
+   fresh isolated exact fetches with their respective tree/document checks. Obtain
+   operator approval to change only `delete_branch_on_merge` from true to false for this one protected
    implementation merge and restore true afterward, including failure cleanup.
 2. Before changing the setting, reserve a single-merge window: the named manager
    starts no other merge until the setting is restored and verified. Capture fresh
@@ -382,12 +432,12 @@ use an unproved retained-PR-ref guarantee as a substitute.
    no branch-deletion request. No ruleset, protection, merge-method or permission
    change is allowed. The temporary setting alone never grants merge authority.
 4. Read the actual merge receipt and verify main, closed/merged PR, unchanged remote
-   implementation branch head, source ancestry and fresh isolated exact fetch of
-   the source commit/tree. Record complete raw evidence and the retaining branch
-   in the implementation receipt. Restore `delete_branch_on_merge` to true, read
+   implementation branch head, both source ancestors and fresh isolated exact fetches
+   with package tree and profile document checks. Record complete raw evidence and
+   the retaining branch in the implementation receipt. Restore `delete_branch_on_merge` to true, read
    it back, and verify protection/rules unchanged. Recheck the branch and exact
-   source fetch after restoration. Restoring this event-triggered setting does
-   not issue a deletion for an already merged branch; the fresh checks establish
+   source fetches and content checks after restoration. Restoring this event-triggered
+   setting does not issue a deletion for an already merged branch; the fresh checks establish
    that this particular branch and source remain available.
 5. If any step fails or returns an uncertain result after the setting write, stop
    other merges, preserve the branch and record the exact partial state. Reconcile
@@ -398,11 +448,11 @@ use an unproved retained-PR-ref guarantee as a substitute.
    or retry unrelated writes. A lost branch/source requires explicit disposition,
    never silent branch recreation or reliance on an unreferenced commit.
 
-The source commit, tree, retaining branch and fetch proof belong in the implementation
-evidence and merge receipt. Restoration needs this published history as well as the
-profile bytes. No tag, release, retention service, installation or activation is
+Both containing commits, the package tree, profile digests, retaining branch and
+exact fetch proofs belong in the implementation evidence and merge receipt.
+Restoration needs this published history as well as the profile bytes. No tag, release, retention service, installation or activation is
 introduced. If the operator does not approve the bounded setting procedure, or the
-existing source cannot retain and serve the commit, keep implementation unmerged
+existing source cannot retain and serve both commits, keep implementation unmerged
 and preserve the attempt for a separately accepted alternative.
 
 ### 7. Finish documentation and restore coverage
@@ -413,8 +463,8 @@ and the two crash windows. Explain that restoration needs the complete state
 directory including frozen execution and permanent lock, plus the same source,
 candidate and scratch boundaries and exact dependency/driver identities. Restored
 paths still must satisfy privacy, ownership and disjointness checks. Include the
-materializer source-commit retention and exact-fetch requirement above. Partial
-copies and changed tools cannot be promoted to original-result evidence.
+materializer and profile containing-commit retention and exact-fetch requirements
+above. Partial copies and changed tools cannot be promoted to original-result evidence.
 
 State the limits visibly: one key/attempt per state directory; no cross-directory
 deduplication; no new ordinal effect; no acknowledgement; inactive offline
@@ -515,6 +565,14 @@ paths. Cover changed/no-change, root/ancestor source commits and SHA-1/SHA-256.
    the source commit and final HEAD resolve the same exact package tree. Run the
    unchanged target-packaging suite, preserving its stale-tree, manifest and binding
    refusals. These owned disposable fixtures are development proof, not a release.
+10. Run the unchanged shadow-assembler suite on the real current shipped default
+    files, followed by the unchanged shadow-slice suite. Require all eight live-pin
+    checks, canonical/repeated output, SHA-1 and SHA-256, self-consistent same-id
+    lookalike refusal, config-source mismatches and the real assembler-to-driver
+    run. Compare the module with the base: only two constants and the source header
+    may differ. Verify every other pin and predicate unchanged. Independently fetch
+    the profile-containing commit and compare its two pinned documents with the
+    actual working-tree bytes; preserve the separate package-source fetch proof.
 
 Run these commands from the implementation checkout and retain output tied to its
 exact head/base:
@@ -529,9 +587,31 @@ bash scripts/test/orchestrator-reconciliation-plan.test.sh
 bash scripts/test/default-profile-assembly.test.sh
 bash scripts/test/alternative-profile-assembly.test.sh
 bash scripts/test/target-packaging.test.sh
+bash scripts/test/shadow-assembler.test.sh
+bash scripts/test/shadow-slice.test.sh
 bash scripts/test/run-all.sh
 git diff --check
 ```
+
+Run the complete native `bash scripts/test/run-all.sh` in the existing authorized
+development environment without a PTY, with stdin closed and the existing tools,
+timeouts and suite inventory unchanged. Ensure no inherited shard selector limits
+this full run. Capture its entire stdout/stderr, actual process exit, head/base,
+tool identities and start/end times. The non-PTY invocation avoids the prior
+interactive cleanup prompts; it does not waive a timeout, add a command shim or
+turn a continuation into a complete run. Require all discovered suites and the
+runner's successful terminal total. If a harness or product failure recurs, preserve
+its complete output and diagnose it; do not claim completion or change files beyond
+this plan to hide it. Do not skip tests, increase timeouts, relax digest checks or
+substitute synthetic assembly for the genuine shipped-profile run.
+
+The prior exit-142 full run and exit-1 shadow continuation stay failed in the saved
+proof index. New focused passes and the plan-only PR's CI do not supersede those
+facts. Obtain fresh complete required remote CI for the final implementation
+head/base: checks, all six test shards and aggregate ci. Retain the original logs,
+verify the checkout parent/tree identity and full tracked suite coverage, and do not
+substitute a green badge or unrelated check for that evidence. A head/base change
+invalidates affected proof and requires the current program's fresh review gate.
 
 Run the exact manifest loop in `.github/workflows/ci.yml`'s “Check required files
 exist” step; require every listed file and executable `scripts/*.sh`. Verify
