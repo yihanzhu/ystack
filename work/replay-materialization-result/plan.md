@@ -1,6 +1,6 @@
 ---
-spec-blob: 73476a70853322564ea7c922e4ae64b9aaa7060e
-drafted: 2026-09-14
+spec-blob: 466079bb084b8b58bd5d09bdca322d0b03d6ce15
+drafted: 2026-09-15
 ---
 
 # Plan: Preserve real materialization results in the replay journal
@@ -11,20 +11,28 @@ Risk: high. Gate mode: `artifact-high`. Review size: `accepted-exception`.
 This plan covers one concern: retaining and retrieving the actual response of
 one keyed offline materialization in the existing replay journal.
 
-The source base is `385251830aa45e72269420f7562f4484041ee485`, containing G2 PR
-#332. The accepted intent blob is `eb68c51f1a9866599c8662e967fba8375ccfbf3e`;
-the spec links to that exact blob. The separately reviewed plan must land before
-implementation. The current Roadmap program delegation in
-`work/roadmap-program-authorization/decision.md` supplies the manager's acceptance
-process; this draft neither accepts itself nor authorizes a second manager.
+The amendment source base is `f7bc0dc641041e568b76dcb8185ec094d5730df3`,
+containing the accepted G2 amendment in PR #335. The accepted intent blob remains
+`eb68c51f1a9866599c8662e967fba8375ccfbf3e`; the spec links to that exact blob.
+The separate plan amendment must land before implementation resumes. The current
+Roadmap program delegation in `work/roadmap-program-authorization/decision.md`
+supplies the named manager's acceptance process. This draft neither accepts itself
+nor authorizes a second manager.
+
+The preserved implementation is `ystack/impl/replay-materialization-result` at
+`db685b5c7f38f4f105d2ac727e4934f6535a3c9b`, with a clean worktree and old
+base/plan-base `70d1a6a06f701514d56628653d48d59043b8672c`. Its recorded PR state
+is absent; intake #324 is paused with `claimed` and `needs-human`, without `ready`.
+These are the preserved facts, not a substitute for the manager's fresh server
+and worktree check. Keep this same attempt. Do not discard, recreate or rewrite it.
 
 ## Files that change
 
 The plan PR changes only `work/replay-materialization-result/plan.md` on
 `ystack/plan/replay-materialization-result`. Its non-merge history must be
-plan-only. Implementation uses `ystack/impl/replay-materialization-result` after
-the protected plan merge and fresh plan-base check. The implementation may change
-only these paths:
+plan-only. Resume `ystack/impl/replay-materialization-result` only after the
+protected plan amendment merge and the reconciliation below. The implementation
+may change only these paths:
 
 | Path | Change |
 | --- | --- |
@@ -32,6 +40,12 @@ only these paths:
 | `adapters/local-git-materializer/v1/protocol.jq` | A pure validator for the supplied response and receipt using existing input, receipt and core result predicates. |
 | `scripts/test/replay-materialization-result.test.sh` | New executable suite with real fixtures, crash/reopen, limits, negative relations, concurrency and scanner proof. |
 | `scripts/test/local-git-materializer-protocol.test.sh` | Direct response-validator positives and relation failures. |
+| `profiles/default/v1/manifests/local-git-materializer.json` | Only the materializer package tree ID and actual containing revision commit. |
+| `profiles/alternative/v1/manifests/local-git-materializer.json` | The same exact materializer package reference update. |
+| `profiles/default/v1/profile.json` | Only the materializer binding's matching package reference and linked canonical manifest SHA-256. |
+| `profiles/alternative/v1/profile.json` | The same exact binding and manifest-digest update. |
+| `scripts/test/default-profile-assembly.test.sh` | Add a fixed materializer commit expectation and isolated exact fetch; retain all existing object and unrelated-pin proof. |
+| `scripts/test/alternative-profile-assembly.test.sh` | The same materializer proof, retaining the independent producer pin and every existing check. |
 | `README.md` | Update the replay component entry and link the storage guide. |
 | `docs/components.md` | Describe keyed storage and retrieval alongside the existing offline replay. |
 | `docs/replay-materialization-result.md` | New invocation, limits, restoration and recovery guide. |
@@ -40,31 +54,59 @@ only these paths:
 Keep `scripts/test/delivery-replay.test.sh` byte-identical, including all 40
 checks. Reuse its `local-git-materializer-fixtures.sh` builder without changing
 that builder. `run-all.sh` discovers the new `*.test.sh` automatically. No scanner,
-planner, core generation, materializer executable, workflow, constitution or
-shipped profile change is needed.
+planner, core generation, materializer executable, workflow or constitution change
+is needed. Shipped profile changes are limited to the six dependency paths and
+fields above. Leave packaging validation and `target-packaging.test.sh` unchanged.
+All six dependency files already exist; only the two originally planned restore
+manifest entries are appended.
 
-The estimated implementation size is 800–1,500 added plus removed lines. This is
-a work allocation, not a measurement of a future diff:
+The accepted implementation envelope remains 800–1,500 added plus removed lines
+across these fourteen exact paths. The preserved implementation measures 1,172
+lines across the original eight paths: replay 524, protocol 49, new receiver tests
+410, direct protocol tests 48, documentation 139 and restore manifest 2. These are
+measurements of the paused attempt, not proof that its unfinished work passes.
 
-| Work | Estimated added plus removed lines |
+| Work | Added plus removed lines |
 | --- | ---: |
-| Replay validation, bounded capture, journal dispatch and retrieval | 300–560 |
-| Pure protocol response validation | 100–190 |
-| New process, persistence, limit and scanner tests | 280–500 |
-| Direct protocol test additions | 40–70 |
-| README, component text and storage guide | 78–178 |
-| Two manifest entries | 2 |
-| Total | 800–1,500 |
+| Preserved implementation across the original eight paths | 1,172 measured |
+| Four canonical one-line JSON replacements | 8 expected |
+| Two explicit materializer commit/fetch test updates | 16–60 estimated |
+| Remaining receiver corrections and proof, if needed | 0–260 estimated |
+| Expected complete diff within the accepted envelope | 1,196–1,500 estimated |
 
-The inspected baseline has an 875-line replay, 435-line protocol, 1,152-line
-unchanged replay suite and 356-line protocol suite. Reusing current predicates,
-fixture construction and table-driven negative cases makes this range plausible.
-The response validator, crash boundary and scanner proof must land together to
-prove the one persistence contract. Compare the actual diff with this range before
-review. If complete, readable work needs more space, pause and obtain a separately
-authored and reviewed plan amendment. Do not compress code or remove proof.
+The remaining allocations explain how the necessary dependency work fits the
+accepted upper bound. They are not per-file quotas or permission to trim proof.
+The source baseline remains an 875-line replay, 435-line protocol, 1,152-line
+unchanged replay suite and 356-line protocol suite. The response validator, crash
+boundary, scanner proof and package consistency must land together to prove this
+one persistence contract. Measure the complete implementation diff against fresh
+main before review, excluding artifact changes already on that base. If complete,
+readable work needs more space, pause for a separately authored and reviewed
+amendment. Do not compress code or remove tests to fit an estimate.
 
 ## Order of work
+
+### 0. Reconcile the preserved attempt after the separate plan merge
+
+Keep implementation paused while this plan-only amendment receives fresh independent
+review and all required CI, followed by the named manager's protected merge. Record
+the actual fetched default commit containing the plan as the new plan-base; never
+write a guessed merge commit into this plan. Recheck intent/spec/plan blobs and both
+hash links at that base.
+
+Before resume, the manager verifies exact repository, branch, local and remote head,
+PR state, old/current base and clean worktree against the preserved handoff. Resolve
+the existing pause and claim on #324 through the current program's recovery sequence.
+An unexpected identity or dirty state stops this attempt.
+
+Merge the newly accepted main into that same implementation branch without reset,
+rebase or force-push. Record the resulting actual head and verify a clean worktree,
+unchanged accepted artifact links and the current base. Before coder work, record a
+fresh matching build claim with `artifact-high/high/plan-refresh`, PR absent and
+this reconciled exact tuple; require `claimed` present and `needs-human` and `ready`
+absent. The coder does not edit the artifact chain. Prior implementation review
+evidence is stale. A later base move requires renewed exact-base checks and
+independent review; changed artifact meaning returns through the affected gate.
 
 ### 1. Separate keyed state from legacy replay before changing execution
 
@@ -254,14 +296,124 @@ existing interruption handling retains 75. No failure output includes a
 scanner-ready result. Result storage, a waiting replay exit and workflow
 completion remain distinct facts.
 
-### 6. Finish documentation and restore coverage
+### 6. Publish a real package source before synchronizing inactive bindings
+
+The response validator changes the bound materializer tree. At the preserved head,
+`adapters/local-git-materializer/v1` is mode `040000`, type `tree`, object
+`efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff`. The old profile tree is
+`277863b98b49e54e2cd826b3f32913fd49c51abf` at commit
+`a637451d4b3fbef6b516a9c08f68c0dde46a7059`. Packaging correctly refuses this
+mismatch. Update the ordinary bindings; do not weaken that refusal or move the
+validator to hide the package change.
+
+After reconciliation and any protocol corrections, select an actual commit on the
+preserved implementation history containing the final materializer tree. The paused
+head may supply it only if that exact tree remains correct. Otherwise commit the
+corrected protocol first and record the resulting real containing commit. Read its
+exact path, mode, type and object ID from Git and verify that the implementation's
+package tree equals it. This source commit predates the binding update, so no file
+needs its own commit ID or a future squash/merge ID.
+
+The manager coordinates publication through the existing implementation branch in
+the existing source repository, using only an ordinary push of the preserved history.
+Record the exact published head and prove the selected source commit is reachable
+from it. Before accepting it as a binding, fetch that exact commit from the source
+into a fresh isolated history repository using the assembly suites' existing
+`history_fetch` boundary: depth one, no tags, unchanged source/auth handling. Verify
+the fetched commit ID and exact package path/mode/type/object. Local object existence
+or a remote-tracking ref alone does not prove source fetchability. An intermediate
+source push is not a green implementation or permission to merge it.
+
+Then change only `body.package_ref.object_id` and
+`body.package_ref.revision.commit_id` in each materializer manifest. Use the same
+verified tree and containing commit for both. Serialize final manifest bytes with
+frozen jq 1.6 `-S -c` and one newline; hash those exact bytes. In each profile's sole
+`adapter.local-git-materializer.v1` binding, copy the identical package reference
+and update only `manifest_ref.sha256` to that manifest digest. Preserve canonical
+profile framing. All other package, prompt and config pins, manifest/profile fields,
+authority records, Roadmap digests, roles, principals, boundaries, capabilities,
+permissions, models and qualification behavior stay unchanged.
+
+Give both assembly suites one fixed `materializer_package_commit` value taken from
+the independently checked source commit. Fetch it explicitly into their disposable
+history repositories and assert its exact commit, depth one and absence of tags.
+In each manifest loop, use that expectation only for
+`adapter.local-git-materializer.v1`; retain exact revision/path/mode/type/object
+checks. Preserve the common `package_commit` for all other applicable packages and
+prompts, and the alternative suite's independent `producer_package_commit`. Never
+read an expected commit back from the candidate manifest/profile or weaken checks
+to permit an arbitrary revision.
+
+Commit the completed bindings and test maintenance on the same implementation
+branch before the unchanged packaging suite runs, because that suite packages actual
+HEAD. Verify the final HEAD's materializer tree still equals the recorded source
+and both profiles. Any subsequent materializer change requires another actual
+containing commit, publication/fetch verification and recomputed binding/digest/test
+links in this same order before fresh proof.
+
+Retain the published implementation branch after squash merge, with the selected
+source commit still reachable; do not delete or rewrite it while bindings reference
+that source. The manager's fresh repository inspection reports
+`delete_branch_on_merge: true`. Omitting a CLI deletion option does not prevent
+server deletion. A squash merge does not retain this original source commit in
+main's history, and a temporarily dangling object is not a restoration guarantee.
+
+The necessary retention procedure below requires the operator's separate direct
+approval for this new repository-setting write. It is not supplied by the Roadmap
+delegation or this draft. The manager obtains independent review of the concrete
+procedure before requesting that approval. Drafting, review and authorized
+implementation preparation can continue; the setting mutation and implementation
+merge wait for this decision. Do not add another ref, change merge protection or
+use an unproved retained-PR-ref guarantee as a substitute.
+
+1. Prepare the complete exact-head/base implementation review and required green
+   CI. Record the source commit/tree, implementation branch and exact remote head.
+   Verify source ancestry and a fresh isolated exact fetch. Obtain operator approval
+   to change only `delete_branch_on_merge` from true to false for this one protected
+   implementation merge and restore true afterward, including failure cleanup.
+2. Before changing the setting, reserve a single-merge window: the named manager
+   starts no other merge until the setting is restored and verified. Capture fresh
+   repository identity and deletion-setting evidence, exact branch/head/base/PR
+   state, required CI, and unchanged protection/rules. Require the expected setting
+   true. An unexpected value or concurrent merge stops before the write.
+3. Set only `delete_branch_on_merge` to false and read it back. Retain raw request
+   and response evidence without credentials. Recheck exact review, head/base and
+   all required CI, then perform only the authorized protected squash merge with
+   no branch-deletion request. No ruleset, protection, merge-method or permission
+   change is allowed. The temporary setting alone never grants merge authority.
+4. Read the actual merge receipt and verify main, closed/merged PR, unchanged remote
+   implementation branch head, source ancestry and fresh isolated exact fetch of
+   the source commit/tree. Record complete raw evidence and the retaining branch
+   in the implementation receipt. Restore `delete_branch_on_merge` to true, read
+   it back, and verify protection/rules unchanged. Recheck the branch and exact
+   source fetch after restoration. Restoring this event-triggered setting does
+   not issue a deletion for an already merged branch; the fresh checks establish
+   that this particular branch and source remain available.
+5. If any step fails or returns an uncertain result after the setting write, stop
+   other merges, preserve the branch and record the exact partial state. Reconcile
+   the server PR/main/branch before any merge retry; do not duplicate an uncertain
+   merge. Restore true and verify it even when the merge did not happen or source
+   verification failed. Capture the recovery evidence. If restoration cannot be
+   verified, notify the operator and keep all merges stopped; do not claim completion
+   or retry unrelated writes. A lost branch/source requires explicit disposition,
+   never silent branch recreation or reliance on an unreferenced commit.
+
+The source commit, tree, retaining branch and fetch proof belong in the implementation
+evidence and merge receipt. Restoration needs this published history as well as the
+profile bytes. No tag, release, retention service, installation or activation is
+introduced. If the operator does not approve the bounded setting procedure, or the
+existing source cannot retain and serve the commit, keep implementation unmerged
+and preserve the attempt for a separately accepted alternative.
+
+### 7. Finish documentation and restore coverage
 
 Document the exact key file and retrieval command with the normal identity
 arguments, both journal versions, limits, exit meanings, missing-result recovery
 and the two crash windows. Explain that restoration needs the complete state
 directory including frozen execution and permanent lock, plus the same source,
 candidate and scratch boundaries and exact dependency/driver identities. Restored
-paths still must satisfy privacy, ownership and disjointness checks. Partial
+paths still must satisfy privacy, ownership and disjointness checks. Include the
+materializer source-commit retention and exact-fetch requirement above. Partial
 copies and changed tools cannot be promoted to original-result evidence.
 
 State the limits visibly: one key/attempt per state directory; no cross-directory
@@ -355,6 +507,14 @@ paths. Cover changed/no-change, root/ancestor source commits and SHA-1/SHA-256.
    Tamper result refs, digest and attempt relations and require scanner rejection;
    recompute the result pair digest for relation mutations. Do not modify scanner
    or planner code or generate a replacement result for this proof.
+9. Run both assembly suites with their independent materializer commit expectation
+   and fresh isolated exact fetch. Compare each changed JSON file structurally with
+   the accepted base after excluding only the permitted revision/tree/digest fields;
+   require every other field to match. Verify canonical framing, both manifests'
+   package equality, both binding links and their recomputed manifest hashes. Check
+   the source commit and final HEAD resolve the same exact package tree. Run the
+   unchanged target-packaging suite, preserving its stale-tree, manifest and binding
+   refusals. These owned disposable fixtures are development proof, not a release.
 
 Run these commands from the implementation checkout and retain output tied to its
 exact head/base:
@@ -366,6 +526,9 @@ bash scripts/test/local-git-materializer-protocol.test.sh
 bash scripts/test/local-git-materializer-adapter.test.sh
 bash scripts/test/orchestrator-state-scanner.test.sh
 bash scripts/test/orchestrator-reconciliation-plan.test.sh
+bash scripts/test/default-profile-assembly.test.sh
+bash scripts/test/alternative-profile-assembly.test.sh
+bash scripts/test/target-packaging.test.sh
 bash scripts/test/run-all.sh
 git diff --check
 ```
