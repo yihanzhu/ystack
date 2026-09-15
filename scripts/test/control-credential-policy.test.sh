@@ -128,7 +128,7 @@ managed_dispatch() {
       if [ "$CONTROL_WAIT_ACTIVE" -eq 1 ]; then
         CONTROL_WAIT_INTERRUPTED=1
       fi
-      return
+      return 0
     fi
     CONTROL_RETAIN_SCRATCH=1
     cleanup
@@ -1273,16 +1273,19 @@ exec 7>&-
 cleanup() { :; }
 eval "$(declare -f managed_dispatch | sed '1s/managed_dispatch/actual_managed_dispatch/')"
 managed_dispatch() {
-  local cause=$1
+  local cause=$1 incoming=${2:-0} handler_status
   actual_managed_dispatch "$cause"
+  handler_status=$?
   if [ "$CONTROL_CONTEXT" -eq 1 ] && [ "$cause" != EXIT ]; then
+    event "handler-return $cause $incoming $handler_status"
     event "outer-signal $cause $$"
   fi
+  return "$handler_status"
 }
-trap 'managed_dispatch EXIT' EXIT
-trap 'managed_dispatch HUP' HUP
-trap 'managed_dispatch INT' INT
-trap 'managed_dispatch TERM' TERM
+trap 'managed_dispatch EXIT $?' EXIT
+trap 'managed_dispatch HUP $?' HUP
+trap 'managed_dispatch INT $?' INT
+trap 'managed_dispatch TERM $?' TERM
 
 coordinator=
 boundary() {
@@ -1980,11 +1983,26 @@ assert_handoff_descendants_absent() {
   [ "$seen" -gt 0 ] || fail "$name descendant identity absent"
 }
 
+handoff_worker_diagnostic() {
+  local name=$1 actual=$2 expected=$3 identity=$4 operation=$5 signal=$6 proof=$7 child_events=$8
+  local worker_excerpt events_excerpt child_excerpt record
+  worker_excerpt=$(control_excerpt "$proof/worker.stderr") || worker_excerpt=read-error
+  events_excerpt=$(control_excerpt "$proof/events") || events_excerpt=read-error
+  child_excerpt=$(control_excerpt "$child_events") || child_excerpt=read-error
+  record=$(/usr/bin/printf \
+    'credential-handoff-worker: case=%s result=%s expected=%s identity=%s operation=%s signal=%s worker=%s events=%s child=%s' \
+    "$name" "$actual" "$expected" "$identity" "$operation" "$signal" \
+    "$worker_excerpt" "$events_excerpt" "$child_excerpt") || return 1
+  /usr/bin/perl -e 'my $text=<STDIN>; defined($text) or exit 1; print substr($text,0,2047),"\n" or exit 2' \
+    <<<"$record"
+}
+
 run_handoff_proofs() {
   local proof_root="$HANDOFF_CONTROL_ROOT/proofs" proof name identity operation signal expected
   local worker worker_group identity_status identity_presence identity_fields reported group
   local status attempt monitor_was release_count expected_release wait_count expected_wait expected_status
-  local proof_child_events descendant_required proof_count=0 proof_names="$tmp/handoff-proof.names"
+  local proof_child_events descendant_required control_fields control_pid control_group saved_failure
+  local proof_count=0 proof_names="$tmp/handoff-proof.names"
   /bin/mkdir "$proof_root" || fail 'handoff proof root'
   CONTROL_RETAIN_SCRATCH=1
   : >"$proof_names" || fail 'handoff proof ledger'
@@ -2031,7 +2049,12 @@ run_handoff_proofs() {
     /bin/rm -- "$proof/worker-start" || fail "$name worker gate remove"
     status=0
     builtin wait "$worker" || status=$?
-    [ "$status" -eq "$expected" ] || fail "$name worker status $status"
+    if [ "$status" -ne "$expected" ]; then
+      handoff_worker_diagnostic "$name" "$status" "$expected" "$reported:$worker_group" \
+        "$operation" "$signal" "$proof" \
+        "$HANDOFF_CONTROL_ROOT/proof-$name-none/events" >&2 || :
+      fail "$name worker status $status"
+    fi
     [ -f "$proof/events" ] || fail "$name proof events missing"
     [ "$(/usr/bin/grep -c "^launched " "$proof/events" || :)" -le 1 ] ||
       fail "$name repeated child launch"
@@ -2107,12 +2130,36 @@ run_handoff_proofs() {
     case "$operation" in
       observation-error)
         /usr/bin/grep -q '^identity-inspection-error 2$' "$proof/events" ||
-          fail "$name identity inspection evidence" ;;
+          fail "$name identity inspection evidence"
+        saved_failure=$CONTROL_FAILURE
+        handoff_worker_diagnostic "$name" 129 64 "$reported:$worker_group" \
+          "$operation" "$signal" "$proof" "$proof_child_events" \
+          >"$proof/worker-mismatch-sample" || fail "$name worker diagnostic"
+        { [ "$CONTROL_FAILURE" = "$saved_failure" ] &&
+          [ "$(/usr/bin/wc -c <"$proof/worker-mismatch-sample" | /usr/bin/tr -d ' ')" -le 2048 ] &&
+          /usr/bin/grep -q '^credential-handoff-worker: ' "$proof/worker-mismatch-sample" &&
+          /usr/bin/grep -Fq '\x0a' "$proof/worker-mismatch-sample"; } ||
+          fail "$name bounded worker diagnostic" ;;
       release-write-empty)
         /usr/bin/grep -q '^outer-signal HUP ' "$proof/events" ||
           fail "$name later signal evidence"
         /usr/bin/grep -q 'outcome=release detail=write signal=HUP' "$proof/diagnostic" ||
           fail "$name chronological release failure" ;;
+      signal-wait)
+        case "$signal" in HUP) expected_status=129 ;; INT) expected_status=130 ;;
+          TERM) expected_status=143 ;; *) fail "$name pending signal" ;; esac
+        control_fields=$(control_identity_read \
+          "$HANDOFF_CONTROL_ROOT/proof-$name-none/identity") || fail "$name control identity"
+        control_pid=''
+        control_group=''
+        IFS=' ' read -r control_pid control_group <<<"$control_fields" ||
+          fail "$name control identity fields"
+        [ "$control_pid" = "$control_group" ] || fail "$name control identity mismatch"
+        { /usr/bin/grep -q "^handler-return $signal $expected_status 0$" "$proof/events" &&
+          /usr/bin/grep -q "^direct-wait $control_pid 0 $expected_status 1$" "$proof/events" &&
+          /usr/bin/grep -q "^direct-wait $control_pid 0 0 0$" "$proof/events" &&
+          /usr/bin/grep -q "outcome=signal detail=trapped-signal signal=$signal" "$proof/diagnostic"; } ||
+          fail "$name handler or wait evidence" ;;
       signal-after-wait)
         case "$signal" in HUP) expected_status=129 ;; INT) expected_status=130 ;;
           TERM) expected_status=143 ;; *) fail "$name observer signal" ;; esac
