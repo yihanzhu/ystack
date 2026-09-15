@@ -271,6 +271,25 @@ that original evaluator. Only a proved missed setup window may retry; exhaustion
 fails. All original mutation, refusal, restoration and cleanup assertions remain
 required. This test setup grants no credentials, qualification or activation.
 
+The credential-policy test now treats its private outer control handoff as one
+transaction. The child publishes its canonical PID and process-group identity by
+writing, closing and atomically renaming a private record. The parent opens the
+final record without following links, checks that it is a regular file, applies a
+bounded exact grammar, and matches both fields to the Bash job it launched before
+writing the one finite release token.
+
+Once release may have occurred, failure handling becomes wait-only. The launching
+Bash is the only consumer of that saved job and retires its authority only after a
+confirmed direct wait. A trapped signal, release error or later observation cannot
+turn into a successful control. Unconfirmed wait state retains the case evidence;
+actual descendant events and the direct child status are reported as separate
+facts. The regression matrix exercises atomic publication, refusal records, signal
+boundaries, release failures and retirement on real private workers.
+
+This evidence does not identify the unique cause of a historical CI failure. It
+does not change the evaluator or grant credential qualification, authority or
+activation.
+
 ## Inactive evidence-integrity evaluator
 
 `control/v1/evaluate-evidence-integrity.sh` compares caller-supplied evidence
