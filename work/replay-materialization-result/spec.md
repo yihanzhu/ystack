@@ -180,6 +180,37 @@ all existing fixed-content verification and candidate-ref/observation guards.
 A later driver or dependency change remains stale under the current identity rule;
 this work adds no migration or tool-identity waiver.
 
+### Inactive materializer package bindings
+
+The response validator changes the Git tree of the existing materializer package.
+Keep both shipped profiles bound to that exact package through a bounded dependency
+update. In each profile's local materializer manifest, change only
+`body.package_ref.object_id` and `body.package_ref.revision.commit_id`. The tree
+must contain the accepted protocol implementation at the existing package path;
+the revision must be an actual, independently verified commit containing that tree.
+It must remain fetchable through the existing repository source for CI and restore.
+Do not invent a future commit ID or leave the new tree paired with the old revision.
+
+In each profile's sole `adapter.local-git-materializer.v1` binding, copy that exact
+package reference and update only its `manifest_ref.sha256` to the SHA-256 of the
+updated canonical manifest bytes. Keep jq 1.6 `-S -c` framing with one final newline.
+All other manifest and profile fields remain unchanged, including authority refs,
+Roadmap digests, capabilities, permissions, roles, execution boundaries, models,
+prompts and other package bindings. No selected or installed profile is changed.
+
+The two profile-assembly suites currently pin the materializer to an older common
+package commit. Give the materializer its own exact expected commit and fetch that
+commit using their existing isolated, shallow, no-tags history boundary. Preserve
+exact revision, path, object type, mode and object ID checks; retain the old pins
+for other packages and prompts. Do not derive the expected commit from the profile
+under test or permit any commit with matching-looking data. Packaging's unchanged
+checks must still reject stale trees, manifest hashes and binding relations.
+
+This is required consistency maintenance for the same inactive receiver result
+contract. It does not add a package format, resolver fallback, qualification,
+capability, release, installation or activation. The existing owned disposable
+packaging test fixtures remain development proof only.
+
 ### Publication and the two crash windows
 
 Hold the existing permanent `replay.lock` across journal validation, delivery,
@@ -270,6 +301,12 @@ Implementation may change only:
 - `adapters/local-git-materializer/v1/protocol.jq`;
 - `scripts/test/replay-materialization-result.test.sh` (new);
 - `scripts/test/local-git-materializer-protocol.test.sh`;
+- `profiles/default/v1/manifests/local-git-materializer.json`;
+- `profiles/default/v1/profile.json`;
+- `profiles/alternative/v1/manifests/local-git-materializer.json`;
+- `profiles/alternative/v1/profile.json`;
+- `scripts/test/default-profile-assembly.test.sh`;
+- `scripts/test/alternative-profile-assembly.test.sh`;
 - `README.md`, `docs/components.md`, `docs/replay-materialization-result.md` (new);
 - `ci/required-files.txt`, appending the two new restore-critical files.
 
@@ -303,13 +340,21 @@ losing prior usable state. Fault injection is test-only, following the existing
 loaded-driver wrapper pattern; no product environment flag bypass is added.
 
 Run the new suite, all 40 replay checks, protocol and adapter suites, scanner and
-planner suites, the complete existing test runner, structure validation and pinned
-Shellcheck 0.11.0. Required CI and separate exact-head/base review remain mandatory.
+planner suites, both profile-assembly suites, the unchanged target-packaging suite,
+the complete existing test runner, structure validation and pinned Shellcheck 0.11.0.
+Compare the four profile files structurally and require only the package revision,
+tree and linked manifest-digest changes described above. Verify that both manifests
+and both bindings name the same exact materializer package and that every other
+field is unchanged. Required CI and separate exact-head/base review remain mandatory.
 Documentation must explain full-directory restoration, format distinction, fixed
 limits, unavailable evidence, supported key scope, retrieval and inactive status.
 
 `review_size: accepted-exception`. Plan for an estimated 800–1,500 added plus
 removed implementation lines across these exact paths, including tests and docs.
+The paused implementation at `db685b5c7f38f4f105d2ac727e4934f6535a3c9b`
+measured 1,172 added plus removed lines across the eight original paths. The bounded binding and exact-pin test maintenance adds six paths;
+it is expected to fit the estimate without dropping receiver or regression proof.
+Recheck the actual complete diff after implementation; this does not waive an overrun.
 This is a planning estimate, not a measured future diff. The source baseline is an
 875-line replay, 435-line protocol, 1,152-line unchanged replay suite and 356-line
 protocol suite. Bounded capture, versioned validation, two process-crash proofs,
@@ -332,7 +377,9 @@ Existing offline publication remains simulation with no publish or merge capabil
 No adoption or rewriting of #271 or other preserved delivery-loop-first work,
 #297's separate delivery-ledger boundary, or #307's telemetry store. Frozen PR #183
 and unresolved dirty attempts remain excluded. No core generation, scanner/planner
-schema, constitution, workflow, shipped profile or materializer executable change.
+schema, constitution, workflow or materializer executable change. Shipped profile
+changes are limited to the inactive materializer package references and their
+manifest digests specified above; no other profile change is allowed.
 
 ## Areas of concern
 
