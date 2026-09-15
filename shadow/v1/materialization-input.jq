@@ -1,14 +1,14 @@
 import "profile_graph" as graph;
 
-# pinned from profiles/default/v1 at 4965175d0edeeec8ba746609e585b053be03e075
+# pinned from profiles/default/v1 at 15476b92860608f640a3d480170fd878af3f4b48
 # Digests of the bytes as committed. Requirement 3 (yihanzhu/ystack#262) pins
 # these so a look-alike default profile is refused by bytes, not by name.
-def profile_pin: "4562888df59cd52feb6e9c9d29e2345579815695ec3af0aec833891f7f608a74";
+def profile_pin: "0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179";
 def producer_config_pin:
   "ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61";
 def manifest_pins:
   {ci:      "a5cf4b1b94e32d850e3d056024fa2d2c3977b977fb08323e99b89f8c159baff3",
-   forge:   "47c5884ca83597a09f1122467c9c0dfd3ea5b4e0256d2d52ae648167349bffe5",
+   forge:   "4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065",
    producer:"ada221fd7186544a53ceb2f10e0bbe863eb0ef6ef54b407c65f58d7f21881bb3",
    publisher:"e780e0ceb0a305928d6c1fec127cfc6db0140cf2e48b3921e23e59d942419029",
    reviewer:"2f1ceaacd455e6cadc09f2762c6735eab48b91890240b6031af3db744a1175c4",
