@@ -674,6 +674,7 @@ state_cases = [
     state_variant("typed-materialization-oid", mutate(["materialization", "candidate_commit_id"], [])),
     state_variant("typed-materialization-digest", mutate(["materialization", "response_sha256"], True)),
     state_variant("list-verification", mutate(["verification"], [])),
+    state_variant("null-verification-review-wait", mutate(["verification"], None)),
     state_variant("extra-verification-field", mutate(["verification", "extra"], "value")),
     state_variant("missing-verification-field", mutate(["verification", "sha256"], delete=True)),
     state_variant("typed-verification-digest", mutate(["verification", "sha256"], True)),
@@ -688,9 +689,11 @@ for field in ("recoverable", "reason", "recovery"):
 state_cases.append(state_variant("recoverable-zero", mutate(["recoverable"], 0)))
 state_cases.extend([
     state_variant("review-list", mutate(["review"], [])),
+    state_variant("review-null-review-wait", mutate(["review"], None)),
     state_variant("review-extra", mutate(["review"], {"actor_id": "test.reviewer", "verdict": "clean", "sha256": "0" * 64, "extra": 1})),
     state_variant("review-actor-type", mutate(["review"], {"actor_id": 1, "verdict": "clean", "sha256": "0" * 64})),
     state_variant("publisher-list", mutate(["publisher"], [])),
+    state_variant("publisher-null-review-wait", mutate(["publisher"], None)),
     state_variant("publisher-extra", mutate(["publisher"], {"actor_id": "test.publisher", "disposition": "offline-simulated", "sha256": "0" * 64, "extra": 1})),
     state_variant("publisher-actor-type", mutate(["publisher"], {"actor_id": 1, "disposition": "offline-simulated", "sha256": "0" * 64})),
     state_variant("pending-wrong-phase", mutate(["phase"], "verifying"), pending=True),
@@ -700,6 +703,24 @@ state_cases.extend([
     state_variant("pending-with-materialization", mutate(["materialization"], copy.deepcopy(base_state_value["materialization"])), pending=True),
     state_variant("pending-with-candidate-id", mutate(["identity", "candidate_commit_id"], base_state_value["identity"]["candidate_commit_id"]), pending=True),
 ])
+verifying_null = copy.deepcopy(base_state_value)
+verifying_null["phase"] = "verifying"
+verifying_null["verification"] = None
+state_cases.append(("verification-null-verifying", verifying_null, False))
+failed_null = copy.deepcopy(base_state_value)
+failed_null.update({"phase": "failed", "recoverable": False,
+                    "reason": "fixed verifier failed", "verification": None})
+state_cases.append(("verification-null-failed", failed_null, False))
+for field in ("review", "publisher"):
+    failed_optional_null = copy.deepcopy(base_state_value)
+    failed_optional_null.update({"phase": "failed", "recoverable": False,
+                                 "reason": "fixed verifier failed", field: None})
+    state_cases.append((f"{field}-null-failed", failed_optional_null, False))
+verifying_materialization_null = copy.deepcopy(base_state_value)
+verifying_materialization_null["phase"] = "verifying"
+verifying_materialization_null.pop("verification", None)
+verifying_materialization_null["materialization"] = None
+state_cases.append(("materialization-null-verifying", verifying_materialization_null, False))
 for name, value, pending in state_cases:
     invoke_case("P04-typed-journal", f"state-{name}", 1, state_value=value, pending=pending)
 
@@ -711,6 +732,28 @@ failed_recoverable = copy.deepcopy(failed)
 failed_recoverable["recoverable"] = True
 invoke_case("P04-valid-failed", "stored-recoverable-true-remains-readable", 0,
             state_value=failed_recoverable,
+            output_kind="delivery_replay_materialization_result")
+
+review_wait_omission = copy.deepcopy(base_state_value)
+review_wait_omission.pop("review", None)
+review_wait_omission.pop("publisher", None)
+invoke_case("P04-valid-omission", "review-wait-omits-review-and-publisher", 0,
+            state_value=review_wait_omission,
+            output_kind="delivery_replay_materialization_result")
+verifying_omission = copy.deepcopy(base_state_value)
+verifying_omission["phase"] = "verifying"
+for field in ("verification", "review", "publisher"):
+    verifying_omission.pop(field, None)
+invoke_case("P04-valid-omission", "verifying-omits-later-records", 0,
+            state_value=verifying_omission,
+            output_kind="delivery_replay_materialization_result")
+failed_omission = copy.deepcopy(base_state_value)
+failed_omission.update({"phase": "failed", "recoverable": False,
+                        "reason": "fixed verifier failed"})
+for field in ("verification", "review", "publisher"):
+    failed_omission.pop(field, None)
+invoke_case("P04-valid-omission", "failed-stored-omits-optional-records", 0,
+            state_value=failed_omission,
             output_kind="delivery_replay_materialization_result")
 
 pending = pending_state()

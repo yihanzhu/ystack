@@ -972,8 +972,9 @@ def validate_state(state, identity):
             name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name]))
         ):
             raise ReplayError("state journal candidate identity is malformed")
+    materialization_present = "materialization" in state
     materialization = state.get("materialization")
-    if materialization is not None and (not exact_object(materialization, (
+    if materialization_present and (not exact_object(materialization, (
         "response_sha256", "receipt_sha256", "candidate_commit_id", "candidate_tree_id",
         "candidate_parent_commit_id"
     )) or any(
@@ -984,7 +985,7 @@ def validate_state(state, identity):
         for name in ("response_sha256", "receipt_sha256")
     )):
         raise ReplayError("state journal materialization is malformed")
-    if needs_materialization and materialization is None:
+    if needs_materialization and not materialization_present:
         raise ReplayError("state journal materialization is malformed")
     if needs_materialization and any(
         saved[name] != materialization[name]
@@ -996,8 +997,9 @@ def validate_state(state, identity):
         materialization["receipt_sha256"] != receiver["receipt_sha256"]
     ):
         raise ReplayError("state journal stored result does not match materialization")
+    verification_present = "verification" in state
     verification = state.get("verification")
-    if verification is not None and (
+    if verification_present and (
         not exact_object(verification, ("id", "path", "sha256")) or verification != {
             "id": saved["verifier"]["id"],
             "path": saved["verifier"]["path"],
@@ -1005,19 +1007,21 @@ def validate_state(state, identity):
         }
     ):
         raise ReplayError("state journal verification is malformed")
-    if phase in {"review-wait", "publish-wait", "completed-offline"} and verification is None:
+    if phase in {"review-wait", "publish-wait", "completed-offline"} and not verification_present:
         raise ReplayError("state journal verification is malformed")
+    review_present = "review" in state
     review = state.get("review")
-    if review is not None and (not exact_object(review, ("actor_id", "verdict", "sha256")) or \
+    if review_present and (not exact_object(review, ("actor_id", "verdict", "sha256")) or \
        not isinstance(review.get("actor_id"), str) or \
            not ACTOR.fullmatch(review["actor_id"]) or \
        review.get("verdict") != "clean" or not isinstance(review.get("sha256"), str) or \
        not re.fullmatch(r"[0-9a-f]{64}", review["sha256"])):
         raise ReplayError("state journal review is malformed")
-    if phase in {"publish-wait", "completed-offline"} and review is None:
+    if phase in {"publish-wait", "completed-offline"} and not review_present:
         raise ReplayError("state journal review is malformed")
+    publisher_present = "publisher" in state
     publisher = state.get("publisher")
-    if publisher is not None and (not exact_object(
+    if publisher_present and (not exact_object(
         publisher, ("actor_id", "disposition", "sha256")
     ) or not isinstance(publisher.get("actor_id"), str) or \
            not ACTOR.fullmatch(publisher["actor_id"]) or \
@@ -1025,7 +1029,7 @@ def validate_state(state, identity):
        not isinstance(publisher.get("sha256"), str) or \
        not re.fullmatch(r"[0-9a-f]{64}", publisher["sha256"])):
         raise ReplayError("state journal publisher is malformed")
-    if phase == "completed-offline" and publisher is None:
+    if phase == "completed-offline" and not publisher_present:
         raise ReplayError("state journal publisher is malformed")
     if "recoverable" in state and not isinstance(state["recoverable"], bool):
         raise ReplayError("state journal recovery flag is malformed")
