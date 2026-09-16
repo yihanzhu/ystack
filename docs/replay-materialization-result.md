@@ -124,3 +124,40 @@ materializer package, core generation, jq, object-closure helper, input, key, ve
 and source identity. The four directories must remain caller-owned, private, and
 disjoint. Partial copies, changed tools, or a matching digest alone cannot be promoted
 to original-result evidence.
+
+## Containing source commits
+
+Restoration also needs the published commits named by the package and profile
+bindings. The materializer source commit is
+`8fc0675eb4e34acbebe9c8ab0310e64328a6114e`; its
+`adapters/local-git-materializer/v1` path is tree
+`07dc1fa6a1084be8a316384634d521b618991897`, mode `040000`. Profile commit
+`4a576d9181d5e8c01c04f027432ad8b143400cee` contains the four bound documents:
+
+| Document | SHA-256 of canonical jq 1.6 bytes with one final newline |
+| --- | --- |
+| Default profile | `81da07a8390b2ec6e00413cce6fad4bd07badbd17a512295da8e5292ace53574` |
+| Alternative profile | `a2f3e69aa2d93afabfa852b6313de69fd44a0ee0d60a6c6ab693d0d3e8f91567` |
+| Both local Git materializer manifests | `f2ace723bf3b604d756169f2cc12c89a02c08026984975e6bd476af4a6d6c3c8` |
+
+Keep both commits reachable on the existing published
+`ystack/impl/replay-materialization-result` branch after any squash merge. Do not
+delete or rewrite that history while these bindings reference it. A squash commit,
+a local object, or a temporarily dangling server object does not retain the original
+containing commits. Omitting a CLI deletion option does not prevent server deletion.
+The manager must obtain the separate approval and verify the retention procedure
+recorded in [the accepted plan](../work/replay-materialization-result/plan.md)
+before merging; this source record is not a completed merge or retention receipt.
+
+Before relying on these bindings, fetch each exact containing commit into its own
+fresh isolated history repository using the assembly tests' `history_fetch` boundary
+and unchanged source/auth handling. Require `--depth=1 --no-tags`, the exact fetched
+commit, ancestry from the retaining branch, one reachable commit and no tags. Check
+the source package path, mode, type and tree object above. At the profile commit,
+require all four files to be regular `100644` blobs, with complete bytes matching
+the checkout and the hashes above. Compare their structures against the accepted
+base, allowing only the materializer package tree/revision and its binding's
+manifest digest. Repeat these fresh source/content checks before PR publication
+and protected merge, and record them with the final receipt. Changed package or
+profile bytes require new observed source commits and all dependent pins; a digest
+agreement alone cannot replace the retained history or the complete state backup.
