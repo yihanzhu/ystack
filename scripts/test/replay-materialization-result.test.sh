@@ -246,6 +246,7 @@ pass 'version 1 remains unavailable as original result evidence'
 loaded_wrapper="$tmp/loaded-driver-wrapper.py"
 cat > "$loaded_wrapper" <<'PY'
 import importlib.util
+import hashlib
 import json
 import pathlib
 import sys
@@ -254,9 +255,16 @@ import time
 path, mode, control, *arguments = sys.argv[1:]
 if mode == "pause":
     point, ready, release, *arguments = arguments
+elif mode == "read-audit":
+    audit_target, audit_limit, *arguments = arguments
+elif mode == "source-root":
+    source_root, *arguments = arguments
 spec = importlib.util.spec_from_file_location("replay", path)
 module = importlib.util.module_from_spec(spec)
 module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()
+if mode == "driver-drift":
+    module._REPLAY_DRIVER_BYTES += b"\n"
+    pathlib.Path(control).write_text(hashlib.sha256(module._REPLAY_DRIVER_BYTES).hexdigest() + "\n")
 exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
 if mode == "count":
     original = module.capture_materializer
@@ -298,6 +306,29 @@ elif mode in ("git-observe", "git-overflow", "git-nonzero"):
             command = [sys.executable, "-c", "raise SystemExit(7)"]
         return original(command, environment, limit)
     module._capture_fixed_process = checked_capture
+elif mode == "read-audit":
+    original = module.read_bytes
+    def audited_read(target, limit):
+        if pathlib.Path(target) != pathlib.Path(audit_target):
+            return original(target, limit)
+        assert limit == int(audit_limit)
+        observed = {"path": str(target), "limit": limit,
+                    "file_bytes": pathlib.Path(target).stat().st_size}
+        try:
+            result = original(target, limit)
+        except module.ReplayError as error:
+            observed["refusal"] = str(error)
+            raise
+        else:
+            observed["returned_bytes"] = len(result)
+            return result
+        finally:
+            pathlib.Path(control).write_text(json.dumps(observed) + "\n")
+    module.read_bytes = audited_read
+elif mode == "source-root":
+    module.__file__ = str(pathlib.Path(source_root) / "delivery/v1/replay.py")
+elif mode == "driver-drift":
+    pass
 else:
     raise AssertionError(("unknown wrapper mode", mode))
 sys.argv = [path] + arguments
@@ -1378,6 +1409,329 @@ capture_node = next(node for node in ast.parse(driver.read_bytes()).body
 assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                and node.func.attr in ('run', 'communicate') for node in ast.walk(capture_node))
 record('P12-bounded-process', 'fixed-capture-has-no-unbounded-fallback', 'PASS')
+
+
+def replace_cli(arguments, option, value):
+    arguments[arguments.index(option) + 1] = str(value)
+
+
+def append_owned(path):
+    metadata = path.stat()
+    path.chmod(0o600)
+    path.write_bytes(path.read_bytes() + b'\n')
+    path.chmod(stat.S_IMODE(metadata.st_mode))
+
+
+def invoke_identity_case(group, name, expected_status, state_value=None,
+                         input_bytes=None, key_bytes=None, frozen_bytes=None, journal_bytes=None,
+                         execution_file=None, source_file=None, native_source=None,
+                         driver_drift=False, options=(), audit=None):
+    root, state, candidate, scratch, supplied_input, supplied_key = case_directories(name)
+    if state_value is not None:
+        (state / 'run.json').write_bytes(encoded(state_value))
+    for path, data in ((supplied_input, input_bytes), (supplied_key, key_bytes),
+                       (state / 'materialization-input.json', frozen_bytes),
+                       (state / 'run.json', journal_bytes)):
+        if data is not None:
+            path.write_bytes(data)
+    if execution_file:
+        append_owned(state / 'execution' / execution_file)
+    invocation = command(state, candidate, scratch, supplied_input, supplied_key)
+    extra_roots = []
+    wrapper_mode, wrapper_values = None, []
+    control = root / 'outside-evidence-audit.json'
+    if source_file:
+        source_copy = root / 'source-copy'
+        for relative in list(base_state_value['identity']['materializer_package']['files']) + ['delivery/v1/replay.py']:
+            target = source_copy / relative
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copy2(driver.parents[2] / relative, target)
+        append_owned(source_copy / source_file)
+        extra_roots.append(source_copy)
+        wrapper_mode, wrapper_values = 'source-root', [str(source_copy)]
+    if native_source:
+        original = Path(jq_bin if native_source == 'jq' else closure_helper)
+        target = root / ('actual-source-' + native_source)
+        shutil.copy2(original, target)
+        append_owned(target)
+        extra_roots.append(target)
+        replace_cli(invocation, '--jq-bin' if native_source == 'jq' else '--closure-helper', target)
+    if driver_drift:
+        wrapper_mode = 'driver-drift'
+    for option, replacement in options:
+        replace_cli(invocation, option, replacement)
+    if audit:
+        target_name, limit, count = audit
+        target = {'supplied-input': supplied_input, 'frozen-input': state / 'materialization-input.json',
+                  'key': supplied_key, 'v2-journal': state / 'run.json'}[target_name]
+        wrapper_mode, wrapper_values = 'read-audit', [str(target), str(limit)]
+    before = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    before['actual_source_tools'] = [inventory(path) for path in extra_roots]
+    if wrapper_mode:
+        invocation = [sys.executable, loaded_wrapper, str(driver), wrapper_mode,
+                      str(control), *wrapper_values, *invocation[2:]]
+    completed = subprocess.run(invocation, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=20, check=False)
+    after = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    after['actual_source_tools'] = [inventory(path) for path in extra_roots]
+    assert completed.returncode == expected_status, (group, name, completed.stderr, completed.stdout)
+    assert b'Traceback' not in completed.stderr and before == after, (group, name, 'preservation')
+    if expected_status:
+        assert b'delivery_replay_materialization_result' not in completed.stdout
+    else:
+        assert json.loads(completed.stdout)['response_utf8'] == base_response_text
+    if audit:
+        observed = json.loads(control.read_bytes())
+        assert observed['limit'] == limit and observed['file_bytes'] == count
+        if count <= limit:
+            assert observed['returned_bytes'] == count and 'refusal' not in observed
+        else:
+            assert observed['refusal'] == 'input exceeds its size limit'
+            assert 'returned_bytes' not in observed
+    if driver_drift:
+        assert control.read_text().strip() == sha(driver.read_bytes() + b'\n')
+        assert control.read_text().strip() != sha(driver.read_bytes())
+    record(group, name, 'PASS')
+
+
+def padded_json(value, count):
+    raw = encoded(value)
+    assert len(raw) <= count
+    return raw + b' ' * (count - len(raw))
+
+
+limits = {'supplied-input': 8*1024*1024, 'frozen-input': 8*1024*1024,
+          'key': 4096, 'v2-journal-read': 8*1024*1024,
+          'v1-journal-read': 65536, 'v2-journal-write': 8*1024*1024,
+          'v1-journal-write': 65536, 'review-observation': 65536,
+          'publisher-observation': 65536}
+assert (scope['MAX_INPUT_BYTES'], scope['MAX_DELIVERY_KEY_BYTES'],
+        scope['MAX_JOURNAL_V2_BYTES'], scope['MAX_OBSERVATION_BYTES'],
+        scope['MAX_STAGE_RESULT_BYTES'], scope['MAX_RECEIPT_BYTES']) == (
+            8*1024*1024, 4096, 8*1024*1024, 65536, 256*1024, 65536)
+for boundary, limit in limits.items():
+    for suffix, count in (('limit', limit), ('limit-plus-one', limit+1)):
+        name = boundary + '-' + suffix
+        boundary_root = case_root / name
+        boundary_root.mkdir(mode=0o700)
+        path = boundary_root / 'boundary.json'
+        if 'journal-write' in boundary:
+            version = 2 if boundary.startswith('v2') else 1
+            value = {'schema_version': version, 'padding': ''}
+            value['padding'] = 'x' * (count - len(encoded(value)))
+            assert len(encoded(value)) == count
+            path.write_bytes(b'prior journal\n')
+        else:
+            value = {'schema_version': 2 if boundary.startswith('v2') else 1}
+            path.write_bytes(padded_json(value, count))
+        before = inventory(boundary_root)
+        try:
+            if 'journal-write' in boundary:
+                scope['write_journal'](path, value)
+            elif 'journal-read' in boundary:
+                assert scope['read_journal'](path) == value
+            elif 'observation' in boundary:
+                kind = 'delivery_replay_' + ('publisher' if boundary.startswith('publisher') else 'review') + '_observation'
+                field = 'disposition' if boundary.startswith('publisher') else 'verdict'
+                scope['observation'](path, kind,
+                                     base_state_value['identity'],
+                                     base_state_value['materialization']['candidate_commit_id'], field)
+            else:
+                assert scope['read_bytes'](path, limit) == path.read_bytes()
+        except scope['ReplayError'] as error:
+            if count <= limit:
+                assert 'observation' in boundary and str(error) == 'offline observation is malformed'
+            else:
+                assert 'size limit' in str(error)
+            assert before == inventory(boundary_root)
+        else:
+            assert count <= limit
+            if 'journal-write' in boundary:
+                assert path.read_bytes() == encoded(value)
+            else:
+                assert before == inventory(boundary_root)
+        record('P06-nonstream', name, 'PASS')
+
+for boundary, limit in (('supplied-input', 8*1024*1024), ('frozen-input', 8*1024*1024),
+                         ('key', 4096), ('v2-journal', 8*1024*1024)):
+    for suffix, count in (('limit', limit), ('limit-plus-one', limit+1)):
+        values = {'audit': (boundary, limit, count)}
+        status = 0 if count == limit and boundary in ('key', 'v2-journal') else 1
+        if boundary == 'supplied-input': values['input_bytes'] = padded_json(base_input_value, count)
+        elif boundary == 'frozen-input': values['frozen_bytes'] = padded_json(base_input_value, count)
+        elif boundary == 'key': values['key_bytes'] = padded_json(base_key, count)
+        else: values['journal_bytes'] = padded_json(base_state_value, count)
+        invoke_identity_case('P06-file-caller', boundary+'-'+suffix, status, **values)
+
+for boundary, limit in (('response-validation', 1024*1024), ('stage-extraction', 256*1024),
+                         ('receipt-validation', 65536)):
+    for suffix, count in (('limit', limit), ('limit-plus-one', limit+1)):
+        response = copy.deepcopy(base_response)
+        if boundary == 'stage-extraction':
+            stage = {'padding': ''}
+            stage['padding'] = 'x' * (count - len(encoded(stage)))
+            response['stage_result'] = stage
+            assert len(scope['jq_canonical_document'](execution, stage)) == count
+        elif boundary == 'receipt-validation':
+            response['payloads'][0]['data'] = padded_json({}, count).decode()
+        else:
+            response = {}
+        raw = padded_json(response, count) if boundary == 'response-validation' else encoded(response)
+        before = evidence_snapshot(base_state, base_candidate, base_scratch, input_path, key_path)
+        try:
+            scope['validate_materializer_response'](caller_arguments, execution, input_path,
+                                                    base_state_value['identity'], raw)
+        except scope['ReplayError'] as error:
+            if count > limit:
+                expected = {'response-validation': 'materializer response',
+                            'stage-extraction': 'materializer stage result',
+                            'receipt-validation': 'materializer receipt'}[boundary]
+                assert str(error) == expected + ' exceeds its size limit'
+            else:
+                assert 'size limit' not in str(error)
+        else:
+            raise AssertionError((boundary, 'invalid large semantic shape accepted'))
+        assert before == evidence_snapshot(base_state, base_candidate, base_scratch, input_path, key_path)
+        record('P06-nonstream', boundary+'-'+suffix, 'PASS')
+
+
+def refresh_run(state):
+    saved = state['identity']
+    saved['run_key'] = sha(encoded({key: value for key, value in saved.items()
+        if key not in ('run_key', 'candidate_commit_id', 'candidate_tree_id')})[:-1])
+
+
+def refresh_saved(state):
+    saved = state['identity']
+    package = saved['materializer_package']
+    package['sha256'] = sha(encoded({'generation_id': package['generation_id'],
+                                     'files': package['files']})[:-1])
+    saved['materializer_sha256'] = package['files'][scope['PACKAGE_FILES'][0]]
+    state['verification'] = {'id': saved['verifier']['id'], 'path': saved['verifier']['path'],
+                             'sha256': saved['verifier']['expected_sha256']}
+    refresh_run(state)
+
+
+def saved_case(group, name, path, replacement, status):
+    value = copy.deepcopy(base_state_value)
+    asserted_sets((['identity', *path], replacement))(value)
+    if path == ['materializer_sha256']:
+        value['identity']['materializer_package']['files'][scope['PACKAGE_FILES'][0]] = replacement
+    refresh_saved(value)
+    if path == ['run_key']:
+        value['identity']['run_key'] = replacement
+    assert value_at(value, ['identity', *path]) == replacement
+    invoke_identity_case(group, name, status, state_value=value)
+
+for field in ('input_sha256', 'request_sha256', 'run_key', 'driver_sha256', 'materializer_sha256',
+              'closure_helper_sha256', 'jq_sha256', 'source_repository_id', 'source_commit_id',
+              'source_tree_id', 'source_hash_algorithm'):
+    original = base_state_value['identity'][field]
+    changed = {'source_repository_id': 'fixture.changed', 'source_hash_algorithm': 'sha256'}.get(field,
+        ('0' if original[0] != '0' else '1') * len(original))
+    for suffix, replacement, status in (('malformed', None, 1), ('changed', changed, 2)):
+        saved_case('P07-saved-identity', field+'-'+suffix, [field], replacement, status)
+for field, changed in (('id', 'delivery.other-verifier.v1'), ('path', 'other.txt'), ('expected_sha256', '0'*64)):
+    for suffix, replacement, status in (('malformed', None, 1), ('changed', changed, 2)):
+        saved_case('P07-saved-verifier', field+'-'+suffix, ['verifier',field], replacement, status)
+package_paths = list(base_state_value['identity']['materializer_package']['files'])
+for relative in package_paths:
+    for suffix, replacement, status in (('malformed', None, 1), ('changed', '0'*64, 2)):
+        saved_case('P07-saved-package-file', relative+'-'+suffix,
+                   ['materializer_package','files',relative], replacement, status)
+    invoke_identity_case('P07-actual-tool', 'current-source-'+relative, 2, source_file=relative)
+    invoke_identity_case('P07-actual-tool', 'frozen-execution-'+relative, 2, execution_file=relative)
+for name in ('generation-malformed','generation-changed','file-set-missing','file-set-extra','aggregate-corrupt'):
+    value = copy.deepcopy(base_state_value)
+    package = value['identity']['materializer_package']
+    if name.startswith('generation'):
+        generation = 'g-'+'0'*64 if name.endswith('changed') else 'bad'
+        old_generation = package['generation_id']
+        package['generation_id'] = generation
+        package['files'] = {key.replace(old_generation,generation): digest for key,digest in package['files'].items()}
+    elif name == 'file-set-missing': package['files'].pop(package_paths[-1])
+    elif name == 'file-set-extra': package['files']['unaccepted-file'] = '0'*64
+    refresh_saved(value)
+    if name == 'aggregate-corrupt':
+        package['sha256'] = '0'*64
+        refresh_run(value)
+    invoke_identity_case('P07-saved-package', name, 2 if name=='generation-changed' else 1, state_value=value)
+for tool in ('jq','object-closure'):
+    invoke_identity_case('P07-actual-tool', 'current-source-'+tool, 2, native_source=tool)
+    invoke_identity_case('P07-actual-tool', 'frozen-execution-'+tool, 2, execution_file='.dependencies/'+tool)
+invoke_identity_case('P07-actual-tool', 'loaded-driver-byte-drift', 2, driver_drift=True)
+for option, malformed, changed in (('source-repository-id','bad value','fixture.changed'),
+                                   ('verify-path','../bad','other.txt'), ('expected-sha256','bad','0'*64)):
+    for suffix, replacement, status in (('malformed',malformed,1), ('changed',changed,2)):
+        invoke_identity_case('P07-argument', option+'-'+suffix, status, options=[('--'+option,replacement)])
+
+
+def replace_value(value, old, new):
+    if value == old: return copy.deepcopy(new)
+    if isinstance(value, dict):
+        return {key: replace_value(item,old,new) for key,item in value.items()}
+    if isinstance(value, list): return [replace_value(item,old,new) for item in value]
+    return value
+
+
+def refresh_input(value):
+    paths = [['manifests',index] for index in range(len(value['manifests']))] + [
+        ['profile'],['resolved_profile'],['stage_request']]
+    for path in paths:
+        pair = value_at(value,path)
+        old = pair['sha256']
+        raw = scope['jq_canonical_document'](execution,pair['content'])
+        assert raw == encoded(pair['content'])
+        value = replace_value(value,old,sha(raw))
+    return value
+
+def replace_package_binding(value, manifest_id, package):
+    if isinstance(value, dict):
+        if value.get('manifest_ref',{}).get('id') == manifest_id and 'package_ref' in value:
+            value['package_ref'] = copy.deepcopy(package)
+        if value.get('binding',{}).get('manifest_ref',{}).get('id') == manifest_id:
+            value['package_source']['source'] = copy.deepcopy(package)
+        for item in value.values(): replace_package_binding(item,manifest_id,package)
+    elif isinstance(value, list):
+        for item in value: replace_package_binding(item,manifest_id,package)
+
+input_variants = []
+for category, path in [('profile',['profile']),('resolved-profile',['resolved_profile']),('stage-request',['stage_request'])]:
+    value = copy.deepcopy(base_input_value)
+    old_id = value_at(value,path)['content']['id']
+    input_variants.append((category,replace_value(value,old_id,old_id+'.changed')))
+for index,pair in enumerate(base_input_value['manifests']):
+    value = copy.deepcopy(base_input_value)
+    old = value['manifests'][index]['content']['body']['package_ref']
+    new = copy.deepcopy(old); new['object_id'] = '0'*len(old['object_id'])
+    value['manifests'][index]['content']['body']['package_ref'] = new
+    replace_package_binding(value,pair['content']['id'],new)
+    input_variants.append(('manifest-'+pair['content']['id'],value))
+for index,payload in enumerate(base_input_value['payloads']):
+    value = copy.deepcopy(base_input_value)
+    old_data = payload['data']
+    if payload['input_id']=='input.materialize':
+        contract = json.loads(old_data); contract['max_patch_bytes'] -= 1
+        new_data = encoded(contract).decode()
+    else: new_data = old_data.replace('+gamma','+delta')
+    assert old_data != new_data
+    value = replace_value(value,old_data,new_data)
+    value = replace_value(value,sha(old_data.encode()),sha(new_data.encode()))
+    input_variants.append(('payload-'+payload['input_id'],value))
+for field,replacement in [('attempt_id','attempt.changed'),('result_id','result.changed'),
+                          ('started_at','2026-08-30T00:00:00Z'),('finished_at','2026-08-30T00:00:03Z'),
+                          ('recorded_at','2026-08-30T00:00:04Z')]:
+    value = copy.deepcopy(base_input_value)
+    asserted_sets((['attempt',field],replacement))(value)
+    input_variants.append(('attempt-id' if field=='attempt_id' else 'attempt-'+field.replace('_','-'),value))
+for name,value in input_variants:
+    invoke_identity_case('P07-frozen-input', name+'-raw-drift', 1, frozen_bytes=encoded(value))
+    value = refresh_input(value)
+    supplied = copy.deepcopy(base_key); supplied['request_sha256'] = value['stage_request']['sha256']
+    assert encoded(value) != encoded(base_input_value)
+    invoke_identity_case('P07-supplied-input', name+'-valid-drift', 2,
+                         input_bytes=encoded(value), key_bytes=encoded(supplied))
 PY
 
 checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
