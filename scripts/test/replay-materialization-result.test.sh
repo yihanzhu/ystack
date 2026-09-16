@@ -243,33 +243,73 @@ if [ "$status" -ne 3 ] || ! "$jq_bin" -e '.status=="unavailable" and
 fi
 pass 'version 1 remains unavailable as original result evidence'
 
-counter_wrapper="$tmp/counter-wrapper.py"
-cat > "$counter_wrapper" <<'PY'
+loaded_wrapper="$tmp/loaded-driver-wrapper.py"
+cat > "$loaded_wrapper" <<'PY'
 import importlib.util
+import json
 import pathlib
 import sys
+import time
 
-path, counter, *arguments = sys.argv[1:]
+path, mode, control, *arguments = sys.argv[1:]
+if mode == "pause":
+    point, ready, release, *arguments = arguments
 spec = importlib.util.spec_from_file_location("replay", path)
 module = importlib.util.module_from_spec(spec)
 module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()
 exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
-original = module.capture_materializer
-def counted(*values):
-    with pathlib.Path(counter).open("a") as handle:
-        handle.write("invoked\n")
-    return original(*values)
-module.capture_materializer = counted
+if mode == "count":
+    original = module.capture_materializer
+    def counted(*values):
+        with pathlib.Path(control).open("a") as handle:
+            handle.write("invoked\n")
+        return original(*values)
+    module.capture_materializer = counted
+elif mode == "pause":
+    original = module.write_journal
+    def paused(target, state):
+        stored = state.get("receiver_result", {}).get("status") == "stored"
+        if point == "before" and stored:
+            pathlib.Path(ready).write_text("ready\n")
+            while not pathlib.Path(release).exists():
+                time.sleep(0.02)
+        original(target, state)
+        if point == "after" and stored and state.get("phase") == "verifying":
+            pathlib.Path(ready).write_text("ready\n")
+            while not pathlib.Path(release).exists():
+                time.sleep(0.02)
+    module.write_journal = paused
+elif mode in ("git-observe", "git-overflow", "git-nonzero"):
+    candidate = pathlib.Path(arguments[arguments.index("--candidate-root") + 1]).resolve()
+    state = pathlib.Path(arguments[arguments.index("--state-dir") + 1])
+    journal = json.loads((state / "run.json").read_bytes())
+    expected_command = ["/usr/bin/git", f"--git-dir={candidate / 'repository.git'}",
+                        "diff-tree", "--no-commit-id", "--name-only", "-r",
+                        journal["identity"]["source_commit_id"],
+                        journal["materialization"]["candidate_commit_id"]]
+    original = module._capture_fixed_process
+    def checked_capture(command, environment, limit):
+        if command != expected_command or environment != module.GIT_ENVIRONMENT or limit != 2 * 1024 * 1024:
+            raise AssertionError(("unexpected fixed Git invocation", command, environment, limit))
+        pathlib.Path(control).write_text(json.dumps(command) + "\n")
+        if mode == "git-overflow":
+            command = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * (2*1024*1024+1))"]
+        elif mode == "git-nonzero":
+            command = [sys.executable, "-c", "raise SystemExit(7)"]
+        return original(command, environment, limit)
+    module._capture_fixed_process = checked_capture
+else:
+    raise AssertionError(("unknown wrapper mode", mode))
 sys.argv = [path] + arguments
 raise SystemExit(module.main())
 PY
 make_roots concurrent
 set_replay_args concurrent
 concurrent_args=("${replay_arguments[@]}")
-python3 "$counter_wrapper" "$replay" "$tmp/invocations" "${concurrent_args[@]}" \
+python3 "$loaded_wrapper" "$replay" count "$tmp/invocations" "${concurrent_args[@]}" \
   > "$tmp/concurrent-1.out" &
 first=$!
-python3 "$counter_wrapper" "$replay" "$tmp/invocations" "${concurrent_args[@]}" \
+python3 "$loaded_wrapper" "$replay" count "$tmp/invocations" "${concurrent_args[@]}" \
   > "$tmp/concurrent-2.out" &
 second=$!
 wait "$first"
@@ -308,36 +348,6 @@ for key_case in duplicate trailing bom ordinal boolean fraction; do
 done
 pass 'strict key parsing rejects duplicate, trailing, BOM, extra, boolean, and fractional data'
 
-wrapper="$tmp/crash-wrapper.py"
-cat > "$wrapper" <<'PY'
-import importlib.util
-import os
-import pathlib
-import sys
-import time
-
-path, point, ready, release, *arguments = sys.argv[1:]
-spec = importlib.util.spec_from_file_location("replay", path)
-module = importlib.util.module_from_spec(spec)
-module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()
-exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
-original = module.write_journal
-
-def paused(target, state):
-    if point == "before" and state.get("receiver_result", {}).get("status") == "stored":
-        pathlib.Path(ready).write_text("ready\n")
-        while not pathlib.Path(release).exists():
-            time.sleep(0.02)
-    original(target, state)
-    if point == "after" and state.get("receiver_result", {}).get("status") == "stored" and state.get("phase") == "verifying":
-        pathlib.Path(ready).write_text("ready\n")
-        while not pathlib.Path(release).exists():
-            time.sleep(0.02)
-
-module.write_journal = paused
-sys.argv = [path] + arguments
-raise SystemExit(module.main())
-PY
 
 wait_ready() {
   local process=$1 ready=$2 count=0
@@ -355,7 +365,7 @@ for point in before after; do
   crash_args=("${replay_arguments[@]}")
   ready="$tmp/$point.ready"
   release="$tmp/$point.release"
-  python3 "$wrapper" "$replay" "$point" "$ready" "$release" "${crash_args[@]}" \
+  python3 "$loaded_wrapper" "$replay" pause unused "$point" "$ready" "$release" "${crash_args[@]}" \
     > "$tmp/$point.out" 2> "$tmp/$point.err" &
   process=$!
   wait_ready "$process" "$ready"
@@ -388,19 +398,23 @@ pass 'both synchronized process-crash windows preserve their distinct evidence s
 checkpoint_helper="$tmp/checkpoint1-cases.py"
 cat > "$checkpoint_helper" <<'PY'
 import copy
+import ast
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 
 (driver, input_path, key_path, source_git, base_state, base_candidate, base_scratch,
  closure_helper, jq_bin, expected_sha, case_root, inventory_path, no_change_input,
  no_change_key, no_change_state, no_change_candidate, no_change_scratch,
- no_change_expected_sha) = sys.argv[1:]
+ no_change_expected_sha, loaded_wrapper) = sys.argv[1:]
 driver = Path(driver)
 input_path = Path(input_path)
 key_path = Path(key_path)
@@ -1166,6 +1180,204 @@ invoke_existing_positive(
     "no-change-stored-reopen", no_change_input, no_change_key, no_change_state,
     no_change_candidate, no_change_scratch, no_change_expected_sha
 )
+
+stream_program = """
+import os, sys
+out, err, style, status = sys.argv[1:]
+out, err, status = int(out), int(err), int(status)
+def write(fd, count, byte):
+    while count:
+        data = byte * min(count, 16384)
+        offset = 0
+        while offset < len(data):
+            offset += os.write(fd, data[offset:])
+        count -= len(data)
+if style == 'before':
+    write(2, err, b'e'); write(1, out, b'o')
+elif style == 'interleaved':
+    while out or err:
+        n, m = min(out, 16384), min(err, 16384)
+        write(1, n, b'o'); write(2, m, b'e')
+        out -= n; err -= m
+elif style == 'early-eof':
+    os.close(1); write(2, err, b'e')
+else:
+    write(1, out, b'o'); write(2, err, b'e')
+raise SystemExit(status)
+"""
+
+assert (scope['MAX_RESPONSE_BYTES'], scope['MAX_GIT_PATH_BYTES'],
+        scope['MAX_STDERR_BYTES']) == (1024*1024, 2*1024*1024, 64*1024)
+capture = scope['_capture_fixed_process']
+
+
+def finite_capture(name, out, err=0, limit=1024*1024, style='plain', status=0,
+                   fault=None, report=True):
+    children, buffers, owned_descriptors = [], [], []
+    original_popen, original_read = subprocess.Popen, os.read
+
+    class ObservedBuffer(bytearray):
+        def __init__(self):
+            super().__init__()
+            self.maximum = 0
+            buffers.append(self)
+
+        def extend(self, value):
+            super().extend(value)
+            self.maximum = max(self.maximum, len(self))
+
+    def tracked_popen(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        owned_descriptors.extend((child.stdout.fileno(), child.stderr.fileno()))
+        return child
+
+    def checked_read(descriptor, size):
+        if descriptor in owned_descriptors:
+            assert size <= 65536
+            if fault == 'read':
+                raise OSError(errno.EIO, 'owned test read failure')
+            if fault == 'interrupt':
+                raise KeyboardInterrupt('owned test interruption')
+        return original_read(descriptor, size)
+
+    def deadline(*_):
+        raise AssertionError((name, 'stream deadline'))
+    previous_alarm = signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(10)
+    subprocess.Popen, os.read = tracked_popen, checked_read
+    scope['bytearray'] = ObservedBuffer
+    completed = None
+    try:
+        try:
+            completed = capture([sys.executable, '-c', stream_program, str(out),
+                                 str(err), style, str(status)],
+                                {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, limit)
+        except (OSError, KeyboardInterrupt) as error:
+            if (fault == 'read' and not isinstance(error, OSError)) or (
+                    fault == 'interrupt' and not isinstance(error, KeyboardInterrupt)) or not fault:
+                raise
+        else:
+            assert not fault, (name, 'injected failure was ignored')
+            assert completed.returncode == status
+            assert completed.stdout == b'o' * min(out, limit + 1)
+            assert completed.stderr == b'e' * min(err, 64*1024)
+    finally:
+        subprocess.Popen, os.read = original_popen, original_read
+        scope.pop('bytearray')
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_alarm)
+        assert len(children) == 1
+        child = children[0]
+        assert child.returncode is not None and child.poll() is not None
+        assert child.stdout.closed and child.stderr.closed
+        for descriptor in owned_descriptors:
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                assert error.errno == errno.EBADF
+            else:
+                raise AssertionError((name, 'pipe descriptor remains open'))
+        try:
+            os.waitpid(child.pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        else:
+            raise AssertionError((name, 'child was not reaped'))
+        assert len(buffers) == 2
+        assert buffers[0].maximum <= limit + 1
+        assert buffers[1].maximum <= 64*1024
+    if report:
+        record('P12-bounded-process', name, 'PASS')
+    return completed
+
+
+for name, out, err, limit, style, status, fault in (
+    ('response-stdout-limit', 1024*1024, 0, 1024*1024, 'plain', 0, None),
+    ('response-stdout-limit-plus-one', 1024*1024+1, 0, 1024*1024, 'plain', 0, None),
+    ('git-path-stdout-limit', 2*1024*1024, 0, 2*1024*1024, 'plain', 0, None),
+    ('git-path-stdout-limit-plus-one', 2*1024*1024+1, 0, 2*1024*1024, 'plain', 0, None),
+    ('stderr-limit', 3, 64*1024, 1024*1024, 'plain', 0, None),
+    ('stderr-limit-plus-one', 3, 64*1024+1, 1024*1024, 'plain', 0, None),
+    ('long-stderr-before-stdout', 17, 4*64*1024, 1024*1024, 'before', 0, None),
+    ('interleaved-pipe-pressure', 2*1024*1024+65536, 4*64*1024, 2*1024*1024, 'interleaved', 0, None),
+    ('nonzero-exit-bounded-diagnostic', 11, 64*1024+1, 1024*1024, 'plain', 7, None),
+    ('early-stdout-eof', 0, 64*1024+1, 1024*1024, 'early-eof', 0, None),
+    ('injected-read-failure', 2*1024*1024, 0, 1024*1024, 'plain', 0, 'read'),
+    ('injected-interruption', 2*1024*1024, 0, 1024*1024, 'plain', 0, 'interrupt'),
+):
+    finite_capture(name, out, err, limit, style, status, fault)
+
+caller_arguments = SimpleNamespace(source_repository_id='fixture.target',
+    source_git_dir=str(source_git), candidate_root=str(base_candidate),
+    scratch_root=str(base_scratch))
+execution = base_state / 'execution'
+expected_materializer_command = [
+    str(execution / 'adapters/local-git-materializer/v1/materialize.sh'),
+    'materialize', str(input_path), 'fixture.target', str(source_git.resolve()),
+    str(base_candidate.resolve()), str(base_scratch.resolve()),
+    str(execution / '.dependencies/object-closure'), str(execution / '.dependencies/jq'),
+]
+for name, out, err, status in (
+    ('materializer-caller-limit', 1024*1024, 0, 0),
+    ('materializer-caller-overflow', 1024*1024+1, 0, 0),
+    ('materializer-caller-stderr-discard', 17, 64*1024+1, 0),
+    ('materializer-caller-nonzero', 0, 64*1024+1, 7),
+):
+    def checked_materializer(command_value, environment, limit):
+        assert command_value == expected_materializer_command
+        assert environment == {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
+        assert limit == 1024*1024
+        return finite_capture(name, out, err, limit, status=status, report=False)
+    scope['_capture_fixed_process'] = checked_materializer
+    try:
+        try:
+            stdout = scope['capture_materializer'](caller_arguments, execution, input_path)
+        except scope['ReplayError'] as error:
+            assert out > 1024*1024 or status != 0
+            if status:
+                assert str(error) == 'materialization did not complete: ' + 'e' * (64*1024)
+            else:
+                assert str(error) == 'materializer response exceeds its size limit'
+        else:
+            assert out <= 1024*1024 and status == 0
+            assert stdout == b'o' * out
+    finally:
+        scope['_capture_fixed_process'] = capture
+    record('P06-stream-caller', name, 'PASS')
+
+for name, mode, expected_status in (
+    ('real-fixed-git-caller-reopen', 'git-observe', 0),
+    ('keyed-fixed-git-overflow-preservation', 'git-overflow', 1),
+    ('keyed-fixed-git-nonzero-preservation', 'git-nonzero', 1),
+):
+    root, state, candidate, scratch, supplied_input, supplied_key = case_directories(name)
+    checked_command = root / 'checked-command.json'
+    before = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    invocation = command(state, candidate, scratch, supplied_input, supplied_key)
+    completed = subprocess.run([sys.executable, loaded_wrapper, str(driver), mode,
+                                str(checked_command), *invocation[2:]],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               stdin=subprocess.DEVNULL, timeout=20, check=False)
+    assert completed.returncode == expected_status, (name, completed.stderr)
+    assert b'Traceback' not in completed.stderr
+    assert before == evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    assert json.loads(checked_command.read_bytes())[2:] == [
+        'diff-tree', '--no-commit-id', '--name-only', '-r',
+        base_state_value['identity']['source_commit_id'],
+        base_state_value['materialization']['candidate_commit_id']]
+    if expected_status:
+        assert b'candidate changed-path evidence is unavailable' in completed.stderr
+        assert completed.stdout == b''
+    else:
+        assert json.loads(completed.stdout)['response_utf8'] == base_state_value['receiver_result']['response_utf8']
+    record('P12-fixed-git-caller', name, 'PASS')
+
+capture_node = next(node for node in ast.parse(driver.read_bytes()).body
+                    if isinstance(node, ast.FunctionDef) and node.name == '_capture_fixed_process')
+assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr in ('run', 'communicate') for node in ast.walk(capture_node))
+record('P12-bounded-process', 'fixed-capture-has-no-unbounded-fallback', 'PASS')
 PY
 
 checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
@@ -1175,7 +1387,7 @@ python3 "$checkpoint_helper" "$replay" "$input" "$key" "$tmp/source.git" \
   "$runtime/object-closure" "$jq_bin" "$expected" "$tmp/checkpoint1-cases" \
   "$checkpoint_inventory" "$empty_input" "$tmp/empty-key.json" \
   "$tmp/no-change-state" "$tmp/no-change-candidate" "$tmp/no-change-scratch" \
-  "$no_change_expected"
+  "$no_change_expected" "$loaded_wrapper"
 checkpoint_case_count=$(wc -l < "$checkpoint_inventory" | tr -d ' ')
 [ "$checkpoint_case_count" -ge 100 ] || fail checkpoint1-case-count
 pass "P03/P04/P05 typed key, journal, parser, and preservation matrix ($checkpoint_case_count cases)"

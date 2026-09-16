@@ -44,6 +44,7 @@ MAX_STAGE_RESULT_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_JOURNAL_V2_BYTES = 8 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
+MAX_GIT_PATH_BYTES = 2 * 1024 * 1024
 MAX_JSON_DEPTH = 32
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
 GUARD_ACKNOWLEDGEMENT_SECONDS = 5
@@ -511,19 +512,14 @@ def run_materializer(arguments, execution, input_path, identity, candidate_root=
         raise ReplayError("materializer response is malformed") from error
 
 
-def capture_materializer(arguments, execution, input_path):
-    command = materializer_command(
-        arguments, execution, input_path,
-        Path(arguments.candidate_root).resolve(), Path(arguments.scratch_root).resolve()
-    )
-    process = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+def _capture_fixed_process(command, environment, stdout_limit):
+    process = subprocess.Popen(command, env=environment,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout_descriptor = process.stdout.fileno()
     stderr_descriptor = process.stderr.fileno()
-    streams = {stdout_descriptor: (process.stdout, MAX_RESPONSE_BYTES),
+    streams = {stdout_descriptor: (process.stdout, stdout_limit + 1),
                stderr_descriptor: (process.stderr, MAX_STDERR_BYTES)}
     captured = {stdout_descriptor: bytearray(), stderr_descriptor: bytearray()}
-    exceeded = set()
     try:
         while streams:
             readable, _, _ = select.select(list(streams), [], [])
@@ -534,26 +530,37 @@ def capture_materializer(arguments, execution, input_path):
                     stream.close()
                     del streams[descriptor]
                     continue
-                remaining = limit + 1 - len(captured[descriptor])
+                remaining = limit - len(captured[descriptor])
                 if remaining > 0:
                     captured[descriptor].extend(chunk[:remaining])
-                if len(captured[descriptor]) > limit or len(chunk) > remaining:
-                    exceeded.add(descriptor)
         returncode = process.wait()
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        for stream, _ in streams.values():
-            stream.close()
-    stdout = bytes(captured[stdout_descriptor])
-    stderr = bytes(captured[stderr_descriptor][:MAX_STDERR_BYTES])
-    if stdout_descriptor in exceeded:
+        try:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        finally:
+            process.stdout.close()
+            process.stderr.close()
+    return subprocess.CompletedProcess(command, returncode,
+                                       bytes(captured[stdout_descriptor]),
+                                       bytes(captured[stderr_descriptor]))
+
+
+def capture_materializer(arguments, execution, input_path):
+    command = materializer_command(
+        arguments, execution, input_path,
+        Path(arguments.candidate_root).resolve(), Path(arguments.scratch_root).resolve()
+    )
+    captured = _capture_fixed_process(
+        command, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, MAX_RESPONSE_BYTES
+    )
+    if len(captured.stdout) > MAX_RESPONSE_BYTES:
         raise ReplayError("materializer response exceeds its size limit")
-    if returncode != 0:
-        diagnostic = stderr.decode("utf-8", errors="replace").strip()
+    if captured.returncode != 0:
+        diagnostic = captured.stderr.decode("utf-8", errors="replace").strip()
         raise ReplayError("materialization did not complete" + (f": {diagnostic}" if diagnostic else ""))
-    return stdout
+    return captured.stdout
 
 
 def jq_canonical_document(execution, value):
@@ -669,13 +676,13 @@ def validate_materializer_response(arguments, execution, input_path, identity, r
     }
     if current != expected:
         raise ReplayError("candidate repository does not match the materializer response")
-    changed = subprocess.run(
+    changed = _capture_fixed_process(
         ["/usr/bin/git", f"--git-dir={Path(arguments.candidate_root).resolve() / 'repository.git'}",
          "diff-tree", "--no-commit-id", "--name-only", "-r",
          identity["source_commit_id"], expected["candidate_commit_id"]],
-        env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False
+        GIT_ENVIRONMENT, MAX_GIT_PATH_BYTES
     )
-    if changed.returncode != 0 or len(changed.stdout) > 2 * 1024 * 1024:
+    if changed.returncode != 0 or len(changed.stdout) > MAX_GIT_PATH_BYTES:
         raise ReplayError("candidate changed-path evidence is unavailable")
     paths = changed.stdout.splitlines()
     if paths != sorted(set(paths)) or any(not path for path in paths):
