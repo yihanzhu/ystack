@@ -304,8 +304,33 @@ elif mode == "lifecycle":
             gate()
         with pathlib.Path(control).open("a") as handle:
             handle.write("invoked\n")
+        if point == "output-overflow":
+            original_process = module._capture_fixed_process
+            arguments_value, execution, input_path = values
+            expected = module.materializer_command(arguments_value, execution, input_path,
+                pathlib.Path(arguments_value.candidate_root).resolve(), pathlib.Path(arguments_value.scratch_root).resolve())
+            def overflow(command, environment, limit):
+                if command != expected:
+                    return original_process(command, environment, limit)
+                assert environment == {"PATH": "/usr/bin:/bin", "LC_ALL": "C"} and limit == 1024 * 1024
+                actual = original_process(command, environment, limit)
+                assert actual.returncode == 0 and actual.stdout and len(actual.stdout) <= limit
+                pathlib.Path(control + ".response").write_bytes(actual.stdout)
+                pathlib.Path(control + ".capture").write_text(json.dumps({"command": command,
+                    "environment": environment, "limit": limit, "actual_exit": actual.returncode,
+                    "actual_stdout_bytes": len(actual.stdout), "injected_stdout_bytes": limit + 1}) + "\n")
+                gate()
+                return module.subprocess.CompletedProcess(command, actual.returncode, b'x' * (limit + 1), actual.stderr)
+            module._capture_fixed_process = overflow
+            try:
+                return original_capture(*values)
+            finally:
+                module._capture_fixed_process = original_process
         response = original_capture(*values)
         pathlib.Path(control + ".response").write_bytes(response)
+        if point == "output-malformed":
+            gate()
+            return b"{"
         return response
     module.capture_materializer = captured
     if point == "reply":
@@ -695,8 +720,26 @@ def record(group, name, outcome):
     print(f"checkpoint1 {group} {name}: {outcome}")
 
 
+def assert_read_envelope(value, response=None, key=None, run_key=None, unavailable=None):
+    expected = {"schema_version": 1, "kind": "delivery_replay_materialization_result",
+                "authority": "none", "qualification": "unavailable", "offline_simulation": True}
+    if unavailable is not None:
+        expected.update(status="unavailable", reason_id=unavailable)
+    else:
+        original = json.loads(response)
+        extracted = subprocess.run([jq_bin, '-S', '-c', '.stage_result'], input=response,
+                                   stdout=subprocess.PIPE, check=True).stdout
+        expected.update(status="stored", delivery_key=key, run_key=run_key,
+                        response_utf8=response.decode(),
+                        stage_result={"content": original['stage_result'], "sha256": sha(extracted)},
+                        receipt=original['payloads'][0])
+    assert type(value.get('schema_version')) is int
+    assert type(value.get('offline_simulation')) is bool
+    assert value == expected and value.keys() == expected.keys(), (value, expected)
+
+
 def invoke_case(group, name, expected_status, state_value=None, state_bytes=None,
-                key_bytes=None, input_bytes=None, pending=False, output_kind=None):
+                key_bytes=None, input_bytes=None, pending=False, output_kind=None, diagnostic=None):
     _, state, candidate, scratch, supplied_input, supplied_key = case_directories(
         name, pending=pending
     )
@@ -717,6 +760,8 @@ def invoke_case(group, name, expected_status, state_value=None, state_bytes=None
                               completed.stdout, completed.stderr))
     if b"Traceback" in completed.stderr:
         raise AssertionError((group, name, "traceback", completed.stderr))
+    if diagnostic is not None:
+        assert diagnostic in completed.stderr, (group, name, completed.stderr)
     if before != after:
         raise AssertionError((group, name, "evidence changed"))
     if output_kind is None:
@@ -724,6 +769,8 @@ def invoke_case(group, name, expected_status, state_value=None, state_bytes=None
             raise AssertionError((group, name, "scanner-ready output on refusal"))
     else:
         output = json.loads(completed.stdout)
+        if expected_status == 3:
+            assert_read_envelope(output, unavailable="replay.materialization-result-missing")
         if output.get("kind") != output_kind:
             raise AssertionError((group, name, "wrong output", output))
     record(group, name, "PASS")
@@ -826,6 +873,11 @@ def pending_state():
 
 
 state_cases = [
+    state_variant("unsupported-version", mutate(["schema_version"], 3)),
+    state_variant("unsupported-receiver-version", mutate(["receiver_result", "schema_version"], 2)),
+    state_variant("unknown-receiver-status", mutate(["receiver_result", "status"], "unknown")),
+    state_variant("unsupported-source-algorithm", mutate(["identity", "source_hash_algorithm"], "md5")),
+    state_variant("unknown-phase", mutate(["phase"], "unknown")),
     state_variant("boolean-version-true", mutate(["schema_version"], True)),
     state_variant("boolean-version-false", mutate(["schema_version"], False)),
     state_variant("fraction-version", mutate(["schema_version"], 1.0)),
@@ -939,8 +991,9 @@ pending = pending_state()
 invoke_case("P04-valid-pending", "pending-remains-unavailable", 3, state_value=pending,
             pending=True, output_kind="delivery_replay_materialization_result")
 
-base_raw = encoded(base_state_value)
-raw_state_cases = {
+def raw_journal_cases(value):
+    base_raw = encoded(value)
+    return {
     "duplicate-member": base_raw.replace(b'"schema_version":2',
         b'"schema_version":2,"schema_version":2', 1),
     "trailing-document": base_raw + b"{}\n",
@@ -954,8 +1007,11 @@ raw_state_cases = {
     "positive-overflow": base_raw[:-2] + b',"recoverable":1e999}\n',
     "negative-overflow": base_raw[:-2] + b',"recoverable":-1e999}\n',
 }
-for name, value in raw_state_cases.items():
-    invoke_case("P05-journal-parser", f"journal-{name}", 1, state_bytes=value)
+for baseline, value, is_pending in (("journal", base_state_value, False),
+                                     ("pending-journal", pending_state(), True)):
+    for name, raw in raw_journal_cases(value).items():
+        invoke_case("P05-journal-parser", f"{baseline}-{name}", 1, state_bytes=raw,
+                    pending=is_pending, diagnostic=b"duplicate JSON members" if name == "duplicate-member" else None)
 
 
 def response_state(response_text, receipt_text=None):
@@ -1047,6 +1103,41 @@ def rehashed_response_state(operation, baseline_state=base_state_value,
     state["materialization"]["response_sha256"] = response_digest
     state["materialization"]["receipt_sha256"] = receipt_digest
     return state
+
+
+response_duplicate = base_response_text.replace('"schema_version":1',
+    '"schema_version":1,"schema_version":1', 1)
+assert response_duplicate != base_response_text and json.loads(response_duplicate) == base_response
+response_duplicate_state = rehashed_response_state(lambda _: None)
+response_duplicate_state['receiver_result']['response_utf8'] = response_duplicate
+for record_value in (response_duplicate_state['receiver_result'], response_duplicate_state['materialization']):
+    record_value['response_sha256'] = sha(response_duplicate.encode())
+invoke_case('P05-response-parser', 'response-same-value-duplicate', 1,
+            state_value=response_duplicate_state, diagnostic=b'duplicate JSON members')
+receipt_original = base_response['payloads'][0]['data']
+receipt_duplicate = receipt_original.replace('"schema_version":1',
+    '"schema_version":1,"schema_version":1', 1)
+assert receipt_duplicate != receipt_original and json.loads(receipt_duplicate) == json.loads(receipt_original)
+receipt_digest = sha(receipt_duplicate.encode())
+def duplicate_receipt(response):
+    response['payloads'][0].update(data=receipt_duplicate, sha256=receipt_digest)
+    body = response['stage_result']['body']
+    for item in body['outputs']:
+        item['ref']['sha256'] = receipt_digest
+    for item in body['evidence']:
+        item['proof_ref']['sha256'] = receipt_digest
+    body['execution']['metadata']['tools']['source_ref']['sha256'] = receipt_digest
+invoke_case('P05-receipt-parser', 'receipt-same-value-duplicate', 1,
+            state_value=rehashed_response_state(duplicate_receipt), diagnostic=b'duplicate JSON members')
+for name, fields in [('response', [('receiver_result', 'response_sha256'), ('materialization', 'response_sha256')]),
+                     ('receipt', [('receiver_result', 'receipt_sha256'), ('materialization', 'receipt_sha256')]),
+                     ('stage', [('receiver_result', 'stage_result_sha256')])]:
+    value = copy.deepcopy(base_state_value)
+    for record_name, field in fields:
+        value[record_name][field] = '0' * 64
+    assert value['receiver_result']['response_utf8'] == base_response_text
+    invoke_case('P08-raw-stored-digest', 'isolated-' + name + '-digest', 1, state_value=value,
+                diagnostic=b'response digest changed' if name == 'response' else b'result does not match the journal')
 
 
 def rehashed_receipt_state(operation, baseline_state=base_state_value,
@@ -1860,6 +1951,10 @@ def without_key(invocation):
 
 
 def retained_operation(name, invocation, roots, status=0, response=None, unavailable=None, extra_roots=()):
+    prior_journal = json.loads((roots[0] / 'run.json').read_bytes()) if response is not None else None
+    expected_key = json.loads(roots[4].read_bytes()) if response is not None else None
+    if response is not None:
+        assert prior_journal['identity']['delivery_key'] == expected_key
     before = evidence_snapshot(*roots)
     before["extra_roots"] = [inventory(path) for path in extra_roots]
     result = checked_process(invocation, None)
@@ -1875,10 +1970,11 @@ def retained_operation(name, invocation, roots, status=0, response=None, unavail
         retained = value['response_utf8'] if '--read-materialization-result' in invocation else (
             value['state']['receiver_result']['response_utf8'])
         assert retained.encode() == response, (name, 'original response bytes')
+        if '--read-materialization-result' in invocation:
+            assert_read_envelope(value, response, expected_key, prior_journal['identity']['run_key'])
     elif unavailable:
         value = json.loads(result.stdout)
-        assert value['status'] == 'unavailable' and value['reason_id'] == unavailable
-        assert not {'stage_result', 'receipt'} & value.keys()
+        assert_read_envelope(value, unavailable=unavailable)
     else:
         assert b'delivery_replay_materialization_result' not in result.stdout
     return result
@@ -2437,6 +2533,36 @@ for received in (signal.SIGINT, signal.SIGTERM):
     assert control.read_text() == 'invoked\n'
     record('P11-keyed-interruption', signal.Signals(received).name + '-exit75', 'PASS')
     repeated_stored(name, read, delivery, roots, response, control)
+
+for fault, diagnostic in [('malformed', b'input is not JSON'),
+                          ('overflow', b'materializer response exceeds its size limit')]:
+    name = 'capture-' + fault
+    root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'output-' + fault)
+    prior = (roots[0] / 'run.json').read_bytes()
+    assert json.loads(prior) == pending_state() and inventory(roots[1])
+    actual = json.loads(response)
+    receipt = json.loads(actual['payloads'][0]['data'])
+    candidate = roots[1] / 'repository.git'
+    commit = fixed_git(candidate, 'rev-parse', 'refs/heads/candidate')
+    assert receipt['candidate']['commit_id'] == commit
+    assert receipt['candidate']['tree_id'] == fixed_git(candidate, 'rev-parse', commit + '^{tree}')
+    if fault == 'overflow':
+        capture = json.loads(Path(str(control) + '.capture').read_bytes())
+        assert capture['actual_exit'] == 0 and capture['injected_stdout_bytes'] == 1024 * 1024 + 1
+        print('cp4d-capture ' + json.dumps(capture, sort_keys=True))
+    release.write_text('release\n')
+    stdout, stderr = finish_owned(process, name, 1)
+    assert not stdout and diagnostic in stderr and b'Traceback' not in stderr
+    assert before == evidence_snapshot(*roots) and (roots[0] / 'run.json').read_bytes() == prior
+    assert not {'recoverable', 'reason', 'recovery'} & json.loads(prior).keys()
+    record('P06-keyed-after-effect', name + '-ordinary-error-preserves-pending', 'PASS')
+    for index in range(2):
+        for operation, invocation in [('read', read), ('delivery', delivery)]:
+            recovery_operation(name + '-' + operation + '-' + str(index), invocation, roots, control,
+                               3, unavailable='replay.materialization-result-missing')
+            record('P06-keyed-after-effect', name + '-' + operation + '-' + str(index), 'PASS')
+    assert control.read_bytes() == b'invoked\n'
+
 
 PY
 
