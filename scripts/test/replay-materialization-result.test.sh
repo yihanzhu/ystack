@@ -1756,8 +1756,9 @@ for name,value in input_variants:
 def checked_process(invocation, status=0):
     result = subprocess.run(invocation, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=20, check=False)
-    assert result.returncode == status and b'Traceback' not in result.stderr, (
-        invocation, result.returncode, result.stdout, result.stderr)
+    if status is not None:
+        assert result.returncode == status and b'Traceback' not in result.stderr, (
+            invocation, result.returncode, result.stdout, result.stderr)
     return result
 
 
@@ -1771,9 +1772,13 @@ def without_key(invocation):
 def retained_operation(name, invocation, roots, status=0, response=None, unavailable=None, extra_roots=()):
     before = evidence_snapshot(*roots)
     before["extra_roots"] = [inventory(path) for path in extra_roots]
-    result = checked_process(invocation, status)
+    result = checked_process(invocation, None)
     after = evidence_snapshot(*roots)
     after["extra_roots"] = [inventory(path) for path in extra_roots]
+    print('cp4b-preservation ' + json.dumps({'name': name, 'before': before, 'after': after, 'actual_exit': result.returncode},
+                                         sort_keys=True, separators=(',', ':')))
+    assert result.returncode == status and b'Traceback' not in result.stderr, (
+        name, result.returncode, result.stdout, result.stderr)
     assert before == after, (name, 'complete evidence changed')
     if response is not None:
         value = json.loads(result.stdout)
@@ -1786,8 +1791,6 @@ def retained_operation(name, invocation, roots, status=0, response=None, unavail
         assert not {'stage_result', 'receipt'} & value.keys()
     else:
         assert b'delivery_replay_materialization_result' not in result.stdout
-    print('cp4b-preservation ' + json.dumps({'name': name, 'before': before, 'after': after},
-                                         sort_keys=True, separators=(',', ':')))
     return result
 
 

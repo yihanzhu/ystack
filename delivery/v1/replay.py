@@ -968,7 +968,7 @@ def validate_state(state, identity):
         set(state) != {
             "schema_version", "kind", "identity", "phase", "authority", "qualification",
             "receiver_result",
-        } or set(saved) != set(identity)
+        } or set(saved) != (set(identity) | {"delivery_key"})
     ):
         raise ReplayError("state journal pending result is malformed")
     needs_materialization = phase in {
