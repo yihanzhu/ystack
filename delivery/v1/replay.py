@@ -943,7 +943,7 @@ def validate_state(state, identity):
             "recoverable", "reason", "recovery",
         }
         if set(state) - allowed_state or set(saved) - (set(identity) | {
-            "candidate_commit_id", "candidate_tree_id"
+            "candidate_commit_id", "candidate_tree_id", "delivery_key"
         }):
             raise ReplayError("state journal contains unknown keyed fields")
         validate_delivery_key(saved.get("delivery_key"))

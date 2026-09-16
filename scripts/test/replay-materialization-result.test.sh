@@ -48,9 +48,6 @@ git_clean() {
 make_source() {
   local destination=$1 tree base commit
   git_clean init --bare "$destination" >/dev/null
-  tree=$(printf 'alpha\nbeta\n' | git_clean --git-dir="$destination" hash-object -w --stdin |
-    git_clean --git-dir="$destination" mktree 2>/dev/null) || true
-  # mktree needs a named entry, so build the source tree through a temporary index.
   base=$(printf 'alpha\nbeta\n' | git_clean --git-dir="$destination" hash-object -w --stdin)
   GIT_INDEX_FILE="$tmp/source-index" git_clean --git-dir="$destination" update-index \
     --add --cacheinfo 100644,"$base",source.txt
@@ -249,6 +246,7 @@ import importlib.util
 import hashlib
 import json
 import pathlib
+import os
 import sys
 import time
 
@@ -266,12 +264,27 @@ if mode == "driver-drift":
     module._REPLAY_DRIVER_BYTES += b"\n"
     pathlib.Path(control).write_text(hashlib.sha256(module._REPLAY_DRIVER_BYTES).hexdigest() + "\n")
 exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
-if mode == "count":
+if mode in ("count", "count-gate"):
+    if mode == "count-gate":
+        original_lock = module.fcntl.flock
+        def lock_wait(descriptor, operation):
+            pathlib.Path(control + ".started." + str(os.getpid())).write_text("lock-wait\n")
+            return original_lock(descriptor, operation)
+        module.fcntl.flock = lock_wait
     original = module.capture_materializer
     def counted(*values):
+        if mode == "count-gate":
+            pathlib.Path(control + ".ready").write_text("ready\n")
+            deadline = time.monotonic() + 20
+            while not pathlib.Path(control + ".release").exists():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("count gate watchdog")
+                time.sleep(0.02)
         with pathlib.Path(control).open("a") as handle:
             handle.write("invoked\n")
-        return original(*values)
+        captured = original(*values)
+        pathlib.Path(control + ".response").write_bytes(captured)
+        return captured
     module.capture_materializer = counted
 elif mode == "pause":
     original = module.write_journal
@@ -440,6 +453,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 (driver, input_path, key_path, source_git, base_state, base_candidate, base_scratch,
@@ -534,6 +548,8 @@ def inventory(root):
             item["type"] = "other"
         entries.append(item)
 
+    if not os.path.lexists(root):
+        return [{"path": "", "type": "missing"}]
     visit(root, "")
     return sorted(entries, key=lambda item: item["path"])
 
@@ -1732,6 +1748,291 @@ for name,value in input_variants:
     assert encoded(value) != encoded(base_input_value)
     invoke_identity_case('P07-supplied-input', name+'-valid-drift', 2,
                          input_bytes=encoded(value), key_bytes=encoded(supplied))
+
+
+def checked_process(invocation, status=0):
+    result = subprocess.run(invocation, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=20, check=False)
+    assert result.returncode == status and b'Traceback' not in result.stderr, (
+        invocation, result.returncode, result.stdout, result.stderr)
+    return result
+
+
+def without_key(invocation):
+    values = invocation.copy()
+    offset = values.index('--delivery-key')
+    del values[offset:offset+2]
+    return values
+
+
+def retained_operation(name, invocation, roots, status=0, response=None, unavailable=None, extra_roots=()):
+    before = evidence_snapshot(*roots)
+    before["extra_roots"] = [inventory(path) for path in extra_roots]
+    result = checked_process(invocation, status)
+    after = evidence_snapshot(*roots)
+    after["extra_roots"] = [inventory(path) for path in extra_roots]
+    assert before == after, (name, 'complete evidence changed')
+    if response is not None:
+        value = json.loads(result.stdout)
+        retained = value['response_utf8'] if '--read-materialization-result' in invocation else (
+            value['state']['receiver_result']['response_utf8'])
+        assert retained.encode() == response, (name, 'original response bytes')
+    elif unavailable:
+        value = json.loads(result.stdout)
+        assert value['status'] == 'unavailable' and value['reason_id'] == unavailable
+        assert not {'stage_result', 'receipt'} & value.keys()
+    else:
+        assert b'delivery_replay_materialization_result' not in result.stdout
+    print('cp4b-preservation ' + json.dumps({'name': name, 'before': before, 'after': after},
+                                         sort_keys=True, separators=(',', ':')))
+    return result
+
+
+def original_oracle(name, response):
+    print('cp4b-original ' + json.dumps({
+        'name': name, 'response_utf8': response.decode(),
+        'receipt': json.loads(response)['payloads'][0]}, sort_keys=True))
+
+
+def fixed_git(repository, *arguments, data=None, raw=False):
+    invocation = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                  f'--git-dir={repository}', *arguments]
+    result = subprocess.run(invocation, input=data, env=scope['GIT_ENVIRONMENT'],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+    assert result.returncode == 0, (invocation, result.stderr)
+    return result.stdout if raw else result.stdout.strip().decode()
+
+
+for algorithm in ('sha1', 'sha256'):
+    for ancestry in ('root', 'ancestor'):
+        for outcome in ('changed', 'no-change'):
+            name = f'{algorithm}-{ancestry}-{outcome}'
+            root = case_root / ('real-' + name)
+            root.mkdir(mode=0o700)
+            repository = root / 'source.git'
+            checked_process(['/usr/bin/git', 'init', '--bare', '--object-format='+algorithm,
+                             str(repository)])
+            blob = fixed_git(repository, 'hash-object', '-w', '--stdin', data=b'alpha\nbeta\n')
+            tree = fixed_git(repository, 'mktree', data=f'100644 blob {blob}\tsource.txt\n'.encode())
+            parent = fixed_git(repository, 'commit-tree', tree, data=b'root\n')
+            commit = parent if ancestry == 'root' else fixed_git(
+                repository, 'commit-tree', tree, '-p', parent, data=b'ancestor source\n')
+            fixed_git(repository, 'update-ref', 'refs/heads/main', commit)
+            assert fixed_git(repository,'rev-parse','--show-object-format') == algorithm
+            assert fixed_git(repository,'rev-parse',commit+'^{tree}') == tree
+            assert fixed_git(repository,'rev-list','--parents','-n','1',commit) == (
+                commit if ancestry=='root' else commit+' '+parent)
+            fixture = root / 'fixture'
+            checked_process([str(driver.parents[2] / 'scripts/test/local-git-materializer-fixtures.sh'),
+                             'build', str(fixture), jq_bin, algorithm, commit, tree])
+            supplied_input, supplied_key = root / 'input.json', root / 'key.json'
+            value = json.loads((fixture / 'input.json').read_bytes())
+            if outcome == 'no-change':
+                patch = next(item['data'] for item in value['payloads']
+                             if item['input_id'] == 'input.producer-patch')
+                value = replace_value(value, patch, '')
+                value = replace_value(value, sha(patch.encode()), sha(b''))
+                value = refresh_input(value)
+            supplied_input.write_bytes(encoded(value))
+            supplied = copy.deepcopy(base_key)
+            supplied['request_sha256'] = value['stage_request']['sha256']
+            supplied_key.write_bytes(encoded(supplied))
+            state, candidate, scratch = [root / item for item in ('state', 'candidate', 'scratch')]
+            for path in (state, candidate, scratch): path.mkdir(mode=0o700)
+            invocation = command(state, candidate, scratch, supplied_input, supplied_key)
+            invocation.remove('--read-materialization-result')
+            replace_cli(invocation, '--source-git-dir', repository)
+            wanted_blob = b'alpha\nbeta\ngamma\n' if outcome == 'changed' else b'alpha\nbeta\n'
+            replace_cli(invocation, '--expected-sha256', sha(wanted_blob))
+            control = root / 'outside-evidence-invocations'
+            counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control),
+                       *invocation[2:]]
+            checked_process(counted)
+            original = Path(str(control)+'.response').read_bytes()
+            response = json.loads(original)
+            receipt_payload = response['payloads'][0]
+            receipt = json.loads(receipt_payload['data'])
+            assert original.endswith(b'\n') and receipt_payload['data'].endswith('\n')
+            assert receipt_payload['sha256'] == sha(receipt_payload['data'].encode())
+            assert receipt['source'] == {'repository_id':'fixture.target', 'hash_algorithm':algorithm,
+                                         'commit_id':commit, 'tree_id':tree}
+            assert fixed_git(candidate/'repository.git','rev-parse','--show-object-format') == algorithm
+            actual_commit = fixed_git(candidate / 'repository.git', 'rev-parse', 'refs/heads/candidate')
+            actual_tree = fixed_git(candidate / 'repository.git', 'rev-parse', actual_commit+'^{tree}')
+            assert receipt['candidate'] == {'repository_kind':'bare', 'hash_algorithm':algorithm,
+                'commit_id':actual_commit, 'tree_id':actual_tree, 'parent_commit_id':commit}
+            assert fixed_git(candidate / 'repository.git', 'show', actual_tree+':source.txt', raw=True) == wanted_blob
+            if outcome == 'changed':
+                assert actual_commit != commit and actual_tree != tree
+                assert fixed_git(candidate / 'repository.git', 'rev-parse', actual_commit+'^') == commit
+            else:
+                assert actual_commit == commit and actual_tree == tree
+            assert receipt['changed_paths'] == {'count':int(outcome=='changed'),
+                'sha256':sha(encoded(['source.txt'] if outcome=='changed' else []))}
+            assert response['stage_result']['body']['outcome']['value'] == outcome
+            roots = (state, candidate, scratch, supplied_input, supplied_key)
+            read = counted + ['--read-materialization-result']
+            first_read = retained_operation(name+'-read', read, roots, response=original)
+            retrieved = json.loads(first_read.stdout)
+            stage_bytes = (
+                subprocess.run([jq_bin,'-S','-c','.stage_result'], input=original,
+                               stdout=subprocess.PIPE, check=True).stdout)
+            assert retrieved['stage_result'] == {'content':response['stage_result'],'sha256':sha(stage_bytes)}
+            assert retrieved['receipt'] == receipt_payload
+            original_oracle(name, original)
+            record('P01-real-variants', name, 'PASS')
+            repeated = retained_operation(name+'-repeat-read', read, roots, response=original)
+            assert repeated.stdout == first_read.stdout
+            retained_operation(name+'-redelivery', counted, roots, response=original)
+            assert control.read_bytes() == b'invoked\n'
+            assert Path(str(control)+'.response').read_bytes() == original
+            record('P02-retention', name+'-read-repeat-redelivery-one-invocation', 'PASS')
+
+name = 'synchronized-concurrent-original-retention'
+root = case_root / name
+root.mkdir(mode=0o700)
+state,candidate,scratch = [root/item for item in ('state','candidate','scratch')]
+for path in (state,candidate,scratch): path.mkdir(mode=0o700)
+roots = (state,candidate,scratch,input_path,key_path)
+invocation = command(*roots)
+invocation.remove('--read-materialization-result')
+control = root/'outside-evidence-invocations'
+counted = [sys.executable,loaded_wrapper,str(driver),'count-gate',str(control),*invocation[2:]]
+children = []
+try:
+    children.append(subprocess.Popen(counted,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE))
+    deadline = time.monotonic()+20
+    while not Path(str(control)+'.ready').exists():
+        assert children[0].poll() is None and time.monotonic()<deadline
+        time.sleep(0.02)
+    children.append(subprocess.Popen(counted,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE))
+    while len(list(root.glob('outside-evidence-invocations.started.*'))) != 2:
+        assert children[1].poll() is None and time.monotonic()<deadline
+        time.sleep(0.02)
+    Path(str(control)+'.release').write_text('release\n')
+    outputs = [child.communicate(timeout=20) for child in children]
+    assert all(child.returncode==0 for child in children), outputs
+finally:
+    for child in children:
+        if child.poll() is None: child.kill()
+        child.wait()
+        child.stdout.close()
+        child.stderr.close()
+original = Path(str(control)+'.response').read_bytes()
+original_oracle(name, original)
+assert control.read_bytes() == b'invoked\n'
+assert all(json.loads(out)['state']['receiver_result']['response_utf8'].encode()==original for out,err in outputs)
+retained_operation(name+'-read',counted+['--read-materialization-result'],roots,response=original)
+retained_operation(name+'-redelivery',counted,roots,response=original)
+assert control.read_bytes() == b'invoked\n'
+record('P02-concurrent',name,'PASS')
+
+name = 'actual-fixed-verifier-failure'
+root = case_root / name
+root.mkdir(mode=0o700)
+state, candidate, scratch = [root / item for item in ('state','candidate','scratch')]
+for path in (state,candidate,scratch): path.mkdir(mode=0o700)
+invocation = command(state,candidate,scratch,input_path,key_path)
+invocation.remove('--read-materialization-result')
+replace_cli(invocation,'--expected-sha256','0'*64)
+control = root / 'outside-evidence-invocations'
+counted = [sys.executable,loaded_wrapper,str(driver),'count',str(control),*invocation[2:]]
+failed = checked_process(counted,1)
+assert json.loads(failed.stdout)['state']['reason'] == 'fixed verifier digest mismatch'
+assert json.loads((state/'run.json').read_bytes())['phase'] == 'failed'
+original = Path(str(control)+'.response').read_bytes()
+original_oracle(name, original)
+roots = (state,candidate,scratch,input_path,key_path)
+first = retained_operation(name+'-read',counted+['--read-materialization-result'],roots,response=original)
+second = retained_operation(name+'-repeat-read',counted+['--read-materialization-result'],roots,response=original)
+assert first.stdout == second.stdout and control.read_bytes() == b'invoked\n'
+record('P02-verifier-failure',name+'-read-original-without-verifying','PASS')
+
+name = 'actual-v1-unavailable-preserved'
+_,state,candidate,scratch,supplied_input,supplied_key = case_directories(name)
+shutil.rmtree(state)
+shutil.copytree(case_root.parent/'legacy-state',state,symlinks=True)
+roots = (state,candidate,scratch,supplied_input,supplied_key)
+retained_operation(name,without_key(command(*roots)),roots,3,
+                   unavailable='replay.legacy-result-unavailable')
+assert json.loads((state/'run.json').read_bytes())['schema_version'] == 1
+record('P13-format',name,'PASS')
+
+for phase in ('pending', 'stored'):
+    for mode in ('read', 'delivery'):
+        name = f'v2-{phase}-no-key-{mode}'
+        _, state, candidate, scratch, supplied_input, supplied_key = case_directories(name)
+        if phase == 'pending':
+            value = pending_state()
+            (state / 'run.json').write_bytes(encoded(value))
+        invocation = without_key(command(state,candidate,scratch,supplied_input,supplied_key))
+        if mode == 'delivery': invocation.remove('--read-materialization-result')
+        retained_operation(name, invocation, (state,candidate,scratch,supplied_input,supplied_key), 2)
+        record('P13-format', name, 'PASS')
+
+for mode in ('read', 'delivery'):
+    name = 'v1-retrofit-key-'+mode
+    _, state,candidate,scratch,supplied_input,supplied_key = case_directories(name)
+    shutil.rmtree(state)
+    shutil.copytree(case_root.parent/'legacy-state',state,symlinks=True)
+    invocation = command(state,candidate,scratch,supplied_input,supplied_key)
+    if mode == 'delivery': invocation.remove('--read-materialization-result')
+    retained_operation(name, invocation, (state,candidate,scratch,supplied_input,supplied_key), 2)
+    assert json.loads((state/'run.json').read_bytes())['schema_version'] == 1
+    record('P13-format', name, 'PASS')
+
+for target_name in ('state','journal','lock','bundle','frozen-input','key','input'):
+    kinds = ('missing','symlink','directory','fifo') if target_name not in ('state','bundle') else ('missing',)
+    for kind in kinds:
+        name = target_name+'-'+kind+'-read'
+        _, state,candidate,scratch,supplied_input,supplied_key = case_directories(name)
+        target = {'state':state,'journal':state/'run.json','lock':state/'replay.lock','bundle':state/'execution',
+                  'frozen-input':state/'materialization-input.json','key':supplied_key,
+                  'input':supplied_input}[target_name]
+        original_target_bytes = target.read_bytes() if target.is_file() else b''
+        if target.is_dir(): shutil.rmtree(target)
+        else: target.unlink()
+        extra_roots = []
+        if kind == 'symlink':
+            referent = target.parent / ('outside-'+target.name)
+            referent.write_bytes(original_target_bytes)
+            target.symlink_to(referent)
+            extra_roots.append(referent)
+        elif kind == 'directory': target.mkdir(mode=0o700)
+        elif kind == 'fifo': os.mkfifo(target, mode=0o600)
+        roots = (state,candidate,scratch,supplied_input,supplied_key)
+        retained_operation(name, command(*roots), roots, 1, extra_roots=extra_roots)
+        record('P13-filesystem', name, 'PASS')
+
+for option in ('--review-observation','--publisher-observation'):
+    name = option[2:]+'-refused-read'
+    _, state,candidate,scratch,supplied_input,supplied_key = case_directories(name)
+    roots = (state,candidate,scratch,supplied_input,supplied_key)
+    retained_operation(name, command(*roots)+[option,str(supplied_key)], roots, 1)
+    record('P13-observation', name, 'PASS')
+
+for name, operation in (
+    ('wrong-result-request-ref', mutate(['body','request_ref','id'],'request.other')),
+    ('wrong-result-profile-ref', mutate(['body','resolved_profile_ref','id'],'profile.other')),
+    ('wrong-result-digest', None),
+    ('rehashed-attempt-mismatch', mutate(['body','attempt_number'],3)),
+):
+    snapshot = json.loads((case_root.parent / 'scanner-snapshot.json').read_bytes())
+    pair = snapshot['body']['items'][0]['latest_result']['value']
+    if operation:
+        operation(pair['content'])
+        pair['sha256'] = sha(subprocess.run([jq_bin,'-S','-c','.'],input=encoded(pair['content']),
+                                           stdout=subprocess.PIPE,check=True).stdout)
+    else: pair['sha256'] = '0'*64
+    path = case_root / ('scanner-'+name+'.json')
+    path.write_bytes(encoded(snapshot))
+    before = inventory(path)
+    result = checked_process([str(driver.parents[2]/'orchestrator/v1/scan-state.sh'),
+                              'scan','fixture.target',base_state_value['identity']['source_commit_id'],
+                              str(path)],1)
+    assert before == inventory(path) and b'scanner.stage-completed' not in result.stdout
+    record('P14-real-scanner', name, 'PASS')
+
 PY
 
 checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
