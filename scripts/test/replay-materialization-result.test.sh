@@ -42,6 +42,9 @@ runtime="$tmp/runtime"
 git_clean() {
   env -i PATH=/usr/bin:/bin LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
     /usr/bin/git -c core.hooksPath=/dev/null "$@"
 }
 
@@ -1797,7 +1800,11 @@ def original_oracle(name, response):
 def fixed_git(repository, *arguments, data=None, raw=False):
     invocation = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
                   f'--git-dir={repository}', *arguments]
-    result = subprocess.run(invocation, input=data, env=scope['GIT_ENVIRONMENT'],
+    fixture_environment = dict(scope['GIT_ENVIRONMENT'], GIT_AUTHOR_NAME='fixture',
+        GIT_AUTHOR_EMAIL='fixture@example.invalid', GIT_COMMITTER_NAME='fixture',
+        GIT_COMMITTER_EMAIL='fixture@example.invalid', GIT_AUTHOR_DATE='2000-01-01T00:00:00Z',
+        GIT_COMMITTER_DATE='2000-01-01T00:00:00Z')
+    result = subprocess.run(invocation, input=data, env=fixture_environment,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
     assert result.returncode == 0, (invocation, result.stderr)
     return result.stdout if raw else result.stdout.strip().decode()
