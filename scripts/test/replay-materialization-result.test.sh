@@ -15,6 +15,18 @@ trap cleanup EXIT
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+lock_identity() {
+  python3 - "$1" <<'PYLOCK'
+import os
+import stat
+import sys
+
+metadata = os.lstat(sys.argv[1])
+if not stat.S_ISREG(metadata.st_mode):
+    raise SystemExit("lock identity requires a regular file")
+print(f"{metadata.st_dev}:{metadata.st_ino}")
+PYLOCK
+}
 passed=0
 pass() { passed=$((passed + 1)); printf 'ok %s - %s\n' "$passed" "$1"; }
 
@@ -84,6 +96,21 @@ set_replay_args() {
     --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected")
 }
 
+identity_control="$tmp/lock-identity-control"
+printf 'original\n' > "$identity_control"
+printf 'replacement\n' > "$tmp/lock-identity-replacement"
+control_before=$(lock_identity "$identity_control")
+[ "$(lock_identity "$identity_control")" = "$control_before" ] || fail lock-identity-unchanged
+/bin/mv "$identity_control" "$tmp/lock-identity-retained"
+/bin/mv "$tmp/lock-identity-replacement" "$identity_control"
+[ "$(lock_identity "$identity_control")" != "$control_before" ] || fail lock-identity-replacement
+for nonregular in "$tmp/lock-identity-missing" "$tmp"; do
+  if lock_identity "$nonregular" > "$tmp/lock-identity-invalid.out" 2> "$tmp/lock-identity-invalid.err"; then
+    fail lock-identity-invalid-accepted
+  fi
+  [ ! -s "$tmp/lock-identity-invalid.out" ] || fail lock-identity-invalid-output
+done
+
 make_roots stored
 set_replay_args stored
 stored_args=("${replay_arguments[@]}")
@@ -95,17 +122,16 @@ python3 "$replay" "${stored_args[@]}" > "$tmp/stored-delivery.out"
 pass 'keyed delivery publishes actual response bytes in journal version 2'
 
 journal_before=$(sha_file "$tmp/stored-state/run.json")
-lock_inode_before=$(/usr/bin/stat -f %i "$tmp/stored-state/replay.lock" 2>/dev/null ||
-  /usr/bin/stat -c %i "$tmp/stored-state/replay.lock")
+lock_identity_before=$(lock_identity "$tmp/stored-state/replay.lock")
 python3 "$replay" "${stored_args[@]}" --read-materialization-result > "$tmp/stored-read.out"
 "$jq_bin" -e '.kind=="delivery_replay_materialization_result" and .status=="stored" and
   .stage_result.content.kind=="stage_result" and
   .receipt.content_id=="candidate.materialization.receipt" and
   .response_utf8[-1:]=="\n"' "$tmp/stored-read.out" >/dev/null || fail stored-read
 [ "$(sha_file "$tmp/stored-state/run.json")" = "$journal_before" ] || fail stored-read-mutated
-lock_inode_after=$(/usr/bin/stat -f %i "$tmp/stored-state/replay.lock" 2>/dev/null ||
-  /usr/bin/stat -c %i "$tmp/stored-state/replay.lock")
-[ "$lock_inode_after" = "$lock_inode_before" ] || fail stored-lock-replaced
+lock_identity_after=$(lock_identity "$tmp/stored-state/replay.lock")
+[ "$lock_identity_after" = "$lock_identity_before" ] ||
+  fail "stored-lock-replaced: before=$lock_identity_before after=$lock_identity_after"
 pass 'fresh read returns scanner-ready actual result without changing state or lock'
 
 snapshot="$tmp/scanner-snapshot.json"
