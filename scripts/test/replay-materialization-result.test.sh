@@ -2350,6 +2350,36 @@ def recovery_process(name, invocation, control, status):
     return result
 
 
+for evidence in ('retained-candidate', 'empty-pre-effect'):
+    name = 'dangling-journal-' + evidence
+    root, state, candidate, scratch, supplied_input, supplied_key = case_directories(
+        name, pending=evidence == 'empty-pre-effect')
+    roots = (state, candidate, scratch, supplied_input, supplied_key)
+    assert (state / 'execution').is_dir() and (state / 'replay.lock').is_file()
+    assert bool(list(candidate.iterdir())) == (evidence == 'retained-candidate')
+    assert not list(scratch.iterdir())
+    journal = state / 'run.json'
+    journal.unlink()
+    referent = root / 'missing-journal-referent.json'
+    link_text = '../missing-journal-referent.json'
+    journal.symlink_to(link_text)
+    assert os.path.lexists(journal) and not journal.exists() and not os.path.lexists(referent)
+    control = root / 'outside-evidence-invocations'
+    read = command(*roots)
+    delivery = read.copy()
+    delivery.remove('--read-materialization-result')
+    for index in range(2):
+        for operation, invocation in [('read', read), ('delivery', delivery)]:
+            case = name + '-' + operation + '-' + str(index)
+            result = recovery_operation(case, invocation, roots, control, 1, extra_roots=[referent])
+            assert result.stdout == b'' and b'input is not readable' in result.stderr, (
+                case, result.returncode, result.stdout, result.stderr)
+            assert journal.is_symlink() and os.readlink(journal) == link_text
+            assert not os.path.lexists(referent) and not control.exists()
+            assert not Path(str(control) + '.response').exists()
+            record('P13-dangling-journal', case, 'PASS')
+
+
 def repeated_stored(name, read, delivery, roots, response, control):
     previous = None
     for index in range(2):

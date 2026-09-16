@@ -1184,7 +1184,11 @@ def replay_locked(arguments, state_dir):
                 validate_keyed_input(execution, Path(arguments.input), input_bytes, input_value)
             identity = input_identity(input_value, input_sha, arguments, execution, supplied_key)
             state = None
-            if state_path.exists():
+            try:
+                state_path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
                 state = read_journal(state_path)
                 validate_state(state, identity)
                 if (state["schema_version"] == 1 and supplied_key is not None) or \
