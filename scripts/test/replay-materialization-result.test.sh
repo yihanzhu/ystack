@@ -289,6 +289,12 @@ if mode in ("count", "count-gate"):
         pathlib.Path(control + ".response").write_bytes(captured)
         return captured
     module.capture_materializer = counted
+    original_reconcile = module.reconcile_materialization
+    def counted_reconciliation(*values):
+        with pathlib.Path(control).open("a") as handle:
+            handle.write("reconciled\n")
+        return original_reconcile(*values)
+    module.reconcile_materialization = counted_reconciliation
 elif mode == "lifecycle":
     import stat
     original_capture = module.capture_materializer
@@ -2144,6 +2150,9 @@ atexit.register(cleanup_lifecycle_processes)
 def lifecycle_case(name, point):
     root, *roots = case_directories('cp4c-' + name, pending=True)
     (roots[0] / 'run.json').write_bytes(encoded(pending_state()))
+    if point == 'pre-effect':
+        (roots[0] / 'run.json').unlink()
+        (roots[0] / 'materialization-input.json').unlink()
     read = command(*roots)
     delivery = read[:-1]
     control, ready, release = [root / item for item in ('oracle', 'ready', 'release')]
@@ -2186,13 +2195,10 @@ def lifecycle_case(name, point):
         raise
 
 
-def finish_owned(process, name, status=None, kill=False, broken=False):
+def finish_owned(process, name, status=None, kill=False):
     try:
         if kill:
             process.kill()
-        if broken:
-            process.stdout.close()
-            process.stdout = None
         stdout, stderr = process.communicate(timeout=20)
         print('cp4c-process ' + json.dumps({'name': name, 'pid': process.pid,
             'actual_exit': process.returncode, 'stdout_utf8': (stdout or b'').decode(),
@@ -2238,8 +2244,14 @@ assert response is None and not control.exists()
 assert json.loads((roots[0] / 'run.json').read_bytes()) == pending_state()
 assert not list(roots[1].iterdir())
 assert not list(roots[2].iterdir())
-release.write_text('release\n')
-stdout, stderr = finish_owned(process, 'empty-pending-restart', 0)
+finish_owned(process, 'empty-pending-pre-effect-crash', -signal.SIGKILL, kill=True)
+assert before == evidence_snapshot(*roots) and not control.exists()
+retained_operation('empty-pending-after-pre-effect-crash', read, roots,
+                   3, unavailable='replay.materialization-result-missing')
+record('P09-empty-restart', 'actual-pre-effect-crash-pending-preserved', 'PASS')
+counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
+result = checked_process(counted, 0)
+stdout, stderr = result.stdout, result.stderr
 response = Path(str(control) + '.response').read_bytes()
 original_oracle('cp4c-empty-pending-restart', response)
 assert json.loads(stdout)['state']['receiver_result']['response_utf8'].encode() == response
