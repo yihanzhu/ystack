@@ -194,6 +194,7 @@ no_change_snapshot="$tmp/no-change-snapshot.json"
   .body.classifications[0].recovery.reason_id=="scanner.stage-completed"' \
   "$tmp/no-change-scanner.out" >/dev/null || fail no-change-scanner
 pass 'actual no-change response is retained and passes the scanner as terminal'
+no_change_expected=$expected
 input=$original_input
 key=$original_key
 expected=$original_expected
@@ -397,7 +398,9 @@ import subprocess
 import sys
 
 (driver, input_path, key_path, source_git, base_state, base_candidate, base_scratch,
- closure_helper, jq_bin, expected_sha, case_root, inventory_path) = sys.argv[1:]
+ closure_helper, jq_bin, expected_sha, case_root, inventory_path, no_change_input,
+ no_change_key, no_change_state, no_change_candidate, no_change_scratch,
+ no_change_expected_sha) = sys.argv[1:]
 driver = Path(driver)
 input_path = Path(input_path)
 key_path = Path(key_path)
@@ -405,6 +408,11 @@ source_git = Path(source_git)
 base_state = Path(base_state)
 base_candidate = Path(base_candidate)
 base_scratch = Path(base_scratch)
+no_change_input = Path(no_change_input)
+no_change_key = Path(no_change_key)
+no_change_state = Path(no_change_state)
+no_change_candidate = Path(no_change_candidate)
+no_change_scratch = Path(no_change_scratch)
 case_root = Path(case_root)
 inventory_path = Path(inventory_path)
 case_root.mkdir(mode=0o700)
@@ -837,6 +845,196 @@ for name, raw in (("positive-overflow", b"1e999\n"), ("negative-overflow", b"-1e
         record("P05-parser-boundary", name, "PASS")
     else:
         raise AssertionError((name, "accepted"))
+
+
+base_response_text = base_state_value["receiver_result"]["response_utf8"]
+base_response = json.loads(base_response_text)
+if encoded(base_response).decode() != base_response_text:
+    raise AssertionError("actual materializer response is not canonical")
+
+
+def rehashed_response_state(operation):
+    response = copy.deepcopy(base_response)
+    operation(response)
+    if response.get("payloads") and isinstance(response["payloads"][0], dict) and \
+       isinstance(response["payloads"][0].get("data"), str):
+        receipt_text = response["payloads"][0]["data"]
+    else:
+        receipt_text = base_response["payloads"][0]["data"]
+    receipt_digest = sha(receipt_text.encode())
+    stage_digest = sha(encoded(response["stage_result"]))
+    response_text = encoded(response).decode()
+    response_digest = sha(response_text.encode())
+    state = copy.deepcopy(base_state_value)
+    state["receiver_result"].update({
+        "response_utf8": response_text,
+        "response_sha256": response_digest,
+        "stage_result_sha256": stage_digest,
+        "receipt_sha256": receipt_digest,
+    })
+    state["materialization"]["response_sha256"] = response_digest
+    state["materialization"]["receipt_sha256"] = receipt_digest
+    return state
+
+
+def rehashed_receipt_state(operation):
+    response = copy.deepcopy(base_response)
+    receipt = json.loads(response["payloads"][0]["data"])
+    operation(receipt)
+    receipt_text = encoded(receipt).decode()
+    receipt_digest = sha(receipt_text.encode())
+    response["payloads"][0].update({"data": receipt_text, "sha256": receipt_digest})
+    body = response["stage_result"]["body"]
+    for ref in (body["outputs"][0]["ref"], body["evidence"][0]["proof_ref"],
+                body["execution"]["metadata"]["tools"]["source_ref"]):
+        ref["sha256"] = receipt_digest
+    return rehashed_response_state(lambda value: value.update(response))
+
+
+fixed_response_cases = [
+    ("response-schema-version", mutate(["schema_version"], 2)),
+    ("response-kind", mutate(["kind"], "other_response")),
+    ("response-authority", mutate(["authority"], "write")),
+    ("response-qualification-state", mutate(["qualification", "state"], "available")),
+    ("response-qualification-reason", mutate(["qualification", "reason_id"], "adapter.other")),
+    ("response-effects-empty", mutate(["effects"], [])),
+    ("response-effects-extra", mutate(["effects"], ["caller-disposable-candidate-repository", "extra-effect"])),
+    ("response-payload-missing", mutate(["payloads"], [])),
+    ("response-payload-content-id", mutate(["payloads", 0, "content_id"], "other.receipt")),
+    ("response-payload-media-type", mutate(["payloads", 0, "media_type"], "application/octet-stream")),
+    ("response-payload-digest", mutate(["payloads", 0, "sha256"], "0" * 64)),
+    ("response-extra", mutate(["extra"], True)),
+    ("response-missing-authority", mutate(["authority"], delete=True)),
+    ("output-receipt-digest", mutate(["stage_result", "body", "outputs", 0, "ref", "sha256"], "0" * 64)),
+    ("output-receipt-content-id", mutate(["stage_result", "body", "outputs", 0, "ref", "content_id"], "other.receipt")),
+    ("output-receipt-media-type", mutate(["stage_result", "body", "outputs", 0, "ref", "media_type"], "application/octet-stream")),
+    ("output-id", mutate(["stage_result", "body", "outputs", 0, "output_id"], "candidate.other")),
+    ("evidence-receipt-digest", mutate(["stage_result", "body", "evidence", 0, "proof_ref", "sha256"], "0" * 64)),
+    ("evidence-receipt-content-id", mutate(["stage_result", "body", "evidence", 0, "proof_ref", "content_id"], "other.receipt")),
+    ("evidence-receipt-media-type", mutate(["stage_result", "body", "evidence", 0, "proof_ref", "media_type"], "application/octet-stream")),
+    ("evidence-id", mutate(["stage_result", "body", "evidence", 0, "evidence_id"], "evidence.other")),
+    ("evidence-kind", mutate(["stage_result", "body", "evidence", 0, "kind"], "observed")),
+    ("evidence-verdict", mutate(["stage_result", "body", "evidence", 0, "verdict"], "failed")),
+    ("tools-receipt-digest", mutate(["stage_result", "body", "execution", "metadata", "tools", "source_ref", "sha256"], "0" * 64)),
+    ("tools-receipt-content-id", mutate(["stage_result", "body", "execution", "metadata", "tools", "source_ref", "content_id"], "other.receipt")),
+    ("tools-receipt-media-type", mutate(["stage_result", "body", "execution", "metadata", "tools", "source_ref", "media_type"], "application/octet-stream")),
+    ("tools-computed", mutate(["stage_result", "body", "execution", "metadata", "tools", "state"], "computed")),
+    ("tools-value", mutate(["stage_result", "body", "execution", "metadata", "tools", "value"], ["unexpected"])),
+    ("metadata-kind", mutate(["stage_result", "body", "execution", "metadata", "kind"], "interactive")),
+    ("performer", mutate(["stage_result", "body", "execution", "performer", "principal_id"], "principal.other")),
+    ("reported-by", mutate(["stage_result", "body", "reported_by", "principal_id"], "principal.other")),
+    ("actual-binding", mutate(["stage_result", "body", "execution", "actual_binding", "binding_id"], "binding.other")),
+    ("environment", mutate(["stage_result", "body", "execution", "environment", "environment_id"], "environment.other")),
+    ("capability", mutate(["stage_result", "body", "execution", "used_capability", "id"], "core.forge.other.v1")),
+    ("request-ref", mutate(["stage_result", "body", "request_ref", "sha256"], "0" * 64)),
+    ("resolved-profile-ref", mutate(["stage_result", "body", "resolved_profile_ref", "sha256"], "0" * 64)),
+    ("attempt-id", mutate(["stage_result", "body", "attempt_id"], "attempt.other")),
+    ("attempt-number", mutate(["stage_result", "body", "attempt_number"], 2)),
+    ("result-version", mutate(["stage_result", "schema_version"], 1)),
+    ("result-kind", mutate(["stage_result", "kind"], "other_result")),
+    ("result-id", mutate(["stage_result", "id"], "result.other")),
+    ("status", mutate(["stage_result", "body", "status"], "failed")),
+    ("outcome-family", mutate(["stage_result", "body", "outcome", "family"], "other")),
+    ("diagnostics", mutate(["stage_result", "body", "diagnostics"], [{}])),
+    ("started-at", mutate(["stage_result", "body", "started_at"], "2026-08-30T00:00:00Z")),
+    ("finished-at", mutate(["stage_result", "body", "finished_at"], "2026-08-30T00:00:03Z")),
+    ("recorded-at", mutate(["stage_result", "body", "recorded_at"], "2026-08-30T00:00:04Z")),
+    ("result-extra", mutate(["stage_result", "extra"], True)),
+    ("body-extra", mutate(["stage_result", "body", "extra"], True)),
+    ("metadata-extra", mutate(["stage_result", "body", "execution", "metadata", "extra"], True)),
+    ("execution-extra", mutate(["stage_result", "body", "execution", "extra"], True)),
+    ("body-missing-reported-by", mutate(["stage_result", "body", "reported_by"], delete=True)),
+    ("execution-missing-metadata", mutate(["stage_result", "body", "execution", "metadata"], delete=True)),
+    ("metadata-missing-tools", mutate(["stage_result", "body", "execution", "metadata", "tools"], delete=True)),
+    ("output-missing-ref", mutate(["stage_result", "body", "outputs", 0, "ref"], delete=True)),
+    ("evidence-missing-proof-ref", mutate(["stage_result", "body", "evidence", 0, "proof_ref"], delete=True)),
+]
+for fact in ("provider", "model", "snapshot", "effort", "prompt", "skills"):
+    fixed_response_cases.append((
+        f"metadata-{fact}",
+        mutate(["stage_result", "body", "execution", "metadata", fact], {"state": "unavailable"}),
+    ))
+
+
+def append_duplicate(path):
+    def apply(value):
+        target = value
+        for name in path:
+            target = target[name]
+        target.append(copy.deepcopy(target[0]))
+    return apply
+
+
+fixed_response_cases.extend([
+    ("response-payload-extra", append_duplicate(["payloads"])),
+    ("output-cardinality", append_duplicate(["stage_result", "body", "outputs"])),
+    ("evidence-cardinality", append_duplicate(["stage_result", "body", "evidence"])),
+])
+for name, operation in fixed_response_cases:
+    invoke_case("P08-persisted-fixed-response", name, 1,
+                state_value=rehashed_response_state(operation))
+
+for name, operation in (
+    ("receipt-version", mutate(["schema_version"], 2)),
+    ("receipt-kind", mutate(["kind"], "other_receipt")),
+    ("receipt-adapter-id", mutate(["adapter", "id"], "adapter.other")),
+    ("receipt-adapter-version", mutate(["adapter", "version"], "v2")),
+    ("receipt-adapter-status", mutate(["adapter", "status"], "active")),
+    ("receipt-attempt-id", mutate(["attempt", "attempt_id"], "attempt.other")),
+    ("receipt-attempt-number", mutate(["attempt", "attempt_number"], 2)),
+    ("receipt-request-ref", mutate(["request_ref", "sha256"], "0" * 64)),
+    ("receipt-resolved-profile-ref", mutate(["resolved_profile_ref", "sha256"], "0" * 64)),
+    ("receipt-manifest-ref", mutate(["manifest_ref", "sha256"], "0" * 64)),
+    ("receipt-materialization-contract-ref", mutate(["materialization_contract_ref", "sha256"], "0" * 64)),
+    ("receipt-patch-ref", mutate(["patch_ref", "sha256"], "0" * 64)),
+    ("receipt-source-repository", mutate(["source", "repository_id"], "fixture.other")),
+    ("receipt-source-algorithm", mutate(["source", "hash_algorithm"], "sha256")),
+    ("receipt-source-commit", mutate(["source", "commit_id"], "9" * 40)),
+    ("receipt-source-tree", mutate(["source", "tree_id"], "0" * 40)),
+    ("receipt-candidate-kind", mutate(["candidate", "repository_kind"], "worktree")),
+    ("receipt-candidate-algorithm", mutate(["candidate", "hash_algorithm"], "sha256")),
+    ("receipt-candidate-commit", mutate(["candidate", "commit_id"], "8" * 40)),
+    ("receipt-candidate-tree", mutate(["candidate", "tree_id"], "7" * 40)),
+    ("receipt-candidate-parent", mutate(["candidate", "parent_commit_id"], "6" * 40)),
+    ("receipt-changed-paths-count", mutate(["changed_paths", "count"], 2)),
+    ("receipt-changed-paths-digest", mutate(["changed_paths", "sha256"], "0" * 64)),
+    ("receipt-extra", mutate(["extra"], True)),
+    ("receipt-missing-patch-ref", mutate(["patch_ref"], delete=True)),
+):
+    invoke_case("P08-persisted-receipt", name, 1,
+                state_value=rehashed_receipt_state(operation))
+
+invoke_case("P08-real-positive", "changed-stored-reopen", 0,
+            output_kind="delivery_replay_materialization_result")
+
+
+def invoke_existing_positive(name, supplied_input, supplied_key, state, candidate,
+                             scratch, expected_digest):
+    before = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    completed = subprocess.run([
+        sys.executable, str(driver), "--input", str(supplied_input),
+        "--delivery-key", str(supplied_key),
+        "--source-repository-id", "fixture.target", "--source-git-dir", str(source_git),
+        "--candidate-root", str(candidate), "--scratch-root", str(scratch),
+        "--state-dir", str(state), "--closure-helper", closure_helper,
+        "--jq-bin", jq_bin, "--verify-path", "source.txt",
+        "--expected-sha256", expected_digest, "--read-materialization-result",
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    after = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    if completed.returncode != 0 or b"Traceback" in completed.stderr or before != after:
+        raise AssertionError((name, completed.returncode, completed.stderr, before == after))
+    output = json.loads(completed.stdout)
+    if output.get("kind") != "delivery_replay_materialization_result" or \
+       output.get("stage_result", {}).get("content", {}).get("body", {}).get(
+           "outcome", {}).get("value") != "no-change":
+        raise AssertionError((name, "wrong output", output))
+    record("P08-real-positive", name, "PASS")
+
+
+invoke_existing_positive(
+    "no-change-stored-reopen", no_change_input, no_change_key, no_change_state,
+    no_change_candidate, no_change_scratch, no_change_expected_sha
+)
 PY
 
 checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
@@ -844,7 +1042,9 @@ checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
 python3 "$checkpoint_helper" "$replay" "$input" "$key" "$tmp/source.git" \
   "$tmp/stored-state" "$tmp/stored-candidate" "$tmp/stored-scratch" \
   "$runtime/object-closure" "$jq_bin" "$expected" "$tmp/checkpoint1-cases" \
-  "$checkpoint_inventory"
+  "$checkpoint_inventory" "$empty_input" "$tmp/empty-key.json" \
+  "$tmp/no-change-state" "$tmp/no-change-candidate" "$tmp/no-change-scratch" \
+  "$no_change_expected"
 checkpoint_case_count=$(wc -l < "$checkpoint_inventory" | tr -d ' ')
 [ "$checkpoint_case_count" -ge 100 ] || fail checkpoint1-case-count
 pass "P03/P04/P05 typed key, journal, parser, and preservation matrix ($checkpoint_case_count cases)"
