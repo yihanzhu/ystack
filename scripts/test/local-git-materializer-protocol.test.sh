@@ -402,11 +402,12 @@ pass 'independent assertions bind every fixed response receipt reference and met
 
 expect_fixed_response_reject() {
   local name=$1 filter=$2 core_valid=${3:-no}
+  local source_response=${4:-$response} source_bundle=${5:-$response_bundle}
   local mutated="$tmp/fixed-$name-response.json"
   local stage="$tmp/fixed-$name-stage.json"
   local bundle="$tmp/fixed-$name-bundle.json"
   local digest
-  "$jq_bin" -S -c "$filter" "$response" > "$mutated"
+  "$jq_bin" -S -c "$filter" "$source_response" > "$mutated"
   "$jq_bin" -S -c '.stage_result' "$mutated" > "$stage"
   digest=$(sha_file "$stage")
   if [ "$core_valid" = yes ]; then
@@ -415,7 +416,7 @@ expect_fixed_response_reject() {
   fi
   "$jq_bin" -S -c --slurpfile response "$mutated" --arg sha "$digest" \
     '.response=$response[0] | .stage_result_sha256=$sha' \
-    "$response_bundle" > "$bundle"
+    "$source_bundle" > "$bundle"
   if "$jq_bin" -e -L "$modules" --arg command validate-response \
       -f "$protocol" "$bundle" >/dev/null 2>&1; then
     fail "$name accepted"
@@ -498,8 +499,20 @@ expect_fixed_response_reject capability \
   '.stage_result.body.execution.used_capability.id="core.forge.other.v1"'
 expect_fixed_response_reject request-ref \
   '.stage_result.body.request_ref.sha256=("0"*64)'
+expect_fixed_response_reject result-request-ref-schema-version \
+  '.stage_result.body.request_ref.schema_version=1'
+expect_fixed_response_reject result-request-ref-kind \
+  '.stage_result.body.request_ref.kind="profile"'
+expect_fixed_response_reject result-request-ref-id \
+  '.stage_result.body.request_ref.id="request.other"'
 expect_fixed_response_reject resolved-profile-ref \
   '.stage_result.body.resolved_profile_ref.sha256=("0"*64)'
+expect_fixed_response_reject result-resolved-profile-ref-schema-version \
+  '.stage_result.body.resolved_profile_ref.schema_version=1'
+expect_fixed_response_reject result-resolved-profile-ref-kind \
+  '.stage_result.body.resolved_profile_ref.kind="profile"'
+expect_fixed_response_reject result-resolved-profile-ref-id \
+  '.stage_result.body.resolved_profile_ref.id="resolved.other"'
 expect_fixed_response_reject attempt-id '.stage_result.body.attempt_id="attempt.other"'
 expect_fixed_response_reject attempt-number '.stage_result.body.attempt_number=2'
 expect_fixed_response_reject result-schema-version '.stage_result.schema_version=1'
@@ -526,6 +539,12 @@ expect_fixed_response_reject finished-at \
   '.stage_result.body.finished_at="2026-08-30T00:00:03Z"'
 expect_fixed_response_reject recorded-at \
   '.stage_result.body.recorded_at="2026-08-30T00:00:04Z"'
+expect_fixed_response_reject changed-outcome-no-change \
+  '.stage_result.body.outcome.value="no-change" | .stage_result.body.outputs=[]'
+expect_fixed_response_reject changed-outcome-unsupported \
+  '.stage_result.body.outcome.value="unsupported" | .stage_result.body.outputs=[]'
+expect_fixed_response_reject changed-missing-candidate-output \
+  '.stage_result.body.outputs=[]'
 
 expect_rehashed_receipt_reject() {
   local name=$1 filter=$2
@@ -561,6 +580,10 @@ expect_rehashed_receipt_reject() {
 }
 
 expect_rehashed_receipt_reject request-ref '.request_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-request-ref-schema-version \
+  '.request_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-request-ref-kind '.request_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-request-ref-id '.request_ref.id="request.other"'
 expect_rehashed_receipt_reject receipt-version '.schema_version=2'
 expect_rehashed_receipt_reject receipt-kind '.kind="other_receipt"'
 expect_rehashed_receipt_reject adapter-id '.adapter.id="adapter.other"'
@@ -570,10 +593,28 @@ expect_rehashed_receipt_reject attempt-id '.attempt.attempt_id="attempt.other"'
 expect_rehashed_receipt_reject attempt-number '.attempt.attempt_number=2'
 expect_rehashed_receipt_reject resolved-profile-ref \
   '.resolved_profile_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-schema-version \
+  '.resolved_profile_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-kind \
+  '.resolved_profile_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-resolved-profile-ref-id \
+  '.resolved_profile_ref.id="resolved.other"'
 expect_rehashed_receipt_reject manifest-ref '.manifest_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-manifest-ref-schema-version \
+  '.manifest_ref.schema_version=1'
+expect_rehashed_receipt_reject receipt-manifest-ref-kind '.manifest_ref.kind="profile"'
+expect_rehashed_receipt_reject receipt-manifest-ref-id '.manifest_ref.id="adapter.other"'
 expect_rehashed_receipt_reject materialization-contract-ref \
   '.materialization_contract_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-materialization-contract-ref-content-id \
+  '.materialization_contract_ref.content_id="contract.other"'
+expect_rehashed_receipt_reject receipt-materialization-contract-ref-media-type \
+  '.materialization_contract_ref.media_type="application/octet-stream"'
 expect_rehashed_receipt_reject patch-ref '.patch_ref.sha256=("0"*64)'
+expect_rehashed_receipt_reject receipt-patch-ref-content-id \
+  '.patch_ref.content_id="patch.other"'
+expect_rehashed_receipt_reject receipt-patch-ref-media-type \
+  '.patch_ref.media_type="application/octet-stream"'
 expect_rehashed_receipt_reject source-repository '.source.repository_id="fixture.other"'
 expect_rehashed_receipt_reject source-algorithm '.source.hash_algorithm="sha256"'
 expect_rehashed_receipt_reject source-commit '.source.commit_id=("9"*40)'
@@ -614,6 +655,19 @@ no_change_bundle="$tmp/no-change-response-bundle.json"
   .response.stage_result.body.evidence[0].proof_ref.sha256 == .verified_receipt.sha256' \
   "$no_change_bundle" >/dev/null || fail independent-no-change-fixed-facts
 pass 'supplied no-change response retains exact evidence and tools receipt links'
+
+expect_fixed_response_reject no-change-outcome-changed '
+  .stage_result.body.outcome.value="changed" |
+  .stage_result.body.outputs=[{output_id:"candidate.repository",
+    ref:.stage_result.body.evidence[0].proof_ref}]
+' no "$no_change_response" "$no_change_bundle"
+expect_fixed_response_reject no-change-outcome-unsupported \
+  '.stage_result.body.outcome.value="unsupported" | .stage_result.body.outputs=[]' \
+  no "$no_change_response" "$no_change_bundle"
+expect_fixed_response_reject no-change-unexpected-candidate-output '
+  .stage_result.body.outputs=[{output_id:"candidate.repository",
+    ref:.stage_result.body.evidence[0].proof_ref}]
+' no "$no_change_response" "$no_change_bundle"
 
 bad_response="$tmp/bad-response.json"
 "$jq_bin" -S -c '.effects += ["extra-effect"]' "$response" > "$bad_response"

@@ -451,6 +451,23 @@ def mutate(path, replacement=None, delete=False):
     return apply
 
 
+def value_at(value, path):
+    for name in path:
+        value = value[name]
+    return value
+
+
+def asserted_sets(*changes):
+    def apply(value):
+        for path, replacement in changes:
+            if value_at(value, path) == replacement:
+                raise AssertionError(("mutation already present", path, replacement))
+            set_path(value, path, copy.deepcopy(replacement))
+            if value_at(value, path) != replacement:
+                raise AssertionError(("mutation not applied", path, replacement))
+    return apply
+
+
 def inventory(root):
     entries = []
 
@@ -853,19 +870,20 @@ if encoded(base_response).decode() != base_response_text:
     raise AssertionError("actual materializer response is not canonical")
 
 
-def rehashed_response_state(operation):
-    response = copy.deepcopy(base_response)
+def rehashed_response_state(operation, baseline_state=base_state_value,
+                            baseline_response=base_response):
+    response = copy.deepcopy(baseline_response)
     operation(response)
     if response.get("payloads") and isinstance(response["payloads"][0], dict) and \
        isinstance(response["payloads"][0].get("data"), str):
         receipt_text = response["payloads"][0]["data"]
     else:
-        receipt_text = base_response["payloads"][0]["data"]
+        receipt_text = baseline_response["payloads"][0]["data"]
     receipt_digest = sha(receipt_text.encode())
     stage_digest = sha(encoded(response["stage_result"]))
     response_text = encoded(response).decode()
     response_digest = sha(response_text.encode())
-    state = copy.deepcopy(base_state_value)
+    state = copy.deepcopy(baseline_state)
     state["receiver_result"].update({
         "response_utf8": response_text,
         "response_sha256": response_digest,
@@ -877,8 +895,9 @@ def rehashed_response_state(operation):
     return state
 
 
-def rehashed_receipt_state(operation):
-    response = copy.deepcopy(base_response)
+def rehashed_receipt_state(operation, baseline_state=base_state_value,
+                           baseline_response=base_response):
+    response = copy.deepcopy(baseline_response)
     receipt = json.loads(response["payloads"][0]["data"])
     operation(receipt)
     receipt_text = encoded(receipt).decode()
@@ -888,7 +907,9 @@ def rehashed_receipt_state(operation):
     for ref in (body["outputs"][0]["ref"], body["evidence"][0]["proof_ref"],
                 body["execution"]["metadata"]["tools"]["source_ref"]):
         ref["sha256"] = receipt_digest
-    return rehashed_response_state(lambda value: value.update(response))
+    return rehashed_response_state(
+        lambda value: value.update(response), baseline_state, baseline_response
+    )
 
 
 fixed_response_cases = [
@@ -927,7 +948,19 @@ fixed_response_cases = [
     ("environment", mutate(["stage_result", "body", "execution", "environment", "environment_id"], "environment.other")),
     ("capability", mutate(["stage_result", "body", "execution", "used_capability", "id"], "core.forge.other.v1")),
     ("request-ref", mutate(["stage_result", "body", "request_ref", "sha256"], "0" * 64)),
+    ("result-request-ref-schema-version", asserted_sets(
+        (("stage_result", "body", "request_ref", "schema_version"), 1))),
+    ("result-request-ref-kind", asserted_sets(
+        (("stage_result", "body", "request_ref", "kind"), "profile"))),
+    ("result-request-ref-id", asserted_sets(
+        (("stage_result", "body", "request_ref", "id"), "request.other"))),
     ("resolved-profile-ref", mutate(["stage_result", "body", "resolved_profile_ref", "sha256"], "0" * 64)),
+    ("result-resolved-profile-ref-schema-version", asserted_sets(
+        (("stage_result", "body", "resolved_profile_ref", "schema_version"), 1))),
+    ("result-resolved-profile-ref-kind", asserted_sets(
+        (("stage_result", "body", "resolved_profile_ref", "kind"), "profile"))),
+    ("result-resolved-profile-ref-id", asserted_sets(
+        (("stage_result", "body", "resolved_profile_ref", "id"), "resolved.other"))),
     ("attempt-id", mutate(["stage_result", "body", "attempt_id"], "attempt.other")),
     ("attempt-number", mutate(["stage_result", "body", "attempt_number"], 2)),
     ("result-version", mutate(["stage_result", "schema_version"], 1)),
@@ -975,6 +1008,19 @@ for name, operation in fixed_response_cases:
                 state_value=rehashed_response_state(operation))
 
 for name, operation in (
+    ("changed-outcome-no-change", asserted_sets(
+        (("stage_result", "body", "outcome", "value"), "no-change"),
+        (("stage_result", "body", "outputs"), []))),
+    ("changed-outcome-unsupported", asserted_sets(
+        (("stage_result", "body", "outcome", "value"), "unsupported"),
+        (("stage_result", "body", "outputs"), []))),
+    ("changed-missing-candidate-output", asserted_sets(
+        (("stage_result", "body", "outputs"), []))),
+):
+    invoke_case("P08-persisted-outcome", name, 1,
+                state_value=rehashed_response_state(operation))
+
+for name, operation in (
     ("receipt-version", mutate(["schema_version"], 2)),
     ("receipt-kind", mutate(["kind"], "other_receipt")),
     ("receipt-adapter-id", mutate(["adapter", "id"], "adapter.other")),
@@ -983,10 +1029,36 @@ for name, operation in (
     ("receipt-attempt-id", mutate(["attempt", "attempt_id"], "attempt.other")),
     ("receipt-attempt-number", mutate(["attempt", "attempt_number"], 2)),
     ("receipt-request-ref", mutate(["request_ref", "sha256"], "0" * 64)),
+    ("receipt-request-ref-schema-version", asserted_sets(
+        (("request_ref", "schema_version"), 1))),
+    ("receipt-request-ref-kind", asserted_sets(
+        (("request_ref", "kind"), "profile"))),
+    ("receipt-request-ref-id", asserted_sets(
+        (("request_ref", "id"), "request.other"))),
     ("receipt-resolved-profile-ref", mutate(["resolved_profile_ref", "sha256"], "0" * 64)),
+    ("receipt-resolved-profile-ref-schema-version", asserted_sets(
+        (("resolved_profile_ref", "schema_version"), 1))),
+    ("receipt-resolved-profile-ref-kind", asserted_sets(
+        (("resolved_profile_ref", "kind"), "profile"))),
+    ("receipt-resolved-profile-ref-id", asserted_sets(
+        (("resolved_profile_ref", "id"), "resolved.other"))),
     ("receipt-manifest-ref", mutate(["manifest_ref", "sha256"], "0" * 64)),
+    ("receipt-manifest-ref-schema-version", asserted_sets(
+        (("manifest_ref", "schema_version"), 1))),
+    ("receipt-manifest-ref-kind", asserted_sets(
+        (("manifest_ref", "kind"), "profile"))),
+    ("receipt-manifest-ref-id", asserted_sets(
+        (("manifest_ref", "id"), "adapter.other"))),
     ("receipt-materialization-contract-ref", mutate(["materialization_contract_ref", "sha256"], "0" * 64)),
+    ("receipt-materialization-contract-ref-content-id", asserted_sets(
+        (("materialization_contract_ref", "content_id"), "contract.other"))),
+    ("receipt-materialization-contract-ref-media-type", asserted_sets(
+        (("materialization_contract_ref", "media_type"), "application/octet-stream"))),
     ("receipt-patch-ref", mutate(["patch_ref", "sha256"], "0" * 64)),
+    ("receipt-patch-ref-content-id", asserted_sets(
+        (("patch_ref", "content_id"), "patch.other"))),
+    ("receipt-patch-ref-media-type", asserted_sets(
+        (("patch_ref", "media_type"), "application/octet-stream"))),
     ("receipt-source-repository", mutate(["source", "repository_id"], "fixture.other")),
     ("receipt-source-algorithm", mutate(["source", "hash_algorithm"], "sha256")),
     ("receipt-source-commit", mutate(["source", "commit_id"], "9" * 40)),
@@ -1006,6 +1078,65 @@ for name, operation in (
 
 invoke_case("P08-real-positive", "changed-stored-reopen", 0,
             output_kind="delivery_replay_materialization_result")
+
+no_change_state_value = json.loads((no_change_state / "run.json").read_bytes())
+no_change_response_text = no_change_state_value["receiver_result"]["response_utf8"]
+no_change_response_value = json.loads(no_change_response_text)
+if encoded(no_change_response_value).decode() != no_change_response_text:
+    raise AssertionError("actual no-change materializer response is not canonical")
+
+
+def invoke_no_change_case(name, operation):
+    root = case_root / f"no-change-{name}"
+    state = root / "state"
+    candidate = root / "candidate"
+    scratch = root / "scratch"
+    supplied_input = root / "materialization-input.json"
+    supplied_key = root / "delivery-key.json"
+    shutil.copytree(no_change_state, state, symlinks=True)
+    shutil.copytree(no_change_candidate, candidate, symlinks=True)
+    shutil.copytree(no_change_scratch, scratch, symlinks=True)
+    supplied_input.parent.mkdir(mode=0o700, exist_ok=True)
+    supplied_input.write_bytes(no_change_input.read_bytes())
+    supplied_key.write_bytes(no_change_key.read_bytes())
+    mutated = rehashed_response_state(
+        operation, no_change_state_value, no_change_response_value
+    )
+    (state / "run.json").write_bytes(encoded(mutated))
+    before = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    completed = subprocess.run([
+        sys.executable, str(driver), "--input", str(supplied_input),
+        "--delivery-key", str(supplied_key),
+        "--source-repository-id", "fixture.target", "--source-git-dir", str(source_git),
+        "--candidate-root", str(candidate), "--scratch-root", str(scratch),
+        "--state-dir", str(state), "--closure-helper", closure_helper,
+        "--jq-bin", jq_bin, "--verify-path", "source.txt",
+        "--expected-sha256", no_change_expected_sha, "--read-materialization-result",
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    after = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    if completed.returncode != 1 or b"Traceback" in completed.stderr or before != after:
+        raise AssertionError((name, completed.returncode, completed.stderr, before == after))
+    if b"delivery_replay_materialization_result" in completed.stdout:
+        raise AssertionError((name, "scanner-ready output on refusal"))
+    record("P08-persisted-outcome", name, "PASS")
+
+
+no_change_output = [{
+    "output_id": "candidate.repository",
+    "ref": copy.deepcopy(
+        no_change_response_value["stage_result"]["body"]["evidence"][0]["proof_ref"]
+    ),
+}]
+invoke_no_change_case("no-change-outcome-changed", asserted_sets(
+    (("stage_result", "body", "outcome", "value"), "changed"),
+    (("stage_result", "body", "outputs"), no_change_output),
+))
+invoke_no_change_case("no-change-outcome-unsupported", asserted_sets(
+    (("stage_result", "body", "outcome", "value"), "unsupported"),
+))
+invoke_no_change_case("no-change-unexpected-candidate-output", asserted_sets(
+    (("stage_result", "body", "outputs"), no_change_output),
+))
 
 
 def invoke_existing_positive(name, supplied_input, supplied_key, state, candidate,
