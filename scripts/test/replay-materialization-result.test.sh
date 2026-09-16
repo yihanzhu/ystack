@@ -254,7 +254,7 @@ import sys
 import time
 
 path, mode, control, *arguments = sys.argv[1:]
-if mode == "pause":
+if mode in ("pause", "lifecycle"):
     point, ready, release, *arguments = arguments
 elif mode == "read-audit":
     audit_target, audit_limit, *arguments = arguments
@@ -289,6 +289,82 @@ if mode in ("count", "count-gate"):
         pathlib.Path(control + ".response").write_bytes(captured)
         return captured
     module.capture_materializer = counted
+elif mode == "lifecycle":
+    import stat
+    original_capture = module.capture_materializer
+    def gate():
+        pathlib.Path(ready).write_text("ready\n")
+        deadline = time.monotonic() + 20
+        while not pathlib.Path(release).exists():
+            if time.monotonic() >= deadline:
+                raise AssertionError("lifecycle gate watchdog")
+            time.sleep(0.02)
+    def captured(*values):
+        if point == "pre-effect":
+            gate()
+        with pathlib.Path(control).open("a") as handle:
+            handle.write("invoked\n")
+        response = original_capture(*values)
+        pathlib.Path(control + ".response").write_bytes(response)
+        return response
+    module.capture_materializer = captured
+    original_journal = module.write_journal
+    def publication(target, state):
+        stored = state.get("receiver_result", {}).get("status") == "stored"
+        if not stored or state.get("phase") != "verifying":
+            return original_journal(target, state)
+        assert target.name == "run.json" and pathlib.Path(control + ".response").exists()
+        if point != "after":
+            gate()
+        if not point.startswith("fault-"):
+            original_journal(target, state)
+            if point == "after":
+                gate()
+            return
+        fault = point[6:]
+        fdopen, fsync, replace = module.os.fdopen, module.os.fsync, module.os.replace
+        observed = []
+        def fail(operation):
+            observed.append(operation)
+            pathlib.Path(control + ".fault").write_text(operation + "\n")
+            raise OSError("injected stored publication " + operation)
+        class Handle:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+            def __enter__(self):
+                self.wrapped.__enter__()
+                return self
+            def __exit__(self, *values):
+                return self.wrapped.__exit__(*values)
+            def write(self, data):
+                if fault == "write":
+                    fail("write")
+                return self.wrapped.write(data)
+            def flush(self):
+                if fault == "flush":
+                    fail("flush")
+                return self.wrapped.flush()
+            def fileno(self):
+                return self.wrapped.fileno()
+        def opened(descriptor, *values, **keywords):
+            return Handle(fdopen(descriptor, *values, **keywords))
+        def synced(descriptor):
+            directory = stat.S_ISDIR(module.os.fstat(descriptor).st_mode)
+            if fault == ("directory-fsync" if directory else "file-fsync"):
+                fail(fault)
+            return fsync(descriptor)
+        def replaced(source, destination):
+            assert pathlib.Path(destination) == target
+            if fault == "rename":
+                fail("rename")
+            return replace(source, destination)
+        module.os.fdopen, module.os.fsync, module.os.replace = opened, synced, replaced
+        try:
+            return original_journal(target, state)
+        finally:
+            module.os.fdopen, module.os.fsync, module.os.replace = fdopen, fsync, replace
+            assert observed == [fault], (fault, observed)
+    module.write_journal = publication
 elif mode == "pause":
     original = module.write_journal
     def paused(target, state):
@@ -2042,6 +2118,235 @@ for name, operation in (
                               str(path)],1)
     assert before == inventory(path) and b'scanner.stage-completed' not in result.stdout
     record('P14-real-scanner', name, 'PASS')
+
+import atexit
+owned_lifecycle_processes = []
+
+def cleanup_lifecycle_processes():
+    for process in owned_lifecycle_processes:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=10)
+        if process.stdout is not None:
+            process.stdout.close()
+        process.stderr.close()
+
+atexit.register(cleanup_lifecycle_processes)
+
+
+def lifecycle_case(name, point):
+    root, *roots = case_directories('cp4c-' + name, pending=True)
+    (roots[0] / 'run.json').write_bytes(encoded(pending_state()))
+    read = command(*roots)
+    delivery = read[:-1]
+    control, ready, release = [root / item for item in ('oracle', 'ready', 'release')]
+    invocation = [sys.executable, loaded_wrapper, str(driver), 'lifecycle', str(control),
+                  point, str(ready), str(release), *delivery[2:]]
+    process = subprocess.Popen(invocation, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    owned_lifecycle_processes.append(process)
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise AssertionError((name, 'gate not reached', process.returncode, stdout, stderr))
+            if time.monotonic() >= deadline:
+                raise AssertionError((name, 'ready watchdog'))
+            time.sleep(0.02)
+        assert process.poll() is None
+        os.set_blocking(process.stdout.fileno(), False)
+        try:
+            outward = os.read(process.stdout.fileno(), 1)
+        except BlockingIOError:
+            outward = b''
+        assert outward == b'', (name, 'outward success before release')
+        os.set_blocking(process.stdout.fileno(), True)
+        before = evidence_snapshot(*roots)
+        oracle = Path(str(control) + '.response')
+        response = oracle.read_bytes() if oracle.exists() else None
+        if point != 'pre-effect':
+            assert response and json.loads(response)['stage_result']
+            original_oracle('cp4c-' + name, response)
+        print('cp4c-pause ' + json.dumps({'name': name, 'point': point, 'snapshot': before,
+                                        'outward_stdout_bytes': 0}, sort_keys=True))
+        return root, roots, read, delivery, control, release, process, before, response
+    except BaseException:
+        process.kill() if process.poll() is None else None
+        process.communicate(timeout=10)
+        process.stdout.close(); process.stderr.close()
+        owned_lifecycle_processes.remove(process)
+        raise
+
+
+def finish_owned(process, name, status=None, kill=False, broken=False):
+    try:
+        if kill:
+            process.kill()
+        if broken:
+            process.stdout.close()
+            process.stdout = None
+        stdout, stderr = process.communicate(timeout=20)
+        print('cp4c-process ' + json.dumps({'name': name, 'pid': process.pid,
+            'actual_exit': process.returncode, 'stdout_utf8': (stdout or b'').decode(),
+            'stderr_utf8': stderr.decode(), 'reaped': process.poll() is not None}, sort_keys=True))
+        if status is not None:
+            assert process.returncode == status, (name, process.returncode, stdout, stderr)
+        if kill:
+            assert stdout == b''
+        return stdout or b'', stderr
+    finally:
+        if process.poll() is None:
+            process.kill(); process.wait(timeout=10)
+        if process.stdout is not None:
+            process.stdout.close()
+        process.stderr.close()
+        owned_lifecycle_processes.remove(process)
+
+
+def repeated_stored(name, read, delivery, roots, response):
+    previous = None
+    for index in range(2):
+        result = retained_operation(name + '-read-' + str(index), read, roots, response=response)
+        assert previous is None or result.stdout == previous
+        previous = result.stdout
+        record('P10/P11-stored-reopen', name + '-read-' + str(index), 'PASS')
+        retained_operation(name + '-delivery-' + str(index), delivery, roots, response=response)
+        record('P10/P11-stored-redelivery', name + '-delivery-' + str(index), 'PASS')
+
+
+values = lifecycle_case('empty-pending-restart', 'pre-effect')
+root, roots, read, delivery, control, release, process, before, response = values
+assert response is None and not control.exists()
+assert json.loads((roots[0] / 'run.json').read_bytes()) == pending_state()
+assert not list(roots[1].iterdir())
+assert not list(roots[2].iterdir())
+release.write_text('release\n')
+stdout, stderr = finish_owned(process, 'empty-pending-restart', 0)
+response = Path(str(control) + '.response').read_bytes()
+original_oracle('cp4c-empty-pending-restart', response)
+assert json.loads(stdout)['state']['receiver_result']['response_utf8'].encode() == response
+assert control.read_text() == 'invoked\n'
+record('P09-empty-restart', 'same-pending-first-effect', 'PASS')
+counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
+for index in range(2):
+    retained_operation('empty-pending-repeat-' + str(index), counted, roots, response=response)
+    assert control.read_text() == 'invoked\n'
+    record('P09-empty-restart', 'materialized-once-' + str(index), 'PASS')
+repeated_stored('empty-pending-restart', read, delivery, roots, response)
+
+for variant in ('partial-candidate', 'partial-scratch', 'linked-candidate', 'complete-candidate'):
+    root, *roots = case_directories('cp4c-' + variant, pending=variant != 'complete-candidate')
+    (roots[0] / 'run.json').write_bytes(encoded(pending_state()))
+    if variant == 'partial-candidate':
+        (roots[1] / 'partial').write_bytes(b'partial candidate\x00')
+    elif variant == 'partial-scratch':
+        (roots[2] / 'partial').write_bytes(b'partial scratch\x00')
+    elif variant == 'linked-candidate':
+        (roots[1] / 'link').symlink_to(roots[4])
+    read = command(*roots); delivery = read[:-1]
+    control = root / 'count'
+    counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
+    for index in range(2):
+        for operation, invocation in [('read', read), ('delivery', counted)]:
+            retained_operation(variant + '-' + operation + '-' + str(index), invocation, roots,
+                               3, unavailable='replay.materialization-result-missing')
+            assert not control.exists()
+            record('P09-partial-effect', variant + '-' + operation + '-' + str(index), 'PASS')
+
+root, *roots = case_directories('cp4c-damaged-stored')
+value = copy.deepcopy(base_state_value)
+value['receiver_result']['response_sha256'] = '0' * 64
+(roots[0] / 'run.json').write_bytes(encoded(value))
+read = command(*roots); control = root / 'count'
+counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *read[2:-1]]
+for index in range(2):
+    for operation, invocation in [('read', read), ('delivery', counted)]:
+        retained_operation('damaged-stored-' + operation + '-' + str(index), invocation, roots, 1)
+        assert not control.exists()
+        record('P09-damaged-stored', operation + '-' + str(index), 'PASS')
+
+root, *roots = case_directories('cp4c-fresh-populated-candidate')
+(roots[0] / 'run.json').unlink()
+(roots[0] / 'materialization-input.json').unlink()
+read = command(*roots); delivery = read[:-1]
+candidate_before, scratch_before = inventory(roots[1]), inventory(roots[2])
+result = checked_process(delivery, 1)
+assert inventory(roots[1]) == candidate_before and inventory(roots[2]) == scratch_before
+assert json.loads((roots[0] / 'run.json').read_bytes())['receiver_result']['status'] == 'pending'
+assert b'delivery_replay_materialization_result' not in result.stdout
+record('P09-fresh-candidate', 'cannot-adopt-populated-root', 'PASS')
+for index in range(2):
+    retained_operation('fresh-populated-read-' + str(index), read, roots,
+                       3, unavailable='replay.materialization-result-missing')
+    retained_operation('fresh-populated-delivery-' + str(index), delivery, roots,
+                       3, unavailable='replay.materialization-result-missing')
+    record('P09-fresh-candidate', 'preserved-reopen-' + str(index), 'PASS')
+
+for point in ('before', 'after'):
+    name = 'sigkill-' + point
+    root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, point)
+    finish_owned(process, name, -signal.SIGKILL, kill=True)
+    assert before == evidence_snapshot(*roots)
+    record('P10-SIGKILL', point + '-exact-pause-preservation', 'PASS')
+    if point == 'after':
+        repeated_stored(name, read, delivery, roots, response)
+    else:
+        for index in range(2):
+            for operation, invocation in [('read', read), ('delivery', delivery)]:
+                retained_operation(name + '-' + operation + '-' + str(index), invocation, roots,
+                                   3, unavailable='replay.materialization-result-missing')
+                record('P10-missing-reopen', operation + '-' + str(index), 'PASS')
+    assert control.read_text() == 'invoked\n'
+
+for fault in ('write', 'flush', 'file-fsync', 'rename', 'directory-fsync'):
+    name = 'publication-' + fault
+    root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'fault-' + fault)
+    assert json.loads((roots[0] / 'run.json').read_bytes())['receiver_result']['status'] == 'pending'
+    release.write_text('release\n')
+    stdout, stderr = finish_owned(process, name, 1)
+    assert not stdout and b'injected stored publication' in stderr and b'Traceback' not in stderr
+    assert Path(str(control) + '.fault').read_text() == fault + '\n'
+    after = evidence_snapshot(*roots)
+    print('cp4c-publication ' + json.dumps({'name': name, 'before': before, 'after': after,
+                                         'renamed': fault == 'directory-fsync'}, sort_keys=True))
+    if fault == 'directory-fsync':
+        prior, present = copy.deepcopy(before), copy.deepcopy(after)
+        for snapshot in (prior, present):
+            snapshot['state'] = [item for item in snapshot['state'] if item['path'] != 'run.json']
+        assert prior == present, (name, 'evidence outside replaced journal changed')
+        repeated_stored(name, read, delivery, roots, response)
+    else:
+        assert before == after, (name, 'prior usable pending evidence changed')
+        for index in range(2):
+            for operation, invocation in [('read', read), ('delivery', delivery)]:
+                retained_operation(name + '-' + operation + '-' + str(index), invocation, roots,
+                                   3, unavailable='replay.materialization-result-missing')
+                record('P11-pre-rename', fault + '-' + operation + '-' + str(index), 'PASS')
+    assert control.read_text() == 'invoked\n'
+    record('P11-atomic-publication', fault + '-no-outward-success', 'PASS')
+
+name = 'broken-reply'
+root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'after')
+process.stdout.close(); process.stdout = None
+release.write_text('release\n')
+stdout, stderr = finish_owned(process, name)
+assert process.returncode != 0 and not stdout
+assert before == evidence_snapshot(*roots)
+record('P11-outward-pipe', 'failed-reply-retains-publication', 'PASS')
+repeated_stored(name, read, delivery, roots, response)
+
+for received in (signal.SIGINT, signal.SIGTERM):
+    name = 'keyed-' + signal.Signals(received).name
+    root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'before')
+    process.send_signal(received)
+    release.write_text('release\n')
+    stdout, stderr = finish_owned(process, name, 75)
+    assert b'Traceback' not in stderr
+    assert json.loads(stdout)['state']['receiver_result']['response_utf8'].encode() == response
+    assert control.read_text() == 'invoked\n'
+    record('P11-keyed-interruption', signal.Signals(received).name + '-exit75', 'PASS')
+    repeated_stored(name, read, delivery, roots, response)
 
 PY
 
