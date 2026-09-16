@@ -308,13 +308,20 @@ elif mode == "lifecycle":
         pathlib.Path(control + ".response").write_bytes(response)
         return response
     module.capture_materializer = captured
+    if point == "reply":
+        original_result = module.result
+        def reply(state):
+            assert state.get("receiver_result", {}).get("status") == "stored"
+            gate()
+            return original_result(state)
+        module.result = reply
     original_journal = module.write_journal
     def publication(target, state):
         stored = state.get("receiver_result", {}).get("status") == "stored"
         if not stored or state.get("phase") != "verifying":
             return original_journal(target, state)
         assert target.name == "run.json" and pathlib.Path(control + ".response").exists()
-        if point != "after":
+        if point == "before" or point.startswith("fault-"):
             gate()
         if not point.startswith("fault-"):
             original_journal(target, state)
@@ -2211,6 +2218,16 @@ def repeated_stored(name, read, delivery, roots, response):
         assert previous is None or result.stdout == previous
         previous = result.stdout
         record('P10/P11-stored-reopen', name + '-read-' + str(index), 'PASS')
+    before = evidence_snapshot(*roots)
+    first_delivery = checked_process(delivery, 0)
+    assert json.loads(first_delivery.stdout)['state']['receiver_result']['response_utf8'].encode() == response
+    after = evidence_snapshot(*roots)
+    print('cp4c-resume ' + json.dumps({'name': name, 'before': before, 'after': after}, sort_keys=True))
+    for snapshot in (before, after):
+        snapshot['state'] = [item for item in snapshot['state'] if item['path'] != 'run.json']
+    assert before == after, (name, 'workflow resume changed evidence outside journal')
+    record('P10/P11-stored-redelivery', name + '-resume-original-response', 'PASS')
+    for index in range(2):
         retained_operation(name + '-delivery-' + str(index), delivery, roots, response=response)
         record('P10/P11-stored-redelivery', name + '-delivery-' + str(index), 'PASS')
 
@@ -2327,7 +2344,7 @@ for fault in ('write', 'flush', 'file-fsync', 'rename', 'directory-fsync'):
     record('P11-atomic-publication', fault + '-no-outward-success', 'PASS')
 
 name = 'broken-reply'
-root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'after')
+root, roots, read, delivery, control, release, process, before, response = lifecycle_case(name, 'reply')
 process.stdout.close(); process.stdout = None
 release.write_text('release\n')
 stdout, stderr = finish_owned(process, name)
