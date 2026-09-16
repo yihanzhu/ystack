@@ -1,5 +1,5 @@
 ---
-spec-blob: d4a803b0c27cd08d21c4d87458faf2fa76ec88ce
+spec-blob: c67f2cf79953613986e777f2c1beab20e497b641
 drafted: 2026-09-15
 ---
 
@@ -11,35 +11,32 @@ Risk: high. Gate mode: `artifact-high`. Review size: `accepted-exception`.
 This plan covers one concern: retaining and retrieving the actual response of
 one keyed offline materialization in the existing replay journal.
 
-The amendment source base is `7b27356db62aabd34ca1726ed5d1ad261d4677b5`,
-containing the accepted shadow-binding G2 amendment in PR #339. The accepted
-intent blob remains
-`eb68c51f1a9866599c8662e967fba8375ccfbf3e`; the spec links to that exact blob.
-The separate plan amendment must land before implementation resumes. The current
-Roadmap program delegation in `work/roadmap-program-authorization/decision.md`
-supplies the named manager's acceptance process. This draft neither accepts itself
-nor authorizes a second manager.
+The amendment source base is `ae5ea2af8711502bf815bb955f4147e37f28f8eb`,
+containing the accepted remediation G2 amendment in PR #341. The accepted intent
+remains `eb68c51f1a9866599c8662e967fba8375ccfbf3e`. The prior accepted plan is
+`c9cb331662d232d18462d5d577ac6256ad7f4a73`. This separate plan amendment must
+land before code resumes. The current Roadmap program delegation supplies the
+named manager's acceptance process; this author does not accept the plan or appoint
+a second manager.
 
-The preserved implementation is `ystack/impl/replay-materialization-result` at
-local `15476b92860608f640a3d480170fd878af3f4b48`, clean, with old base/plan-base
-`ab26ca2a477afff6541220fde2107fd445904538`. Its recorded remote head is
-`529069b731eb5738646928f6c6c07fe5bd61d927`; PR state is absent. The local binding
-commit is the direct child of that published package-source commit. Intake #324
-is paused with `claimed` and `needs-human`, without `ready`. The prior accepted
-plan blob is `356b48a1a64b03678e3b89e56db53fecd98792c9`. Earlier implementation
-`db685b5c7f38f4f105d2ac727e4934f6535a3c9b` remains in the same history.
-These are preserved facts, not a substitute for fresh server and worktree checks.
-Keep this same attempt; do not discard, recreate or rewrite it.
+Preserve `ystack/impl/replay-materialization-result` at clean local head
+`45f306b3b7d8e6346393101e91005703adca58dc`, recorded remote checkpoint
+`0b662b0c5317c8d27a0331f7204fbe7b62353363`, implementation PR absent, and old
+base/plan-base `c332aaff66f116c2badf2adb408e39c887383697`. Intake #324 is paused
+with `claimed` and `needs-human`, without `ready`. These are the manager's bound
+handoff facts; reverify repository, branch, full heads, PR/base/claim and clean
+worktree before resume. Never reset, rebase, force-push, recreate or silently replace
+this attempt or its earlier commits.
 
-The saved full runner at the paused head failed with exit 142. Its corrected
-continuation later failed with `E_PROFILE profile.json` from the real shadow
-assembler because the newly bound default files differ from its old fixed pins.
-The 32-file proof index has SHA-256
+The complete independent content review has SHA-256
+`23286d26eb638f67023d96571532cfdb6fb53661d8fda1e326bfc71f6e71ec17` and
+`Content-verdict: REVISE` / `VERDICT: FAIL`. It identified malformed journal types
+and non-finite numbers, incomplete fixed receipt links, unbounded Git diff capture,
+and missing accepted proof. All four must be corrected together. Preserve the
+stopped native run at exit 143 and the earlier exit-142 full run, exit-1 shadow
+continuation, other harness failures and individual passes. None is a complete
+implementation pass. The old 32-file proof index remains SHA-256
 `968d286c1498d48069fe97e13cee87271364704b9d879dfac3dbd5ed8a2c6621`.
-Preserve that complete record, including the other harness failures and subsequent
-individual passes. Neither those passes nor G2's artifact-only CI prove this
-implementation complete. The remaining work is the ordinary shadow binding repair
-and fresh complete proof, plus any allowed receiver corrections evidence requires.
 
 ## Files that change
 
@@ -77,28 +74,35 @@ All seven dependency files already exist, including the shadow module already
 covered by the restore manifest. Only the two originally planned restore manifest
 entries are appended. Keep both shadow suites and the shadow shell driver unchanged.
 
-The accepted implementation envelope remains 800–1,500 added plus removed lines
-across these fifteen exact paths. The current paused implementation measures 1,168
-additions plus 34 deletions, or 1,202 added plus removed lines across fourteen paths
-against `ab26ca2a477afff6541220fde2107fd445904538`. The earlier eight-path
-implementation measured 1,172 lines. These are measurements, not passing evidence.
+The accepted implementation envelope is 2,000–3,000 added plus removed lines
+across these fifteen exact paths. Current head measures 1,171 additions plus
+37 deletions, or 1,208 total, against its old base. That incomplete implementation
+cannot meet the remaining proof inside the earlier 800–1,500 estimate.
 
-| Work | Added plus removed lines |
-| --- | ---: |
-| Current implementation and completed six-path binding maintenance | 1,202 measured |
-| Two shadow digest constants and their containing-commit header | 6 expected |
-| Remaining receiver corrections and proof, if needed | 0–292 estimated |
-| Expected complete diff within the accepted envelope | 1,208–1,500 estimated |
+| Area | Current measured | Estimated complete diff |
+| --- | ---: | ---: |
+| Replay driver, typed validation and bounded capture | 524 | 640–800 |
+| Pure fixed response predicate | 49 | 85–125 |
+| Receiver suite with complete named proof matrix | 410 | 1,050–1,450 |
+| Direct protocol relation tests | 48 | 180–300 |
+| README, components, recovery guide and restore entries | 141 | 141–165 |
+| Four profile files, two assembly tests and shadow pins/header | 36 | 36–50 |
+| Total | 1,208 | 2,132–2,890 |
 
-The remaining allocations explain how the necessary dependency work fits the
-accepted upper bound. They are not per-file quotas or permission to trim proof.
-The source baseline remains an 875-line replay, 435-line protocol, 1,152-line
-unchanged replay suite and 356-line protocol suite. The response validator, crash
-boundary, scanner proof and package consistency must land together to prove this
-one persistence contract. Measure the complete implementation diff against fresh
-main before review, excluding artifact changes already on that base. If complete,
-readable work needs more space, pause for a separately authored and reviewed
-amendment. Do not compress code or remove tests to fit an estimate.
+Counts describe the final complete diff against the accepted base, not edit churn
+or quotas. The receiver suite allocation covers real fixture/source setup,
+private invocation/mutation/snapshot helpers, typed and relation cases, byte/stream
+boundaries, and process-crash/I/O/restart/scanner proof. Reorganize shared setup for
+readability without omitting named assertions. Keep helpers inside the two allowed
+test files; do not modify the existing fixture-builder file or create a new testing
+framework. Its existing algorithm/commit/tree arguments already support the needed
+fixtures; extend only this suite's local source/setup helpers for ancestry and cases.
+
+Measure the final diff excluding artifacts already on current main. Preserve the
+unchanged 1,152-line legacy suite and all 40 checks. If complete readable work needs
+more space, another path or a changed concern, pause for the affected separately
+authored amendment. Never compress code, split off required correctness/proof or
+drop tests to fit. This remains one persistence boundary.
 
 ## Order of work
 
@@ -113,24 +117,59 @@ hash links at that base.
 Before resume, the manager verifies exact repository, branch, local and remote head,
 PR state, old/current base and clean worktree against the preserved handoff. Resolve
 the existing pause and claim on #324 through the current program's recovery sequence.
-An unexpected identity or dirty state stops this attempt.
+An unexpected identity or dirty state stops this attempt. Require the prior native
+run owner to confirm the stopped run and its exit-143 logs are fully preserved and
+no old test process remains active before any writer resumes.
 
 Merge the newly accepted main into that same implementation branch without reset,
-rebase or force-push. Record the resulting actual head and verify a clean worktree,
-unchanged accepted artifact links and the current base. Verify both actual source
-commits remain ancestors, the materializer tree and all four profile bytes are
-unchanged from the preserved tuple below, and the two shadow pins still need the
-identified update. A change to that tuple pauses this repair for a separate plan
-amendment; any wider profile change also returns to G2. Before coder work, record a
-fresh matching build claim with `artifact-high/high/plan-refresh`, PR absent and
-this reconciled exact tuple; require `claimed` present and `needs-human` and `ready`
-absent. The coder does not edit the artifact chain. Prior implementation review
-evidence is stale. A later base move requires renewed exact-base checks and
-independent review; changed artifact meaning returns through the affected gate.
+rebase or force-push. Record its actual head, clean state, current base and unchanged
+accepted artifact hash links. Verify the old package/profile checkpoints remain
+ancestors and the current package/profile/shadow bytes match the preserved handoff.
+Those old values are historical starting evidence; section 6 deliberately replaces
+them after protocol correction under the accepted staged procedure.
 
-Steps 1–5 retain the complete receiver implementation contract. Review and finish
-the existing implementation against them; do not restart it or replace evidence
-already present. Step 6 completes the missing dependency maintenance.
+Before coder work, the manager records the matching build claim with
+`artifact-high/high/plan-refresh`, PR absent, exact local/remote heads and current
+base; require `claimed` present and `needs-human` and `ready` absent. The coder does
+not edit the accepted artifact chain. A dirty or unexplained identity/state change
+stops. Base moves invalidate affected review evidence; reconcile and recheck hashes
+through the existing rules. Design/scope/safety changes return to their artifact gate.
+
+### Work checkpoints and one writer
+
+Resume with one implementation writer. Finish and commit each bounded group below
+with its focused proof and a concise exact-head case inventory before moving on.
+The manager inspects each checkpoint and coordinates read-only substantive review
+where needed; checkpoints cannot reset review rounds or evade an unresolved finding.
+Any review of a checkpoint names that exact immutable commit. No reviewer edits code
+or controls the writer's running tests.
+
+1. Correct journal/key typing and finite-number parsing; add pending/stored type,
+   parser and preservation cases. Run those focused cases and legacy regression.
+2. Correct fixed result/receipt relations; add direct and persisted fully rehashed
+   mutation cases with independent fixed-fact assertions. Run both protocol and
+   receiver relation groups, keeping real changed/no-change positives.
+3. Reuse one genuinely bounded subprocess capture boundary; prove exact limits,
+   concurrent streams, child cleanup and the fixed Git caller with full snapshots.
+4. Finish every remaining named proof row: source algorithms/ancestry, restart and
+   format transitions, identity mutations, byte/depth limits, full crash/I/O/reply
+   oracles, read invariants and scanner negatives. Record a case-to-requirement
+   inventory. A count of passing groups alone does not establish coverage.
+5. Complete section 6's actual source checkpoints and shadow repair. Run unchanged
+   assembly, packaging and shadow proof to establish a coherent candidate. Do not
+   describe expected intermediate stale bindings as passing packaging evidence.
+6. Freeze that clean coherent head. The single test owner runs the full native
+   proof while a separate read-only reviewer performs the substantive exact-head/
+   base content and matrix review. This parallelism is review plus execution, not
+   concurrent writers. No edit, new commit or source update on this implementation occurs during the
+   run. If review requires a correction, have the owner finish or safely
+   stop the run and record full output/exit before further edits. Retain its actual
+   result and repeat affected checks on the corrected frozen candidate. Required
+   remote CI and final independent review still follow the normal PR gates.
+
+Steps 1–5 below retain the full receiver contract and specify the concrete fixes.
+The later proof section supplies every checkpoint's named acceptance cases. Existing
+working behavior is retained; this is a continuation of the same implementation.
 
 ### 1. Separate keyed state from legacy replay before changing execution
 
@@ -164,6 +203,29 @@ Unicode including escaped lone surrogates, malformed nested types, and depth abo
 32. Catch parse/type/encoding/recursion failures as ordinary diagnostics. Do not
 allow Python's bool/int equality to accept booleans in integer fields.
 
+Extend the existing parsed-value walk to reject every non-finite float, including
+`1e999` and `-1e999`, not only named NaN/Infinity tokens. Keep finite JSON values
+subject to their field-specific type rules. Share the delivery-key shape/type
+predicate between supplied and saved keys; separately bind a well-typed key to
+frozen input and classify a valid mismatch as conflict. Check the input attempt's
+integer type before equality as well.
+
+Before any journal membership, equality, regex or nested lookup, require the
+expected type. This includes journal version/phase, source algorithm, receiver
+version/status, saved key and its stage fields, and nested identity records.
+Version 1 and 2 are true integers; receiver version is integer 1. A pending receiver
+has exactly its version/status fields and is valid only in `materializing`. A stored
+record always requires its exact response fields, materialization summary and
+candidate identities, including when the workflow later failed.
+
+Validate every present version-2 optional record even if the read path will not
+consume it: recoverable is boolean, reason/recovery are strings, and materialization,
+verification, review and publisher retain their exact field sets and typed values.
+Check phase-required records are present and relations agree. Reject unknown fields.
+Preserve valid failed-workflow retrieval and every valid legacy state. Diagnose
+malformed data at these boundaries; do not substitute a broad late TypeError catch
+for typed validation or accidentally convert a programming error into success.
+
 The byte ceilings are inclusive:
 
 | Data | Ceiling |
@@ -176,6 +238,7 @@ The byte ceilings are inclusive:
 | Encoded version 2 journal | 8 MiB |
 | Version 1 journal and each review/publisher observation | 64 KiB |
 | Retained materializer stderr | 64 KiB |
+| Read-only Git changed-path inventory | 2 MiB |
 
 A journal read may inspect at most 8 MiB plus the over-limit sentinel byte to
 identify its version, then apply the 64 KiB limit to version 1. Check the fully
@@ -241,6 +304,24 @@ evidence/receipt/output links. Reject extra claims, metadata, outputs or optiona
 fields that the fixed protocol does not produce. A no-change result has no
 candidate output entry but retains its receipt and evidence links.
 
+The generic core intentionally accepts broader producers, so it cannot supply the
+fixed adapter's remaining facts. In `response_ok`, require the exact successful
+result envelope/body fields and completed status, and compare `reported_by` plus
+execution facts with the existing request projection. Define only the expected
+receipt content reference from fixed content ID `candidate.materialization.receipt`,
+media type `application/json` and verified raw receipt SHA-256. Changed outputs equal
+one requested output ID with that entire ref; no-change outputs equal an empty list.
+Evidence equals one fixed `evidence.local-git-materialization` item, deterministic,
+passed, with that entire proof_ref. Check exact array sizes and field sets.
+
+Require exactly deterministic metadata: provider/model/snapshot/effort/prompt/skills
+are their fixed not-applicable records; tools is recorded with empty value and that
+same complete source_ref. Reject computed/unavailable alternatives and different
+IDs, versions, media types, digests or extra claims, even when generic-core-valid.
+Retain all generic predicates and existing receipt relations. Compare these supplied
+facts directly; never invoke stage-result/receipt construction as a validator oracle.
+Raw receipt parsing and digest verification remain the Python boundary's job.
+
 Extract only the actual response's `stage_result` object with frozen jq 1.6
 `-S -c` and one newline; enforce its 256 KiB ceiling and hash that framing. No
 separately emitted stage-result file was observed. Validate candidate
@@ -252,16 +333,33 @@ Reuse the materializer's 2 MiB changed-path inventory ceiling and accepted path
 rules; hash the canonical list and compare count/digest. This checks saved facts,
 without executing a patch or reconstructing a result.
 
-### 4. Capture and publish once at the existing atomic boundary
+### 4. Bound both fixed subprocesses and publish once
 
-Give the keyed materialization path bounded streaming stdout/stderr capture.
-Drain both pipes concurrently with fixed read chunks to avoid pipe deadlock.
-Retain no more than 1 MiB stdout and 64 KiB stderr; detect one byte beyond each
-ceiling. Excess stdout makes capture fail. Excess stderr may be drained and
-discarded beyond the diagnostic ceiling. Always reap the child, close pipes, and
-honor existing interruption handling. Use no retry policy or product fault flag;
-leave the fixed materializer's cleanup semantics unchanged. Keep the legacy
-`run_materializer`/reconciliation contract usable by the unchanged 40-check suite.
+Refactor the existing keyed streaming capture into one private process-capture
+boundary used only by the fixed materializer command and fixed read-only Git diff.
+Callers provide their already fixed argument vector/environment and byte ceilings;
+there is no new public runner, shell interpretation or configurable product command.
+Leave legacy materializer/reconciliation behavior unchanged.
+
+Use fixed bounded read chunks and concurrent pipe draining. Retain at most stdout's
+limit plus one sentinel byte: 1 MiB for materializer response, 2 MiB for Git paths.
+Retain at most 64 KiB diagnostic stderr; further diagnostic bytes can be discarded.
+A stdout sentinel irreversibly marks the call failed; never truncate and accept.
+The normal overflow path may continue draining/discarding finite output with bounded
+retention until the fixed child exits, then report the overflow. Draining further
+bytes never appends to retained stdout or clears the overflow failure.
+On interruption or I/O exception, stop/reap the owned child and close its pipes;
+on every path close descriptors and reap it. Keep existing interruption handling
+and cleanup semantics. No timeout increase, retry policy, runtime bypass or new
+process-tree guarantee is introduced.
+
+For Git, reject nonzero exit or overflow before splitting or decoding stdout. Then
+check the existing sorted, unique, valid-path list and its canonical count/hash
+against the receipt. Do not leave an unrestricted `subprocess.run(..., PIPE)` or
+`communicate()` at this caller. Materializer stdout overflow likewise cannot publish
+a result. Excess diagnostic stderr alone need not reject successful materialization.
+The focused tests must exercise real pipes, the helper bounds and the actual fixed
+Git call wiring; a helper test alone cannot prove the production call is bounded.
 
 Before first execution, atomically save exact input bytes and a version 2
 `materializing` journal whose required `receiver_result` is exactly
@@ -320,91 +418,86 @@ existing interruption handling retains 75. No failure output includes a
 scanner-ready result. Result storage, a waiting replay exit and workflow
 completion remain distinct facts.
 
-### 6. Complete the exact package, profile and shadow binding chain
+### 6. Record actual source checkpoints, then update their consumers
 
-Keep the existing actual source identities separate:
+The preserved package checkpoint `529069b731eb5738646928f6c6c07fe5bd61d927`
+contains tree `efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff` at
+`adapters/local-git-materializer/v1`, mode `040000`, type `tree`. The preserved
+profile checkpoint `15476b92860608f640a3d480170fd878af3f4b48` contains default
+profile SHA-256 `0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179`
+and materializer manifest SHA-256
+`4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065`.
+These are historical starting facts. Correcting `protocol.jq` changes the package
+tree, so they cannot remain the corrected package/profile/shadow claims.
 
-| Source fact | Exact value |
-| --- | --- |
-| Materializer package containing commit | `529069b731eb5738646928f6c6c07fe5bd61d927` |
-| Package path, mode and type | `adapters/local-git-materializer/v1`, `040000`, `tree` |
-| Package object ID | `efa85d8f51cb4ac6523f2db5e1418e5c9cb6f8ff` |
-| Updated default profile containing commit | `15476b92860608f640a3d480170fd878af3f4b48` |
-| Default `profile.json` SHA-256 | `0d1c815783529ad4d4fc285f2966942fedddb087db4cc7703aa137bb30046179` |
-| Default materializer manifest SHA-256 | `4f7219f25de07df9112fb39f0aa4eac63e8af13ef6f24528a49a8d31d148f065` |
+`S` and `B` below name two observed source checkpoints, not literal OIDs, branches,
+refs or product fields. The accepted spec permits this plan to bind the exact
+starting attempt and procedure, then record real derived IDs after commits exist.
+Learning those resulting IDs alone does not require another plan amendment.
 
-The package anchor contains the old profiles; its child contains the new profile
-bindings. Read both revisions from Git to prove their contents, and require the
-current implementation to retain the exact package tree and four profile files
-from the corresponding revision. Do not replace the correct package anchor with
-the profile commit merely because its header needs a later provenance revision.
-No future squash/merge ID or self-referential file is needed.
+1. Once the current protocol correction and its focused tests are coherent, commit
+   or select the actual corrected protocol-containing commit S on this same history.
+   Prefer the completed correction/proof checkpoint after groups 1–4, so later
+   ordinary test edits do not churn source pins. Read S's full OID and exact package
+   path/mode/type/tree; require the current package bytes equal that tree. The
+   manager records S as an observed source fact, never a guessed future merge SHA.
+2. The manager coordinates an ordinary fast-forward push of the existing
+   implementation branch. Verify actual remote head and S ancestry. Independently
+   fetch exact S into a fresh isolated history repository through the assembly
+   suites' existing history-fetch boundary: depth one, no tags, unchanged source
+   repository/auth handling. Verify exact fetched commit, count one, no tags and
+   package path/mode/type/object. Preserve raw proof. Local object existence or a
+   remote-tracking ref is insufficient. This source push does not claim full green
+   packaging or implementation acceptance.
+3. Only after S is recorded and verified, change `body.package_ref.object_id` and
+   `body.package_ref.revision.commit_id` in both materializer manifests to its exact
+   tree/revision. Canonicalize with frozen jq 1.6 `-S -c` plus one newline and hash
+   those bytes. In each profile's sole `adapter.local-git-materializer.v1` binding,
+   copy that package reference and update only `manifest_ref.sha256`. Give both
+   assembly suites the independently verified fixed S expectation and preserve
+   their isolated fetch, depth/no-tags and path/mode/type/object checks. Do not
+   derive expected commits from the profile under test. Retain other common
+   package/prompt pins and the alternative suite's independent producer pin.
+4. Commit these six dependency files as profile checkpoint B on the same history.
+   Read B's actual full OID. Publish by ordinary fast-forward push and verify the
+   new remote head, S/B ancestry and unchanged S package tree. Independently fetch
+   exact B into another fresh isolated depth-one, no-tags history repository.
+   Verify all four profile files as regular `100644` blobs, their complete bytes
+   and canonical hashes against the current checkout, and only the permitted
+   structural differences from the accepted base. All authority records, Roadmap
+   digests, roles, principals, boundaries, capabilities, permissions, qualification,
+   models and unrelated package/prompt/config fields must match that base.
+5. Before the shadow repair, the manager records the actual verified S/B tuple,
+   package object, four document hashes, retaining branch and raw fetch proof.
+   Change precisely three lines in `shadow/v1/materialization-input.jq`:
+   `profile_pin` equals B's default profile SHA-256; `manifest_pins.forge` equals B's
+   default materializer manifest SHA-256; the existing pinned-from header names B.
+   Retain the six other document pins, all decision text/digest pins,
+   `digest_mismatch`, `config_pins_ok`, profile graph checks and every other predicate
+   byte-for-byte. Commit this dependent repair on the same branch before packaging
+   proof that reads actual HEAD. No old/new alternative pin acceptance or fallback.
+6. Verify final HEAD still contains S's exact materializer tree and B's exact four
+   profile files. The shadow module is outside both trees and has no downstream
+   byte pin, so its update introduces no recursive dependency. Run unchanged real
+   assembly, packaging and both shadow suites. Repeat fresh source ancestry and
+   exact fetch/content proof for S and B before implementation PR publication and
+   before protected merge; keep the complete final tuple with implementation proof.
 
-The four profile files already implement the accepted repair. In each materializer
-manifest only `body.package_ref.object_id` and
-`body.package_ref.revision.commit_id` differ from the old base. Each profile's sole `adapter.local-git-materializer.v1` binding has
-the same package reference and the canonical manifest hash in `manifest_ref.sha256`.
-Both manifests and profiles use frozen jq 1.6 `-S -c` with one newline. Verify these
-facts and every other field unchanged: authority records, Roadmap digests, roles,
-principals, boundaries, capabilities, permissions, models and all other packages,
-prompts and config. Packaging correctly rejects stale trees or linked hashes;
-retain that validation.
+S precedes the canonical bindings; B contains those bindings and precedes its shadow
+header. No file names its own future commit. Later same-scope protocol changes
+repeat S and every dependent step; a profile change repeats B and its downstream
+steps after rechecking S. Preserve previous history and invalidate affected review/
+CI evidence. A replay-only or test-only change that leaves both source trees and
+profile bytes unchanged need not churn those pins, but still needs applicable
+fresh content/behavior proof. Changed design, allowed fields, paths, size or safety
+returns to the corresponding artifact gate. Source records never replace final
+independent exact-head/base review.
 
-Both assembly suites already carry an independent fixed
-`materializer_package_commit` equal to the package anchor above. Preserve their
-isolated exact fetch, depth-one/no-tags and revision/path/mode/type/object checks.
-Retain the common `package_commit` for all other applicable packages and prompts,
-and the alternative suite's independent `producer_package_commit`. Do not derive
-expected commits from the candidate manifests/profiles or allow arbitrary revisions.
-
-After the plan merge and exact attempt reconciliation, the manager coordinates an
-ordinary fast-forward push of this same implementation history to its existing
-branch. Record the published head and require both containing commits to be
-ancestors. Independently fetch each exact containing commit into a fresh isolated
-history repository using the existing assembly `history_fetch` boundary: depth one,
-no tags and unchanged repository source/auth handling. For the package commit,
-verify exact commit/path/mode/type/object. For the profile commit, verify exact
-commit and both default documents as regular `100644` blobs, their complete bytes
-and SHA-256 values; compare all four profile files with current implementation.
-This must precede the implementation PR. Local object existence, a tracking ref or
-the older package-source fetch alone cannot prove the newer profile commit is
-fetchable. An intermediate source push is not passing implementation evidence.
-
-Then update precisely three lines in `shadow/v1/materialization-input.jq`:
-
-- `profile_pin` becomes the default profile SHA-256 above.
-- `manifest_pins.forge` becomes the default materializer manifest SHA-256 above.
-- The existing `# pinned from profiles/default/v1 at <commit>` header names the
-  verified profile-containing commit `15476b92860608f640a3d480170fd878af3f4b48`.
-
-Retain the other six document pins, all decision text/digest pins, `digest_mismatch`,
-`config_pins_ok`, profile graph checks and every other predicate byte-for-byte.
-The two fixed constants continue to validate both supplied document bytes and the
-corresponding resolved config source. No caller-derived trusted pins, old/new
-alternative acceptance, shape-only check, fallback or sibling artifact rewrite is
-allowed. The accepted shadow spec's requirements 3 and 13 require this live-pin
-maintenance and its unchanged existing suite checks it.
-
-The module is loaded by path and has no downstream package or digest pin. It lies
-outside the materializer package and profile trees. Verify this three-line diff
-leaves those trees and profile bytes unchanged; it creates no recursive digest
-chain. Commit the repair on this same implementation branch before proof that
-packages actual HEAD. Recheck both source ancestors and their fetchability at the
-final head, before implementation PR publication and again before merge.
-
-If later accepted receiver corrections change the materializer tree, preserve the
-attempt and return through a separate plan amendment binding the replacement exact
-source/profile tuple before any later shadow repair. That amendment must retain
-actual containing commit → ordinary source publication → isolated exact fetch →
-canonical manifest/profile/test links → profile-containing commit → published/fetched
-profile provenance → shadow pins, in that order. No source change silently reuses
-these old expected digests. Wider profile meaning returns through G2.
-
-Retain the published implementation branch after squash merge, with both selected
+Retain the published implementation branch after squash merge, with both final S/B
 containing commits still reachable; do not delete or rewrite it while package or
-profile provenance references them. The manager's fresh repository inspection reports
-`delete_branch_on_merge: true`. Omitting a CLI deletion option does not prevent
-server deletion. A squash merge does not retain these original source commits in
+profile provenance references them. The prior fresh repository inspection reported
+`delete_branch_on_merge: true`; re-read it before the setting boundary. Omitting a
+CLI deletion option does not prevent server deletion. A squash merge does not retain these original source commits in
 main's history, and a temporarily dangling object is not a restoration guarantee.
 
 The necessary retention procedure below requires the operator's separate direct
@@ -419,8 +512,8 @@ use an unproved retained-PR-ref guarantee as a substitute.
    CI. Record both containing commits, the package tree and profile digests,
    implementation branch and exact remote head. Verify both source ancestors and
    fresh isolated exact fetches with their respective tree/document checks. Obtain
-   operator approval to change only `delete_branch_on_merge` from true to false for this one protected
-   implementation merge and restore true afterward, including failure cleanup.
+   operator approval to change only `delete_branch_on_merge` from true to false for
+   this one protected implementation merge and restore true afterward, including failure cleanup.
 2. Before changing the setting, reserve a single-merge window: the named manager
    starts no other merge until the setting is restored and verified. Capture fresh
    repository identity and deletion-setting evidence, exact branch/head/base/PR
@@ -434,11 +527,11 @@ use an unproved retained-PR-ref guarantee as a substitute.
 4. Read the actual merge receipt and verify main, closed/merged PR, unchanged remote
    implementation branch head, both source ancestors and fresh isolated exact fetches
    with package tree and profile document checks. Record complete raw evidence and
-   the retaining branch in the implementation receipt. Restore `delete_branch_on_merge` to true, read
-   it back, and verify protection/rules unchanged. Recheck the branch and exact
+   the retaining branch in the implementation receipt. Restore
+   `delete_branch_on_merge` to true, read it back, and verify protection/rules unchanged. Recheck the branch and exact
    source fetches and content checks after restoration. Restoring this event-triggered
-   setting does not issue a deletion for an already merged branch; the fresh checks establish
-   that this particular branch and source remain available.
+   setting does not issue a deletion for an already merged branch; fresh checks
+   establish that this particular branch and both sources remain available.
 5. If any step fails or returns an uncertain result after the setting write, stop
    other merges, preserve the branch and record the exact partial state. Reconcile
    the server PR/main/branch before any merge retry; do not duplicate an uncertain
@@ -450,8 +543,8 @@ use an unproved retained-PR-ref guarantee as a substitute.
 
 Both containing commits, the package tree, profile digests, retaining branch and
 exact fetch proofs belong in the implementation evidence and merge receipt.
-Restoration needs this published history as well as the profile bytes. No tag, release, retention service, installation or activation is
-introduced. If the operator does not approve the bounded setting procedure, or the
+Restoration needs this published history as well as the profile bytes. No tag,
+release, retention service, installation or activation is introduced. If the operator does not approve the bounded setting procedure, or the
 existing source cannot retain and serve both commits, keep implementation unmerged
 and preserve the attempt for a separately accepted alternative.
 
@@ -499,80 +592,85 @@ dirty attempts remain outside this plan.
 
 ## Proof
 
-Add tests alongside each behavior. Use the existing fixture builder and real
-fixed materializer for execution proof, owned disposable bare repositories,
-private state/scratch directories, pinned native jq 1.6 and the compiled existing
-object-closure helper. Tests must work on the existing supported Linux and macOS
-paths. Cover changed/no-change, root/ancestor source commits and SHA-1/SHA-256.
+Use the existing fixture builder, fixed real materializer, owned disposable bare
+repositories and private state/scratch roots, pinned native jq 1.6 and the compiled
+existing object-closure helper. Support the existing Linux and macOS environments.
+Do not change `local-git-materializer-fixtures.sh` or the legacy replay suite. This
+suite's local `make_source` helper can accept algorithm/ancestry and pass the resulting
+commit/tree to the existing builder. Remove the redundant intentionally failed
+mktree attempt while retaining valid fixture construction and proof.
 
-1. Capture and retrieve actual response/receipt bytes in separate processes;
-   compare exact strings including newline and canonical result hashes. Assert
-   same-key redelivery and concurrent callers under one lock cause one logical
-   materialization. A test-only loaded-driver wrapper counts invocations and
-   delegates to the real materializer. Reopen must not invoke it again.
-2. Use the existing `_REPLAY_DRIVER_BYTES` wrapper pattern with explicit ready and
-   release synchronization, watchdogs and separate processes. Stop immediately
-   after real materializer return while candidate exists but before `atomic_json`;
-   SIGKILL and wait for death. Reopen reports missing evidence and retains all
-   state. Separately stop after successful result publication and before any
-   outward response; SIGKILL and retrieve the original bytes in a fresh process.
-   Prove stdout was empty at the latter pause. Test an empty pending pre-effect
-   restart, partial/nonempty scratch roots, and repeated missing-evidence reopen.
-3. Snapshot file bytes and candidate refs/objects before every missing, malformed,
-   corrupt, conflicting or stale read/redelivery. Compare them afterward,
-   including frozen input and journal; compare scratch state in the prepublication
-   failure cases. Verify read mode preserves the execution bundle, lock inode and
-   phase, creates no missing state, rejects observations, and remains usable after
-   a separate fixed-verifier failure.
-4. Exercise every key field and shape, omitted/wrong key, unsupported operation or
-   attempt, new ordinal, input/source/tool drift and each saved identity binding.
-   Corrupt response, result and receipt hashes and all full-ref, attempt/time,
-   source/candidate, output/evidence/metadata/outcome relations. Rehash corrupted
-   contents in relation tests so rejection is not merely a digest mismatch.
-   Cover both direct protocol validation and persisted-record reopening.
-5. Cover duplicate members, BOM, invalid UTF-8 and escaped Unicode, truncation,
-   trailing data, extra JSON documents, unknown fields, missing payloads, booleans
-   in integer fields, fractions/non-finite numbers, depth 32/33 and each inclusive
-   byte ceiling plus one. Where fixed shapes cannot produce a semantically valid
-   maximum-size value, test the read/capture boundary separately from semantic
-   rejection. Oversized stdout/stderr tests exercise the actual streaming capture
-   path with test-only subprocess output and verify retained byte bounds and no
-   deadlock. No runtime bypass flag or fake positive materialization is added.
-6. Inject publication write/fsync/rename failures and post-rename directory-fsync
-   failure through the loaded-driver wrapper. Assert no outward stored success,
-   prior usable bytes survive failures before replacement, and a fresh process
-   judges actual state after rename. Inject broken outward output after successful
-   publication and prove subsequent retrieval. Keep interruption exit 75 covered.
-7. Prove version 1's unavailable result read and refusal of retrofit keys, and
-   version 2's refusal of missing keys in both pending and stored states. Assert
-   legacy recovery remains version 1 and never creates original-result evidence.
-   Run the unchanged 40-check suite in full.
-8. Build a canonical one-item `orchestrator_state_snapshot` from the frozen
-   request/resolved-profile pairs and the retrieved actual result pair. Use the
-   scanner's current pinned core contract, absent active attempt, retry limit at
-   least 1, observed time at/after the actual result and request, and matching
-   source repository/algorithm/commit. Call
-   `orchestrator/v1/scan-state.sh scan fixture.target "$source_commit" "$snapshot"`.
-   Changed and no-change results must classify terminal via the real scanner.
-   Tamper result refs, digest and attempt relations and require scanner rejection;
-   recompute the result pair digest for relation mutations. Do not modify scanner
-   or planner code or generate a replacement result for this proof.
-9. Run both assembly suites with their independent materializer commit expectation
-   and fresh isolated exact fetch. Compare each changed JSON file structurally with
-   the accepted base after excluding only the permitted revision/tree/digest fields;
-   require every other field to match. Verify canonical framing, both manifests'
-   package equality, both binding links and their recomputed manifest hashes. Check
-   the source commit and final HEAD resolve the same exact package tree. Run the
-   unchanged target-packaging suite, preserving its stale-tree, manifest and binding
-   refusals. These owned disposable fixtures are development proof, not a release.
-10. Run the unchanged shadow-assembler suite on the real current shipped default
-    files, followed by the unchanged shadow-slice suite. Require all eight live-pin
-    checks, canonical/repeated output, SHA-1 and SHA-256, self-consistent same-id
-    lookalike refusal, config-source mismatches and the real assembler-to-driver
-    run. Compare the module with the base: only two constants and the source header
-    may differ. Verify every other pin and predicate unchanged. Independently fetch
-    the profile-containing commit and compare its two pinned documents with the
-    actual working-tree bytes; preserve the separate package-source fetch proof.
+Keep test helpers private within the allowed receiver/protocol test files. Share
+one loaded-driver test wrapper for invocation counting, synchronized pauses, targeted
+faults and isolated boundary calls. It loads actual driver bytes through the existing
+`_REPLAY_DRIVER_BYTES` pattern. Positive materialization delegates to the real fixed
+implementation. Do not copy its validators into a test oracle, add a shipped helper
+or install a runtime environment flag. Protocol tests retain their own small pure
+input/response bundle helper; this is not a second integration framework.
+
+### Shared preservation and mutation rules
+
+Build valid baseline states from actual materializations and restore separate owned
+case fixtures between mutations. Snapshot the evidence immediately after deliberate
+test setup/mutation, before the operation under test. Inventory relative entry names,
+types, modes, complete file hashes/bytes and symlink targets without following them
+for journal, frozen input, execution bundle, candidate refs/objects and applicable
+scratch contents. Record the permanent lock inode separately. Exclude access times
+and test logs outside the evidence roots, not durable data. Apply comparison to every
+missing, malformed, corrupt, conflicting or stale read/redelivery. Fault cases use
+the correct pre/post-publication oracle described below, not unconditional rollback.
+
+For semantic response/result/receipt mutations, recompute the entire enclosing hash
+chain using the pinned jq framing and independent SHA-256: receipt raw data/payload
+hash and unaffected receipt refs where relevant; extracted stage-result digest;
+response digest; receiver fields; and journal materialization summary digests.
+Leave only the targeted relation wrong. A stale materialization.response_sha256
+must not mask a missing validator check. Separate digest-corruption cases intentionally
+leave the relevant digest stale. Assert the single intended change from a valid
+baseline. Independent expected receipt refs/facts come from fixed protocol constants,
+actual input and captured receipt bytes, never the new validator or a regenerated
+stage_result. Each case has a descriptive name and its own assertion/report.
+
+### Named case matrix
+
+The identifiers below group related cases; they are not one assertion per row.
+Maintain a case-to-requirement inventory with actual case names and outcomes. Neither
+an aggregate count nor older unbound checks substitute for the required keyed cases.
+
+| ID / group | Required cases and oracle |
+| --- | --- |
+| P01 real source variants | Changed and no-change for SHA-1/SHA-256 and root/ancestor sources. Verify source commit/tree/algorithm, actual candidate commit/tree/parent, retained response/receipt bytes and canonical result digest. For no-change, require source-as-parent convention even at a root source. Every positive uses the fixed real materializer. |
+| P02 retention/read/lock | Separate-process repeated retrieval equals independently captured original response, including final newline and raw receipt. Same-key redelivery and concurrent callers yield one counted real invocation; stored reopen adds none. Read leaves phase, execution bundle and lock inode unchanged, consumes no observation, and remains usable after a separate fixed-verifier failure. |
+| P03 supplied/stored keys | Each of four stage IDs, request digest, operation and integer attempt; omitted/extra/malformed fields, unknown ordinal, unsupported operation/attempt, nested null/list/object, booleans/fractions and valid conflicting values. Reuse strict rules for saved keys. Malformed returns 1, a well-typed binding conflict 2, with no traceback, scanner-ready result or evidence mutation. |
+| P04 typed journals | Pending and stored discriminators/version/phase/source algorithm, saved identities, optional recoverable/reason/recovery and each optional record; malformed nested types and unknown/missing fields. Pending only materializing; stored requires summary/candidates even in failed phase. Cover true versus integer 1 and false versus integer 0. Validate every present unused field and preserve valid failed-workflow reads. |
+| P05 strict parser | Duplicate members, BOM, invalid UTF-8, lone-surrogate escapes, truncation, trailing/extra documents, NaN/Infinity and positive/negative exponent overflow, invalid integer fractions, depth 32/33. Exercise keys, pending/stored journals and actual response/receipt boundaries, including otherwise unused optional data. No uncaught parse/type/encoding/recursion traceback. |
+| P06 byte ceilings | Inclusive maximum and +1 for supplied/frozen input 8 MiB, key 4 KiB, response 1 MiB, extracted stage 256 KiB, receipt 64 KiB, encoded/read v2 journal 8 MiB, unchanged v1/observations 64 KiB, retained stderr 64 KiB and Git paths 2 MiB. Test actual helper/caller wiring. If semantic shapes cannot attain a ceiling, test that boundary separately without claiming a valid materialization. |
+| P07 identity drift | Every saved input/request/run/driver/materializer/helper/jq digest; source repository/commit/tree/algorithm; verifier ID/path/expected digest; materializer package generation/file set/file digests/aggregate; frozen profile/resolved-profile/manifest/payload/attempt identities. Cover actual source-tool byte drift and corresponding saved-record mutations. Rehash to reach targeted relations where needed. Malformed is ordinary error; valid changed identity is stale/conflict. |
+| P08 fixed response/result/receipt | Direct protocol and stored reopen cases for envelope version/kind/authority/qualification/effects/payload count and fixed fields; complete document/content refs (version/kind/ID/media/digest as applicable); all attempt/time/result fields; source/candidate kind/algorithm/commit/tree/parent and changed-path count/hash; changed/no-change outcome; reported performer/binding/environment/capability; output ID/full ref; evidence ID/kind/verdict/full proof ref; every metadata fact, tools state/value/full source ref; extra/absent fields and cardinalities. Include core-valid wrong receipt refs and computed tools facts. Rehash all unaffected enclosing links; retain separate raw digest failures. |
+| P09 restart/missing effect | Synchronize a pending pre-effect state with empty candidate/scratch and prove same first attempt runs once. Partial/nonempty candidate and partial scratch never materialize or reconcile; repeated unavailable read/redelivery retains complete evidence. A damaged stored record cannot fall back to pending. Fresh journal cannot adopt a populated candidate. |
+| P10 both SIGKILL windows | Wrapper records actual captured materializer stdout to an independent test-owned oracle outside evidence roots. Pause after real effect before stored journal replacement, SIGKILL and wait; full snapshots remain unchanged on repeated missing-result reopen. Separately pause after stored replacement before outward response, assert empty stdout, SIGKILL and wait; a fresh process returns exact oracle bytes, not merely matching result shape. Use explicit ready/release synchronization and watchdogs. |
+| P11 publication/reply/interruption | Inject write, flush, file-fsync, rename and directory-fsync failures only during stored-result publication after real capture. No outward stored success. Before replacement, compare prior pending journal/input/candidate/scratch; after rename, fresh read may establish valid stored bytes and must equal original response. Break the outward pipe after successful publication and retrieve original bytes later. Exercise keyed signal/interruption exit 75 separately. |
+| P12 bounded process capture | Real finite subprocesses at stdout limit/+1, long stderr before stdout and interleaved pipe pressure, nonzero exit, early EOF and injected read failure. Check retained lengths, overflow failure, no deadlock and reaped/closed child. Keep a genuine fixed-Git integration case and exercise the actual Git caller via test-only command-checked overflow injection plus a full keyed-reopen snapshot; reject an unbounded run/communicate fallback. Synthetic streams prove bounds only. |
+| P13 format/read refusal | Version-1 unavailable read and retrofit-key refusal; no key on pending/stored v2 for both read and delivery; legacy remains version 1. Missing journal/lock/bundle/frozen input cannot be created by read. Review and publisher observations are refused. Missing/linked/nonregular key, input and journal files fail promptly without following or rewriting; owned FIFO fixtures use watchdogs. Run all unchanged legacy checks. |
+| P14 scanner | Canonical one-item snapshot from frozen request/resolved-profile and actual retrieved result pairs; absent active attempt, compatible retry limit/time and exact source revision under current core pins. Call the real scanner. Changed/no-change classify terminal; wrong result refs, wrong digest and fully rehashed attempt mismatch are rejected. Scanner/planner code stays unchanged. |
+| P15 source/binding closure | Actual S/B published ancestry and fresh isolated exact fetches; four JSON structural comparisons permitting only the stated fields; independent assembly expectations and unchanged unrelated pins; exact three-line shadow diff, all eight live pins, canonical/repeatable assembly, both Git formats, same-ID lookalike and config-source refusals, and genuine assembler-to-driver run. Unchanged packaging and shadow suites must pass. |
+| P16 complete candidate | Frozen clean final head/base: all named focused cases, full unchanged legacy suite, complete non-PTY closed-stdin native runner, structure and pinned Shellcheck, full original required remote CI logs and independent content/final review. Retain every stopped/failed attempt; require actual final successful exit and complete tracked suite coverage. |
+
+For P11, scope monkeypatches to the stored `run.json` publication call, not earlier
+execution-bundle/frozen-input writes or temporary validator files. Identify the
+file-fsync and directory-fsync separately. Before replacement an injected error
+must preserve the prior usable journal; after replacement do not require rollback
+or label the writer successful. Preserve and inspect what the fresh process sees.
+For P10/P11, the response oracle is captured from the real subprocess return before
+journal serialization, never read back from the result being asserted.
+
+For P06/P12, large but semantically invalid bounded values test the read/capture
+primitive only; pair them with actual caller wiring assertions and valid smaller
+end-to-end cases. Do not weaken semantic validators to manufacture a maximum-sized
+valid result. Use finite child streams, fixed test deadlines and process cleanup;
+observe retained buffer lengths rather than flaky whole-process RSS thresholds.
+The keyed Git overflow refusal compares all prior evidence bytes. No test injects
+candidate code or changes the product's command/environment selection.
 
 Run these commands from the implementation checkout and retain output tied to its
 exact head/base:
@@ -605,8 +703,8 @@ its complete output and diagnose it; do not claim completion or change files bey
 this plan to hide it. Do not skip tests, increase timeouts, relax digest checks or
 substitute synthetic assembly for the genuine shipped-profile run.
 
-The prior exit-142 full run and exit-1 shadow continuation stay failed in the saved
-proof index. New focused passes and the plan-only PR's CI do not supersede those
+The safely stopped exit-143 native run stays incomplete; the earlier exit-142 full
+run and exit-1 shadow continuation stay failed in their saved records. New focused passes and the plan-only PR's CI do not supersede those
 facts. Obtain fresh complete required remote CI for the final implementation
 head/base: checks, all six test shards and aggregate ci. Retain the original logs,
 verify the checkout parent/tree identity and full tracked suite coverage, and do not
