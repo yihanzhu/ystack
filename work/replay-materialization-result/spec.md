@@ -530,34 +530,58 @@ Artifact-only CI, focused passes and a green badge do not replace this proof.
 Documentation must explain full-directory restoration, format distinction, fixed
 limits, unavailable evidence, supported key scope, retrieval and inactive status.
 
-`review_size: accepted-exception`. Plan for 2,000–3,000 added plus removed
+`review_size: accepted-exception`. Plan for 3,300–4,200 added plus removed
 implementation lines across the same fifteen exact paths, including tests and docs.
-The earlier 800–1,500 estimate did not account for the complete accepted proof and
-validation obligations. The paused head
-`45f306b3b7d8e6346393101e91005703adca58dc` measures 1,171 additions and
+The earlier 800–1,500 and 2,000–3,000 estimates did not account adequately for the
+complete accepted proof. The earlier paused head
+`45f306b3b7d8e6346393101e91005703adca58dc` measured 1,171 additions and
 37 deletions, or 1,208 total, against
-`c332aaff66f116c2badf2adb408e39c887383697`. It contains incomplete validation
-and proof; its measured size is not evidence of completion. Its remote checkpoint
-is `0b662b0c5317c8d27a0331f7204fbe7b62353363`, with implementation PR absent.
-Preserve and freshly reconcile that same attempt before resume.
+`c332aaff66f116c2badf2adb408e39c887383697`; it remains preserved history.
+
+The current clean paused head `528feae88dbbb45b3100f00d58085168f3254d4d`
+measures 2,423 additions and 59 deletions, or 2,482 total, against
+`adf57b2394a7dbd1451202d15a3a57590d74d374`. Its remote checkpoint remains
+`0b662b0c5317c8d27a0331f7204fbe7b62353363`, with implementation PR absent.
+Checkpoint 1 and checkpoint 2 fixes have independent acceptance for their bounded
+validation and proof changes. Bounded Git capture and the remaining complete proof
+are still open; checkpoint acceptance is not final implementation acceptance.
+The same attempt is paused for this size amendment and the later separate high-risk
+plan amendment. Preserve and freshly reconcile it before resume.
 
 | Area | Current added plus removed | Estimated complete diff |
 | --- | ---: | ---: |
-| Replay driver, typed validation and bounded capture | 524 | 640–800 |
-| Pure fixed materializer response validator | 49 | 85–125 |
-| Receiver suite with complete proof matrix | 410 | 1,050–1,450 |
-| Direct protocol relation tests | 48 | 180–300 |
-| README, component guide, recovery guide and restore entries | 141 | 141–165 |
-| Four profile files, two assembly tests and shadow pins/header | 36 | 36–50 |
-| Total | 1,208 | 2,132–2,890 |
+| Replay driver, typed validation and bounded capture | 626 | 686–736 |
+| Pure fixed materializer response validator | 115 | 115 |
+| Receiver suite with complete proof matrix | 1,206 | 2,026–2,486 |
+| Direct protocol relation tests | 358 | 358 |
+| Documentation, restore entries, four profile files, two assembly tests and shadow pins/header | 177 | 177–201 |
+| Total | 2,482 | 3,362–3,896 |
 
-The 2,000–3,000 envelope allows modest variation around that allocation. Counts are
-final additions plus removals against the accepted base, not accumulated edit churn
-or per-file quotas. The new receiver suite's final length counts once. Reuse its
-private helpers and existing fixtures for named cases; introduce no duplicate test
-framework or product injection seam. Keep the unchanged 1,152-line legacy suite and
-all 40 checks. Recheck the full final diff and exact path set. The high-risk plan
-must allocate this range; final review must compare actual size and full proof.
+The remaining allocation includes actual source/outcome variants and original-byte
+retention; all byte ceilings and bounded stream/caller proof; complete saved and
+actual source/tool identity drift; pre-effect restart, both crash windows, atomic
+publication failures, broken reply and interruption; filesystem/format refusals;
+and scanner negatives. It retains the typed key/journal/parser and direct/persisted
+relation cases already implemented. Source checkpoint, packaging, full native and
+remote CI proof remain required even where their completion adds no repository
+lines. No accepted proof group is deferred to another implementation.
+
+The estimate adds 970–1,469 lines to the current diff and allows only 55–90 lines
+of duplicate setup removal. Reuse scanner snapshot construction, CLI invocation
+and private wrapper loading without removing distinct cases, preservation checks
+or independent oracles. The 3,300–4,200 envelope rounds the lower estimate and
+allows 304 lines above the upper forecast for uncertainty in the remaining process
+and boundary tests. Even if none of the estimated simplification is safe, the
+upper forecast before that saving is 3,951, still below the envelope. This allowance
+changes neither scope nor acceptance requirements; it is not work to fill a quota.
+
+Counts are final additions plus removals against the accepted base, not accumulated
+edit churn or per-file quotas. The new receiver suite's final length counts once.
+Reuse its private helpers and existing fixtures for named cases; introduce no
+duplicate test framework or product injection seam. Keep the unchanged 1,152-line
+legacy suite and all 40 checks. Recheck the full final diff and exact path set.
+The high-risk plan must allocate this range; final review must compare actual size
+and full proof.
 
 Bounded capture, exact result/journal validation, separate process-crash windows,
 atomic I/O failure proof, negative relations, preservation, real scanner integration
