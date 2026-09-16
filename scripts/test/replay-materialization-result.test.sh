@@ -289,12 +289,6 @@ if mode in ("count", "count-gate"):
         pathlib.Path(control + ".response").write_bytes(captured)
         return captured
     module.capture_materializer = counted
-    original_reconcile = module.reconcile_materialization
-    def counted_reconciliation(*values):
-        with pathlib.Path(control).open("a") as handle:
-            handle.write("reconciled\n")
-        return original_reconcile(*values)
-    module.reconcile_materialization = counted_reconciliation
 elif mode == "lifecycle":
     import stat
     original_capture = module.capture_materializer
@@ -436,6 +430,13 @@ elif mode == "driver-drift":
     pass
 else:
     raise AssertionError(("unknown wrapper mode", mode))
+if mode in ("count", "count-gate", "lifecycle"):
+    original_reconcile = module.reconcile_materialization
+    def counted_reconciliation(*values):
+        with pathlib.Path(control).open("a") as handle:
+            handle.write("reconciled\n")
+        return original_reconcile(*values)
+    module.reconcile_materialization = counted_reconciliation
 sys.argv = [path] + arguments
 raise SystemExit(module.main())
 PY
@@ -2171,6 +2172,8 @@ def lifecycle_case(name, point):
                 raise AssertionError((name, 'ready watchdog'))
             time.sleep(0.02)
         assert process.poll() is None
+        initial_calls = control.read_bytes() if control.exists() else None
+        assert initial_calls == (None if point == 'pre-effect' else b'invoked\n')
         os.set_blocking(process.stdout.fileno(), False)
         try:
             outward = os.read(process.stdout.fileno(), 1)
@@ -2185,7 +2188,8 @@ def lifecycle_case(name, point):
             assert response and json.loads(response)['stage_result']
             original_oracle('cp4c-' + name, response)
         print('cp4c-pause ' + json.dumps({'name': name, 'point': point, 'snapshot': before,
-                                        'outward_stdout_bytes': 0}, sort_keys=True))
+                                        'outward_stdout_bytes': 0,
+                                        'initial_calls_utf8': initial_calls.decode() if initial_calls else None}, sort_keys=True))
         return root, roots, read, delivery, control, release, process, before, response
     except BaseException:
         process.kill() if process.poll() is None else None
@@ -2217,24 +2221,79 @@ def finish_owned(process, name, status=None, kill=False):
         owned_lifecycle_processes.remove(process)
 
 
-def repeated_stored(name, read, delivery, roots, response):
+def recovery_command(invocation, control):
+    if invocation[1] == loaded_wrapper:
+        assert invocation[3:5] == ['count', str(control)]
+        return invocation
+    assert invocation[1] == str(driver)
+    return [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *invocation[2:]]
+
+
+def counter_bytes(control):
+    return control.read_bytes() if control.exists() else None
+
+
+def unchanged_counter(name, control, before):
+    after = counter_bytes(control)
+    print('cp4c-counter ' + json.dumps({'name': name, 'before_utf8': before.decode() if before else None,
+                                       'after_utf8': after.decode() if after else None}, sort_keys=True))
+    assert before in (None, b'invoked\n') and after == before, (name, 'capture/reconciliation on recovery')
+
+
+def recovery_operation(name, invocation, roots, control, *values, **keywords):
+    before = counter_bytes(control)
+    result = retained_operation(name, recovery_command(invocation, control), roots, *values, **keywords)
+    unchanged_counter(name, control, before)
+    return result
+
+
+def recovery_process(name, invocation, control, status):
+    before = counter_bytes(control)
+    result = checked_process(recovery_command(invocation, control), status)
+    unchanged_counter(name, control, before)
+    return result
+
+
+def repeated_stored(name, read, delivery, roots, response, control):
     previous = None
     for index in range(2):
-        result = retained_operation(name + '-read-' + str(index), read, roots, response=response)
+        result = recovery_operation(name + '-read-' + str(index), read, roots, control, response=response)
         assert previous is None or result.stdout == previous
         previous = result.stdout
         record('P10/P11-stored-reopen', name + '-read-' + str(index), 'PASS')
     before = evidence_snapshot(*roots)
-    first_delivery = checked_process(delivery, 0)
-    assert json.loads(first_delivery.stdout)['state']['receiver_result']['response_utf8'].encode() == response
+    journal = roots[0] / 'run.json'
+    prior_bytes = journal.read_bytes()
+    prior_journal = json.loads(prior_bytes)
+    expected_journal = copy.deepcopy(prior_journal)
+    if prior_journal['phase'] == 'verifying':
+        verifier = prior_journal['identity']['verifier']
+        expected_journal['phase'] = 'review-wait'
+        expected_journal['verification'] = {'id': verifier['id'], 'path': verifier['path'],
+                                             'sha256': verifier['expected_sha256']}
+        expected_bytes = encoded(expected_journal)
+    else:
+        assert prior_journal['phase'] == 'review-wait'
+        expected_bytes = prior_bytes
+    expected_snapshot = copy.deepcopy(before)
+    journal_entries = [item for item in expected_snapshot['state'] if item['path'] == 'run.json']
+    assert len(journal_entries) == 1
+    assert journal_entries[0]['type'] == 'file' and journal_entries[0]['mode'] == 0o600
+    journal_entries[0].update(bytes=len(expected_bytes), sha256=sha(expected_bytes))
+    first_delivery = recovery_process(name + '-resume', delivery, control, 0)
+    returned_journal = json.loads(first_delivery.stdout)['state']
+    assert encoded(returned_journal) == encoded(expected_journal)
+    assert returned_journal['receiver_result']['response_utf8'].encode() == response
     after = evidence_snapshot(*roots)
-    print('cp4c-resume ' + json.dumps({'name': name, 'before': before, 'after': after}, sort_keys=True))
-    for snapshot in (before, after):
-        snapshot['state'] = [item for item in snapshot['state'] if item['path'] != 'run.json']
-    assert before == after, (name, 'workflow resume changed evidence outside journal')
+    after_bytes = journal.read_bytes()
+    print('cp4c-resume ' + json.dumps({'name': name, 'before': before, 'after': after,
+        'prior_journal_utf8': prior_bytes.decode(), 'expected_journal_utf8': expected_bytes.decode(),
+        'after_journal_utf8': after_bytes.decode()}, sort_keys=True))
+    assert after_bytes == expected_bytes and json.loads(after_bytes) == expected_journal
+    assert after == expected_snapshot, (name, 'journal or other evidence changed beyond exact workflow delta')
     record('P10/P11-stored-redelivery', name + '-resume-original-response', 'PASS')
     for index in range(2):
-        retained_operation(name + '-delivery-' + str(index), delivery, roots, response=response)
+        recovery_operation(name + '-delivery-' + str(index), delivery, roots, control, response=response)
         record('P10/P11-stored-redelivery', name + '-delivery-' + str(index), 'PASS')
 
 
@@ -2246,7 +2305,7 @@ assert not list(roots[1].iterdir())
 assert not list(roots[2].iterdir())
 finish_owned(process, 'empty-pending-pre-effect-crash', -signal.SIGKILL, kill=True)
 assert before == evidence_snapshot(*roots) and not control.exists()
-retained_operation('empty-pending-after-pre-effect-crash', read, roots,
+recovery_operation('empty-pending-after-pre-effect-crash', read, roots, control,
                    3, unavailable='replay.materialization-result-missing')
 record('P09-empty-restart', 'actual-pre-effect-crash-pending-preserved', 'PASS')
 counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
@@ -2259,10 +2318,10 @@ assert control.read_text() == 'invoked\n'
 record('P09-empty-restart', 'same-pending-first-effect', 'PASS')
 counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
 for index in range(2):
-    retained_operation('empty-pending-repeat-' + str(index), counted, roots, response=response)
+    recovery_operation('empty-pending-repeat-' + str(index), counted, roots, control, response=response)
     assert control.read_text() == 'invoked\n'
     record('P09-empty-restart', 'materialized-once-' + str(index), 'PASS')
-repeated_stored('empty-pending-restart', read, delivery, roots, response)
+repeated_stored('empty-pending-restart', read, delivery, roots, response, control)
 
 for variant in ('partial-candidate', 'partial-scratch', 'linked-candidate', 'complete-candidate'):
     root, *roots = case_directories('cp4c-' + variant, pending=variant != 'complete-candidate')
@@ -2278,7 +2337,7 @@ for variant in ('partial-candidate', 'partial-scratch', 'linked-candidate', 'com
     counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *delivery[2:]]
     for index in range(2):
         for operation, invocation in [('read', read), ('delivery', counted)]:
-            retained_operation(variant + '-' + operation + '-' + str(index), invocation, roots,
+            recovery_operation(variant + '-' + operation + '-' + str(index), invocation, roots, control,
                                3, unavailable='replay.materialization-result-missing')
             assert not control.exists()
             record('P09-partial-effect', variant + '-' + operation + '-' + str(index), 'PASS')
@@ -2291,7 +2350,7 @@ read = command(*roots); control = root / 'count'
 counted = [sys.executable, loaded_wrapper, str(driver), 'count', str(control), *read[2:-1]]
 for index in range(2):
     for operation, invocation in [('read', read), ('delivery', counted)]:
-        retained_operation('damaged-stored-' + operation + '-' + str(index), invocation, roots, 1)
+        recovery_operation('damaged-stored-' + operation + '-' + str(index), invocation, roots, control, 1)
         assert not control.exists()
         record('P09-damaged-stored', operation + '-' + str(index), 'PASS')
 
@@ -2300,15 +2359,17 @@ root, *roots = case_directories('cp4c-fresh-populated-candidate')
 (roots[0] / 'materialization-input.json').unlink()
 read = command(*roots); delivery = read[:-1]
 candidate_before, scratch_before = inventory(roots[1]), inventory(roots[2])
-result = checked_process(delivery, 1)
+control = root / 'count'
+result = checked_process(recovery_command(delivery, control), 1)
+assert counter_bytes(control) == b'invoked\n'
 assert inventory(roots[1]) == candidate_before and inventory(roots[2]) == scratch_before
 assert json.loads((roots[0] / 'run.json').read_bytes())['receiver_result']['status'] == 'pending'
 assert b'delivery_replay_materialization_result' not in result.stdout
 record('P09-fresh-candidate', 'cannot-adopt-populated-root', 'PASS')
 for index in range(2):
-    retained_operation('fresh-populated-read-' + str(index), read, roots,
+    recovery_operation('fresh-populated-read-' + str(index), read, roots, control,
                        3, unavailable='replay.materialization-result-missing')
-    retained_operation('fresh-populated-delivery-' + str(index), delivery, roots,
+    recovery_operation('fresh-populated-delivery-' + str(index), delivery, roots, control,
                        3, unavailable='replay.materialization-result-missing')
     record('P09-fresh-candidate', 'preserved-reopen-' + str(index), 'PASS')
 
@@ -2319,11 +2380,11 @@ for point in ('before', 'after'):
     assert before == evidence_snapshot(*roots)
     record('P10-SIGKILL', point + '-exact-pause-preservation', 'PASS')
     if point == 'after':
-        repeated_stored(name, read, delivery, roots, response)
+        repeated_stored(name, read, delivery, roots, response, control)
     else:
         for index in range(2):
             for operation, invocation in [('read', read), ('delivery', delivery)]:
-                retained_operation(name + '-' + operation + '-' + str(index), invocation, roots,
+                recovery_operation(name + '-' + operation + '-' + str(index), invocation, roots, control,
                                    3, unavailable='replay.materialization-result-missing')
                 record('P10-missing-reopen', operation + '-' + str(index), 'PASS')
     assert control.read_text() == 'invoked\n'
@@ -2344,12 +2405,12 @@ for fault in ('write', 'flush', 'file-fsync', 'rename', 'directory-fsync'):
         for snapshot in (prior, present):
             snapshot['state'] = [item for item in snapshot['state'] if item['path'] != 'run.json']
         assert prior == present, (name, 'evidence outside replaced journal changed')
-        repeated_stored(name, read, delivery, roots, response)
+        repeated_stored(name, read, delivery, roots, response, control)
     else:
         assert before == after, (name, 'prior usable pending evidence changed')
         for index in range(2):
             for operation, invocation in [('read', read), ('delivery', delivery)]:
-                retained_operation(name + '-' + operation + '-' + str(index), invocation, roots,
+                recovery_operation(name + '-' + operation + '-' + str(index), invocation, roots, control,
                                    3, unavailable='replay.materialization-result-missing')
                 record('P11-pre-rename', fault + '-' + operation + '-' + str(index), 'PASS')
     assert control.read_text() == 'invoked\n'
@@ -2363,7 +2424,7 @@ stdout, stderr = finish_owned(process, name)
 assert process.returncode != 0 and not stdout
 assert before == evidence_snapshot(*roots)
 record('P11-outward-pipe', 'failed-reply-retains-publication', 'PASS')
-repeated_stored(name, read, delivery, roots, response)
+repeated_stored(name, read, delivery, roots, response, control)
 
 for received in (signal.SIGINT, signal.SIGTERM):
     name = 'keyed-' + signal.Signals(received).name
@@ -2375,7 +2436,7 @@ for received in (signal.SIGINT, signal.SIGTERM):
     assert json.loads(stdout)['state']['receiver_result']['response_utf8'].encode() == response
     assert control.read_text() == 'invoked\n'
     record('P11-keyed-interruption', signal.Signals(received).name + '-exit75', 'PASS')
-    repeated_stored(name, read, delivery, roots, response)
+    repeated_stored(name, read, delivery, roots, response, control)
 
 PY
 
