@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -143,6 +144,8 @@ def parse_json(data):
         if isinstance(value, str):
             if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
                 raise ReplayError("input contains invalid Unicode")
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ReplayError("input contains a non-finite number")
         elif isinstance(value, dict):
             for key, child in value.items():
                 check(key, depth + 1)
@@ -371,7 +374,7 @@ def materializer_package_identity(repository):
     return package
 
 
-def delivery_key(value, input_value):
+def validate_delivery_key(value):
     if not exact_object(value, ("stage_key", "request_sha256", "operation", "attempt_number")):
         raise ReplayError("delivery key is malformed")
     stage_key = value.get("stage_key")
@@ -384,6 +387,13 @@ def delivery_key(value, input_value):
        value.get("operation") != "dispatch-stage" or \
        not integer(value.get("attempt_number")) or value["attempt_number"] != 1:
         raise ReplayError("delivery key is malformed")
+    return value
+
+
+def delivery_key(value, input_value):
+    validate_delivery_key(value)
+    stage_key = value["stage_key"]
+    stage_fields = ("initiative_id", "workflow_id", "stage_id", "task_class_id")
     try:
         body = input_value["stage_request"]["content"]["body"]
         expected = {name: body[name] for name in stage_fields}
@@ -391,6 +401,8 @@ def delivery_key(value, input_value):
         request_sha = input_value["stage_request"]["sha256"]
     except (KeyError, TypeError) as error:
         raise ReplayError("delivery key cannot be related to the input") from error
+    if not integer(attempt_number):
+        raise ReplayError("materialization input attempt number is malformed")
     if stage_key != expected or value["request_sha256"] != request_sha or \
        attempt_number != 1 or value["attempt_number"] != attempt_number:
         raise ReplayConflict("delivery key does not match the materialization input")
@@ -873,7 +885,8 @@ def observation(path, kind, identity, candidate_commit_id, field):
 
 
 def validate_state(state, identity):
-    if not isinstance(state, dict) or state.get("schema_version") not in {1, 2} or \
+    if not isinstance(state, dict) or not integer(state.get("schema_version")) or \
+       state["schema_version"] not in {1, 2} or \
        state.get("kind") != "delivery_replay_state" or state.get("authority") != "none" or \
        state.get("qualification") != "unavailable":
         raise ReplayError("state journal is malformed")
@@ -884,13 +897,15 @@ def validate_state(state, identity):
                      "closure_helper_sha256", "jq_sha256", "run_key")
     ) or not isinstance(saved.get("source_repository_id"), str) or \
        not REPOSITORY_ID.fullmatch(saved["source_repository_id"]) or \
-       saved.get("source_hash_algorithm") not in {"sha1", "sha256"} or \
+       not isinstance(saved.get("source_hash_algorithm"), str) or \
+       saved["source_hash_algorithm"] not in {"sha1", "sha256"} or \
        any(not isinstance(saved.get(name), str) or not OID.fullmatch(saved[name])
            for name in ("source_commit_id", "source_tree_id")) or \
-       not isinstance(saved.get("verifier"), dict) or \
+       not exact_object(saved.get("verifier"), ("id", "path", "expected_sha256")) or \
        not isinstance(saved["verifier"].get("id"), str) or \
        not isinstance(saved["verifier"].get("path"), str) or \
-       not re.fullmatch(r"[0-9a-f]{64}", str(saved["verifier"].get("expected_sha256", ""))):
+       not isinstance(saved["verifier"].get("expected_sha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", saved["verifier"]["expected_sha256"]):
         raise ReplayError("state journal identity is malformed")
     package = saved.get("materializer_package")
     if not isinstance(package, dict) or not isinstance(package.get("generation_id"), str) or \
@@ -905,52 +920,13 @@ def validate_state(state, identity):
        })) or saved["materializer_sha256"] != package["files"][PACKAGE_FILES[0]]:
         raise ReplayError("state journal materializer package is malformed")
     phase = state.get("phase")
-    if phase not in {"materializing", "verifying", "review-wait", "publish-wait", "completed-offline", "failed"}:
+    if not isinstance(phase, str) or phase not in {
+        "materializing", "verifying", "review-wait", "publish-wait", "completed-offline", "failed"
+    }:
         raise ReplayError("state journal phase is malformed")
-    needs_materialization = phase in {"verifying", "review-wait", "publish-wait", "completed-offline"}
-    for name in ("candidate_commit_id", "candidate_tree_id"):
-        if (needs_materialization and name not in saved) or (
-            name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name]))
-        ):
-            raise ReplayError("state journal candidate identity is malformed")
-    materialization = state.get("materialization")
-    if needs_materialization and (not isinstance(materialization, dict) or any(
-        not isinstance(materialization.get(name), str) or not OID.fullmatch(materialization[name])
-        for name in ("candidate_commit_id", "candidate_tree_id", "candidate_parent_commit_id")
-    ) or any(
-        not isinstance(materialization.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", materialization[name])
-        for name in ("response_sha256", "receipt_sha256")
-    )):
-        raise ReplayError("state journal materialization is malformed")
-    if needs_materialization and any(
-        saved[name] != materialization[name]
-        for name in ("candidate_commit_id", "candidate_tree_id")
-    ):
-        raise ReplayError("state journal candidate identity does not match materialization")
-    if phase in {"review-wait", "publish-wait", "completed-offline"}:
-        verification = state.get("verification")
-        if verification != {
-            "id": saved["verifier"]["id"],
-            "path": saved["verifier"]["path"],
-            "sha256": saved["verifier"]["expected_sha256"],
-        }:
-            raise ReplayError("state journal verification is malformed")
-    if phase in {"publish-wait", "completed-offline"}:
-        review = state.get("review")
-        if not isinstance(review, dict) or not isinstance(review.get("actor_id"), str) or \
-           not ACTOR.fullmatch(review["actor_id"]) or \
-           review.get("verdict") != "clean" or not re.fullmatch(r"[0-9a-f]{64}", str(review.get("sha256", ""))):
-            raise ReplayError("state journal review is malformed")
-    if phase == "completed-offline":
-        publisher = state.get("publisher")
-        if not isinstance(publisher, dict) or not isinstance(publisher.get("actor_id"), str) or \
-           not ACTOR.fullmatch(publisher["actor_id"]) or \
-           publisher.get("disposition") != "offline-simulated" or \
-           not re.fullmatch(r"[0-9a-f]{64}", str(publisher.get("sha256", ""))):
-            raise ReplayError("state journal publisher is malformed")
-    if phase == "failed" and not isinstance(state.get("reason"), str):
-        raise ReplayError("state journal failure is malformed")
-    if state["schema_version"] == 1:
+    version = state["schema_version"]
+    receiver = None
+    if version == 1:
         if "delivery_key" in saved or "receiver_result" in state:
             raise ReplayError("legacy state journal contains keyed result evidence")
     else:
@@ -963,12 +939,11 @@ def validate_state(state, identity):
             "candidate_commit_id", "candidate_tree_id"
         }):
             raise ReplayError("state journal contains unknown keyed fields")
-        if not exact_object(saved.get("delivery_key"),
-                            ("stage_key", "request_sha256", "operation", "attempt_number")):
-            raise ReplayError("state journal delivery key is malformed")
+        validate_delivery_key(saved.get("delivery_key"))
         receiver = state.get("receiver_result")
-        if not isinstance(receiver, dict) or receiver.get("schema_version") != 1 or \
-           receiver.get("status") not in {"pending", "stored"}:
+        if not isinstance(receiver, dict) or not integer(receiver.get("schema_version")) or \
+           receiver["schema_version"] != 1 or not isinstance(receiver.get("status"), str) or \
+           receiver["status"] not in {"pending", "stored"}:
             raise ReplayError("state journal receiver result is malformed")
         if receiver["status"] == "pending":
             if receiver != {"schema_version": 1, "status": "pending"} or phase != "materializing":
@@ -976,11 +951,90 @@ def validate_state(state, identity):
         elif not exact_object(receiver, (
             "schema_version", "status", "response_utf8", "response_sha256",
             "stage_result_sha256", "receipt_sha256"
-        )) or not isinstance(receiver["response_utf8"], str) or any(
+        )) or phase == "materializing" or not isinstance(receiver["response_utf8"], str) or any(
             not isinstance(receiver.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", receiver[name])
             for name in ("response_sha256", "stage_result_sha256", "receipt_sha256")
         ):
             raise ReplayError("state journal stored result is malformed")
+    stored_result = receiver is not None and receiver["status"] == "stored"
+    if receiver is not None and receiver["status"] == "pending" and (
+        set(state) != {
+            "schema_version", "kind", "identity", "phase", "authority", "qualification",
+            "receiver_result",
+        } or set(saved) != set(identity)
+    ):
+        raise ReplayError("state journal pending result is malformed")
+    needs_materialization = phase in {
+        "verifying", "review-wait", "publish-wait", "completed-offline"
+    } or stored_result
+    for name in ("candidate_commit_id", "candidate_tree_id"):
+        if (needs_materialization and name not in saved) or (
+            name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name]))
+        ):
+            raise ReplayError("state journal candidate identity is malformed")
+    materialization = state.get("materialization")
+    if materialization is not None and (not exact_object(materialization, (
+        "response_sha256", "receipt_sha256", "candidate_commit_id", "candidate_tree_id",
+        "candidate_parent_commit_id"
+    )) or any(
+        not isinstance(materialization.get(name), str) or not OID.fullmatch(materialization[name])
+        for name in ("candidate_commit_id", "candidate_tree_id", "candidate_parent_commit_id")
+    ) or any(
+        not isinstance(materialization.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", materialization[name])
+        for name in ("response_sha256", "receipt_sha256")
+    )):
+        raise ReplayError("state journal materialization is malformed")
+    if needs_materialization and materialization is None:
+        raise ReplayError("state journal materialization is malformed")
+    if needs_materialization and any(
+        saved[name] != materialization[name]
+        for name in ("candidate_commit_id", "candidate_tree_id")
+    ):
+        raise ReplayError("state journal candidate identity does not match materialization")
+    if stored_result and (
+        materialization["response_sha256"] != receiver["response_sha256"] or
+        materialization["receipt_sha256"] != receiver["receipt_sha256"]
+    ):
+        raise ReplayError("state journal stored result does not match materialization")
+    verification = state.get("verification")
+    if verification is not None and (
+        not exact_object(verification, ("id", "path", "sha256")) or verification != {
+            "id": saved["verifier"]["id"],
+            "path": saved["verifier"]["path"],
+            "sha256": saved["verifier"]["expected_sha256"],
+        }
+    ):
+        raise ReplayError("state journal verification is malformed")
+    if phase in {"review-wait", "publish-wait", "completed-offline"} and verification is None:
+        raise ReplayError("state journal verification is malformed")
+    review = state.get("review")
+    if review is not None and (not exact_object(review, ("actor_id", "verdict", "sha256")) or \
+       not isinstance(review.get("actor_id"), str) or \
+           not ACTOR.fullmatch(review["actor_id"]) or \
+       review.get("verdict") != "clean" or not isinstance(review.get("sha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", review["sha256"])):
+        raise ReplayError("state journal review is malformed")
+    if phase in {"publish-wait", "completed-offline"} and review is None:
+        raise ReplayError("state journal review is malformed")
+    publisher = state.get("publisher")
+    if publisher is not None and (not exact_object(
+        publisher, ("actor_id", "disposition", "sha256")
+    ) or not isinstance(publisher.get("actor_id"), str) or \
+           not ACTOR.fullmatch(publisher["actor_id"]) or \
+       publisher.get("disposition") != "offline-simulated" or \
+       not isinstance(publisher.get("sha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", publisher["sha256"])):
+        raise ReplayError("state journal publisher is malformed")
+    if phase == "completed-offline" and publisher is None:
+        raise ReplayError("state journal publisher is malformed")
+    if "recoverable" in state and not isinstance(state["recoverable"], bool):
+        raise ReplayError("state journal recovery flag is malformed")
+    if "reason" in state and not isinstance(state["reason"], str):
+        raise ReplayError("state journal failure reason is malformed")
+    if "recovery" in state and not isinstance(state["recovery"], str):
+        raise ReplayError("state journal recovery instruction is malformed")
+    if phase == "failed" and not isinstance(state.get("reason"), str):
+        raise ReplayError("state journal failure is malformed")
 
 
 def read_journal(path):

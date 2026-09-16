@@ -384,6 +384,428 @@ for point in before after; do
 done
 pass 'both synchronized process-crash windows preserve their distinct evidence state'
 
+checkpoint_helper="$tmp/checkpoint1-cases.py"
+cat > "$checkpoint_helper" <<'PY'
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+
+(driver, input_path, key_path, source_git, base_state, base_candidate, base_scratch,
+ closure_helper, jq_bin, expected_sha, case_root, inventory_path) = sys.argv[1:]
+driver = Path(driver)
+input_path = Path(input_path)
+key_path = Path(key_path)
+source_git = Path(source_git)
+base_state = Path(base_state)
+base_candidate = Path(base_candidate)
+base_scratch = Path(base_scratch)
+case_root = Path(case_root)
+inventory_path = Path(inventory_path)
+case_root.mkdir(mode=0o700)
+base_key = json.loads(key_path.read_bytes())
+base_state_value = json.loads((base_state / "run.json").read_bytes())
+
+
+def encoded(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def sha(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def set_path(value, path, replacement):
+    target = value
+    for name in path[:-1]:
+        target = target[name]
+    target[path[-1]] = replacement
+
+
+def delete_path(value, path):
+    target = value
+    for name in path[:-1]:
+        target = target[name]
+    del target[path[-1]]
+
+
+def mutate(path, replacement=None, delete=False):
+    def apply(value):
+        if delete:
+            delete_path(value, path)
+        else:
+            set_path(value, path, copy.deepcopy(replacement))
+    return apply
+
+
+def inventory(root):
+    entries = []
+
+    def visit(path, relative):
+        metadata = os.lstat(path)
+        item = {"path": relative, "mode": stat.S_IMODE(metadata.st_mode)}
+        if stat.S_ISLNK(metadata.st_mode):
+            item.update({"type": "symlink", "target": os.readlink(path)})
+        elif stat.S_ISDIR(metadata.st_mode):
+            item["type"] = "directory"
+            for child in sorted(os.scandir(path), key=lambda entry: entry.name):
+                visit(Path(child.path), f"{relative}/{child.name}" if relative else child.name)
+        elif stat.S_ISREG(metadata.st_mode):
+            data = Path(path).read_bytes()
+            item.update({"type": "file", "bytes": len(data), "sha256": sha(data)})
+            if Path(path).name == "replay.lock":
+                item["inode"] = metadata.st_ino
+        else:
+            item["type"] = "other"
+        entries.append(item)
+
+    visit(root, "")
+    return sorted(entries, key=lambda item: item["path"])
+
+
+def evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key):
+    return {
+        "state": inventory(state),
+        "candidate": inventory(candidate),
+        "scratch": inventory(scratch),
+        "supplied_input": inventory(supplied_input),
+        "supplied_key": inventory(supplied_key),
+    }
+
+
+def case_directories(name, pending=False):
+    root = case_root / name
+    state = root / "state"
+    candidate = root / "candidate"
+    scratch = root / "scratch"
+    supplied_input = root / "materialization-input.json"
+    supplied_key = root / "delivery-key.json"
+    shutil.copytree(base_state, state, symlinks=True)
+    if pending:
+        candidate.mkdir(mode=0o700)
+        scratch.mkdir(mode=0o700)
+    else:
+        shutil.copytree(base_candidate, candidate, symlinks=True)
+        shutil.copytree(base_scratch, scratch, symlinks=True)
+    supplied_input.write_bytes(input_path.read_bytes())
+    supplied_key.write_bytes(key_path.read_bytes())
+    return root, state, candidate, scratch, supplied_input, supplied_key
+
+
+def command(state, candidate, scratch, supplied_input, supplied_key):
+    return [
+        sys.executable, str(driver), "--input", str(supplied_input),
+        "--delivery-key", str(supplied_key),
+        "--source-repository-id", "fixture.target", "--source-git-dir", str(source_git),
+        "--candidate-root", str(candidate), "--scratch-root", str(scratch),
+        "--state-dir", str(state), "--closure-helper", closure_helper, "--jq-bin", jq_bin,
+        "--verify-path", "source.txt", "--expected-sha256", expected_sha,
+        "--read-materialization-result",
+    ]
+
+
+def record(group, name, outcome):
+    line = f"{group}\t{name}\t{outcome}\n"
+    with inventory_path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+    print(f"checkpoint1 {group} {name}: {outcome}")
+
+
+def invoke_case(group, name, expected_status, state_value=None, state_bytes=None,
+                key_bytes=None, input_bytes=None, pending=False, output_kind=None):
+    _, state, candidate, scratch, supplied_input, supplied_key = case_directories(
+        name, pending=pending
+    )
+    if state_value is not None:
+        (state / "run.json").write_bytes(encoded(state_value))
+    if state_bytes is not None:
+        (state / "run.json").write_bytes(state_bytes)
+    if key_bytes is not None:
+        supplied_key.write_bytes(key_bytes)
+    if input_bytes is not None:
+        supplied_input.write_bytes(input_bytes)
+    before = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    completed = subprocess.run(command(state, candidate, scratch, supplied_input, supplied_key),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    after = evidence_snapshot(state, candidate, scratch, supplied_input, supplied_key)
+    if completed.returncode != expected_status:
+        raise AssertionError((group, name, "status", completed.returncode,
+                              completed.stdout, completed.stderr))
+    if b"Traceback" in completed.stderr:
+        raise AssertionError((group, name, "traceback", completed.stderr))
+    if before != after:
+        raise AssertionError((group, name, "evidence changed"))
+    if output_kind is None:
+        if b"delivery_replay_materialization_result" in completed.stdout:
+            raise AssertionError((group, name, "scanner-ready output on refusal"))
+    else:
+        output = json.loads(completed.stdout)
+        if output.get("kind") != output_kind:
+            raise AssertionError((group, name, "wrong output", output))
+    record(group, name, "PASS")
+
+
+def key_variant(name, operation, expected_status):
+    value = copy.deepcopy(base_key)
+    operation(value)
+    return name, value, expected_status
+
+
+key_cases = []
+for field in ("initiative_id", "workflow_id", "stage_id", "task_class_id"):
+    key_cases.extend([
+        key_variant(f"missing-stage-{field}", mutate(["stage_key", field], delete=True), 1),
+        key_variant(f"typed-stage-{field}", mutate(["stage_key", field], 7), 1),
+        key_variant(f"conflicting-stage-{field}", mutate(["stage_key", field], f"other.{field}"), 2),
+    ])
+for field in ("stage_key", "request_sha256", "operation", "attempt_number"):
+    key_cases.append(key_variant(f"missing-top-{field}", mutate([field], delete=True), 1))
+key_cases.extend([
+    key_variant("extra-delivery-ordinal", mutate(["delivery_ordinal"], 2), 1),
+    key_variant("extra-stage-field", mutate(["stage_key", "extra"], "value"), 1),
+    key_variant("null-stage-key", mutate(["stage_key"], None), 1),
+    key_variant("list-stage-key", mutate(["stage_key"], []), 1),
+    key_variant("empty-stage-key", mutate(["stage_key"], {}), 1),
+    key_variant("null-stage-value", mutate(["stage_key", "stage_id"], None), 1),
+    key_variant("list-stage-value", mutate(["stage_key", "stage_id"], []), 1),
+    key_variant("object-stage-value", mutate(["stage_key", "stage_id"], {}), 1),
+    key_variant("null-request", mutate(["request_sha256"], None), 1),
+    key_variant("list-request", mutate(["request_sha256"], []), 1),
+    key_variant("object-request", mutate(["request_sha256"], {}), 1),
+    key_variant("boolean-request", mutate(["request_sha256"], True), 1),
+    key_variant("malformed-request", mutate(["request_sha256"], "bad"), 1),
+    key_variant("conflicting-request", mutate(["request_sha256"], "0" * 64), 2),
+    key_variant("null-operation", mutate(["operation"], None), 1),
+    key_variant("list-operation", mutate(["operation"], []), 1),
+    key_variant("object-operation", mutate(["operation"], {}), 1),
+    key_variant("unsupported-operation", mutate(["operation"], "dispatch-other"), 1),
+    key_variant("null-attempt", mutate(["attempt_number"], None), 1),
+    key_variant("list-attempt", mutate(["attempt_number"], []), 1),
+    key_variant("object-attempt", mutate(["attempt_number"], {}), 1),
+    key_variant("boolean-attempt", mutate(["attempt_number"], True), 1),
+    key_variant("fractional-attempt", mutate(["attempt_number"], 1.5), 1),
+    key_variant("unsupported-attempt", mutate(["attempt_number"], 2), 1),
+])
+
+for name, value, expected_status in key_cases:
+    invoke_case("P03-supplied-key", f"supplied-{name}", expected_status,
+                key_bytes=encoded(value))
+    saved = copy.deepcopy(base_state_value)
+    saved["identity"]["delivery_key"] = value
+    invoke_case("P03-saved-key", f"saved-{name}", expected_status, state_value=saved)
+
+base_input_value = json.loads(input_path.read_bytes())
+for name, replacement, expected_status in (
+    ("boolean-input-attempt", True, 1),
+    ("fractional-input-attempt", 1.5, 1),
+    ("unsupported-input-attempt", 2, 2),
+):
+    value = copy.deepcopy(base_input_value)
+    value["attempt"]["attempt_number"] = replacement
+    invoke_case("P03-input-attempt", name, expected_status, input_bytes=encoded(value))
+
+raw_key_cases = {
+    "duplicate-member": encoded(base_key).replace(b'"operation":"dispatch-stage"',
+        b'"operation":"dispatch-stage","operation":"dispatch-stage"', 1),
+    "trailing-document": encoded(base_key) + b"{}\n",
+    "bom": b"\xef\xbb\xbf" + encoded(base_key),
+    "invalid-utf8": encoded(base_key)[:-1] + b"\xff\n",
+    "lone-surrogate": encoded(base_key).replace(b'"operation":"dispatch-stage"',
+        b'"operation":"\\ud800"', 1),
+    "truncated": encoded(base_key)[:-2],
+    "nan": encoded(base_key).replace(b'"attempt_number":1', b'"attempt_number":NaN'),
+    "infinity": encoded(base_key).replace(b'"attempt_number":1', b'"attempt_number":Infinity'),
+    "negative-infinity": encoded(base_key).replace(b'"attempt_number":1', b'"attempt_number":-Infinity'),
+    "positive-overflow": encoded(base_key).replace(b'"attempt_number":1', b'"attempt_number":1e999'),
+    "negative-overflow": encoded(base_key).replace(b'"attempt_number":1', b'"attempt_number":-1e999'),
+}
+for name, value in raw_key_cases.items():
+    invoke_case("P05-key-parser", f"key-{name}", 1, key_bytes=value)
+
+
+def state_variant(name, operation, pending=False):
+    value = pending_state() if pending else copy.deepcopy(base_state_value)
+    operation(value)
+    return name, value, pending
+
+
+def pending_state():
+    value = copy.deepcopy(base_state_value)
+    value["phase"] = "materializing"
+    value["receiver_result"] = {"schema_version": 1, "status": "pending"}
+    for field in ("materialization", "verification", "review", "publisher",
+                  "recoverable", "reason", "recovery"):
+        value.pop(field, None)
+    value["identity"].pop("candidate_commit_id", None)
+    value["identity"].pop("candidate_tree_id", None)
+    return value
+
+
+state_cases = [
+    state_variant("boolean-version-true", mutate(["schema_version"], True)),
+    state_variant("boolean-version-false", mutate(["schema_version"], False)),
+    state_variant("fraction-version", mutate(["schema_version"], 1.0)),
+    state_variant("list-phase", mutate(["phase"], [])),
+    state_variant("object-phase", mutate(["phase"], {})),
+    state_variant("null-phase", mutate(["phase"], None)),
+    state_variant("numeric-phase", mutate(["phase"], 1)),
+    state_variant("list-source-algorithm", mutate(["identity", "source_hash_algorithm"], [])),
+    state_variant("object-source-algorithm", mutate(["identity", "source_hash_algorithm"], {})),
+    state_variant("null-source-algorithm", mutate(["identity", "source_hash_algorithm"], None)),
+    state_variant("boolean-receiver-version", mutate(["receiver_result", "schema_version"], True)),
+    state_variant("fraction-receiver-version", mutate(["receiver_result", "schema_version"], 1.0)),
+    state_variant("list-receiver-status", mutate(["receiver_result", "status"], [])),
+    state_variant("object-receiver-status", mutate(["receiver_result", "status"], {})),
+    state_variant("null-receiver-status", mutate(["receiver_result", "status"], None)),
+    state_variant("numeric-receiver-status", mutate(["receiver_result", "status"], 1)),
+    state_variant("list-response", mutate(["receiver_result", "response_utf8"], [])),
+    state_variant("boolean-response-digest", mutate(["receiver_result", "response_sha256"], True)),
+    state_variant("list-verifier", mutate(["identity", "verifier"], [])),
+    state_variant("extra-verifier-field", mutate(["identity", "verifier", "extra"], "value")),
+    state_variant("boolean-verifier-digest", mutate(["identity", "verifier", "expected_sha256"], True)),
+    state_variant("list-materialization", mutate(["materialization"], [])),
+    state_variant("extra-materialization-field", mutate(["materialization", "extra"], "value")),
+    state_variant("missing-materialization-field", mutate(["materialization", "receipt_sha256"], delete=True)),
+    state_variant("typed-materialization-oid", mutate(["materialization", "candidate_commit_id"], [])),
+    state_variant("typed-materialization-digest", mutate(["materialization", "response_sha256"], True)),
+    state_variant("list-verification", mutate(["verification"], [])),
+    state_variant("extra-verification-field", mutate(["verification", "extra"], "value")),
+    state_variant("missing-verification-field", mutate(["verification", "sha256"], delete=True)),
+    state_variant("typed-verification-digest", mutate(["verification", "sha256"], True)),
+    state_variant("unknown-state-field", mutate(["unknown"], "value")),
+    state_variant("unknown-identity-field", mutate(["identity", "unknown"], "value")),
+    state_variant("missing-stored-materialization", mutate(["materialization"], delete=True)),
+    state_variant("missing-stored-candidate", mutate(["identity", "candidate_commit_id"], delete=True)),
+]
+for field in ("recoverable", "reason", "recovery"):
+    for label, replacement in (("null", None), ("number", 1), ("list", []), ("object", {})):
+        state_cases.append(state_variant(f"{field}-{label}", mutate([field], replacement)))
+state_cases.append(state_variant("recoverable-zero", mutate(["recoverable"], 0)))
+state_cases.extend([
+    state_variant("review-list", mutate(["review"], [])),
+    state_variant("review-extra", mutate(["review"], {"actor_id": "test.reviewer", "verdict": "clean", "sha256": "0" * 64, "extra": 1})),
+    state_variant("review-actor-type", mutate(["review"], {"actor_id": 1, "verdict": "clean", "sha256": "0" * 64})),
+    state_variant("publisher-list", mutate(["publisher"], [])),
+    state_variant("publisher-extra", mutate(["publisher"], {"actor_id": "test.publisher", "disposition": "offline-simulated", "sha256": "0" * 64, "extra": 1})),
+    state_variant("publisher-actor-type", mutate(["publisher"], {"actor_id": 1, "disposition": "offline-simulated", "sha256": "0" * 64})),
+    state_variant("pending-wrong-phase", mutate(["phase"], "verifying"), pending=True),
+    state_variant("pending-extra-receiver-field", mutate(["receiver_result", "extra"], 1), pending=True),
+    state_variant("pending-boolean-receiver-version", mutate(["receiver_result", "schema_version"], True), pending=True),
+    state_variant("pending-list-status", mutate(["receiver_result", "status"], []), pending=True),
+    state_variant("pending-with-materialization", mutate(["materialization"], copy.deepcopy(base_state_value["materialization"])), pending=True),
+    state_variant("pending-with-candidate-id", mutate(["identity", "candidate_commit_id"], base_state_value["identity"]["candidate_commit_id"]), pending=True),
+])
+for name, value, pending in state_cases:
+    invoke_case("P04-typed-journal", f"state-{name}", 1, state_value=value, pending=pending)
+
+failed = copy.deepcopy(base_state_value)
+failed.update({"phase": "failed", "recoverable": False, "reason": "fixed verifier failed"})
+invoke_case("P04-valid-failed", "stored-failed-remains-readable", 0, state_value=failed,
+            output_kind="delivery_replay_materialization_result")
+failed_recoverable = copy.deepcopy(failed)
+failed_recoverable["recoverable"] = True
+invoke_case("P04-valid-failed", "stored-recoverable-true-remains-readable", 0,
+            state_value=failed_recoverable,
+            output_kind="delivery_replay_materialization_result")
+
+pending = pending_state()
+invoke_case("P04-valid-pending", "pending-remains-unavailable", 3, state_value=pending,
+            pending=True, output_kind="delivery_replay_materialization_result")
+
+base_raw = encoded(base_state_value)
+raw_state_cases = {
+    "duplicate-member": base_raw.replace(b'"schema_version":2',
+        b'"schema_version":2,"schema_version":2', 1),
+    "trailing-document": base_raw + b"{}\n",
+    "bom": b"\xef\xbb\xbf" + base_raw,
+    "invalid-utf8": base_raw[:-1] + b"\xff\n",
+    "lone-surrogate": base_raw[:-2] + b',"reason":"\\ud800"}\n',
+    "truncated": base_raw[:-2],
+    "nan": base_raw[:-2] + b',"recoverable":NaN}\n',
+    "infinity": base_raw[:-2] + b',"recoverable":Infinity}\n',
+    "negative-infinity": base_raw[:-2] + b',"recoverable":-Infinity}\n',
+    "positive-overflow": base_raw[:-2] + b',"recoverable":1e999}\n',
+    "negative-overflow": base_raw[:-2] + b',"recoverable":-1e999}\n',
+}
+for name, value in raw_state_cases.items():
+    invoke_case("P05-journal-parser", f"journal-{name}", 1, state_bytes=value)
+
+
+def response_state(response_text, receipt_text=None):
+    value = copy.deepcopy(base_state_value)
+    response_bytes = response_text.encode("utf-8")
+    value["receiver_result"]["response_utf8"] = response_text
+    value["receiver_result"]["response_sha256"] = sha(response_bytes)
+    value["materialization"]["response_sha256"] = sha(response_bytes)
+    if receipt_text is not None:
+        receipt_digest = sha(receipt_text.encode("utf-8"))
+        value["receiver_result"]["receipt_sha256"] = receipt_digest
+        value["materialization"]["receipt_sha256"] = receipt_digest
+    return value
+
+
+invoke_case("P05-response-parser", "response-truncated", 1,
+            state_value=response_state("{"))
+invoke_case("P05-response-parser", "response-positive-overflow", 1,
+            state_value=response_state('{"unused":1e999}'))
+for name, receipt_text in (("receipt-positive-overflow", "1e999"),
+                           ("receipt-lone-surrogate", '"\\ud800"')):
+    response = json.loads(base_state_value["receiver_result"]["response_utf8"])
+    response["payloads"][0]["data"] = receipt_text
+    response["payloads"][0]["sha256"] = sha(receipt_text.encode("utf-8"))
+    response_text = encoded(response).decode("utf-8")
+    invoke_case("P05-receipt-parser", name, 1,
+                state_value=response_state(response_text, receipt_text))
+
+scope = {"_REPLAY_DRIVER_BYTES": driver.read_bytes(), "__name__": "checkpoint1_driver",
+         "__file__": str(driver)}
+exec(compile(scope["_REPLAY_DRIVER_BYTES"], str(driver), "exec"), scope)
+parse_json = scope["parse_json"]
+
+
+def nested(levels):
+    value = 0
+    for _ in range(levels):
+        value = [value]
+    return encoded(value)
+
+
+parse_json(nested(31))
+record("P05-parser-boundary", "depth-32-accepted", "PASS")
+try:
+    parse_json(nested(32))
+except scope["ReplayError"]:
+    record("P05-parser-boundary", "depth-33-rejected", "PASS")
+else:
+    raise AssertionError("depth 33 accepted")
+if parse_json(b"1e308\n") != 1e308:
+    raise AssertionError("finite exponent changed")
+record("P05-parser-boundary", "finite-exponent-accepted", "PASS")
+for name, raw in (("positive-overflow", b"1e999\n"), ("negative-overflow", b"-1e999\n"),
+                  ("lone-surrogate", b'"\\ud800"\n')):
+    try:
+        parse_json(raw)
+    except scope["ReplayError"]:
+        record("P05-parser-boundary", name, "PASS")
+    else:
+        raise AssertionError((name, "accepted"))
+PY
+
+checkpoint_inventory="$tmp/checkpoint1-case-inventory.tsv"
+: > "$checkpoint_inventory"
+python3 "$checkpoint_helper" "$replay" "$input" "$key" "$tmp/source.git" \
+  "$tmp/stored-state" "$tmp/stored-candidate" "$tmp/stored-scratch" \
+  "$runtime/object-closure" "$jq_bin" "$expected" "$tmp/checkpoint1-cases" \
+  "$checkpoint_inventory"
+checkpoint_case_count=$(wc -l < "$checkpoint_inventory" | tr -d ' ')
+[ "$checkpoint_case_count" -ge 100 ] || fail checkpoint1-case-count
+pass "P03/P04/P05 typed key, journal, parser, and preservation matrix ($checkpoint_case_count cases)"
+
 bad_stored_response="$tmp/bad-stored-response.json"
 "$jq_bin" -S -c '.receiver_result.response_utf8 | fromjson |
   .stage_result.body.attempt_number=2' "$tmp/stored-state/run.json" > "$bad_stored_response"
