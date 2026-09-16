@@ -1,6 +1,6 @@
 ---
-spec-blob: c67f2cf79953613986e777f2c1beab20e497b641
-drafted: 2026-09-15
+spec-blob: 07c4deb6a59590dfeb021b47dcf8b60d37ed12c5
+drafted: 2026-09-16
 ---
 
 # Plan: Preserve real materialization results in the replay journal
@@ -11,32 +11,46 @@ Risk: high. Gate mode: `artifact-high`. Review size: `accepted-exception`.
 This plan covers one concern: retaining and retrieving the actual response of
 one keyed offline materialization in the existing replay journal.
 
-The amendment source base is `ae5ea2af8711502bf815bb955f4147e37f28f8eb`,
-containing the accepted remediation G2 amendment in PR #341. The accepted intent
+The amendment source base is `3d9ccb801bc65daa40e54e7c26dc191754f821ee`,
+containing the accepted size-only G2 amendment in PR #343. The accepted intent
 remains `eb68c51f1a9866599c8662e967fba8375ccfbf3e`. The prior accepted plan is
-`c9cb331662d232d18462d5d577ac6256ad7f4a73`. This separate plan amendment must
+`474a7f6ee09996f5a78cd2b42baae54718b80086`. This separate plan amendment must
 land before code resumes. The current Roadmap program delegation supplies the
 named manager's acceptance process; this author does not accept the plan or appoint
 a second manager.
 
 Preserve `ystack/impl/replay-materialization-result` at clean local head
-`45f306b3b7d8e6346393101e91005703adca58dc`, recorded remote checkpoint
-`0b662b0c5317c8d27a0331f7204fbe7b62353363`, implementation PR absent, and old
-base/plan-base `c332aaff66f116c2badf2adb408e39c887383697`. Intake #324 is paused
-with `claimed` and `needs-human`, without `ready`. These are the manager's bound
-handoff facts; reverify repository, branch, full heads, PR/base/claim and clean
-worktree before resume. Never reset, rebase, force-push, recreate or silently replace
-this attempt or its earlier commits.
+`528feae88dbbb45b3100f00d58085168f3254d4d`, recorded remote checkpoint
+`0b662b0c5317c8d27a0331f7204fbe7b62353363`, implementation PR absent in all
+states, and old base/plan-base `adf57b2394a7dbd1451202d15a3a57590d74d374`.
+Current main is the amendment source base above. Intake #324 is paused with
+`claimed` and `needs-human`, without `ready`, recorded in manager pause comment
+5692647316. These are the manager's bound handoff facts; reverify repository,
+branch, full heads, PR/base/claim and clean worktree before resume. Never reset,
+rebase, force-push, recreate or silently replace this attempt or its earlier commits.
+The earlier head `45f306b3b7d8e6346393101e91005703adca58dc` and base
+`c332aaff66f116c2badf2adb408e39c887383697` remain preserved historical facts.
 
-The complete independent content review has SHA-256
+The original independent content review has SHA-256
 `23286d26eb638f67023d96571532cfdb6fb53661d8fda1e326bfc71f6e71ec17` and
-`Content-verdict: REVISE` / `VERDICT: FAIL`. It identified malformed journal types
-and non-finite numbers, incomplete fixed receipt links, unbounded Git diff capture,
-and missing accepted proof. All four must be corrected together. Preserve the
-stopped native run at exit 143 and the earlier exit-142 full run, exit-1 shadow
-continuation, other harness failures and individual passes. None is a complete
-implementation pass. The old 32-file proof index remains SHA-256
-`968d286c1498d48069fe97e13cee87271364704b9d879dfac3dbd5ed8a2c6621`.
+`Content-verdict: REVISE` / `VERDICT: FAIL`. Its four findings remain the complete
+remediation obligation: typed journal/finite JSON, fixed receipt relations, bounded
+Git capture and complete accepted proof. CP1 fix 1 accepted the first at head
+`5f7ed89a337c8c0a97f888dd683ec7842b37d7be`; report SHA-256
+`5e9e726bb9b9d593fa4f122e1d2b732f2ca60040bb39a12a4ba5cf1d7f23a9ef`.
+CP2 fix 1 accepted the second and its scoped P08 proof at the current paused head;
+report SHA-256 `ba063fa72bfa9199a51f58db459dc2d6fe2ab08701fcfa370ec7ead3d3ba542d`.
+Both reports say `Checkpoint-verdict: ACCEPT` and `VERDICT: PASS`. They do not
+accept remaining findings 3/4, final source bindings or the complete implementation.
+Preserve their exact evidence and rerun affected proof after later changes; historical
+checkpoint acceptance is not fresh final-head/base acceptance.
+
+Preserve the stopped native run at exit 143, earlier exit-142 full run, exit-1
+shadow continuation, failed checkpoint reviews, other harness failures and individual
+passes. None is a complete implementation pass. The old 32-file proof index remains
+SHA-256 `968d286c1498d48069fe97e13cee87271364704b9d879dfac3dbd5ed8a2c6621`.
+The original size forecast and its arithmetic-failed draft/review remain historical;
+use the corrected totals below, without rewriting that evidence.
 
 ## Files that change
 
@@ -74,20 +88,42 @@ All seven dependency files already exist, including the shadow module already
 covered by the restore manifest. Only the two originally planned restore manifest
 entries are appended. Keep both shadow suites and the shadow shell driver unchanged.
 
-The accepted implementation envelope is 2,000–3,000 added plus removed lines
-across these fifteen exact paths. Current head measures 1,171 additions plus
-37 deletions, or 1,208 total, against its old base. That incomplete implementation
-cannot meet the remaining proof inside the earlier 800–1,500 estimate.
+The accepted implementation envelope is 3,300–4,200 added plus removed lines
+across these fifteen exact paths. The paused head measures 2,423 additions plus
+59 deletions, or 2,482 total, against its old plan-base. The earlier 1,208-line
+measurement and 800–1,500 / 2,000–3,000 estimates remain historical; none
+established complete proof.
 
 | Area | Current measured | Estimated complete diff |
 | --- | ---: | ---: |
-| Replay driver, typed validation and bounded capture | 524 | 640–800 |
-| Pure fixed response predicate | 49 | 85–125 |
-| Receiver suite with complete named proof matrix | 410 | 1,050–1,450 |
-| Direct protocol relation tests | 48 | 180–300 |
-| README, components, recovery guide and restore entries | 141 | 141–165 |
-| Four profile files, two assembly tests and shadow pins/header | 36 | 36–50 |
-| Total | 1,208 | 2,132–2,890 |
+| Replay driver, typed validation and bounded capture | 626 | 686–736 |
+| Pure fixed response predicate | 115 | 115 |
+| Receiver suite with complete named proof matrix | 1,206 | 2,026–2,486 |
+| Direct protocol relation tests | 358 | 358 |
+| Documentation, restore entries, four profile files, two assembly tests and shadow pins/header | 177 | 177–201 |
+| Total | 2,482 | 3,362–3,896 |
+
+Allocate remaining work by the checkpoints below. These increments share setup
+and count overlapping P06/P12 stream proof once. External source-fetch, native-run
+and CI evidence is still required even when it adds no repository lines.
+
+| Remaining checkpoint | Increment before simplification |
+| --- | ---: |
+| CP3 driver capture/cleanup and P06/P12 stream/caller proof | 240–360 |
+| CP4a non-stream byte ceilings and complete identity drift | 230–330 |
+| CP4b real variants/retention, format/filesystem refusals and scanner negatives | 200–300 |
+| CP4c restart, crash, publication, reply and interruption proof | 300–420 |
+| CP4d residual P03–P05/P08 case mapping gaps | 0–35 |
+| Source bindings and documentation closure | 0–24 |
+| Gross remaining increment | 970–1,469 |
+
+Allow only 55–90 lines of clear duplicate setup removal, preserving every case,
+entrypoint, snapshot and independent oracle. Thus the working estimate is
+2,482 + 970 - 90 = 3,362 through 2,482 + 1,469 - 55 = 3,896. Without any savings,
+the upper estimate is 3,951. The accepted 4,200 ceiling leaves 304 lines above
+the upper forecast, or 249 without savings, for uncertainty in existing process
+and boundary proof. This is not another work item or a quota to fill. No proof
+row is deferred or reduced to meet the range.
 
 Counts describe the final complete diff against the accepted base, not edit churn
 or quotas. The receiver suite allocation covers real fixture/source setup,
@@ -144,17 +180,44 @@ where needed; checkpoints cannot reset review rounds or evade an unresolved find
 Any review of a checkpoint names that exact immutable commit. No reviewer edits code
 or controls the writer's running tests.
 
-1. Correct journal/key typing and finite-number parsing; add pending/stored type,
-   parser and preservation cases. Run those focused cases and legacy regression.
-2. Correct fixed result/receipt relations; add direct and persisted fully rehashed
-   mutation cases with independent fixed-fact assertions. Run both protocol and
-   receiver relation groups, keeping real changed/no-change positives.
-3. Reuse one genuinely bounded subprocess capture boundary; prove exact limits,
-   concurrent streams, child cleanup and the fixed Git caller with full snapshots.
-4. Finish every remaining named proof row: source algorithms/ancestry, restart and
-   format transitions, identity mutations, byte/depth limits, full crash/I/O/reply
-   oracles, read invariants and scanner negatives. Record a case-to-requirement
-   inventory. A count of passing groups alone does not establish coverage.
+1. CP1 is complete at its reviewed checkpoint: journal/key typing and finite-number
+   parsing with pending/stored type, parser and preservation cases. Retain those
+   cases and the unchanged legacy regression. Do not redo accepted work merely
+   to create another checkpoint; later affected bytes still need fresh proof.
+2. CP2 is complete at its reviewed checkpoint: fixed result/receipt relations and
+   direct/persisted fully rehashed cases, including both real changed/no-change
+   baselines, complete refs, output/evidence/metadata and outcome directions.
+   Preserve the independent fixed-fact assertions and all named cases.
+3. CP3 remains open. Implement section 4's one genuinely bounded subprocess
+   capture boundary for the fixed materializer and Git caller. Prove P12 and the
+   P06 stream ceilings: exact limit/+1, stdout/stderr pressure, nonzero/EOF/read
+   failure, bounded retention, descriptor close and child reap. Keep actual fixed-Git
+   integration and command-checked overflow injection through a keyed reopen with
+   full snapshots. Run the affected receiver cases and unchanged legacy regression;
+   retain exact-head logs and an inventory linking each case to P06/P12.
+4. CP4 remains open. Finish the remaining proof in these sequential subcheckpoints,
+   using the same writer and existing private helpers. Commit each coherent group
+   with its named cases, actual outcomes and focused proof for manager inspection;
+   none replaces the complete final suite or resets review rounds.
+   - CP4a: finish P06 file/extracted-document/encoded-journal ceilings and P07 saved
+     and actual source/tool identity drift. Test actual helper/caller wiring with
+     complete post-mutation preservation and ordinary-error versus conflict exits.
+   - CP4b: finish P01's real outcome/algorithm/ancestry matrix, P02's independently
+     captured original bytes/counts/lock/bundle invariants and real verifier-failure
+     read, P13's format/no-key/missing/nonregular/observation cases, and P14's real
+     scanner negatives. Retain every existing positive and distinct initial-delivery
+     case; use bounded owned FIFO tests and the existing scanner unchanged.
+   - CP4c: finish P09's real pre-effect restart and partial-root refusals; strengthen
+     both P10 SIGKILL cases with original-response oracles and full repeated-reopen
+     snapshots; add every P11 scoped publication fault, broken reply and keyed
+     interruption case. Use explicit synchronization, deadlines and owned cleanup.
+   - CP4d: reconcile every P01–P16 row with named assertions and exact proof. Preserve
+     CP1/CP2 parser/type/relation coverage and close any remaining P03–P05/P08 mapping
+     gap without duplicating the framework. Distinguish completed focused proof from
+     P15 source closure and P16 final proof still pending. A passing count alone
+     does not establish coverage. Remeasure the complete diff at each subcheckpoint;
+     an expected overrun or changed path/meaning returns through the affected gate.
+
 5. Complete section 6's actual source checkpoints and shadow repair. Run unchanged
    assembly, packaging and shadow proof to establish a coherent candidate. Do not
    describe expected intermediate stale bindings as passing packaging evidence.
