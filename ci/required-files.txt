@@ -278,6 +278,8 @@ scripts/test/local-git-materializer-adapter.test.sh
 # Inactive offline delivery replay
 delivery/v1/replay.py
 scripts/test/delivery-replay.test.sh
+scripts/test/replay-materialization-result.test.sh
+docs/replay-materialization-result.md
 work/delivery-loop-first/plan.md
 
 # Inactive Claude Code producer normalizer payload
