@@ -79,8 +79,12 @@ proof. Recheck it against plan-base before execution; do not execute a real targ
 | `scripts/core-contract.sh` | `18748127ead49a22717723e9860210940010d84e` | Sources the selected immutable ingress; shell calls preserve group. |
 | Selected generation's `core-ingress.sh` | `973f5c3808ffbbda23471b2dbdd7b221cb4d0599` | Uses fixed jq and resolved system utilities, not a provider, daemon or session launcher. |
 
-The selected generation is
-`core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/`.
+Resolve the selected generation through the existing core/profile selection and
+`core/v2/generation-registry.json`, whose G2 blob is
+`0bc09fa56047b2e3fdecf22559f68468f0528797`; the matching profile-resolution
+source blob is `4cb098be3de6bc00406315a8944d54b17231e98c`. Verify the resolved
+ingress against the exact blob above. Do not repeat the generation ID in a new
+tracked path; its closed-path allowlist remains unchanged.
 Include its `contracts.jq` and five imported modules, materializer `protocol.jq`,
 generation registry, fixed jq/object-closure executable identities and actual
 Git/Bash/Python identities in the source inventory. These jq files validate data;
@@ -134,8 +138,9 @@ an independent group kill or signal a retired replay.
 | --- | --- |
 | empty/launching | Create keeper; defer signal dispatch through return/handle assignment. No group authority. |
 | child-owned | Retain exact unreaped keeper; validate handshake. Failure permits one raw positive-PID kill, then retire direct authority and reap. No descendants are admitted. |
-| group-owned | Verified keeper PID=PGID=SID and own-group exclusion; may release exactly one admission. No keeper reap or implicit poll. |
-| cleanup | At most one keeper replay-stop command; drain statuses within the first five seconds of shared cleanup. |
+| verified-unreleased | Verified keeper PID=PGID=SID and own-group exclusion, but zero admission bytes written. Cancellation uses exact-child-only cleanup and no group signal. May attempt one admission. |
+| group-owned | Admission possibly released; retain verified group ownership. No keeper reap or implicit poll. |
+| cleanup | At most one keeper replay-stop command; await status and complete stream capture within the first five seconds of shared cleanup. |
 | signal-attempted | Record attempt before one raw group SIGKILL; do not retry on error or interruption. |
 | retired | Clear all keeper PID/group signal authority before any keeper wait. Only exact reap and read-only observations remain. |
 | observed/diagnostic/sealed | Record actual wait and absence; publish bounded diagnostics and completion. No process signaling. |
@@ -147,7 +152,9 @@ without a signal. A zero wait result leaves the direct child unreaped; raw kill
 of that owned PID is safe until this sole reaper consumes status. Mark the signal
 attempt first, signal at most once and retire replay signal authority before
 continued wait/drain. No other thread can race that sequence. The coordinator
-never inherits replay-PID signal authority, including after keeper EOF.
+never inherits replay-PID signal authority, including after keeper EOF. Unknown
+wait/ownership results also retire replay signal authority; they cannot justify
+another signal. Coordinator status polling never reaps a keeper before retirement.
 
 ### 4. Implement channels, admission and deadlines
 
@@ -172,7 +179,13 @@ keeper. This prelaunch gate consumes the same admission/setup budgets, so it
 cannot wait indefinitely. Keeper uses start_new_session=True, sends its identity
 and cannot launch replay until one valid admit command. Coordinator verifies the
 actual direct child and OS getpgid/getsid results, positive equality and exclusion
-of its own PGID, then publishes group-owned before sending admission.
+of its own PGID, then records verified-unreleased ownership before admission.
+Keep a separate release state: known-zero, possibly-released or released. Before
+the write syscall mark possibly-released so an unknown result cannot discard group
+ownership. A returned positive byte count marks released. EAGAIN restores known-zero
+only if cumulative bytes written remain zero and no earlier write result is unknown;
+EAGAIN after a partial write stays released. No replay is permitted until keeper
+receives a valid command.
 
 Cancellation has priority over admission whenever observed. Immediately before
 the first admission write, briefly block INT/TERM with pthread_sigmask, check
@@ -181,6 +194,12 @@ decision. If cancellation is present, do not write. Otherwise attempt only the
 nonblocking write and restore the prior mask in finally, without a selector wait
 inside the masked region. The first written command byte is the release boundary;
 an EAGAIN with zero bytes repeats this cancellation check before a later attempt.
+Pending cancellation while still known-zero, including after EAGAIN, cancels all
+future admission writes and clears unused group authority before exact-child-only
+keeper cleanup. Kill the still-unreaped keeper once by its owned positive PID,
+retire that authority, then require authentic reap within the same cleanup budget.
+This path has zero replay launches and zero group signals even after identity
+verification. An admission deadline while known-zero follows the same path.
 Cancellation after release may find one replay starting and must clean it; it
 never starts a second. A partial/failed write is possibly released under group-owned
 cleanup, never pre-admission. A signal becoming pending after the decision check
@@ -213,6 +232,13 @@ completes. Control frames carry counts/status only, never stream payloads. After
 cleanup the coordinator reads capped files for diagnostics. Do not claim an exact
 total for bytes never read after a forced close.
 
+Track replay wait status and each stream's capture state separately. A stream is
+complete only after a real zero-byte read establishes EOF and every preceding
+byte is accounted for in its capped file/count or an explicit overflow failure.
+Reaping replay does not imply EOF. Keeper sends a distinct capture-complete event
+only after both EOFs and successful capture writes, with final counts; a wait
+event alone cannot supply final output counts or permit zero-output acceptance.
+
 ### 5. Wire the actual crash boundary and final cleanup
 
 Extend only the loaded wrapper's pause route. Observe wrapper entry, capture
@@ -224,14 +250,25 @@ An earlier phase event cannot satisfy readiness. The wrapper waits at that hook
 for the deliberate real crash; readiness carries the current case identity.
 
 The coordinator commands keeper to SIGKILL the actual replay after readiness.
-Keeper reports its authentic -9 wait result and zero outward stdout. Then perform
-group cleanup and hand control back to the unchanged shell recovery assertions.
+Keeper reports its authentic -9 wait result separately from capture completion.
+The coordinator accepts zero outward stdout only with both stream EOFs, the valid
+capture-complete event and final stdout count zero. It keeps the reader alive
+while awaiting those facts, then performs group cleanup and hands control back
+to the unchanged shell recovery assertions.
 The two cases still use fresh real roots, the real replay and original read/reopen
 commands. Never synthesize missing/stored output or infer status from a kill call.
 
-For any failure, begin cleanup once with its fixed shared deadline. If responsive,
-keeper terminates/reaps its replay or returns the already-observed status. Whether
-that succeeds or not, attempt the final admitted-group KILL once while keeper is
+Begin cleanup once on deliberate crash or any failure with its fixed shared
+deadline. If responsive, keeper terminates/reaps replay or returns the saved
+status, and continues draining both pipes. Status plus complete capture must
+arrive by cleanup start + 5 seconds, leaving the remaining shared budget for
+final group cleanup/reap/absence. A retained writer cannot extend this deadline.
+On expiry, keeper failure or forced close before completion, or a missing capture
+acknowledgment, record capture incomplete and fail even if replay -9, empty partial
+files and group absence are later observed. Preserve the authentic status and
+partial diagnostics. Never kill
+the sole reader and then treat its partial counts as complete. Whether capture
+succeeds or fails, attempt the final admitted-group KILL once while keeper is
 still unreaped. Raw os.killpg avoids Popen's implicit poll. Retire group authority
 in a finally boundary before calling reap_exact on keeper, even if signaling
 fails. A group signal error is recorded and is never a license for another signal.
@@ -369,11 +406,13 @@ timings, identity and scratch disposition. A failed subcase fails the suite.
 
 | IDs | Cases and required evidence |
 | --- | --- |
-| C01-before, C01-after | Both original real crash/reopen cases; real ready, replay -9, zero outward stdout, unchanged original assertions. |
+| C01-before, C01-after | Both original real crash/reopen cases; real ready, replay -9, complete capture with both EOFs and zero outward stdout, unchanged original assertions. |
 | C02-before, C02-after | Actual pre-publication acknowledgment, at least 12 measured seconds of controlled hold, then real readiness within 60 s and the same original recovery outcomes. No sleep selects the crash boundary. |
 | C03-early-exit | Fixture exits 37 with known stderr before readiness; authentic wait 37, no pass, keeper retained through cleanup. |
 | C04-watchdog | Actual 60-second setup expiry with live replay fixture and nested descendant; one launch, named timeout, replay status if observed, keeper reap and ESRCH group absence. |
 | C05-missing, C05-wrong | Missing/invalid keeper identity; zero replay launches and group signals; exact-child-only cleanup. |
+| C05-unreleased-trigger-boundary | Real verified keeper, triggers pending INT/pending TERM/shell cancellation, boundaries first pre-release check/after known zero-byte EAGAIN: six acknowledged records. Require zero admission bytes, zero replay launches, zero group signals, bounded exact-child-only cleanup and authentic keeper reap. |
+| C05-partial-admission | Acknowledged partial command write followed by cancellation; possibly released state uses retained group cleanup, never the unreleased path. Keeper launches at most once and no authority survives retirement. |
 | C06-target-signal-boundary | Cartesian product of targets Bash/coordinator, signals INT/TERM, boundaries launch handoff/setup/ready hold/cleanup-before-signal/retirement-wait/diagnostic-handoff: 24 distinct records. Direct coordinator launch means handlers-ready; Bash covers pre-assignment. |
 | C07-replay-retired | Replay exits naturally before stop request; saved actual status, no signal after its retirement. |
 | C08-keeper-eof, C08-keeper-exit | Keeper fails after admission, including a nested child; coordinator does not poll it early, unknown replay result stays unknown, group cleanup uses retained keeper ownership. |
@@ -381,11 +420,22 @@ timings, identity and scratch disposition. A failed subcase fails the suite.
 | C10-signal-error, C10-wait-eintr, C10-wait-expired, C10-wait-echild | First three exercise actual boundary plus scoped error injection; ECHILD separately for coordinator and keeper. Unknown result never fabricates zero; no repeated signal or new launch. |
 | C11-probe-alive, C11-probe-eperm, C11-probe-other | Non-ESRCH responses never count as absence; retained scratch and no post-retirement signal. Real absence remains separately proved. |
 | C12-stdout, C12-stderr, C12-frame, C12-total | Each accepted capture/control ceiling and overflow refusal; simultaneous pipe pressure cannot block cancellation or deadlines. |
+| C12-buffered-tail | Acknowledged fixture writes known small stdout/stderr tails, then holds their reads until keeper consumes the replay wait result. Release reads and prove both exact tails reach retained capture before completion, with nonzero stdout failing the zero-output oracle; no empty partial file can pass. |
+| C12-retained-writer | An acknowledged descendant holds a stream writer after replay reap. At the unchanged drain cutoff require explicit capture-incomplete failure, retained partial diagnostics, final one-shot group cleanup and real absence; replay status cannot substitute for EOF. |
 | C13-malformed, C13-duplicate, C13-wrong-case, C13-out-of-order | Strict control parsing/order failures; no forged readiness or pass. |
 | C14-output-blocked, C14-output-broken, C14-record-write, C14-seal-rename, C14-flags-restore, C14-shell-handoff | Diagnostics/hand-off failures retain scratch and fail; no indefinitely blocking output or hidden success. |
 | C15-sigchld-coordinator, C15-sigchld-keeper | Start with inherited SIGCHLD ignored; explicit reset permits an authentic nonzero direct wait, not Popen fallback zero. |
 | C15-mask-coordinator, C15-mask-keeper | Inherit blocked INT/TERM; verify explicit unblocking after handlers, with actual delivery through an acknowledged supported boundary. |
 | C16-wait-return-signal, C16-repeat-signal, C16-cancel-write, C16-errexit | Completion/interruption race, repeated INT/TERM, failed cancellation write and ordinary shell error do not bypass handoff or scratch retention. |
+
+For C05, acknowledge verified-unreleased before injecting each trigger. The
+EAGAIN variant uses a scoped first-write fault at the actual admission boundary:
+return zero-byte EAGAIN without calling the underlying write, then acknowledge
+that return before injecting cancellation and allowing the next admission check.
+Record this as error injection, not native socket-backpressure proof. Masked real
+INT/TERM must be observed as pending; shell cancellation uses the real private
+path. The partial variant writes an actual prefix and acknowledges its positive
+byte count; no later EAGAIN can turn that case back into known-zero ownership.
 
 For C06 and C16, run real /bin/bash control shells under set -e; capture their
 outcome explicitly in the outer driver. Inject only after actual boundary
@@ -400,8 +450,9 @@ keeper EOF/exit. At finish require authentic direct reaps and ESRCH-only group
 absence; separately observe known descendant termination without signaling saved
 numbers. Do not call a zombie absent or use process-name matching as ownership.
 
-Deliberate cleanup failures use independently owned rescue pipes or fixed finite
-fixture lifetimes. Outer control first records and asserts the supervisor's failed
+Deliberate cleanup failures assign independently owned rescue pipes or fixed finite
+lifetimes to every possible survivor, including keeper after group-signal failure.
+Outer control first records and asserts the supervisor's failed
 result and retained scratch, then releases rescue and observes its separate result.
 No rescue event supplies supervisor cleanup credit. A rescue failure itself fails
 the suite and remains visible. Neither real crash case has a rescue fallback.
