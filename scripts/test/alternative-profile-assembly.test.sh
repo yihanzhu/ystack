@@ -14,6 +14,7 @@ producer_config="$root/profiles/alternative/v1/producer-config.json"
 roadmap="$root/ROADMAP.md"
 roadmap_sha='1466262c8994d637a02cc3503c35e3254ecce28479f9847589cb112e42b00107'
 package_commit='a637451d4b3fbef6b516a9c08f68c0dde46a7059'
+materializer_package_commit='8fc0675eb4e34acbebe9c8ab0310e64328a6114e'
 producer_package_commit='d31d6adb01268957228363aa74a92956e6b5db98'
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 pass=0
@@ -114,6 +115,11 @@ history_fetch "+$package_commit:refs/ystack/package"
   fail package-fetch
 [ "$(history_git rev-list --count refs/ystack/package)" -eq 1 ] ||
   fail package-fetch-depth
+history_fetch "+$materializer_package_commit:refs/ystack/materializer-package"
+[ "$(history_git rev-parse 'refs/ystack/materializer-package^{commit}')" = \
+  "$materializer_package_commit" ] || fail materializer-package-fetch
+[ "$(history_git rev-list --count refs/ystack/materializer-package)" -eq 1 ] ||
+  fail materializer-package-fetch-depth
 history_fetch "+$producer_package_commit:refs/ystack/producer-package"
 [ "$(history_git rev-parse 'refs/ystack/producer-package^{commit}')" = \
   "$producer_package_commit" ] || fail producer-package-fetch
@@ -247,6 +253,9 @@ for manifest in "${manifests[@]}"; do
   commit=$(jq -r .body.package_ref.revision.commit_id "$manifest")
   if [ "$id" = adapter.codex-cli-producer.v1 ]; then
     [ "$commit" = "$producer_package_commit" ] || fail "package-commit-$id"
+  elif [ "$id" = adapter.local-git-materializer.v1 ]; then
+    [ "$commit" = "$materializer_package_commit" ] ||
+      fail "package-commit-$id"
   else
     [ "$commit" = "$package_commit" ] || fail "package-commit-$id"
   fi

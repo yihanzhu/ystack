@@ -1,6 +1,7 @@
 import "schema" as schema;
 import "profile_graph" as profile;
 import "stage_request" as request;
+import "result_truth" as result;
 
 def exact($required; $optional):
   . as $value |
@@ -420,6 +421,108 @@ def stage_result:
     }
   else error("E_RESULT") end;
 
+def fixed_result_relations_ok($input; $response; $verified):
+  request::expected_execution_projection(
+    $input.stage_request.content.body;$input.resolved_profile.content.body) as $projection |
+  {
+    content_id:"candidate.materialization.receipt",
+    media_type:"application/json",
+    sha256:$verified.sha256
+  } as $receipt_ref |
+  $response.stage_result as $stage_result |
+  $stage_result.body as $body |
+  $body.outcome.value as $outcome |
+  $projection != null and
+  ($stage_result | exact(["schema_version","kind","id","body"];[])) and
+  $stage_result.schema_version == 2 and
+  $stage_result.kind == "stage_result" and
+  $stage_result.id == $input.attempt.result_id and
+  ($body | exact(
+    ["request_ref","resolved_profile_ref","attempt_id","attempt_number",
+     "reported_by","status","outcome","outputs","diagnostics","execution",
+     "evidence","started_at","finished_at","recorded_at"];
+    [])) and
+  $body.request_ref == document_ref($input.stage_request) and
+  $body.resolved_profile_ref == document_ref($input.resolved_profile) and
+  $body.attempt_id == $input.attempt.attempt_id and
+  $body.attempt_number == $input.attempt.attempt_number and
+  $body.reported_by == $projection.performer and
+  $body.status == "completed" and
+  $body.outcome == {family:"change",value:$outcome} and
+  ($outcome == "changed" or $outcome == "no-change") and
+  $body.outputs ==
+    (if $outcome == "changed" then [{
+       output_id:$input.stage_request.content.body.operation.arguments.candidate_output_id,
+       ref:$receipt_ref
+     }] else [] end) and
+  $body.diagnostics == [] and
+  ($body.execution | exact(
+    ["performer","actual_binding","environment","used_capability","metadata"];
+    [])) and
+  $body.execution.performer == $projection.performer and
+  $body.execution.actual_binding == $projection.actual_binding and
+  $body.execution.environment == $projection.environment and
+  $body.execution.used_capability == $projection.used_capability and
+  ($body.execution.metadata | exact(
+    ["kind","provider","model","snapshot","effort","prompt","skills","tools"];
+    [])) and
+  $body.execution.metadata == {
+    kind:"deterministic",
+    provider:not_applicable,
+    model:not_applicable,
+    snapshot:not_applicable,
+    effort:not_applicable,
+    prompt:not_applicable,
+    skills:not_applicable,
+    tools:recorded([];$receipt_ref)
+  } and
+  $body.evidence == [{
+    evidence_id:"evidence.local-git-materialization",
+    kind:"deterministic",
+    verdict:"passed",
+    proof_ref:$receipt_ref
+  }] and
+  $body.started_at == $input.attempt.started_at and
+  $body.finished_at == $input.attempt.finished_at and
+  $body.recorded_at == $input.attempt.recorded_at;
+
+def response_ok($input; $response; $verified; $receipt_utf8; $stage_result_sha256):
+  ($response | exact(
+    ["schema_version","kind","stage_result","payloads","authority",
+     "qualification","effects"];
+    [])) and
+  $response.schema_version == 1 and
+  $response.kind == "local_git_materialization_response" and
+  $response.authority == "none" and
+  $response.qualification == {
+    state:"unavailable",reason_id:"adapter.unqualified"
+  } and
+  $response.effects == ["caller-disposable-candidate-repository"] and
+  ($response.payloads | type == "array" and length == 1) and
+  $response.payloads[0] == {
+    content_id:"candidate.materialization.receipt",
+    media_type:"application/json",
+    sha256:$verified.sha256,
+    data:$receipt_utf8
+  } and
+  ($verified | verified_receipt_pair_ok) and
+  ($verified.content | schema::parsed_limits_ok) and
+  ($response.stage_result | schema::parsed_limits_ok) and
+  ($stage_result_sha256 | schema::sha256_ok) and
+  $response.stage_result.id == $input.attempt.result_id and
+  $response.stage_result.body.attempt_id == $input.attempt.attempt_id and
+  $response.stage_result.body.attempt_number == $input.attempt.attempt_number and
+  $response.stage_result.body.started_at == $input.attempt.started_at and
+  $response.stage_result.body.finished_at == $input.attempt.finished_at and
+  $response.stage_result.body.recorded_at == $input.attempt.recorded_at and
+  receipt_relations_ok($input;$verified.content) and
+  receipt_outcome_ok($verified.content;$response.stage_result.body.outcome.value) and
+  fixed_result_relations_ok($input;$response;$verified) and
+  result::stage_run_ok(
+    $input.stage_request;
+    $input.resolved_profile;
+    {content:$response.stage_result,sha256:$stage_result_sha256});
+
 if $command == "validate-input" then input_ok
 elif $command == "contract" then
   . as $input |
@@ -432,4 +535,16 @@ elif $command == "patch" then
   if input_ok then payload_for(.;"input.producer-patch").data else error("E_INPUT") end
 elif $command == "receipt" then receipt
 elif $command == "stage-result" then stage_result
+elif $command == "validate-response" then
+  . as $bundle |
+  if ($bundle | exact(
+      ["input","response","verified_receipt","receipt_utf8",
+       "stage_result_sha256"];
+      [])) and
+     ($bundle.input | input_ok) and
+     ($bundle.receipt_utf8 | type == "string") and
+     response_ok(
+       $bundle.input;$bundle.response;$bundle.verified_receipt;
+       $bundle.receipt_utf8;$bundle.stage_result_sha256)
+  then true else false end
 else error("E_COMMAND") end

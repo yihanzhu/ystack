@@ -130,6 +130,17 @@ through the existing local Git materializer. It then checks one repo-relative
 candidate blob against a supplied SHA-256 and records a private, resumable state.
 It never executes candidate code or a user command string.
 
+An optional planner delivery key selects journal version 2 for the one supported
+`dispatch-stage` operation and attempt 1. That format stores the complete validated
+materializer response, its actual typed stage result, and receipt bytes at the same
+atomic journal boundary as the candidate identity. A matching redelivery reuses the
+stored result. Read mode holds the permanent replay lock, rechecks the frozen input,
+tools, source, candidate, response, and result relations, and returns the stored facts
+without advancing a phase or running the verifier. Version 1 remains the unbound
+format and cannot be promoted into original-result evidence. See the
+[stored materialization result guide](replay-materialization-result.md) for the key,
+commands, limits, exit codes, crash behavior, and restoration boundary.
+
 Review and publisher records are supplied offline test observations. Each names the
 exact request digest, candidate tree, and candidate commit, and all three must match
 the recorded materialization: two candidate commits can carry one tree, so the commit
