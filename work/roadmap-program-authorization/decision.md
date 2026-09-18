@@ -73,3 +73,64 @@ explicit handoff. This record restores context, not live credentials or authorit
 
 These are manually enforced working rules. No new hook, daemon, publisher capability
 or automatic scope classifier is claimed.
+
+## Manager succession — 2026-09-18
+
+The Codex delegation above ended on 2026-09-18. Codex session
+`01a09ae7-9bd4-77f3-8c15-966143bebff4` is ended, and that end is recorded on
+https://github.com/yihanzhu/ystack/issues/275. No manager authority remains with it.
+
+- Succeeding manager: yshifu running as Claude — Claude Code desktop session
+  `dd83267a-8ae2-4699-9afa-a8ca0bf3421c`, model Claude Fable 5.1.
+- Date: 2026-09-18.
+- Operator: yihanzhu, directly handing the manager role back in that session's chat:
+  “你可以直接接回manager了。处理所有目前还open的东西，然后继续完成roadmap”.
+- Review lane: the operator's Codex default model (gpt-6-astra) through
+  `scripts/codex-review.sh`. The coder ceiling stays `YSTACK_CODER_MODEL=sonnet`.
+
+The same bounded delegation recorded above now applies to that named Claude session,
+and to no other session. Nothing else changes. The reserved operator decisions, the
+one-manager invariant, one concern and exact allowed paths per PR, substantive
+independent review with no unresolved Important finding, fresh exact head/base
+evidence, all required CI green before merge, read-only reviewers, the rounds cap,
+claims, recovery and restoration, and the exclusion of frozen #183 and unresolved
+dirty attempts all stand unchanged. ROADMAP.md stays byte-identical and the accepted
+source blobs still pin the agreed product scope; a product-scope, goal, acceptance,
+safety or authority change still returns to the operator.
+
+Publishing mechanism. The successor merges with
+`gh pr merge --squash --match-head-commit <reviewed head>` under operator decision
+OD-1 (issue #275, 2026-09-09), re-affirmed by this 2026-09-18 handoff, and only when
+the newest review is clean at the exact head and base, `ci` is green, and the labels
+are consistent. Constitution-path PRs (`.github/**`, `.claude/**`, `AGENTS.md`,
+`CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`, `NORTH_STAR.md`, `config/**`) stay the
+operator's to merge. `.claude/hooks/no-merge-guard.sh` is unchanged, but be exact
+about whom it still binds in this session. This manager session's Claude Code project
+directory is `/Users/yihanzhu/git`, the parent of the checkout, so the repository's
+`.claude/settings.json` is not loaded — and the coder, fix-coder and reviewer
+subagents this session spawns inherit that same project directory. Running their Bash
+commands inside the checkout does not load it either. So for this session's subagents
+the deterministic layer is absent: the hook is not what stops them. What does hold for
+them is weaker and worth naming precisely: (1) `routines/coder.md` and the spawn brief
+forbid any merge, any label change on the intake, and any push to `main`; (2) the
+`ystack-main-gate` ruleset on `main` — required `ci`, strict up-to-date, squash only,
+no direct pushes — blocks a red or stale merge regardless of who calls it; (3) every
+merge is pinned with `--match-head-commit` to a head the manager verified against the
+newest review, and only the manager session runs `gh pr merge` at all; and (4) the
+hook still protects every agent launched with the checkout itself as its project
+directory — a standalone Claude Code session opened in the repo — while the Codex
+review lane is read-only and never merges. That is a weaker boundary for this
+session's subagents than the hook was, and it is recorded as weaker rather than
+papered over. The operator accepts it for this session only. Restoring a
+deterministic layer for subagent Bash calls — for example a user-level `PreToolUse`
+hook that reuses `no-merge-guard.sh` while exempting only the manager's pinned
+`--match-head-commit` merge form — is a named follow-up, not something this record
+claims is done. That is the whole of the narrowly scoped, operator-approved
+publishing path, for the named session only, and the operator can revoke it by
+saying so.
+
+The manager verified its own session identity from its scratchpad path, which the
+Claude Code harness derives from the session id. That is identity evidence, not
+authority. This file still cannot appoint a manager, and the named session cannot
+authorize a later session by itself; a further successor needs another explicit
+operator handoff recorded here.
