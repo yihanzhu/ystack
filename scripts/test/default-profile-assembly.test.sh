@@ -13,6 +13,7 @@ producer_config="$root/profiles/default/v1/producer-config.json"
 roadmap="$root/ROADMAP.md"
 roadmap_sha='1466262c8994d637a02cc3503c35e3254ecce28479f9847589cb112e42b00107'
 package_commit='a637451d4b3fbef6b516a9c08f68c0dde46a7059'
+materializer_package_commit='8fc0675eb4e34acbebe9c8ab0310e64328a6114e'
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 pass=0
 ok() { pass=$((pass + 1)); printf 'ok %s - %s\n' "$pass" "$1"; }
@@ -110,6 +111,11 @@ history_fetch "+$package_commit:refs/ystack/package"
   fail package-fetch
 [ "$(history_git rev-list --count refs/ystack/package)" -eq 1 ] ||
   fail package-fetch-depth
+history_fetch "+$materializer_package_commit:refs/ystack/materializer-package"
+[ "$(history_git rev-parse 'refs/ystack/materializer-package^{commit}')" = \
+  "$materializer_package_commit" ] || fail materializer-package-fetch
+[ "$(history_git rev-list --count refs/ystack/materializer-package)" -eq 1 ] ||
+  fail materializer-package-fetch-depth
 [ -z "$(history_git for-each-ref --format='%(refname)' refs/tags)" ] ||
   fail package-fetch-tags
 
@@ -210,7 +216,12 @@ for manifest in "${manifests[@]}"; do
      $binding.package_ref == $offered.package_ref)
   ' "$profile" >/dev/null || fail "manifest-graph-$id"
   commit=$(jq -r .body.package_ref.revision.commit_id "$manifest")
-  [ "$commit" = "$package_commit" ] || fail "package-commit-$id"
+  if [ "$id" = adapter.local-git-materializer.v1 ]; then
+    [ "$commit" = "$materializer_package_commit" ] ||
+      fail "package-commit-$id"
+  else
+    [ "$commit" = "$package_commit" ] || fail "package-commit-$id"
+  fi
   path=$(jq -r .body.package_ref.location.value "$manifest")
   oid=$(jq -r .body.package_ref.object_id "$manifest")
   mode=$(jq -r .body.package_ref.mode "$manifest")
