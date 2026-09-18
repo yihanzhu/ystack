@@ -125,7 +125,7 @@ if [ "$entry_repo" = "$entry_dir" ] ||
 fi
 runtime_path="$entry_dir/profile-resolve-runtime.sh"
 
-# Platform: two uname reads, each in the three-step run/checkpoint/refuse
+# Platform: two uname reads, each in the three-step run, checkpoint, refuse
 # shape, never a substitution inside the case word itself (R1) -- a signal
 # landing on a foreground uname must not be mistaken for an unsupported
 # platform.
@@ -185,7 +185,7 @@ output_mode=${output_owner_mode#* }
 [ "$output_owner" = "$EUID" ] || refuse E_RUNTIME
 [ "$output_mode" = 700 ] || refuse E_RUNTIME
 shopt -s dotglob nullglob
-output_entries=("$output"/*)
+output_entries=("${output}/"*)
 shopt -u dotglob nullglob
 [ "${#output_entries[@]}" -eq 0 ] || refuse E_RUNTIME
 
@@ -199,7 +199,7 @@ trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
 trap ': "${entry_signal:=INT}"; wait_interrupted=1' INT
 trap ': "${entry_signal:=HUP}"; wait_interrupted=1' HUP
 
-# EXIT trap: capture status first, ignore INT/TERM/HUP second (trap is a
+# EXIT trap: capture status first, ignore INT, TERM and HUP second (trap is a
 # builtin so this cannot lose the captured status), restore and remove an
 # owned run directory, write the entry's own diagnostic last and only onto a
 # regular stderr, then select the prescribed exit status.
@@ -208,12 +208,12 @@ trap '
   ecap=$?
   trap "" INT TERM HUP
   if [ -n "$run_created" ]; then
-    /bin/chmod 0700 -- "${run:?}" 2>/dev/null || :
+    /bin/chmod 0700 "${run:?}" 2>/dev/null || :
     /bin/rm -rf -- "${run:?}" 2>/dev/null || :
   fi
   if [ -n "$entry_signal" ] && [ -f /dev/fd/2 ]; then
     if [ -n "$parent_pid" ]; then
-      builtin printf "entry-signal: %s forwarded %s\n" "$entry_signal" "$parent_pid" >&2
+      builtin printf "entry-signal: %s forwarded %s\n" "$entry_signal" "$$" >&2
     else
       builtin printf "entry-signal: %s no-parent\n" "$entry_signal" >&2
     fi
@@ -350,13 +350,13 @@ esac
 /bin/rm -rf -- "${run:?}/tmp" "${run:?}/home"; status=$?
 checkpoint
 [ "$status" -eq 0 ] || refuse 'E_RUNTIME binding'
-for run_file in "$run"/*; do
+for run_file in "${run}/"*; do
   [ -e "$run_file" ] || continue
-  /bin/chmod 0500 -- "$run_file"; status=$?
+  /bin/chmod 0500 "$run_file"; status=$?
   checkpoint
   [ "$status" -eq 0 ] || refuse 'E_RUNTIME binding'
 done
-/bin/chmod 0500 -- "$run"; status=$?
+/bin/chmod 0500 "$run"; status=$?
 checkpoint
 [ "$status" -eq 0 ] || refuse 'E_RUNTIME binding'
 
