@@ -15,10 +15,25 @@ report; it does not claim to identify the cause or fix a flaky test.
 
 ## Proposed outcome
 
-When the existing late-target test fails, its report preserves the actual wait
-status, stdout byte count and a small, safely escaped stderr prefix with a clear
-truncation indication. Reads are bounded before escaping. The report helps a
-reviewer distinguish failure conditions without exposing stdout contents.
+When the existing late-target test fails, its report preserves typed, safe fields
+only: the actual wait status, the stdout byte count, the stderr byte count, and a
+classification of stderr rather than its bytes. The classification comes from a
+small fixed set the specification enumerates, for example `empty`,
+`expected-error-line-present` and `unexpected-content`, decided by matching the
+captured stderr against the exact expected error line the test already asserts
+(`E_TARGET_STALE`). The report carries no raw stderr bytes and no stderr prefix,
+so there is no escaping or truncation story to design.
+
+Escaping is not redaction: it makes bytes printable without removing anything
+sensitive. An unexpected shell or tool diagnostic on this path can carry temporary
+fixture paths, invocation details or other content the constraints below forbid
+reporting, and the test cannot tell in advance what such a diagnostic contains.
+Classifying against a known constant avoids that whole class of exposure.
+
+If a bounded excerpt is genuinely needed for debugging, it may only be the expected
+error line itself when that line is present. That line is a known constant, so
+there is nothing in it to redact. The report still helps a reviewer distinguish
+failure conditions without exposing stdout or stderr contents.
 
 A reporting error still leaves the original outcome failed. Normal successful
 output and every existing acceptance check remain unchanged.
@@ -49,7 +64,9 @@ cause needs evidence and its own accepted scope.
 
 ## Open questions
 
-Design must choose a small byte cap, an escaping format and a truncation indication
-that keep arbitrary captured stderr safe and readable. It must also define how to
-preserve the actual wait status when reporting fails, without changing the existing
-launch, synchronization or failure checks.
+Design must fix the exact set of stderr classifications and the matching rule that
+assigns one, including how the byte counts are read under a bound so a large or
+binary capture cannot slow or break the report. It must also decide whether the
+expected error line is echoed back at all, and define how to preserve the actual
+wait status when reporting fails, without changing the existing launch,
+synchronization or failure checks.
