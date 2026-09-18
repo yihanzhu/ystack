@@ -116,5 +116,15 @@ Review size: `$3`
    Record the manual reviewer, exact plan blob/head, risk class, and operator merge
    when applicable.
 
+**Normative content only.** The plan states the files that change, the order of work,
+risks, proof, and its hash link. Never add a per-round changelog, "this round adds N
+lines" accounting, a history of the plan's own line count, or the same size range
+restated in more than one place — that is review record and goes in the PR description
+or a PR comment. At most one `review_size:` record here, with its evidence-based range
+stated once. A review round edits this text in place: change the plan, do not append a
+paragraph that narrates the change. If the spec or plan has grown past roughly 5x the
+implementation estimate, stop and re-scope instead of appending
+(see `work/README.md` > Artifact hygiene).
+
 **Write in plain language.** Short sentences, everyday words — the reader is a
 tired human, not another agent (see AGENTS.md > PR rules).
