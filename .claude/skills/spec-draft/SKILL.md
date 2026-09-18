@@ -51,8 +51,10 @@ Intake issue: `$1`
 **Normative content only.** The spec states requirements, design, risks, proof, and
 its hash links. Never add a per-round changelog, "this round adds N lines" accounting,
 a history of the spec's own line count, or the same size range restated in more than
-one place — that is review record and goes in the PR description or a PR comment. At
-most one `review_size:` record here, with its evidence-based range stated once. A
+one place — that is review record and goes in the PR description or a PR comment. Keep
+one `review_size:` record here for each PR this spec covers: the implementation PR's,
+and — only when this spec PR itself exceeds the soft budget — this spec PR's own. Label
+which PR each record belongs to and state its evidence-based range once. A
 review round edits this text in place: change the requirement, do not append a
 paragraph that narrates the change. If the spec grows past roughly 5x its own
 implementation estimate, stop the round loop and split or re-scope the initiative
