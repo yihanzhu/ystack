@@ -1,5 +1,5 @@
 ---
-spec-blob: 285ae2a7582cd750b40923b95617d85e0fbd4947
+spec-blob: ce5348028204e91f1e52d7ecf32607c8e222e4ca
 drafted: 2026-09-14
 ---
 
@@ -23,14 +23,6 @@ The existing implementation attempt remains paused. After this amendment is
 accepted, the manager must reconcile its exact preserved head and dirty test draft,
 merge the accepted main normally and verify the refreshed tuple before authorizing
 resumption. This plan amendment does not discard WIP or itself authorize resume.
-
-**Amendment, 2026-09-18 (post-#328).** The plan-base refresh review on #271 returned
-`Plan-verdict: REVISE`. PR #328 (`resolver-direct-git-runtime`, merged 2026-09-14,
-commit `ac734ba`) already made the resolver runtime select the CommandLineTools git
-directly on Darwin, so the DR-2 residual this plan ordered the coder to measure and
-document no longer exists. This amendment removes those orders and replaces them with
-the stronger proof the spec now requires, re-pins the amended spec, and refreshes the
-reuse cite that #328 shifted. No file, scope, risk or size band changes.
 
 ## Files that change
 
