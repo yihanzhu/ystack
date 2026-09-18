@@ -237,6 +237,16 @@ follow-up issue alone cannot rewrite the current artifacts.
   second. Preserve the original branch base and require the branch to differ from current
   base only by `plan.md`. Require pushed exact-head/prior-head/branch-base/current-base
   acceptance before code; a conflict or intervening commit is Important.
+- **Artifact hygiene:** an intent, spec, or plan carries normative content only —
+  requirements, design, risks, proof, hash links. A per-round changelog, "this round
+  adds N lines" accounting, a growth history of the artifact's own line count, or the
+  same size range restated in several places belongs in the PR thread; report it as a
+  nit, and as Important when it hides a scope, risk, or size change. Require exactly one
+  `review_size:` token per PR with its range stated once. A revision round must edit the
+  normative text in place: a finding answered by appending a paragraph that narrates the
+  change, rather than by changing the requirement, is a nit. A spec past roughly 5x its
+  own implementation estimate is a signal to split the initiative or re-scope, not to
+  keep appending.
 - **Existing process exceptions:** sole-purpose add-CI and greenfield bootstrap use
   their concrete operator-approved bootstrap plan and human merge. Reject that mode
   for any other concern.
