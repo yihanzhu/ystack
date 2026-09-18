@@ -28,6 +28,12 @@
    sub-spans with this line between them. */
 #include <dirent.h>
 
+/* step 4 (deviation 6): <sys/select.h> is needed for the bounded wait every branch
+   of the installed handler uses (spec R2's twenty-iteration 50 ms wait) -- the
+   copied launcher installs no handler and never waits this way. Added here beside
+   the other new-code include above rather than inside either copied span below. */
+#include <sys/select.h>
+
 /* copy-begin scripts/test/portable-profile-resolution-launcher.c:20-43 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
 #if defined(__linux__)
 #include <dirent.h>
@@ -492,6 +498,213 @@ static int close_inherited_descriptors(void) {
     return 0;
 }
 
+/* --- step 4: signal ownership as its own reviewable block (deviation 6, new code --
+   the copied launcher installs no handler at all; see spec R2, "Signals: the parent
+   owns process-group termination"). `g_pgid` names the resolver's process group
+   while anything in it may still be alive; `g_pre_child` names the one pre-resolver
+   child running right now. Both are `volatile sig_atomic_t`, touched by main-flow
+   code only under the three-signal block below, and read by the one installed
+   handler with no block of its own: POSIX keeps all three signals blocked for the
+   whole handler body through the mask the handler is registered with. */
+
+static volatile sig_atomic_t g_pgid = 0;
+static volatile sig_atomic_t g_pre_child = 0;
+
+#define YSTACK_SIGNAL_TABLE_SIZE 32
+
+/* Fills `set` with exactly SIGINT/SIGTERM/SIGHUP -- the one set every block/publish/
+   reap region below blocks and every handler below is masked with. */
+static void ystack_three_signals(sigset_t *set) {
+    sigemptyset(set);
+    sigaddset(set, SIGINT);
+    sigaddset(set, SIGTERM);
+    sigaddset(set, SIGHUP);
+}
+
+/* Blocks SIGINT/SIGTERM/SIGHUP, saving the previous mask in `*saved`. Opens every
+   fork-publish and every tracked-reap region below. */
+static int ystack_block_three(sigset_t *saved) {
+    sigset_t mask;
+    ystack_three_signals(&mask);
+    return sigprocmask(SIG_BLOCK, &mask, saved);
+}
+
+/* Restores a mask `ystack_block_three` saved. Closes every region it opened. */
+static void ystack_restore_mask(const sigset_t *saved) {
+    (void)sigprocmask(SIG_SETMASK, saved, NULL);
+}
+
+/* Child-side reset shared by every fork this file performs: dispositions back to
+   default first, while the inherited block is still held, then the mask restored
+   last -- the fixed order spec R2 requires, so a signal already pending on the
+   child cannot run the parent's inherited handler from inside the child before the
+   child's own execve. SIGPIPE is included because the parent leaves it ignored
+   (below) and that one disposition, unlike the other three, is inherited across
+   execve. */
+static void ystack_reset_child_dispositions(const sigset_t *saved) {
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    (void)sigaction(SIGINT, &dfl, NULL);
+    (void)sigaction(SIGTERM, &dfl, NULL);
+    (void)sigaction(SIGHUP, &dfl, NULL);
+    (void)sigaction(SIGPIPE, &dfl, NULL);
+    (void)sigprocmask(SIG_SETMASK, saved, NULL);
+}
+
+/* Async-signal-safe: a table lookup, no call, and no search -- the three entries
+   this parent ever registers a handler for. */
+static const char *const YSTACK_SIGNAL_NAME[YSTACK_SIGNAL_TABLE_SIZE] = {
+    [SIGINT] = "INT",
+    [SIGTERM] = "TERM",
+    [SIGHUP] = "HUP",
+};
+
+/* Async-signal-safe hand-written decimal rendering (no snprintf, per spec R2):
+   writes `value`'s digits into `buffer` (capacity `capacity`) and returns the digit
+   count. `value` is always non-negative here (a pid). */
+static size_t ystack_render_decimal(long value, char *buffer, size_t capacity) {
+    char digits[24];
+    size_t count = 0U;
+    unsigned long magnitude = (value < 0) ? 0UL : (unsigned long)value;
+    size_t i;
+
+    if (magnitude == 0UL) {
+        digits[count++] = '0';
+    } else {
+        while (magnitude > 0UL && count < sizeof(digits)) {
+            digits[count++] = (char)('0' + (magnitude % 10UL));
+            magnitude /= 10UL;
+        }
+    }
+    if (count > capacity) {
+        count = capacity;
+    }
+    for (i = 0U; i < count; i++) {
+        buffer[i] = digits[count - 1U - i];
+    }
+    return count;
+}
+
+/* The one handler this file registers for INT/TERM/HUP (spec R2). Every call in it
+   is checked by name against POSIX.1-2017's async-signal-safe list (XSH 2.4.3):
+   kill, waitpid, select, fcntl, write and _exit, plus memcpy in the diagnostic
+   assembly below. No snprintf, malloc, free, fprintf, printf, strerror, nanosleep
+   or usleep. It runs at most once in the life of the parent: every branch below
+   ends in _exit, so a sibling signal held by the mask during this body is discarded
+   with the process rather than delivered afterward. Never kill(0, ...) or
+   kill(-0, ...): both forms would signal the caller's own process group, and there
+   is no case here where that is the right thing to do -- `target` is only ever a
+   pid this parent itself forked and published. */
+static void ystack_terminate_handler(int sig) {
+    pid_t target = 0;
+    int is_group = 0;
+    int reaped = 0;
+
+    if (g_pgid != 0) {
+        target = (pid_t)g_pgid;
+        is_group = 1;
+    } else if (g_pre_child != 0) {
+        target = (pid_t)g_pre_child;
+        is_group = 0;
+    }
+
+    if (target != 0) {
+        int status;
+        int i;
+        (void)kill(is_group ? -target : target, SIGTERM);
+        for (i = 0; i < 20; i++) {
+            struct timeval tv;
+            if (waitpid(target, &status, WNOHANG) == target) {
+                reaped = 1;
+                break;
+            }
+            tv.tv_sec = 0;
+            tv.tv_usec = 50000;
+            (void)select(0, NULL, NULL, NULL, &tv);
+        }
+        if (is_group) {
+            /* Unconditional: survivors in the group are the entire reason a group
+               kill exists, and the handler cannot scan the process table for them
+               (not on the async-signal-safe list). */
+            (void)kill(-target, SIGKILL);
+            if (!reaped) {
+                (void)waitpid(target, &status, 0);
+            }
+        } else if (!reaped) {
+            (void)kill(target, SIGKILL);
+            (void)waitpid(target, &status, 0);
+        }
+    }
+
+    {
+        char buf[64];
+        size_t len = 0U;
+        const char *name = (sig >= 0 && sig < YSTACK_SIGNAL_TABLE_SIZE)
+                                ? YSTACK_SIGNAL_NAME[sig]
+                                : NULL;
+        int flags;
+
+        if (name != NULL) {
+            size_t name_len = strlen(name);
+            memcpy(buf + len, "parent-signal: ", 15U);
+            len += 15U;
+            memcpy(buf + len, name, name_len);
+            len += name_len;
+            if (target != 0 && is_group) {
+                memcpy(buf + len, " group ", 7U);
+                len += 7U;
+                len += ystack_render_decimal((long)target, buf + len,
+                                             sizeof(buf) - len - 1U);
+            } else {
+                memcpy(buf + len, " no-runtime", 11U);
+                len += 11U;
+            }
+            buf[len++] = '\n';
+        }
+
+        flags = fcntl(STDERR_FILENO, F_GETFL, 0);
+        if (flags != -1) {
+            (void)fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK);
+        }
+        if (name != NULL) {
+            (void)write(STDERR_FILENO, buf, len);
+        }
+        if (flags != -1) {
+            (void)fcntl(STDERR_FILENO, F_SETFL, flags);
+        }
+    }
+
+    _exit(128 + sig);
+}
+
+/* Registers the three handlers as the first statements of main (after umask(077),
+   spec R5/R2) and ignores SIGPIPE beside them. Each handler's mask covers all three
+   signals, not only the one delivered, so a sibling signal that arrives mid-handler
+   is held rather than run; neither SA_RESTART nor SA_SIGINFO is set. */
+static int ystack_install_signal_handlers(void) {
+    struct sigaction action;
+    struct sigaction ignore_action;
+    sigset_t mask;
+
+    ystack_three_signals(&mask);
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = ystack_terminate_handler;
+    action.sa_mask = mask;
+    action.sa_flags = 0;
+    if (sigaction(SIGINT, &action, NULL) != 0 ||
+        sigaction(SIGTERM, &action, NULL) != 0 ||
+        sigaction(SIGHUP, &action, NULL) != 0) {
+        return -1;
+    }
+    memset(&ignore_action, 0, sizeof(ignore_action));
+    ignore_action.sa_handler = SIG_IGN;
+    if (sigaction(SIGPIPE, &ignore_action, NULL) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 /* R7: the fixed envp every pre-resolver child runs under -- never the caller's
    environ, on any exec this file performs before the resolver's own. */
 static char *const FIXED_CHILD_ENVP[3] = {
@@ -521,27 +734,37 @@ static int run_pinned_child(const char *program, char *const argv[],
         (void)close(in_pipe[1]);
         return -1;
     }
-    /* step 4: block/publish/reap here (deviation 6) -- this fork and its waitpid
-       below are one of the ten pre-resolver children the signal-ownership step wraps. */
-    child = fork();
-    if (child < 0) {
-        (void)close(in_pipe[0]);
-        (void)close(in_pipe[1]);
-        (void)close(out_pipe[0]);
-        (void)close(out_pipe[1]);
-        return -1;
-    }
-    if (child == 0) {
-        if (dup2(in_pipe[0], STDIN_FILENO) < 0 ||
-            dup2(out_pipe[1], STDOUT_FILENO) < 0) {
+    /* deviation 6: this fork and its reap below are one of the ten pre-resolver
+       children the block/publish/reap region wraps (spec R2) -- block, fork, then
+       in the parent publish `g_pre_child` and restore before anything else runs;
+       in the child reset dispositions and restore the mask before the exec. */
+    {
+        sigset_t saved;
+        (void)ystack_block_three(&saved);
+        child = fork();
+        if (child < 0) {
+            ystack_restore_mask(&saved);
+            (void)close(in_pipe[0]);
+            (void)close(in_pipe[1]);
+            (void)close(out_pipe[0]);
+            (void)close(out_pipe[1]);
+            return -1;
+        }
+        if (child == 0) {
+            ystack_reset_child_dispositions(&saved);
+            if (dup2(in_pipe[0], STDIN_FILENO) < 0 ||
+                dup2(out_pipe[1], STDOUT_FILENO) < 0) {
+                _exit(127);
+            }
+            (void)close(in_pipe[0]);
+            (void)close(in_pipe[1]);
+            (void)close(out_pipe[0]);
+            (void)close(out_pipe[1]);
+            execve(program, argv, FIXED_CHILD_ENVP);
             _exit(127);
         }
-        (void)close(in_pipe[0]);
-        (void)close(in_pipe[1]);
-        (void)close(out_pipe[0]);
-        (void)close(out_pipe[1]);
-        execve(program, argv, FIXED_CHILD_ENVP);
-        _exit(127);
+        g_pre_child = child;
+        ystack_restore_mask(&saved);
     }
     (void)close(in_pipe[0]);
     (void)close(out_pipe[1]);
@@ -571,7 +794,15 @@ static int run_pinned_child(const char *program, char *const argv[],
         total += (size_t)count;
     }
     (void)close(out_pipe[0]);
-    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    /* deviation 6: block, reap, zero `g_pre_child`, restore -- the id is never left
+       readable as a process this parent has already given back to the kernel. */
+    {
+        sigset_t saved;
+        (void)ystack_block_three(&saved);
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        }
+        g_pre_child = 0;
+        ystack_restore_mask(&saved);
     }
     if (write_failed || read_failed || total > output_capacity ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -1022,6 +1253,12 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
     unsigned memory_scan_failures = 0U;
     time_t started;
     struct timespec interval = {0, 10000000L};
+    /* deviation 6: set when the poll loop's own reap has already blocked the three
+       signals and is carrying that block into the cleanup below it (spec R2's
+       "the blocked region ... runs on through the survivor check and through any
+       kill of the surviving group"). */
+    sigset_t reap_saved;
+    int reap_mask_held = 0;
 
     stdout_fd = openat(output_fd, "child.stdout",
                        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -1037,43 +1274,101 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
         fputs("E_RUNTIME unexpected\n", stderr);
         return 70;
     }
-    child = fork();
-    if (child < 0) {
-        (void)close(stdout_fd);
-        (void)close(stderr_fd);
-        fputs("E_RUNTIME unexpected\n", stderr);
-        return 70;
-    }
-    if (child == 0) {
-        if (setpgid(0, 0) != 0 || dup2(stdout_fd, STDOUT_FILENO) < 0 ||
-            dup2(stderr_fd, STDERR_FILENO) < 0 || close(stdout_fd) != 0 ||
-            close(stderr_fd) != 0 || apply_child_limits() != 0) {
-            _exit(75);
+    /* deviation 6: block before the fork, publish `g_pgid` only once setpgid has
+       been tried and the child is known, restore before anything else in this
+       function can run (spec R2). The setpgid-failure kill/reap below sits inside
+       this same block, before `g_pgid` is ever assigned, so it reaps under a block
+       already held and leaves `g_pgid` at 0. */
+    {
+        sigset_t saved;
+        (void)ystack_block_three(&saved);
+        child = fork();
+        if (child < 0) {
+            ystack_restore_mask(&saved);
+            (void)close(stdout_fd);
+            (void)close(stderr_fd);
+            fputs("E_RUNTIME unexpected\n", stderr);
+            return 70;
         }
-        /* step 3/4 TODO (deviation 2, resolver-child half; masked under deviation 6
-           in step 4): close every inherited descriptor above 2 here, before execve,
-           the same way main()'s startup close does it -- R3/R5 both require it. */
-        execve(program, child_argv, child_env);
-        _exit(70);
+        if (child == 0) {
+            ystack_reset_child_dispositions(&saved);
+            if (setpgid(0, 0) != 0 || dup2(stdout_fd, STDOUT_FILENO) < 0 ||
+                dup2(stderr_fd, STDERR_FILENO) < 0 || close(stdout_fd) != 0 ||
+                close(stderr_fd) != 0 || apply_child_limits() != 0) {
+                _exit(75);
+            }
+            /* deviation 2 (resolver-child half): close every inherited descriptor
+               above 2 here, before execve, the same way main()'s startup close does
+               it (R3/R5) -- under the block this whole region holds until the
+               restore above already ran in this child. */
+            if (close_inherited_descriptors() != 0) {
+                _exit(75);
+            }
+            execve(program, child_argv, child_env);
+            _exit(70);
+        }
+        if (setpgid(child, child) != 0 && errno != EACCES && errno != ESRCH) {
+            (void)kill(child, SIGKILL);
+            (void)waitpid(child, &status, 0);
+            ystack_restore_mask(&saved);
+            (void)close(stdout_fd);
+            (void)close(stderr_fd);
+            fputs("E_RUNTIME unexpected\n", stderr);
+            return 70;
+        }
+        g_pgid = child;
+        ystack_restore_mask(&saved);
     }
-    if (setpgid(child, child) != 0 && errno != EACCES && errno != ESRCH) {
-        (void)kill(child, SIGKILL);
-        (void)waitpid(child, &status, 0);
-        (void)close(stdout_fd);
-        (void)close(stderr_fd);
-        fputs("E_RUNTIME unexpected\n", stderr);
-        return 70;
+    /* deviation 9: the runtime-pgid diagnostic sits outside the block above (a
+       write that can block must never share a region with the fork it is reporting
+       on -- spec R2) and under its own short three-signal block, after the restore
+       and before the poll loop starts. */
+    {
+        sigset_t saved;
+        char buf[48];
+        int len;
+        int flags;
+
+        len = snprintf(buf, sizeof(buf), "runtime-pgid: %ld\n", (long)child);
+        if (len < 0) {
+            len = 0;
+        } else if ((size_t)len > sizeof(buf)) {
+            len = (int)sizeof(buf);
+        }
+        (void)ystack_block_three(&saved);
+        flags = fcntl(STDERR_FILENO, F_GETFL, 0);
+        if (flags != -1) {
+            (void)fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK);
+        }
+        (void)write(STDERR_FILENO, buf, (size_t)len);
+        if (flags != -1) {
+            (void)fcntl(STDERR_FILENO, F_SETFL, flags);
+        }
+        ystack_restore_mask(&saved);
     }
-    /* copy-begin scripts/test/portable-profile-resolution-launcher.c:456-489 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
+    /* Adapted from scripts/test/portable-profile-resolution-launcher.c:456-489 at
+       f4de7e48c688b6adb3669f69a221d2aa7bf43b15 (deviation 6): the four checks below
+       and the nanosleep are unchanged, but the reap itself now runs blocked, and
+       the block stays held through the survivor check the moment this loop actually
+       reaps the child (spec R2) -- copy-begin/copy-end no longer applies to this
+       loop, the way it already does not apply to the rest of this function (see the
+       note above supervise()). */
     for (;;) {
-        pid_t observed = waitpid(child, &status, WNOHANG);
+        sigset_t poll_saved;
+        pid_t observed;
         time_t now;
+
+        (void)ystack_block_three(&poll_saved);
+        observed = waitpid(child, &status, WNOHANG);
         if (observed == child) {
             if (process_group_count(child) > 0U) {
                 stopped = STOP_PROCESS;
             }
+            reap_saved = poll_saved;
+            reap_mask_held = 1;
             break;
         }
+        ystack_restore_mask(&poll_saved);
         if (observed < 0 && errno != EINTR) {
             stopped = STOP_PROCESS;
             break;
@@ -1099,12 +1394,22 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
         }
         (void)nanosleep(&interval, NULL);
     }
-    /* copy-end */
     if (stopped != STOP_NONE) {
+        /* deviation 6: the limit path is blocked the same way the reap path is, so
+           the two cannot drift -- reuse the block the loop already holds if this
+           break came from the reap-with-survivors case, else open a fresh one. */
+        sigset_t cleanup_saved;
+        if (reap_mask_held) {
+            cleanup_saved = reap_saved;
+        } else {
+            (void)ystack_block_three(&cleanup_saved);
+        }
         (void)kill(-child, SIGKILL);
         (void)kill(child, SIGKILL);
         while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
         }
+        g_pgid = 0;
+        ystack_restore_mask(&cleanup_saved);
         (void)close(stdout_fd);
         (void)close(stderr_fd);
         if (stopped == STOP_TIME) {
@@ -1116,6 +1421,12 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
         }
         return 75;
     }
+    /* deviation 6: stopped == STOP_NONE means the loop's own reap found no
+       survivors -- clear `g_pgid` and restore the mask the loop is still holding
+       (spec R2: "pgid is cleared last of all", after the survivor check finds
+       nothing left to kill). */
+    g_pgid = 0;
+    ystack_restore_mask(&reap_saved);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
         empty_regular_file(stderr_fd)) {
         result = stream_file(stdout_fd, STDOUT_FILENO);
@@ -1191,17 +1502,21 @@ int main(int argc, char **argv) {
        whole suite instead (portable-profile-resolution.test.sh:5). */
     umask(077);
 
-    /* step 4 TODO: install the INT/TERM/HUP handlers and ignore SIGPIPE here, among
-       main's first statements per the plan's signal-ownership step (deviation 6) --
-       they belong between umask() and the close below, per R5's "after umask(077)
-       and after the three sigaction installations, before the first pin, the first
-       fork and the first creation". */
+    /* deviation 6: register the INT/TERM/HUP handlers and ignore SIGPIPE among
+       main's first statements, per R5's "after umask(077) and after the handler
+       registrations, before the first pin, the first fork and the first creation" --
+       and before R2's own statement that the window in which a signal still finds
+       the default disposition should be as small as a process start. */
+    if (ystack_install_signal_handlers() != 0) {
+        fputs("E_RUNTIME unexpected\n", stderr);
+        return 70;
+    }
 
     /* deviation 2 (startup half): close every inherited descriptor above 2 before any
        check, pin or fork (R5). The matching resolver-child close before execve (the
-       other half of this deviation, inside supervise()'s fork branch above) is left
-       as a step 3/4 TODO there: it sits inside the region step 4's signal masking
-       wraps, so it lands with that step rather than here. */
+       other half of this deviation, inside supervise()'s fork branch) is handled
+       there under the block/publish/reap region deviation 6 wraps around that
+       fork. */
     if (close_inherited_descriptors() != 0) {
         fputs("E_RUNTIME unexpected\n", stderr);
         return 70;
@@ -1579,9 +1894,10 @@ int main(int argc, char **argv) {
      * missing-helper test action").
      */
 
-    /* step 4 TODO: the runtime-pgid: diagnostic (deviation 9) is written here, after
-       fork publication and after the signal-mask restore, once step 4 lands the fork
-       region masking it depends on. */
+    /* deviation 9: the runtime-pgid diagnostic is written inside supervise() itself,
+       right after that function's own fork/publish/restore region -- `child` (the
+       resolver's pid, which is also its process group id) is not known until that
+       fork runs, so the write cannot happen out here. */
 
     /* adapted from scripts/test/portable-profile-resolution-launcher.c:701-702 --
        deviation 7 passes out_fd instead of a sandbox path, and out_fd (opened by
