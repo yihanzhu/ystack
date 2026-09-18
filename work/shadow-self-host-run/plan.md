@@ -1,5 +1,5 @@
 ---
-spec-blob: a1674656fcf440113b8e7b5f955f4a4065e621cd
+spec-blob: 918ad3a2c3b6150bc3f95a24dc1419f0ba88ce88
 drafted: 2026-09-18
 ---
 # Plan: shadow-self-host-run
@@ -150,12 +150,27 @@ proceeds only when the verdict is `satisfied` (`shadow/v1/reproduce.sh:436-442`,
 matching `.body.verdict`), what it proceeds on is a declaration verdict and nothing
 more: the single expected reason is `sandbox.declaration-satisfied`
 (`control/v1/sandbox.jq:256`), and enforcement stays `unproven`. A verdict that is not
-`satisfied` stops the run at `environment.not-satisfied`; it is not worked around. Second, the placeholder digests stay out of the evidence: the fixtures at
-`scripts/test/shadow-slice.test.sh:128-195` build their control policy and decision
-references from repeated-character values (`("2" * 64)`, `("b" * 64)`), and
-`control/v1/sandbox-policy.json` pins demonstration `/sandbox/*` roots with a verifier
-digest of 64 ones. Any such digest in a committed reference stops the run rather than
-being retained.
+`satisfied` stops the run at `environment.not-satisfied`; it is not worked around.
+Second, requirement 2 divides the placeholder digests in two, and the evidence follows
+that division exactly — recorded on intake #264 as decision request DR-4. The retained
+policy and claim bytes keep the shipped verifier tool digest of 64 ones that
+`control/v1/sandbox-policy.json` pins and `control/v1/sandbox.jq:policy_ok` fixes: the
+claim's `body.tools` must repeat it literally or the evaluator emits `tools.not-fixed`,
+so removing or rewriting it would make `satisfied` unreachable and would misstate what
+was evaluated. The evidence and README label that value as the shipped demonstration
+value, never as a real tool identity, per `work/real-sandbox-boundary/spec.md`
+requirement 5. What the run refuses is a fabricated reference digest among its own
+inputs: the control policy set's `body.core_contract.package_ref.sha256` and, for each
+entry of `body.sections`, `policy_ref.sha256` and `decision_ref.sha256`; the duty
+evaluation's `body.policy_ref.sha256`, `body.decision_ref.sha256`,
+`body.policy_set.sha256` and each reference under `body.stage` (`request_ref`,
+`resolved_profile_ref`, `result_ref`); and the claim's `body.policy_set_ref.sha256`,
+`body.duty_evaluation_ref.sha256` and `body.stage_result_ref.sha256`. Each must be
+recomputed from the exact committed bytes it names and equal the recorded value. A
+repeated-character value of the kind the fixtures at
+`scripts/test/shadow-slice.test.sh:128-195` build those references from (`("2" * 64)`,
+`("b" * 64)`), or any digest that does not equal the SHA-256 of the real committed
+bytes it names, stops the run rather than being retained.
 
 **What the coder may do before that gate clears**, because none of it needs a run:
 
@@ -355,8 +370,12 @@ fields `enforcement_proof: "declaration-only"`, `authority_effect: "none"` and
 `satisfied` verdict carries the single reason `sandbox.declaration-satisfied`. That
 verdict is what the driver's `satisfied` branch reads
 (`shadow/v1/reproduce.sh:436-442`); it records that the claim matched the declared
-policy and leaves enforcement `unproven`. No committed reference may carry a
-placeholder digest — see the precondition gate.
+policy and leaves enforcement `unproven`. Retain the policy and claim bytes as
+produced, including the shipped verifier tool digest of 64 ones, and label it in the
+evidence and README as the shipped demonstration value rather than a real tool
+identity. What may not be retained is a fabricated reference digest: recompute each
+reference field listed in the precondition gate from the committed bytes it names and
+stop the run on any mismatch.
 
 ### Repeatability (requirement 18)
 
@@ -429,8 +448,12 @@ credentials, no model and no real reproduction. It checks the committed bytes:
     verdict carries exactly `["sandbox.declaration-satisfied"]`. Alongside it, no
     committed document — evidence, README, verification instructions, `docs/components.md`
     section, index row or restore block — claims a satisfied sandbox boundary,
-    enforcement proof or a qualified workflow, and none carries a repeated-character
-    placeholder digest.
+    enforcement proof or a qualified workflow. The check then asserts requirement 2's
+    placeholder division as written: that the retained policy and claim bytes still
+    carry the shipped all-ones verifier digest and that the evidence labels it the
+    shipped demonstration value, and that each reference field listed in the
+    precondition gate equals the SHA-256 recomputed from the committed bytes it names.
+    It must not assert that the all-ones value is absent.
 11. Negative cases: mutate a **copy** of each of an evidence file, a digest in
     `checksums.json`, and an outcome field, and require the test to fail on each. A
     test that passes on altered evidence proves nothing.
@@ -513,9 +536,13 @@ declaration-only marker and check 10 greps the committed prose. The second is fi
 a coder who finds the claim, policy set and duty at
 `scripts/test/shadow-slice.test.sh:128-195`, sees them produce `satisfied`, and reuses
 them — their references are repeated-character placeholders (`"2" * 64`, `"b" * 64`)
-and `control/v1/sandbox-policy.json` pins demonstration `/sandbox/*` roots with a
-verifier digest of 64 ones. A placeholder digest in a committed reference stops the run;
-review should look for those values in anything committed. The real execution boundary
+naming no real bytes. A fabricated reference digest in a committed reference stops the
+run; review should recompute each reference field listed in the precondition gate and
+look for those repeated-character values in anything committed. The shipped verifier
+tool digest of 64 ones that `control/v1/sandbox-policy.json` pins is the other half of
+the division and is not the failure mode: it stays in the retained policy and claim
+bytes, labelled as the shipped demonstration value, and check 10 asserts its presence
+and its label rather than its absence. The real execution boundary
 stays a step-8 prerequisite, and nothing here shortens or substitutes for it.
 
 **Reading the real repository.** Both runs read history that contains the operator's
