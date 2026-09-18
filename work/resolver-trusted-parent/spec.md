@@ -6462,10 +6462,12 @@ the spec pull request's range above still blocks review.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
   credential, and **exactly one write root: the output path the caller named** — for
   everything this initiative adds, on every supported platform, and for the unchanged
-  runtime on Linux, where R10 asserts it mechanically in CI. On Darwin the runtime's own
-  `git` calls leave one known write outside that root; the Darwin paragraph below states it
-  exactly, DR-2 accepted it on 2026-09-10, and the intent now names it as the one accepted
-  exception to its own constraint. The one
+  runtime as well, on Linux and on Darwin alike, with no exception on either. On Linux R10
+  asserts it mechanically in CI; on Darwin R10's operator recipe asserts the same thing, and
+  the Darwin paragraph below states why nothing is left outside the root. An earlier round
+  did carry one Darwin exception — DR-2 accepted a write from the runtime's own `git` calls
+  on 2026-09-10 — but `#328` removed its cause, and the intent was amended to drop the
+  exception and keep that as history. The one
   root is what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36-45`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
