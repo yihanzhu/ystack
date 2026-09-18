@@ -6,13 +6,15 @@ drafted: 2026-09-17
 # Plan: profile-history-fetch-maintenance
 
 Tracks #351. Risk: routine. Gate mode: `artifact-routine`.
-Review size: standard, about 300–400 net changed lines; check the whole PR.
+Proposed `review_size: accepted-exception`: 450–600 total added plus removed lines
+across this plan and the two named test files. Independent initial plan review
+must accept this exact one-concern range before code; this proposal is not acceptance.
 Intent blob: `23634448860b28b6bd2f3d6bc0af524b7298c6fd`.
 Initial branch-base/current-base: `60e6da427c1d536cf68ef763b1920616b52bd65f`.
 
 ## Files that change
 
-This first implementation-branch commit changes only
+This initial implementation-branch history changes only
 `work/profile-history-fetch-maintenance/plan.md` on
 `ystack/impl/profile-history-fetch-maintenance`. The manager pushes the plan-only
 head without opening a PR, directly obtains independent `initial` acceptance
@@ -141,10 +143,18 @@ removing `--no-auto-gc` makes the first positive fetch dispatch maintenance unde
 the identical enabled fixture config and fail its absence check. Do not require
 an extra remote-fetching mutation run or alter accepted source to manufacture one.
 
-Check whole-PR size, including this plan, before completing both control blocks.
-Two readable fixture/observer blocks may need roughly 240–320 code lines, making
-the combined change exceed the normal 300–400-line signal. This is a forecast,
-not a size exception. If confirmed, pause and obtain a separate size amendment;
+Request the size exception before initial plan acceptance and coding. The first
+plan revision contains 225 added lines; the two readable fixture/observer blocks
+are estimated at 240–320 added plus removed code lines, including the helper edits.
+That gives 465–545 lines before this small sizing revision. The proposed 450–600
+total-line range includes that revision and a modest margin for readable checks.
+Required plan detail and proof exceed the normal 300–400-line signal while keeping
+one concern and exactly the same three paths. This changes only the review-size
+signal, not design, scope, oracles, controls, required CI or independent review.
+
+Check the complete branch-base-to-head diff after the first control block and
+again before final proof. An unexplained overrun beyond the accepted range or a
+new concern pauses work for separate amendment/review. Preserve the attempt;
 do not reduce proof, relax checks, compress code or edit this accepted plan.
 
 ## Risks
