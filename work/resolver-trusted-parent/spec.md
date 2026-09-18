@@ -12,20 +12,6 @@ resolved outside a test run. The resolver does not change. The parent copies wha
 that today live in the test script rather than in the launcher, and produces the same
 bytes for the same request.
 
-**Amendment, 2026-09-18 (post-`#328`).** The independent plan-base refresh review on
-intake `#271` returned `Plan-verdict: REVISE`: `resolver-direct-git-runtime` (pull request
-`#328`, merged 2026-09-14, commit `ac734ba`) had already made the resolver runtime select
-`/Library/Developer/CommandLineTools/usr/bin/git` directly on Darwin, which is exactly the
-condition under which the DR-2 residual disappears, so every statement in this spec that
-the runtime runs `/usr/bin/git` and may write an `xcrun_db` cache had become false. This
-amendment re-pins the amended intent, states the single-write-root claim without
-qualification on both platforms and for the runtime as well, turns R10's Darwin operator
-recipe from a difference into an equality, and refreshes the `scripts/lib/profile-resolution.sh`
-and `scripts/test/portable-profile-resolution.test.sh` line cites that `#328` shifted. The
-round-history paragraphs below are left as history and still describe DR-2 as it stood at
-the time; this paragraph is where the removal is recorded. No requirement, scope, risk or
-proof obligation changes, and the file gets no longer.
-
 **Implementation `review_size: accepted-exception`** — this figure and the derivation
 under it are the *implementation* pull request's exception, not this spec pull request's
 (that one is recorded on its own line in the size-exception waiver later in this
