@@ -156,6 +156,10 @@ Two goals drive the backlog:
   An accepted spec/plan may record an exact one-concern review-size exception with an
   evidence-based range. That changes only the soft line signal; unexplained overrun,
   new concern/scope, unreadable code, reduced tests, CI, and review still block.
+  Record exactly one `review_size:` token per PR and state its range once; per-round
+  accounting, line-count history, and any narration of what a round changed live in the
+  PR description and comments, never in the artifact (`work/README.md` >
+  Artifact hygiene).
 - Every PR links its intake issue and keeps README/docs in sync. Pre-code intent,
   spec, and high-risk plan PRs use non-closing `Tracks #<n>` so the intake stays open;
   the terminal implementation PR uses `Closes #<n>`. Never let an artifact/plan merge
