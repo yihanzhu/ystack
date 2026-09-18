@@ -98,6 +98,19 @@ dirty attempts all stand unchanged. ROADMAP.md stays byte-identical and the acce
 source blobs still pin the agreed product scope; a product-scope, goal, acceptance,
 safety or authority change still returns to the operator.
 
+Publishing mechanism. The successor merges with
+`gh pr merge --squash --match-head-commit <reviewed head>` under operator decision
+OD-1 (issue #275, 2026-09-09), re-affirmed by this 2026-09-18 handoff, and only when
+the newest review is clean at the exact head and base, `ci` is green, and the labels
+are consistent. Constitution-path PRs (`.github/**`, `.claude/**`, `AGENTS.md`,
+`CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`, `NORTH_STAR.md`, `config/**`) stay the
+operator's to merge. `.claude/hooks/no-merge-guard.sh` is unchanged and still blocks
+every agent that runs inside the checkout — coders, fix coders, reviewers; this
+manager session's Claude Code project directory is `/Users/yihanzhu/git`, the parent
+of the checkout, so the repository's `.claude/settings.json` is not loaded there.
+That is the whole of the narrowly scoped, operator-approved publishing path, for the
+named session only, and the operator can revoke it by saying so.
+
 The manager verified its own session identity from its scratchpad path, which the
 Claude Code harness derives from the session id. That is identity evidence, not
 authority. This file still cannot appoint a manager, and the named session cannot
