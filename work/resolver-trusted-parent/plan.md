@@ -1,5 +1,5 @@
 ---
-spec-blob: ce5348028204e91f1e52d7ecf32607c8e222e4ca
+spec-blob: d088f283c4ac03a5d6a8c8dd505a02179ea551ef
 drafted: 2026-09-14
 ---
 
@@ -44,8 +44,10 @@ Measured figures are the three implementation files at
 `ystack/impl/resolver-trusted-parent`, 4175 changed lines against plan-base
 `d23a331`. The remaining five paths are unwritten estimates totalling 62.
 
-`review_size: accepted-exception`, **3650-4950 changed lines**, is accepted in
-the spec for this one implementation concern. The range is evidence-based: about
+`review_size: accepted-exception`, **3650-4950 changed lines**, for this one
+implementation concern: the spec's record (blob
+`d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) and this plan state the same range,
+and it is the only range this implementation is measured against. About
 4240 changed lines are expected at final head, rounded outward by roughly a
 sixth for the remaining documentation, manifest and test-harness work.
 
@@ -453,7 +455,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
 - `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
-  `git diff --numstat <base> HEAD` — report additions/deletions/net against 2850-3200.
+  `git diff --numstat <base> HEAD` — report additions/deletions/net against 3650-4950.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
 - R10 pin-liveness checks compare all eighteen source pins and all three non-blob
   constants: parent generation and entry generation equal the accepted library
