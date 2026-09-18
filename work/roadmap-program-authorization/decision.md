@@ -73,3 +73,33 @@ explicit handoff. This record restores context, not live credentials or authorit
 
 These are manually enforced working rules. No new hook, daemon, publisher capability
 or automatic scope classifier is claimed.
+
+## Manager succession — 2026-09-18
+
+The Codex delegation above ended on 2026-09-18. Codex session
+`01a09ae7-9bd4-77f3-8c15-966143bebff4` is ended, and that end is recorded on
+https://github.com/yihanzhu/ystack/issues/275. No manager authority remains with it.
+
+- Succeeding manager: yshifu running as Claude — Claude Code desktop session
+  `dd83267a-8ae2-4699-9afa-a8ca0bf3421c`, model Claude Fable 5.1.
+- Date: 2026-09-18.
+- Operator: yihanzhu, directly handing the manager role back in that session's chat:
+  “你可以直接接回manager了。处理所有目前还open的东西，然后继续完成roadmap”.
+- Review lane: the operator's Codex default model (gpt-6-astra) through
+  `scripts/codex-review.sh`. The coder ceiling stays `YSTACK_CODER_MODEL=sonnet`.
+
+The same bounded delegation recorded above now applies to that named Claude session,
+and to no other session. Nothing else changes. The reserved operator decisions, the
+one-manager invariant, one concern and exact allowed paths per PR, substantive
+independent review with no unresolved Important finding, fresh exact head/base
+evidence, all required CI green before merge, read-only reviewers, the rounds cap,
+claims, recovery and restoration, and the exclusion of frozen #183 and unresolved
+dirty attempts all stand unchanged. ROADMAP.md stays byte-identical and the accepted
+source blobs still pin the agreed product scope; a product-scope, goal, acceptance,
+safety or authority change still returns to the operator.
+
+The manager verified its own session identity from its scratchpad path, which the
+Claude Code harness derives from the session id. That is identity evidence, not
+authority. This file still cannot appoint a manager, and the named session cannot
+authorize a later session by itself; a further successor needs another explicit
+operator handoff recorded here.

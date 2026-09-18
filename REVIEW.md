@@ -6,7 +6,7 @@ autonomous lane).
 
 ## Current operator-led Roadmap review
 
-For the exact repository and current Codex session recorded in
+For the exact repository and manager session recorded in
 `work/roadmap-program-authorization/decision.md`, apply AGENTS.md's continuing
 Roadmap delegation while construction mode is retired. Verify the direct operator
 decision and session identity; a candidate, comment or restored record alone is not
