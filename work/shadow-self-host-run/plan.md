@@ -1,5 +1,5 @@
 ---
-spec-blob: e3481b7d9dbf7eef2473f0117b2382c759cf2391
+spec-blob: a1674656fcf440113b8e7b5f955f4a4065e621cd
 drafted: 2026-09-18
 ---
 # Plan: shadow-self-host-run
@@ -54,7 +54,7 @@ files and fourteen per case, thirty-five in all:
 | `duty-evaluation.json` | The duty evaluation the claim references | 1 |
 | `{pre,post}/incident.json` | `incident.ystack-transition.{pre,post}` | 2 |
 | `{pre,post}/qualified-identity.json` | The identity each run was performed under | 2 |
-| `{pre,post}/sandbox-evaluation.json` | The evaluator's document for that run | 2 |
+| `{pre,post}/sandbox-evaluation.json` | The shipped evaluator's declaration-only document for that run | 2 |
 | `{pre,post}/assembled/*` | The assembler's seven outputs, native names | 20-40 |
 | `{pre,post}/state/*` | The driver's four state files, native names | 8 |
 
@@ -116,14 +116,18 @@ gate rather than compressing the test or dropping evidence files.
 
 `review_size: accepted-exception` for **this plan PR**, one concern — the complete
 pre-code design for the first real self-host run — with an evidence-based range of
-**470-530 lines**.
+**545-605 lines**. Requirement 2's declaration-only framing carries real cost in this
+plan: the precondition gate, the evaluator call, the marker checks, the consumers'
+vocabulary and the documentation rule each have to state the boundary between a
+declaration and enforcement, and the exact invocations — the validator's verb and the
+`PATH` the two standalone calls need — are design detail a reader cannot infer.
 
 ## Order of work
 
 ### The precondition gate
 
-**No run step below may execute until all three of these are merged on `main` with
-their required proof green.** This is the single hard gate in this initiative.
+**No run step below may execute until both of these are merged on `main` with their
+required proof green.** This is the single hard gate in this initiative.
 
 1. **`resolver-trusted-parent`.** The implementation is in progress on
    `ystack/impl/resolver-trusted-parent`. Its plan
@@ -132,20 +136,26 @@ their required proof green.** This is the single hard gate in this initiative.
    is no supported way to produce a real resolved profile: the only launcher of
    `resolver/v1/profile-resolve-runtime.sh` today lives in `scripts/test/`, which
    `docs/components.md:1368-1372` states plainly. Requirement 1 forbids substituting it.
-2. **The real sandbox dependency.** Requirement 2 and the Areas of concern demand a
-   truthful execution boundary. **Read this carefully before assuming it is close:**
-   the accepted `work/real-sandbox-boundary/plan.md` ships documentation only — three
-   files, 20-30 lines, "it does not implement a sandbox" — and defers four separately
-   gated child concerns. Today `scripts/test/shadow-slice.test.sh:128-195` builds the
-   policy set, duty evaluation and claim as fixtures with placeholder digests
-   (`"2" * 64`, `"b" * 64`), and `control/v1/sandbox-policy.json` pins demonstration
-   `/sandbox/*` roots. So the enforcing child concern — not the documentation PR — is
-   this initiative's real blocker, and it is not yet planned. Copying the placeholder
-   or declaring `satisfied` is forbidden; a missing boundary blocks execution.
-3. **`shadow-input-assembler`.** Already merged: `shadow/v1/assemble-materialization-input.sh`
+2. **`shadow-input-assembler`.** Already merged: `shadow/v1/assemble-materialization-input.sh`
    and `shadow/v1/materialization-input.jq` are on `main` and listed in
    `ci/required-files.txt:414-417`. Confirm its focused proof is still green at the
    implementation base.
+
+**No sandbox dependency gates these runs.** Per requirement 2 the runs use the shipped
+declaration-only evaluation exactly as shipped — `control/v1/evaluate-sandbox.sh` with
+`control/v1/sandbox-policy.json` and `control/v1/sandbox.jq` — and claim no execution
+boundary. A real boundary is a step-8 prerequisite, not this run's. Two limits hold
+regardless. First, the evaluator compares declarations, so although the driver
+proceeds only when the verdict is `satisfied` (`shadow/v1/reproduce.sh:436-442`,
+matching `.body.verdict`), what it proceeds on is a declaration verdict and nothing
+more: the single expected reason is `sandbox.declaration-satisfied`
+(`control/v1/sandbox.jq:256`), and enforcement stays `unproven`. A verdict that is not
+`satisfied` stops the run at `environment.not-satisfied`; it is not worked around. Second, the placeholder digests stay out of the evidence: the fixtures at
+`scripts/test/shadow-slice.test.sh:128-195` build their control policy and decision
+references from repeated-character values (`("2" * 64)`, `("b" * 64)`), and
+`control/v1/sandbox-policy.json` pins demonstration `/sandbox/*` roots with a verifier
+digest of 64 ones. Any such digest in a committed reference stops the run rather than
+being retained.
 
 **What the coder may do before that gate clears**, because none of it needs a run:
 
@@ -218,7 +228,13 @@ resolver/v1/resolve-profile.sh "$JQ" "$RESOLVE_OUT" "$REQUEST" "$MAP" > resolved
 
 `$JQ` is the pinned jq 1.6 (Darwin SHA-256
 `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef`, the value both
-shipped scripts check). `$RESOLVE_OUT` is a fresh empty 0700 directory; after the run
+shipped scripts check). Provision it the way the focused suites already do
+(`scripts/test/shadow-slice.test.sh:24-51`): fetch the pinned jq 1.6 release asset for
+the platform into the shared cache, verify that digest, then copy it into a fresh 0700
+directory `$JQ_DIR` under the file name `jq` (mode `0555`), so `$JQ` is `$JQ_DIR/jq`.
+`$JQ_DIR` is needed as a directory, not just as a path to a binary, because two
+shipped entry points discover jq through `PATH` rather than an argument — see "The two
+runs" below. `$RESOLVE_OUT` is a fresh empty 0700 directory; after the run
 it holds exactly `home`, `tmp`, `child.stdout` and `child.stderr`. The resolved profile
 has no file of its own — its bytes are the entry's stdout, which equals
 `$RESOLVE_OUT/child.stdout`. `$REQUEST` and `$MAP` are the resolution request and
@@ -270,8 +286,17 @@ final relation check at `:657-667`), so a mismatch is a refusal, not a silent re
 Validate each incident before running it:
 
 ```sh
-shadow/v1/validate-incident.sh <incident.json>
+PATH="$JQ_DIR:/usr/bin:/bin" \
+  shadow/v1/validate-incident.sh validate "$CASE/incident.json"
 ```
+
+Both parts matter. The script takes exactly two arguments, the literal verb `validate`
+and an **absolute** record path, and exits `E_USAGE` otherwise. It also resolves jq
+through `PATH` and requires that binary's exact digest, so the operator's default jq —
+1.7.1 on the current Darwin machine — makes it exit `E_RUNTIME`. Prepending `$JQ_DIR`
+puts the pinned jq 1.6 first under the name `jq`, mirroring the fixed
+`PATH="$scratch/bin:/usr/bin:/bin"` the driver uses for its own internal calls
+(`shadow/v1/reproduce.sh:421`, `:606`). `$CASE` is an absolute path.
 
 ### The two runs (requirement 8)
 
@@ -302,17 +327,36 @@ unsuccessful attempt; it never stands in for either required outcome.
 into its own scratch (`shadow/v1/reproduce.sh:421-423`) and does not export the
 document; it only records the digest inside the shadow record's
 `environment.evaluation.value.evaluation_ref.sha256`. So obtain the bytes through the
-evaluator's own public interface with identical inputs:
+shipped evaluator's own public interface with identical inputs:
 
 ```sh
-control/v1/evaluate-sandbox.sh evaluate "$POLICY_SET" "$DUTY" "$CLAIM" \
+PATH="$JQ_DIR:/usr/bin:/bin" \
+  control/v1/evaluate-sandbox.sh evaluate "$POLICY_SET" "$DUTY" "$CLAIM" \
   > "$CASE/sandbox-evaluation.json"
 ```
 
+The `PATH` is not optional and `$JQ` does not cover it: `evaluate-sandbox.sh` takes no
+jq argument, discovers jq with `command -v jq` and checks that binary's exact digest
+(`control/v1/evaluate-sandbox.sh:46-57`), so with the operator's default jq 1.7.1 on
+the current Darwin machine it exits `E_RUNTIME`. The line above mirrors the driver's
+own internal invocation, which runs the same evaluator under the fixed
+`PATH="$scratch/bin:/usr/bin:/bin"` holding the snapshotted pinned jq as `jq`
+(`shadow/v1/reproduce.sh:159-173`, `:421-423`) — the same reason the identical inputs
+produce identical bytes.
+
 Then require `shasum -a 256` of that file to equal the reference the shadow record
-already carries, before retaining it. If it does not match, stop and return to the
-dependency gate — do not intercept the driver's scratch, bypass its cleanup, or hand-write
-the document.
+already carries, before retaining it. If it does not match, stop and reconcile — do not
+intercept the driver's scratch, bypass its cleanup, or hand-write the document.
+
+The retained document is declaration-only and the README says so in those words. Check
+before retaining that its `sandbox_policy_evaluation` body carries the shipped marker
+fields `enforcement_proof: "declaration-only"`, `authority_effect: "none"` and
+`qualification_effect: "none"` (`control/v1/sandbox.jq:259-272`), and that a
+`satisfied` verdict carries the single reason `sandbox.declaration-satisfied`. That
+verdict is what the driver's `satisfied` branch reads
+(`shadow/v1/reproduce.sh:436-442`); it records that the claim matched the declared
+policy and leaves enforcement `unproven`. No committed reference may carry a
+placeholder digest — see the precondition gate.
 
 ### Repeatability (requirement 18)
 
@@ -353,14 +397,20 @@ credentials, no model and no real reproduction. It checks the committed bytes:
    missing — and every digest matches.
 2. Every `.json` under the evidence path is canonical (`jq -S -c` output equals the
    file) and a single JSON text.
-3. Each incident passes `shadow/v1/validate-incident.sh`.
+3. Each incident passes
+   `PATH="$JQ_DIR:/usr/bin:/bin" shadow/v1/validate-incident.sh validate <abs>/incident.json`
+   — the verb and the absolute path are both required, and the suite's own provisioned
+   jq 1.6 directory (`scripts/test/shadow-slice.test.sh:24-51`, already exported as
+   `PATH` there) is what the script's `PATH` lookup must find.
 4. Each `qualified-identity.json` equals its case's `stage-request-ref.json` and
    `resolved-profile-ref.json` by id and digest, and its `target_revision` equals the
    case's `git_revision_ref`.
 5. The post record is `reproduced` / `check.failed-at-revision` at `0427390…`; the pre
    record is `no-change` / `check.passed-at-revision` at `d3f6d52…`; both carry
    `authority: none`, `deploy_authority: none`, `shadow: true`,
-   `activation_state: inactive` and `qualification.state: unavailable`.
+   `activation_state: inactive` and
+   `qualification: {state: "unavailable", reason_id: "shadow.unqualified"}`
+   (`shadow/v1/reproduce.sh:630`).
 6. The producer patch payload is empty in **both** locations — `payloads[]` and
    `trust_context.verified_payloads[]` — and
    `stage_request.content.body.operation.arguments.network_mode` is `deny`, the exact
@@ -373,7 +423,15 @@ credentials, no model and no real reproduction. It checks the committed bytes:
    `event_count` to match, plus the shadow record's `trace_ledger_ref`.
 9. Each retained `sandbox-evaluation.json` hashes to that record's
    `environment.evaluation.value.evaluation_ref.sha256`.
-10. Negative cases: mutate a **copy** of each of an evidence file, a digest in
+10. Each retained evaluation carries the declaration-only marker: its
+    `sandbox_policy_evaluation` body has `enforcement_proof: "declaration-only"`,
+    `authority_effect: "none"` and `qualification_effect: "none"`, and a `satisfied`
+    verdict carries exactly `["sandbox.declaration-satisfied"]`. Alongside it, no
+    committed document — evidence, README, verification instructions, `docs/components.md`
+    section, index row or restore block — claims a satisfied sandbox boundary,
+    enforcement proof or a qualified workflow, and none carries a repeated-character
+    placeholder digest.
+11. Negative cases: mutate a **copy** of each of an evidence file, a digest in
     `checksums.json`, and an outcome field, and require the test to fail on each. A
     test that passes on altered evidence proves nothing.
 
@@ -385,9 +443,13 @@ shadow-set, dashboard, risk, kill, duty, marker (`scope/v1/evaluate-scope.sh:73`
 harness supplies the two real unchanged shadow records as the shadow set, with the
 actual identities, and whatever the other six slots need. The assertion is narrow: the
 evaluator's complete shape and reference checks accept these records, and any other
-missing gate evidence is reported distinctly from malformed shadow evidence. Do not
-copy or weaken the validator, do not create live scope authority, and say in the
-harness header that compatibility is not qualification.
+missing gate evidence is reported distinctly from malformed shadow evidence. Require
+the evaluator's own vocabulary for the classification — `outcome: "not-proposable"`
+with `qualification: {state: "unavailable", reason_id:
+"scope.enablement-requires-operator-pr"}` (`scope/v1/scope-gates.jq:924`, `:954`) — and
+never restate it as a passing or proposable result. Do not copy or weaken the
+validator, do not create live scope authority, and say in the harness header that
+compatibility is not qualification.
 
 **Maintenance.** Feed each incident with its matching shadow record to the real
 converter:
@@ -400,6 +462,9 @@ maintenance/v1/incident-to-eval.sh convert <incident.json> <shadow-record.json> 
 `stale-moved-artifacts`, and `:64-65` maps `reproduced` to
 `{disposition: accepted, status: stale}` and `no-change` to
 `{disposition: accepted, status: completed}`. Require exactly those, require the
+generated skeleton to carry the converter's own
+`qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`
+(`maintenance/v1/incident-to-eval.jq:80`), require the
 provenance digests to equal the supplied documents, and require the two cross-pairings
 (post incident with pre record, and the reverse) to fail. The emitted
 `eval-seed-case-stale-moved-artifacts.json` is a test output written to a temporary
@@ -413,6 +478,13 @@ restores evidence and verification instructions, and it executes no run and regi
 activates or qualifies nothing. The registry entry for
 `env.local-macos-ystack-self` stays `proof_state: unproven`; this initiative does not
 change it.
+
+None of this prose may describe the run as sandbox-enforced, qualified or proposable.
+Each place that mentions the environment says the evaluation was declaration-only and
+enforcement stays `unproven`, and points at `work/real-sandbox-boundary/spec.md` as the
+record of what a real boundary would have to bind — a step-8 prerequisite, not this
+run's. The focused test's check 10 enforces this on the committed bytes, so write the
+documentation to pass it rather than patching the test.
 
 Then run the Proof section on the final head and paste it into the PR body with commit
 SHAs.
@@ -432,14 +504,19 @@ actually checked.
 
 ## Risks
 
-**The sandbox precondition is the one that can sink this.** The accepted
-`real-sandbox-boundary` work documents a blocked decision; it does not enforce
-anything. Requirement 2 forbids running on a declaration. The honest reading is that
-this initiative is gated on a child concern that has not reached its own artifact gate
-yet, and that this plan cannot shorten. The failure mode to guard against is a coder
-who finds the fixture claim in `scripts/test/shadow-slice.test.sh:173-195`, sees it
-produce `satisfied`, and reuses it. The test skeleton must never accept a placeholder
-digest, and review should look for `"2" * 64` and `"b" * 64` in anything committed.
+**Overclaiming the declaration is the one that can sink this.** The evaluator compares
+declarations, so a `satisfied` verdict here is cheap and easy to misread as a boundary.
+Two failure modes follow. The first is language: a README line, a docs sentence or a
+consumer summary that calls the run sandbox-enforced, qualified or proposable turns
+honest evidence into a false claim, which is why the retained bytes must keep the
+declaration-only marker and check 10 greps the committed prose. The second is fixtures:
+a coder who finds the claim, policy set and duty at
+`scripts/test/shadow-slice.test.sh:128-195`, sees them produce `satisfied`, and reuses
+them — their references are repeated-character placeholders (`"2" * 64`, `"b" * 64`)
+and `control/v1/sandbox-policy.json` pins demonstration `/sandbox/*` roots with a
+verifier digest of 64 ones. A placeholder digest in a committed reference stops the run;
+review should look for those values in anything committed. The real execution boundary
+stays a step-8 prerequisite, and nothing here shortens or substitutes for it.
 
 **Reading the real repository.** Both runs read history that contains the operator's
 own work. The mitigations are the ones the shipped code already enforces — the driver
@@ -467,7 +544,8 @@ directory. The alternative — a second test file for the consumers — I reject
 it would duplicate the whole evidence-loading half for no reviewer benefit.
 
 **A refusal mid-exercise.** If the assembler or driver refuses, the answer is the
-dependency gate, not a local patch, a weakened claim or a private registry entry. A
+precondition gate or the operator's own inputs, not a local patch, a weakened claim or
+a private registry entry. A
 refused attempt is listed in the README as an unsuccessful diagnostic attempt and is
 never relabelled as the accepted pair.
 
@@ -484,8 +562,10 @@ the PR body.
    consumes, still green and still unmodified.
 4. The operator's run transcript for both cases: the two `reproduce.sh` command lines
    with their outcome and reason ids, the two assembler command lines, the resolver
-   command line, and the dependency heads (`resolver-trusted-parent` implementation
-   commit, sandbox dependency commit, assembler commit already on `main`).
+   command line with the `PATH` it ran under, the two standalone
+   `evaluate-sandbox.sh` and `validate-incident.sh` command lines with theirs, and the
+   dependency heads (`resolver-trusted-parent` implementation commit, assembler commit
+   already on `main`).
 5. The repeatability comparison: `diff -r` over both assembler output directories and
    `shasum -a 256` over both state directories, showing byte-identical results.
 6. The source integrity comparison: the `show-ref` and `cat-file --batch-all-objects`
