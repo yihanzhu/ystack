@@ -1,5 +1,5 @@
 ---
-spec-blob: 859fb6f0709364e0e6c487f62db74f1d2138d3e4
+spec-blob: ce5348028204e91f1e52d7ecf32607c8e222e4ca
 drafted: 2026-09-14
 ---
 
@@ -9,9 +9,9 @@ Tracks #271. The accepted spec is the complete contract, including the retained
 R1 and R10 detail. This plan selects the files, construction order and proof; it
 does not replace that detail with a smaller acceptance set.
 
-At base `5888b72881c06d588a131017838b2434d4f439ce`, the accepted spec records
+At base `60e6da427c1d536cf68ef763b1920616b52bd65f`, the accepted spec records
 `risk: high` and its intent link equals
-`eaa322c405502cc0ca7c453814ca0f005f11b48f`. Gate mode is `artifact-high`.
+`bc6e669b755bae6c7f52f10f047c602faa46210a`. Gate mode is `artifact-high`.
 This plan-only PR requires independent review, required CI and accepted publication
 under AGENTS.md's current operator-led Roadmap program.
 Record the fetched merge-containing default as `plan-base`; before first code,
@@ -71,7 +71,7 @@ The new test may use existing fixture helpers and create temporary drivers.
 
 Provision pinned jq using `scripts/test/shadow-slice.test.sh:24-51`, as R10 requires.
 Reuse temporary cleanup and result-helper patterns from
-`scripts/test/portable-profile-resolution.test.sh:1-151`, its launcher source and
+`scripts/test/portable-profile-resolution.test.sh:23-30,521-533`, its launcher source and
 loader-trap source; fixture helpers serve auxiliary cases.
 The positive request names real committed `profiles/default/v1` profile/manifest
 objects with this repository mapped, as R10 requires, not a synthetic profile.
@@ -417,13 +417,13 @@ unverified. Descriptor checks prove check-time facts; helper/jq/HOME/TMPDIR rema
 runtime path handoffs. Do not claim the parent binds or guarantees what the runtime
 executes. Fixing that requires the separately gated descriptor-handoff follow-up.
 
-DR-2 on #271, carried by accepted intent PR #282, permits only the unchanged Darwin
-runtime's `/usr/bin/git` xcrun_db write in the per-user temp directory. The private
-boundary is the unchanged runtime's fixed git invocation; neither shipped addition
-may use it. Removal condition is a later accepted runtime change avoiding that shim.
-Measure precisely this residual on Darwin under R10, not a broader write allowance.
-Linux proof must show the sole output write root. Keep the accepted provenance link
-in the boundary documentation and regression proof; no second workaround is added.
+DR-2 on #271 accepted a Darwin residual: the unchanged runtime's `/usr/bin/git`
+xcrun_db write in the per-user temp directory. PR #328 removed it by selecting the
+CommandLineTools git directly, so there is no residual left to accept, measure or
+document. The write root is the caller's output root on both platforms, for the
+runtime as well as for everything this initiative adds. Neither shipped addition may
+run the shim path. Keep the accepted provenance link in the boundary documentation and
+regression proof; no second workaround is added.
 
 Copied supervisor process-table reads are host state, not repository content; they
 remain byte-identical and review-only. Cleanup is best-effort on exits the entry can
@@ -465,13 +465,13 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   it reads unsupported-platform and unreachable jq-length guards, host readers,
   handler-safe call inventory, masked fork/reap/diagnostic sequences and entry ordering.
   Do not label these readings as executed negative cases or sandbox qualification.
-- Native Darwin R10 operator measurement attributes any outside-root write solely
-  to unchanged runtime git's xcrun_db, while entry/compiler/parent/helper/copies stay
-  inside output. Record exact platform/tools and R10 observation method and limits.
+- The native Darwin R10 operator run must show no write outside the output root.
+  Record exact platform/tools and the R10 observation method and its limits.
   Use `/usr/bin/getconf DARWIN_USER_TEMP_DIR` to locate the observed directory;
-  record the whole directory's names/sizes/mtimes and xcrun_db absence or
-  size/mtime/SHA-1 before and after. Full entry resolution permits only that cache
-  difference, including creation; caller HOME/TMPDIR remain unchanged. The isolated
-  compile/pin half must preserve the cache's starting state, absence included.
-  A warm unchanged cache does not prove no possible runtime write. Any other observed
-  change fails. Missing platform evidence remains an explicit proof gap, not a pass.
+  record the whole directory's names/sizes/mtimes, and xcrun_db's absence or its
+  size/mtime/SHA-1, before and after. Both listings must be identical, and xcrun_db
+  must come back in the state it started in, absence included; the isolated
+  compile/pin half must do the same. Caller HOME/TMPDIR remain unchanged. Any other
+  observed change fails, including a new or modified xcrun_db, which would mean a
+  shim got back into the entry's path or the runtime's. Missing platform evidence
+  remains an explicit proof gap, not a pass.
