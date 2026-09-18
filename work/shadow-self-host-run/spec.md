@@ -19,15 +19,55 @@ workflow qualification, activation, target write or deployment authority.
    fabricated resolved profile or copied resolver implementation may replace them.
    Preparation of incident documents and verification instructions can precede them.
 
-2. Before execution, require the separately accepted real sandbox policy, enforcement
-   and evidence dependencies described under Areas of concern. Their outputs must
-   work with this task's unchanged driver.
+2. This first run requires no real sandbox and claims none. It uses the shipped
+   declaration-only evaluation exactly as shipped: `control/v1/evaluate-sandbox.sh`
+   with `control/v1/sandbox-policy.json` and `control/v1/sandbox.jq`. The evidence
+   retains that evaluator's raw result bytes together with its fixed,
+   machine-checkable declaration-only marker in the emitted
+   `sandbox_policy_evaluation` body: `enforcement_proof: "declaration-only"`,
+   `authority_effect: "none"` and `qualification_effect: "none"`. The evaluator
+   compares declarations only, so its verdict — including `satisfied` with the
+   single reason `sandbox.declaration-satisfied` — records that the claim matched
+   the declared policy and leaves enforcement `unproven`. It is never enforcement
+   proof, qualification or a substitute for a real sandbox.
    The environment must already be registered as `env.local-macos-ystack-self`,
    bound to `repo.ystack` and root `7908b159c0a2d24ce6ccdde6ee0f501acc483e75`.
    Verify the registry and source history before running. Registration and its
-   `unproven` state establish no sandbox guarantee. Missing or unsupported
-   enforcement blocks execution and completion; it cannot be replaced by a
-   `satisfied` declaration. This evidence task changes none of those boundaries.
+   `unproven` state establish no sandbox guarantee. This evidence task changes
+   none of those boundaries.
+   The consumers must classify the run in their own shipped vocabulary: the scope
+   evaluator emits `outcome: "not-proposable"` with `qualification: {state:
+   "unavailable", reason_id: "scope.enablement-requires-operator-pr"}`, the
+   maintenance consumer's generated skeleton carries `qualification: {state:
+   "unavailable", reason_id: "maintenance.no-adapter-exists"}`, and each shadow
+   record keeps `qualification: {state: "unavailable", reason_id:
+   "shadow.unqualified"}`. No consumer output, evidence document, component
+   documentation or README may describe this run as sandbox-enforced, qualified
+   or proposable.
+   Committed evidence retains the shipped policy bytes and the evaluator's raw
+   result exactly as produced. That includes the shipped policy's verifier tool
+   digest of 64 ones, which `sandbox.jq:policy_ok` fixes and which the claim's
+   `body.tools` must repeat literally, because the evaluator emits `tools.not-fixed`
+   for any other value; removing or rewriting it would make `satisfied` unreachable
+   and would misstate what was evaluated. The evidence and README must label that
+   value as the shipped demonstration value and never as a real tool identity, as
+   `work/real-sandbox-boundary/spec.md` requirement 5 states: the all-ones verifier
+   digest is demonstration data and cannot be a real identity.
+   What the run refuses is a fabricated reference digest among its own inputs. Every
+   SHA-256 that names committed bytes must be recomputed from those exact bytes and
+   must equal the recorded value. The checked fields are the control policy set's
+   `body.core_contract.package_ref.sha256` and, for each entry of `body.sections`,
+   `policy_ref.sha256` and `decision_ref.sha256`; the duty evaluation's
+   `body.policy_ref.sha256`, `body.decision_ref.sha256`, `body.policy_set.sha256` and
+   each reference under `body.stage` (`request_ref`, `resolved_profile_ref`,
+   `result_ref`); and the claim's `body.policy_set_ref.sha256`,
+   `body.duty_evaluation_ref.sha256` and `body.stage_result_ref.sha256`. A
+   repeated-character value of the kind the shadow slice harness builds its control
+   policy and decision references from (`scripts/test/shadow-slice.test.sh`,
+   `("2" * 64)` and `("b" * 64)`), or any digest that does not equal the SHA-256 of
+   the real committed bytes it names, stops the run rather than being retained.
+   This division — retain the shipped policy's demonstration digest, refuse
+   fabricated references — is recorded on intake #264 as decision request DR-4.
 
 3. Both target revisions use their native SHA-1 Git object identities. File-byte
    digests and content references use SHA-256. The driver's current registry check
@@ -111,7 +151,15 @@ workflow qualification, activation, target write or deployment authority.
    identity/reference equality, exact revisions and outcomes, empty patch in both
    input locations, network deny, successful no-change materialization, trace seal
    and materialization-result reference, plus the retained sandbox evaluation
-   bytes and their recorded reference. Missing or altered evidence must fail.
+   bytes and their recorded reference. It also asserts that every retained
+   evaluation carries the declaration-only marker of requirement 2 and that no
+   committed document claims a satisfied sandbox boundary, enforcement proof or a
+   qualified workflow. It asserts requirement 2's placeholder division as written:
+   that the retained policy and claim bytes still carry the shipped all-ones verifier
+   digest and that the evidence labels it the shipped demonstration value, and that
+   each reference field listed in requirement 2 equals the SHA-256 recomputed from
+   the committed bytes it names. It must not assert that the all-ones value is
+   absent. Missing or altered evidence must fail.
    CI does not perform a real self-host run, obtain credentials or invoke a model.
 
 16. Both unchanged shadow records must pass the step-8 consumer's complete shape
@@ -155,14 +203,16 @@ the resolved profile, environment claim, control policy set and duty evaluation.
 and the driver's four state outputs: `shadow-record.json`, `trace-ledger.json`,
 `trace-receipt.json`, `materialization-result.json`. Preserve native names in
 `assembled/` and `state/` subdirectories; all JSON remains canonical producer output.
-Also retain `sandbox-evaluation.json` beside each case's assembled and state
-directories. The driver exports only its four state files before cleaning scratch.
-Obtain the sandbox evaluation through the evaluator's supported public interface,
-with identical claim, policy-set, duty and dependency bytes to the driver's call.
-Require its raw-byte digest to equal that run's recorded sandbox evaluation
-reference before retaining it. Do not intercept scratch or bypass driver cleanup.
-If the accepted evaluator cannot reproduce matching bytes, stop and return to
-the dependency gate; do not fabricate the document or weaken the reference.
+Also retain each case's declaration-only `sandbox-evaluation.json` beside its
+assembled and state directories. The driver exports only its four state files
+before cleaning scratch. Obtain the sandbox evaluation through the shipped
+evaluator's supported public interface, with identical claim, policy-set, duty and
+dependency bytes to the driver's call. Require its raw-byte digest to equal that
+run's recorded sandbox evaluation reference before retaining it, and keep the
+declaration-only marker of requirement 2 visible in the retained bytes and in the
+README's description of them. Do not intercept scratch or bypass driver cleanup.
+If the shipped evaluator cannot reproduce matching bytes, stop and reconcile; do
+not fabricate the document or weaken the reference.
 
 Keep the raw bytes of every referenced evidence document recoverable from this
 directory or an exact committed Git object named in the README. Record a finite
@@ -201,15 +251,18 @@ to real repository history and records execution and identity claims. G2 accepts
 this spec; a separate independently reviewed, operator-merged high-risk plan
 must precede implementation. This spec authorizes no execution by itself.
 
-A separately accepted real sandbox policy, enforcement and evidence initiative
-must supply a truthful execution boundary before these runs. The shipped policy
-fixes demonstration `/sandbox/*` roots and a verifier SHA-256 of 64 ones; the
-evaluator checks declarations and provides no enforcement proof. No real binary
-can be bound truthfully by copying that placeholder. The current policy cannot
-support this task's real-run acceptance, and no fake claim is an allowed fallback.
-The separate initiative must bind actual tool bytes, policy and evaluator
-identities and prove the required restrictions before this task consumes them.
-Its accepted outputs must remain compatible with this task's unchanged driver.
+A real execution boundary is a prerequisite of step 8 (bounded autonomous writes),
+not of this run. The shipped policy fixes demonstration `/sandbox/*` roots and a
+verifier SHA-256 of 64 ones, and the evaluator checks declarations only; no real
+binary can be bound truthfully by copying that placeholder. This run therefore
+produces no sandbox evidence: its retained evaluation states declaration-only,
+`unproven` enforcement, and nothing here qualifies an execution boundary, relaxes
+one or lets a declaration stand in for enforcement. `work/real-sandbox-boundary/spec.md`
+is the record of why real sandboxed execution is blocked and of what the separate
+initiative must bind — actual tool bytes, policy and evaluator identities, and the
+proven restrictions — before any task consumes it. That initiative's accepted
+outputs must remain compatible with this task's unchanged driver, and step 8 must
+be sized against the evidence this run produces.
 
 
 One concern: the first real self-host evidence pair and its durable verification.
