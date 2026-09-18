@@ -616,6 +616,14 @@ inactive and declaration-only. It does not enforce or qualify a real sandbox, ru
 a candidate or adapter, use a credential, activate a profile, or perform a network
 or external-write action.
 
+Restore the sandbox decision's [intent](work/real-sandbox-boundary/intent.md),
+[spec](work/real-sandbox-boundary/spec.md) and
+[plan](work/real-sandbox-boundary/plan.md) from the same commit, using the
+decision-record block in [the manifest](ci/required-files.txt). Read the spec
+for the accepted blockers and later implementation dependencies. Restoring
+these records and the declaration evaluator does not restore a qualified
+launcher; real execution remains blocked.
+
 Restore the five paths in the manifest's inactive credential-policy block, then
 run:
 
