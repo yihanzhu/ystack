@@ -44,11 +44,30 @@ workflow qualification, activation, target write or deployment authority.
    "shadow.unqualified"}`. No consumer output, evidence document, component
    documentation or README may describe this run as sandbox-enforced, qualified
    or proposable.
-   Committed evidence must refuse the fixture placeholder digests: the
-   repeated-character values the shadow slice harness builds its control policy and
-   decision references from (`scripts/test/shadow-slice.test.sh`, `("2" * 64)` and
-   `("b" * 64)`) are not real bytes; any such digest in a committed reference stops
-   the run rather than being retained.
+   Committed evidence retains the shipped policy bytes and the evaluator's raw
+   result exactly as produced. That includes the shipped policy's verifier tool
+   digest of 64 ones, which `sandbox.jq:policy_ok` fixes and which the claim's
+   `body.tools` must repeat literally, because the evaluator emits `tools.not-fixed`
+   for any other value; removing or rewriting it would make `satisfied` unreachable
+   and would misstate what was evaluated. The evidence and README must label that
+   value as the shipped demonstration value and never as a real tool identity, as
+   `work/real-sandbox-boundary/spec.md` requirement 5 states: the all-ones verifier
+   digest is demonstration data and cannot be a real identity.
+   What the run refuses is a fabricated reference digest among its own inputs. Every
+   SHA-256 that names committed bytes must be recomputed from those exact bytes and
+   must equal the recorded value. The checked fields are the control policy set's
+   `body.core_contract.package_ref.sha256` and, for each entry of `body.sections`,
+   `policy_ref.sha256` and `decision_ref.sha256`; the duty evaluation's
+   `body.policy_ref.sha256`, `body.decision_ref.sha256`, `body.policy_set.sha256` and
+   each reference under `body.stage` (`request_ref`, `resolved_profile_ref`,
+   `result_ref`); and the claim's `body.policy_set_ref.sha256`,
+   `body.duty_evaluation_ref.sha256` and `body.stage_result_ref.sha256`. A
+   repeated-character value of the kind the shadow slice harness builds its control
+   policy and decision references from (`scripts/test/shadow-slice.test.sh`,
+   `("2" * 64)` and `("b" * 64)`), or any digest that does not equal the SHA-256 of
+   the real committed bytes it names, stops the run rather than being retained.
+   This division — retain the shipped policy's demonstration digest, refuse
+   fabricated references — is recorded on intake #264 as decision request DR-4.
 
 3. Both target revisions use their native SHA-1 Git object identities. File-byte
    digests and content references use SHA-256. The driver's current registry check
@@ -135,7 +154,12 @@ workflow qualification, activation, target write or deployment authority.
    bytes and their recorded reference. It also asserts that every retained
    evaluation carries the declaration-only marker of requirement 2 and that no
    committed document claims a satisfied sandbox boundary, enforcement proof or a
-   qualified workflow. Missing or altered evidence must fail.
+   qualified workflow. It asserts requirement 2's placeholder division as written:
+   that the retained policy and claim bytes still carry the shipped all-ones verifier
+   digest and that the evidence labels it the shipped demonstration value, and that
+   each reference field listed in requirement 2 equals the SHA-256 recomputed from
+   the committed bytes it names. It must not assert that the all-ones value is
+   absent. Missing or altered evidence must fail.
    CI does not perform a real self-host run, obtain credentials or invoke a model.
 
 16. Both unchanged shadow records must pass the step-8 consumer's complete shape
