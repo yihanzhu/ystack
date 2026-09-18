@@ -127,7 +127,7 @@ gate rather than compressing the test or dropping evidence files.
 
 `review_size: accepted-exception` for **this plan PR**, one concern — the complete
 pre-code design for the first real self-host run — with an evidence-based range of
-**770-820 lines**. Requirement 2's declaration-only framing carries real cost in this
+**865-915 lines**. Requirement 2's declaration-only framing carries real cost in this
 plan: the precondition gate, the evaluator call, the marker checks, the consumers'
 vocabulary and the documentation rule each have to state the boundary between a
 declaration and enforcement, and the exact invocations — the validator's verb and the
@@ -137,13 +137,18 @@ the policy set, the duty evaluation and the claim has to be written out document
 document, with the producer and the referenced bytes named for each: an acyclic order
 is not something a reader can infer from the shipped interfaces, and getting it wrong
 is a digest cycle the operator only discovers mid-run. The written-out order is
-about 180 lines of the total.
+about 180 lines of the total. It moved up again, from 770-820, for the third
+precondition-gate entry: the shipped assembler's requester cannot pass duty
+separation, and a blocked dependency has to be stated with the checks it fails, the
+reason ids it produces, why no requester this plan could write would be honest, and
+which gate owns the fix — about 45 lines, and the alternative is a reader who cannot
+tell a blocking finding from an unexplored one.
 
 ## Order of work
 
 ### The precondition gate
 
-**No run step below may execute until both of these are merged on `main` with their
+**No run step below may execute until all three of these are merged on `main` with their
 required proof green.** This is the single hard gate in this initiative.
 
 1. **`resolver-trusted-parent`.** The implementation is in progress on
@@ -157,6 +162,53 @@ required proof green.** This is the single hard gate in this initiative.
    and `shadow/v1/materialization-input.jq` are on `main` and listed in
    `ci/required-files.txt:414-417`. Confirm its focused proof is still green at the
    implementation base.
+3. **`shadow-input-assembler` again, for a requester duty separation accepts.** The
+   assembler as shipped cannot produce a stage request that passes the duty evaluator,
+   so the prerequisite duty evaluation that "Construct the duty evaluation and the
+   claim" below depends on cannot be produced yet, and neither run can proceed.
+   `shadow/v1/materialization-input.jq:111-118` builds `body.requested_by` from one
+   binding and `:181` puts it in the request; that binding is
+   `materialization-input.jq:108-110`'s `forge_binding`, the resolved profile's `forge`
+   entry, chosen by the program and by nothing the caller passes. The duty evaluator
+   then refuses it twice over: `control/v1/duty-separation.jq:120-121` accepts
+   `body.requested_by.role` only when it is one of `manager`, `operator`,
+   `orchestrator` (`:55`), and `:122-124` rejects a requester whose
+   `adapter_instance_id`, `execution_boundary_id` or `principal_id` equals that of any
+   protected binding (`:6-7`, `:96`, `:102`), which a forge identity does by
+   construction because `forge` is itself one of the five protected roles (`:4`). The
+   tuple therefore evaluates to `violated` with four reasons at once —
+   `requester.role-denied` plus all three `requester.*-collision`s — and
+   `control/v1/sandbox.jq:212` turns that into `duty.violated`, ending the run at
+   `environment.not-satisfied`.
+
+   **This plan does not construct a passing request itself.** The only requester the
+   checks would accept is an identity in none of the resolved profile's bindings: a
+   binding whose role is `manager`, `operator` or `orchestrator` cannot be added to the
+   profile at all, because `duty-separation.jq:109-111` emits `profile.role-denied` for
+   any binding outside the protected and dormant role sets (`:4-5`), and the profile's
+   six committed bindings (`profiles/default/v1/profile.json`) are exactly `ci` plus
+   the five protected roles. The only `orchestrator` requester identities anywhere in
+   the repository are the synthetic `instance.orchestrator` / `boundary.orchestrator` /
+   `principal.orchestrator` fixtures in `evals/v1/seed-set-duty.json` and
+   `scripts/test/control-duty-separation.test.sh`. Writing the prerequisite request by
+   hand from the assembler's other outputs with a requester of our own choosing would
+   therefore be a document the pipeline never produces, resting on an identity nothing
+   declares — the spec's out-of-scope rule forbids exactly that ("no local patch,
+   weakened claim, fabricated reference or alternate private entry may make this run
+   pass", `work/shadow-self-host-run/spec.md`), as does requirement 1's ban on
+   substituting a shipped producer.
+
+   So this is an incompatible accepted dependency, and by the same spec rule it returns
+   to its own artifact gate: **`shadow-input-assembler`**. What that initiative has to
+   settle is where a stage request's requester identity comes from when it is not a
+   profile binding — an explicit requester-identity input to
+   `shadow/v1/assemble-materialization-input.sh`, carried into
+   `body.requested_by`, is the shape this plan assumes, but the choice is that gate's,
+   not this one's. Until it is merged on `main` with its proof green and a real tuple
+   evaluates `satisfied`, no step of "Construct the duty evaluation and the claim"
+   executes and no evidence run starts. Nothing else in this plan changes when it
+   lands: entry 4 below still invokes the assembler, with whatever additional argument
+   that gate defines, and entries 5-8 are unaffected.
 
 **No sandbox dependency gates these runs.** Per requirement 2 the runs use the shipped
 declaration-only evaluation exactly as shipped — `control/v1/evaluate-sandbox.sh` with
@@ -378,7 +430,7 @@ references a later entry.
 
    ```sh
    /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash \
-     adapters/local-git-materializer/v1/materialize.sh materialize \
+     "$REPO/adapters/local-git-materializer/v1/materialize.sh" materialize \
      "$OUT_DIR_0/input.json" repo.ystack "$SRC" "$CAND0" "$SCRATCH0" "$CLOSURE" "$JQ" \
      > "$PRE_REQ/materialize.json"
    "$JQ" -S -c '.stage_result' "$PRE_REQ/materialize.json" > "$PRE_REQ/stage-result.json"
@@ -386,7 +438,12 @@ references a later entry.
 
    That is the driver's own call and its own extraction
    (`shadow/v1/reproduce.sh:452-461`), and `$CLOSURE` is the closure helper compiled the
-   way "The two runs" below describes.
+   way "The two runs" below describes. The script path must be the absolute one under
+   `$REPO`, as written: `adapters/local-git-materializer/v1/materialize.sh:23-24`
+   refuses `E_USAGE` when its own `BASH_SOURCE[0]` is not absolute, because it re-execs
+   itself by that path and does not normalise it the way the assembler and the driver
+   normalise their relative arguments. The driver passes an absolute path for the same
+   reason (`shadow/v1/reproduce.sh:131`, `:138`, `:452`),
    so these bytes are produced the way the evidence runs produce theirs. It is a real
    materialization of real history, it writes nothing to `$SRC`, and it happens between
    the two readings of the source inventory, so requirement 10's before/after comparison
@@ -412,21 +469,48 @@ references a later entry.
    document is computed by the evaluator from the bytes it was handed, never written by
    hand: `body.policy_ref`, `body.decision_ref`, `body.policy_set` and all three
    `body.stage` references (`:285-288`, `:396-412`). It also sets the document's `id` to the stage
-   result's id, which `control/v1/sandbox.jq:148` requires. A `violated` verdict is a
-   stop, not something to work around: `sandbox.jq:211` would add `duty.violated` and the
-   run would end at `environment.not-satisfied`. References entries 1, 4 and 5.
+   result's id, which `control/v1/sandbox.jq:148` requires. The verdict this run needs
+   is `satisfied` with the single reason `duty.satisfied`
+   (`control/v1/duty-separation.jq:180`) — the only satisfied form `sandbox.jq:135-137`
+   accepts — and the focused test asserts exactly that pair over the committed
+   `duty-evaluation.json`. A `violated` verdict is a stop, not something to work
+   around: `sandbox.jq:212` would add `duty.violated` and the run would end at
+   `environment.not-satisfied`.
+
+   **Today that verdict is `violated`, and this entry is blocked.** The request entry 4
+   hands the evaluator carries the forge binding as its requester, which duty
+   separation refuses on the role and on all three identity dimensions at once. The
+   third precondition-gate entry above sets out the four reason ids, why no requester
+   this plan could write would be honest under the spec, and why the fix belongs to
+   `shadow-input-assembler`'s artifact gate rather than here. Entries 4 to 8 wait on
+   it. References entries 1, 4 and 5.
 7. **`environment-claim.json`** — **constructed by this run**, and `$CLAIM` is that file;
    no shipped tool emits a claim. Build it with `jq -S -c -n --slurpfile` over
-   `control/v1/sandbox-policy.json` and `duty-evaluation.json`, with these fields and no
-   others — `control/v1/sandbox.jq:63-70` fixes the key set:
+   `control/v1/sandbox-policy.json`, `duty-evaluation.json` and `$RESOLVED_PROFILE`,
+   with these fields and no others — `control/v1/sandbox.jq:63-70` fixes the key set:
 
    - `environment`, `filesystem`, `isolation`, `limits`, `network`, `resources`,
      `sensitive_material` and `tools` copied verbatim from the shipped policy's body.
      That copy is what keeps the shipped all-ones verifier digest literal, which
      `sandbox.jq:179-183` requires and which the precondition gate keeps.
-   - `execution_identity.role` `verifier`, the role `control/v1/sandbox-policy.json`
-     fixes and `sandbox.jq:160`, `:204` check; `declaration_status` `complete`; `effects` with
-     `external_writes` and `target_writes` both false.
+   - `execution_identity` with all four fields `control/v1/sandbox.jq:19-22` requires
+     and no others (`:71` applies `identity_ok` to it, and `identity_ok` is an exact
+     key-set check, so a claim carrying only `role` is refused as malformed):
+     - `role` `verifier`, the role `control/v1/sandbox-policy.json`'s
+       `body.required_role` fixes and `sandbox.jq:160`, `:204` check.
+     - `adapter_instance_id` `instance.verifier`, `execution_boundary_id`
+       `boundary.verifier` and `principal_id` `principal.verifier` — read out of entry
+       2's resolved profile, from the `body.bindings[]` element whose `binding.role` is
+       `verifier`, under the `binding` object's keys of those same three names. Those
+       are the values the resolver carries through from the committed
+       `profiles/default/v1/profile.json` binding `binding.verifier`, whose
+       `adapter_instance_id`, `execution_boundary_id` and `principal_id` keys hold
+       them. Take them from `$RESOLVED_PROFILE` with jq rather than typing the strings,
+       so the claim states the identity that was actually resolved and moves with the
+       profile if it ever changes.
+
+     `declaration_status` `complete`; `effects` with `external_writes` and
+     `target_writes` both false.
    - `id` `env.local-macos-ystack-self`, because the driver reads the environment id out
      of the claim (`shadow/v1/reproduce.sh:258-264`).
    - `policy_set_ref`: `{schema_version:1, kind:"control_policy_set", id:` the set's own
