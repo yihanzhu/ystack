@@ -40,8 +40,8 @@ What I verified myself against real history, rather than copying from the spec:
 
 Nothing outside this list. Counts are net changed lines, honest estimates.
 
-**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Seven shared
-files and fourteen per case, thirty-five in all:
+**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Twelve shared
+files and fourteen per case, forty in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
@@ -52,6 +52,11 @@ files and fourteen per case, thirty-five in all:
 | `environment-claim.json` | The real claim for `env.local-macos-ystack-self` | 1 |
 | `control-policy-set.json` | The policy set the driver was handed | 1 |
 | `duty-evaluation.json` | The duty evaluation the claim references | 1 |
+| `prerequisite/environment-declaration.json` | The bootstrap environment description the prerequisite stage request fingerprints | 1 |
+| `prerequisite/input.json` | The assembler's materialization input for the prerequisite stage run | 1 |
+| `prerequisite/stage-request.json` | That run's stage request, the duty evaluation's `request_ref` | 1 |
+| `prerequisite/resolved-profile-document.json` | That run's resolved profile, the duty evaluation's `resolved_profile_ref` | 1 |
+| `prerequisite/stage-result.json` | That run's stage result, the duty evaluation's `result_ref` and the claim's `stage_result_ref` | 1 |
 | `{pre,post}/incident.json` | `incident.ystack-transition.{pre,post}` | 2 |
 | `{pre,post}/qualified-identity.json` | The identity each run was performed under | 2 |
 | `{pre,post}/sandbox-evaluation.json` | The shipped evaluator's declaration-only document for that run | 2 |
@@ -72,9 +77,9 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 **Existing files:**
 
-- `ci/required-files.txt` (+38). A block headed
+- `ci/required-files.txt` (+43). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
-  listing all thirty-five evidence paths and the new test.
+  listing all forty evidence paths and the new test.
 - `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
   the assembler write-up, which today runs to line 1395 before
   `## Inactive maintenance loop` at 1397.
@@ -95,7 +100,7 @@ component refuses it, the component is right and the run is wrong.
 
 `review_size: accepted-exception` for the **implementation PR**, one concern — the
 first real self-host evidence pair and its durable verification — with an
-evidence-based range of **600-800 net lines**.
+evidence-based range of **650-870 net lines**.
 
 This is above the spec's earlier 250-450 figure, which the spec itself asked this plan
 to refine against the real interfaces. Two things grew once I read them:
@@ -105,22 +110,34 @@ to refine against the real interfaces. Two things grew once I read them:
   seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
   `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
   refusal, on top of the twelve evidence checks requirement 15 lists.
-- The manifest block is 38 lines, not a handful, because the spec's design requires
+- The manifest block is 43 lines, not a handful, because the spec's design requires
   every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names thirty-five of them.
+  design names forty of them.
 
-The rest is close to the spec's own breakdown: 135-200 for README and verification
-instructions, 60-110 of committed evidence bytes, 50-64 for documentation, index and
-restore. Midpoint 700. If the real diff lands outside 600-800, stop and return to the
+- The prerequisite stage run adds five committed documents, five manifest lines, the
+  README's account of the construction order and the test's recomputation of it:
+  50-70 lines above the figure this plan first carried. It is not optional work —
+  without it the duty evaluation has no acyclic source, which is what the rest of this
+  plan's "Construct the duty evaluation and the claim" section settles.
+
+The rest is close to the spec's own breakdown: 155-230 for README and verification
+instructions, 65-115 of committed evidence bytes, 50-64 for documentation, index and
+restore. Midpoint 760. If the real diff lands outside 650-870, stop and return to the
 gate rather than compressing the test or dropping evidence files.
 
 `review_size: accepted-exception` for **this plan PR**, one concern — the complete
 pre-code design for the first real self-host run — with an evidence-based range of
-**545-605 lines**. Requirement 2's declaration-only framing carries real cost in this
+**770-820 lines**. Requirement 2's declaration-only framing carries real cost in this
 plan: the precondition gate, the evaluator call, the marker checks, the consumers'
 vocabulary and the documentation rule each have to state the boundary between a
 declaration and enforcement, and the exact invocations — the validator's verb and the
-`PATH` the two standalone calls need — are design detail a reader cannot infer.
+`PATH` the standalone calls need — are design detail a reader cannot infer. The range
+moved up from the 545-605 this plan first carried because the construction order for
+the policy set, the duty evaluation and the claim has to be written out document by
+document, with the producer and the referenced bytes named for each: an acyclic order
+is not something a reader can infer from the shipped interfaces, and getting it wrong
+is a digest cycle the operator only discovers mid-run. The written-out order is
+about 180 lines of the total.
 
 ## Order of work
 
@@ -170,7 +187,10 @@ recomputed from the exact committed bytes it names and equal the recorded value.
 repeated-character value of the kind the fixtures at
 `scripts/test/shadow-slice.test.sh:128-195` build those references from (`("2" * 64)`,
 `("b" * 64)`), or any digest that does not equal the SHA-256 of the real committed
-bytes it names, stops the run rather than being retained.
+bytes it names, stops the run rather than being retained. Every one of those fields has
+a producer and a fixed place in an order where no document names bytes produced after
+it; "Construct the duty evaluation and the claim" below is that order, and it is a
+prerequisite of the assembly step rather than a detail of it.
 
 **What the coder may do before that gate clears**, because none of it needs a run:
 
@@ -268,6 +288,184 @@ These are **recorded configured settings, not evidence that a model ran** — th
 says so in those words. Nothing in this initiative calls a model, and the session that
 performs the run must not write its own model into the identity.
 
+### Construct the duty evaluation and the claim (requirements 2, 12)
+
+This section produces `$POLICY_SET`, `$DUTY` and `$CLAIM`. It runs once, before either
+assembly, because the assembler already needs the claim. `$PRE_REQ` is the retained
+`prerequisite/` directory of the evidence bundle; `$OUT_DIR_0`, `$CAND0` and `$SCRATCH0`
+are fresh, empty, private 0700 directories outside `$SRC` and disjoint from it and from
+each other, on the same terms the driver checks for its own three.
+
+**Why these cannot come from this run's own documents.**
+`shadow/v1/materialization-input.jq:197` puts the claim's SHA-256 into the stage request
+it builds, as `environment_ref.fingerprint_sha256`. So a duty evaluation over *this*
+run's stage tuple would hash a request that already hashes the claim that references
+that duty evaluation: claim -> request -> duty -> claim. No ordering of this run's own
+steps breaks that cycle. The duty evaluation therefore covers a **prerequisite stage
+run**, performed once before either evidence run, and the claim is built from its bytes
+afterwards.
+
+No committed tuple can be reused instead. Nothing in the repository holds a real
+`stage_request` / `resolved_profile` / `stage_result` triple: the only such documents
+are the synthetic payloads under `evals/v1/` and `scripts/test/`, whose references are
+the repeated-character placeholders the precondition gate refuses.
+
+**The order.** Each entry names what it produces and what it references; nothing
+references a later entry.
+
+1. **`control-policy-set.json`** — produced by no tool: it is `control/v1/control-policy-set.json`
+   copied byte for byte, and `$POLICY_SET` is that copy. It references the shipped
+   `control/v1/*-policy.json` and `*-decision.json` bytes and the core-contract package
+   closure, all committed on `main` before the run. The shipped file and no other:
+   `control/v1/evaluate-duty.sh:306-325` requires `body.core_contract.package_ref.sha256`
+   to equal the digest of the live core closure it recomputes itself, and the
+   `duty-separation` section's `policy_ref` and `decision_ref` to equal the shipped
+   policy and decision digests; `control/v1/sandbox.jq:140-148` then requires the duty
+   evaluation to carry those same two references. Confirm the copy before use with
+   `PATH="$JQ_DIR:/usr/bin:/bin" control/v1/validate.sh validate "$POLICY_SET"`.
+2. **`resolved-profile.json`** — produced by the resolver entry, above. References only
+   the committed `profiles/default/v1` objects and the resolution request and map.
+3. **`prerequisite/environment-declaration.json`** — **constructed by this run**; no
+   shipped tool emits it. It is the bootstrap environment description that the first
+   stage run in a newly registered environment has to fingerprint, and it exists so that
+   entry 4's `environment_ref` names real, earlier bytes instead of a claim that does not
+   exist yet. Build it with `jq -S -c -n` from two real sources and nothing else: the
+   shipped `control/v1/sandbox-policy.json` body's `environment`, `filesystem`,
+   `isolation`, `limits`, `network`, `resources`, `sensitive_material` and `tools`
+   sections copied verbatim, and `registry_entry_sha256`, the SHA-256 of
+   `"$JQ" -S -c '.environments[] | select(.id == "env.local-macos-ystack-self")' shadow/v1/shadow-environments.json`.
+   `schema_version` 1, `kind` `execution_environment_claim`, `id`
+   `env.local-macos-ystack-self` — those two fields are all the assembler reads from the
+   file it is handed (`shadow/v1/materialization-input.jq:101-105`, `:213-214`). It
+   carries no `*_ref` field of any kind, so it can carry no fabricated reference. It is
+   never passed to `control/v1/evaluate-sandbox.sh` and it is not the claim either run is
+   evaluated under; the README says both of those things in words beside its digest and
+   beside the jq program that built it.
+4. **`prerequisite/input.json`, `prerequisite/stage-request.json`,
+   `prerequisite/resolved-profile-document.json`** — produced by the shipped assembler,
+   invoked exactly as in the next section but with entry 3's file in the claim position,
+   the pre-transition revision, its own frozen `$REQUESTED_AT_0` and its own fresh 0700
+   `$OUT_DIR_0`:
+
+   ```sh
+   shadow/v1/assemble-materialization-input.sh assemble \
+     repo.ystack "$SRC" d3f6d525328838b9c2de819699e53d8909ab7a3f "$REQUESTED_AT_0" \
+     "$REPO/profiles/default/v1" "$RESOLVED_PROFILE" "$JQ" "$OUT_DIR_0" \
+     "$PRE_REQ/environment-declaration.json"
+   ```
+
+   Retain `input.json`, and extract the two documents the duty evaluator needs in the
+   assembler's own canonical form — the extraction
+   `scripts/test/shadow-slice.test.sh:119-120` performs:
+
+   ```sh
+   "$JQ" -S -c '.stage_request.content' "$OUT_DIR_0/input.json" \
+     > "$PRE_REQ/stage-request.json"
+   "$JQ" -S -c '.resolved_profile.content' "$OUT_DIR_0/input.json" \
+     > "$PRE_REQ/resolved-profile-document.json"
+   ```
+
+   Their SHA-256s must equal the `sha256` fields of the assembler's own
+   `stage-request-ref.json` and `resolved-profile-ref.json` in `$OUT_DIR_0`; if either
+   differs, stop. `$REQUESTED_AT_0` is the real UTC time of this prerequisite run and
+   differs from both cases' timestamps, so the three assembled inputs are distinct
+   documents. They are not distinguishable by id — `materialization-input.jq` gives every
+   request the id `request.shadow-input-assembler` — so the README distinguishes them by
+   digest and says so. References entries 2 and 3.
+5. **`prerequisite/stage-result.json`** — produced by the shipped materializer, read-only
+   over the same `$SRC`, with its own fresh, empty, private, mutually disjoint 0700
+   `$CAND0` and `$SCRATCH0`:
+
+   ```sh
+   /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash \
+     adapters/local-git-materializer/v1/materialize.sh materialize \
+     "$OUT_DIR_0/input.json" repo.ystack "$SRC" "$CAND0" "$SCRATCH0" "$CLOSURE" "$JQ" \
+     > "$PRE_REQ/materialize.json"
+   "$JQ" -S -c '.stage_result' "$PRE_REQ/materialize.json" > "$PRE_REQ/stage-result.json"
+   ```
+
+   That is the driver's own call and its own extraction
+   (`shadow/v1/reproduce.sh:452-461`), and `$CLOSURE` is the closure helper compiled the
+   way "The two runs" below describes.
+   so these bytes are produced the way the evidence runs produce theirs. It is a real
+   materialization of real history, it writes nothing to `$SRC`, and it happens between
+   the two readings of the source inventory, so requirement 10's before/after comparison
+   still has to come out equal. `materialize.json` is scratch and is not retained; the
+   `stage_result` document is. References entry 4.
+6. **`duty-evaluation.json`** — produced by the shipped evaluator, and `$DUTY` is that
+   file:
+
+   ```sh
+   PATH="$JQ_DIR:/usr/bin:/bin" control/v1/evaluate-duty.sh evaluate \
+     "$POLICY_SET" "$PRE_REQ/stage-request.json" \
+     "$PRE_REQ/resolved-profile-document.json" "$PRE_REQ/stage-result.json" \
+     > duty-evaluation.json
+   ```
+
+   Four file arguments after the literal verb, in that order
+   (`control/v1/evaluate-duty.sh:17`, `:104`). Run it from the real checkout: it derives
+   the repository from its own path and recomputes the live core closure, and like the
+   other standalone calls it finds jq through `PATH` and requires jq 1.6
+   (`control/v1/evaluate-duty.sh:40-42`). Its stdout is already canonical — it emits
+   through `jq -S -c` and then compares those bytes against their own canonicalisation
+   (`:362`, `:382-386`) — so redirect it and do not reformat. Every reference in the
+   document is computed by the evaluator from the bytes it was handed, never written by
+   hand: `body.policy_ref`, `body.decision_ref`, `body.policy_set` and all three
+   `body.stage` references (`:285-288`, `:396-412`). It also sets the document's `id` to the stage
+   result's id, which `control/v1/sandbox.jq:148` requires. A `violated` verdict is a
+   stop, not something to work around: `sandbox.jq:211` would add `duty.violated` and the
+   run would end at `environment.not-satisfied`. References entries 1, 4 and 5.
+7. **`environment-claim.json`** — **constructed by this run**, and `$CLAIM` is that file;
+   no shipped tool emits a claim. Build it with `jq -S -c -n --slurpfile` over
+   `control/v1/sandbox-policy.json` and `duty-evaluation.json`, with these fields and no
+   others — `control/v1/sandbox.jq:63-70` fixes the key set:
+
+   - `environment`, `filesystem`, `isolation`, `limits`, `network`, `resources`,
+     `sensitive_material` and `tools` copied verbatim from the shipped policy's body.
+     That copy is what keeps the shipped all-ones verifier digest literal, which
+     `sandbox.jq:179-183` requires and which the precondition gate keeps.
+   - `execution_identity.role` `verifier`, the role `control/v1/sandbox-policy.json`
+     fixes and `sandbox.jq:160`, `:204` check; `declaration_status` `complete`; `effects` with
+     `external_writes` and `target_writes` both false.
+   - `id` `env.local-macos-ystack-self`, because the driver reads the environment id out
+     of the claim (`shadow/v1/reproduce.sh:258-264`).
+   - `policy_set_ref`: `{schema_version:1, kind:"control_policy_set", id:` the set's own
+     id `, sha256:` the SHA-256 of entry 1's retained bytes `}`.
+   - `duty_evaluation_ref`: `{schema_version:1, kind:"duty_separation_evaluation", id:`
+     the evaluation's own id `, sha256:` the SHA-256 of entry 6's retained bytes `}`.
+   - `stage_result_ref` copied field for field from `duty-evaluation.json`'s
+     `body.stage.result_ref`, which `sandbox.jq:210` compares for equality and which
+     already names entry 5's bytes.
+
+   References entries 1, 5 and 6 — nothing produced later. The README quotes the jq
+   program beside the claim's digest, so a reader can rebuild the bytes and compare.
+8. **`{pre,post}/assembled/*`**, then `{pre,post}/qualified-identity.json`, then
+   `{pre,post}/state/*` and `{pre,post}/sandbox-evaluation.json` — the two evidence
+   assemblies and the two runs in the sections below, each referencing entry 7's claim
+   and everything above it.
+
+Only entries 3 and 7 are written by this run rather than by a shipped tool. Both are
+canonical `jq -S -c`, both are retained in the evidence, and neither carries a digest
+that is not the SHA-256 of bytes retained beside it.
+
+**How the focused test rechecks this.** `scripts/test/shadow-self-host-evidence.test.sh`
+walks the same order offline over the committed bytes, recomputing each reference in
+turn and stopping at the first mismatch, so a failure names the earliest document whose
+bytes moved: the shipped `control/v1` policy and decision digests against
+`control-policy-set.json`'s section references; `control-policy-set.json`'s digest
+against `duty-evaluation.json`'s `body.policy_set.sha256` and the claim's
+`body.policy_set_ref.sha256`; `prerequisite/environment-declaration.json`'s digest
+against `prerequisite/input.json`'s
+`.stage_request.content.body.environment_ref.fingerprint_sha256`;
+`prerequisite/stage-request.json`, `prerequisite/resolved-profile-document.json` and
+`prerequisite/stage-result.json` against the duty evaluation's three `body.stage`
+references; the duty evaluation's `body.stage.result_ref` against the claim's
+`body.stage_result_ref`, field for field; `duty-evaluation.json`'s digest against the
+claim's `body.duty_evaluation_ref.sha256`; and `environment-claim.json`'s digest against
+each case's `assembled/input.json`
+`.stage_request.content.body.environment_ref.fingerprint_sha256`. These are requirement
+15's checks in a fixed order, not extra ones, and none of them runs a reproduction.
+
 ### Assemble each run's input (requirement 12)
 
 Once per case, with `$OUT_DIR` a fresh empty 0700 directory:
@@ -282,8 +480,9 @@ shadow/v1/assemble-materialization-input.sh assemble \
 `d3f6d525328838b9c2de819699e53d8909ab7a3f` for the pre case. `$REQUESTED_AT` is the
 frozen input timestamp for that case, in `YYYY-MM-DDTHH:MM:SSZ`, the same value the
 incident record's `observed_at` carries — the real UTC time the digest was checked for
-this exercise, not a re-dated outage time (requirement 7). `$CLAIM` is the real
-environment claim; its `id` must be `env.local-macos-ystack-self`, because the driver
+this exercise, not a re-dated outage time (requirement 7). `$CLAIM` is the claim
+entry 7 of the construction order above produced; its `id` is
+`env.local-macos-ystack-self`, because the driver
 reads the environment id straight out of the claim
 (`shadow/v1/reproduce.sh:258-264`) and matches it against the registry.
 
@@ -536,7 +735,10 @@ declaration-only marker and check 10 greps the committed prose. The second is fi
 a coder who finds the claim, policy set and duty at
 `scripts/test/shadow-slice.test.sh:128-195`, sees them produce `satisfied`, and reuses
 them — their references are repeated-character placeholders (`"2" * 64`, `"b" * 64`)
-naming no real bytes. A fabricated reference digest in a committed reference stops the
+naming no real bytes. The answer to "where do the real ones come from, then" is the
+construction order above, and its prerequisite stage run is the only reason that order
+is acyclic; a coder who skips it will find no way to build the claim except by
+inventing digests. A fabricated reference digest in a committed reference stops the
 run; review should recompute each reference field listed in the precondition gate and
 look for those repeated-character values in anything committed. The shipped verifier
 tool digest of 64 ones that `control/v1/sandbox-policy.json` pins is the other half of
