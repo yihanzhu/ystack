@@ -28,35 +28,34 @@ resumption. This plan amendment does not discard WIP or itself authorize resume.
 
 Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
-| Path | Work | Estimated changed lines |
+| Path | Work | Changed lines |
 | --- | --- | ---: |
-| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1075-1228 |
-| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 380-447 |
-| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1367-1447 |
+| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1910 measured |
+| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 400 measured |
+| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1865 measured |
 | `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
 | `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
 | `README.md` | Resolver index row | 2 |
 | `RESTORE.md` | Resolver restoration and proof | 18 |
 | `ci/required-files.txt` | Append both shipped files and focused test | 5 |
 
-`review_size: accepted-exception`, **2850-3200 changed lines**, is accepted in
-the spec for this one implementation concern. The projected table total is
-2884-3184, not measured implementation. Parent/entry intervals retain the earlier
-plan estimates and the spec's later cumulative estimates. Other paths total 62.
-The paused test draft measures 1242 lines; it is incomplete and unaccepted proof.
-Its projected 1367-1447 includes 70-100 added lines for native Darwin directory/cache
-attribution and isolated compile-cache proof, 15-25 for observing all four run files
-and the run directory at 0500, and 40-80 net lines to replace the incomplete 74-line
-source sweep with the accepted exact-role and lexical checks. These additions are
-estimates of unwritten work, not measurements. The accepted band rounds the total
-outward; it does not permit dropping another discovered proof obligation.
+Measured figures are the three implementation files at
+`5472bdc23bf6771c8dcb00845c036b054a58b820` on
+`ystack/impl/resolver-trusted-parent`, 4175 changed lines against plan-base
+`d23a331`. The remaining five paths are unwritten estimates totalling 62.
 
-The 702-line existing launcher supplies about 605 copied lines; existing test
-fixtures are reuse, not permission to omit cases. Choose the specified platform
-SHA tools; do not add a C digest implementation. Measure additions, deletions and
-net separately when full tests land and at final head. No compressed code, reduced
-tests or component/test split to meet the band. An unexplained overrun returns to
-the artifact gate before more code.
+`review_size: accepted-exception`, **3650-4950 changed lines**, is accepted in
+the spec for this one implementation concern. The range is evidence-based: about
+4240 changed lines are expected at final head, rounded outward by roughly a
+sixth for the remaining documentation, manifest and test-harness work.
+
+The 702-line existing launcher supplies about 605 of the parent's lines; existing
+test fixtures are reuse, not permission to omit cases. Choose the specified
+platform SHA tools; do not add a C digest implementation. Measure additions,
+deletions and net separately at final head. No compressed code, reduced tests or
+component/test split to meet the band. An unexplained overrun returns to the
+artifact gate before more code; above the top of the band, stop and re-decide
+rather than continue.
 The spec's separate 8521-11529 artifact range does not apply to this plan or code.
 
 Do not change the resolver runtime, library, jq program, native helper, core files,
@@ -71,7 +70,7 @@ The new test may use existing fixture helpers and create temporary drivers.
 
 Provision pinned jq using `scripts/test/shadow-slice.test.sh:24-51`, as R10 requires.
 Reuse temporary cleanup and result-helper patterns from
-`scripts/test/portable-profile-resolution.test.sh:23-30,521-533`, its launcher source and
+`scripts/test/portable-profile-resolution.test.sh:23-34,521-531`, its launcher source and
 loader-trap source; fixture helpers serve auxiliary cases.
 The positive request names real committed `profiles/default/v1` profile/manifest
 objects with this repository mapped, as R10 requires, not a synthetic profile.
