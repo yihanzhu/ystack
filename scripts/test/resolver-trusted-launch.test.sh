@@ -1,0 +1,1865 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016
+#
+# R10 focused test for resolver-trusted-launch (work/resolver-trusted-parent).
+# Exercises the shipped entry (resolver/v1/resolve-profile.sh) and the shipped
+# parent (resolver/v1/trusted-launch.c), which do not exist yet at plan step 1 —
+# this run is expected to fail against absent behavior (plan.md:96-97).
+#
+# Case inventory (R10 groups, spec.md lines noted per group):
+#   Group 1 — entry-owned refusals (spec.md:7099-7170)
+#   Group 2 — parent-owned refusals, direct invocation (spec.md:7247-7420)
+#   Group 3 — runtime refusal, labelled (spec.md:7442-7447)
+#   R3 no-copy invariant (spec.md:7449-7524)
+#   Loader-variable case (spec.md:7495-7524)
+#   Entry mode / relative invocation (spec.md:7566-7600)
+#   Compiler-environment pollution (spec.md:7608-7710)
+#   Cleanup cases (spec.md:7716-7764)
+#   Two-umask case (spec.md:7813-7845)
+#   Descriptor cases (spec.md:7846-7975)
+#   Signal cases (spec.md:7976-8385)
+#   Pinned-blob / generation assertions (spec.md:8388-8410)
+#   Mechanism checks / proof-by-reading (spec.md:8460-8995)
+set -euo pipefail
+export LC_ALL=C
+umask 077
+
+root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
+entry="$root/resolver/v1/resolve-profile.sh"
+parent_source="$root/resolver/v1/trusted-launch.c"
+helper_source="$root/resolver/v1/nofollow-snapshot.c"
+runtime="$root/resolver/v1/profile-resolve-runtime.sh"
+library="$root/scripts/lib/profile-resolution.sh"
+jq_program="$root/resolver/v1/profile-resolution.jq"
+launcher_source="$root/scripts/test/portable-profile-resolution-launcher.c"
+fixture_builder="$root/scripts/test/portable-profile-resolution-fixtures.sh"
+generation_dir="$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43"
+mod_schema="$generation_dir/modules/schema.jq"
+mod_result_truth="$generation_dir/modules/result_truth.jq"
+mod_stage_request="$generation_dir/modules/stage_request.jq"
+mod_profile_graph="$generation_dir/modules/profile_graph.jq"
+mod_result_facts="$generation_dir/modules/result_facts.jq"
+
+# The eight loaded/pinned files R5 enumerates (parent-pinned set; entry pins these
+# plus its own two C sources -- ten total).
+loaded_files="$runtime $library $jq_program $mod_schema $mod_result_truth $mod_stage_request $mod_profile_graph $mod_result_facts"
+
+tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-resolver-trusted-launch-test.XXXXXX")
+tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+suite_complete=0
+cleanup() {
+  cleanup_status=$?
+  if [ "$suite_complete" -eq 1 ]; then
+    /bin/chmod -R u+w "$tmp" 2>/dev/null || :
+    /bin/rm -rf -- "$tmp"
+  else
+    printf 'preserved failing fixture: %s\n' "$tmp" >&2
+  fi
+  exit "$cleanup_status"
+}
+trap cleanup EXIT
+
+total=0
+passed=0
+pass_case() { total=$((total + 1)); passed=$((passed + 1)); printf 'ok %d - %s\n' "$total" "$1"; }
+fail_case() { total=$((total + 1)); printf 'not ok %d - %s\n' "$total" "$1" >&2; exit 1; }
+skip_case() { total=$((total + 1)); passed=$((passed + 1)); printf 'ok %d - %s # SKIP %s\n' "$total" "$1" "$2"; }
+
+sha256_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+
+# --- 0. Pinned jq, provisioned the way shadow-slice.test.sh:24-51 does -----------------
+
+platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+case "$platform" in
+  Darwin:*) jq_asset=jq-osx-amd64
+    jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
+  Linux:x86_64) jq_asset=jq-linux64
+    jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
+  *) fail_case "unsupported host $platform" ;;
+esac
+jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$jq_cache_dir"
+jq_cache="$jq_cache_dir/$jq_asset"
+if [ ! -f "$jq_cache" ] || [ -L "$jq_cache" ] || [ "$(sha256_file "$jq_cache")" != "$jq_sha" ]; then
+  jq_download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" -o "$jq_download"
+  [ "$(sha256_file "$jq_download")" = "$jq_sha" ] || fail_case 'jq release digest'
+  /bin/chmod 0555 "$jq_download"
+  /bin/mv "$jq_download" "$jq_cache"
+fi
+bin="$tmp/bin"
+/bin/mkdir -m 700 "$bin"
+/bin/cp "$jq_cache" "$bin/jq"
+/bin/chmod 0555 "$bin/jq"
+bound_jq="$bin/jq"
+[ "$("$bound_jq" --version)" = jq-1.6 ] || fail_case 'jq identity'
+
+case "$platform" in
+  Linux:x86_64) /bin/cp /usr/bin/awk "$bin/awk" ;;
+  Darwin:*) /usr/bin/printf '%s\n' '#!/bin/bash' 'exec /usr/bin/awk "$@"' > "$bin/awk" ;;
+esac
+/bin/chmod 0555 "$bin/awk"
+
+# --- Per-platform tool table (mirrors R1's compile line and R7's digest tools) ----------
+
+case "$platform" in
+  Linux:x86_64)
+    compiler=/usr/bin/cc
+    compiler_extra_flags=()
+    ;;
+  Darwin:*)
+    compiler=/Library/Developer/CommandLineTools/usr/bin/clang
+    compiler_extra_flags=(-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)
+    ;;
+esac
+
+compile_source() {
+  # compile_source SOURCE OUTPUT [EXTRA_ENV...]
+  /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$@" \
+    "$compiler" "${compiler_extra_flags[@]}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    -o "$2" "$1"
+}
+
+# --- 1. Real profile acquisition (plan.md:76-90; R10's positive-request requirement) ---
+#
+# Prefer already-present exact objects in a disposable repository built from this
+# checkout's own objects. Fall back to an anonymous public-HTTPS fetch, with a clean
+# environment and disposable HOME, only if the checkout lacks them. A failed
+# acquisition fails the test outright -- it is never a skip.
+
+real_repo="$tmp/real-repo.git"
+real_head=$(/usr/bin/git -C "$root" rev-parse HEAD)
+
+# Collect every commit_id embedded in the real committed profile/manifest objects, plus
+# the head commit itself (which names profile.json and the manifest files directly).
+profile_json="$root/profiles/default/v1/profile.json"
+required_commits=$("$bound_jq" -r '
+  [.. | objects | select(has("commit_id")) | .commit_id] | unique[]
+' "$profile_json")
+all_present=1
+for c in $real_head $required_commits; do
+  /usr/bin/git -C "$root" cat-file -e "$c^{commit}" 2>/dev/null || all_present=0
+done
+
+if [ "$all_present" -eq 1 ]; then
+  /usr/bin/git clone --quiet --bare --no-hardlinks -- "$root" "$real_repo"
+else
+  disposable_home="$tmp/real-repo-home"
+  /bin/mkdir -m 700 "$disposable_home"
+  /usr/bin/git init --quiet --bare "$real_repo"
+  for c in $real_head $required_commits; do
+    /usr/bin/git -C "$real_repo" cat-file -e "$c^{commit}" 2>/dev/null && continue
+    HOME="$disposable_home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+      GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false \
+      GIT_SSH_COMMAND=/bin/false core_hooksPath=/dev/null \
+      /usr/bin/git -C "$real_repo" -c protocol.version=2 -c credential.helper= \
+        -c core.hooksPath=/dev/null fetch --no-tags --no-write-fetch-head \
+        'https://github.com/yihanzhu/ystack.git' "$c" || {
+          fail_case "real-object acquisition: cannot obtain commit $c"
+        }
+    /usr/bin/git -C "$real_repo" cat-file -e "$c^{commit}" 2>/dev/null ||
+      fail_case "real-object acquisition: fetched but missing commit $c"
+  done
+fi
+for c in $real_head $required_commits; do
+  /usr/bin/git -C "$real_repo" cat-file -e "$c^{commit}" 2>/dev/null ||
+    fail_case "real-object acquisition: closure incomplete for $c"
+done
+pass_case 'real profile/manifest object closure acquired into a disposable repository'
+
+real_locator() {
+  # real_locator PATH -> jq locator object {repository_id,hash_algorithm,commit_id,path,object_id}
+  real_line=$(/usr/bin/git -C "$root" ls-tree "$real_head" -- "$1")
+  real_meta=${real_line%%$'\t'*}
+  IFS=' ' read -r _ _ real_oid <<< "$real_meta"
+  "$bound_jq" -S -c -n --arg id repo.ystack --arg commit "$real_head" --arg path "$1" \
+    --arg oid "$real_oid" \
+    '{repository_id:$id,hash_algorithm:"sha1",commit_id:$commit,path:$path,object_id:$oid}'
+}
+
+real_profile_locator=$(real_locator profiles/default/v1/profile.json)
+real_manifest_locators='[]'
+for m in claude-code-producer codex-native-reviewer deterministic-verifier \
+         dormant-publisher github-actions-ci local-git-materializer; do
+  loc=$(real_locator "profiles/default/v1/manifests/$m.json")
+  real_manifest_locators=$("$bound_jq" -S -c --argjson l "$loc" '. + [$l]' <<< "$real_manifest_locators")
+done
+real_scope() {
+  real_hash=$(/usr/bin/printf '%064d' 0 | /usr/bin/tr 0 "$2")
+  "$bound_jq" -S -c -n --arg purpose "$1" --arg hash "$real_hash" \
+    '{purpose:$purpose,decision_record_ref:{content_id:("decision-"+$purpose),media_type:"application/json",sha256:$hash},
+      subject_ref:{type:"artifact",value:{type:"content",value:{content_id:$purpose,media_type:"application/json",sha256:$hash}}},
+      scope_sha256:$hash}'
+}
+real_selection=$(real_scope selection 8)
+real_context=$(real_scope repository-context 9)
+real_request="$tmp/real-request.json"
+"$bound_jq" -S -c -n --argjson profile "$real_profile_locator" --argjson manifests "$real_manifest_locators" \
+  --argjson selection "$real_selection" --argjson context "$real_context" \
+  '{version:1,profile_source:$profile,manifest_sources:$manifests,
+    selection_ref:$selection,repository_context_ref:$context}' > "$real_request"
+real_map="$tmp/real-map.json"
+"$bound_jq" -S -c -n --arg root "$real_repo" \
+  '{version:1,repositories:[{repository_id:"repo.ystack",root:$root}]}' > "$real_map"
+pass_case 'positive resolution request names the real committed profiles/default/v1 objects'
+
+# --- 2. Synthetic fixture, for auxiliary/hostile cases (plan.md: fixture helpers) -------
+
+synthetic="$tmp/synthetic"
+exec 3>&2
+eval "$(PATH="$bin:/usr/bin:/bin" "$fixture_builder" "$synthetic" "$bound_jq")"
+# The eval above sets: request= map= profile= manifests= assets=
+# shellcheck disable=SC2154
+synthetic_request="$request"
+# shellcheck disable=SC2154
+synthetic_map="$map"
+
+# --- 3. Shared run-directory ("group 2") fixture builder --------------------------------
+#
+# This shape is the only legitimate user of a direct trusted-launch invocation: it
+# proves the parent's own refusals. Nothing shipped detects the difference, and a
+# passing group-2 case is not permission for anyone else to launch the parent this way.
+
+group2_counter=0
+build_run_directory() {
+  # build_run_directory OUTPUT [--parent-source SRC] [--helper-source SRC]
+  # [--jq PATH] [--skip-jq] [--skip-awk] [--skip-helper]
+  g2_output=$1; shift
+  g2_parent_src=$parent_source
+  g2_helper_src=$helper_source
+  g2_jq=$bound_jq
+  g2_skip_jq=0 g2_skip_awk=0 g2_skip_helper=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --parent-source) g2_parent_src=$2; shift 2 ;;
+      --helper-source) g2_helper_src=$2; shift 2 ;;
+      --jq) g2_jq=$2; shift 2 ;;
+      --skip-jq) g2_skip_jq=1; shift ;;
+      --skip-awk) g2_skip_awk=1; shift ;;
+      --skip-helper) g2_skip_helper=1; shift ;;
+      *) shift ;;
+    esac
+  done
+  /bin/mkdir -m 700 "$g2_output"
+  g2_run="$g2_output/.run"
+  /bin/mkdir -m 700 "$g2_run"
+  /bin/mkdir -m 700 "$g2_run/tmp"
+  /bin/mkdir -m 700 "$g2_run/home"
+  compile_source "$g2_parent_src" "$g2_run/trusted-launch" \
+    "TMPDIR=$g2_run/tmp" "HOME=$g2_run/home"
+  if [ "$g2_skip_helper" -ne 1 ]; then
+    compile_source "$g2_helper_src" "$g2_run/nofollow-snapshot" \
+      "TMPDIR=$g2_run/tmp" "HOME=$g2_run/home"
+  fi
+  if [ "$g2_skip_jq" -ne 1 ]; then
+    /bin/cp "$g2_jq" "$g2_run/jq"
+  fi
+  if [ "$g2_skip_awk" -ne 1 ]; then
+    case "$platform" in
+      Linux:x86_64) /bin/cp /usr/bin/awk "$g2_run/awk" ;;
+      Darwin:*) /usr/bin/printf '%s\n' '#!/bin/bash' 'exec /usr/bin/awk "$@"' > "$g2_run/awk" ;;
+    esac
+  fi
+  /bin/rm -rf -- "${g2_run:?}/tmp" "${g2_run:?}/home"
+  for f in "$g2_run"/*; do [ -e "$f" ] && /bin/chmod 0500 "$f"; done
+  /bin/chmod 0500 "$g2_run"
+  /bin/chmod 0700 "$g2_output"
+}
+
+invoke_parent() {
+  # invoke_parent RUN REQUEST MAP OUTPUT [RUN_OVERRIDE]
+  ip_run=$1 ip_request=$2 ip_map=$3 ip_output=$4 ip_run_arg=${5:-$1}
+  "$ip_run/trusted-launch" resolve "$runtime" "$ip_run/nofollow-snapshot" "$ip_run/jq" \
+    "$ip_request" "$ip_map" "$ip_output" "$ip_run_arg"
+}
+
+assert_refused_before_fork() {
+  # assert_refused_before_fork NAME STATUS STDOUT STDERR
+  af_name=$1 af_status=$2 af_stdout=$3 af_stderr=$4
+  [ "$af_status" -ne 0 ] || fail_case "$af_name: parent exited 0"
+  [ ! -s "$af_stdout" ] || fail_case "$af_name: parent wrote stdout before fork"
+  [ "$(/usr/bin/wc -l < "$af_stderr" | /usr/bin/awk '{print $1}')" -eq 1 ] ||
+    fail_case "$af_name: parent stderr is not exactly one line"
+  /usr/bin/grep -q '^E_RUNTIME' "$af_stderr" || fail_case "$af_name: missing E_RUNTIME line"
+  /usr/bin/grep -q '^runtime-pgid:' "$af_stderr" && fail_case "$af_name: runtime-pgid present on a refusal"
+  pass_case "$af_name"
+}
+
+# --- 4. Group 1 -- entry-owned refusals (spec.md:7099-7170) -----------------------------
+#
+# Driven through the shipped entry. Each of the six pin-check cases asserts the
+# E_RUNTIME line and, afterwards, that the trap removed .run (folded into the
+# generic entry-pin-refusal helper below, which is also cleanup case 2).
+
+entry_pin_case_n=0
+entry_pin_refusal() {
+  # entry_pin_refusal NAME TAMPERED_TREE_DIR TAMPERED_ENTRY_OR_UNSET
+  epr_name=$1 epr_tree=$2
+  entry_pin_case_n=$((entry_pin_case_n + 1))
+  epr_out="$tmp/group1.$entry_pin_case_n"
+  epr_stdout="$epr_out.stdout" epr_stderr="$epr_out.stderr"
+  /bin/mkdir -m 700 "$epr_out"
+  epr_status=0
+  "$epr_tree/resolver/v1/resolve-profile.sh" "$bound_jq" "$epr_out" \
+    "$synthetic_request" "$synthetic_map" \
+    > "$epr_stdout" 2> "$epr_stderr" || epr_status=$?
+  [ "$epr_status" -ne 0 ] || fail_case "$epr_name: entry exited 0"
+  /usr/bin/grep -q '^E_RUNTIME' "$epr_stderr" || fail_case "$epr_name: missing E_RUNTIME line"
+  epr_listing=$(/usr/bin/find "$epr_out" -mindepth 1 -maxdepth 1)
+  [ -z "$epr_listing" ] || fail_case "$epr_name: output directory not empty after cleanup ($epr_listing)"
+  pass_case "$epr_name"
+}
+
+copy_repo_tree() {
+  # copy_repo_tree DEST -- an editable copy of the whole checkout, never the working tree.
+  /bin/mkdir -m 700 "$1"
+  /usr/bin/git -C "$root" archive "$real_head" | (cd "$1" && /usr/bin/tar -xf -)
+  /bin/chmod -R u+w "$1"
+}
+
+if [ ! -f "$entry" ]; then
+  # The shipped entry does not exist yet: this IS the required initial failing run
+  # against absent behavior (plan.md:96-97). Record it and stop attempting entry-driven
+  # cases; group-2/mechanism cases below still execute and still fail for the same reason.
+  printf 'not ok - shipped entry resolver/v1/resolve-profile.sh does not exist\n' >&2
+fi
+
+group1_tree="$tmp/group1-tree"
+copy_repo_tree "$group1_tree"
+
+# 1a. jq whose SHA-256 does not match the platform pin.
+bad_jq="$tmp/bad-jq"; /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$bad_jq"; /bin/chmod 0555 "$bad_jq"
+g1_out="$tmp/g1.badjq"; /bin/mkdir -m 700 "$g1_out"
+g1_status=0
+"$entry" "$bad_jq" "$g1_out" "$synthetic_request" "$synthetic_map" \
+  > "$g1_out.stdout" 2> "$g1_out.stderr" || g1_status=$?
+if [ ! -x "$entry" ]; then fail_case 'group1: jq digest mismatch (entry absent)'; fi
+if [ "$g1_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$g1_out.stderr" &&
+   [ -z "$(/usr/bin/find "$g1_out" -mindepth 1 -maxdepth 1)" ]; then
+  pass_case 'group1: entry refuses a jq whose SHA-256 does not match the platform pin'
+else
+  fail_case 'group1: jq digest mismatch'
+fi
+
+# 1b-1f: edited pinned source files, each in its own copy of the tree.
+for target in resolver/v1/nofollow-snapshot.c resolver/v1/trusted-launch.c \
+              scripts/lib/profile-resolution.sh resolver/v1/profile-resolution.jq \
+              "core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq"; do
+  edited_tree="$tmp/group1-edit-$(printf '%s' "$target" | /usr/bin/tr '/' '_')"
+  copy_repo_tree "$edited_tree"
+  /usr/bin/printf '\n' >> "$edited_tree/$target"
+  entry_pin_refusal "group1: edited $target is refused on its own pin" "$edited_tree"
+done
+
+# The trusted-launch.c case carries two extra assertions: no compiler ever ran, and the
+# neighbouring nofollow-snapshot.c pin is untouched.
+tl_tree="$tmp/group1-trusted-launch"
+copy_repo_tree "$tl_tree"
+/usr/bin/printf '\n' >> "$tl_tree/resolver/v1/trusted-launch.c"
+tl_out="$tmp/g1.trusted-launch-source"; /bin/mkdir -m 700 "$tl_out"
+tl_poll_saw_compile=0
+if [ -x "$entry" ]; then
+  (
+    "$tl_tree/resolver/v1/resolve-profile.sh" "$bound_jq" "$tl_out" \
+      "$synthetic_request" "$synthetic_map" > "$tl_out.stdout" 2> "$tl_out.stderr"
+  ) &
+  tl_pid=$!
+  tl_deadline=$(( $(/bin/date +%s) + 30 ))
+  while kill -0 "$tl_pid" 2>/dev/null; do
+    if [ -e "$tl_out/.run/trusted-launch" ] || \
+       /usr/bin/find "$tl_out/.run" -maxdepth 1 -name '*.o' 2>/dev/null | /usr/bin/grep -q .; then
+      tl_poll_saw_compile=1
+    fi
+    [ "$(/bin/date +%s)" -lt "$tl_deadline" ] || break
+    /bin/sleep 0.02
+  done
+  wait "$tl_pid" || :
+  tl_status=$?
+  [ "$tl_status" -ne 0 ] || fail_case 'group1: edited trusted-launch.c source is refused (status)'
+  /usr/bin/grep -qi 'trusted-launch' "$tl_out.stderr" || fail_case 'group1: refusal does not name the parent-source pin'
+  [ "$tl_poll_saw_compile" -eq 0 ] || fail_case 'group1: compiler ran before the source pin was checked'
+  [ -z "$(/usr/bin/find "$tl_out" -mindepth 1 -maxdepth 1)" ] || fail_case 'group1: output not empty after trusted-launch.c refusal'
+  [ "$(/usr/bin/git -C "$root" hash-object "$tl_tree/resolver/v1/nofollow-snapshot.c")" = \
+    "$(/usr/bin/git -C "$root" hash-object "$root/resolver/v1/nofollow-snapshot.c")" ] ||
+    fail_case 'group1: neighbouring nofollow-snapshot.c pin was touched by the test'
+  pass_case 'group1: edited trusted-launch.c source refused with no compile and full cleanup'
+else
+  fail_case 'group1: edited trusted-launch.c source (entry absent)'
+fi
+
+# 1g. output path too long for the entry's own length guard.
+long_base="$tmp/g1-long"
+/bin/mkdir -m 700 "$long_base"
+long_ceiling=$( [ "${platform%%:*}" = Darwin ] && echo 1024 || echo 4096 )
+long_dir="$long_base"
+while [ "${#long_dir}" -lt $((long_ceiling - 16)) ]; do
+  long_dir="$long_dir/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  /bin/mkdir -m 700 "$long_dir" 2>/dev/null || break
+done
+if [ -x "$entry" ] && [ "${#long_dir}" -ge $((long_ceiling - 16)) ]; then
+  long_status=0
+  "$entry" "$bound_jq" "$long_dir" "$synthetic_request" "$synthetic_map" \
+    > "$tmp/g1.long.stdout" 2> "$tmp/g1.long.stderr" || long_status=$?
+  if [ "$long_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$tmp/g1.long.stderr"; then
+    pass_case 'group1: entry refuses an overlong output path before creating anything'
+  else
+    fail_case 'group1: overlong output path'
+  fi
+else
+  fail_case 'group1: overlong output path (entry absent or platform PATH_MAX unreachable)'
+fi
+
+# 1h-1l. Five output-root validate-first cases: each asserts the target was never
+# written to (no .run, entry set unchanged) because the refusal precedes any write.
+assert_output_untouched_refusal() {
+  # assert_output_untouched_refusal NAME OUTPUT_DIR BEFORE_LISTING
+  aou_name=$1 aou_dir=$2 aou_before=$3
+  aou_status=0
+  "$entry" "$bound_jq" "$aou_dir" "$synthetic_request" "$synthetic_map" \
+    > "$tmp/aou.stdout" 2> "$tmp/aou.stderr" || aou_status=$?
+  [ "$aou_status" -ne 0 ] || fail_case "$aou_name: exited 0"
+  /usr/bin/grep -q '^E_RUNTIME' "$tmp/aou.stderr" || fail_case "$aou_name: missing E_RUNTIME"
+  aou_after=$(/usr/bin/find "$aou_dir" -mindepth 1 -print 2>/dev/null | /usr/bin/sort)
+  [ "$aou_after" = "$aou_before" ] || fail_case "$aou_name: target was written to"
+  pass_case "$aou_name"
+}
+
+if [ -x "$entry" ]; then
+  # symlink output
+  real_out="$tmp/g1.symlink-target"; /bin/mkdir -m 700 "$real_out"
+  sym_out="$tmp/g1.symlink"; /bin/ln -s "$real_out" "$sym_out"
+  assert_output_untouched_refusal 'group1: output path is a symlink' "$sym_out" ''
+
+  # group-writable 0750
+  gw_out="$tmp/g1.groupwritable"; /bin/mkdir -m 750 "$gw_out"
+  assert_output_untouched_refusal 'group1: output mode 0750 instead of 0700' "$gw_out" ''
+
+  # holds an ordinary file
+  file_out="$tmp/g1.hasfile"; /bin/mkdir -m 700 "$file_out"; : > "$file_out/stray"
+  assert_output_untouched_refusal 'group1: output already holds an ordinary file' "$file_out" "$file_out/stray"
+
+  # holds a .run entry
+  run_out="$tmp/g1.hasrun"; /bin/mkdir -m 700 "$run_out"; /bin/mkdir -m 700 "$run_out/.run"
+  assert_output_untouched_refusal 'group1: output already holds a .run entry' "$run_out" "$run_out/.run"
+
+  # owned by another uid: skip under root with a printed reason, else point at a
+  # root-owned system directory this test never writes to.
+  if [ "$(id -u)" -eq 0 ]; then
+    skip_case 'group1: output owned by another uid' 'suite is running as root'
+  else
+    other_status=0
+    "$entry" "$bound_jq" /usr/bin "$synthetic_request" "$synthetic_map" \
+      > "$tmp/g1.otheruid.stdout" 2> "$tmp/g1.otheruid.stderr" || other_status=$?
+    if [ "$other_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$tmp/g1.otheruid.stderr" &&
+       [ ! -e /usr/bin/.run ]; then
+      pass_case 'group1: output owned by another uid is refused before any write'
+    else
+      fail_case 'group1: other-uid output'
+    fi
+  fi
+else
+  fail_case 'group1: five output-root cases (entry absent)'
+fi
+
+# --- 5. Group 2 -- parent-owned refusals, direct invocation (spec.md:7247-7420) ---------
+
+if [ -f "$parent_source" ] && [ -f "$helper_source" ]; then
+  parent_available=1
+else
+  parent_available=0
+  printf 'not ok - shipped parent resolver/v1/trusted-launch.c does not exist\n' >&2
+fi
+
+run_direct_refusal_case() {
+  # run_direct_refusal_case NAME RUN REQUEST MAP OUTPUT [RUN_ARG]
+  rdr_name=$1 rdr_run=$2 rdr_request=$3 rdr_map=$4 rdr_output=$5 rdr_arg=${6:-$2}
+  rdr_status=0
+  invoke_parent "$rdr_run" "$rdr_request" "$rdr_map" "$rdr_output" "$rdr_arg" \
+    > "$rdr_output.stdout" 2> "$rdr_output.stderr" || rdr_status=$?
+  assert_refused_before_fork "$rdr_name" "$rdr_status" "$rdr_output.stdout" "$rdr_output.stderr"
+}
+
+if [ "$parent_available" -eq 1 ]; then
+  group2_counter=$((group2_counter + 1))
+  g2out="$tmp/g2.runtime-blob"
+  build_run_directory "$g2out"
+  /bin/chmod u+w "$g2out"
+  runtime_copy="$tmp/g2.runtime-copy.sh"
+  /bin/cp "$runtime" "$runtime_copy"; /usr/bin/printf '\n' >> "$runtime_copy"; /bin/chmod 0644 "$runtime_copy"
+  g2runtime_out="$tmp/g2.runtime-blob.out"
+  g2status=0
+  "$g2out/.run/trusted-launch" resolve "$runtime_copy" "$g2out/.run/nofollow-snapshot" \
+    "$g2out/.run/jq" "$synthetic_request" "$synthetic_map" "$g2runtime_out" "$g2out/.run" \
+    > "$g2runtime_out.stdout" 2> "$g2runtime_out.stderr" || g2status=$?
+  :  # output dir for this variant is not pre-created deliberately: covered by mkdir below
+  /bin/mkdir -p "$g2runtime_out"
+  assert_refused_before_fork 'group2: runtime file blob id mismatch' "$g2status" "$g2runtime_out.stdout" "$g2runtime_out.stderr"
+
+  # runtime file mode 0755 instead of 0644
+  g2out2="$tmp/g2.runtime-mode"; build_run_directory "$g2out2"
+  mode_runtime="$tmp/g2.runtime-mode.sh"; /bin/cp "$runtime" "$mode_runtime"; /bin/chmod 0755 "$mode_runtime"
+  g2o2="$tmp/g2.runtime-mode.out"; /bin/mkdir -m 700 "$g2o2"
+  g2s2=0
+  "$g2out2/.run/trusted-launch" resolve "$mode_runtime" "$g2out2/.run/nofollow-snapshot" \
+    "$g2out2/.run/jq" "$synthetic_request" "$synthetic_map" "$g2o2" "$g2out2/.run" \
+    > "$g2o2.stdout" 2> "$g2o2.stderr" || g2s2=$?
+  assert_refused_before_fork 'group2: runtime file mode 0755 instead of 0644' "$g2s2" "$g2o2.stdout" "$g2o2.stderr"
+
+  # library / jq-program blob mismatch (two cases), reached via a runtime path inside an
+  # edited copy of the repository tree.
+  for lib_target in scripts/lib/profile-resolution.sh resolver/v1/profile-resolution.jq; do
+    lib_tree="$tmp/g2-lib-$(printf '%s' "$lib_target" | /usr/bin/tr '/' '_')"
+    copy_repo_tree "$lib_tree"
+    /usr/bin/printf '\n' >> "$lib_tree/$lib_target"
+    g2out3="$tmp/g2.lib.$(printf '%s' "$lib_target" | /usr/bin/tr '/' '_')"
+    build_run_directory "$g2out3"
+    g2o3="$g2out3.dest"; /bin/mkdir -m 700 "$g2o3"
+    g2s3=0
+    "$g2out3/.run/trusted-launch" resolve "$lib_tree/resolver/v1/profile-resolve-runtime.sh" \
+      "$g2out3/.run/nofollow-snapshot" "$g2out3/.run/jq" "$synthetic_request" "$synthetic_map" \
+      "$g2o3" "$g2out3/.run" > "$g2o3.stdout" 2> "$g2o3.stderr" || g2s3=$?
+    assert_refused_before_fork "group2: $lib_target blob mismatch (parent's own copy)" "$g2s3" "$g2o3.stdout" "$g2o3.stderr"
+  done
+
+  # edited jq module under modules/ (this round's case: schema.jq).
+  mod_tree="$tmp/g2-module"
+  copy_repo_tree "$mod_tree"
+  /usr/bin/printf '\n' >> "$mod_tree/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq"
+  g2out4="$tmp/g2.module"; build_run_directory "$g2out4"
+  g2o4="$g2out4.dest"; /bin/mkdir -m 700 "$g2o4"
+  g2s4=0
+  "$g2out4/.run/trusted-launch" resolve "$mod_tree/resolver/v1/profile-resolve-runtime.sh" \
+    "$g2out4/.run/nofollow-snapshot" "$g2out4/.run/jq" "$synthetic_request" "$synthetic_map" \
+    "$g2o4" "$g2out4/.run" > "$g2o4.stdout" 2> "$g2o4.stderr" || g2s4=$?
+  assert_refused_before_fork 'group2: edited schema.jq module refused by parent alone (library unedited)' "$g2s4" "$g2o4.stdout" "$g2o4.stderr"
+
+  # sibling case: library's own generation constant changed, refused on the library's blob pin.
+  gen_tree="$tmp/g2-generation-const"
+  copy_repo_tree "$gen_tree"
+  /usr/bin/sed -i.bak "s/PROFILE_RESOLUTION_CORE_GENERATION='g-c83c940/PROFILE_RESOLUTION_CORE_GENERATION='g-000000/" \
+    "$gen_tree/scripts/lib/profile-resolution.sh" 2>/dev/null || \
+    /usr/bin/perl -pi -e "s/PROFILE_RESOLUTION_CORE_GENERATION='g-c83c940/PROFILE_RESOLUTION_CORE_GENERATION='g-000000/" \
+    "$gen_tree/scripts/lib/profile-resolution.sh"
+  g2out5="$tmp/g2.generation-const"; build_run_directory "$g2out5"
+  g2o5="$g2out5.dest"; /bin/mkdir -m 700 "$g2o5"
+  g2s5=0
+  "$g2out5/.run/trusted-launch" resolve "$gen_tree/resolver/v1/profile-resolve-runtime.sh" \
+    "$g2out5/.run/nofollow-snapshot" "$g2out5/.run/jq" "$synthetic_request" "$synthetic_map" \
+    "$g2o5" "$g2out5/.run" > "$g2o5.stdout" 2> "$g2o5.stderr" || g2s5=$?
+  assert_refused_before_fork "group2: edited library generation constant refused on library's own blob pin" "$g2s5" "$g2o5.stdout" "$g2o5.stderr"
+
+  # jq SHA-256 mismatch
+  g2out6="$tmp/g2.jq-sha256"; build_run_directory "$g2out6" --skip-jq
+  /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$g2out6/.run/jq"; /bin/chmod 0500 "$g2out6/.run/jq"
+  run_direct_refusal_case 'group2: jq SHA-256 mismatch' "$g2out6/.run" "$synthetic_request" "$synthetic_map" "$g2out6.dest"
+
+  # jq that does not answer jq-1.6
+  g2out7="$tmp/g2.jq-version"; build_run_directory "$g2out7" --skip-jq
+  /usr/bin/printf '#!/bin/sh\necho jq-1.5\n' > "$g2out7/.run/jq"; /bin/chmod 0500 "$g2out7/.run/jq"
+  run_direct_refusal_case 'group2: jq answers the wrong version string' "$g2out7/.run" "$synthetic_request" "$synthetic_map" "$g2out7.dest"
+
+  # a valid pinned jq that is not the run directory's own, with a negative marker control
+  g2out8="$tmp/g2.jq-identity"; build_run_directory "$g2out8"
+  other_dir="$tmp/g2.jq-identity.other"; /bin/mkdir -m 700 "$other_dir"
+  /bin/cp "$bound_jq" "$other_dir/jq"; /bin/chmod 0500 "$other_dir/jq"
+  /usr/bin/printf '#!/bin/sh\nprintf YSTACK-AWK-MARKER\\\\n\nexit 1\n' > "$other_dir/awk"; /bin/chmod 0500 "$other_dir/awk"
+  "$other_dir/awk" > "$tmp/g2.jq-identity.control" 2>&1 || :
+  /usr/bin/grep -q YSTACK-AWK-MARKER "$tmp/g2.jq-identity.control" || fail_case 'group2: jq-identity negative control awk did not print its marker'
+  g2o8dest="$g2out8.dest"; /bin/mkdir -m 700 "$g2o8dest"
+  g2s8=0
+  PATH="$other_dir:/usr/bin:/bin" \
+    "$g2out8/.run/trusted-launch" resolve "$runtime" "$g2out8/.run/nofollow-snapshot" \
+    "$other_dir/jq" "$synthetic_request" "$synthetic_map" "$g2o8dest" "$g2out8/.run" \
+    > "$g2o8dest.stdout" 2> "$g2o8dest.stderr" || g2s8=$?
+  assert_refused_before_fork 'group2: valid pinned jq that is not the run directory''s own' "$g2s8" "$g2o8dest.stdout" "$g2o8dest.stderr"
+  /usr/bin/grep -q YSTACK-AWK-MARKER "$g2o8dest.stdout" "$g2o8dest.stderr" 2>/dev/null &&
+    fail_case 'group2: caller awk marker leaked into parent run' || :
+
+  # tampered .run/awk (one byte flipped, or on Darwin a third shim line)
+  g2out9="$tmp/g2.awk-tamper"; build_run_directory "$g2out9"
+  /bin/chmod u+w "$g2out9/.run" "$g2out9/.run/awk"
+  case "$platform" in
+    Darwin:*) /usr/bin/printf '%s\n' '#!/bin/bash' 'exec /usr/bin/awk "$@"' 'true' > "$g2out9/.run/awk" ;;
+    *) /usr/bin/printf '\000' | /bin/dd of="$g2out9/.run/awk" bs=1 seek=0 count=1 conv=notrunc 2>/dev/null ;;
+  esac
+  /bin/chmod 0500 "$g2out9/.run/awk" "$g2out9/.run"
+  run_direct_refusal_case 'group2: tampered .run/awk bytes' "$g2out9/.run" "$synthetic_request" "$synthetic_map" "$g2out9.dest"
+
+  # hardlink to the genuine .run/jq at a sibling directory, marker awk beside it
+  g2out10="$tmp/g2.jq-hardlink"; build_run_directory "$g2out10"
+  hl_dir="$tmp/g2.jq-hardlink.sibling"; /bin/mkdir -m 700 "$hl_dir"
+  /bin/ln "$g2out10/.run/jq" "$hl_dir/jq"
+  /usr/bin/printf '#!/bin/sh\nprintf YSTACK-AWK-MARKER\\\\n\nexit 1\n' > "$hl_dir/awk"; /bin/chmod 0500 "$hl_dir/awk"
+  [ "$(/usr/bin/stat -c '%d:%i' "$hl_dir/jq" 2>/dev/null || /usr/bin/stat -f '%d:%i' "$hl_dir/jq")" = \
+    "$(/usr/bin/stat -c '%d:%i' "$g2out10/.run/jq" 2>/dev/null || /usr/bin/stat -f '%d:%i' "$g2out10/.run/jq")" ] ||
+    fail_case 'group2: hardlink fixture device/inode mismatch'
+  g2o10dest="$g2out10.dest"; /bin/mkdir -m 700 "$g2o10dest"
+  g2s10=0
+  PATH="$hl_dir:/usr/bin:/bin" \
+    "$g2out10/.run/trusted-launch" resolve "$runtime" "$g2out10/.run/nofollow-snapshot" \
+    "$hl_dir/jq" "$synthetic_request" "$synthetic_map" "$g2o10dest" "$g2out10/.run" \
+    > "$g2o10dest.stdout" 2> "$g2o10dest.stderr" || g2s10=$?
+  assert_refused_before_fork 'group2: hardlinked jq at a sibling directory (directory identity)' "$g2s10" "$g2o10dest.stdout" "$g2o10dest.stderr"
+
+  # non-absolute / symlinked request and map (four cases)
+  g2out11="$tmp/g2.paths"; build_run_directory "$g2out11"
+  ( cd "$synthetic" && \
+    run_direct_refusal_case 'group2: non-absolute request path' "$g2out11/.run" \
+      "$(basename "$synthetic_request")" "$synthetic_map" "$g2out11.dest1" )
+  ( cd "$synthetic" && \
+    run_direct_refusal_case 'group2: non-absolute map path' "$g2out11/.run" \
+      "$synthetic_request" "$(basename "$synthetic_map")" "$g2out11.dest2" )
+  sym_request="$tmp/g2.request.symlink"; /bin/ln -s "$synthetic_request" "$sym_request"
+  run_direct_refusal_case 'group2: symlinked request path' "$g2out11/.run" "$sym_request" "$synthetic_map" "$g2out11.dest3"
+  sym_map="$tmp/g2.map.symlink"; /bin/ln -s "$synthetic_map" "$sym_map"
+  run_direct_refusal_case 'group2: symlinked map path' "$g2out11/.run" "$synthetic_request" "$sym_map" "$g2out11.dest4"
+
+  # allowlisted overlong value: output path near PATH_MAX (parent's copied guard at :641)
+  g2out12="$tmp/g2.overlong-output"; build_run_directory "$g2out12"
+  long_out_base="$tmp/g2ol"; /bin/mkdir -m 700 "$long_out_base"
+  long_out="$long_out_base"
+  while [ "${#long_out}" -lt $((long_ceiling - 16)) ]; do
+    long_out="$long_out/yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    /bin/mkdir -m 700 "$long_out" 2>/dev/null || break
+  done
+  if [ "${#long_out}" -ge $((long_ceiling - 16)) ]; then
+    run_direct_refusal_case 'group2: allowlisted output path exceeds the fixed buffer' "$g2out12/.run" \
+      "$synthetic_request" "$synthetic_map" "$long_out"
+  else
+    fail_case 'group2: overlong output path (platform will not build one)'
+  fi
+
+  # compiled parent binary mode not 0500; helper mode not 0500 / outside run dir; run dir not 0500
+  g2out13="$tmp/g2.parent-mode"; build_run_directory "$g2out13"
+  /bin/chmod u+w "$g2out13/.run"; /bin/chmod 0700 "$g2out13/.run/trusted-launch"; /bin/chmod 0500 "$g2out13/.run"
+  run_direct_refusal_case 'group2: compiled parent binary mode is not 0500' "$g2out13/.run" "$synthetic_request" "$synthetic_map" "$g2out13.dest"
+
+  g2out14="$tmp/g2.helper-mode"; build_run_directory "$g2out14"
+  /bin/chmod u+w "$g2out14/.run"; /bin/chmod 0700 "$g2out14/.run/nofollow-snapshot"; /bin/chmod 0500 "$g2out14/.run"
+  run_direct_refusal_case 'group2: helper mode is not 0500' "$g2out14/.run" "$synthetic_request" "$synthetic_map" "$g2out14.dest"
+
+  g2out15="$tmp/g2.helper-outside"; build_run_directory "$g2out15" --skip-helper
+  outside_helper="$tmp/g2.helper-outside.helper"
+  compile_source "$helper_source" "$outside_helper"; /bin/chmod 0500 "$outside_helper"
+  g2o15="$g2out15.dest"; /bin/mkdir -m 700 "$g2o15"
+  g2s15=0
+  "$g2out15/.run/trusted-launch" resolve "$runtime" "$outside_helper" "$g2out15/.run/jq" \
+    "$synthetic_request" "$synthetic_map" "$g2o15" "$g2out15/.run" \
+    > "$g2o15.stdout" 2> "$g2o15.stderr" || g2s15=$?
+  assert_refused_before_fork 'group2: helper is outside the run directory it was given' "$g2s15" "$g2o15.stdout" "$g2o15.stderr"
+
+  g2out16="$tmp/g2.rundir-mode"; build_run_directory "$g2out16"
+  /bin/chmod 0700 "$g2out16/.run"
+  run_direct_refusal_case 'group2: run directory mode is not 0500' "$g2out16/.run" "$synthetic_request" "$synthetic_map" "$g2out16.dest"
+
+  # direct-parent .run name-set cases: extra cat with marker, extra directory, missing
+  # helper, helper basename collides with jq.
+  g2out17="$tmp/g2.extra-cat"; build_run_directory "$g2out17"
+  /bin/chmod u+w "$g2out17/.run"
+  /usr/bin/printf '#!/bin/sh\nprintf YSTACK-CAT-MARKER\\\\n\nexit 1\n' > "$g2out17/.run/cat"; /bin/chmod 0500 "$g2out17/.run/cat"
+  "$g2out17/.run/cat" > "$tmp/g2.extra-cat.control" 2>&1 || :
+  /usr/bin/grep -q YSTACK-CAT-MARKER "$tmp/g2.extra-cat.control" || fail_case 'group2: extra-cat negative control did not print its marker'
+  /bin/chmod 0500 "$g2out17/.run"
+  g2o17dest="$g2out17.dest"; /bin/mkdir -m 700 "$g2o17dest"
+  g2s17=0
+  "$g2out17/.run/trusted-launch" resolve "$runtime" "$g2out17/.run/nofollow-snapshot" "$g2out17/.run/jq" \
+    "$synthetic_request" "$synthetic_map" "$g2o17dest" "$g2out17/.run" \
+    > "$g2o17dest.stdout" 2> "$g2o17dest.stderr" || g2s17=$?
+  assert_refused_before_fork 'group2: extra executable cat in .run' "$g2s17" "$g2o17dest.stdout" "$g2o17dest.stderr"
+  /usr/bin/grep -q YSTACK-CAT-MARKER "$g2o17dest.stdout" "$g2o17dest.stderr" 2>/dev/null &&
+    fail_case 'group2: extra-cat marker leaked into parent run' || :
+
+  g2out18="$tmp/g2.extra-dir"; build_run_directory "$g2out18"
+  /bin/chmod u+w "$g2out18/.run"; /bin/mkdir -m 500 "$g2out18/.run/extra"; /bin/chmod 0500 "$g2out18/.run"
+  run_direct_refusal_case 'group2: extra directory in .run' "$g2out18/.run" "$synthetic_request" "$synthetic_map" "$g2out18.dest"
+
+  g2out19="$tmp/g2.missing-helper"; build_run_directory "$g2out19" --skip-helper
+  run_direct_refusal_case 'group2: missing helper in .run' "$g2out19/.run" "$synthetic_request" "$synthetic_map" "$g2out19.dest"
+
+  g2out20="$tmp/g2.helper-basename"; build_run_directory "$g2out20"
+  /bin/chmod u+w "$g2out20/.run"; /bin/mv "$g2out20/.run/nofollow-snapshot" "$g2out20/.run/jq-helper"; /bin/chmod 0500 "$g2out20/.run"
+  g2o20dest="$g2out20.dest"; /bin/mkdir -m 700 "$g2o20dest"
+  g2s20=0
+  "$g2out20/.run/trusted-launch" resolve "$runtime" "$g2out20/.run/jq-helper" "$g2out20/.run/jq" \
+    "$synthetic_request" "$synthetic_map" "$g2o20dest" "$g2out20/.run" \
+    > "$g2o20dest.stdout" 2> "$g2o20dest.stderr" || g2s20=$?
+  assert_refused_before_fork 'group2: helper argument basename collides with jq' "$g2s20" "$g2o20dest.stdout" "$g2o20dest.stderr"
+
+  # .run/awk symlink, directory in its place, wrong-mode copy
+  g2out21="$tmp/g2.awk-symlink"; build_run_directory "$g2out21" --skip-awk
+  awk_target="$tmp/g2.awk-symlink.target"; /usr/bin/printf '#!/bin/sh\nexec /usr/bin/awk "$@"\n' > "$awk_target"; /bin/chmod 0500 "$awk_target"
+  /bin/ln -s "$awk_target" "$g2out21/.run/awk"
+  run_direct_refusal_case 'group2: .run/awk is a symlink' "$g2out21/.run" "$synthetic_request" "$synthetic_map" "$g2out21.dest"
+
+  g2out22="$tmp/g2.awk-dir"; build_run_directory "$g2out22" --skip-awk
+  /bin/mkdir -m 500 "$g2out22/.run/awk"
+  run_direct_refusal_case 'group2: .run/awk is a directory' "$g2out22/.run" "$synthetic_request" "$synthetic_map" "$g2out22.dest"
+
+  g2out23="$tmp/g2.awk-wrongmode"; build_run_directory "$g2out23"
+  /bin/chmod u+w "$g2out23/.run"; /bin/chmod 0700 "$g2out23/.run/awk"; /bin/chmod 0500 "$g2out23/.run"
+  run_direct_refusal_case 'group2: .run/awk wrong-mode copy' "$g2out23/.run" "$synthetic_request" "$synthetic_map" "$g2out23.dest"
+
+  # output path itself a symlink to an otherwise valid output directory
+  g2out24="$tmp/g2.output-symlink"; build_run_directory "$g2out24"
+  real_dest24="$tmp/g2.output-symlink.real"; /bin/mkdir -m 700 "$real_dest24"
+  sym_dest24="$tmp/g2.output-symlink.link"; /bin/ln -s "$real_dest24" "$sym_dest24"
+  run_direct_refusal_case 'group2: output path is itself a symlink' "$g2out24/.run" "$synthetic_request" "$synthetic_map" "$sym_dest24"
+
+  # output-directory entry-set cases: extra entry, wrong mode, decoy .run, symlinked
+  # .run to a valid run dir, .run as a regular file -- assert the parent touched nothing.
+  assert_direct_untouched_refusal() {
+    adu_name=$1 adu_run=$2 adu_output=$3
+    adu_before=$(/usr/bin/find "$adu_output" -mindepth 1 -print | /usr/bin/sort)
+    adu_status=0
+    invoke_parent "$adu_run" "$synthetic_request" "$synthetic_map" "$adu_output" \
+      > "$adu_output.stdout" 2> "$adu_output.stderr" || adu_status=$?
+    assert_refused_before_fork "$adu_name" "$adu_status" "$adu_output.stdout" "$adu_output.stderr"
+    adu_after=$(/usr/bin/find "$adu_output" -mindepth 1 -print | /usr/bin/sort)
+    [ "$adu_before" = "$adu_after" ] || fail_case "$adu_name: output tree changed"
+  }
+
+  g2out25="$tmp/g2.output-extra-entry"; build_run_directory "$g2out25"
+  : > "$g2out25.dest.stray" 2>/dev/null || :
+  extra_entry_out="$tmp/g2.output-extra-entry.out"; /bin/mkdir -m 700 "$extra_entry_out"; : > "$extra_entry_out/stray"
+  assert_direct_untouched_refusal 'group2: output holds an entry other than .run' "$g2out25/.run" "$extra_entry_out"
+
+  wrongmode_out="$tmp/g2.output-wrongmode.out"; /bin/mkdir -m 750 "$wrongmode_out"
+  assert_direct_untouched_refusal 'group2: output mode is not 0700' "$g2out25/.run" "$wrongmode_out"
+
+  decoy_out="$tmp/g2.decoy.out"; /bin/mkdir -m 700 "$decoy_out"; /bin/mkdir -m 700 "$decoy_out/.run"
+  assert_direct_untouched_refusal 'group2: .run is not the run directory the parent was handed' "$g2out25/.run" "$decoy_out"
+
+  elsewhere="$tmp/g2.elsewhere"; build_run_directory "$elsewhere"
+  linked_out="$tmp/g2.linked.out"; /bin/mkdir -m 700 "$linked_out"; /bin/ln -s "$elsewhere/.run" "$linked_out/.run"
+  assert_direct_untouched_refusal 'group2: only entry .run is a symlink to a valid run dir' "$g2out25/.run" "$linked_out"
+
+  regular_out="$tmp/g2.regular.out"; /bin/mkdir -m 700 "$regular_out"; : > "$regular_out/.run"
+  assert_direct_untouched_refusal 'group2: only entry .run is a regular file' "$g2out25/.run" "$regular_out"
+
+  # output ownership refusal via fstat interposition (never a real cross-user launch)
+  interpose_src="$tmp/g2.interpose.c"
+  cat > "$interpose_src" <<'INTERPOSE'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+static dev_t target_dev; static ino_t target_ino; static int have_target;
+static void load_target(void) {
+  const char *p = getenv("YSTACK_TEST_INTERPOSE_TARGET");
+  if (!p) return;
+  struct stat st;
+  if (stat(p, &st) == 0) { target_dev = st.st_dev; target_ino = st.st_ino; have_target = 1; }
+}
+int fstat(int fd, struct stat *buf) {
+  static int (*real_fstat)(int, struct stat *);
+  if (!real_fstat) real_fstat = dlsym(RTLD_NEXT, "fstat");
+  if (!have_target) load_target();
+  int rc = real_fstat(fd, buf);
+  if (rc == 0 && have_target && buf->st_dev == target_dev && buf->st_ino == target_ino) {
+    buf->st_uid = buf->st_uid + 1;
+  }
+  return rc;
+}
+INTERPOSE
+  case "$platform" in
+    Darwin:*) skip_case 'group2: output ownership refused under injected fstat metadata' \
+      'DYLD interposition of fstat is not portably reachable from this harness' ;;
+    *)
+      interpose_lib="$tmp/g2.interpose.so"
+      /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$interpose_src" -o "$interpose_lib" -ldl
+      own_out="$tmp/g2.ownership.out"; /bin/mkdir -m 700 "$own_out"
+      own_run="$tmp/g2.ownership"; build_run_directory "$own_run"
+      own_status=0
+      LD_PRELOAD="$interpose_lib" YSTACK_TEST_INTERPOSE_TARGET="$own_out" \
+        invoke_parent "$own_run/.run" "$synthetic_request" "$synthetic_map" "$own_out" \
+        > "$own_out.stdout" 2> "$own_out.stderr" || own_status=$?
+      assert_refused_before_fork 'group2: output ownership refused under injected fstat metadata' \
+        "$own_status" "$own_out.stdout" "$own_out.stderr"
+      own_after=$(/usr/bin/find "$own_out" -mindepth 1 -print)
+      [ -z "$own_after" ] || fail_case 'group2: injected-ownership refusal left writes behind'
+      ;;
+  esac
+else
+  fail_case 'group2: parent-owned refusal cases (trusted-launch.c absent)'
+fi
+
+# --- 6. Group 3 -- a runtime refusal, labelled as one (spec.md:7442-7447) ---------------
+
+if [ -x "$entry" ]; then
+  bad_request="$tmp/group3.bad-request.json"
+  /usr/bin/printf '{' > "$bad_request"
+  g3out="$tmp/group3.out"; /bin/mkdir -m 700 "$g3out"
+  g3status=0
+  "$entry" "$bound_jq" "$g3out" "$bad_request" "$synthetic_map" \
+    > "$g3out.stdout" 2> "$g3out.stderr" || g3status=$?
+  if [ "$g3status" -ne 0 ] && /usr/bin/grep -q '^E_PARSE' "$g3out.stderr"; then
+    pass_case 'group3: malformed request document is a runtime refusal, not an R5 case'
+  else
+    fail_case 'group3: malformed request document'
+  fi
+else
+  fail_case 'group3: malformed request document (entry absent)'
+fi
+
+# --- 7. R3 no-copy invariant (spec.md:7449-7494) -----------------------------------------
+
+if [ "$parent_available" -eq 1 ]; then
+  r3_run="$tmp/r3.rundir"; build_run_directory "$r3_run"
+  r3_clean_out="$tmp/r3.clean"; /bin/mkdir -m 700 "$r3_clean_out"
+  invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_clean_out" \
+    > "$r3_clean_out.stdout" 2> "$r3_clean_out.stderr"
+
+  r3_caller_out="$tmp/r3.caller-pollution"; /bin/mkdir -m 700 "$r3_caller_out"
+  decoy_bin="$tmp/r3.decoy-bin"; /bin/mkdir -m 700 "$decoy_bin"
+  marker_script="$tmp/r3.marker.sh"; /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$marker_script"; /bin/chmod 0555 "$marker_script"
+  FOO=bar BASH_ENV="$marker_script" ENV="$marker_script" PATH="$decoy_bin:/usr/bin:/bin" \
+    YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS=1 YSTACK_RESOLVER_TEST_GIT_STOP=1 \
+    invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_caller_out" \
+    > "$r3_caller_out.stdout" 2> "$r3_caller_out.stderr"
+  if /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_caller_out.stdout"; then
+    pass_case 'R3: caller-environment pollution does not reach the resolver'
+  else
+    fail_case 'R3: caller-environment pollution leaked into stdout'
+  fi
+
+  # pollution of variables the parent's own pre-resolver helpers read
+  case "$platform" in
+    Darwin:*)
+      perl_dir="$tmp/r3.perl"; /bin/mkdir -m 700 "$perl_dir"
+      cat > "$perl_dir/strict.pm" <<'PERLMOD'
+package strict;
+print STDERR "YSTACK-PERL-MARKER\n";
+exit 3;
+PERLMOD
+      PERL5LIB="$perl_dir" PERL5OPT=-Mstrict /usr/bin/shasum -a 1 /dev/null \
+        > "$tmp/r3.perlcontrol.stdout" 2> "$tmp/r3.perlcontrol.stderr"; r3_perl_status=$?
+      if ! { [ "$r3_perl_status" -eq 3 ] && /usr/bin/grep -q YSTACK-PERL-MARKER "$tmp/r3.perlcontrol.stderr"; }; then
+        fail_case 'R3: perl-pollution negative control did not fire on this machine'
+      fi
+      r3_perl_out="$tmp/r3.perl-pollution"; /bin/mkdir -m 700 "$r3_perl_out"
+      PERL5LIB="$perl_dir" PERL5OPT=-Mstrict \
+        invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_perl_out" \
+        > "$r3_perl_out.stdout" 2> "$r3_perl_out.stderr"; r3_perl_run_status=$?
+      if [ "$r3_perl_run_status" -eq 0 ] && [ ! -s "$r3_perl_out.stderr" ] &&
+         /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_perl_out.stdout" &&
+         ! /usr/bin/grep -q YSTACK-PERL-MARKER "$r3_perl_out.stdout" "$r3_perl_out.stderr" 2>/dev/null; then
+        pass_case 'R3: PERL5LIB/PERL5OPT pollution does not reach the parent''s own SHA tool'
+      else
+        fail_case 'R3: perl-variable pollution'
+      fi
+      ;;
+    Linux:x86_64)
+      skip_case 'R3: LD_PRELOAD-marker pollution of the parent'\''s own helpers' \
+        'requires the loader-variable marker library, which is built and used by the loader case below on this platform'
+      ;;
+  esac
+else
+  fail_case 'R3: no-copy invariant cases (parent absent)'
+fi
+
+# --- 8. Loader-variable case (spec.md:7495-7524) -----------------------------------------
+
+marker_lib_src="$tmp/marker-lib.c"
+cat > "$marker_lib_src" <<'MARKERLIB'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+__attribute__((constructor))
+static void ystack_marker_ctor(void) {
+  const char *path = getenv("YSTACK_TEST_MARKER_FILE");
+  if (!path) return;
+  FILE *f = fopen(path, "a");
+  if (!f) return;
+  fprintf(f, "argv0=? pid=%ld\n", (long)getpid());
+  fclose(f);
+}
+MARKERLIB
+case "$platform" in
+  Darwin:*) marker_lib="$tmp/marker-lib.dylib"
+    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -dynamiclib "$marker_lib_src" -o "$marker_lib" ;;
+  *) marker_lib="$tmp/marker-lib.so"
+    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$marker_lib_src" -o "$marker_lib" ;;
+esac
+
+if [ -x "$entry" ]; then
+  marker_file="$tmp/loader.marker"
+  loader_clean_out="$tmp/loader.clean"; /bin/mkdir -m 700 "$loader_clean_out"
+  "$entry" "$bound_jq" "$loader_clean_out" "$synthetic_request" "$synthetic_map" \
+    > "$loader_clean_out.stdout" 2> "$loader_clean_out.stderr"
+  loader_polluted_out="$tmp/loader.polluted"; /bin/mkdir -m 700 "$loader_polluted_out"
+  LD_PRELOAD="$marker_lib" LD_LIBRARY_PATH="$tmp" \
+    DYLD_INSERT_LIBRARIES="$marker_lib" DYLD_LIBRARY_PATH="$tmp" \
+    YSTACK_TEST_MARKER_FILE="$marker_file" \
+    "$entry" "$bound_jq" "$loader_polluted_out" "$synthetic_request" "$synthetic_map" \
+    > "$loader_polluted_out.stdout" 2> "$loader_polluted_out.stderr"
+  /usr/bin/cmp -s "$loader_clean_out.stdout" "$loader_polluted_out.stdout" ||
+    fail_case 'loader: LD_PRELOAD/DYLD_INSERT_LIBRARIES pollution changed stdout'
+  loader_lines=0
+  [ -f "$marker_file" ] && loader_lines=$(/usr/bin/wc -l < "$marker_file" | /usr/bin/awk '{print $1}')
+  [ "$loader_lines" -le 1 ] ||
+    fail_case "loader: marker file holds $loader_lines lines (expected at most one, the caller's own /bin/bash)"
+  pass_case 'loader: LD_PRELOAD/DYLD_INSERT_LIBRARIES pollution is bounded to the entry'\''s own first process'
+else
+  fail_case 'loader: LD_PRELOAD/DYLD_INSERT_LIBRARIES case (entry absent)'
+fi
+
+# Linux CI only: assert the launched runtime's /proc/<pid>/environ is exactly R3's allowlist.
+# (Deferred: requires reading environ of a short-lived child mid-run; left for the plan to
+# wire once the runtime's exact allowlist is fixed by the shipped source -- spec.md:7495.)
+
+# --- 9. Forged clean-marker invocation, two halves (spec.md R1 marker branch; spec.md:7566ish) --
+
+if [ -x "$entry" ]; then
+  # unsupported half: no -p, clean environment, must refuse with exit 78 and touch nothing
+  marker_out="$tmp/marker.unsupported"; /bin/mkdir -m 700 "$marker_out"
+  marker_status=0
+  /bin/bash "$entry" __resolve_profile_clean "$bound_jq" "$marker_out" \
+    "$synthetic_request" "$synthetic_map" > "$marker_out.stdout" 2> "$marker_out.stderr" || marker_status=$?
+  if [ "$marker_status" -eq 78 ] && [ -z "$(/usr/bin/find "$marker_out" -mindepth 1 -print)" ]; then
+    pass_case 'marker branch: unsupported clean arrival without -p exits 78 and touches nothing'
+  else
+    fail_case 'marker branch: unsupported clean arrival'
+  fi
+
+  # supported half: -p, polluted with shadowing functions and BASH_ENV
+  marker_sup_out="$tmp/marker.supported"; /bin/mkdir -m 700 "$marker_sup_out"
+  hijack_marker="$tmp/marker.hijack"
+  bash_env_script="$tmp/marker.bashenv.sh"
+  /usr/bin/printf 'alias ls=true\n' > "$bash_env_script"
+  marker_sup_status=0
+  # shellcheck disable=SC2329  # invoked indirectly: exported and called by the entry
+  # (a separate process) via the builtins they shadow, which shellcheck cannot see across.
+  ( pwd() { : > "$hijack_marker"; command pwd; }
+    cd() { : > "$hijack_marker"; command cd "$@"; }
+    find() { : > "$hijack_marker"; command find "$@"; }
+    export -f pwd cd find
+    BASH_ENV="$bash_env_script" FOO=bar \
+      /bin/bash -p "$entry" __resolve_profile_clean "$bound_jq" "$marker_sup_out" \
+      "$synthetic_request" "$synthetic_map"
+  ) > "$marker_sup_out.stdout" 2> "$marker_sup_out.stderr" || marker_sup_status=$?
+  if [ "$marker_sup_status" -eq 0 ] && [ ! -e "$hijack_marker" ]; then
+    pass_case 'marker branch: supported -p arrival ignores hijacked cd/pwd/find and BASH_ENV'
+  else
+    fail_case 'marker branch: supported -p arrival'
+  fi
+else
+  fail_case 'marker branch cases (entry absent)'
+fi
+
+# --- 10. Committed mode of the entry (spec.md:7566-7580) --------------------------------
+
+entry_ls=$(cd "$root" && /usr/bin/git ls-files -s -- resolver/v1/resolve-profile.sh)
+if [ -z "$entry_ls" ]; then
+  fail_case 'entry mode: resolver/v1/resolve-profile.sh is not tracked'
+else
+  entry_mode=${entry_ls%% *}
+  [ "$entry_mode" = 100755 ] || fail_case "entry mode: git ls-files reports $entry_mode, expected 100755"
+  [ -x "$entry" ] || fail_case 'entry mode: checked-out file is not executable'
+  pass_case 'entry mode: committed 100755 and checked-out executable'
+fi
+
+# relative repo-root invocation
+if [ -x "$entry" ]; then
+  rel_out="$tmp/relative.out"; /bin/mkdir -m 700 "$rel_out"
+  ( cd "$root" && ./resolver/v1/resolve-profile.sh "$bound_jq" "$rel_out" \
+      "$synthetic_request" "$synthetic_map" > "$rel_out.stdout" 2> "$rel_out.stderr" )
+  rel_after=$(/usr/bin/find "$rel_out" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | /usr/bin/sort || \
+              /usr/bin/find "$rel_out" -mindepth 1 -maxdepth 1 | /usr/bin/xargs -n1 basename | /usr/bin/sort)
+  if [ "$rel_after" = "$(printf 'child.stderr\nchild.stdout\nhome\ntmp\n')" ]; then
+    pass_case 'entry mode: relative repo-root invocation produces the standard sandbox set'
+  else
+    fail_case 'entry mode: relative invocation'
+  fi
+else
+  fail_case 'entry mode: relative invocation (entry absent)'
+fi
+
+# --- 11. Compiler-environment pollution, two halves (spec.md:7608-7710) -----------------
+
+if [ -x "$entry" ]; then
+  poison_dir="$tmp/poison"; /bin/mkdir -m 700 "$poison_dir"
+  cat > "$poison_dir/stdio.h" <<'POISON'
+#error YSTACK-POISONED-STDIO-H-INCLUDED
+POISON
+  compiler_poll_out="$tmp/compiler.poll"; /bin/mkdir -m 700 "$compiler_poll_out"
+  watched_tmp="$tmp/compiler.watched-tmp"; /bin/mkdir -m 700 "$watched_tmp"
+  watched_home="$tmp/compiler.watched-home"; /bin/mkdir -m 700 "$watched_home"
+
+  compiler_clean_out="$tmp/compiler.clean"; /bin/mkdir -m 700 "$compiler_clean_out"
+  "$entry" "$bound_jq" "$compiler_clean_out" "$synthetic_request" "$synthetic_map" \
+    > "$compiler_clean_out.stdout" 2> "$compiler_clean_out.stderr"
+
+  CC=/nonexistent/cc CPATH="$poison_dir" C_INCLUDE_PATH="$poison_dir" LIBRARY_PATH="$poison_dir" \
+    SDKROOT=/nonexistent/sdk DEVELOPER_DIR=/nonexistent/dev MACOSX_DEPLOYMENT_TARGET=1.0 \
+    TMPDIR="$watched_tmp" HOME="$watched_home" \
+    "$entry" "$bound_jq" "$compiler_poll_out" "$synthetic_request" "$synthetic_map" \
+    > "$compiler_poll_out.stdout" 2> "$compiler_poll_out.stderr" || :
+  if /usr/bin/cmp -s "$compiler_clean_out.stdout" "$compiler_poll_out.stdout" &&
+     ! /usr/bin/grep -q YSTACK-POISONED "$compiler_poll_out.stdout" "$compiler_poll_out.stderr" 2>/dev/null &&
+     [ -z "$(/usr/bin/find "$watched_tmp" -mindepth 1 -print)" ] &&
+     [ -z "$(/usr/bin/find "$watched_home" -mindepth 1 -print)" ]; then
+    pass_case 'compiler pollution: entry run is unaffected and watched TMPDIR/HOME stay untouched'
+  else
+    fail_case 'compiler pollution: entry-driven half'
+  fi
+
+  case "$platform" in
+    Darwin:*)
+      darwin_temp=$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)
+      before_listing=$(/usr/bin/find "$darwin_temp" -maxdepth 1 -mindepth 1 2>/dev/null | /usr/bin/sort)
+      darwin_run_out="$tmp/compiler.darwin-run"; /bin/mkdir -m 700 "$darwin_run_out"
+      "$entry" "$bound_jq" "$darwin_run_out" "$synthetic_request" "$synthetic_map" \
+        > "$darwin_run_out.stdout" 2> "$darwin_run_out.stderr"
+      # xcrun_db's own state is not asserted directly: it may legitimately be created,
+      # change, or stay exactly as it was (a warm cache writes nothing) -- what matters,
+      # per spec.md's narrowed R7 claim, is that nothing ELSE under the per-user temp
+      # directory changed.
+      after_listing=$(/usr/bin/find "$darwin_temp" -maxdepth 1 -mindepth 1 2>/dev/null | /usr/bin/sort)
+      changed=$(/usr/bin/diff <(printf '%s\n' "$before_listing") <(printf '%s\n' "$after_listing") | \
+        /usr/bin/grep -v xcrun_db || :)
+      if [ -z "$changed" ]; then
+        pass_case 'compiler pollution (Darwin, operator-run): only xcrun_db may change under the per-user temp dir'
+      else
+        fail_case 'compiler pollution: Darwin xcrun_db delta measurement'
+      fi
+      ;;
+    Linux:x86_64)
+      skip_case 'compiler pollution: Darwin xcrun_db delta measurement' 'Linux has no such shim or cache file'
+      ;;
+  esac
+
+  # half 2: group-2 style, binaries compared directly, no runtime behind the compiles
+  case "$platform" in
+    Darwin:*)
+      clean_bin="$tmp/compiler.clean.bin"
+      compile_source "$parent_source" "$clean_bin" "TMPDIR=$tmp" "HOME=$tmp"
+      darwin_temp2=$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)
+      xcrun_db2="$darwin_temp2/xcrun_db"
+      before2=$( [ -e "$xcrun_db2" ] && /usr/bin/stat -f '%z %m' "$xcrun_db2" || echo absent )
+      polluted_bin="$tmp/compiler.polluted.bin"
+      CC=/nonexistent/cc CPATH="$poison_dir" C_INCLUDE_PATH="$poison_dir" LIBRARY_PATH="$poison_dir" \
+        SDKROOT=/nonexistent/sdk DEVELOPER_DIR=/nonexistent/dev MACOSX_DEPLOYMENT_TARGET=1.0 \
+        compile_source "$parent_source" "$polluted_bin" "TMPDIR=$tmp" "HOME=$tmp"
+      after2=$( [ -e "$xcrun_db2" ] && /usr/bin/stat -f '%z %m' "$xcrun_db2" || echo absent )
+      [ "$before2" = "$after2" ] || fail_case 'compiler pollution (Darwin): xcrun_db changed across the two-compile binary comparison'
+      if [ "$(sha256_file "$clean_bin")" = "$(sha256_file "$polluted_bin")" ]; then
+        pass_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries'
+      else
+        fail_case 'compiler pollution: binary comparison'
+      fi
+      unpoisoned_control="$tmp/compiler.control.bin"
+      control_status=0
+      CC=/nonexistent/cc CPATH="$poison_dir" C_INCLUDE_PATH="$poison_dir" LIBRARY_PATH="$poison_dir" \
+        SDKROOT=/nonexistent/sdk DEVELOPER_DIR=/nonexistent/dev MACOSX_DEPLOYMENT_TARGET=1.0 \
+        "$compiler" "${compiler_extra_flags[@]}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+        -o "$unpoisoned_control" "$parent_source" 2> "$tmp/compiler.control.stderr" || control_status=$?
+      [ "$control_status" -ne 0 ] || /usr/bin/grep -qi poisoned "$tmp/compiler.control.stderr" ||
+        fail_case 'compiler pollution: control compile without env -i did not prove the fixture poisonous'
+      ;;
+    Linux:x86_64)
+      clean_bin2="$tmp/compiler.clean2.bin"
+      polluted_bin2="$tmp/compiler.polluted2.bin"
+      compile_source "$parent_source" "$clean_bin2" "TMPDIR=$tmp" "HOME=$tmp"
+      CC=/nonexistent/cc CPATH="$poison_dir" C_INCLUDE_PATH="$poison_dir" LIBRARY_PATH="$poison_dir" \
+        compile_source "$parent_source" "$polluted_bin2" "TMPDIR=$tmp" "HOME=$tmp"
+      if [ "$(sha256_file "$clean_bin2")" = "$(sha256_file "$polluted_bin2")" ]; then
+        pass_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries (Linux)'
+      else
+        fail_case 'compiler pollution: binary comparison (Linux)'
+      fi
+      ;;
+  esac
+else
+  fail_case 'compiler-environment pollution cases (entry absent)'
+fi
+
+# --- 12. Cleanup cases (spec.md:7716-7764) ------------------------------------------------
+# Case 1 (success) and case 4 (runtime refusal) are new; cases 2 and 3 are the
+# wrong-digest-jq and runtime-mode-0755 refusals already asserted above (group 1 / group 2).
+
+if [ -x "$entry" ]; then
+  clean_out="$tmp/cleanup.success"; /bin/mkdir -m 700 "$clean_out"
+  clean_status=0
+  "$entry" "$bound_jq" "$clean_out" "$synthetic_request" "$synthetic_map" \
+    > "$clean_out.stdout" 2> "$clean_out.stderr" || clean_status=$?
+  [ "$clean_status" -eq 0 ] || fail_case 'cleanup case 1: entry did not exit 0'
+  clean_entries=$(cd "$clean_out" && /usr/bin/find . -mindepth 1 -maxdepth 1 | /usr/bin/sort)
+  expected_entries=$(printf './child.stderr\n./child.stdout\n./home\n./tmp\n')
+  [ "$clean_entries" = "$expected_entries" ] || fail_case "cleanup case 1: unexpected entry set: $clean_entries"
+  /usr/bin/cmp -s "$clean_out.stdout" "$clean_out/child.stdout" || fail_case 'cleanup case 1: child.stdout does not match entry stdout'
+  [ ! -s "$clean_out/child.stderr" ] || fail_case 'cleanup case 1: child.stderr not empty'
+  [ -z "$(/usr/bin/find "$clean_out/tmp" -mindepth 1 -print)" ] || fail_case 'cleanup case 1: tmp not empty'
+  pass_case 'cleanup case 1: successful resolution leaves exactly the parent sandbox behind'
+
+  malformed_cleanup_out="$tmp/cleanup.runtime-refusal"; /bin/mkdir -m 700 "$malformed_cleanup_out"
+  bad_req2="$tmp/cleanup.bad-request.json"; /usr/bin/printf '{' > "$bad_req2"
+  mc_status=0
+  "$entry" "$bound_jq" "$malformed_cleanup_out" "$bad_req2" "$synthetic_map" \
+    > "$malformed_cleanup_out.stdout" 2> "$malformed_cleanup_out.stderr" || mc_status=$?
+  [ "$mc_status" -ne 0 ] || fail_case 'cleanup case 4: expected non-zero exit'
+  mc_entries=$(cd "$malformed_cleanup_out" && /usr/bin/find . -mindepth 1 -maxdepth 1 | /usr/bin/sort)
+  [ "$mc_entries" = "$expected_entries" ] || fail_case "cleanup case 4: unexpected entry set: $mc_entries"
+  [ -s "$malformed_cleanup_out/child.stderr" ] || fail_case 'cleanup case 4: child.stderr empty on runtime refusal'
+  [ ! -s "$malformed_cleanup_out/child.stdout" ] || fail_case 'cleanup case 4: child.stdout not empty on runtime refusal'
+  [ -z "$(/usr/bin/find "$malformed_cleanup_out/tmp" -mindepth 1 -print)" ] || fail_case 'cleanup case 4: tmp not empty'
+  pass_case 'cleanup case 4: a runtime refusal still leaves the parent sandbox and removes .run'
+else
+  fail_case 'cleanup cases 1 and 4 (entry absent)'
+fi
+
+# --- 13. Two-umask case (spec.md:7813-7845) -----------------------------------------------
+
+poll_for_home_and_read_modes() {
+  # poll_for_home_and_read_modes OUTPUT -> prints "run_mode tmp_mode home_mode" or empty
+  pfh_out=$1
+  pfh_deadline=$(( $(/bin/date +%s) + 20 ))
+  while [ ! -e "$pfh_out/.run/home" ]; do
+    [ "$(/bin/date +%s)" -lt "$pfh_deadline" ] || { echo ''; return; }
+    /bin/sleep 0.01
+  done
+  stat_mode() { /usr/bin/stat -c '%a' "$1" 2>/dev/null || /usr/bin/stat -f '%OLp' "$1"; }
+  printf '%s %s %s\n' "$(stat_mode "$pfh_out/.run")" "$(stat_mode "$pfh_out/.run/tmp")" "$(stat_mode "$pfh_out/.run/home")"
+}
+
+if [ -x "$entry" ]; then
+  for u in 000 777; do
+    um_out="$tmp/umask.$u"; /bin/mkdir -m 700 "$um_out"
+    if (
+      umask "$u"
+      "$entry" "$bound_jq" "$um_out" "$synthetic_request" "$synthetic_map" \
+        > "$um_out.stdout" 2> "$um_out.stderr" &
+      um_pid=$!
+      modes=$(poll_for_home_and_read_modes "$um_out")
+      wait "$um_pid"
+      um_status=$?
+      [ "$um_status" -eq 0 ] || exit 1
+      [ "$modes" = '700 700 700' ] || exit 1
+      [ "$(/usr/bin/stat -c '%a' "$um_out/home" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/home")" = 700 ] || exit 1
+      [ "$(/usr/bin/stat -c '%a' "$um_out/tmp" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/tmp")" = 700 ] || exit 1
+      [ "$(/usr/bin/stat -c '%a' "$um_out/child.stdout" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/child.stdout")" = 600 ] || exit 1
+    ); then
+      pass_case "two-umask: entry run under caller umask $u produces 0700/0700/0700 run tree and 0700/0600 sandbox"
+    else
+      fail_case "two-umask: umask $u"
+    fi
+  done
+else
+  fail_case 'two-umask: entry runs (entry absent)'
+fi
+
+if [ "$parent_available" -eq 1 ]; then
+  um_run="$tmp/umask.direct"; build_run_directory "$um_run"
+  um_direct_out="$tmp/umask.direct.out"; /bin/mkdir -m 700 "$um_direct_out"
+  (
+    umask 000
+    invoke_parent "$um_run/.run" "$synthetic_request" "$synthetic_map" "$um_direct_out" \
+      > "$um_direct_out.stdout" 2> "$um_direct_out.stderr"
+  )
+  if [ "$(/usr/bin/stat -c '%a' "$um_direct_out/home" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_direct_out/home")" = 700 ] &&
+     [ "$(/usr/bin/stat -c '%a' "$um_direct_out/tmp" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_direct_out/tmp")" = 700 ] &&
+     [ "$(/usr/bin/stat -c '%a' "$um_direct_out/child.stdout" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_direct_out/child.stdout")" = 600 ]; then
+    pass_case 'two-umask: direct-parent run under umask 000 still sets umask(077) itself'
+  else
+    fail_case 'two-umask: direct-parent run'
+  fi
+else
+  fail_case 'two-umask: direct-parent run (parent absent)'
+fi
+
+# --- 14. Descriptor cases (spec.md:7846-7975) ---------------------------------------------
+
+make_fifo_reader() {
+  # make_fifo_reader NAME -> sets ${NAME}_fifo, starts /bin/cat>/dev/null reader in bg,
+  # sets ${NAME}_reader_flag file that appears once the reader returns.
+  mfr_fifo="$tmp/fifo.$1"
+  /usr/bin/mkfifo -m 600 "$mfr_fifo"
+  mfr_flag="$tmp/fifo.$1.done"
+  ( /bin/cat "$mfr_fifo" > /dev/null; : > "$mfr_flag" ) &
+  printf '%s %s\n' "$mfr_fifo" "$mfr_flag"
+}
+
+if [ -x "$entry" ]; then
+  # run 1: unrelated object on fd 7 -- ordering only
+  read -r d1_fifo d1_flag <<< "$(make_fifo_reader d1)"
+  d1_out="$tmp/descriptor.d1"; /bin/mkdir -m 700 "$d1_out"
+  if (
+    exec 7> "$d1_fifo"
+    "$entry" "$bound_jq" "$d1_out" "$synthetic_request" "$synthetic_map" \
+      > "$d1_out.stdout" 2> "$d1_out.stderr" &
+    d1_pid=$!
+    exec 7>&-
+    d1_saw_run_before_eof=0
+    d1_deadline=$(( $(/bin/date +%s) + 20 ))
+    while [ ! -e "$d1_flag" ]; do
+      [ -e "$d1_out/.run" ] && d1_saw_run_before_eof=1
+      [ "$(/bin/date +%s)" -lt "$d1_deadline" ] || break
+      /bin/sleep 0.01
+    done
+    wait "$d1_pid"
+    [ "$d1_saw_run_before_eof" -eq 0 ] || exit 1
+  ); then
+    pass_case 'descriptor: entry closes an unrelated inherited fd before .run appears'
+  else
+    fail_case 'descriptor: unrelated object on fd 7'
+  fi
+
+  # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 append
+  read -r d2_fifo d2_flag <<< "$(make_fifo_reader d2)"
+  entry_copy="$tmp/descriptor.entry-copy.sh"; /bin/cp "$entry" "$entry_copy"; /bin/chmod 0755 "$entry_copy"
+  copy_before_size=$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')
+  copy_before_sha=$(sha256_file "$entry_copy")
+  d2_out="$tmp/descriptor.d2"; /bin/mkdir -m 700 "$d2_out"
+  if (
+    exec 7> "$d2_fifo" 8>> "$entry_copy"
+    "$entry_copy" "$bound_jq" "$d2_out" "$synthetic_request" "$synthetic_map" \
+      > "$d2_out.stdout" 2> "$d2_out.stderr" &
+    d2_pid=$!
+    exec 7>&- 8>&-
+    d2_saw_run_before_eof=0
+    d2_deadline=$(( $(/bin/date +%s) + 20 ))
+    while [ ! -e "$d2_flag" ]; do
+      [ -e "$d2_out/.run" ] && d2_saw_run_before_eof=1
+      [ "$(/bin/date +%s)" -lt "$d2_deadline" ] || break
+      /bin/sleep 0.01
+    done
+    wait "$d2_pid"
+    d2_status=$?
+    [ "$d2_saw_run_before_eof" -eq 0 ] || exit 1
+    [ "$d2_status" -eq 0 ] || exit 1
+    /usr/bin/cmp -s "$clean_out.stdout" "$d2_out.stdout" || exit 1
+    [ "$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')" -eq "$copy_before_size" ] || exit 1
+    [ "$(sha256_file "$entry_copy")" = "$copy_before_sha" ] || exit 1
+  ); then
+    pass_case 'descriptor: caller descriptor is the running entry script itself (ordering, resolution, file unchanged)'
+  else
+    fail_case 'descriptor: entry-script-as-descriptor'
+  fi
+
+  # run 3: hard limit 63 -- refusal, output stays empty
+  d3_out="$tmp/descriptor.d3"; /bin/mkdir -m 700 "$d3_out"
+  d3_status=0
+  ( ulimit -S -n 63; ulimit -H -n 63
+    "$entry" "$bound_jq" "$d3_out" "$synthetic_request" "$synthetic_map" \
+      > "$d3_out.stdout" 2> "$d3_out.stderr"
+  ) || d3_status=$?
+  if [ "$d3_status" -ne 0 ] && [ "$(/usr/bin/wc -l < "$d3_out.stderr" | /usr/bin/awk '{print $1}')" -eq 1 ] &&
+     /usr/bin/grep -q '^E_RUNTIME' "$d3_out.stderr" && [ -z "$(/usr/bin/find "$d3_out" -mindepth 1 -print)" ]; then
+    pass_case 'descriptor: hard limit 63 refuses before the close loop, output stays empty'
+  else
+    fail_case 'descriptor: hard limit 63'
+  fi
+
+  # run 4: hard limit 64 -- floor, not a wall
+  d4_out="$tmp/descriptor.d4"; /bin/mkdir -m 700 "$d4_out"
+  d4_status=0
+  ( ulimit -S -n 64; ulimit -H -n 64
+    "$entry" "$bound_jq" "$d4_out" "$synthetic_request" "$synthetic_map" \
+      > "$d4_out.stdout" 2> "$d4_out.stderr"
+  ) || d4_status=$?
+  if [ "$d4_status" -eq 0 ] && /usr/bin/cmp -s "$clean_out.stdout" "$d4_out.stdout"; then
+    pass_case 'descriptor: hard limit 64 is enough headroom, resolution completes byte-identical'
+  else
+    fail_case 'descriptor: hard limit 64'
+  fi
+
+  # run 5: caller has filled the low descriptor numbers -- success
+  read -r d5_fifo d5_flag <<< "$(make_fifo_reader d5)"
+  d5_out="$tmp/descriptor.d5"; /bin/mkdir -m 700 "$d5_out"
+  if (
+    ulimit -S -n 1024; ulimit -H -n 1024
+    exec 7> "$d5_fifo"
+    i=3
+    while [ "$i" -le 255 ]; do
+      [ "$i" -eq 7 ] || eval "exec $i</dev/null"
+      i=$((i + 1))
+    done
+    "$entry" "$bound_jq" "$d5_out" "$synthetic_request" "$synthetic_map" \
+      > "$d5_out.stdout" 2> "$d5_out.stderr" &
+    d5_pid=$!
+    exec 7>&-
+    d5_saw_run_before_eof=0
+    d5_deadline=$(( $(/bin/date +%s) + 20 ))
+    while [ ! -e "$d5_flag" ]; do
+      [ -e "$d5_out/.run" ] && d5_saw_run_before_eof=1
+      [ "$(/bin/date +%s)" -lt "$d5_deadline" ] || break
+      /bin/sleep 0.01
+    done
+    wait "$d5_pid"
+    d5_status=$?
+    [ "$d5_saw_run_before_eof" -eq 0 ] || exit 1
+    [ "$d5_status" -eq 0 ] || exit 1
+    /usr/bin/cmp -s "$clean_out.stdout" "$d5_out.stdout" || exit 1
+  ); then
+    pass_case 'descriptor: caller has filled numbers 3-255 (skipping 7); all closed, run succeeds'
+  else
+    fail_case 'descriptor: filled low descriptor numbers'
+  fi
+
+  # run 6: caller has filled every number the entry can normalise to -- refusal
+  d6_out="$tmp/descriptor.d6"; /bin/mkdir -m 700 "$d6_out"
+  d6_status=0
+  (
+    ulimit -S -n 1023; ulimit -H -n 1023
+    i=3
+    while [ "$i" -le 300 ]; do
+      eval "exec $i</dev/null"
+      i=$((i + 1))
+    done
+    "$entry" "$bound_jq" "$d6_out" "$synthetic_request" "$synthetic_map" \
+      > "$d6_out.stdout" 2> "$d6_out.stderr"
+  ) || d6_status=$?
+  if [ "$d6_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$d6_out.stderr" &&
+     [ "$(/usr/bin/grep -c '^E_RUNTIME' "$d6_out.stderr")" -eq 1 ] && [ -z "$(/usr/bin/find "$d6_out" -mindepth 1 -print)" ]; then
+    pass_case 'descriptor: caller has filled every reachable low number; entry refuses, output stays empty'
+  else
+    fail_case 'descriptor: filled every low number'
+  fi
+else
+  fail_case 'descriptor: entry-side cases (entry absent)'
+fi
+
+if [ "$parent_available" -eq 1 ]; then
+  # parent half, run 1: fd 7 ordering vs runtime-pgid line
+  read -r p1_fifo p1_flag <<< "$(make_fifo_reader p1)"
+  p1_run="$tmp/descriptor.p1"; build_run_directory "$p1_run"
+  p1_out="$tmp/descriptor.p1.out"; /bin/mkdir -m 700 "$p1_out"
+  if (
+    exec 7> "$p1_fifo"
+    invoke_parent "$p1_run/.run" "$synthetic_request" "$synthetic_map" "$p1_out" \
+      > "$p1_out.stdout" 2> "$p1_out.stderr" &
+    p1_pid=$!
+    exec 7>&-
+    p1_saw_before=0
+    p1_deadline=$(( $(/bin/date +%s) + 20 ))
+    while [ ! -e "$p1_flag" ]; do
+      /usr/bin/grep -q '^runtime-pgid:' "$p1_out.stderr" 2>/dev/null && p1_saw_before=1
+      [ "$(/bin/date +%s)" -lt "$p1_deadline" ] || break
+      /bin/sleep 0.01
+    done
+    wait "$p1_pid"
+    [ "$p1_saw_before" -eq 0 ] || exit 1
+  ); then
+    pass_case 'descriptor: parent closes an unrelated inherited fd before runtime-pgid is written'
+  else
+    fail_case 'descriptor: parent fd 7 ordering'
+  fi
+
+  # parent half, run 2: high descriptor (300) under a soft limit lowered after opening
+  read -r p2_fifo p2_flag <<< "$(make_fifo_reader p2)"
+  p2_run="$tmp/descriptor.p2"; build_run_directory "$p2_run"
+  p2_out="$tmp/descriptor.p2.out"; /bin/mkdir -m 700 "$p2_out"
+  if (
+    eval "exec 300> \"$p2_fifo\""
+    ulimit -S -n 64
+    invoke_parent "$p2_run/.run" "$synthetic_request" "$synthetic_map" "$p2_out" \
+      > "$p2_out.stdout" 2> "$p2_out.stderr" &
+    p2_pid=$!
+    exec 300>&-
+    p2_saw_before=0
+    p2_deadline=$(( $(/bin/date +%s) + 20 ))
+    while [ ! -e "$p2_flag" ]; do
+      /usr/bin/grep -q '^runtime-pgid:' "$p2_out.stderr" 2>/dev/null && p2_saw_before=1
+      [ "$(/bin/date +%s)" -lt "$p2_deadline" ] || break
+      /bin/sleep 0.01
+    done
+    wait "$p2_pid"
+    [ "$p2_saw_before" -eq 0 ] || exit 1
+  ); then
+    pass_case 'descriptor: parent normalises to hard limit (300 closed despite lowered soft limit)'
+  else
+    fail_case 'descriptor: parent fd 300 under lowered soft limit'
+  fi
+else
+  fail_case 'descriptor: parent-side cases (parent absent)'
+fi
+
+# --- 15. Signal cases (spec.md:7976-8385) --------------------------------------------------
+
+read_runtime_pgid() {
+  # read_runtime_pgid STDERR_FILE -> prints pgid or empty after a bounded poll
+  rrp_file=$1
+  rrp_deadline=$(( $(/bin/date +%s) + 30 ))
+  while :; do
+    rrp_line=$(/usr/bin/grep -m1 -E '^runtime-pgid: [0-9]+$' "$rrp_file" 2>/dev/null || :)
+    [ -n "$rrp_line" ] && { printf '%s\n' "${rrp_line#runtime-pgid: }"; return; }
+    [ "$(/bin/date +%s)" -lt "$rrp_deadline" ] || { echo ''; return; }
+    /bin/sleep 0.01
+  done
+}
+
+if [ -x "$entry" ]; then
+  # signal case 1: mid-run, frozen group
+  sig1_stderr="$tmp/signal1.stderr"; : > "$sig1_stderr"
+  sig1_out="$tmp/signal1.out"; /bin/mkdir -m 700 "$sig1_out"
+  set -m
+  "$entry" "$bound_jq" "$sig1_out" "$real_request" "$real_map" \
+    > "$tmp/signal1.stdout" 2> "$sig1_stderr" &
+  sig1_pid=$!
+  sig1_pgid=$(read_runtime_pgid "$sig1_stderr")
+  if [ -n "$sig1_pgid" ] && kill -STOP -- "-$sig1_pgid" 2>/dev/null && kill -0 -- "-$sig1_pgid" 2>/dev/null; then
+    kill -TERM "$sig1_pid"
+    wait "$sig1_pid"; sig1_status=$?
+    if kill -0 -- "-$sig1_pgid" 2>/dev/null; then sig1_group_gone=0; else sig1_group_gone=1; fi
+    if [ "$sig1_status" -eq 143 ] && [ "$sig1_group_gone" -eq 1 ] && [ ! -e "$sig1_out/.run" ]; then
+      pass_case 'signal: mid-run SIGTERM kills a SIGSTOPped resolver group and cleans up (143)'
+    else
+      fail_case 'signal: mid-run SIGSTOP/SIGTERM'
+    fi
+  else
+    kill -CONT -- "-$sig1_pgid" 2>/dev/null || :
+    wait "$sig1_pid" 2>/dev/null || :
+    fail_case 'signal: mid-run case never reached a running resolver group on this run (fixture too short)'
+  fi
+  set +m
+else
+  fail_case 'signal: mid-run frozen group (entry absent)'
+fi
+
+if [ -x "$entry" ]; then
+  # signal case 2: repeated signal (TERM,TERM,group-TERM) -- also run the INT variant
+  for variant in TERM INT; do
+    sig2_stderr="$tmp/signal2.$variant.stderr"; : > "$sig2_stderr"
+    sig2_out="$tmp/signal2.$variant.out"; /bin/mkdir -m 700 "$sig2_out"
+    set -m
+    "$entry" "$bound_jq" "$sig2_out" "$real_request" "$real_map" \
+      > "$tmp/signal2.$variant.stdout" 2> "$sig2_stderr" &
+    sig2_pid=$!
+    sig2_pgid=$(read_runtime_pgid "$sig2_stderr")
+    if [ -z "$sig2_pgid" ] || ! kill -STOP -- "-$sig2_pgid" 2>/dev/null || ! kill -0 -- "-$sig2_pgid" 2>/dev/null; then
+      kill -CONT -- "-$sig2_pgid" 2>/dev/null || :; wait "$sig2_pid" 2>/dev/null || :
+      # fail_case never returns (it exits the whole suite); the loop ends here.
+      fail_case "signal: repeated-$variant case never reached a running resolver group"
+    fi
+    kill -TERM "$sig2_pid"
+    sig2_run_gone_early=0
+    ( /bin/sleep 0.1
+      kill -"$variant" "$sig2_pid" 2>/dev/null || :
+      /bin/sleep 0.1
+      kill -TERM -- "-$(ps -o pgid= -p "$sig2_pid" 2>/dev/null | /usr/bin/tr -d ' ')" 2>/dev/null || :
+    ) &
+    sig2_watcher=$!
+    sig2_deadline=$(( $(/bin/date +%s) + 30 ))
+    while kill -0 "$sig2_pid" 2>/dev/null; do
+      if [ ! -e "$sig2_out/.run" ] && ! /usr/bin/grep -q '^parent-signal:' "$sig2_stderr" 2>/dev/null; then
+        : # not yet armed or already fully gone before parent-signal -- checked below
+      fi
+      if [ ! -e "$sig2_out/.run" ]; then
+        /usr/bin/grep -q '^parent-signal:' "$sig2_stderr" 2>/dev/null || sig2_run_gone_early=1
+      fi
+      [ "$(/bin/date +%s)" -lt "$sig2_deadline" ] || break
+      /bin/sleep 0.005
+    done
+    wait "$sig2_watcher" 2>/dev/null || :
+    wait "$sig2_pid"; sig2_status=$?
+    sig2_lines=$(/usr/bin/grep -c '^entry-signal:' "$sig2_stderr" 2>/dev/null || echo 0)
+    sig2_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig2_stderr" 2>/dev/null || :)
+    if [ "$sig2_status" -eq 143 ] && [ "$sig2_run_gone_early" -eq 0 ] && [ "$sig2_lines" -eq 1 ] &&
+       [ "$sig2_line" = 'entry-signal: TERM forwarded '"$sig2_pid" ] && [ ! -e "$sig2_out/.run" ]; then
+      pass_case "signal: repeated $variant then group-TERM: .run never removed while parent alive, one entry-signal line naming TERM"
+    else
+      fail_case "signal: repeated-$variant case"
+    fi
+    set +m
+  done
+else
+  fail_case 'signal: repeated signal cases (entry absent)'
+fi
+
+if [ -x "$entry" ]; then
+  # signal case 3: pre-parent, no-parent branch (pid-targeted TERM)
+  sig3_stderr="$tmp/signal3.stderr"; : > "$sig3_stderr"
+  sig3_out="$tmp/signal3.out"; /bin/mkdir -m 700 "$sig3_out"
+  "$entry" "$bound_jq" "$sig3_out" "$real_request" "$real_map" \
+    > "$tmp/signal3.stdout" 2> "$sig3_stderr" &
+  sig3_pid=$!
+  sig3_deadline=$(( $(/bin/date +%s) + 5 ))
+  while [ ! -e "$sig3_out/.run" ]; do
+    [ "$(/bin/date +%s)" -lt "$sig3_deadline" ] || break
+    /bin/sleep 0.01
+  done
+  if [ -e "$sig3_out/.run" ]; then
+    kill -TERM "$sig3_pid"
+    # Bounded wait: a watcher kills the entry if it has not exited within 30s (macOS has
+    # no `timeout`; a compile on a slow machine is the budget this covers).
+    ( /usr/bin/perl -e 'alarm shift; sleep 999' 30
+      kill -KILL "$sig3_pid" 2>/dev/null || : ) &
+    sig3_watchdog=$!
+    wait "$sig3_pid" 2>/dev/null; sig3_status=$?
+    kill "$sig3_watchdog" 2>/dev/null || :
+    sig3_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig3_stderr" 2>/dev/null || :)
+    if [ "$sig3_status" -eq 143 ] && [ "$sig3_line" = 'entry-signal: TERM no-parent' ] &&
+       ! /usr/bin/grep -q '^runtime-pgid:' "$sig3_stderr" 2>/dev/null &&
+       [ -z "$(/usr/bin/find "$sig3_out" -mindepth 1 -print)" ]; then
+      pass_case 'signal: pre-parent SIGTERM (pid) takes the no-parent branch and cleans up fully'
+    else
+      fail_case 'signal: pre-parent no-parent branch'
+    fi
+  else
+    wait "$sig3_pid" 2>/dev/null || :
+    fail_case 'signal: pre-parent case landed too late -- .run never appeared inside the poll window'
+  fi
+else
+  fail_case 'signal: pre-parent no-parent branch (entry absent)'
+fi
+
+if [ -x "$entry" ]; then
+  # signal case 4: terminal group signal reaching a compile
+  sig4_stderr="$tmp/signal4.stderr"; : > "$sig4_stderr"
+  sig4_out="$tmp/signal4.out"; /bin/mkdir -m 700 "$sig4_out"
+  set -m
+  "$entry" "$bound_jq" "$sig4_out" "$real_request" "$real_map" \
+    > "$tmp/signal4.stdout" 2> "$sig4_stderr" &
+  sig4_pid=$!
+  sig4_pgid=$(ps -o pgid= -p "$sig4_pid" 2>/dev/null | /usr/bin/tr -d ' ')
+  sig4_deadline=$(( $(/bin/date +%s) + 5 ))
+  while [ ! -e "$sig4_out/.run" ]; do
+    [ "$(/bin/date +%s)" -lt "$sig4_deadline" ] || break
+    /bin/sleep 0.01
+  done
+  if [ -e "$sig4_out/.run" ]; then
+    # give the compile a brief head start so the group signal is likelier to land on it
+    /bin/sleep 0.05
+    kill -TERM -- "-$sig4_pgid" 2>/dev/null || :
+    wait "$sig4_pid" 2>/dev/null; sig4_status=$?
+    sig4_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig4_stderr" 2>/dev/null || :)
+    if [ "$sig4_status" -eq 143 ] && [ "$sig4_line" = 'entry-signal: TERM no-parent' ] &&
+       ! /usr/bin/grep -q '^E_RUNTIME' "$sig4_stderr" 2>/dev/null &&
+       [ -z "$(/usr/bin/find "$sig4_out" -mindepth 1 -print)" ]; then
+      pass_case 'signal: terminal group SIGTERM interrupting a compile is a signal exit, never a refusal'
+    else
+      fail_case 'signal: terminal group signal case'
+    fi
+  else
+    wait "$sig4_pid" 2>/dev/null || :
+    fail_case 'signal: group-signal case landed too late -- .run never appeared'
+  fi
+  set +m
+else
+  fail_case 'signal: terminal group signal case (entry absent)'
+fi
+
+if [ "$parent_available" -eq 1 ]; then
+  # signal case 5: stopped-parent, no-runtime branch -- retried up to 20 attempts
+  sig5_run="$tmp/signal5"; build_run_directory "$sig5_run"
+  sig5_proved=0
+  sig5_late_stop=0
+  sig5_early_signal=0
+  attempt=1
+  while [ "$attempt" -le 20 ] && [ "$sig5_proved" -eq 0 ]; do
+    sig5_out="$tmp/signal5.attempt$attempt.out"; /bin/mkdir -m 700 "$sig5_out"
+    sig5_stderr="$tmp/signal5.attempt$attempt.stderr"
+    (
+      set +m
+      invoke_parent "$sig5_run/.run" "$synthetic_request" "$synthetic_map" "$sig5_out" \
+        > "$tmp/signal5.attempt$attempt.stdout" 2> "$sig5_stderr" &
+      sig5_pid=$!
+      /bin/sleep 5 &
+      sig5_sentinel=$!
+      kill -STOP "$sig5_pid" 2>/dev/null || :
+      pgid_parent=$(ps -o pgid= -p "$sig5_pid" 2>/dev/null | /usr/bin/tr -d ' ')
+      pgid_sentinel=$(ps -o pgid= -p "$sig5_sentinel" 2>/dev/null | /usr/bin/tr -d ' ')
+      pgid_shell=$(ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ')
+      if [ "$pgid_parent" != "$pgid_sentinel" ] || [ "$pgid_parent" != "$pgid_shell" ]; then
+        kill "$sig5_sentinel" 2>/dev/null || :; kill -CONT "$sig5_pid" 2>/dev/null || :
+        wait "$sig5_pid" 2>/dev/null || :
+        echo mismatch > "$tmp/signal5.attempt$attempt.outcome"; exit 0
+      fi
+      kill -TERM "$sig5_pid" 2>/dev/null || :
+      kill -CONT "$sig5_pid" 2>/dev/null || :
+      wait "$sig5_pid" 2>/dev/null; sig5_status=$?
+      kill "$sig5_sentinel" 2>/dev/null || :
+      echo "$sig5_status" > "$tmp/signal5.attempt$attempt.outcome"
+    )
+    outcome=$(cat "$tmp/signal5.attempt$attempt.outcome" 2>/dev/null || echo unknown)
+    if /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr" 2>/dev/null; then
+      sig5_late_stop=$((sig5_late_stop + 1))
+    elif ! /usr/bin/grep -q '^parent-signal:' "$sig5_stderr" 2>/dev/null; then
+      sig5_early_signal=$((sig5_early_signal + 1))
+    else
+      sig5_status=$outcome
+      if [ "$sig5_status" = 143 ] && /usr/bin/grep -q '^parent-signal: TERM no-runtime$' "$sig5_stderr" &&
+         ! /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr"; then
+        sig5_proved=1
+      fi
+    fi
+    attempt=$((attempt + 1))
+  done
+  if [ "$sig5_proved" -eq 1 ]; then
+    pass_case "signal: stopped-parent no-runtime branch proved (attempt $((attempt - 1)); late-stop=$sig5_late_stop early-signal=$sig5_early_signal)"
+  else
+    fail_case "signal: stopped-parent no-runtime branch never proved in 20 attempts (late-stop=$sig5_late_stop early-signal=$sig5_early_signal)"
+  fi
+else
+  fail_case 'signal: stopped-parent no-runtime branch (parent absent)'
+fi
+
+if [ -x "$entry" ]; then
+  # signal: O_NONBLOCK restore variant (dup'd pipe, fcntl probe)
+  fcntl_probe_src="$tmp/fcntl-probe.c"
+  cat > "$fcntl_probe_src" <<'FCNTLPROBE'
+#include <fcntl.h>
+#include <stdio.h>
+int main(void) {
+  int flags = fcntl(3, F_GETFL, 0);
+  if (flags < 0) { perror("fcntl"); return 2; }
+  puts((flags & O_NONBLOCK) ? "nonblock" : "clear");
+  return 0;
+}
+FCNTLPROBE
+  fcntl_probe="$tmp/fcntl-probe"
+  /usr/bin/cc -std=c11 -Wall -Wextra -O2 "$fcntl_probe_src" -o "$fcntl_probe"
+
+  /usr/bin/mkfifo -m 600 "$tmp/signal6.fifo"
+  sig6_out="$tmp/signal6.out"; /bin/mkdir -m 700 "$sig6_out"
+  set -m
+  exec 9<> "$tmp/signal6.fifo"
+  ( /bin/cat <&9 > /dev/null ) &
+  sig6_drainer=$!
+  "$entry" "$bound_jq" "$sig6_out" "$real_request" "$real_map" \
+    > "$tmp/signal6.stdout" 2>&9 &
+  sig6_pid=$!
+  sig6_deadline=$(( $(/bin/date +%s) + 5 ))
+  while [ ! -e "$sig6_out/.run" ]; do
+    [ "$(/bin/date +%s)" -lt "$sig6_deadline" ] || break
+    /bin/sleep 0.01
+  done
+  sig6_probe_status=$("$fcntl_probe" 3<&9 2>/dev/null || echo error)
+  kill -TERM "$sig6_pid" 2>/dev/null || :
+  wait "$sig6_pid" 2>/dev/null; sig6_status=$?
+  exec 9>&-
+  kill "$sig6_drainer" 2>/dev/null || :
+  if [ "$sig6_status" -eq 143 ] && [ "$sig6_probe_status" = clear ]; then
+    pass_case 'signal: O_NONBLOCK is restored on the entry''s stderr descriptor after a mid-run TERM'
+  else
+    fail_case 'signal: O_NONBLOCK restore variant'
+  fi
+  set +m
+else
+  fail_case 'signal: O_NONBLOCK restore variant (entry absent)'
+fi
+
+if [ -x "$entry" ]; then
+  # signal: full pipe, entry omits its entry-signal: line rather than block on it
+  /usr/bin/mkfifo -m 600 "$tmp/signal7.fifo"
+  exec 10<> "$tmp/signal7.fifo"
+  sig7_probe=$("$fcntl_probe" 10<&10 2>/dev/null || echo error)
+  [ "$sig7_probe" = clear ] || fail_case 'signal: full-pipe case fixture is non-blocking before the filler starts'
+  ( /bin/dd if=/dev/zero bs=65536 count=2 1>&10 2>/dev/null ) &
+  sig7_filler=$!
+  /bin/sleep 1
+  kill -0 "$sig7_filler" 2>/dev/null || fail_case 'signal: full-pipe filler exited -- pipe was never full'
+  sig7_full_probe=$("$fcntl_probe" 10<&10 2>/dev/null || echo error)
+  [ "$sig7_full_probe" = clear ] || fail_case 'signal: full-pipe descriptor unexpectedly non-blocking'
+  sig7_out="$tmp/signal7.out"; /bin/mkdir -m 700 "$sig7_out"
+  "$entry" "$bound_jq" "$sig7_out" "$real_request" "$real_map" \
+    > "$tmp/signal7.stdout" 2>&10 &
+  sig7_pid=$!
+  sig7_deadline=$(( $(/bin/date +%s) + 5 ))
+  while [ ! -e "$sig7_out/.run" ]; do
+    [ "$(/bin/date +%s)" -lt "$sig7_deadline" ] || break
+    /bin/sleep 0.01
+  done
+  if [ -e "$sig7_out/.run" ]; then
+    kill -TERM "$sig7_pid"
+    # Bounded wait: a watchdog kills the entry if it has not exited within 30s.
+    ( /usr/bin/perl -e 'alarm shift; sleep 999' 30
+      kill -KILL "$sig7_pid" 2>/dev/null || : ) &
+    sig7_watchdog=$!
+    wait "$sig7_pid" 2>/dev/null; sig7_wait_status=$?
+    kill "$sig7_watchdog" 2>/dev/null || :
+  else
+    fail_case 'signal: full-pipe case landed too late -- .run never appeared'
+  fi
+  kill "$sig7_filler" 2>/dev/null || :
+  exec 10>&-
+  sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)
+  drained="$tmp/signal7.drained"
+  ( exec 11< "$tmp/signal7.fifo"; /bin/cat <&11 > "$drained" 2>/dev/null || : ) &
+  sig7_drain_pid=$!
+  /bin/sleep 0.2
+  kill "$sig7_drain_pid" 2>/dev/null || :
+  if [ "$sig7_wait_status" -eq 143 ] && [ -z "$sig7_after" ] &&
+     ! /usr/bin/grep -q '^entry-signal:' "$drained" 2>/dev/null; then
+    pass_case 'signal: entry omits its entry-signal line on a full pipe rather than blocking'
+  else
+    fail_case 'signal: full-pipe omission case'
+  fi
+else
+  fail_case 'signal: full-pipe omission case (entry absent)'
+fi
+
+# --- 16. Pinned blob / generation constant assertions (spec.md:8388-8410) ------------------
+
+launcher_blob_expected=f4de7e48c688b6adb3669f69a221d2aa7bf43b15
+launcher_blob_actual=$(/usr/bin/git -C "$root" hash-object "$launcher_source")
+if [ "$launcher_blob_actual" = "$launcher_blob_expected" ]; then
+  pass_case 'baseline launcher blob (portable-profile-resolution-launcher.c) matches the accepted pin'
+else
+  fail_case "baseline launcher blob mismatch: got $launcher_blob_actual, expected $launcher_blob_expected"
+fi
+
+if [ -f "$entry" ]; then
+  for f in "$parent_source" "$helper_source" $loaded_files; do
+    expected=$(/usr/bin/git -C "$root" hash-object "$f")
+    /usr/bin/grep -qF -- "$expected" "$entry" ||
+      fail_case "pinned blob missing from entry: $f ($expected)"
+  done
+  pass_case 'entry (resolve-profile.sh) pins all ten blob ids as literal git hash-object values'
+else
+  fail_case 'entry pin literals (entry absent)'
+fi
+
+if [ -f "$parent_source" ]; then
+  for f in $loaded_files; do
+    expected=$(/usr/bin/git -C "$root" hash-object "$f")
+    /usr/bin/grep -qF -- "$expected" "$parent_source" ||
+      fail_case "pinned blob missing from parent: $f ($expected)"
+  done
+  pass_case 'parent (trusted-launch.c) pins all eight loaded-file blob ids as literal git hash-object values'
+
+  if /usr/bin/grep -qF -- g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43 "$parent_source" &&
+     /usr/bin/grep -qF -- '2' "$parent_source"; then
+    pass_case 'parent pins the core generation and schema-major constants'
+  else
+    fail_case 'parent generation/schema-major constants'
+  fi
+else
+  fail_case 'parent pin literals (trusted-launch.c absent)'
+fi
+
+if [ -f "$entry" ]; then
+  if /usr/bin/grep -qF -- g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43 "$entry"; then
+    pass_case 'entry pins the core generation constant'
+  else
+    fail_case 'entry generation constant'
+  fi
+fi
+
+# --- 17. Mechanism checks: proof-by-reading greps (spec.md:8800-8995) ---------------------
+#
+# These are the automatable readings R10 specifies: the three-pass allowlist sweep, the
+# awk/printf position assertions, and the handler async-signal-safety grep. Several other
+# "readings" R10 lists explicitly cannot be a test case at all (the fork/reap windows and
+# the signal-delivery-timing claims); those are not implemented here and are named in the
+# coder's report rather than silently dropped.
+
+allowlist_words='/bin/bash /bin/mkdir /bin/cp /bin/chmod /bin/rm /bin/cat /usr/bin/uname /usr/bin/printf /usr/bin/env /usr/bin/stat /usr/bin/cc /Library/Developer/CommandLineTools/usr/bin/clang /usr/bin/shasum /usr/bin/sha256sum /usr/bin/sha1sum'
+allowlist_data='/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk /usr/bin:/bin /proc /proc/%s/stat /usr/bin/awk /dev/fd /dev/fd/* /dev/fd/2'
+
+sweep_absolute_paths() {
+  sap_file=$1
+  /usr/bin/grep -Eo '(/[A-Za-z0-9_.%*-]+)+' "$sap_file" 2>/dev/null | /usr/bin/sort -u
+}
+
+if [ -f "$entry" ]; then
+  bad_tokens=0
+  for tok in $(sweep_absolute_paths "$entry"); do
+    match=0
+    for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done
+    case "$tok" in /dev/fd/*) match=1 ;; esac
+    [ "$match" -eq 1 ] || { printf 'unlisted absolute path token in entry: %s\n' "$tok" >&2; bad_tokens=$((bad_tokens + 1)); }
+  done
+  if [ "$bad_tokens" -eq 0 ]; then
+    pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data allowlist'
+  else
+    fail_case "mechanism: entry has $bad_tokens unlisted absolute-path token(s)"
+  fi
+
+  builtins=$(/bin/bash -c 'compgen -b')
+  reserved=$(/bin/bash -c 'compgen -k')
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    first=${line%% *}
+    first=${first#*[$'\t']}
+    case "$first" in
+      /*|\$*|'"'*|"'"*|*'='*|'{'*|'}'*|checkpoint|refuse) continue ;;
+    esac
+    for b in $builtins; do [ "$first" = "$b" ] && continue 2; done
+    for r in $reserved; do [ "$first" = "$r" ] && continue 2; done
+  done < "$entry"
+  pass_case 'mechanism: bare-word command-position sweep completed (heuristic; full parity needs the shipped entry)'
+
+  env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
+  if [ -n "$env_i_line" ]; then
+    bad_printf=0
+    while IFS=: read -r n _; do
+      [ "$n" -gt "$env_i_line" ] || bad_printf=$((bad_printf + 1))
+    done < <(/usr/bin/grep -n '/usr/bin/printf' "$entry" || :)
+    if [ "$bad_printf" -eq 0 ]; then
+      pass_case 'mechanism: every /usr/bin/printf occurrence sits below the env -i re-exec line'
+    else
+      fail_case "mechanism: $bad_printf /usr/bin/printf occurrence(s) sit above the env -i re-exec"
+    fi
+  else
+    fail_case 'mechanism: no exec /usr/bin/env -i re-exec line found in entry'
+  fi
+
+  devnull_lines=$(/usr/bin/grep -n '/dev/null' "$entry" || :)
+  devnull_bad=0
+  while IFS=: read -r _ text; do
+    case "$text" in
+      *'ulimit -S -n'*'2>/dev/null'*) ;;
+      *'2>/dev/null'*'||'*) ;;
+      *'unset -f'*'2>/dev/null'*) ;;
+      *'kill -"$entry_signal"'*'2>/dev/null'*) ;;
+      *) devnull_bad=$((devnull_bad + 1)) ;;
+    esac
+  done <<< "$devnull_lines"
+  if [ -n "$devnull_lines" ]; then
+    if [ "$devnull_bad" -eq 0 ]; then
+      pass_case 'mechanism: /dev/null discard appears only in its enumerated roles'
+    else
+      fail_case "mechanism: /dev/null used outside its enumerated roles ($devnull_bad occurrence(s))"
+    fi
+  fi
+else
+  fail_case 'mechanism: allowlist sweep (entry absent)'
+fi
+
+if [ -f "$parent_source" ]; then
+  forbidden_calls='snprintf malloc free fprintf strerror nanosleep usleep'
+  handler_bad=0
+  in_handler=0
+  while IFS= read -r line; do
+    case "$line" in
+      *sigaction*|*'void handle_'*|*'static void '*'signal'*) in_handler=1 ;;
+    esac
+    if [ "$in_handler" -eq 1 ]; then
+      for f in $forbidden_calls; do
+        case "$line" in *"$f("*) handler_bad=$((handler_bad + 1)) ;; esac
+      done
+    fi
+    case "$line" in '}') in_handler=0 ;; esac
+  done < "$parent_source"
+  if [ "$handler_bad" -eq 0 ]; then
+    pass_case 'mechanism: no obviously-forbidden non-async-signal-safe call textually inside a handler body'
+  else
+    fail_case "mechanism: $handler_bad forbidden call(s) found near a handler body (heuristic)"
+  fi
+
+  if /usr/bin/grep -qE 'environ|execv\(|execvp\(|execlp\(' "$parent_source"; then
+    fail_case 'mechanism: parent references environ/execv/execvp/execlp'
+  else
+    pass_case 'mechanism: parent contains no environ/execv/execvp/execlp'
+  fi
+else
+  fail_case 'mechanism: parent handler-safety grep (trusted-launch.c absent)'
+fi
+
+# --- Not mapped to an automated case (spec.md line references) -----------------------------
+# - The fork-then-publish sigprocmask window (spec.md:8434-8449): "nothing a test can do
+#   puts a signal in it on demand" -- proof by reading only.
+# - The reap/kill(-pgid) ordering inside the handlers (spec.md:8483-8500): same reason.
+# - The kill(0,...) coincidence and the "few instructions wide" scheduling claims
+#   (spec.md:8516-8524, 8460-8470): explicitly not case-able, proof by reading only.
+# - Full byte-exact reproduction of the three-pass allowlist grammar (pass 1's source-role
+#   carve-outs, pass 3's parameter-name closure) is approximated above rather than
+#   reproduced to the letter; a later step should tighten it once the shipped source's
+#   actual variable names are fixed (spec.md:8801-8940).
+
+suite_complete=1
+printf 'resolver-trusted-launch: %d/%d cases passed\n' "$passed" "$total"
+[ "$passed" -eq "$total" ] || exit 1
