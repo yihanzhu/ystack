@@ -32,6 +32,83 @@ profile_resolution_error() {
   return 1
 }
 
+profile_resolution_platform_file() {
+  [ -f "$1" ] && [ -x "$1" ] && [ ! -L "$1" ]
+}
+
+profile_resolution_platform_producer() {
+  /usr/bin/uname -sm
+}
+
+profile_resolution_platform_reader() {
+  /bin/dd bs=1 count=65
+}
+
+profile_resolution_platform_encoder() {
+  /usr/bin/od -An -v -tu1
+}
+
+profile_resolution_observe_platform() (
+  set -o pipefail
+  set -f
+  IFS=$' \t\n'
+  local rendering token count=0 normalized=''
+  if rendering=$(profile_resolution_platform_producer |
+      profile_resolution_platform_reader |
+      profile_resolution_platform_encoder); then
+    :
+  else
+    return 1
+  fi
+  for token in $rendering; do
+    case "$token" in
+      0|[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5]) ;;
+      *) return 1 ;;
+    esac
+    count=$((count + 1))
+    [ "$count" -le 64 ] || return 1
+    if [ -z "$normalized" ]; then
+      normalized=$token
+    else
+      normalized="$normalized $token"
+    fi
+  done
+  [ "$count" -gt 0 ] || return 1
+  printf '%s\n' "$normalized"
+) 2>/dev/null
+
+profile_resolution_initialize_git() {
+  local observation selected dependency
+  profile_resolution_git_path=''
+  for dependency in /usr/bin/uname /bin/dd /usr/bin/od; do
+    if ! profile_resolution_platform_file "$dependency"; then
+      profile_resolution_error E_RUNTIME dependency
+      return 1
+    fi
+  done
+  if ! observation=$(profile_resolution_observe_platform); then
+    profile_resolution_error E_RUNTIME dependency
+    return 1
+  fi
+  case "$observation" in
+    "76 105 110 117 120 32 120 56 54 95 54 52 10")
+      selected=/usr/bin/git
+      ;;
+    "68 97 114 119 105 110 32 120 56 54 95 54 52 10")
+      selected=/Library/Developer/CommandLineTools/usr/bin/git
+      ;;
+    "68 97 114 119 105 110 32 97 114 109 54 52 10")
+      selected=/Library/Developer/CommandLineTools/usr/bin/git
+      ;;
+    *) profile_resolution_error E_RUNTIME dependency; return 1 ;;
+  esac
+  if ! profile_resolution_platform_file "$selected"; then
+    profile_resolution_error E_RUNTIME dependency
+    return 1
+  fi
+  profile_resolution_git_path=$selected
+}
+
 profile_resolution_cleanup() {
   if [ -n "${profile_resolution_scratch:-}" ] &&
      [ -d "$profile_resolution_scratch" ] &&
@@ -320,7 +397,7 @@ profile_resolution_git() {
     GIT_CONFIG_KEY_5=fetch.fsckObjects GIT_CONFIG_VALUE_5=true \
     GIT_CONFIG_KEY_6=core.multiPackIndex GIT_CONFIG_VALUE_6=false \
     GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 \
-      exec /usr/bin/git --git-dir="$profile_resolution_gitdir" "$@" \
+      exec "$profile_resolution_git_path" --git-dir="$profile_resolution_gitdir" "$@" \
         0<&9 3>&- 7>&- 8>&- 9<&- 2>/dev/null
   ) &
   profile_resolution_git_child=$!
@@ -677,8 +754,9 @@ profile_resolution_main() {
       profile_resolution_error E_RUNTIME dependency
       return 1
     }
+  profile_resolution_initialize_git || return 1
   for profile_resolution_dependency in /bin/bash /bin/dd /bin/mkdir /bin/rm /bin/mv /bin/cat /bin/ln \
-    /usr/bin/git /usr/bin/shasum /usr/bin/mktemp /usr/bin/cmp /usr/bin/wc \
+    /usr/bin/shasum /usr/bin/mktemp /usr/bin/cmp /usr/bin/wc \
     /usr/bin/sed /usr/bin/tr /usr/bin/sort /usr/bin/comm /usr/bin/mkfifo /usr/bin/od; do
     [ -x "$profile_resolution_dependency" ] && [ ! -L "$profile_resolution_dependency" ] || {
       profile_resolution_error E_RUNTIME dependency
@@ -708,10 +786,10 @@ profile_resolution_main() {
       return 1
     }
   profile_resolution_generation_root="$profile_resolution_repo/core/v$PROFILE_RESOLUTION_SCHEMA_MAJOR/generations/$PROFILE_RESOLUTION_CORE_GENERATION"
-  [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object scripts/core-contract.sh 2>/dev/null)" = "$PROFILE_RESOLUTION_WRAPPER_BLOB" ] &&
-    [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "core/v$PROFILE_RESOLUTION_SCHEMA_MAJOR/generation-registry.json" 2>/dev/null)" = "$PROFILE_RESOLUTION_REGISTRY_BLOB" ] &&
-    [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/contracts.jq" 2>/dev/null)" = "$PROFILE_RESOLUTION_CONTRACTS_BLOB" ] &&
-    [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/core-ingress.sh" 2>/dev/null)" = "$PROFILE_RESOLUTION_INGRESS_BLOB" ] || {
+  [ "$("$profile_resolution_git_path" -C "$profile_resolution_repo" hash-object scripts/core-contract.sh 2>/dev/null)" = "$PROFILE_RESOLUTION_WRAPPER_BLOB" ] &&
+    [ "$("$profile_resolution_git_path" -C "$profile_resolution_repo" hash-object "core/v$PROFILE_RESOLUTION_SCHEMA_MAJOR/generation-registry.json" 2>/dev/null)" = "$PROFILE_RESOLUTION_REGISTRY_BLOB" ] &&
+    [ "$("$profile_resolution_git_path" -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/contracts.jq" 2>/dev/null)" = "$PROFILE_RESOLUTION_CONTRACTS_BLOB" ] &&
+    [ "$("$profile_resolution_git_path" -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/core-ingress.sh" 2>/dev/null)" = "$PROFILE_RESOLUTION_INGRESS_BLOB" ] || {
       profile_resolution_error E_RUNTIME binding
       return 1
     }

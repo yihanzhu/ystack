@@ -220,6 +220,26 @@ reproduces nothing on its own: the slice
 is read-only, grants no authority and no deploy authority, and performs no model,
 credential, forge, network, publish, or target operation.
 
+### Restore the inactive shadow materialization input assembler
+
+Restore the three paths listed under “Inactive shadow materialization input
+assembler” in [`ci/required-files.txt`](ci/required-files.txt), together with
+the local Git materializer and `profiles/default/v1/`, then run:
+
+```sh
+bash scripts/test/shadow-assembler.test.sh
+```
+
+The proof builds a fixture bare repository and a resolved profile over the
+shipped default, assembles a materialization input, and shows it validating
+against the materializer protocol, byte-identical on a repeat run, read-only
+in both payload places, and accepted by `shadow/v1/reproduce.sh`. It also
+shows every refusal: an impure or non-physical source repository, a
+look-alike default profile, an unpinned config source, a malformed or
+oversized input, and a finished input over the driver's own size cap.
+Restoring these records materializes nothing on its own: the assembler is
+read-only and resolves no profile.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in
@@ -413,8 +433,11 @@ That checklist covers:
   command** (unlike the labels loop), and **branch protection isn't available on free
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.
-- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (structure
-  check + shellcheck). It is the **hard merge gate**; restore it by having this repo's
+- **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml): a
+  `checks` job (structure check, shellcheck, sharding proof, rename gate), six
+  parallel `test` shards each running
+  `scripts/test/run-all.sh --shard <index>/<count>`, and an aggregate `ci` job
+  that stays the **hard merge gate**. Restore it by having this repo's
   `.github/workflows/` present on `main`. Don't copy its steps here — link to it.
   - The structure check enforces the full backup against
     [`ci/required-files.txt`](ci/required-files.txt) — the **source of truth** for every
@@ -592,6 +615,14 @@ output, snapshotted jq execution, and postflight mutation detection. The result 
 inactive and declaration-only. It does not enforce or qualify a real sandbox, run
 a candidate or adapter, use a credential, activate a profile, or perform a network
 or external-write action.
+
+Restore the sandbox decision's [intent](work/real-sandbox-boundary/intent.md),
+[spec](work/real-sandbox-boundary/spec.md) and
+[plan](work/real-sandbox-boundary/plan.md) from the same commit, using the
+decision-record block in [the manifest](ci/required-files.txt). Read the spec
+for the accepted blockers and later implementation dependencies. Restoring
+these records and the declaration evaluator does not restore a qualified
+launcher; real execution remains blocked.
 
 Restore the five paths in the manifest's inactive credential-policy block, then
 run:
