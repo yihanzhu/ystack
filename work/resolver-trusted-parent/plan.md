@@ -1,5 +1,5 @@
 ---
-spec-blob: 69135783c3c1642d07e9e26cd8ed173d6dd583bc
+spec-blob: 6adf3023ba90fda298e609497d683f8954ec05c8
 drafted: 2026-09-14
 ---
 
@@ -48,7 +48,7 @@ implementation files are 5268 insertions (1988 / 400 / 2880).
 
 `review_size: accepted-exception`, **4600-6300 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
-record (blob `69135783c3c1642d07e9e26cd8ed173d6dd583bc`) and is the only
+record (blob `6adf3023ba90fda298e609497d683f8954ec05c8`) and is the only
 range this implementation is measured against. It brackets the measured
 5370 with an outward margin of roughly a sixth for the work still open.
 
@@ -304,11 +304,16 @@ run, always the first recorded signal. The section exists because a loop racing 
 trap cannot be arbitrated by `last_forwarded` alone; both reproduced failures — one
 arrival sent twice, and an INT sent for a run whose recorded signal was TERM — are named
 in R1.
-There are four job-table-gated forwarding kills — one in each of the three trap bodies'
-forwarding form and one in this section — all sending `$entry_signal`, all on the same
-`case " $(jobs -l) "` read and nowhere else, and all four carrying `2>/dev/null`, so a
+There are four job-table-gated forwarding kill roles — one in each of the three trap
+bodies' forwarding form and one in this section — all sending `$entry_signal`, all on the
+same `case " $(jobs -l) "` read and nowhere else. Their source occurrences are seven, not
+four: each forwarding trap literal is written at two sites, the arming after
+`parent_pid=$!` and the re-arm at the foot of the section, plus the loop's own kill. Every
+one of the seven carries `2>/dev/null`, so a
 `kill` at a parent that vanished after the table read cannot produce a stderr write that
-blocks on a pipe whose reader has gone. Set last_forwarded in the loop after the case, even when forwarding is
+blocks on a pipe whose reader has gone. The two writings of a signal's forwarding literal
+must be byte-identical; count exactly seven occurrences and exactly four roles, admitting
+no eighth occurrence and no fifth role. Set last_forwarded in the loop after the case, even when forwarding is
 skipped, so it cannot be retried later and so the section terminates when the table stops
 listing the parent; in the trap body it is set inside the Running arm, beside the kill.
 Steps 3-5, the second-wait rule and the 127 fallbacks are unchanged. Enumerate every
@@ -397,9 +402,11 @@ Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
 `ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
 in every required scrub including the marker branch, and the wait loop's signal
 forwarding kill in the job-table Running arm inside its record-only section together with
-the three trap-body forwarding kills — all four job-table-gated kills carry it, and there
-is no fifth kill in the entry. Check those source roles
-and positions, not only an occurrence count. Reject every other command/descriptor,
+the forwarding kill in each of the three trap bodies — four roles and seven source
+occurrences, since each forwarding literal is written at two sites and the loop's at one,
+and every one of the seven carries it. Admit no eighth occurrence and no fifth role.
+Check those source roles
+and positions as well as that occurrence count. Reject every other command/descriptor,
 input or append redirection, variable sink, prefix path, C pathname or execve
 argument using that target. It is neither an executable nor a general data member.
 Keep the redirect outside eval's quoted exec; persistent stderr suppression remains
