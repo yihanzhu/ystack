@@ -994,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
+**8596-11630 lines** — this file's measured 10113 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10106 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10113 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1199,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
+**8596-11630 lines** — this file's measured 10113 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2540,8 +2540,8 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8590-11622 lines**, which is this file's measured
-10106 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8596-11630 lines**, which is this file's measured
+10113 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -8758,11 +8758,15 @@ the spec pull request's range above still blocks review.
   agree — three values, not two. The test may run git freely: it is not a shipped file, and
   the allowlist grep below covers the two shipped files only.
 
-  In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
-  `resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
-  `scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, sorted
+  In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh`,
+  `resolver/v1/trusted-launch.c` and `scripts/test/resolver-trusted-launch.test.sh`
+  to the closed expected generation-hit list in
+  `scripts/test/portable-core-schema.test.sh` — three additions, not two, because the
+  focused test embeds the selected generation id itself when it asserts the parent's
+  eight pins, and a closed allowlist over embedded generation ids that omits it fails.
+  Preserve every existing entry, sorted
   exact-path comparison, and the scan of indexed tracked bytes. Change no other
-  behavior in that test. No wildcard, extra path, selected-generation change or
+  behavior in that test. No wildcard, further path, selected-generation change or
   split/encoded literal is permitted. The focused test and full schema check must
   pass together against committed/indexed implementation bytes.
 
@@ -8981,7 +8985,7 @@ the spec pull request's range above still blocks review.
 Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
 `resolver/v1/resolve-profile.sh`, `scripts/test/resolver-trusted-launch.test.sh`,
 `scripts/test/portable-core-schema.test.sh`, `docs/components.md`, `README.md`,
-`RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
+`RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the three
 exact generation-inventory additions required by R10. All other requirements and
 exclusions remain, including the eighteen blob-pin checks. The implementation
 review-size range is 3650-4950 changed lines; measure the complete change and
@@ -9394,8 +9398,11 @@ Order, each step checkable before the next:
    and exit with the child's status (`128 + signal` if it was signalled). No step reaches
    the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
-4. **`scripts/test/portable-core-schema.test.sh`** — add only the two exact shipped
-   generation consumers to its closed expected-hit list, as R10 requires.
+4. **`scripts/test/portable-core-schema.test.sh`** — add only the three exact
+   generation consumers — `resolver/v1/resolve-profile.sh`,
+   `resolver/v1/trusted-launch.c` and `scripts/test/resolver-trusted-launch.test.sh`,
+   the focused test included because it embeds the generation id when it asserts the
+   parent's eight pins — to its closed expected-hit list, as R10 requires.
 5. **Docs and manifest** — R9, in the same pull request as the code.
 
 **Distribution** (intent open question 2): build on every invocation from the committed C
