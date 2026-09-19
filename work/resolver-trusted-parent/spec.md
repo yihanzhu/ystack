@@ -994,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8790-11892 lines** — this file's measured 10341 lines plus or minus 15%, rounded. That
+**8843-11965 lines** — this file's measured 10404 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10341 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10404 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1199,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8790-11892 lines** — this file's measured 10341 lines plus or minus 15%, rounded. That
+**8843-11965 lines** — this file's measured 10404 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2542,8 +2542,8 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8790-11892 lines**, which is this file's measured
-10341 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8843-11965 lines**, which is this file's measured
+10404 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -2615,10 +2615,11 @@ the spec pull request's range above still blocks review.
   So the disk half of the signal path comes out of the traps and the forwarding half stays
   in. **There are exactly two trap-form literals per signal and these are they, and every
   place in this spec that quotes a trap body uses one of the two.** The **forwarding
-  form**, three statements:
+  form**, three statements — the assign-if-empty, the flag write, and one `if` that holds
+  the whole of the forwarding:
 
   ```
-  : "${entry_signal:=TERM}"; wait_interrupted=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" || :; last_forwarded=$entry_signal; };; esac
+  : "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi
   ```
 
   and the **record-only form**, two statements:
@@ -2631,10 +2632,40 @@ the spec pull request's range above still blocks review.
   nothing else —
   and nothing else in either: no chmod, no removal, no write, no exit. Every statement in
   either body is
-  a shell builtin or a subshell around one — `:`, an assignment, `case`, `[`, `kill`, and
+  a shell builtin or a subshell around one — `:`, an assignment, `if`, `case`, `[`,
+  `kill`, and
   `$(jobs -l)`, which forks a subshell and no external command — so a trap body runs no
   program a group signal can cut short part-way, which is the property the withdrawn design
   lost and the reason the chmod and the removal are still not here.
+
+  **A trap body is not atomic, so the forwarding form serialises itself with
+  `trap_busy`.** Bash 3.2 runs a trap for a signal that arrives while another trap body is
+  executing, nested inside it, and the `$(jobs -l)` subshell in the middle of this body is
+  a wide enough place for that to happen in practice. Without the flag two sends come out
+  of one window: the `TERM` body passes `[ -n "$last_forwarded" ]` with the variable still
+  empty, a `HUP` is delivered before the `kill`, the `HUP` body finds the same empty
+  variable, sends and records — and the `TERM` body, already past its guard, sends again.
+  `trap_busy` is the serialisation, and the two orderings it has to survive are worth
+  writing out rather than asserting:
+
+  1. **A nested trap arriving anywhere after `trap_busy=1`** — which is every instant of
+     the `case`, the `$(jobs -l)` subshell, the `kill` and the assignment — finds the flag
+     set, skips the whole `if`, and records only. It has still done the two things a
+     record-only body does, so nothing about the name or the wait flag is lost; what it
+     does not do is send. The outer body then finishes its own send and clears the flag.
+  2. **A nested trap arriving between the `[ -z "$trap_busy" ]` test and `trap_busy=1`** —
+     a two-statement window, and the one ordering the flag cannot exclude. The inner body
+     finds the flag still empty, runs the whole `if` to completion first, and may send and
+     record. Control then returns to the outer body, which sets `trap_busy=1` and reaches
+     its own `[ -n "$last_forwarded" ]` — and finds it **set**, because the inner body
+     wrote it before returning. So the outer sends nothing.
+
+  Either way at most one `kill` goes out, and `last_forwarded` carries the name that was
+  actually sent. The flag is cleared on the way out of the `if` and nowhere else, so a body
+  that is skipped never clears a flag it did not set. Note which guard does the work in
+  each case: `trap_busy` in the first, `last_forwarded` in the second. Neither alone is
+  enough, which is why both are there. The loop's record-only section needs no part of
+  this, because during it no trap can send at all.
 
   **The forwarding form sends `$entry_signal` and not the name in its own `:=NAME`
   default, and that is not a stylistic choice.** The default is what this body contributes
@@ -2764,11 +2795,13 @@ the spec pull request's range above still blocks review.
   compile and before the parent is launched. The `EXIT` trap is the same problem on every
   refusal path: it reads `run_created`, then `entry_signal`, then `parent_pid` to choose
   its line's second word, then `entry_status`, and an `E_RUNTIME` that happens before the
-  run directory exists reaches it with all four unassigned. The trap bodies add a fifth
-  name to the same rule, `last_forwarded`, for the reason set out below.
+  run directory exists reaches it with all four unassigned. The forwarding trap bodies add
+  a fifth and a sixth name to the same rule, `last_forwarded` and `trap_busy`, for the
+  reason set out below.
 
-  So the entry declares all five empty — `entry_signal=''`, `run_created=''`,
-  `entry_status=''`, `parent_pid=''`, `last_forwarded=''` — among its first builtins, after the seven opening
+  So the entry declares all six empty — `entry_signal=''`, `run_created=''`,
+  `entry_status=''`, `parent_pid=''`, `last_forwarded=''`, `trap_busy=''` — among its
+  first builtins, after the seven opening
   steps below — the `-p` refusal, the `umask 077`, the descriptor-headroom precondition,
   the descriptor close, the scrub, the
   re-exec and the marker branch — and before it runs any external command, and the
@@ -2778,14 +2811,20 @@ the spec pull request's range above still blocks review.
   has by then validated; that assignment precedes the `trap` builtins for the same reason.
   The rule is one line long and the plan should carry it as one: **no trap is installed
   until every variable that trap, the checkpoint or the `EXIT` trap can read has been
-  assigned.** **`last_forwarded` is the fifth name and it is in the list because the trap
-  bodies read it**, which is a change from the round that put the forward in the loop
-  alone: `[ -n "$last_forwarded" ]` stands inside every one of the three bodies, the traps
-  are armed before the `mkdir`, and a signal arriving there would meet `set -u` with the
-  name unassigned and abort the entry on the one path this whole requirement exists for.
-  Its initialisation therefore moves from the statement immediately above the wait loop up
-  among these five, and the loop does **not** re-initialise it — an empty assignment above
-  the loop would erase a forward a trap had already made and let step 2 send a second one.
+  assigned.** **`last_forwarded` is the fifth name and `trap_busy` the sixth, and both are
+  in the list because the forwarding trap bodies read them** — `[ -n "$last_forwarded" ]`
+  and `[ -z "$trap_busy" ]` each stand inside all three of those bodies. The arming that
+  installs them is the one after `parent_pid=$!` rather than the one before the `mkdir`,
+  so on a strict reading of the rule they could be assigned later; they are not, because
+  the rule is worth keeping as one rule and the read-check cheap as one glance, and because
+  a name assigned next to the statement that first needs it is a name a later edit moves
+  without noticing. `last_forwarded`'s initialisation therefore moves from the statement
+  immediately above the wait loop up
+  among these six, and the loop does **not** re-initialise it — an empty assignment above
+  the loop would erase a forward a trap had already made and let the section send a second
+  one. `trap_busy` sits beside it and nothing outside a forwarding body ever writes it: it
+  is set on the way into the `if` and cleared on the way out, both inside the same body, so
+  it is empty whenever no trap is executing.
   `wait_interrupted` is outside the rule, and for a sharper reason: the three traps
   *write* it, and a write is not a read, so `set -u` has nothing to say about it however
   early a signal arrives. Its only read is the loop's own `[ -n "$wait_interrupted" ]`,
@@ -2797,7 +2836,7 @@ the spec pull request's range above still blocks review.
   `${entry_signal:-}` and leaving the variables undeclared would satisfy `set -u` too. An
   explicit initialisation is preferred for two reasons. It puts the entry's whole signal
   state in one place a reviewer can see at a glance, which is what makes R10's read-check
-  of the arming order cheap — five assignments, then the `trap` lines, in that order on
+  of the arming order cheap — six assignments, then the `trap` lines, in that order on
   the page. And a `${var:-}` written at every read is indistinguishable from a misspelled
   name, so it switches off exactly the thing `set -u` is on for: with the defaults in
   place, `${entry_signl:-}` is a silent empty string on every path rather than an error on
@@ -2997,9 +3036,9 @@ the spec pull request's range above still blocks review.
         esac
         last_forwarded=$entry_signal
       fi
-      trap ': "${entry_signal:=TERM}"; wait_interrupted=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" || :; last_forwarded=$entry_signal; };; esac' TERM
-      trap ': "${entry_signal:=INT}"; wait_interrupted=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" || :; last_forwarded=$entry_signal; };; esac' INT
-      trap ': "${entry_signal:=HUP}"; wait_interrupted=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" || :; last_forwarded=$entry_signal; };; esac' HUP
+      trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' TERM
+      trap ': "${entry_signal:=INT}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' INT
+      trap ': "${entry_signal:=HUP}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' HUP
     done
     wait "$parent_pid"; status=$?
     if [ -z "$wait_interrupted" ]; then
@@ -6816,13 +6855,17 @@ the spec pull request's range above still blocks review.
      The entry also performs the temporary stderr discard already required by R1:
      exact `2>/dev/null` on the three ulimit rungs, descriptor-close eval, the two
      unset forms in each required scrub (including the marker branch), and the wait
-     loop's job-table-gated signal-forwarding kill. There are **four** job-table-gated
-     forwarding kills in the entry — one in each of the three trap bodies' forwarding form
+     four job-table-gated signal-forwarding kills. There are exactly **four** of them in
+     the entry — one in each of the three trap bodies' forwarding form
      and one in the wait loop's section — and
-     only the loop's carries this redirection; the trap bodies'
-     `kill -"$entry_signal" "$parent_pid" || :` carries none, so `2>/dev/null` on a trap
-     body's kill is a rejection here rather
-     than an allowed role. R10 checks those roles only.
+     **all four carry this redirection**, which is a change from the draft that admitted
+     it on the loop's kill alone. The reason is the same one the ladder rungs have: a
+     `kill` at a job the table listed as `Running` an instant earlier can still fail on a
+     parent that has since exited, and the diagnostic bash would write for it goes to the
+     entry's stderr — which on a signal path may be a pipe whose reader has gone, where a
+     write can block and hold the entry open past the parent's exit. A trap body is the
+     worst place in the entry for that, because it is reached with the caller already
+     waiting. R10 checks those roles only.
      This is no general data path, command permission or persistent write-root
      allowance; no additional diagnostic may be suppressed. The redirection stays
      outside eval's quoted exec, preserving the existing prohibition.
@@ -7924,15 +7967,16 @@ the spec pull request's range above still blocks review.
   into the microseconds between the two `mkdir` calls, which is a flaky test dressed as a
   deterministic one. A test-only hook inside the entry is the thing this spec refuses
   everywhere else. So the arming order is covered the way R2's mask window is: by reading,
-  with the plan quoting the statements in order — the five empty initialisations
-  `entry_signal=''`, `run_created=''`, `entry_status=''`, `parent_pid=''` and
-  `last_forwarded=''`, then the
+  with the plan quoting the statements in order — the six empty initialisations
+  `entry_signal=''`, `run_created=''`, `entry_status=''`, `parent_pid=''`,
+  `last_forwarded=''` and `trap_busy=''`, then the
   `trap` lines, then the `[ -e ]`
   refusal, then `/bin/mkdir -- "$run"` with the guard set from its captured status, then
   the two subdirectories — and the
-  reviewer checking that those five initialisations all precede the `trap` builtins, so
+  reviewer checking that those six initialisations all precede the `trap` builtins, so
   that no variable a trap, a checkpoint or the `EXIT` trap reads can be unset when `set -u`
-  meets it — `last_forwarded` among them this round, because the trap bodies now read it —
+  meets it — `last_forwarded` and `trap_busy` among them, because the forwarding bodies
+  read both —
   that no statement between them can create `.run` without the guard,
   and that the pre-parent arming uses the **record-only** two-statement form R1 fixes —
   the assign-if-empty and `wait_interrupted=1` — and nothing besides: a body
@@ -7943,18 +7987,29 @@ the spec pull request's range above still blocks review.
   **The trap inventory is a read-check of its own this round, because the entry now holds
   two trap-form literals per signal and the `trap` builtins that switch between them are
   shipped statements like any other.** The reviewer enumerates every `trap` command in the
-  entry and classifies each one, and the list is closed: the `EXIT` trap; the three
+  entry and classifies each one, and the list is closed: the `trap … EXIT` command that
+  arms the cleanup; the three
   pre-parent arming commands, which carry the record-only form; the three that re-arm the
   forwarding form on the statement after `parent_pid=$!`; the three inside the wait loop's
-  section that put the record-only form back; and the three at the foot of that section
-  that restore the forwarding form. Thirteen `trap` commands, two distinct body literals
-  per signal and no third, and the record-only literal is a prefix of the forwarding one
+  section that put the record-only form back; the three at the foot of that section
+  that restore the forwarding form; and **`trap '' INT TERM HUP`, the second statement of
+  the `EXIT` trap body**, which is a `trap` command in the shipped text like any other and
+  belongs in this count even though it stands inside another trap — it is the one that
+  makes the `chmod` and the `/bin/rm` uninterruptible, and a reader who leaves it out of
+  the inventory is a reader who can delete it without noticing. Fourteen `trap` commands
+  in all: two distinct non-empty body literals
+  per signal and no third, plus the one empty body the `EXIT` trap sets. The record-only
+  literal is a prefix of the forwarding one
   so a body that has been half-edited is visible as a body that is neither. The reviewer
   checks that no forwarding body sends its own `:=NAME` default instead of
   `$entry_signal` — that is the first of the two failures R1 reproduces, and it is
   unreachable by test because provoking it needs a second, differently named signal to
-  arrive after the job table has stopped saying `Running` and before the loop looks — and
-  that no forwarding body carries `2>/dev/null`. **A body carrying the record-only form
+  arrive after the job table has stopped saying `Running` and before the loop looks — that
+  every forwarding body carries its `[ -z "$trap_busy" ]` guard, its `trap_busy=1` and its
+  `trap_busy=''` in that order, since a body missing the clear forwards once per run and
+  then never again, and a body missing the guard is the nested-trap double send R1
+  argues — and that every one of the four forwarding `kill`s carries `2>/dev/null`.
+  **A body carrying the record-only form
   where the forwarding one belongs is the second untestable form**: it needs a signal
   delivered between the loop's forwarding check and the `wait` under it, and what it
   produces is an entry that blocks for the parent's whole natural life and then exits with
@@ -7972,7 +8027,8 @@ the spec pull request's range above still blocks review.
   between two adjacent statements (R1). The reviewer counts the forwarding kills as well:
   four, one in each of the three trap bodies' forwarding form and one in the loop's
   section, all four gated on the same
-  `case " $(jobs -l) "` read, all four sending `$entry_signal`, and none anywhere else.
+  `case " $(jobs -l) "` read, all four sending `$entry_signal`, all four carrying
+  `2>/dev/null`, and none anywhere else.
   It also checks the two statements the section's termination rests on: the guard is
   `[ -z "$last_forwarded" ]` and not a comparison against `entry_signal`, and
   `last_forwarded=$entry_signal` stands after the loop's `case` rather than inside its
@@ -9017,9 +9073,9 @@ the spec pull request's range above still blocks review.
      the literal target of `2>/dev/null` on R1's three `ulimit -S -n` ladder rungs,
      the descriptor-close `eval`, `builtin unset -f` and `builtin unset` in every
      mandated scrub (including the full marker scrub), and the wait loop's forwarding
-     `kill` in the job-table Running arm inside its record-only section — that one only,
-     and not the other three forwarding `kill`s, one in each trap body's forwarding form,
-     which carry no redirection at all. Check each command's required
+     `kill` in the job-table Running arm inside its record-only section **and** the three
+     forwarding `kill`s, one in each trap body's forwarding form — four in all, every one
+     of them carrying it, and no fifth `kill` anywhere in the entry. Check each command's required
      role and position, not a guessed total occurrence count. Preserve the original
      command forms and all their existing ordering/behavior checks. Reject this
      target on any other command, another descriptor, input/append redirection,
@@ -9448,19 +9504,21 @@ Order, each step checkable before the next:
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
    (R1);
    then install the `EXIT`/`INT`/`TERM`/`HUP` traps **before** anything creates the run
-   directory — and after the five empty initialisations above and after `run` itself is
+   directory — and after the six empty initialisations above and after `run` itself is
    assigned from the validated output root, so nothing any trap reads is unset when it is
    armed (R1) — the three signal traps recording the **first** signal's name in
    `entry_signal` with an assign-if-empty and setting the wait loop's flag beside it, armed
    here in the **record-only** form `: "${entry_signal:=TERM}"; wait_interrupted=1` and its
    `INT` and `HUP` siblings, two statements each and the whole of each — there is no parent
    to forward to yet — and re-armed in the **forwarding** form
-   `: "${entry_signal:=TERM}"; wait_interrupted=1; case " $(jobs -l) " in
-   *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal"
-   "$parent_pid" || :; last_forwarded=$entry_signal; };; esac` on the statement
+   `: "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then
+   trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*)
+   [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :;
+   last_forwarded=$entry_signal; };; esac; trap_busy=''; fi` on the statement
    immediately after `parent_pid=$!`, three statements each, every one
    a builtin or a subshell around one, forwarding `$entry_signal` and never the body's own
-   `:=NAME` default, so that a
+   `:=NAME` default, and serialised against a nested trap by the `trap_busy` flag the
+   third statement sets and clears, so that a
    repeat or a second, different signal cannot overwrite a name the entry
    has already acted on or be sent in its place, no signal arriving during a `wait` can
    leave the loop below
@@ -9814,7 +9872,11 @@ intent says for this change. Only after the operator's merge does
   made, the forwarding form goes back, and the section repeats if a signal arrived while it
   was open. Both failures that design answers were reproduced on bash 3.2 rather than
   argued — one arrival sent twice, and an `INT` sent for a run whose recorded signal was
-  `TERM` (R1) — measured on bash 3.2 both ways, and the old order exits `0` on a run
+  `TERM`. A third was found the same way and is answered inside the trap rather than around
+  it: bash runs a trap for a signal that arrives while another trap body is executing, so
+  two bodies can pass the same empty `last_forwarded`, and the forwarding form therefore
+  serialises itself with a `trap_busy` flag it sets on the way in and clears on the way out
+  (R1) — measured on bash 3.2 both ways, and the old order exits `0` on a run
   the caller sent a `TERM` to (R1). The third test drives the
   entry's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
@@ -10220,7 +10282,8 @@ intent says for this change. Only after the operator's merge does
   same lines: `reproduce.sh` cleans up inside its `EXIT`/`HUP`/`INT`/`TERM` trap bodies,
   where the entry's three signal traps record and, in their forwarding form, forward under
   a job-table gate — the
-  signal's name, the wait loop's `wait_interrupted` flag and one guarded `kill` of
+  signal's name, the wait loop's `wait_interrupted` flag and one `trap_busy`-serialised
+  guarded `kill` of
   `$entry_signal`, three
   statements each and every one a builtin, against two in the record-only form the same
   three traps carry before the parent exists and inside the wait loop's section — its
