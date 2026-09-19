@@ -588,6 +588,17 @@ static size_t ystack_render_decimal(long value, char *buffer, size_t capacity) {
     return count;
 }
 
+/* write(2) is declared warn_unused_result under glibc's _FORTIFY_SOURCE (a plain
+   (void) cast does not silence it under -Werror), and both diagnostics below are
+   best-effort: the write's own return is never actionable here (there is nowhere
+   left to report a partial write or EAGAIN to), so the result is captured into a
+   local and explicitly discarded rather than actioned. write(2) itself remains on
+   the async-signal-safe list either way; this wrapper adds nothing unsafe. */
+static void ystack_write_ignore(int fd, const void *buf, size_t len) {
+    ssize_t written = write(fd, buf, len);
+    (void)written;
+}
+
 /* The one handler this file registers for INT/TERM/HUP (spec R2). Every call in it
    is checked by name against POSIX.1-2017's async-signal-safe list (XSH 2.4.3):
    kill, waitpid, select, fcntl, write and _exit, plus memcpy in the diagnostic
@@ -670,7 +681,7 @@ static void ystack_terminate_handler(int sig) {
             (void)fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK);
         }
         if (name != NULL) {
-            (void)write(STDERR_FILENO, buf, len);
+            ystack_write_ignore(STDERR_FILENO, buf, len);
         }
         if (flags != -1) {
             (void)fcntl(STDERR_FILENO, F_SETFL, flags);
@@ -1342,7 +1353,7 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
         if (flags != -1) {
             (void)fcntl(STDERR_FILENO, F_SETFL, flags | O_NONBLOCK);
         }
-        (void)write(STDERR_FILENO, buf, (size_t)len);
+        ystack_write_ignore(STDERR_FILENO, buf, (size_t)len);
         if (flags != -1) {
             (void)fcntl(STDERR_FILENO, F_SETFL, flags);
         }
