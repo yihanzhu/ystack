@@ -33,7 +33,7 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 | `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1910 measured |
 | `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 400 measured |
 | `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1865 measured |
-| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
+| `scripts/test/portable-core-schema.test.sh` | Add exactly the three new generation consumers | 3 |
 | `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
 | `README.md` | Resolver index row | 2 |
 | `RESTORE.md` | Resolver restoration and proof | 18 |
@@ -42,7 +42,7 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 Measured figures are the three implementation files at
 `5472bdc23bf6771c8dcb00845c036b054a58b820` on
 `ystack/impl/resolver-trusted-parent`, 4175 changed lines against plan-base
-`d23a331`. The remaining five paths are unwritten estimates totalling 62.
+`d23a331`. The remaining five paths are unwritten estimates totalling 63.
 
 `review_size: accepted-exception`, **3650-4950 changed lines**, for this one
 implementation concern: the spec's record (blob
@@ -377,12 +377,16 @@ Implement small inspectable lexical/role extraction for all three passes:
 No full parser or linter AST supplies this invariant. Review extraction coverage
 against the actual shipped source shapes; a broad quoted-token skip is forbidden.
 
-In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
-`resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
-`scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, the
-sorted exact comparison and the indexed tracked-byte scan. No wildcard, generation
-change or other schema-test change is permitted. Stage the complete implementation
-before running this test so its indexed-byte proof includes both new consumers.
+In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh`,
+`resolver/v1/trusted-launch.c` and `scripts/test/resolver-trusted-launch.test.sh`
+to the closed expected generation-hit list in
+`scripts/test/portable-core-schema.test.sh`: a closed allowlist over embedded
+generation ids must list the focused test too, because that test pins the
+generation id when it asserts the parent's eight pins. Preserve every existing
+entry, the sorted exact comparison and the indexed tracked-byte scan. No wildcard,
+generation change or other schema-test change is permitted. Stage the complete
+implementation before running this test so its indexed-byte proof includes all
+three new consumers.
 
 Update docs at the existing resolver sections, not new conflicting instructions.
 State both supported forms, 100755 entry, direct-parent test-only boundary, CLT
