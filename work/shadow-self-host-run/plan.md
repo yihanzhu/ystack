@@ -40,8 +40,8 @@ What I verified myself against real history, rather than copying from the spec:
 
 Nothing outside this list. Counts are net changed lines, honest estimates.
 
-**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Thirteen shared
-files and fifteen per case, forty-three in all:
+**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Fourteen shared
+files and fifteen per case, forty-four in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
@@ -51,6 +51,7 @@ files and fifteen per case, forty-three in all:
 | `resolved-profile.json` | The resolver's output, shared by both runs | 1 |
 | `environment-claim.json` | The real claim for `env.local-macos-ystack-self` | 1 |
 | `control-policy-set.json` | The policy set the driver was handed | 1 |
+| `core-package-closure.json` | The exact core-contract package closure descriptor bytes that the policy set's `package_ref.sha256` names, stored with no trailing newline | 1 |
 | `duty-evaluation.json` | The duty evaluation the claim references | 1 |
 | `prerequisite/environment-declaration.json` | The bootstrap environment description the prerequisite stage request fingerprints | 1 |
 | `prerequisite/input.json` | The assembler's materialization input for the prerequisite stage run | 1 |
@@ -79,9 +80,9 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 **Existing files:**
 
-- `ci/required-files.txt` (+46). A block headed
+- `ci/required-files.txt` (+47). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
-  listing all forty-three evidence paths and the new test.
+  listing all forty-four evidence paths and the new test.
 - `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
   the assembler write-up, which today runs to line 1395 before
   `## Inactive maintenance loop` at 1397.
@@ -112,9 +113,9 @@ to refine against the real interfaces. Two things grew once I read them:
   seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
   `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
   refusal, on top of the twelve evidence checks requirement 15 lists.
-- The manifest block is 46 lines, not a handful, because the spec's design requires
+- The manifest block is 47 lines, not a handful, because the spec's design requires
   every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names forty-three of them.
+  design names forty-four of them.
 
 - The prerequisite stage run adds six committed documents, six manifest lines, the
   README's account of the construction order and the test's recomputation of it:
@@ -495,6 +496,63 @@ references a later entry.
    policy and decision digests; `control/v1/sandbox.jq:140-148` then requires the duty
    evaluation to carry those same two references. Confirm the copy before use with
    `PATH="$JQ_DIR:/usr/bin:/bin" control/v1/validate.sh validate "$POLICY_SET"`.
+
+   **The closure descriptor those bytes name is retained too**, as
+   `core-package-closure.json`, because `package_ref.sha256` is one of the reference
+   fields the precondition gate requires to be recomputable from committed bytes and no
+   shipped file holds the descriptor. `control/v1/evaluate-duty.sh:140-148` builds the
+   descriptor with `jq -Rn -S -c` over a nine-line member table and hashes it through
+   `sha256_text`, which pipes the value with `printf '%s'` — **so the hashed bytes carry
+   no trailing newline**, and the digest of the newline-terminated form is a different
+   value that satisfies nothing. `core-package-closure.json` is therefore written with
+   no trailing newline; it is the one bundled `.json` for which that is true, and the
+   README says so beside it. Reconstruct it deterministically from the pinned generation
+   `g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43` — the value
+   `PORTABLE_CORE_GENERATION` pins in `scripts/core-contract.sh` — by hashing the nine
+   closure paths in the order `evaluate-duty.sh:122-130` lists them and feeding the
+   result to the evaluator's own program, from a checkout of the pre-transition
+   revision `d3f6d525328838b9c2de819699e53d8909ab7a3f`:
+
+   ```sh
+   SEL=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
+   : >"$SCRATCH/core-members.tsv"
+   for rel in scripts/core-contract.sh core/v2/generation-registry.json \
+     "core/v2/generations/$SEL/contracts.jq" \
+     "core/v2/generations/$SEL/core-ingress.sh" \
+     "core/v2/generations/$SEL/modules/profile_graph.jq" \
+     "core/v2/generations/$SEL/modules/result_facts.jq" \
+     "core/v2/generations/$SEL/modules/result_truth.jq" \
+     "core/v2/generations/$SEL/modules/schema.jq" \
+     "core/v2/generations/$SEL/modules/stage_request.jq"; do
+     printf '%s\t%s\n' "$rel" \
+       "$(shasum -a 256 "$REPO/$rel" | awk '{print $1}')" \
+       >>"$SCRATCH/core-members.tsv"
+   done
+   "$JQ" -Rn -S -c \
+     --arg selected_sha "$(printf '%s' "$SEL" | shasum -a 256 | awk '{print $1}')" \
+     '[inputs|split("\t")|{path:.[0],sha256:.[1]}] as $members |
+      {schema_version:1,kind:"core_contract_package_closure",
+       semantic_identity:"core.contracts.v2",
+       selected_generation_id_sha256:$selected_sha,members:$members}' \
+     <"$SCRATCH/core-members.tsv" >"$SCRATCH/core-closure.nl.json"
+   printf '%s' "$(cat "$SCRATCH/core-closure.nl.json")" >core-package-closure.json
+   ```
+
+   The second command is what drops the newline `jq` appends; it is the only
+   transformation applied, and it removes bytes rather than re-serializing the document.
+
+   The offline check is one command and needs no run, no network and no jq:
+   `shasum -a 256 < shadow/evidence/self-host-transition/v1/core-package-closure.json`
+   must print
+   `eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963`, the value
+   `control/v1/control-policy-set.json` records in
+   `body.core_contract.package_ref.sha256` and the value the retained
+   `control-policy-set.json` copy repeats. The redirect form is required: hashing the
+   file by name prints the same digest, but a copy that acquired a trailing newline
+   would hash to `06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1`
+   instead, and that mismatch is the signal that the bytes were re-serialized rather
+   than retained. If the digest does not match, the descriptor was not reconstructed
+   from the pinned generation and the run stops rather than committing it.
 2. **`resolved-profile.json`** — produced by the resolver entry, above. References only
    the committed `profiles/default/v1` objects and the resolution request and map.
 3. **`prerequisite/environment-declaration.json`** — **constructed by this run**; no
@@ -939,7 +997,7 @@ says so.
 
 ### Capture, recoverability, inventory
 
-Copy the thirty per-case files and the ten shared documents — everything in the
+Copy the thirty per-case files and the eleven shared documents — everything in the
 table above except `README.md`, `verification-instructions.md` and `checksums.json`,
 which this step writes — into
 `shadow/evidence/self-host-transition/v1/`, unchanged. Build `checksums.json` as a
@@ -961,7 +1019,10 @@ credentials, no model and no real reproduction. It checks the committed bytes:
 1. `checksums.json` inventory matches the directory exactly — no extra file, none
    missing — and every digest matches.
 2. Every `.json` under the evidence path is canonical (`jq -S -c` output equals the
-   file) and a single JSON text.
+   file) and a single JSON text. `core-package-closure.json` is the one documented
+   exception to the trailing newline: its bytes are canonical `jq -S -c` output with the
+   final newline removed, and the check asserts that exception explicitly rather than
+   relaxing the rule for the directory.
 3. Each incident passes
    `PATH="$JQ_DIR:/usr/bin:/bin" shadow/v1/validate-incident.sh validate <abs>/incident.json`
    — the verb and the absolute path are both required, and the suite's own provisioned
@@ -1006,7 +1067,18 @@ credentials, no model and no real reproduction. It checks the committed bytes:
     shipped demonstration value, and that each reference field listed in the
     precondition gate equals the SHA-256 recomputed from the committed bytes it names.
     It must not assert that the all-ones value is absent.
-11. Negative cases: mutate a **copy** of each of an evidence file, a digest in
+11. `core-package-closure.json` recovers the package reference offline: its committed
+    bytes hash to
+    `eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963`, which equals
+    both the shipped and the retained `control-policy-set.json`'s
+    `body.core_contract.package_ref.sha256`. The check hashes the bytes with no
+    trailing newline added, asserts the file's last byte is not a newline, and asserts
+    that the newline-terminated form hashes to the different value
+    `06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1`, so a copy that
+    regained the newline fails rather than passing silently. It also parses the
+    descriptor and requires its nine `members[].path` entries and their digests to
+    equal the live digests of those nine committed files at the pinned generation.
+12. Negative cases: mutate a **copy** of each of an evidence file, a digest in
     `checksums.json`, and an outcome field, and require the test to fail on each. A
     test that passes on altered evidence proves nothing.
 
