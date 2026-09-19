@@ -152,6 +152,26 @@ compile_source() {
     -o "$cs_output" "$cs_source"
 }
 
+# wait_for_run OUT_DIR -- poll up to 5s for OUT_DIR/.run to appear.
+wait_for_run() {
+  wfr_deadline=$(( $(/bin/date +%s) + 5 ))
+  while [ ! -e "$1/.run" ]; do
+    [ "$(/bin/date +%s)" -lt "$wfr_deadline" ] || break
+    /bin/sleep 0.01
+  done
+}
+
+# poll_run_before_eof FLAG OUT_DIR SECS -- echoes 1 if OUT_DIR/.run preceded FLAG.
+poll_run_before_eof() {
+  prbe_deadline=$(( $(/bin/date +%s) + $3 )); prbe_saw=0
+  while [ ! -e "$1" ]; do
+    [ -e "$2/.run" ] && prbe_saw=1
+    [ "$(/bin/date +%s)" -lt "$prbe_deadline" ] || break
+    /bin/sleep 0.01
+  done
+  printf '%s\n' "$prbe_saw"
+}
+
 # --- 1. Real profile acquisition (plan.md:76-90; R10's positive-request requirement) ---
 #
 # Prefer already-present exact objects in a disposable repository built from this
@@ -266,6 +286,22 @@ if [ -x "$entry" ]; then
   fi
 else
   fail_case 'real-profile equivalence (entry absent)'
+fi
+
+# --- 1c. BASH_XTRACEFD pollution (round-9 finding 1): must not survive the scrub as a closed stdout/stderr.
+if [ -x "$entry" ]; then
+  for xfd in 1 2; do
+    xtrace_out="$tmp/xtracefd$xfd.out"; /bin/mkdir -m 700 "$xtrace_out"; xtrace_stdout="$tmp/xtracefd$xfd.stdout"; xtrace_status=0
+    BASH_XTRACEFD=$xfd "$entry" "$bound_jq" "$xtrace_out" "$real_request" "$real_map" \
+      > "$xtrace_stdout" 2> "$tmp/xtracefd$xfd.stderr" || xtrace_status=$?
+    if [ "$xtrace_status" -eq 0 ] && /usr/bin/cmp -s "$xtrace_stdout" "$eq_entry_stdout"; then
+      pass_case "environment: inherited BASH_XTRACEFD=$xfd does not disturb resolution stdout"
+    else
+      fail_case "BASH_XTRACEFD=$xfd pollution: status=$xtrace_status $(/usr/bin/cmp "$xtrace_stdout" "$eq_entry_stdout" 2>&1 || :)"
+    fi
+  done
+else
+  fail_case 'environment: BASH_XTRACEFD pollution cases (entry absent)'
 fi
 
 # --- 2. Synthetic fixture, for auxiliary/hostile cases (plan.md: fixture helpers) -------
@@ -1771,13 +1807,7 @@ if [ -x "$entry" ]; then
       > "$d1_out.stdout" 2> "$d1_out.stderr" &
     d1_pid=$!
     exec 7>&-
-    d1_saw_run_before_eof=0
-    d1_deadline=$(( $(/bin/date +%s) + 20 ))
-    while [ ! -e "$d1_flag" ]; do
-      [ -e "$d1_out/.run" ] && d1_saw_run_before_eof=1
-      [ "$(/bin/date +%s)" -lt "$d1_deadline" ] || break
-      /bin/sleep 0.01
-    done
+    d1_saw_run_before_eof=$(poll_run_before_eof "$d1_flag" "$d1_out" 20)
     wait "$d1_pid"
     [ "$d1_saw_run_before_eof" -eq 0 ] || exit 1
   ); then
@@ -1818,13 +1848,7 @@ if [ -x "$entry" ]; then
       > "$d2_out.stdout" 2> "$d2_out.stderr" &
     d2_pid=$!
     exec 7>&- 8>&-
-    d2_saw_run_before_eof=0
-    d2_deadline=$(( $(/bin/date +%s) + 20 ))
-    while [ ! -e "$d2_flag" ]; do
-      [ -e "$d2_out/.run" ] && d2_saw_run_before_eof=1
-      [ "$(/bin/date +%s)" -lt "$d2_deadline" ] || break
-      /bin/sleep 0.01
-    done
+    d2_saw_run_before_eof=$(poll_run_before_eof "$d2_flag" "$d2_out" 20)
     wait "$d2_pid"
     d2_status=$?
     d2_after_size=$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')
@@ -1888,13 +1912,7 @@ if [ -x "$entry" ]; then
       > "$d5_out.stdout" 2> "$d5_out.stderr" &
     d5_pid=$!
     exec 7>&-
-    d5_saw_run_before_eof=0
-    d5_deadline=$(( $(/bin/date +%s) + 20 ))
-    while [ ! -e "$d5_flag" ]; do
-      [ -e "$d5_out/.run" ] && d5_saw_run_before_eof=1
-      [ "$(/bin/date +%s)" -lt "$d5_deadline" ] || break
-      /bin/sleep 0.01
-    done
+    d5_saw_run_before_eof=$(poll_run_before_eof "$d5_flag" "$d5_out" 20)
     wait "$d5_pid"
     d5_status=$?
     [ "$d5_saw_run_before_eof" -eq 0 ] || exit 1
@@ -2130,11 +2148,7 @@ if [ -x "$entry" ]; then
   "$entry" "$bound_jq" "$sig3_out" "$real_request" "$real_map" \
     > "$tmp/signal3.stdout" 2> "$sig3_stderr" &
   sig3_pid=$!
-  sig3_deadline=$(( $(/bin/date +%s) + 5 ))
-  while [ ! -e "$sig3_out/.run" ]; do
-    [ "$(/bin/date +%s)" -lt "$sig3_deadline" ] || break
-    /bin/sleep 0.01
-  done
+  wait_for_run "$sig3_out"
   if [ -e "$sig3_out/.run" ]; then
     kill -TERM "$sig3_pid"
     # Bounded wait: a watcher kills the entry if it has not exited within 30s (macOS has
@@ -2170,11 +2184,7 @@ if [ -x "$entry" ]; then
     > "$tmp/signal4.stdout" 2> "$sig4_stderr" &
   sig4_pid=$!
   sig4_pgid=$(ps -o pgid= -p "$sig4_pid" 2>/dev/null | /usr/bin/tr -d ' ')
-  sig4_deadline=$(( $(/bin/date +%s) + 5 ))
-  while [ ! -e "$sig4_out/.run" ]; do
-    [ "$(/bin/date +%s)" -lt "$sig4_deadline" ] || break
-    /bin/sleep 0.01
-  done
+  wait_for_run "$sig4_out"
   if [ -e "$sig4_out/.run" ]; then
     # give the compile a brief head start so the group signal is likelier to land on it
     /bin/sleep 0.05
@@ -2313,11 +2323,7 @@ FCNTLPROBE
   "$entry" "$bound_jq" "$sig6_out" "$real_request" "$real_map" \
     > "$tmp/signal6.stdout" 2>&9 &
   sig6_pid=$!
-  sig6_deadline=$(( $(/bin/date +%s) + 5 ))
-  while [ ! -e "$sig6_out/.run" ]; do
-    [ "$(/bin/date +%s)" -lt "$sig6_deadline" ] || break
-    /bin/sleep 0.01
-  done
+  wait_for_run "$sig6_out"
   # Wait for a live runtime process (not merely the .run directory, which
   # appears before the parent is even compiled) before signaling, then reap
   # the entry, and only then inspect the retained duplicate descriptor's
@@ -2357,35 +2363,27 @@ if [ -x "$entry" ]; then
   "$entry" "$bound_jq" "$sig7_out" "$real_request" "$real_map" \
     > "$tmp/signal7.stdout" 2>&10 &
   sig7_pid=$!
-  sig7_deadline=$(( $(/bin/date +%s) + 5 ))
-  while [ ! -e "$sig7_out/.run" ]; do
-    [ "$(/bin/date +%s)" -lt "$sig7_deadline" ] || break
-    /bin/sleep 0.01
-  done
+  wait_for_run "$sig7_out"
   if [ -e "$sig7_out/.run" ]; then
     kill -TERM "$sig7_pid"
     # Bounded wait: a watchdog kills the entry if it has not exited within 30s.
-    ( /usr/bin/perl -e 'alarm shift; sleep 999' 30 || :
+    # fd 10 is closed first so the watchdog's Perl child never holds a writer
+    # reference on the FIFO past the kill below -- otherwise it outlives the
+    # 30s alarm and the drain never sees EOF.
+    ( exec 10>&-
+      /usr/bin/perl -e 'alarm shift; sleep 999' 30 || :
       kill -KILL "$sig7_pid" 2>/dev/null || : ) &
     sig7_watchdog=$!
     sig7_wait_status=0
     wait "$sig7_pid" 2>/dev/null || sig7_wait_status=$?
     kill "$sig7_watchdog" 2>/dev/null || :
-    # Same reasoning as the filler below: kill only sends the signal. The
-    # watchdog subshell forked above (while fd 10 was still open) inherited
-    # its own copy of fd 10 as a writer reference; without waiting for it
-    # to actually exit here, that copy can outlive the kill and keep the
-    # drain below from ever seeing EOF.
+    # Reap it: kill only sends the signal (fd 10 is already closed above).
     wait "$sig7_watchdog" 2>/dev/null || :
   else
     fail_case 'signal: full-pipe case landed too late -- .run never appeared'
   fi
-  # kill only sends the signal -- it returns before the filler has actually
-  # exited and released ITS OWN copy of fd 10. Without waiting for it here,
-  # that copy can still be open (a third writer reference, after this shell's
-  # and the drainer subshell's) when fd 10 is closed below, so EOF never
-  # arrives and the drain deadline is spent waiting on a reference nothing
-  # ever explicitly closes.
+  # Reap the filler too: its own fd 10 copy must be gone before the close
+  # below, or EOF never arrives for the drain.
   kill "$sig7_filler" 2>/dev/null || :
   wait "$sig7_filler" 2>/dev/null || :
   sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)

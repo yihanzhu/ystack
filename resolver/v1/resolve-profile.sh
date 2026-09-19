@@ -71,6 +71,8 @@ clean_path=/usr/bin:/bin
 while IFS= builtin read -r inherited_function; do
   builtin unset -f "$inherited_function" 2>/dev/null || :
 done < <(builtin compgen -A function)
+# (adapted: park BASH_XTRACEFD on an owned fd so the unset below closes that.)
+[ -n "${BASH_XTRACEFD+x}" ] && { exec 9>/dev/null; BASH_XTRACEFD=9; }
 while IFS= builtin read -r exported_name; do
   case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
 done < <(builtin compgen -e)
