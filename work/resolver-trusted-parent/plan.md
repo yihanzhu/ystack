@@ -44,25 +44,13 @@ All eight figures are measured at implementation head
 `ystack/impl/resolver-trusted-parent`: `git diff --numstat
 origin/main...origin/ystack/impl/resolver-trusted-parent` reports 8 files,
 5367 insertions and 3 deletions, **5370 changed lines**, of which the three
-implementation files are 5268 insertions (1988 / 400 / 2880). The earlier
-record measured only those three files at
-`5472bdc23bf6771c8dcb00845c036b054a58b820` (1910 / 400 / 1865, 4175 changed
-lines) and estimated the remaining five at 62.
-
-The growth from 4175 to 5268 in those three files is review-driven, not scope
-creep: the round-0 and round-1 findings on the implementation PR replaced the
-approximate command scan with a real lexical command-position extractor, added
-the runtime-environment allowlist assertion and its descriptor probes, and
-forced the valid-fixture rework (Darwin snapshots and the matching helper
-binding), each of which carries its own R10 cases.
+implementation files are 5268 insertions (1988 / 400 / 2880).
 
 `review_size: accepted-exception`, **4600-6300 changed lines**, for this one
-implementation concern. The spec's record (blob
-`d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) carries the original
-3650-4950 band; this re-measured band supersedes it and is the only range
-this implementation is measured against. 5370 changed lines are measured at
-the head above, rounded outward by roughly a sixth for the remaining review
-rounds, in the same style as the superseded record.
+implementation concern. This band supersedes the one carried by the spec's
+record (blob `d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) and is the only
+range this implementation is measured against. It brackets the measured
+5370 with an outward margin of roughly a sixth for the work still open.
 
 The 702-line existing launcher supplies about 605 of the parent's lines; existing
 test fixtures are reuse, not permission to omit cases. Choose the specified
