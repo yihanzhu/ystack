@@ -33,7 +33,16 @@ real resolved profile. This repository first, and any target repository later.
   a new resolver behaviour.
 - The launch boundary is a security control, so the change is high risk: plan-only
   pull request, merged by the operator.
-- No network, no credentials, no writes outside the caller's own output.
+- No network, no credentials, no writes outside the caller's own output. This holds
+  without exception, on both platforms, for the resolver runtime as well as for
+  everything this initiative adds. The history: DR-2 on #271 (2026-09-10) accepted one
+  Darwin residual, because the unchanged runtime ran `/usr/bin/git`, which is the
+  xcrun shim and may write an `xcrun_db` cache in the per-user temp directory outside
+  the caller's output. `resolver-direct-git-runtime` (PR #328, merged 2026-09-14)
+  removed that residual by having the runtime select the CommandLineTools git
+  directly on Darwin (`scripts/lib/profile-resolution.sh:95-101`), so no shim runs and
+  nothing lands in the temp directory. The constraint is therefore whole again, and
+  the parent, the entry, the compiler, the helper and the copies are held to it too.
 - Nothing in the shipped component may depend on the test tree.
 - The pinned jq 1.6 and the native snapshot helper stay pinned by digest.
 - Follow the component conventions: a focused test, a documentation section, an index
