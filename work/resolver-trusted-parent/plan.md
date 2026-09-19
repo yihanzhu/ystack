@@ -30,27 +30,33 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
 | Path | Work | Changed lines |
 | --- | --- | ---: |
-| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1988 measured |
-| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 400 measured |
-| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 2880 measured |
+| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 2006 measured |
+| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 463 measured |
+| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 3757 measured |
 | `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 measured |
 | `docs/components.md` | Resolver launch, boundary and proof documentation | 66 measured |
 | `README.md` | Resolver index row | 1 measured |
 | `RESTORE.md` | Resolver restoration and proof | 28 measured |
 | `ci/required-files.txt` | Append both shipped files and focused test | 5 measured |
 
-All eight figures are measured at implementation head
-`e96804fdaf7417d9a88a10bb6c7555a9eca18fe1` on
+All eight figures are re-measured at implementation head
+`66342f33e1f39823ae9f8256bca1ff9328e3c05f` on
 `ystack/impl/resolver-trusted-parent`: `git diff --numstat
 origin/main...origin/ystack/impl/resolver-trusted-parent` reports 8 files,
-5367 insertions and 3 deletions, **5370 changed lines**, of which the three
-implementation files are 5268 insertions (1988 / 400 / 2880).
+6325 insertions and 3 deletions, **6328 changed lines**, of which the three
+implementation files are 6226 insertions (2006 / 463 / 3757). The rise of 958 over
+the previously recorded 5370 is review-driven and carries no new component,
+permission or runtime behaviour: it is the wait loop's record-only section and the
+two trap-form literals it switches between, the `trap_busy` serialisation of nested
+trap bodies, the launch-boundary test the same rounds added, and R10's
+four-role/seven-occurrence forwarding checks with the read-checks that go with them.
 
-`review_size: accepted-exception`, **4600-6300 changed lines**, for this one
+`review_size: accepted-exception`, **5400-7400 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
 record (blob `6adf3023ba90fda298e609497d683f8954ec05c8`) and is the only
 range this implementation is measured against. It brackets the measured
-5370 with an outward margin of roughly a sixth for the work still open.
+6328 with an outward margin of roughly a sixth, the same margin style the
+superseded 4600-6300 band used around 5370.
 
 The 702-line existing launcher supplies about 605 of the parent's lines; existing
 test fixtures are reuse, not permission to omit cases. Choose the specified
@@ -510,7 +516,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
 - `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
-  `git diff --numstat <base> HEAD` — report additions/deletions/net against 4600-6300.
+  `git diff --numstat <base> HEAD` — report additions/deletions/net against 5400-7400.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
 - R10 pin-liveness checks compare all eighteen source pins and all three non-blob
   constants: parent generation and entry generation equal the accepted library
