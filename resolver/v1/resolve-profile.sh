@@ -142,6 +142,7 @@ core_schema_major=2
 case "$os:$machine" in
   Linux:x86_64)
     path_max=4096
+    name_max=255
     jq_sha256=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44
     sha1_args=(/usr/bin/sha1sum)
     sha256_args=(/usr/bin/sha256sum)
@@ -152,6 +153,7 @@ case "$os:$machine" in
     ;;
   Darwin:x86_64|Darwin:arm64)
     path_max=1024
+    name_max=255
     jq_sha256=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
     sha1_args=(/usr/bin/shasum -a 1)
     sha256_args=(/usr/bin/shasum -a 256)
@@ -171,7 +173,14 @@ case "$output" in
   /*) ;;
   *) refuse E_RUNTIME ;;
 esac
-[ "${#output}" -le $((path_max - 16)) ] || refuse E_RUNTIME
+# Reserve the literal "/.run/tmp/" (10 bytes) plus a full NAME_MAX filename --
+# the compiler chooses its own intermediate names, so no single name is
+# enough (R1) -- rather than the fixed, too-small margin an earlier round
+# used. This is deliberately stricter than the parent's own copied guard
+# (`strlen(sandbox) > PATH_MAX - 16`), which only reserves room for
+# "<output>/child.stdout".
+run_tmp_reserve=$((10 + name_max))
+[ "${#output}" -le $((path_max - run_tmp_reserve)) ] || refuse E_RUNTIME
 [ -d "$output" ] && [ ! -L "$output" ] || refuse E_RUNTIME
 output_physical=$(CDPATH='' builtin cd -P -- "$output" && builtin pwd -P); status=$?
 checkpoint
