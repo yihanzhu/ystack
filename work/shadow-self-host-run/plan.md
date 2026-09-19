@@ -41,7 +41,7 @@ What I verified myself against real history, rather than copying from the spec:
 Nothing outside this list. Counts are net changed lines, honest estimates.
 
 **New evidence, under `shadow/evidence/self-host-transition/v1/`.** Thirteen shared
-files and fourteen per case, forty-one in all:
+files and fifteen per case, forty-three in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
@@ -61,6 +61,7 @@ files and fourteen per case, forty-one in all:
 | `{pre,post}/incident.json` | `incident.ystack-transition.{pre,post}` | 2 |
 | `{pre,post}/qualified-identity.json` | The identity each run was performed under | 2 |
 | `{pre,post}/sandbox-evaluation.json` | The shipped evaluator's declaration-only document for that run | 2 |
+| `{pre,post}/materialization-receipt.json` | The receipt bytes that case's `state/materialization-result.json` references by digest | 2 |
 | `{pre,post}/assembled/*` | The assembler's seven outputs, native names | 20-40 |
 | `{pre,post}/state/*` | The driver's four state files, native names | 8 |
 
@@ -71,16 +72,16 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 **New test:**
 
-- `scripts/test/shadow-self-host-evidence.test.sh` (new, mode `0755`, 300-390 lines).
+- `scripts/test/shadow-self-host-evidence.test.sh` (new, mode `0755`, 310-400 lines).
   Requirements 15, 16 and 17 together: the offline evidence check, the scope-consumer
   compatibility harness, and the maintenance-consumer conversion. One file, because all
   three read the same committed bytes and none of them runs a real reproduction.
 
 **Existing files:**
 
-- `ci/required-files.txt` (+44). A block headed
+- `ci/required-files.txt` (+46). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
-  listing all forty-one evidence paths and the new test.
+  listing all forty-three evidence paths and the new test.
 - `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
   the assembler write-up, which today runs to line 1395 before
   `## Inactive maintenance loop` at 1397.
@@ -101,34 +102,39 @@ component refuses it, the component is right and the run is wrong.
 
 `review_size: accepted-exception` for the **implementation PR**, one concern — the
 first real self-host evidence pair and its durable verification — with an
-evidence-based range of **660-885 net lines**.
+evidence-based range of **685-915 net lines**.
 
 This is above the spec's earlier 250-450 figure, which the spec itself asked this plan
 to refine against the real interfaces. Two things grew once I read them:
 
 - The focused test carries requirements 15, 16 **and** 17. The spec allots 100-170 for
-  it. Against the real consumers that is 300-390: `scope/v1/evaluate-scope.sh` takes
+  it. Against the real consumers that is 310-400: `scope/v1/evaluate-scope.sh` takes
   seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
   `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
   refusal, on top of the twelve evidence checks requirement 15 lists.
-- The manifest block is 44 lines, not a handful, because the spec's design requires
+- The manifest block is 46 lines, not a handful, because the spec's design requires
   every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names forty-one of them.
+  design names forty-three of them.
 
 - The prerequisite stage run adds six committed documents, six manifest lines, the
   README's account of the construction order and the test's recomputation of it:
   55-80 lines above the figure this plan first carried. It is not optional work —
   without it the duty evaluation has no acyclic source, which is what the rest of this
   plan's "Construct the duty evaluation and the claim" section settles.
+- Retaining each case's materialization receipt adds two committed documents, two
+  manifest lines, the README's account of how they were captured and the gates that
+  bind them, and the test's recomputation: 25-30 lines above the figure this plan
+  carried before. It is not optional either — without it both cases' stage results
+  reference bytes nothing holds.
 
 The rest is close to the spec's own breakdown: 155-230 for README and verification
 instructions, 70-120 of committed evidence bytes, 50-64 for documentation, index and
-restore. Midpoint 772. If the real diff lands outside 660-885, stop and return to the
+restore. Midpoint 800. If the real diff lands outside 685-915, stop and return to the
 gate rather than compressing the test or dropping evidence files.
 
 `review_size: accepted-exception` for **this plan PR**, one concern — the complete
 pre-code design for the first real self-host run — with an evidence-based range of
-**955-1005 lines**. Requirement 2's declaration-only framing carries real cost in this
+**1140-1190 lines**. Requirement 2's declaration-only framing carries real cost in this
 plan: the precondition gate, the evaluator call, the marker checks, the consumers'
 vocabulary and the documentation rule each have to state the boundary between a
 declaration and enforcement, and the exact invocations — the validator's verb and the
@@ -148,7 +154,14 @@ tell a blocking finding from an unexplored one. It moved up a third time, from
 written out key by key with the reason each pin is there and the one the resolver
 library pins that this step cannot (about 50 lines), and the receipt retention that
 keeps the prerequisite stage result's own references resolvable (about 30). Both are
-correctness of the operator's run, not commentary.
+correctness of the operator's run, not commentary. It moved up a fourth time, from
+955-1005, for two more review findings: the per-case receipt capture, which has to
+state the supported invocation, why its bytes are the driver's own and the three
+digest gates that prove it (about 85 lines), and moving dependency provisioning out of
+the run procedure into its own pre-boundary step with the authorization it rests on
+(about 50). Both are the difference between evidence that resolves and evidence that
+does not, and between a run that honours requirement 10's boundary and one that
+quietly crosses it.
 
 ## Order of work
 
@@ -254,7 +267,10 @@ prerequisite of the assembly step rather than a detail of it.
 
 - Write the whole of `scripts/test/shadow-self-host-evidence.test.sh` except the
   assertions that read committed evidence bytes: the jq-1.6 provisioning block copied
-  from `scripts/test/shadow-slice.test.sh:24-51`, the temp-directory and result
+  from `scripts/test/shadow-slice.test.sh:24-51` — this is a CI suite, which provisions
+  its own pinned dependency exactly as the other suites do and is not inside
+  requirement 10's run boundary; the operator's evidence session is, and provisions
+  nothing — the temp-directory and result
   helpers, the inventory walker, the canonical-JSON helper, the trace-seal
   recomputation, and the harness scaffolding for both consumers.
 - Write `verification-instructions.md` in full. It describes reading one named blob at
@@ -267,6 +283,48 @@ prerequisite of the assembly step rather than a detail of it.
 **What waits:** every command in the two run sections, every committed evidence byte,
 every assertion that reads one, and the README's filled-in digests and outcomes. The
 test skeleton must fail loudly, not skip, while the evidence is absent.
+
+### Before the evidence session: provision the pinned dependencies
+
+**This step is not part of the run procedure and produces no evidence document.** It
+happens earlier, on its own, and the session below begins only once it has finished.
+Requirement 10 puts source preparation and execution behind a no-network,
+no-credentials boundary, and that boundary starts at the next section. So every pinned
+dependency the exercise runs under has to be in the operator's hands, verified, before
+the boundary is entered — nothing inside it may fetch, and no step inside it may fall
+back to fetching.
+
+There is exactly one network action in this initiative and it lives here: fetching the
+pinned jq 1.6 release asset over HTTPS —
+`https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset`, with `$jq_asset`
+`jq-osx-amd64` on Darwin and `jq-linux64` on `Linux:x86_64` — and verifying it against
+the pinned SHA-256 for that platform — on Darwin
+`5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef`, on `Linux:x86_64`
+`af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44` — the values
+`scripts/test/shadow-slice.test.sh:24-51` and `shadow/v1/reproduce.sh:143-149` both
+check. Discard a download whose digest does not
+match; never install an unverified one.
+
+It is the same fetch the shipped suites already perform into the shared cache
+`${TMPDIR:-/tmp}/ystack-portable-core-jq16`, on a cache miss and never otherwise, so
+running `bash scripts/test/shadow-slice.test.sh` once on the operator's machine fills
+it and nothing further is needed. That is ordinary test work in an existing development
+environment, which `AGENTS.md:46-49` already authorizes; this initiative asks for no
+new network scope, and none of the run steps below inherits any. If that fetch is
+blocked, or the digest does not match, it is the operator's own hand that resolves it —
+a new credential or network scope is a question for the operator under the same lines,
+not something a run step may take for itself.
+
+The closure helper belongs to this step too: compile it locally from the committed
+`adapters/local-git-materializer/v1/object-closure.c` the way
+`scripts/test/shadow-slice.test.sh:52-55` builds it. That is a local compile of
+committed source and reaches no network, but the session starts with both dependencies
+already in hand rather than building one midway.
+
+Record in the README as a **precondition line, not an evidence document**: the asset
+name, the URL, the verified SHA-256, the cache path, and the date it was provisioned —
+stated as work performed before the evidence session, outside requirement 10's
+boundary.
 
 ### Prepare the disposable source (requirements 9, 10)
 
@@ -368,11 +426,20 @@ resolver/v1/resolve-profile.sh "$JQ" "$RESOLVE_OUT" "$REQUEST" "$MAP" > resolved
 
 `$JQ` is the pinned jq 1.6 (Darwin SHA-256
 `5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef`, the value both
-shipped scripts check). Provision it the way the focused suites already do
-(`scripts/test/shadow-slice.test.sh:24-51`): fetch the pinned jq 1.6 release asset for
-the platform into the shared cache, verify that digest, then copy it into a fresh 0700
-directory `$JQ_DIR` under the file name `jq` (mode `0555`), so `$JQ` is `$JQ_DIR/jq`.
-`$JQ_DIR` is needed as a directory, not just as a path to a binary, because two
+shipped scripts check). **It is already in hand: this procedure provisions nothing and
+reaches no network.** Take the already provisioned asset from the shared cache the step
+before the boundary filled — `${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset` —
+require it to be a regular file rather than a symlink, re-verify its SHA-256 against
+that pinned value, and copy it into a fresh 0700 directory `$JQ_DIR` under the file
+name `jq` (mode `0555`), so `$JQ` is `$JQ_DIR/jq`. If it is absent, is a symlink, or
+does not match the pin, **stop with `pinned jq 1.6 asset not provisioned — run the
+provisioning step outside the evidence session` and end the session.** Do not download
+it here, do not substitute the operator's default jq (1.7.1 on the current Darwin
+machine, which the shipped scripts refuse with `E_RUNTIME` anyway), and do not continue
+with an unpinned binary: a fetch inside these steps would cross requirement 10's
+no-network boundary, and a run that crossed it is not the evidence this initiative
+owes. The same rule covers the closure helper — it is compiled before the session, not
+here. `$JQ_DIR` is needed as a directory, not just as a path to a binary, because two
 shipped entry points discover jq through `PATH` rather than an argument — see "The two
 runs" below. `$RESOLVE_OUT` is a fresh empty 0700 directory; after the run
 it holds exactly `home`, `tmp`, `child.stdout` and `child.stderr`. The resolved profile
@@ -503,12 +570,13 @@ references a later entry.
    ```
 
    That is the driver's own call and its own extraction
-   (`shadow/v1/reproduce.sh:452-461`), and `$CLOSURE` is the closure helper compiled the
-   way "The two runs" below describes. The script path must be the absolute one under
-   `$REPO`, as written: `adapters/local-git-materializer/v1/materialize.sh:23-24`
-   refuses `E_USAGE` when its own `BASH_SOURCE[0]` is not absolute, because it re-execs
-   itself by that path and does not normalise it the way the assembler and the driver
-   normalise their relative arguments. The driver passes an absolute path for the same
+   (`shadow/v1/reproduce.sh:452-461`), and `$CLOSURE` is the closure helper the
+   provisioning step above compiled, already in hand. The script path must be the
+   absolute one under `$REPO`, as written:
+   `adapters/local-git-materializer/v1/materialize.sh:23-24` refuses `E_USAGE` when
+   its own `BASH_SOURCE[0]` is not absolute, because it re-execs itself by that path
+   and does not normalise it the way the assembler and the driver normalise their
+   relative arguments. The driver passes an absolute path for the same
    reason (`shadow/v1/reproduce.sh:131`, `:138`, `:452`),
    so these bytes are produced the way the evidence runs produce theirs. It is a real
    materialization of real history, it writes nothing to `$SRC`, and it happens between
@@ -643,8 +711,9 @@ against `prerequisite/input.json`'s
 references; `prerequisite/materialization-receipt.json`'s digest against the retained
 stage result's `body.evidence[0].proof_ref.sha256` and
 `body.execution.metadata.tools.source_ref.sha256` (and `body.outputs[0].ref.sha256`
-where the outcome is `changed`), so the one reference in committed evidence that points
-outside a document resolves to retained bytes; the duty evaluation's
+where the outcome is `changed`), so this stage result's references to bytes outside
+itself resolve to retained bytes — check 7 below does the same for each case's own
+stage result and receipt; the duty evaluation's
 `body.stage.result_ref` against the claim's
 `body.stage_result_ref`, field for field; `duty-evaluation.json`'s digest against the
 claim's `body.duty_evaluation_ref.sha256`; and `environment-claim.json`'s digest against
@@ -701,9 +770,10 @@ puts the pinned jq 1.6 first under the name `jq`, mirroring the fixed
 ### The two runs (requirement 8)
 
 Each run needs three fresh, empty, private, mutually disjoint 0700 directories outside
-`$SRC` — the driver checks all of that at `shadow/v1/reproduce.sh:112-125`. The closure
-helper is compiled from `adapters/local-git-materializer/v1/object-closure.c`, the same
-way `scripts/test/shadow-slice.test.sh:52-55` builds it.
+`$SRC` — the driver checks all of that at `shadow/v1/reproduce.sh:112-125`. `$CLOSURE`
+is the helper already compiled before the session from
+`adapters/local-git-materializer/v1/object-closure.c`, and `$JQ` the already
+provisioned pinned binary; neither is built or fetched here.
 
 ```sh
 shadow/v1/reproduce.sh reproduce \
@@ -722,6 +792,92 @@ unsuccessful attempt; it never stands in for either required outcome.
 `$STATE` then holds the four state files the driver exports at
 `shadow/v1/reproduce.sh:682-691`: `shadow-record.json`, `trace-ledger.json`,
 `trace-receipt.json`, `materialization-result.json`. Copy all four to `<case>/state/`.
+Both required outcomes come through the `check.completed` branch, so
+`materialization-result.json` is present in both cases; if it is absent the run did not
+materialize and is a diagnostic attempt, not one of the pair.
+
+**The receipt those four files reference needs a second, separate call.** The exported
+`materialization-result.json` is the materializer's `stage_result` document, and
+`adapters/local-git-materializer/v1/protocol.jq:370-373` makes its
+`body.evidence[0].proof_ref` and `body.execution.metadata.tools.source_ref` — and, for
+a `changed` outcome, `body.outputs[0].ref` (`:392`, `:408`, `:415`) — name the
+materialization receipt by digest. The driver writes those receipt bytes to
+`$scratch/receipt.json` (`shadow/v1/reproduce.sh:463`), never exports them, and deletes
+`$scratch` on every exit path (`:155-158`, `:694-695`). It has no retain flag and no
+evidence directory of its own: the twelve arguments are the ones written above, and the
+only directory it publishes into is `$STATE`. So retaining only those four files leaves
+each case's evidence pointing at bytes no committed file and no Git object holds, which
+the spec's recoverability rule (`work/shadow-self-host-run/spec.md:217-220`) refuses.
+The prerequisite receipt cannot stand in — it binds a different stage request, and its
+digest is not the one either case's stage result names.
+
+Do not intercept the driver's scratch, bypass its cleanup or patch the driver. Obtain
+each case's receipt through the materializer's own public interface, after that case's
+run, with the same inputs the driver used, into a fresh, empty, private 0700
+`$RECEIPT_OUT` and fresh, empty, private, mutually disjoint 0700 `$CAND_R` and
+`$SCRATCH_R`, all outside `$SRC` and disjoint from it:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash \
+  "$REPO/adapters/local-git-materializer/v1/materialize.sh" materialize \
+  "$CASE/assembled/input.json" repo.ystack "$SRC" "$CAND_R" "$SCRATCH_R" \
+  "$CLOSURE" "$JQ" > "$RECEIPT_OUT/materialize.json"
+"$JQ" -j '.payloads[0].data' "$RECEIPT_OUT/materialize.json" \
+  > "$RECEIPT_OUT/receipt.json"
+"$JQ" -S -c '.stage_result' "$RECEIPT_OUT/materialize.json" \
+  > "$RECEIPT_OUT/stage-result.json"
+```
+
+The script path must be the absolute one under `$REPO`, for the reason entry 5 gives
+(`adapters/local-git-materializer/v1/materialize.sh:23-24`).
+
+**Why these are the driver's own bytes.** Every argument is the one the driver passed
+it. `shadow/v1/reproduce.sh:189` snapshots the caller-supplied materialization input
+byte for byte into `$scratch/materialize-input.json` and hands the materializer that
+copy (`:453`), and the caller-supplied file is `$CASE/assembled/input.json` itself —
+the driver re-checks that its digest is unchanged before publishing anything
+(`:669-681`). `repo.ystack` is the incident record's repository id; `$SRC`, `$CLOSURE`
+and the jq binary are the caller's own arguments, the jq one digest-checked against the
+platform pin (`:143-149`) and used only as a snapshot copy of those same bytes
+(`:169`). Only the candidate and scratch roots differ, and the receipt records no path:
+`adapters/local-git-materializer/v1/materialize.sh:609-617` builds it from the input
+snapshot plus the source and candidate commit, tree and changed-path values, and the
+candidate commit is made with fixed author and committer identities and a fixed
+`2000-01-01T00:00:00Z` date (`:589-598`). The same inputs therefore produce the same
+receipt bytes — and requirement 18's repeatability run is the same claim tested twice.
+
+That is the argument; these gates are what settle it. Before retaining anything,
+require all of:
+
+- `shasum -a 256 "$RECEIPT_OUT/receipt.json"` equals `payloads[0].sha256` of
+  `$RECEIPT_OUT/materialize.json`;
+- the same digest equals **both** `body.evidence[0].proof_ref.sha256` and
+  `body.execution.metadata.tools.source_ref.sha256` of the driver-exported
+  `<case>/state/materialization-result.json` — and `body.outputs[0].ref.sha256` too,
+  where that document's outcome is `changed`;
+- `cmp "$RECEIPT_OUT/stage-result.json" "<case>/state/materialization-result.json"`
+  reports the two byte-identical.
+
+The third is the determinism evidence, not a formality: if the re-invocation reproduced
+the driver's entire stage result byte for byte, it reproduced the receipt whose digest
+those bytes carry, and the second gate says so directly. If any of the three differs,
+stop and reconcile — do not hand-write the receipt, do not re-serialize it, and do not
+retain a stage result whose references resolve to nothing.
+
+Extract with `-j`, exactly as the driver does (`shadow/v1/reproduce.sh:463`): the
+payload is the exact UTF-8 the materializer hashed, trailing newline included, and it
+is already canonical `jq -S -c` output from the producer
+(`adapters/local-git-materializer/v1/materialize.sh:609-617`), so it satisfies the
+bundle's canonical-JSON rule as emitted. Re-serializing bytes that are referenced by
+digest breaks the reference.
+
+Once the gates pass, copy `$RECEIPT_OUT/receipt.json` to
+`<case>/materialization-receipt.json` and retain it; it appears in `checksums.json` and
+in the manifest beside that case's four state files. `materialize.json` and
+`stage-result.json` are scratch and are deleted with `$RECEIPT_OUT`, `$CAND_R` and
+`$SCRATCH_R`; none of them is committed. This second materialization is read-only over
+`$SRC` on the driver's own terms, and it happens between the two readings of the source
+inventory, so requirement 10's before/after comparison still has to come out equal.
 
 **The sandbox evaluation needs a second, separate call.** The driver runs the evaluator
 into its own scratch (`shadow/v1/reproduce.sh:421-423`) and does not export the
@@ -773,14 +929,17 @@ shasum -a 256 "$STATE_1"/*.json "$STATE_2"/*.json
 ```
 
 Assembler outputs and driver state must be byte-identical. They can be, because every
-timestamp comes from the incident record rather than the clock. Repeat the source
+timestamp comes from the incident record rather than the clock. Capture the receipt
+again on the second run, in its own fresh directories, and require the same three
+gates plus equality with the first capture's bytes: that is the determinism the
+receipt capture rests on, measured rather than assumed. Repeat the source
 ref/object comparison afterwards. This proves repeatability for these inputs on this
 machine — not portability to Linux or to future dependency versions, and the README
 says so.
 
 ### Capture, recoverability, inventory
 
-Copy the twenty-eight per-case files and the ten shared documents — everything in the
+Copy the thirty per-case files and the ten shared documents — everything in the
 table above except `README.md`, `verification-instructions.md` and `checksums.json`,
 which this step writes — into
 `shadow/evidence/self-host-transition/v1/`, unchanged. Build `checksums.json` as a
@@ -823,7 +982,13 @@ credentials, no model and no real reproduction. It checks the committed bytes:
    pair the driver refuses on at `shadow/v1/reproduce.sh:266-282`.
 7. `materialization-result.json` is present, its outcome is a no-change
    materialization, and the shadow record's `materialization.value.stage_result_ref`
-   digest equals its bytes.
+   digest equals its bytes. Its own outward references resolve inside the bundle too:
+   the SHA-256 of that case's `materialization-receipt.json`, recomputed from the
+   committed bytes, equals `body.evidence[0].proof_ref.sha256` and
+   `body.execution.metadata.tools.source_ref.sha256` — and `body.outputs[0].ref.sha256`
+   where the outcome is `changed` — and the two cases' receipts differ from each other
+   and from `prerequisite/materialization-receipt.json`, so neither case is recorded
+   against another run's proof.
 8. The trace seal recomputes: strip `record_digest`, hash each event in order, and
    require the recorded per-event digests, `first_digest`, `final_digest` and
    `event_count` to match, plus the shadow record's `trace_ledger_ref`.
@@ -980,7 +1145,10 @@ the PR body.
 4. The operator's run transcript for both cases: the two `reproduce.sh` command lines
    with their outcome and reason ids, the two assembler command lines, the resolver
    command line with the `PATH` it ran under, the two standalone
-   `evaluate-sandbox.sh` and `validate-incident.sh` command lines with theirs, and the
+   `evaluate-sandbox.sh` and `validate-incident.sh` command lines with theirs, the two
+   per-case `materialize.sh` command lines that captured the receipts together with
+   their three digest gates, the pre-session provisioning line (asset, URL, verified
+   digest, date) marked as work outside requirement 10's boundary, and the
    dependency heads (`resolver-trusted-parent` implementation commit, assembler commit
    already on `main`).
 5. The repeatability comparison: `diff -r` over both assembler output directories and
