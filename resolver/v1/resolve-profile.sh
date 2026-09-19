@@ -21,8 +21,15 @@ umask 077
 # Fork-free headroom ladder (R1): the /dev/fd/* close loop below is a shell
 # glob, not a fork, so this only ever has to clear room for the caller's own
 # already-open descriptors.
+# exec >&2 first (a permanent redirection, needing no saved-fd scratch
+# descriptor) rather than `builtin printf ... >&2`: with descriptors already
+# exhausted, that per-command redirection would need bash to dup a spare fd
+# to restore stdout afterward, which itself fails EMFILE -- bash 3.2 (Darwin)
+# still prints despite the failed save, bash 5.2 (Linux) instead skips the
+# printf and prints its own "redirection error" (Linux CI: case 75).
 ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || {
-  builtin printf '%s\n' E_RUNTIME >&2
+  exec >&2
+  builtin printf '%s\n' E_RUNTIME
   exit 1
 }
 
@@ -34,7 +41,12 @@ for fd_entry in /dev/fd/*; do
   case "$fd_name" in
     ''|*[!0-9]*)
       if [ "$fd_entry" = '/dev/fd/*' ]; then
-        builtin printf '%s\n' E_RUNTIME >&2
+        # Same exec->&2-first reasoning as the ulimit ladder's refusal above:
+        # this arm fires exactly when opendir("/dev/fd") itself hit EMFILE,
+        # so a saved-fd redirection on the printf is the one thing guaranteed
+        # to fail here too.
+        exec >&2
+        builtin printf '%s\n' E_RUNTIME
         exit 1
       fi
       continue
@@ -228,8 +240,8 @@ trap '
   ecap=$?
   trap "" INT TERM HUP
   if [ -n "$run_created" ]; then
-    /bin/chmod 0700 "${run:?}" 2>/dev/null || :
-    /bin/rm -rf -- "${run:?}" 2>/dev/null || :
+    /bin/chmod 0700 "${run:?}" || :
+    /bin/rm -rf -- "${run:?}" || :
   fi
   if [ -n "$entry_signal" ] && [ -f /dev/fd/2 ]; then
     if [ -n "$parent_pid" ]; then
