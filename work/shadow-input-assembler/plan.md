@@ -1,5 +1,5 @@
 ---
-spec-blob: 7a9ae4bcdb100fd7662ee8ba69850fe106480b16
+spec-blob: 753e643259a02643e1a03132dcbe5aa56a15c8d9
 drafted: 2026-09-10
 amended: 2026-09-18
 ---
@@ -758,7 +758,8 @@ constructed by the test, and each entry references only earlier ones:
    `reproduce.sh:396-399` selects it. It carries **no `*_ref` field of any kind**, so it can hash
    nothing and can fabricate nothing, and it goes neither to `evaluate-sandbox.sh` nor to the
    driver. The assembler checks only the claim-position file's `kind` and `id`
-   (`materialization-input.jq:101-105`, applied at `:213-214`), so this needs no component change.
+   (`materialization-input.jq:101-105`, applied at `:213-214`), so this needs no component change
+   and needs none of `declaration_status`, `effects` or the other claim-only fields entry 5 lists.
 2. **The prerequisite assembler run** — that declaration in the claim position, its own
    `requested_at` and its own output directory. Assert `requested_by` equals the tenth argument's
    bytes exactly, including the presence or absence of `authority_ref`, and that no field of the
@@ -773,11 +774,25 @@ constructed by the test, and each entry references only earlier ones:
    `satisfied` and `reason_ids` are exactly `["duty.satisfied"]`. This is the assertion that proves
    the requester, and it is made about the **prerequisite** request, which carries the explicit
    tenth-argument requester exactly as the final one does.
-5. **The final claim** — written with the same shipped sandbox policy body sections verbatim, an
-   `execution_identity` read out of the resolved profile's `verifier` binding rather than typed,
-   `policy_set_ref` naming the shipped policy set's own id and digest, `duty_evaluation_ref` naming
-   entry 4's id and the SHA-256 of entry 4's bytes, and `stage_result_ref` copied field for field
-   from entry 4's `body.stage.result_ref`. No digest in it is chosen.
+5. **The final claim** — the one document here that reaches `evaluate-sandbox.sh`, so it must
+   carry the exact key set `claim_ok` demands (`control/v1/sandbox.jq:59-88`); a missing or extra
+   field is `invalid-input`, the evaluator exits non-zero, and `reproduce.sh:419-427` records
+   `environment.evaluation-refused` with an `inconclusive` outcome. Requirement 13 enumerates the
+   fields; write all of them and nothing else: top level `schema_version` 1, `kind`
+   `execution_environment_claim`, `id` the fixture environment's id, `body`; and in the body
+   `declaration_status` the literal `"complete"` (`sandbox.jq:67`, `:243`); `effects` exactly
+   `{external_writes: false, target_writes: false}` (`:72-73`, `:240-241`, `:251-252`); the eight
+   shipped sandbox policy body sections `environment`, `filesystem`, `isolation`, `limits`,
+   `network`, `resources`, `sensitive_material`, `tools` verbatim (`:213-235`); an
+   `execution_identity` of exactly `adapter_instance_id`, `execution_boundary_id`, `principal_id`
+   and `role`, read out of the resolved profile's `verifier` binding rather than typed (`:20-23`,
+   `:204-205`); `policy_set_ref` naming the shipped policy set's own id and digest (`:69`,
+   `:206-207`); `duty_evaluation_ref` naming entry 4's id and the SHA-256 of entry 4's bytes
+   (`:68`, `:208-209`); and `stage_result_ref` copied field for field from entry 4's
+   `body.stage.result_ref` (`:70`, `:210-211`). `declaration_status` and `effects` are the only
+   literals, and the policy fixes both values, so they are not chosen verdicts; the fixture claim
+   at `scripts/test/shadow-slice.test.sh:178-194` already has this shape. No digest in it is
+   chosen.
 6. **The final assembler run** — the same arguments with that claim in the claim position. Its
    request fingerprints the final claim and nothing earlier fingerprints that request, so the order
    closes. This is the only `input.json` the driver reads.
