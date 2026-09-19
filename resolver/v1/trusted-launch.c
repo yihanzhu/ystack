@@ -1562,6 +1562,24 @@ int main(int argc, char **argv) {
         return 64;
     }
 
+    /* R-colon: a ':' in the bound jq path (argv[4], whose directory becomes the
+       literal tool_path string spliced into PATH below) or in the output
+       directory (argv[7], whose descendant .run holds that same jq) makes the
+       later `PATH="%s:/usr/bin:/bin"` construction ambiguous -- a component
+       such as /tmp/tools:run/.run splits into two PATH entries, letting
+       portable_core_ingress_open()'s `command -v jq`/`command -v awk` resolve
+       against attacker-placed programs earlier on PATH. Refuse both, by
+       string content alone, before any fd is opened or the child environment
+       is built. */
+    if (strchr(argv[4], ':') != NULL) {
+        fputs("E_RUNTIME binding\n", stderr);
+        return 70;
+    }
+    if (strchr(argv[7], ':') != NULL) {
+        fputs("E_RUNTIME output\n", stderr);
+        return 70;
+    }
+
     /* deviation 1: runtime (argv[2]) additionally needs an exact mode-0644 check (R5).
        The E_USAGE branch above stays for malformed invocation; a mode mismatch on an
        otherwise well-formed invocation is E_RUNTIME, per the copied binding failures

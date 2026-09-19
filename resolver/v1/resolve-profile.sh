@@ -173,6 +173,17 @@ case "$output" in
   /*) ;;
   *) refuse E_RUNTIME ;;
 esac
+# R-colon: a ':' anywhere in the output path (and so, since jq is bound at
+# "$output/.run/jq", in the parent's tool_path too) would let the parent's
+# literal PATH="<tool_path>:/usr/bin:/bin" splice split into two PATH
+# entries, exposing an earlier attacker-controlled component to its
+# `command -v jq`/`command -v awk` lookups. This entry always launches the
+# parent with a fixed clean PATH (clean_env below), so it is not itself
+# exploitable, but the check is refused here too, by string content alone,
+# so a caller cannot even construct such an output/run pair for the parent.
+case "$output" in
+  *:*) refuse E_RUNTIME ;;
+esac
 # Reserve the literal "/.run/tmp/" (10 bytes) plus a full NAME_MAX filename --
 # the compiler chooses its own intermediate names, so no single name is
 # enough (R1) -- rather than the fixed, too-small margin an earlier round
@@ -293,7 +304,7 @@ pin_hexes=(
   cfc3ed3b1c3d714412a6dffc85accaabb98cf3df
   6af6f42d9afb073fbc892646fe9cd899f7057700
   cb99a95688f5b141e2a4db787bbc800780f5e59a
-  1bdbf07ca3df28d1949d77b6305c3a4433919d06
+  20be9aeecf7f7ad4a7f37940647ae3b8bcb8e6af
 )
 
 pin_index=0
