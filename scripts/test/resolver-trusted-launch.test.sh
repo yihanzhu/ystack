@@ -890,13 +890,17 @@ if [ "$parent_available" -eq 1 ]; then
   cat > "$interpose_src" <<'INTERPOSE'
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 static dev_t target_dev; static ino_t target_ino; static int have_target;
+static const char *marker_path;
 static void load_target(void) {
   const char *p = getenv("YSTACK_TEST_INTERPOSE_TARGET");
+  marker_path = getenv("YSTACK_TEST_INTERPOSE_MARKER");
   if (!p) return;
   struct stat st;
   if (stat(p, &st) == 0) { target_dev = st.st_dev; target_ino = st.st_ino; have_target = 1; }
@@ -908,6 +912,10 @@ int fstat(int fd, struct stat *buf) {
   int rc = real_fstat(fd, buf);
   if (rc == 0 && have_target && buf->st_dev == target_dev && buf->st_ino == target_ino) {
     buf->st_uid = buf->st_uid + 1;
+    if (marker_path) {
+      int mfd = open(marker_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+      if (mfd >= 0) close(mfd);
+    }
   }
   return rc;
 }
@@ -918,16 +926,33 @@ INTERPOSE
     *)
       interpose_lib="$tmp/g2.interpose.so"
       /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$interpose_src" -o "$interpose_lib" -ldl
-      own_out="$tmp/g2.ownership.out"; /bin/mkdir -m 700 "$own_out"
+
+      # Positive control first: the SAME kind of valid run/output pair used below,
+      # with no interposition at all, must succeed -- so the refusal case that
+      # follows is attributable to the injected ownership metadata, not to some
+      # other defect in the pairing.
+      own_run_ok="$tmp/g2.ownership-control"; build_run_directory "$own_run_ok"
+      own_ok_status=0
+      invoke_parent "$own_run_ok/.run" "$synthetic_request" "$synthetic_map" "$own_run_ok" \
+        > "$own_run_ok.stdout" 2> "$own_run_ok.stderr" || own_ok_status=$?
+      if [ "$own_ok_status" -eq 0 ]; then
+        pass_case 'group2: unmodified-owner positive control succeeds'
+      else
+        fail_case "group2: unmodified-owner positive control failed (status=$own_ok_status): $(cat "$own_run_ok.stderr" 2>/dev/null)"
+      fi
+
       own_run="$tmp/g2.ownership"; build_run_directory "$own_run"
+      own_marker="$tmp/g2.ownership.marker"; /bin/rm -f "$own_marker"
+      own_before=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
       own_status=0
-      LD_PRELOAD="$interpose_lib" YSTACK_TEST_INTERPOSE_TARGET="$own_out" \
-        invoke_parent "$own_run/.run" "$synthetic_request" "$synthetic_map" "$own_out" \
-        > "$own_out.stdout" 2> "$own_out.stderr" || own_status=$?
+      LD_PRELOAD="$interpose_lib" YSTACK_TEST_INTERPOSE_TARGET="$own_run" YSTACK_TEST_INTERPOSE_MARKER="$own_marker" \
+        invoke_parent "$own_run/.run" "$synthetic_request" "$synthetic_map" "$own_run" \
+        > "$own_run.stdout" 2> "$own_run.stderr" || own_status=$?
       assert_refused_before_fork 'group2: output ownership refused under injected fstat metadata' \
-        "$own_status" "$own_out.stdout" "$own_out.stderr" 'E_RUNTIME output'
-      own_after=$(/usr/bin/find "$own_out" -mindepth 1 -print)
-      [ -z "$own_after" ] || fail_case 'group2: injected-ownership refusal left writes behind'
+        "$own_status" "$own_run.stdout" "$own_run.stderr" 'E_RUNTIME output'
+      [ -e "$own_marker" ] || fail_case 'group2: injected-ownership refusal -- interposed fstat never matched the output descriptor'
+      own_after=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
+      [ "$own_before" = "$own_after" ] || fail_case 'group2: injected-ownership refusal left writes behind'
       ;;
   esac
 else
@@ -1076,9 +1101,101 @@ else
   fail_case 'loader: LD_PRELOAD/DYLD_INSERT_LIBRARIES case (entry absent)'
 fi
 
-# Linux CI only: assert the launched runtime's /proc/<pid>/environ is exactly R3's allowlist.
-# (Deferred: requires reading environ of a short-lived child mid-run; left for the plan to
-# wire once the runtime's exact allowlist is fixed by the shipped source -- spec.md:7495.)
+read_runtime_pgid() {
+  # read_runtime_pgid STDERR_FILE -> prints pgid or empty after a bounded poll
+  rrp_file=$1
+  rrp_deadline=$(( $(/bin/date +%s) + 30 ))
+  while :; do
+    rrp_line=$(/usr/bin/grep -m1 -E '^runtime-pgid: [0-9]+$' "$rrp_file" 2>/dev/null || :)
+    [ -n "$rrp_line" ] && { printf '%s\n' "${rrp_line#runtime-pgid: }"; return; }
+    [ "$(/bin/date +%s)" -lt "$rrp_deadline" ] || { echo ''; return; }
+    /bin/sleep 0.01
+  done
+}
+
+# Runtime-environment allowlist assertion (spec.md:7495, plan.md's "Check exact Linux
+# runtime environment and R10's Darwin alternative"): the resolver runtime must run
+# under exactly the eight fixed names trusted-launch.c's child_env builds (HOME, TMPDIR,
+# LC_ALL, PATH, YSTACK_RESOLVER_TRUSTED, YSTACK_RESOLVER_HELPER, YSTACK_RESOLVER_JQ,
+# GIT_TERMINAL_PROMPT), plus MallocNanoZone on Darwin -- never the caller's own
+# environment, and never a superset (the loader-marker case above already proves no
+# *values* leak through; this proves no *names* do either).
+runtime_env_expected='GIT_TERMINAL_PROMPT
+HOME
+LC_ALL
+PATH
+TMPDIR
+YSTACK_RESOLVER_HELPER
+YSTACK_RESOLVER_JQ
+YSTACK_RESOLVER_TRUSTED'
+
+case "$platform" in
+  Linux:x86_64)
+    if [ -x "$entry" ]; then
+      # /proc/<pid>/environ, on the real pinned entry -> parent -> runtime chain: the
+      # most direct reading of the actual shipped runtime's actual environment. The
+      # runtime is short-lived, so the pgid (which is also its own pid, per the
+      # "runtime-pgid:" diagnostic) is read as soon as it is published and /proc is
+      # polled immediately and repeatedly for a bounded window rather than once.
+      renv_out="$tmp/runtime-env.linux.out"; /bin/mkdir -m 700 "$renv_out"
+      renv_stderr="$tmp/runtime-env.linux.stderr"; : > "$renv_stderr"
+      set -m
+      "$entry" "$bound_jq" "$renv_out" "$real_request" "$real_map" \
+        > "$tmp/runtime-env.linux.stdout" 2> "$renv_stderr" &
+      renv_pid=$!
+      renv_pgid=$(read_runtime_pgid "$renv_stderr")
+      renv_names=''
+      if [ -n "$renv_pgid" ]; then
+        renv_deadline=$(( $(/bin/date +%s) + 5 ))
+        while [ -z "$renv_names" ] && [ "$(/bin/date +%s)" -lt "$renv_deadline" ]; do
+          renv_names=$(/usr/bin/tr '\0' '\n' < "/proc/$renv_pgid/environ" 2>/dev/null |
+            /usr/bin/grep -v '^$' | /usr/bin/cut -d= -f1 | LC_ALL=C /usr/bin/sort || :)
+        done
+      fi
+      wait "$renv_pid" 2>/dev/null || :
+      set +m
+      if [ -n "$renv_names" ] && [ "$renv_names" = "$runtime_env_expected" ]; then
+        pass_case 'mechanism: resolver runtime (Linux, /proc/<pid>/environ) runs under exactly R3''s fixed environment names'
+      else
+        fail_case "mechanism: resolver runtime environment names (Linux): $(printf '%s' "$renv_names" | /usr/bin/tr '\n' ' ')"
+      fi
+    else
+      fail_case 'mechanism: runtime-environment allowlist (Linux, entry absent)'
+    fi
+    ;;
+  Darwin:*)
+    # R10's Darwin alternative -- a source-order proof in place of the Linux
+    # case's observed-behavior one (the same observed/source-order split
+    # plan.md draws for the cleanup cases): Darwin has no /proc, and reading
+    # another process's real environ needs root, which this suite must not
+    # require (confirmed locally: "ps eww" prints no environment for a
+    # same-user, non-root process on this OS version any more). trusted-launch
+    # itself DOES pin the runtime script's own identity (repo_root_from_runtime
+    # plus its SHA-1 against the R5 pin set), so -- unlike group 2's other
+    # direct-invocation fixtures -- a stand-in runtime cannot be substituted
+    # for it either. What IS directly readable is the shipped source: every
+    # name child_env is ever assigned, between its first assignment and the
+    # NULL-termination/no-NULL-hole check, read verbatim out of
+    # trusted-launch.c. This is the exact set R7 fixes execve's envp to, by
+    # construction (there is no other path into child_env), so a name-for-name
+    # match against R3's expected set is the direct Darwin equivalent of the
+    # Linux case's /proc reading, not a weaker proxy for it.
+    if [ -f "$parent_source" ]; then
+      renv_src_names=$(/usr/bin/sed -n '/child_env\[0\] = environment_value/,/child_env\[child_env_count\] = NULL;/p' "$parent_source" |
+        /usr/bin/grep -oE '(environment_value\("[A-Za-z_][A-Za-z0-9_]*"|strdup\("[A-Za-z_][A-Za-z0-9_]*=)' |
+        /usr/bin/sed -E 's/^environment_value\("//; s/^strdup\("//; s/"$//; s/=$//' |
+        LC_ALL=C /usr/bin/sort -u)
+      renv_expected_darwin=$(printf '%s\nMallocNanoZone\n' "$runtime_env_expected" | LC_ALL=C /usr/bin/sort)
+      if [ -n "$renv_src_names" ] && [ "$renv_src_names" = "$renv_expected_darwin" ]; then
+        pass_case 'mechanism: trusted-launch.c assigns exactly R3''s fixed environment names into child_env (Darwin source-order proof)'
+      else
+        fail_case "mechanism: resolver runtime environment names (Darwin, source-order): $(printf '%s' "$renv_src_names" | /usr/bin/tr '\n' ' ')"
+      fi
+    else
+      fail_case 'mechanism: runtime-environment allowlist (Darwin, trusted-launch.c absent)'
+    fi
+    ;;
+esac
 
 # --- 9. Forged clean-marker invocation, two halves (spec.md R1 marker branch; spec.md:7566ish) --
 
@@ -1230,12 +1347,25 @@ POISON
   # half 2: group-2 style, binaries compared directly, no runtime behind the compiles
   case "$platform" in
     Darwin:*)
-      clean_bin="$tmp/compiler.clean.bin"
+      # Same basename in two separate directories, not "compiler.clean.bin"
+      # vs "compiler.polluted.bin": on arm64, CommandLineTools' ad-hoc
+      # linker signature embeds the OUTPUT BASENAME as the code-signing
+      # identifier, so two differently-named outputs produce different
+      # bytes (a 351-byte delta covering the embedded CodeDirectory and
+      # LC_UUID) even when compiled from byte-identical sources with
+      # identical flags -- a false "nondeterminism" that has nothing to do
+      # with the poisoned-environment fixture under test. Using the same
+      # basename in each of the two directories keeps that identifier
+      # identical and isolates the comparison to what compiler-environment
+      # pollution can actually change.
+      clean_dir="$tmp/compiler.clean.d"; /bin/mkdir -m 700 "$clean_dir"
+      clean_bin="$clean_dir/trusted-launch"
       darwin_temp2=$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)
       before2=$(darwin_snapshot "$darwin_temp2")
       compile_source "$parent_source" "$clean_bin" "TMPDIR=$tmp" "HOME=$tmp"
       mid2=$(darwin_snapshot "$darwin_temp2")
-      polluted_bin="$tmp/compiler.polluted.bin"
+      polluted_dir="$tmp/compiler.polluted.d"; /bin/mkdir -m 700 "$polluted_dir"
+      polluted_bin="$polluted_dir/trusted-launch"
       CC=/nonexistent/cc CPATH="$poison_dir" C_INCLUDE_PATH="$poison_dir" LIBRARY_PATH="$poison_dir" \
         SDKROOT=/nonexistent/sdk DEVELOPER_DIR=/nonexistent/dev MACOSX_DEPLOYMENT_TARGET=1.0 \
         compile_source "$parent_source" "$polluted_bin" "TMPDIR=$tmp" "HOME=$tmp"
@@ -1647,18 +1777,6 @@ fi
 
 # --- 15. Signal cases (spec.md:7976-8385) --------------------------------------------------
 
-read_runtime_pgid() {
-  # read_runtime_pgid STDERR_FILE -> prints pgid or empty after a bounded poll
-  rrp_file=$1
-  rrp_deadline=$(( $(/bin/date +%s) + 30 ))
-  while :; do
-    rrp_line=$(/usr/bin/grep -m1 -E '^runtime-pgid: [0-9]+$' "$rrp_file" 2>/dev/null || :)
-    [ -n "$rrp_line" ] && { printf '%s\n' "${rrp_line#runtime-pgid: }"; return; }
-    [ "$(/bin/date +%s)" -lt "$rrp_deadline" ] || { echo ''; return; }
-    /bin/sleep 0.01
-  done
-}
-
 if [ -x "$entry" ]; then
   # signal case 1: mid-run, frozen group
   sig1_stderr="$tmp/signal1.stderr"; : > "$sig1_stderr"
@@ -1885,6 +2003,13 @@ if [ "$parent_available" -eq 1 ]; then
     fi
     attempt=$((attempt + 1))
   done
+  # Residual, pre-existing race (flagged in round 0's review; not touched by round
+  # 2's fix set): this case's STOP has to land in the narrow window before the
+  # parent's own handler registration, and on a loaded or otherwise slower host
+  # every one of the 20 attempts can land as "early-signal" instead, exhausting the
+  # budget without proving the branch. Left for the plan to make deterministic
+  # (e.g. a synchronization point the parent itself writes before that window)
+  # rather than widening this round's scope to redesign the fixture.
   if [ "$sig5_proved" -eq 1 ]; then
     pass_case "signal: stopped-parent no-runtime branch proved (attempt $((attempt - 1)); late-stop=$sig5_late_stop early-signal=$sig5_early_signal)"
   else
@@ -1915,13 +2040,19 @@ FCNTLPROBE
   sig6_stderr="$tmp/signal6.stderr"; : > "$sig6_stderr"
   set -m
   exec 9<> "$tmp/signal6.fifo"
-  ( /bin/cat <&9 > /dev/null ) &
+  # fd 8 is a duplicate of fd 9's open file description, saved BEFORE the
+  # pipe's write end is handed to the entry as its stderr. File-status flags
+  # (O_NONBLOCK among them) live on the open file description, not on a
+  # per-process fd-table entry, so whatever the entry does to its own fd 2 is
+  # visible through fd 8 even after the entry exits and its own descriptors
+  # are gone. Probing fd 9 itself (as before) or the drainer's copy would
+  # instead observe process substitution's own, unrelated pipe -- flags never
+  # propagate through a `tee`.
+  exec 8<&9
+  ( /bin/cat <&9 > "$sig6_stderr" ) &
   sig6_drainer=$!
-  # Tee the entry's stderr to a capture file (to observe runtime-pgid) while
-  # still delivering every byte to fd 9 -- process substitution does not
-  # disturb $! below, which still names the entry itself.
   "$entry" "$bound_jq" "$sig6_out" "$real_request" "$real_map" \
-    > "$tmp/signal6.stdout" 2> >(/usr/bin/tee "$sig6_stderr" >&9) &
+    > "$tmp/signal6.stdout" 2>&9 &
   sig6_pid=$!
   sig6_deadline=$(( $(/bin/date +%s) + 5 ))
   while [ ! -e "$sig6_out/.run" ]; do
@@ -1938,8 +2069,8 @@ FCNTLPROBE
   kill -TERM "$sig6_pid" 2>/dev/null || :
   sig6_status=0
   wait "$sig6_pid" 2>/dev/null || sig6_status=$?
-  sig6_probe_status=$("$fcntl_probe" 3<&9 2>/dev/null || echo error)
-  exec 9>&-
+  sig6_probe_status=$("$fcntl_probe" 3<&8 2>/dev/null || echo error)
+  exec 9>&- 8>&-
   kill "$sig6_drainer" 2>/dev/null || :
   if [ "$sig6_status" -eq 143 ] && [ "$sig6_probe_status" = clear ]; then
     pass_case 'signal: O_NONBLOCK is restored on the entry''s stderr descriptor after a mid-run TERM'
@@ -2178,94 +2309,426 @@ if [ -f "$entry" ]; then
   # "${parent_env[@]}" in command position is a recognised, closed idiom
   # rather than an unresolvable bare variable.
   cps_env_wrappers='${clean_env[@]} ${parent_env[@]}'
-  cps_violations=0
-  while IFS= read -r line; do
-    case "$line" in ''|'#'*) continue ;; esac
-    # A function definition header (e.g. "refuse() {") names the function
-    # being declared, not a command being invoked -- not a command position
-    # at all, so it never reaches the bare-command check below. Likewise a
-    # line that is only the closing ")" of a multi-line array/subshell (e.g.
-    # the pin_hexes=(...) / pin_paths=(...) literals above) is punctuation,
-    # not a command word.
-    case "$line" in
-      *'() {'*) continue ;;
-    esac
-    first=${line%% *}
-    first=${first#*[$'\t']}
-    # Unwrap exactly one layer of surrounding quotes so a quoted command word
-    # (e.g. "$run/.run/trusted-launch") is inspected rather than discarded --
-    # a prior draft's broad "\"*|'*" skip let any quoted or variable-led token
-    # through unexamined, which is exactly the shape an actually-risky bare
-    # command hijacked off PATH would take if merely interpolated into a
-    # string. Only a leading-slash literal or a slash appearing after variable
-    # expansion is treated as a path; anything else reaching the bare-command
-    # check below must resolve to a builtin, reserved word, or this script's
-    # own function.
-    case "$first" in
-      \"*) first=${first#\"}; first=${first%\"} ;;
-      \'*) first=${first#\'}; first=${first%\'} ;;
-    esac
-    case "$first" in
-      ''|')'|'{'*|'}'*|*'='*) continue ;;
-      /*) continue ;;                 # literal absolute path: sweep_absolute_paths above
-      *'/'*) continue ;;              # variable-joined path: dynamic-join allowlist above
-    esac
-    cps_env_wrapper_match=0
-    for w in $cps_env_wrappers; do [ "$first" = "$w" ] && cps_env_wrapper_match=1 && break; done
-    [ "$cps_env_wrapper_match" -eq 1 ] && continue
-    case "$first" in
-      \$*)
-        # A bare variable used as the command word with no path component at
-        # all -- the program actually run at this position is not statically
-        # knowable from the source text, so it can never be shown to come
-        # from an allowlist. This is exactly the shape the sweep must reject,
-        # not silently pass through.
-        printf 'command-position sweep: unresolvable variable command word: %s\n' "$first" >&2
-        cps_violations=$((cps_violations + 1))
-        continue
+
+  # cps_scan_source FILE -- the lexical extraction the prior draft deferred:
+  # strips full-line comments and heredoc bodies (data, never a command
+  # position), then walks every logical line, recursively queuing the body
+  # of each $(...) / `...` command substitution as a further line to scan,
+  # and splitting on unquoted ; & | && || into one command position per
+  # segment (quote-tracked, so an operator character inside a quoted
+  # argument is not mistaken for a separator). Each segment's leading word
+  # has one layer of surrounding quotes unwrapped (never skipped wholesale --
+  # that let a quoted or variable-led token through unexamined) and any
+  # leading VAR=value assignments or exec/command prefix words are peeled
+  # so the position actually naming the program is what gets classified.
+  # Prints one finding line per rejected or unresolved command word to
+  # stdout; silence means the file passed.
+  cps_count_trailing_backslashes() {
+    # Portable to bash 3.2 (macOS's shipped bash): no negative substring
+    # offsets, no mapfile.
+    cps_ctb_s=$1 cps_ctb_n=0
+    cps_ctb_len=${#cps_ctb_s}
+    while [ "$cps_ctb_len" -gt 0 ]; do
+      [ "${cps_ctb_s:$((cps_ctb_len - 1)):1}" = '\' ] || break
+      cps_ctb_n=$((cps_ctb_n + 1))
+      cps_ctb_len=$((cps_ctb_len - 1))
+    done
+    printf '%s' "$cps_ctb_n"
+  }
+
+  cps_classify_command() {
+    # Classifies the command whose (quote-tokenized) words are in the global
+    # cps_cmd_words array, printing a finding line for anything rejected or
+    # unresolved. Called with an empty array between operators (e.g. "a &&
+    # && b") and at end-of-line; both are no-ops.
+    [ "${#cps_cmd_words[@]}" -gt 0 ] || return 0
+    case "${cps_cmd_words[0]}" in
+      [A-Za-z_][A-Za-z0-9_]*=\(*|[A-Za-z_][A-Za-z0-9_]*+=\(*)
+        # VAR=(...) / VAR+=(...) array-literal assignment: the whole
+        # statement IS the assignment, there is no following command word
+        # to peel toward (unlike "VAR=value realcmd args"), whether the
+        # literal closes on this line (e.g. stat_owner_mode=(-c '%u %a'))
+        # or was opened by the multi-line-array skip pass below.
+        return 0
         ;;
     esac
-    case "$first" in
-      checkpoint|refuse) continue ;;
+    cps_first=''
+    cps_wi=0
+    while [ "$cps_wi" -lt "${#cps_cmd_words[@]}" ]; do
+      cps_w=${cps_cmd_words[$cps_wi]}
+      case "$cps_w" in
+        \"*) cps_w=${cps_w#\"}; cps_w=${cps_w%\"} ;;
+        \'*) cps_w=${cps_w#\'}; cps_w=${cps_w%\'} ;;
+      esac
+      case "$cps_w" in
+        [A-Za-z_][A-Za-z0-9_]*=*|exec|command|env)
+          cps_wi=$((cps_wi + 1)); continue ;;
+      esac
+      cps_first=$cps_w
+      break
+    done
+    [ -n "$cps_first" ] || return 0
+
+    case "$cps_first" in
+      ')'|'{'*|'}'*) return 0 ;;
+      /*) return 0 ;;                 # literal absolute path: sweep_absolute_paths above
+      *'/'*) return 0 ;;              # variable-joined path: dynamic-join allowlist above
+    esac
+    cps_env_wrapper_match=0
+    for cps_wv in $cps_env_wrappers; do [ "$cps_first" = "$cps_wv" ] && cps_env_wrapper_match=1 && break; done
+    [ "$cps_env_wrapper_match" -eq 1 ] && return 0
+    case "$cps_first" in
+      \$*)
+        printf 'unresolvable variable command word: %s\n' "$cps_first"
+        return 0
+        ;;
+    esac
+    case "$cps_first" in
+      checkpoint|refuse) return 0 ;;
     esac
     cps_known=0
-    for b in $builtins; do [ "$first" = "$b" ] && cps_known=1 && break; done
+    for cps_b in $builtins; do [ "$cps_first" = "$cps_b" ] && cps_known=1 && break; done
     if [ "$cps_known" -ne 1 ]; then
-      for r in $reserved; do [ "$first" = "$r" ] && cps_known=1 && break; done
+      for cps_r in $reserved; do [ "$cps_first" = "$cps_r" ] && cps_known=1 && break; done
     fi
     if [ "$cps_known" -ne 1 ]; then
-      for f in $cps_functions; do [ "$first" = "$f" ] && cps_known=1 && break; done
+      for cps_f in $cps_functions; do [ "$cps_first" = "$cps_f" ] && cps_known=1 && break; done
     fi
     if [ "$cps_known" -ne 1 ]; then
-      printf 'command-position sweep: unallowlisted bare command: %s\n' "$first" >&2
-      cps_violations=$((cps_violations + 1))
+      printf 'unallowlisted bare command: %s\n' "$cps_first"
     fi
-  done < "$entry"
-  if [ "$cps_violations" -eq 0 ]; then
+    return 0
+  }
+
+  cps_scan_source() {
+    cps_file=$1
+
+    # Pass 1: join backslash-continued physical lines (an odd number of
+    # trailing backslashes is a real continuation; an even number is that
+    # many literal, already-escaped backslashes) AND a quoted argument that
+    # itself spans multiple physical lines (e.g. the EXIT trap's multi-line
+    # single-quoted body below) into one logical line, so each is inspected
+    # as the single command position it actually is. A joined quote-span is
+    # glued with a space rather than its real embedded newline: since the
+    # interior of a quoted span is never itself decomposed into command
+    # positions (cps_classify_command only ever looks at an UNquoted leading
+    # word), only the location of the closing quote matters, not the exact
+    # whitespace inside it.
+    cps_physical=()
+    while IFS= read -r cps_pl || [ -n "$cps_pl" ]; do cps_physical+=("$cps_pl"); done < "$cps_file"
+    cps_logical=() cps_acc='' cps_acc_active=0 cps_mlq=''
+    for cps_pl in "${cps_physical[@]}"; do
+      if [ "$cps_acc_active" -eq 1 ]; then cps_pl="$cps_acc $cps_pl"; fi
+      cps_acc='' cps_acc_active=0
+
+      # Always re-derive quote state from the start of cps_pl, never seeded
+      # from cps_mlq: once a line has been joined onto its accumulator, it
+      # already contains the full text back to the point the quote first
+      # opened, so re-scanning it from scratch is what re-derives the
+      # correct state -- seeding with "already inside" here would treat
+      # that same, now-repeated opening quote character as the CLOSING one.
+      cps_qc_i=0 cps_qc_len=${#cps_pl} cps_qc_inq=''
+      while [ "$cps_qc_i" -lt "$cps_qc_len" ]; do
+        cps_qc_c=${cps_pl:$cps_qc_i:1}
+        if [ -n "$cps_qc_inq" ]; then
+          [ "$cps_qc_c" = "$cps_qc_inq" ] && cps_qc_inq=''
+        else
+          case "$cps_qc_c" in
+            \'|\") cps_qc_inq=$cps_qc_c ;;
+            '#')
+              # An unquoted '#' starting a word (line start, or preceded by
+              # whitespace) opens a comment: an apostrophe in ordinary prose
+              # after it (e.g. "the entry's own") must never be mistaken for
+              # the start of a quoted span. Nothing past it is code, so stop
+              # scanning this line for quote balance right here.
+              if [ "$cps_qc_i" -eq 0 ]; then
+                cps_qc_i=$cps_qc_len
+                break
+              fi
+              case "${cps_pl:$((cps_qc_i - 1)):1}" in
+                ' '|$'\t') cps_qc_i=$cps_qc_len; break ;;
+              esac
+              ;;
+          esac
+        fi
+        cps_qc_i=$((cps_qc_i + 1))
+      done
+      cps_mlq=$cps_qc_inq
+      if [ -n "$cps_mlq" ]; then
+        cps_acc=$cps_pl; cps_acc_active=1
+        continue
+      fi
+
+      case "$cps_pl" in
+        *\\)
+          if [ $(( $(cps_count_trailing_backslashes "$cps_pl") % 2 )) -eq 1 ]; then
+            cps_acc=${cps_pl%?}; cps_acc_active=1
+            continue
+          fi
+          ;;
+      esac
+      cps_logical+=("$cps_pl")
+    done
+    [ "$cps_acc_active" -eq 1 ] && cps_logical+=("$cps_acc")
+
+    # Pass 2: strip heredoc bodies (data, never a command position) and the
+    # element lines of a multi-line array literal such as
+    # "pin_hexes=(\n  hash\n  ...\n)" (also data -- a single-line array
+    # literal like "sha1_args=(/usr/bin/sha1sum)" is instead recognised and
+    # skipped whole in cps_classify_command above).
+    cps_skip_heredoc='' cps_strip_tabs=0 cps_skip_array=0
+    cps_queue=()
+    for cps_raw in "${cps_logical[@]}"; do
+      if [ -n "$cps_skip_heredoc" ]; then
+        cps_cmp=$cps_raw
+        if [ "$cps_strip_tabs" -eq 1 ]; then
+          while [ "${cps_cmp:0:1}" = $'\t' ]; do cps_cmp=${cps_cmp:1}; done
+        fi
+        [ "$cps_cmp" = "$cps_skip_heredoc" ] && cps_skip_heredoc=''
+        continue
+      fi
+      if [ "$cps_skip_array" -eq 1 ]; then
+        cps_trim=${cps_raw#"${cps_raw%%[![:space:]]*}"}
+        cps_trim=${cps_trim%"${cps_trim##*[![:space:]]}"}
+        [ "$cps_trim" = ')' ] && cps_skip_array=0
+        continue
+      fi
+      if [[ $cps_raw =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*)[\'\"]? ]]; then
+        cps_skip_heredoc=${BASH_REMATCH[1]}
+        case "$cps_raw" in *'<<-'*) cps_strip_tabs=1 ;; *) cps_strip_tabs=0 ;; esac
+      fi
+      cps_trim=${cps_raw#"${cps_raw%%[![:space:]]*}"}
+      cps_trim=${cps_trim%"${cps_trim##*[![:space:]]}"}
+      case "$cps_trim" in
+        [A-Za-z_][A-Za-z0-9_]*=\(|[A-Za-z_][A-Za-z0-9_]*+=\() cps_skip_array=1 ;;
+      esac
+      cps_queue+=("$cps_raw")
+    done
+
+    # Pass 3: walk the queue (gaining more entries as $(...) / `...`
+    # substitution bodies are found and queued too), tracking case/esac
+    # depth so a case arm's pattern ("Linux:x86_64)", "0|1|2)", ...) is
+    # recognised and skipped rather than misread as a bare command -- only
+    # the text after the pattern's closing, unquoted ")" is a real command
+    # position.
+    cps_case_depth=0 cps_await_pattern=0
+    cps_qi=0
+    while [ "$cps_qi" -lt "${#cps_queue[@]}" ]; do
+      cps_line=${cps_queue[$cps_qi]}
+      cps_qi=$((cps_qi + 1))
+      case "$cps_line" in ''|[[:space:]]*'#'*|'#'*) continue ;; esac
+      # A function definition header (e.g. "refuse() {") names the function
+      # being declared, not a command being invoked.
+      case "$cps_line" in *'() {'*) continue ;; esac
+
+      cps_trim=${cps_line#"${cps_line%%[![:space:]]*}"}
+      cps_trim=${cps_trim%"${cps_trim##*[![:space:]]}"}
+      cps_padded=" $cps_trim "
+      cps_has_case=0; case "$cps_padded" in *' case '*) cps_has_case=1 ;; esac
+      cps_has_esac=0; case "$cps_padded" in *' esac '*) cps_has_esac=1 ;; esac
+
+      if [ "$cps_has_case" -eq 1 ] && [ "$cps_has_esac" -eq 1 ]; then
+        # Self-contained "case ... in ...) ...;; esac" all on one physical
+        # line: opaque to this sweep (hand-reviewed rather than lexically
+        # re-derived, same carve-out as sweep_absolute_paths' full-line
+        # comments above).
+        continue
+      fi
+
+      cps_rest=$cps_line
+      if [ "$cps_case_depth" -gt 0 ] && [ "$cps_await_pattern" -eq 1 ] && [ "$cps_has_case" -eq 0 ]; then
+        cps_pat_i=0 cps_pat_inq='' cps_pat_len=${#cps_line} cps_pattern_paren=-1
+        while [ "$cps_pat_i" -lt "$cps_pat_len" ]; do
+          cps_pc=${cps_line:$cps_pat_i:1}
+          if [ -n "$cps_pat_inq" ]; then
+            [ "$cps_pc" = "$cps_pat_inq" ] && cps_pat_inq=''
+            cps_pat_i=$((cps_pat_i + 1)); continue
+          fi
+          case "$cps_pc" in
+            \'|\") cps_pat_inq=$cps_pc ;;
+            ')') cps_pattern_paren=$cps_pat_i ;;
+          esac
+          [ "$cps_pattern_paren" -ge 0 ] && break
+          cps_pat_i=$((cps_pat_i + 1))
+        done
+        if [ "$cps_pattern_paren" -ge 0 ]; then
+          cps_rest=${cps_line:$((cps_pattern_paren + 1))}
+        else
+          cps_rest=''
+        fi
+        cps_await_pattern=0
+      fi
+
+      if [ "$cps_has_case" -eq 1 ]; then
+        case "$cps_trim" in
+          *[[:space:]]in) cps_case_depth=$((cps_case_depth + 1)); cps_await_pattern=1 ;;
+        esac
+      fi
+      if [ "$cps_has_esac" -eq 1 ]; then
+        [ "$cps_case_depth" -gt 0 ] && cps_case_depth=$((cps_case_depth - 1))
+        cps_await_pattern=0
+      fi
+
+      while [[ $cps_rest =~ \$\(([^\(\)]*)\) ]] || [[ $cps_rest =~ \`([^\`]*)\` ]]; do
+        cps_sub=${BASH_REMATCH[1]}
+        cps_lit=${BASH_REMATCH[0]}
+        [ -n "$cps_sub" ] && cps_queue+=("$cps_sub")
+        cps_rest=${cps_rest/"$cps_lit"/ }
+      done
+
+      # Quote-tracked tokenizer: splits cps_rest into words and operators
+      # (; & | && ||), keeping whitespace inside a quoted span from
+      # breaking a word (e.g. -c '%u %a' is one word after -c, not two),
+      # keeping whitespace inside an unquoted ${...} from doing the same
+      # (e.g. ${var%% *} or ${run:?} is one word, not split at its own
+      # internal space or ":"), and keeping an operator character inside
+      # either from acting as one.
+      cps_tok='' cps_toks=() cps_is_op=() cps_inq='' cps_brace=0 cps_paren=0 cps_i=0 cps_n=${#cps_rest}
+      while [ "$cps_i" -lt "$cps_n" ]; do
+        cps_c=${cps_rest:$cps_i:1}
+        if [ -n "$cps_inq" ]; then
+          cps_tok="$cps_tok$cps_c"
+          [ "$cps_c" = "$cps_inq" ] && cps_inq=''
+          cps_i=$((cps_i + 1)); continue
+        fi
+        if [ "$cps_brace" -gt 0 ]; then
+          cps_tok="$cps_tok$cps_c"
+          case "$cps_c" in
+            '{') cps_brace=$((cps_brace + 1)) ;;
+            '}') cps_brace=$((cps_brace - 1)) ;;
+          esac
+          cps_i=$((cps_i + 1)); continue
+        fi
+        if [ "$cps_c" = '{' ] && [ "$cps_i" -gt 0 ] && [ "${cps_rest:$((cps_i - 1)):1}" = '$' ]; then
+          cps_brace=1
+          cps_tok="$cps_tok$cps_c"
+          cps_i=$((cps_i + 1)); continue
+        fi
+        # Parenthesis depth: protects the same way for "(...)" spans left
+        # after the $(...) extraction pass above has already pulled out and
+        # queued any inner command substitution -- e.g. "$((128 + $(...)))"
+        # leaves the outer arithmetic's own "(( ... ))" behind, and its
+        # internal space/operator characters ("128 +  )" ) must not be
+        # mistaken for word or command-position boundaries.
+        if [ "$cps_paren" -gt 0 ]; then
+          cps_tok="$cps_tok$cps_c"
+          case "$cps_c" in
+            '(') cps_paren=$((cps_paren + 1)) ;;
+            ')') cps_paren=$((cps_paren - 1)) ;;
+          esac
+          cps_i=$((cps_i + 1)); continue
+        fi
+        if [ "$cps_c" = '(' ]; then
+          cps_paren=1
+          cps_tok="$cps_tok$cps_c"
+          cps_i=$((cps_i + 1)); continue
+        fi
+        case "$cps_c" in
+          \'|\") cps_inq=$cps_c; cps_tok="$cps_tok$cps_c"; cps_i=$((cps_i + 1)); continue ;;
+          ' '|$'\t')
+            [ -n "$cps_tok" ] && { cps_toks+=("$cps_tok"); cps_is_op+=(0); cps_tok=''; }
+            cps_i=$((cps_i + 1)); continue
+            ;;
+          '&')
+            # A "&" immediately after ">" or "<" is part of a redirection
+            # operator (">&2", "2>&1", "<&3", ...), not the background/AND
+            # operator -- it names a target descriptor, never a command
+            # position, so it stays part of the current (redirection) word.
+            cps_tlen=${#cps_tok}
+            if [ "$cps_tlen" -gt 0 ] && [ "${cps_tok:$((cps_tlen - 1)):1}" = '>' -o "${cps_tok:$((cps_tlen - 1)):1}" = '<' ]; then
+              cps_tok="$cps_tok$cps_c"; cps_i=$((cps_i + 1)); continue
+            fi
+            [ -n "$cps_tok" ] && { cps_toks+=("$cps_tok"); cps_is_op+=(0); cps_tok=''; }
+            cps_two=${cps_rest:$cps_i:2}
+            case "$cps_two" in
+              '&&') cps_toks+=("$cps_two"); cps_is_op+=(1); cps_i=$((cps_i + 2)) ;;
+              *) cps_toks+=("$cps_c"); cps_is_op+=(1); cps_i=$((cps_i + 1)) ;;
+            esac
+            continue
+            ;;
+          ';'|'|')
+            [ -n "$cps_tok" ] && { cps_toks+=("$cps_tok"); cps_is_op+=(0); cps_tok=''; }
+            cps_two=${cps_rest:$cps_i:2}
+            case "$cps_two" in
+              '||') cps_toks+=("$cps_two"); cps_is_op+=(1); cps_i=$((cps_i + 2)) ;;
+              *) cps_toks+=("$cps_c"); cps_is_op+=(1); cps_i=$((cps_i + 1)) ;;
+            esac
+            continue
+            ;;
+        esac
+        cps_tok="$cps_tok$cps_c"
+        cps_i=$((cps_i + 1))
+      done
+      [ -n "$cps_tok" ] && { cps_toks+=("$cps_tok"); cps_is_op+=(0); }
+
+      cps_cmd_words=()
+      cps_ti=0
+      while [ "$cps_ti" -lt "${#cps_toks[@]}" ]; do
+        if [ "${cps_is_op[$cps_ti]}" -eq 1 ]; then
+          cps_classify_command
+          cps_cmd_words=()
+        else
+          cps_cmd_words+=("${cps_toks[$cps_ti]}")
+        fi
+        cps_ti=$((cps_ti + 1))
+      done
+      cps_classify_command
+
+      case "$cps_line" in *';;'*) [ "$cps_case_depth" -gt 0 ] && cps_await_pattern=1 ;; esac
+    done
+    return 0
+  }
+
+  cps_findings=$(cps_scan_source "$entry")
+  if [ -z "$cps_findings" ]; then
     pass_case 'mechanism: bare-word command-position sweep finds no unallowlisted command in the shipped entry'
   else
+    printf '%s\n' "$cps_findings" | while IFS= read -r cps_finding; do
+      printf 'command-position sweep: %s\n' "$cps_finding" >&2
+    done
+    cps_violations=$(printf '%s\n' "$cps_findings" | /usr/bin/grep -c .)
     fail_case "mechanism: bare-word command-position sweep found $cps_violations unallowlisted command word(s)"
   fi
 
-  # Prove the sweep above can actually reject something: run the identical
-  # builtin/reserved/function membership test against a bare command word that
-  # belongs to none of those sets. Without this, a sweep that always passes
-  # (as the prior draft's fall-through loop did) would be indistinguishable
-  # from one that genuinely enforces the allowlist.
-  cps_negative='an-unallowlisted-external-command'
-  cps_negative_known=0
-  for b in $builtins; do [ "$cps_negative" = "$b" ] && cps_negative_known=1 && break; done
-  if [ "$cps_negative_known" -ne 1 ]; then
-    for r in $reserved; do [ "$cps_negative" = "$r" ] && cps_negative_known=1 && break; done
-  fi
-  if [ "$cps_negative_known" -ne 1 ]; then
-    for f in $cps_functions; do [ "$cps_negative" = "$f" ] && cps_negative_known=1 && break; done
-  fi
-  if [ "$cps_negative_known" -eq 0 ]; then
-    pass_case 'mechanism: bare-word command-position sweep can reject an unallowlisted command (negative fixture)'
-  else
-    fail_case 'mechanism: bare-word command-position sweep negative fixture was unexpectedly allowlisted'
-  fi
+  # Prove the sweep can actually reject something, by running the fixture
+  # THROUGH the extractor above (not just the bare membership test) -- an
+  # indented unallowlisted command, one reached only after peeling an
+  # "exec" prefix, and one reached only after an unquoted "&&" separator.
+  # Without this, a sweep whose extraction silently drops these shapes (as
+  # the prior draft's "${line%% *}" and lack of substitution/operator
+  # splitting did) would be indistinguishable from one that genuinely
+  # enforces the allowlist.
+  cps_neg_dir="$tmp/cps-negative"; /bin/mkdir -m 700 "$cps_neg_dir"
+
+  cps_neg_indented="$cps_neg_dir/indented.sh"
+  printf '%s\n' '    an-unallowlisted-indented-command --flag' > "$cps_neg_indented"
+  cps_neg_indented_findings=$(cps_scan_source "$cps_neg_indented")
+  case "$cps_neg_indented_findings" in
+    *an-unallowlisted-indented-command*)
+      pass_case 'mechanism: command-position sweep rejects an indented unallowlisted command' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject an indented unallowlisted command' ;;
+  esac
+
+  cps_neg_exec="$cps_neg_dir/exec.sh"
+  printf '%s\n' 'exec an-unallowlisted-exec-target "$@"' > "$cps_neg_exec"
+  cps_neg_exec_findings=$(cps_scan_source "$cps_neg_exec")
+  case "$cps_neg_exec_findings" in
+    *an-unallowlisted-exec-target*)
+      pass_case 'mechanism: command-position sweep rejects a command reached via an exec prefix' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached via an exec prefix' ;;
+  esac
+
+  cps_neg_and="$cps_neg_dir/and.sh"
+  printf '%s\n' 'checkpoint && an-unallowlisted-command-after-and' > "$cps_neg_and"
+  cps_neg_and_findings=$(cps_scan_source "$cps_neg_and")
+  case "$cps_neg_and_findings" in
+    *an-unallowlisted-command-after-and*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only after an unquoted &&' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached only after an unquoted &&' ;;
+  esac
 
   env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
   if [ -n "$env_i_line" ]; then
