@@ -1,5 +1,5 @@
 ---
-spec-blob: d088f283c4ac03a5d6a8c8dd505a02179ea551ef
+spec-blob: 43573970acd55683437d4d532b82fa457e0f72b6
 drafted: 2026-09-14
 ---
 
@@ -46,7 +46,7 @@ Measured figures are the three implementation files at
 
 `review_size: accepted-exception`, **3650-4950 changed lines**, for this one
 implementation concern: the spec's record (blob
-`d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) and this plan state the same range,
+`43573970acd55683437d4d532b82fa457e0f72b6`) and this plan state the same range,
 and it is the only range this implementation is measured against. About
 4240 changed lines are expected at final head, rounded outward by roughly a
 sixth for the remaining documentation, manifest and test-harness work.
@@ -63,7 +63,7 @@ The spec's separate 8521-11529 artifact range does not apply to this plan or cod
 Do not change the resolver runtime, library, jq program, native helper, core files,
 profiles, existing test launcher or fixtures, shadow components, workflows or any
 accepted intent/spec/plan during implementation. Shipped files never read the test
-path. The schema test changes only its two exact consumer-list additions below.
+path. The schema test changes only its three exact consumer-list additions below.
 The new test may use existing fixture helpers and create temporary drivers.
 
 ## Order of work
@@ -450,7 +450,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   fixture launcher regression suite; byte-identical resolved-profile stdout through
   test launcher and shipped public entry for the default request.
 - `bash scripts/test/portable-core-schema.test.sh` — zero failures against the
-  staged final implementation bytes. Verify the two exact consumer additions and
+  staged final implementation bytes. Verify the three exact consumer additions and
   unchanged existing list, indexed scan and exact comparison in the final diff.
 - `shellcheck --version` must report 0.11.0; then
   `find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck -x -S style`.
