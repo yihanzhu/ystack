@@ -1,5 +1,5 @@
 ---
-spec-blob: e76e8e878282b49bc8265f02ff92c5f742714e30
+spec-blob: 7a9ae4bcdb100fd7662ee8ba69850fe106480b16
 drafted: 2026-09-10
 amended: 2026-09-18
 ---
@@ -735,34 +735,71 @@ collision rules are `E_RELATION` and run **after** the resolved profile has been
 validated, because they need its bindings, and **before** any request document is built, so the
 component never constructs a document it would then refuse. Nothing earlier moves.
 
-5.3 **The test runs the real duty evaluator; the fabricated `duty.json` goes.** Delete the
-hand-built duty document (today `scripts/test/shadow-assembler.test.sh:697-714`, `verdict:
-satisfied` and repeated-character digests) and the fabricated policy set with it. In their place:
+5.3 **The test runs the real duty evaluator, in two acyclic passes; the fabricated `duty.json`
+goes.** Delete the hand-built duty document (today `scripts/test/shadow-assembler.test.sh:697-714`,
+`verdict: satisfied` and repeated-character digests) and the fabricated policy set with it. No
+document this test hands to a control evaluator or to the driver may be hand-built with a chosen
+`verdict`, a chosen `reason_ids`, or a repeated-character digest standing in for a real SHA-256.
 
-- assert `requested_by` in the assembled request equals the tenth argument's bytes, including the
-  presence or absence of `authority_ref`, and that no field of the forge binding appears in it;
-- run `adapters/local-git-materializer/v1/materialize.sh` over the assembled input and take
-  `.stage_result` from its output, the same projection `shadow/v1/reproduce.sh:460` takes, to get
-  a real stage result;
-- run `control/v1/evaluate-duty.sh evaluate <policy-set> <request> <resolved> <result>` with the
-  shipped `control/v1/control-policy-set.json`, the assembled request, the same real resolved
-  profile the assembler was given, and that stage result; assert the evaluation's `verdict` is
-  `satisfied` and its `reason_ids` are exactly `["duty.satisfied"]`;
-- hand the driver run that same evaluation as its duty document, with the fixture claim's
-  `duty_evaluation_ref` carrying its real SHA-256, and keep the existing not-`inconclusive`
-  assertion.
+A single pass cannot be built: the claim's digest goes into the request
+(`materialization-input.jq:197`), the request's digest into the evaluation
+(`duty-separation.jq:194`), and `sandbox.jq:204-211` requires the claim to carry that evaluation's
+digest and its `stage_result_ref`. The test therefore runs the assembler twice — the same nine
+arguments and the same tenth-argument requester each time, differing only in the claim-position
+file, the frozen `requested_at` and the output directory — in the order requirement 13 sets out,
+the same construction the accepted `shadow-self-host-run` plan uses. Exactly two documents are
+constructed by the test, and each entry references only earlier ones:
+
+1. **`environment-declaration.json`** — written with `jq -S -c -n`: `schema_version` 1, `kind`
+   `execution_environment_claim`, `id` the fixture environment's id, the shipped
+   `control/v1/sandbox-policy.json` body's `environment`, `filesystem`, `isolation`, `limits`,
+   `network`, `resources`, `sensitive_material` and `tools` sections verbatim, plus
+   `registry_entry_sha256` over the one matching fixture registry entry, selected the way
+   `reproduce.sh:396-399` selects it. It carries **no `*_ref` field of any kind**, so it can hash
+   nothing and can fabricate nothing, and it goes neither to `evaluate-sandbox.sh` nor to the
+   driver. The assembler checks only the claim-position file's `kind` and `id`
+   (`materialization-input.jq:101-105`, applied at `:213-214`), so this needs no component change.
+2. **The prerequisite assembler run** — that declaration in the claim position, its own
+   `requested_at` and its own output directory. Assert `requested_by` equals the tenth argument's
+   bytes exactly, including the presence or absence of `authority_ref`, and that no field of the
+   forge binding leaked into it; check `.stage_request.content` and `.resolved_profile.content`
+   against the run's own `stage-request-ref.json` and `resolved-profile-ref.json`.
+3. **The prerequisite stage result** — `.stage_result` of a real
+   `adapters/local-git-materializer/v1/materialize.sh` run over that `input.json`, the same
+   projection `reproduce.sh:460` takes.
+4. **The duty evaluation** — the real `control/v1/evaluate-duty.sh evaluate <policy-set> <request>
+   <resolved> <result>` over the shipped `control/v1/control-policy-set.json`, entry 2's stage
+   request, entry 2's resolved-profile document and entry 3's stage result. Assert `verdict` is
+   `satisfied` and `reason_ids` are exactly `["duty.satisfied"]`. This is the assertion that proves
+   the requester, and it is made about the **prerequisite** request, which carries the explicit
+   tenth-argument requester exactly as the final one does.
+5. **The final claim** — written with the same shipped sandbox policy body sections verbatim, an
+   `execution_identity` read out of the resolved profile's `verifier` binding rather than typed,
+   `policy_set_ref` naming the shipped policy set's own id and digest, `duty_evaluation_ref` naming
+   entry 4's id and the SHA-256 of entry 4's bytes, and `stage_result_ref` copied field for field
+   from entry 4's `body.stage.result_ref`. No digest in it is chosen.
+6. **The final assembler run** — the same arguments with that claim in the claim position. Its
+   request fingerprints the final claim and nothing earlier fingerprints that request, so the order
+   closes. This is the only `input.json` the driver reads.
+
+The two runs are told apart by digest, because `materialization-input.jq` gives every request the
+same id. The driver run then takes the **final** pass's `sha1` input, the fixture environment, the
+shipped policy set, entry 4's evaluation as its duty document — the one the final claim's
+`duty_evaluation_ref` already names — and that same final claim, and keeps the existing
+not-`inconclusive` assertion.
 
 Three negative cases, each asserting the refusal id and an empty output directory: role
 `observer`, otherwise identical to the good requester, `E_RELATION`; a requester whose
 `principal_id` is read out of the resolved profile's forge binding rather than written as a
 literal, `E_RELATION`; and a requester that is not an `actor_ref` at all, `E_SHAPE`.
 
-5.4 **`review_size` for this implementation pull request.** `review_size: standard`, 140-270 net
+5.4 **`review_size` for this implementation pull request.** `review_size: standard`, 180-330 net
 lines, as the spec records. The component's earlier `accepted-exception` covered the shipped
 component and its focused test and is not a standing allowance for this slug; this PR claims no
 exception. About 60-120 lines across the jq module and the shell entry, some of it given back by
-deleting the projection, and about 80-150 lines of test for the real duty evaluation and the three
-negative cases.
+deleting the projection, and about 120-200 lines of test — the six-entry two-pass construction of
+5.3, the verbatim-copy assertion and the three negative cases — plus the documentation row and the
+arity change.
 
 5.5 **Proof.**
 
