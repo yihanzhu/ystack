@@ -178,7 +178,10 @@ if [ "$all_present" -eq 1 ]; then
 else
   disposable_home="$tmp/real-repo-home"
   /bin/mkdir -m 700 "$disposable_home"
-  /usr/bin/git init --quiet --bare "$real_repo"
+  # Seed from this checkout's own objects first (real_head is always present
+  # in $root); only genuinely missing objects fall back to a public fetch,
+  # which cannot see an unpublished local commit.
+  /usr/bin/git clone --quiet --bare --no-hardlinks -- "$root" "$real_repo"
   for c in $real_head $required_commits; do
     /usr/bin/git -C "$real_repo" cat-file -e "$c^{commit}" 2>/dev/null && continue
     env -i PATH=/usr/bin:/bin HOME="$disposable_home" \
@@ -234,6 +237,39 @@ real_map="$tmp/real-map.json"
 "$bound_jq" -S -c -n --arg root "$real_repo" \
   '{version:1,repositories:[{repository_id:"repo.ystack",root:$root}]}' > "$real_map"
 pass_case 'positive resolution request names the real committed profiles/default/v1 objects'
+
+# --- 1b. Real-profile equivalence (round-8 finding 1; plan.md:447-448) -------------------
+# Uninterrupted, to-completion run of the shipped entry AND a freshly compiled
+# copy of the pre-existing test launcher on the same real default-profile
+# inputs: both must exit 0 with byte-identical stdout.
+if [ -x "$entry" ]; then
+  eq_out="$tmp/equivalence.entry.out"; /bin/mkdir -m 700 "$eq_out"
+  eq_entry_stdout="$tmp/equivalence.entry.stdout"
+  eq_entry_status=0
+  "$entry" "$bound_jq" "$eq_out" "$real_request" "$real_map" \
+    > "$eq_entry_stdout" 2> "$tmp/equivalence.entry.stderr" || eq_entry_status=$?
+
+  eq_launcher_bin="$tmp/equivalence-launcher"
+  eq_launcher_helper="$tmp/equivalence-nofollow-snapshot"
+  compile_source "$launcher_source" "$eq_launcher_bin"
+  compile_source "$helper_source" "$eq_launcher_helper"
+  eq_sandbox="$tmp/equivalence.launcher.sandbox"; /bin/mkdir -m 700 "$eq_sandbox"
+  eq_launcher_stdout="$tmp/equivalence.launcher.stdout"
+  eq_launcher_status=0
+  YSTACK_TEST_SANDBOX="$eq_sandbox" \
+    "$eq_launcher_bin" resolve "$runtime" "$eq_launcher_helper" "$bound_jq" \
+    "$real_request" "$real_map" \
+    > "$eq_launcher_stdout" 2> "$tmp/equivalence.launcher.stderr" || eq_launcher_status=$?
+
+  if [ "$eq_entry_status" -eq 0 ] && [ "$eq_launcher_status" -eq 0 ] &&
+     /usr/bin/cmp -s "$eq_entry_stdout" "$eq_launcher_stdout"; then
+    pass_case 'mechanism: shipped entry and the existing test launcher both resolve the real default profile to completion with byte-identical stdout'
+  else
+    fail_case "real-profile equivalence: entry_status=$eq_entry_status launcher_status=$eq_launcher_status $(/usr/bin/cmp "$eq_entry_stdout" "$eq_launcher_stdout" 2>&1 || :)"
+  fi
+else
+  fail_case 'real-profile equivalence (entry absent)'
+fi
 
 # --- 2. Synthetic fixture, for auxiliary/hostile cases (plan.md: fixture helpers) -------
 
@@ -2511,18 +2547,22 @@ allowlist_data='/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk /usr/bin:/bi
 # "$entry_repo/{resolver/v1/*.c,resolver/v1/profile-resolution.jq,
 # scripts/lib/profile-resolution.sh,core/v$core_schema_major}",
 # "$modules_dir/{schema,profile_graph,stage_request,result_facts,result_truth}.jq",
-# "$entry_dir/profile-resolve-runtime.sh", and "$output/.run". "/bin" alone is
-# the second half of the fixed "/usr/bin:/bin" PATH value, already allowlisted
-# whole; the regex's own delimiter (":") splits it into two matched tokens. This
+# "$entry_dir/profile-resolve-runtime.sh", and "$output/.run". This
 # is a hand-reviewed approximation of the closure the full lexical pass would
 # compute, not that pass itself.
-allowlist_dynamic_joins='/awk /jq /home /tmp /trusted-launch /nofollow-snapshot /resolver/v1/trusted-launch.c /resolver/v1/nofollow-snapshot.c /resolver/v1/profile-resolution.jq /scripts/lib/profile-resolution.sh /schema.jq /profile_graph.jq /stage_request.jq /result_facts.jq /result_truth.jq /core/v /generations /modules /profile-resolve-runtime.sh /.run /bin /usr/bin /resolver/v1'
+allowlist_dynamic_joins='/awk /jq /home /tmp /trusted-launch /nofollow-snapshot /resolver/v1/trusted-launch.c /resolver/v1/nofollow-snapshot.c /resolver/v1/profile-resolution.jq /scripts/lib/profile-resolution.sh /schema.jq /profile_graph.jq /stage_request.jq /result_facts.jq /result_truth.jq /core/v /generations /modules /profile-resolve-runtime.sh /.run'
 
 # "/dev/null" is the same regex-versus-":"/redirect-operator artefact as "/bin"
-# above (e.g. "2>/dev/null"): it is not a command word or a manufactured host
+# below (e.g. "2>/dev/null"): it is not a command word or a manufactured host
 # path, and its own roles are independently checked a few hundred lines below
 # ("mechanism: /dev/null discard appears only in its enumerated roles").
-allowlist_data="$allowlist_data /dev/null"
+#
+# "/usr/bin"/"/bin" (round-8 finding 3): both halves of the fixed
+# "/usr/bin:/bin" PATH splice (resolve-profile.sh:70,77,88,284,401); a colon
+# is not a join-context char, so each half is STANDALONE, not dynamic-join.
+# "/resolver/v1" is the ${entry_dir%/resolver/v1} trim operand
+# (resolve-profile.sh:132), likewise standalone. All literal, not attacker-influenced.
+allowlist_data="$allowlist_data /dev/null /usr/bin /bin /resolver/v1"
 
 sweep_absolute_paths() {
   # sweep_absolute_paths FILE -- approximates R10's pass-1 source-role carve-out
