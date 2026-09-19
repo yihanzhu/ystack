@@ -64,7 +64,16 @@ mod_result_facts="$generation_dir/modules/result_facts.jq"
 # git hash-object a nonexistent path.
 loaded_files=("$runtime" "$library" "$jq_program" "$mod_schema" "$mod_result_truth" "$mod_stage_request" "$mod_profile_graph" "$mod_result_facts")
 
-tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-resolver-trusted-launch-test.XXXXXX")
+platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+case "$platform" in
+  # Darwin's default TMPDIR sits inside $(getconf DARWIN_USER_TEMP_DIR) --
+  # exactly the directory the compiler-pollution write-attribution cases
+  # observe below. Rooting the suite's own scratch there forced those cases
+  # to carve their own directory out of the listing they were supposed to be
+  # watching. /private/tmp (never the /tmp symlink) sits outside it.
+  Darwin:*) tmp=$(/usr/bin/mktemp -d "/private/tmp/ystack-resolver-trusted-launch-test.XXXXXX") ;;
+  *) tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-resolver-trusted-launch-test.XXXXXX") ;;
+esac
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 suite_complete=0
 cleanup() {
@@ -89,7 +98,6 @@ sha256_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
 # --- 0. Pinned jq, provisioned the way shadow-slice.test.sh:24-51 does -----------------
 
-platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
   Darwin:*) jq_asset=jq-osx-amd64
     jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
@@ -1434,35 +1442,44 @@ POISON
     fail_case 'compiler pollution: entry-driven half'
   fi
 
-  # darwin_snapshot DIR -> "name size mtime" triples for every top-level entry,
-  # sorted by name -- not filenames alone (a prior draft's plain `find` listing
-  # missed in-place content changes to an already-existing entry, including
-  # xcrun_db) and no cache-write exemption: the accepted plan (PR #328)
-  # removed the residual "xcrun_db may legitimately change" carve-out, so
-  # every entry under the per-user temp directory, xcrun_db included, must
-  # come back byte-for-byte unchanged.
+  # darwin_snapshot DIR -> "name size mtime" triples for every top-level
+  # entry, sorted by name, plus xcrun_db's own state anywhere under DIR
+  # ("absent", or "path size mtime sha1" per match) so an in-place same-
+  # size, same-second rewrite of its content still shows up. $tmp is rooted
+  # under /private/tmp (see its mktemp above), not under DIR, so no entry
+  # here is this suite's own scratch; no exemption of any kind is applied.
   darwin_snapshot() {
     ds_dir=$1
-    # Two entries are excluded, neither as a reinstated cache-write exemption
-    # (the plan removed that carve-out for xcrun_db specifically, not for
-    # unrelated housekeeping or for this suite's own workspace):
-    #   - "TemporaryItems" is a Finder/LaunchServices-owned directory whose
-    #     own mtime bumps every few seconds from other processes on this
-    #     machine regardless of anything this suite does.
-    #   - "$tmp" (this suite's own scratch directory) lives directly under
-    #     the per-user temp dir and is, by construction, being written to
-    #     throughout the run by every case above and below this one -- its
-    #     own size/mtime changing is this suite operating normally, not
-    #     something under test.
-    # xcrun_db and every other entry are still snapshotted and compared with
-    # no exemption.
-    # -name (a basename match) rather than -path: $ds_dir may carry a trailing
-    # slash (getconf DARWIN_USER_TEMP_DIR does), which would make find's own
-    # "$ds_dir/entry" concatenation contain a doubled slash that never equals
-    # $tmp's own normalised (single-slash) path under -path.
     /usr/bin/find "$ds_dir" -maxdepth 1 -mindepth 1 \
-      ! -name TemporaryItems ! -name "$(basename "$tmp")" \
       -exec /usr/bin/stat -f '%N %z %m' {} \; 2>/dev/null | /usr/bin/sort
+    xdb_hits=$(/usr/bin/find "$ds_dir" -name xcrun_db 2>/dev/null | /usr/bin/sort)
+    if [ -z "$xdb_hits" ]; then
+      printf 'xcrun_db absent\n'
+    else
+      while IFS= read -r xdb; do
+        printf '%s %s\n' "$(/usr/bin/stat -f '%N %z %m' "$xdb")" \
+          "$(/usr/bin/shasum -a 1 "$xdb" | /usr/bin/awk '{print $1}')"
+      done <<< "$xdb_hits"
+    fi
+  }
+
+  # Compare two darwin_snapshot outputs. Equal -> pass. Otherwise: if every
+  # differing line names only Finder/LaunchServices-owned TemporaryItems
+  # (whose mtime bumps from unrelated processes on the machine, not from
+  # anything under test), that is an explicit proof gap, never a silent
+  # pass; any other difference, xcrun_db included, fails outright.
+  darwin_snapshot_check() {
+    local before=$1 after=$2 pass_msg=$3 fail_msg=$4 skip_msg=$5 d
+    if [ "$before" = "$after" ]; then
+      pass_case "$pass_msg"; return
+    fi
+    d=$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | /usr/bin/grep -E '^[<>]' || :)
+    if ! printf '%s\n' "$d" | /usr/bin/grep -qv 'TemporaryItems'; then
+      skip_case "$skip_msg" "proof gap -- only TemporaryItems churn: $(printf '%s' "$d" | /usr/bin/tr '\n' '|')"
+    else
+      printf '%s\n' "$d" >&2
+      fail_case "$fail_msg"
+    fi
   }
 
   case "$platform" in
@@ -1473,12 +1490,10 @@ POISON
       "$entry" "$bound_jq" "$darwin_run_out" "$synthetic_request" "$synthetic_map" \
         > "$darwin_run_out.stdout" 2> "$darwin_run_out.stderr"
       after_listing=$(darwin_snapshot "$darwin_temp")
-      if [ "$before_listing" = "$after_listing" ]; then
-        pass_case 'compiler pollution (Darwin, operator-run): nothing under the per-user temp dir changes name, size, or mtime (no cache-write exemption)'
-      else
-        diff <(printf '%s\n' "$before_listing") <(printf '%s\n' "$after_listing") >&2 || :
-        fail_case 'compiler pollution: Darwin per-user temp dir changed (name/size/mtime snapshot mismatch)'
-      fi
+      darwin_snapshot_check "$before_listing" "$after_listing" \
+        'compiler pollution (Darwin, operator-run): nothing under the per-user temp dir changes name, size, mtime, or xcrun_db content (no cache-write exemption)' \
+        'compiler pollution: Darwin per-user temp dir changed (name/size/mtime/xcrun_db snapshot mismatch)' \
+        'compiler pollution (Darwin, operator-run): per-user temp dir write-attribution'
       ;;
     Linux:x86_64)
       skip_case 'compiler pollution: Darwin xcrun_db delta measurement' 'Linux has no such shim or cache file'
@@ -1515,8 +1530,14 @@ POISON
       # PR #328 removed the residual): both the clean and the polluted compile
       # must leave every entry under the per-user temp dir -- xcrun_db included
       # -- with its name, size, and mtime unchanged.
-      [ "$before2" = "$mid2" ] || fail_case 'compiler pollution (Darwin): per-user temp dir changed across the clean isolated compile'
-      [ "$mid2" = "$after2" ] || fail_case 'compiler pollution (Darwin): per-user temp dir changed across the polluted isolated compile'
+      darwin_snapshot_check "$before2" "$mid2" \
+        'compiler pollution (Darwin): per-user temp dir unchanged across the clean isolated compile' \
+        'compiler pollution (Darwin): per-user temp dir changed across the clean isolated compile' \
+        'compiler pollution (Darwin): per-user temp dir write-attribution (clean isolated compile)'
+      darwin_snapshot_check "$mid2" "$after2" \
+        'compiler pollution (Darwin): per-user temp dir unchanged across the polluted isolated compile' \
+        'compiler pollution (Darwin): per-user temp dir changed across the polluted isolated compile' \
+        'compiler pollution (Darwin): per-user temp dir write-attribution (polluted isolated compile)'
       if [ "$(sha256_file "$clean_bin")" = "$(sha256_file "$polluted_bin")" ]; then
         pass_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries'
       else
@@ -1592,6 +1613,8 @@ fi
 
 # --- 13. Two-umask case (spec.md:7813-7845) -----------------------------------------------
 
+stat_mode() { /usr/bin/stat -c '%a' "$1" 2>/dev/null || /usr/bin/stat -f '%OLp' "$1"; }
+
 poll_for_home_and_read_modes() {
   # poll_for_home_and_read_modes OUTPUT -> prints "run_mode tmp_mode home_mode" or empty
   pfh_out=$1
@@ -1600,8 +1623,30 @@ poll_for_home_and_read_modes() {
     [ "$(/bin/date +%s)" -lt "$pfh_deadline" ] || { echo ''; return; }
     /bin/sleep 0.01
   done
-  stat_mode() { /usr/bin/stat -c '%a' "$1" 2>/dev/null || /usr/bin/stat -f '%OLp' "$1"; }
   printf '%s %s %s\n' "$(stat_mode "$pfh_out/.run")" "$(stat_mode "$pfh_out/.run/tmp")" "$(stat_mode "$pfh_out/.run/home")"
+}
+
+# run_lockdown_modes_ok RUN -> 0 iff RUN and all four run files (trusted-launch,
+# nofollow-snapshot, jq, awk) are exactly 0500 -- the state plan.md:310-313
+# requires while the parent is executing, ahead of the entry's own EXIT-trap
+# removal of RUN once the parent exits.
+run_lockdown_modes_ok() {
+  rlm_run=$1
+  for rlm_f in "$rlm_run" "$rlm_run/trusted-launch" "$rlm_run/nofollow-snapshot" "$rlm_run/jq" "$rlm_run/awk"; do
+    [ "$(stat_mode "$rlm_f")" = 500 ] || return 1
+  done
+}
+
+poll_for_lockdown_ok() {
+  # poll_for_lockdown_ok OUTPUT -> 0 once RUN reaches the locked-down state
+  # (bounded like the home-mode poll above), 1 on timeout or a bad mode.
+  pfl_out=$1
+  pfl_deadline=$(( $(/bin/date +%s) + 20 ))
+  while [ ! -e "$pfl_out/.run/awk" ]; do
+    [ "$(/bin/date +%s)" -lt "$pfl_deadline" ] || return 1
+    /bin/sleep 0.01
+  done
+  run_lockdown_modes_ok "$pfl_out/.run"
 }
 
 if [ -x "$entry" ]; then
@@ -1613,19 +1658,31 @@ if [ -x "$entry" ]; then
         > "$um_out.stdout" 2> "$um_out.stderr" &
       um_pid=$!
       modes=$(poll_for_home_and_read_modes "$um_out")
+      poll_for_lockdown_ok "$um_out"; lockdown_ok=$?
       wait "$um_pid"
       um_status=$?
       [ "$um_status" -eq 0 ] || exit 1
+      [ "$lockdown_ok" -eq 0 ] || exit 1
       [ "$modes" = '700 700 700' ] || exit 1
-      [ "$(/usr/bin/stat -c '%a' "$um_out/home" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/home")" = 700 ] || exit 1
-      [ "$(/usr/bin/stat -c '%a' "$um_out/tmp" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/tmp")" = 700 ] || exit 1
-      [ "$(/usr/bin/stat -c '%a' "$um_out/child.stdout" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_out/child.stdout")" = 600 ] || exit 1
+      [ "$(stat_mode "$um_out/home")" = 700 ] || exit 1
+      [ "$(stat_mode "$um_out/tmp")" = 700 ] || exit 1
+      [ "$(stat_mode "$um_out/child.stdout")" = 600 ] || exit 1
+      [ "$(stat_mode "$um_out/child.stderr")" = 600 ] || exit 1
     ); then
-      pass_case "two-umask: entry run under caller umask $u produces 0700/0700/0700 run tree and 0700/0600 sandbox"
+      pass_case "two-umask: entry run under caller umask $u produces 0700/0700/0700 provisioning tree, 0500 locked-down run files, and 0700/0600 sandbox"
     else
       fail_case "two-umask: umask $u"
     fi
   done
+  lockdown_neg_run="$tmp/lockdown-neg/.run"; /bin/mkdir -p "$lockdown_neg_run"
+  for lnf in trusted-launch nofollow-snapshot awk; do : > "$lockdown_neg_run/$lnf"; /bin/chmod 0500 "$lockdown_neg_run/$lnf"; done
+  : > "$lockdown_neg_run/jq"; /bin/chmod 0700 "$lockdown_neg_run/jq"
+  /bin/chmod 0500 "$lockdown_neg_run"
+  if run_lockdown_modes_ok "$lockdown_neg_run"; then
+    fail_case 'two-umask: run-lockdown mode check failed to reject a writable copied jq (negative control)'
+  else
+    pass_case 'two-umask: run-lockdown mode check rejects a writable copied jq (negative control)'
+  fi
 else
   fail_case 'two-umask: entry runs (entry absent)'
 fi
@@ -1836,10 +1893,13 @@ if [ -x "$entry" ]; then
     "$entry" "$bound_jq" "$d6_out" "$synthetic_request" "$synthetic_map" \
       > "$d6_out.stdout" 2> "$d6_out.stderr"
   ) || d6_status=$?
-  if [ "$d6_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$d6_out.stderr" &&
-     [ "$(/usr/bin/grep -c '^E_RUNTIME' "$d6_out.stderr")" -eq 1 ] && [ -z "$(/usr/bin/find "$d6_out" -mindepth 1 -print)" ]; then
+  d6_e_runtime_lines=$(/usr/bin/grep -c '^E_RUNTIME' "$d6_out.stderr" 2>/dev/null || echo 0)
+  d6_leftover=$(/usr/bin/find "$d6_out" -mindepth 1 -print 2>/dev/null)
+  if [ "$d6_status" -ne 0 ] && [ "$d6_e_runtime_lines" -eq 1 ] && [ -z "$d6_leftover" ]; then
     pass_case 'descriptor: caller has filled every reachable low number; entry refuses, output stays empty'
   else
+    printf 'descriptor: filled every low number: status=%s(expected nonzero) e_runtime_lines=%s(expected 1) leftover=[%s] stderr=[%s]\n' \
+      "$d6_status" "$d6_e_runtime_lines" "$d6_leftover" "$(/usr/bin/tail -c 2000 "$d6_out.stderr" 2>/dev/null)" >&2
     fail_case 'descriptor: filled every low number'
   fi
 else
@@ -3490,8 +3550,9 @@ if [ -f "$entry" ]; then
   # Enumerate plan §6's exact roles by full (whitespace-trimmed) line
   # content instead: the three-rung ulimit ladder, the descriptor-close
   # eval, both unset scrub forms (including the marker branch's case arm),
-  # the two EXIT-trap cleanup commands, and the unique signal-forwarding
-  # kill. Grep matches whole source lines, so a /dev/null token written
+  # and the unique signal-forwarding kill (cleanup is excluded from this
+  # allowance: a chmod/rm failure there must reach stderr, plan.md:351-359).
+  # Grep matches whole source lines, so a /dev/null token written
   # inside a quoted eval argument string is still caught -- it is literal
   # text on that same line, not something the grep would skip.
   devnull_role_bad_count() {
@@ -3503,8 +3564,6 @@ if [ -f "$entry" ]; then
         'eval "exec ${fd_name}>&-" 2>/dev/null || :') ;;
         'builtin unset -f "$inherited_function" 2>/dev/null || :') ;;
         'case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac') ;;
-        '/bin/chmod 0700 "${run:?}" 2>/dev/null || :') ;;
-        '/bin/rm -rf -- "${run:?}" 2>/dev/null || :') ;;
         '*" $parent_pid Running"*) kill -"$entry_signal" "$parent_pid" 2>/dev/null || : ;;') ;;
         *) bad=$((bad + 1)) ;;
       esac
@@ -3539,9 +3598,9 @@ if [ -f "$entry" ]; then
 
   devnull_neg_cleanup="$devnull_neg_dir/unlisted-cleanup.sh"
   /bin/cp -- "$entry" "$devnull_neg_cleanup"
-  # Shaped exactly like the two enumerated EXIT-trap cleanup lines, but on
-  # an unlisted target ("${output:?}" instead of "${run:?}") -- a cleanup
-  # redirect outside the enumerated roles must still be rejected.
+  # Shaped like an EXIT-trap cleanup line, on an unlisted target
+  # ("${output:?}" instead of "${run:?}") -- cleanup has no enumerated
+  # /dev/null role at all now, so any such redirect must be rejected.
   printf '%s\n' '    /bin/rm -rf -- "${output:?}" 2>/dev/null || :' >> "$devnull_neg_cleanup"
   devnull_neg_cleanup_bad=$(devnull_role_bad_count "$devnull_neg_cleanup")
   if [ "$devnull_neg_cleanup_bad" -gt 0 ]; then
