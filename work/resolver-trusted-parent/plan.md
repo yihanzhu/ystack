@@ -30,26 +30,39 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
 | Path | Work | Changed lines |
 | --- | --- | ---: |
-| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1910 measured |
+| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1988 measured |
 | `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 400 measured |
-| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1865 measured |
-| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
-| `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
-| `README.md` | Resolver index row | 2 |
-| `RESTORE.md` | Resolver restoration and proof | 18 |
-| `ci/required-files.txt` | Append both shipped files and focused test | 5 |
+| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 2880 measured |
+| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 measured |
+| `docs/components.md` | Resolver launch, boundary and proof documentation | 66 measured |
+| `README.md` | Resolver index row | 1 measured |
+| `RESTORE.md` | Resolver restoration and proof | 28 measured |
+| `ci/required-files.txt` | Append both shipped files and focused test | 5 measured |
 
-Measured figures are the three implementation files at
-`5472bdc23bf6771c8dcb00845c036b054a58b820` on
-`ystack/impl/resolver-trusted-parent`, 4175 changed lines against plan-base
-`d23a331`. The remaining five paths are unwritten estimates totalling 62.
+All eight figures are measured at implementation head
+`e96804fdaf7417d9a88a10bb6c7555a9eca18fe1` on
+`ystack/impl/resolver-trusted-parent`: `git diff --numstat
+origin/main...origin/ystack/impl/resolver-trusted-parent` reports 8 files,
+5367 insertions and 3 deletions, **5370 changed lines**, of which the three
+implementation files are 5268 insertions (1988 / 400 / 2880). The earlier
+record measured only those three files at
+`5472bdc23bf6771c8dcb00845c036b054a58b820` (1910 / 400 / 1865, 4175 changed
+lines) and estimated the remaining five at 62.
 
-`review_size: accepted-exception`, **3650-4950 changed lines**, for this one
-implementation concern: the spec's record (blob
-`d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) and this plan state the same range,
-and it is the only range this implementation is measured against. About
-4240 changed lines are expected at final head, rounded outward by roughly a
-sixth for the remaining documentation, manifest and test-harness work.
+The growth from 4175 to 5268 in those three files is review-driven, not scope
+creep: the round-0 and round-1 findings on the implementation PR replaced the
+approximate command scan with a real lexical command-position extractor, added
+the runtime-environment allowlist assertion and its descriptor probes, and
+forced the valid-fixture rework (Darwin snapshots and the matching helper
+binding), each of which carries its own R10 cases.
+
+`review_size: accepted-exception`, **4600-6300 changed lines**, for this one
+implementation concern. The spec's record (blob
+`d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) carries the original
+3650-4950 band; this re-measured band supersedes it and is the only range
+this implementation is measured against. 5370 changed lines are measured at
+the head above, rounded outward by roughly a sixth for the remaining review
+rounds, in the same style as the superseded record.
 
 The 702-line existing launcher supplies about 605 of the parent's lines; existing
 test fixtures are reuse, not permission to omit cases. Choose the specified
@@ -455,7 +468,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
 - `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
-  `git diff --numstat <base> HEAD` — report additions/deletions/net against 3650-4950.
+  `git diff --numstat <base> HEAD` — report additions/deletions/net against 4600-6300.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
 - R10 pin-liveness checks compare all eighteen source pins and all three non-blob
   constants: parent generation and entry generation equal the accepted library
