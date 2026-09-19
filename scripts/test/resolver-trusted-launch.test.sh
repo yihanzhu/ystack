@@ -377,22 +377,13 @@ invoke_parent_exec() {
   # invoke_parent_exec RUN REQUEST MAP OUTPUT [RUN_OVERRIDE] -- identical to
   # invoke_parent, but for callers that background it and then watch a caller-
   # owned descriptor's close-ordering (the p1/p2 descriptor cases below).
-  # "invoke_parent ... &" forks a bash process to run the function body, which
-  # then forks *again* to run trusted-launch as its own child and stays alive as
-  # a wrapper doing an implicit wait() -- inheriting every descriptor open at the
-  # point it was backgrounded, including the caller's fifo write end, and never
-  # closing it (trusted-launch's own startup close loop only closes descriptors
-  # trusted-launch itself holds, not its parent's). That wrapper only exits once
-  # trusted-launch's whole subtree -- the resolver runtime and every git/jq/awk it
-  # forks -- finishes, which measurably delayed a fifo reader's EOF: a live run
-  # showed the reader's flag lagging the parent's own "runtime-pgid:" line by
-  # double-digit seconds, while five standalone repros of the same fixture (before
-  # this wrapper was identified) measured no delay at all with nothing watching a
-  # caller descriptor. Every *other* invoke_parent caller (group 2's refusal
-  # cases, R3, etc.) calls it in the foreground, in the same process as the rest
-  # of the suite, where an unconditional "exec" would replace the whole test
-  # script -- so this exec-tail variant exists only for the backgrounded,
-  # ordering-sensitive callers and is not a drop-in replacement for invoke_parent.
+  # "invoke_parent ... &" leaves a wrapper bash process alive doing an implicit
+  # wait() on trusted-launch's whole subtree, inheriting the caller's fifo write
+  # end and never closing it -- measured delaying a fifo reader's EOF by double-
+  # digit seconds versus a standalone repro with nothing watching that descriptor.
+  # Every other invoke_parent caller (group 2 refusals, R3, etc.) runs foreground
+  # in the suite's own process, where an unconditional "exec" would replace it --
+  # so this exec-tail variant is only for backgrounded, ordering-sensitive callers.
   ipe_run=$1 ipe_request=$2 ipe_map=$3 ipe_output=$4 ipe_run_arg=${5:-$1}
   exec "$ipe_run/trusted-launch" resolve "$runtime" "$ipe_run/nofollow-snapshot" "$ipe_run/jq" \
     "$ipe_request" "$ipe_map" "$ipe_output" "$ipe_run_arg"
@@ -893,21 +884,14 @@ if [ "$parent_available" -eq 1 ]; then
   run_direct_refusal_case 'group2: extra directory in .run' "$g2out18/.run" "$synthetic_request" "$synthetic_map" "$g2out18" "$g2out18/.run" 'E_RUNTIME run-directory'
 
   # The parent opens the helper via openat(run_fd, basename(argv[3]), ...) -- only
-  # the basename is ever looked up inside .run (trusted-launch.c:1661-1673,1691) --
-  # so this case must hand it a helper argument that is itself a real, absolute,
-  # regular, non-symlink file (to clear the E_USAGE argv-shape gate, which stats
-  # argv[3] directly) whose basename is simply absent from .run's actual listing.
-  # run_direct_refusal_case / invoke_parent always point the helper argument at
-  # "<run>/nofollow-snapshot", which --skip-helper leaves nonexistent -- that fails
-  # the E_USAGE gate itself (E_USAGE, not E_RUNTIME) rather than reaching R5's
-  # exact-four-names listing check, so this case is invoked directly instead.
-  # The E_USAGE gate's regular_absolute(argv[3], 1) also requires X_OK (executable),
-  # so the substitute helper argument has to be a real, absolute, regular,
-  # non-symlink, executable file -- a plain data file (e.g. the synthetic request)
-  # fails that gate itself. A compiled binary sitting outside .run, under a name
-  # that does not collide with any of .run's three remaining entries, clears the
-  # gate and then fails R5's exact-four-names openat(run_fd, basename(argv[3]))
-  # lookup instead, which is the refusal this case exists to prove.
+  # the basename is looked up inside .run (trusted-launch.c:1661-1673,1691) -- so
+  # this case needs a real, absolute, regular, non-symlink, EXECUTABLE (X_OK; a
+  # plain data file fails the E_USAGE argv-shape gate itself) helper argument
+  # whose basename is absent from .run's actual listing. run_direct_refusal_case /
+  # invoke_parent always point the helper at "<run>/nofollow-snapshot" (which
+  # --skip-helper leaves nonexistent, failing E_USAGE before reaching R5's check),
+  # so this case is invoked directly with a compiled binary outside .run, under a
+  # non-colliding name, to clear the gate and fail R5's exact-four-names lookup.
   g2out19="$tmp/g2.missing-helper"; build_run_directory "$g2out19" --skip-helper
   missing_helper_bin="$tmp/g2.missing-helper.absent-from-run"
   compile_source "$helper_source" "$missing_helper_bin"; /bin/chmod 0500 "$missing_helper_bin"
@@ -1144,20 +1128,13 @@ case "$platform" in
 esac
 
 if [ "$parent_available" -eq 1 ]; then
-  # R5's output-directory check requires argv[7] (the output root) to contain
-  # *exactly* {".run"} and to be the same object (equal st_dev/st_ino) as argv[8]
-  # (the run-directory argument) -- so, unlike every refusal case above (where any
-  # E_RUNTIME before fork satisfies the assertion, whichever check fires first),
-  # a genuine end-to-end SUCCESS run needs the output argument to be the directory
-  # that directly contains .run, not an unrelated empty directory. A prior draft
-  # shared one build_run_directory output as the RUN argument while pointing each
-  # invocation's OUTPUT argument at a separate, unrelated empty directory -- that
-  # output directory's listing is never exactly {".run"}, so every "clean" call
-  # here always refused at the output check itself (E_RUNTIME output) instead of
-  # completing a resolution, and the bare invocation (no "|| status=$?" capture,
-  # since these calls are expected to succeed) took the whole suite down with it
-  # under set -e. Each invocation below now gets its own build_run_directory
-  # output and passes that same directory as OUTPUT.
+  # R5's output-directory check requires argv[7] (output root) to contain
+  # *exactly* {".run"} and be the same object (st_dev/st_ino) as argv[8] (the run
+  # directory) -- so a genuine SUCCESS run, unlike a before-fork refusal, needs
+  # OUTPUT to be the directory that directly contains .run. A prior draft pointed
+  # OUTPUT at a separate empty directory, so every "clean" call refused at the
+  # output check (E_RUNTIME output) and the uncaptured status took the suite down
+  # under set -e. Each invocation below gets its own build_run_directory output.
   r3_clean_out="$tmp/r3.clean"; build_run_directory "$r3_clean_out"
   invoke_parent "$r3_clean_out/.run" "$synthetic_request" "$synthetic_map" "$r3_clean_out" \
     > "$r3_clean_out.stdout" 2> "$r3_clean_out.stderr"
@@ -1663,8 +1640,25 @@ if [ -x "$entry" ]; then
   [ ! -s "$malformed_cleanup_out/child.stdout" ] || fail_case 'cleanup case 4: child.stdout not empty on runtime refusal'
   [ -z "$(/usr/bin/find "$malformed_cleanup_out/tmp" -mindepth 1 -print)" ] || fail_case 'cleanup case 4: tmp not empty'
   pass_case 'cleanup case 4: a runtime refusal still leaves the parent sandbox and removes .run'
+
+  # Cleanup case 3 (spec.md:7733-7740) through the ENTRY (R11): the group-2 0755
+  # runtime-mode case above invokes trusted-launch directly, never the entry's own
+  # EXIT trap / .run removal. Reuse copy_repo_tree, chmod the copy's runtime to 0755.
+  c3_tree="$tmp/cleanup.case3-tree"; copy_repo_tree "$c3_tree"
+  /bin/chmod 0755 "$c3_tree/resolver/v1/profile-resolve-runtime.sh"
+  c3_entry="$c3_tree/resolver/v1/resolve-profile.sh"
+  c3_out="$tmp/cleanup.case3"; /bin/mkdir -m 700 "$c3_out"
+  c3_status=0
+  "$c3_entry" "$bound_jq" "$c3_out" "$synthetic_request" "$synthetic_map" \
+    > "$c3_out.stdout" 2> "$c3_out.stderr" || c3_status=$?
+  [ "$c3_status" -ne 0 ] || fail_case 'cleanup case 3 (entry): expected non-zero exit'
+  /usr/bin/grep -qF 'E_RUNTIME binding' "$c3_out.stderr" ||
+    fail_case "cleanup case 3 (entry): expected E_RUNTIME binding, got: $(/usr/bin/tail -c 500 "$c3_out.stderr")"
+  c3_leftover=$(cd "$c3_out" && /usr/bin/find . -mindepth 1)
+  [ -z "$c3_leftover" ] || fail_case "cleanup case 3 (entry): output dir not empty: $c3_leftover"
+  pass_case 'cleanup case 3: entry refuses a 0755 runtime script through its own EXIT trap, output dir left empty'
 else
-  fail_case 'cleanup cases 1 and 4 (entry absent)'
+  fail_case 'cleanup cases 1, 3 and 4 (entry absent)'
 fi
 
 # --- 13. Two-umask case (spec.md:7813-7845) -----------------------------------------------
@@ -1772,20 +1766,14 @@ make_fifo_reader() {
   # make_fifo_reader NAME -> sets ${NAME}_fifo, starts /bin/cat>/dev/null reader in bg,
   # sets ${NAME}_reader_flag file that appears once the reader returns.
   #
-  # The background group's own stdout redirect matters, not just cat's: this whole
-  # function runs inside a command substitution ($(make_fifo_reader d1)), which is a
-  # pipe read by the caller and does not return until every process holding the
-  # write end closes it. "( /bin/cat ... > /dev/null; : > flag ) &" redirects only
-  # cat's own stdout -- the grouping subshell bash forks for "( ... )" still inherits
-  # the substitution's pipe on ITS OWN fd 1 (cat is a separate exec'd child; the
-  # redirect on that one simple command does not touch the group's fd), and that
-  # subshell does not exit until the whole group (both commands) finishes, i.e. until
-  # the fifo it is about to read gets a writer and a close. Nothing opens the fifo for
-  # writing until code AFTER this call returns, so the unclosed inherited pipe
-  # deadlocks the command substitution forever -- confirmed by a live hang with the
-  # reader process blocked and the caller never reaching the line that would open the
-  # fifo. Redirecting the whole group's stdout (not just cat's) closes that inherited
-  # copy before the group can block on anything, matching the usual "$(cmd &)" fix.
+  # The background GROUP's own stdout redirect matters, not just cat's: this
+  # function runs inside a command substitution, a pipe that does not return
+  # until every write-end holder closes it. "( /bin/cat ... >/dev/null; : >flag ) &"
+  # redirects only cat's stdout -- the grouping subshell still inherits the
+  # substitution's pipe on its OWN fd 1, and does not exit until the fifo (opened
+  # for writing only after this call returns) gets a writer and a close -- a
+  # confirmed live hang. Redirecting the whole group's stdout closes that
+  # inherited copy first, matching the usual "$(cmd &)" fix.
   mfr_fifo="$tmp/fifo.$1"
   /usr/bin/mkfifo -m 600 "$mfr_fifo"
   mfr_flag="$tmp/fifo.$1.done"
@@ -1813,25 +1801,20 @@ if [ -x "$entry" ]; then
   fi
 
   # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 read-only.
-  # The copy has to sit at its own full "resolver/v1/resolve-profile.sh" repo-root-
-  # relative path, not a bare file dropped in $tmp: the entry derives its own repo
-  # root from ${BASH_SOURCE[0]} (entry_dir=${script_path%/*};
-  # entry_repo=${entry_dir%/resolver/v1}) and then requires
-  # "$entry_repo/scripts/lib/profile-resolution.sh" to exist, so a flat copy fails
-  # that binding check on its own path shape before ever reaching the fd8 question
-  # this case exists to prove -- confirmed by a live run refusing "E_RUNTIME binding"
-  # with .run never created. copy_repo_tree already builds exactly this shape for
-  # group 1's cases above.
+  # The copy must sit at its own full "resolver/v1/resolve-profile.sh" repo-root-
+  # relative path, not a bare file in $tmp: the entry derives its repo root from
+  # ${BASH_SOURCE[0]} and requires "$entry_repo/scripts/lib/profile-resolution.sh"
+  # to exist, so a flat copy fails that binding check first -- confirmed by a live
+  # run refusing "E_RUNTIME binding" with .run never created. copy_repo_tree
+  # already builds this shape for group 1's cases above.
   #
   # fd8 is opened READ-ONLY on the script (round-4 review, Linux CI diagnostics on
-  # a99d7fc): Linux's exec() returns ETXTBSY for a script whose interpreter line it
-  # must open for reading while ANY process holds that same file open for writing
-  # (append counts), surfacing as "bad interpreter: Text file busy" -- Darwin does
-  # not enforce this, which is why it only failed in CI. The case's own point (an
-  # extra caller-held descriptor that happens to reference the entry's own script
-  # path is closed like any other, ordering/content unaffected) does not depend on
-  # that descriptor being open for writing, so a read-only open proves the same
-  # thing on both platforms without hitting a Linux-only exec restriction.
+  # a99d7fc): Linux's exec() returns ETXTBSY ("Text file busy") for a script whose
+  # interpreter line it must open for reading while ANY process holds it open for
+  # writing (append counts) -- Darwin does not enforce this. The case's own point
+  # (an extra caller-held descriptor on the entry's own script path is closed like
+  # any other) does not depend on that descriptor being open for writing, so a
+  # read-only open proves the same thing on both platforms.
   read -r d2_fifo d2_flag <<< "$(make_fifo_reader d2)"
   d2_tree="$tmp/descriptor.d2-tree"; copy_repo_tree "$d2_tree"
   entry_copy="$d2_tree/resolver/v1/resolve-profile.sh"; /bin/chmod 0755 "$entry_copy"
@@ -1948,25 +1931,20 @@ fi
 
 if [ "$parent_available" -eq 1 ]; then
   # parent half, run 1: fd 7 ordering vs runtime-pgid line
-  # Success-path run (it waits for the parent's own "runtime-pgid:" line, so a
-  # premature E_RUNTIME from a mismatched output/.run pair would make the
-  # "never saw it before the flag" assertion pass vacuously) -- OUTPUT must
-  # directly contain .run, as in R3 above.
+  # Success-path run (it waits for the parent's "runtime-pgid:" line, so a
+  # premature E_RUNTIME from a mismatched output/.run pair would make the "never
+  # saw it before the flag" assertion pass vacuously) -- OUTPUT must directly
+  # contain .run, as in R3 above.
   #
-  # The ordering assertion itself is exactly R10's ("the reader must return before
-  # the runtime-pgid: line appears"), but the *observation* of "the reader
-  # returned" depends on the independently-scheduled /bin/cat reader process being
-  # scheduled promptly -- fd 7's actual close happens at the parent's first
-  # statements, microseconds after start, while a direct-parent run with no
-  # compile step behind it can finish the whole resolution (including the
-  # runtime-pgid write) fast enough that a delayed reader wakeup loses the race
-  # even though the real ordering held. Confirmed benign: five consecutive
-  # standalone repro runs of this exact fixture all measured saw_before=0, and a
-  # false failure seen once mid-suite left no compiled-parent or entry process
-  # alive by the time it was inspected -- i.e. the run had already completed
-  # correctly. A small bounded retry (the same shape sig5 already uses above for
-  # its own inherently racy pre-resolver window) absorbs scheduler noise without
-  # weakening the assertion any single attempt makes.
+  # The ordering assertion is R10's own ("the reader must return before
+  # runtime-pgid: appears"), but *observing* that return depends on the
+  # independently-scheduled /bin/cat reader being scheduled promptly -- a direct-
+  # parent run with no compile step can finish fast enough that a delayed reader
+  # wakeup loses the race even though the real ordering held. Confirmed benign
+  # (five standalone repros all measured saw_before=0; a mid-suite false failure
+  # left no live process, i.e. the run had already completed correctly). A small
+  # bounded retry (sig5's shape above) absorbs scheduler noise without weakening
+  # what any single attempt asserts.
   p1_proved=0
   p1_attempt=1
   while [ "$p1_attempt" -le 5 ] && [ "$p1_proved" -eq 0 ]; do
@@ -2305,14 +2283,12 @@ FCNTLPROBE
   sig6_stderr="$tmp/signal6.stderr"; : > "$sig6_stderr"
   set -m
   exec 9<> "$tmp/signal6.fifo"
-  # fd 8 is a duplicate of fd 9's open file description, saved BEFORE the
-  # pipe's write end is handed to the entry as its stderr. File-status flags
-  # (O_NONBLOCK among them) live on the open file description, not on a
-  # per-process fd-table entry, so whatever the entry does to its own fd 2 is
-  # visible through fd 8 even after the entry exits and its own descriptors
-  # are gone. Probing fd 9 itself (as before) or the drainer's copy would
-  # instead observe process substitution's own, unrelated pipe -- flags never
-  # propagate through a `tee`.
+  # fd 8 duplicates fd 9's open file description, saved BEFORE the pipe's write
+  # end is handed to the entry as its stderr. File-status flags (O_NONBLOCK
+  # among them) live on the open file description, so whatever the entry does
+  # to its own fd 2 is visible through fd 8 even after the entry exits.
+  # Probing fd 9 or the drainer's copy would instead observe process
+  # substitution's own, unrelated pipe -- flags never propagate through `tee`.
   exec 8<&9
   ( /bin/cat <&9 > "$sig6_stderr" ) &
   sig6_drainer=$!
@@ -2385,29 +2361,21 @@ if [ -x "$entry" ]; then
   sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)
   drained="$tmp/signal7.drained"
   drained_flag="$tmp/signal7.drained.done"
-  # Round-4 review: the previous background `cat`-after-a-fixed-50ms-sleep
-  # was a race -- on a loaded runner the drainer subshell can still be
-  # waiting to be scheduled when the sleep elapses and this shell closes
-  # fd 10, so the drainer's own read-only open() then finds no writer left
-  # (the kernel has already discarded whatever fd 10 had buffered) and
-  # blocks forever. Fixed by opening the read end SYNCHRONOUSLY, as fd 11,
-  # in THIS shell, before fd 10 (its remaining writer reference) is closed:
-  # a read-only open on a fifo cannot block here because fd 10 is still a
-  # live writer at the moment fd 11 is opened, so there is no
-  # drainer-startup race left to lose to scheduling delay at all -- the
-  # reader is provably attached before the last writer goes away. The
-  # background `cat` below only READS an already-open fd 11; forking it
-  # afterward is no longer timing-sensitive.
+  # Round-4 review: the previous background `cat`-after-a-fixed-50ms-sleep was a
+  # race -- a slow-to-schedule drainer could still be waiting when this shell
+  # closes fd 10, so its read-only open() finds no writer left and blocks
+  # forever. Fixed by opening the read end SYNCHRONOUSLY, as fd 11, in THIS
+  # shell, before fd 10 (the remaining writer) is closed: the open cannot block
+  # since fd 10 is still a live writer, so the reader is provably attached
+  # before the last writer goes away. The background `cat` below only reads an
+  # already-open fd 11, no longer timing-sensitive.
   exec 11< "$tmp/signal7.fifo"
   exec 10>&-
   ( /bin/cat 0<&11 > "$drained" 2>/dev/null; : > "$drained_flag" ) &
   sig7_drain_pid=$!
-  # 30s, matching this file's other post-signal watchdog bounds (e.g. the
-  # sig7_watchdog alarm above): even with the reader-attachment race fixed,
-  # the kernel does not deliver EOF until every writer reference is closed,
-  # and on a loaded host the entry/parent's own process teardown after TERM
-  # can measurably lag kill+wait returning. 10s was observed to be too
-  # tight under load even though no writer was ever actually leaked.
+  # 30s, matching this file's other post-signal watchdog bounds: the kernel
+  # withholds EOF until every writer is closed, and a loaded host's teardown
+  # after TERM can lag; 10s was observed too tight though nothing was leaked.
   sig7_drain_deadline=$(( $(/bin/date +%s) + 30 ))
   while [ ! -e "$drained_flag" ]; do
     [ "$(/bin/date +%s)" -lt "$sig7_drain_deadline" ] || break
@@ -2455,21 +2423,53 @@ if [ -f "$parent_source" ]; then
   done
   pass_case 'parent (trusted-launch.c) pins all eight loaded-file blob ids as literal git hash-object values'
 
-  if /usr/bin/grep -qF -- "$core_generation_value" "$parent_source" &&
-     /usr/bin/grep -qF -- '2' "$parent_source"; then
-    pass_case 'parent pins the core generation and schema-major constants'
+  # Pin-liveness (R11): a bare "$core_generation_value" / '2' grep is tautological
+  # (both derive from the source under test; a changed PARENT_SCHEMA_MAJOR still
+  # passes). Parse each side's own constants and compare against the ACCEPTED
+  # LIBRARY (scripts/core-contract.sh), the source the runtime actually resolves.
+  core_contract="$root/scripts/core-contract.sh"
+  library_generation=$(/usr/bin/grep -oE "PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'" "$core_contract" |
+    /usr/bin/grep -oE 'g-[0-9a-f]{64}')
+  library_schema_major=$(/usr/bin/grep -oE "PORTABLE_CORE_SCHEMA_MAJOR='[0-9]+'" "$core_contract" |
+    /usr/bin/grep -oE '[0-9]+')
+
+  # extract_parent_pins SRC -> "GENERATION SCHEMA_MAJOR" from a trusted-launch.c
+  # source (blank fields on a parse miss).
+  extract_parent_pins() {
+    /usr/bin/grep -A1 'static const char \*const PARENT_CORE_GENERATION =' "$1" 2>/dev/null |
+      /usr/bin/grep -oE 'g-[0-9a-f]{64}' | { read -r g; printf '%s ' "$g"; }
+    /usr/bin/grep -oE 'PARENT_SCHEMA_MAJOR = "[0-9]+"' "$1" 2>/dev/null | /usr/bin/grep -oE '[0-9]+'
+  }
+
+  read -r parent_generation parent_schema_major <<< "$(extract_parent_pins "$parent_source")"
+  if [ "$parent_generation" = "$library_generation" ] && [ "$parent_schema_major" = "$library_schema_major" ]; then
+    pass_case 'parent core-generation/schema-major constants match the accepted library'
   else
-    fail_case 'parent generation/schema-major constants'
+    fail_case "parent generation/schema-major constants: got $parent_generation/$parent_schema_major, library wants $library_generation/$library_schema_major"
+  fi
+
+  # Negative control: PARENT_SCHEMA_MAJOR=9 in a fixture copy must be caught here.
+  tampered_parent="$tmp/parent-schema-major-tamper.c"
+  /bin/cp "$parent_source" "$tampered_parent"
+  /usr/bin/sed -i.bak 's/PARENT_SCHEMA_MAJOR = "2"/PARENT_SCHEMA_MAJOR = "9"/' "$tampered_parent" 2>/dev/null ||
+    /usr/bin/perl -pi -e 's/PARENT_SCHEMA_MAJOR = "2"/PARENT_SCHEMA_MAJOR = "9"/' "$tampered_parent"
+  read -r tampered_generation tampered_schema_major <<< "$(extract_parent_pins "$tampered_parent")"
+  if [ "$tampered_generation" = "$library_generation" ] && [ "$tampered_schema_major" = "$library_schema_major" ]; then
+    fail_case 'pin-liveness negative control: a tampered PARENT_SCHEMA_MAJOR went undetected'
+  else
+    pass_case 'pin-liveness check rejects a fixture PARENT_SCHEMA_MAJOR=9 (negative control)'
   fi
 else
   fail_case 'parent pin literals (trusted-launch.c absent)'
 fi
 
 if [ -f "$entry" ]; then
-  if /usr/bin/grep -qF -- "$core_generation_value" "$entry"; then
-    pass_case 'entry pins the core generation constant'
+  entry_generation=$(/usr/bin/grep -oE '^core_generation=g-[0-9a-f]{64}' "$entry" | /usr/bin/sed -E 's/^core_generation=//')
+  entry_schema_major=$(/usr/bin/grep -oE '^core_schema_major=[0-9]+' "$entry" | /usr/bin/sed -E 's/^core_schema_major=//')
+  if [ "$entry_generation" = "$library_generation" ] && [ "$entry_schema_major" = "$library_schema_major" ]; then
+    pass_case 'entry core-generation/schema-major constants match the accepted library'
   else
-    fail_case 'entry generation constant'
+    fail_case "entry generation/schema-major constants: got $entry_generation/$entry_schema_major, library wants $library_generation/$library_schema_major"
   fi
 fi
 
