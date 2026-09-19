@@ -71,6 +71,29 @@ than adding any, splitting requirement 10's jq result into an `E_USAGE` and an
 the split is about five more. The range above still covers
 all of them.
 
+**This spec pull request.** `review_size: standard`. Its whole diff is this one
+file: the spec goes from 1,607 to 1,806 lines by `wc -l`, 223 added and 24
+removed, 247 changed lines — inside the standard budget, and no
+exception is claimed for it.
+
+**The amendment's own implementation pull request.** `review_size: standard`,
+180-330 net lines, and this record is separate from the
+`accepted-exception` above. That exception covers the shipped component and
+its focused test, which have already landed; it is not a standing allowance
+for later work on the same slug. What the requester rule adds to that shipped
+component is one more argument, one more input read, one shape check, two
+relation checks, and their refusals — about 60-120 lines across
+`shadow/v1/materialization-input.jq` and
+`assemble-materialization-input.sh`, of which the removal of the projection
+gives a little back — plus about 120-200 lines of test: the acyclic two-pass
+construction requirement 13 sets out (the declaration, the prerequisite
+assemble, the materializer run, the real duty evaluation over the shipped
+policy set, the final claim, and the second assemble), the verbatim-copy
+assertion, and the three negative cases. The
+documentation row and the arity change are a handful more. That total sits
+inside the standard budget, so the amendment's implementation PR claims no
+exception of its own.
+
 The exception waives only the soft line signal. It does not widen scope beyond
 the one concern, and it does not relax readability, tests, CI, review, the
 high-risk gate, or operator merge. The component and its focused test land
@@ -103,11 +126,12 @@ lose the verified detail the rounds added.
 
 ## Requirements
 
-1. **Nine positional inputs, all absolute paths or exact values.** Invocation
+1. **Ten positional inputs, all absolute paths or exact values.** Invocation
    is `assemble <repository-id> <source-git-dir> <commit-id>
    <attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
-   <output-dir> <environment-claim-file>`. The claim is appended, so the first
-   eight keep their positions. The repository id matches
+   <output-dir> <environment-claim-file> <requester-file>`. The claim and then
+   the requester are appended, so the first eight keep their positions and the
+   claim keeps the ninth. The repository id matches
    `\A[a-z0-9][a-z0-9._:-]{0,127}\z`; the source Git directory is a physical
    bare repository that passes **every repository-level source guard the
    materializer applies, copied verbatim** — requirement 15, which also says
@@ -137,7 +161,9 @@ lose the verified detail the rounds added.
    the environment claim file is the same `execution_environment_claim`
    document the caller will hand to `shadow/v1/reproduce.sh` as its own claim
    argument, read here as data and never modified (requirement 7 says what is
-   derived from it).
+   derived from it); and the requester file is one JSON `actor_ref`, the
+   identity the stage request is made under, held to the rule requirement 6
+   states.
 2. **The resolved profile is an input, never something this component makes.**
    The assembler never sets `YSTACK_RESOLVER_TRUSTED`, never invokes
    `resolver/v1/profile-resolve-runtime.sh`, and imports nothing from
@@ -232,9 +258,40 @@ lose the verified detail the rounds added.
    `decision_record_ref.sha256` (the convention `evals/v1/framework.jq:36`
    already uses). `selection_ref` and `repository_context_ref` are copied
    unchanged from the resolved profile, because
-   `stage_request_resolved_relation_ok` requires it, and `requested_by` is
-   projected from the resolved forge binding, so the requester is exactly the
-   binding the operation selects.
+   `stage_request_resolved_relation_ok` requires it — that predicate
+   (`stage_request.jq:296-301`) constrains those two refs, the selected
+   binding, and nothing about the requester.
+
+   **`requested_by` is the caller's requester input, copied verbatim, and is
+   never projected from a binding.** Core v2 types it as a free-standing
+   `actor_ref` (`core/v2/generations/g-*/modules/schema.jq:332-343`,
+   `stage_request.jq:92`) whose `role` must be one of the actor-only roles
+   `manager|observer|operator|orchestrator` (`schema.jq:13`), and no profile
+   binding can carry one of those roles, because `profile_graph.jq:51`
+   requires an adapter role. A requester projected from the forge binding is
+   therefore not merely odd, it is a request born `violated`:
+   `control/v1/duty-separation.jq:55` accepts requester roles
+   `manager|operator|orchestrator` only, and `:120-124` rejects any requester
+   whose `adapter_instance_id`, `execution_boundary_id` or `principal_id`
+   equals that field of a protected binding, forge being protected (`:4`).
+
+   So the assembler reads the requester file and refuses unless all three of
+   these hold: it satisfies the pinned generation's `schema::actor_ref_ok`;
+   its `role` is `manager`, `operator` or `orchestrator`; and none of its
+   `adapter_instance_id`, `execution_boundary_id` or `principal_id` equals the
+   same field of **any** binding in the supplied resolved profile, not only
+   the forge one. What passes all three is copied into `requested_by` byte for
+   byte — with an `authority_ref` when the caller supplied one, and without
+   when the caller did not. No field of the forge binding, its `authority_ref`
+   least of all, is projected onto the requester. This widens no authority:
+   the requester names who asked, the operation still names what the forge
+   binding may do, and refusing is the alternative to emitting a document the
+   duty evaluator must reject.
+
+   The identity **values** the self-host run will be recorded under are not
+   fixed here. They are the operator's to choose, requested as DR-5 on issue
+   #262; this spec fixes the shape and the three rules, and the caller
+   supplies the values.
 7. **`environment_ref` is derived from the supplied claim, never invented.**
    The request carries the two-field object core v2 requires, `{environment_id,
    fingerprint_sha256}` (`core/v2/generations/g-*/modules/schema.jq:345-348`,
@@ -410,8 +467,11 @@ lose the verified detail the rounds added.
     claim's bound being the driver's own 1 MiB. `E_PARSE`: an input is not
     exactly one JSON value, or carries a BOM. `E_CANONICAL`: it parses but is
     not byte-identical to its `jq -S -c` form. `E_SHAPE`: the profile, resolved
-    profile, or a manifest fails its own core v2 document shape, or the claim
-    is not kind `execution_environment_claim` with an id in the id charset.
+    profile, or a manifest fails its own core v2 document shape, the claim
+    is not kind `execution_environment_claim` with an id in the id charset, or
+    the requester file is not an `actor_ref` — it fails the pinned
+    generation's `schema::actor_ref_ok`, which is the same predicate the core
+    applies to `requested_by` itself.
     `E_PROFILE`: the profile directory layout is wrong, it does not hold
     exactly six manifests, `profile.json` is not the default profile
     `profile.default.v1`, a supplied document's SHA-256 differs from its
@@ -419,17 +479,42 @@ lose the verified detail the rounds added.
     present `config_source` in the supplied resolved profile does not carry
     the pinned digest of the document it names (requirement 16).
     `E_RELATION`: the profile set does not hold together,
-    or the finished input fails `validate-input` — which a bad timestamp no
-    longer reaches, because requirement 10 refuses it as `E_USAGE` before any
-    of this runs. No new error id.
+    the requester is well-shaped but cannot stand against the profile set —
+    its `role` is not `manager`, `operator` or `orchestrator`, or one of its
+    three identity fields equals the same field of a binding in the resolved
+    profile (requirement 6) — or the finished input fails `validate-input`,
+    which a bad timestamp no longer reaches because requirement 10 refuses it
+    as `E_USAGE` before any of this runs. The two requester rules belong here
+    and not in `E_SHAPE`, because a requester with role `observer` or with the
+    forge's `principal_id` is a perfectly well-shaped `actor_ref`; what is
+    wrong is how it stands to the other documents, which is exactly what
+    `E_RELATION` already means here. No new error id.
+
+    **Where the requester checks sit in the refusal order.** The requester
+    file is the tenth argument and it is the last input read. Its cheap
+    argument-level refusals — a relative path, the wrong argument count — are
+    already decided by requirement 17's copied entry, ahead of everything.
+    Its file-level refusals are the same ones every caller document gets and
+    are taken in the same pass: `E_RUNTIME` for missing or symlinked,
+    `E_LIMIT` over the 1 MiB per-file bound, `E_PARSE` for not exactly one
+    JSON value, `E_CANONICAL` for bytes that are not their `jq -S -c` form,
+    then `E_SHAPE` for `actor_ref_ok`. The two `E_RELATION` rules run after
+    the resolved profile has been read and validated — they need its bindings
+    — and before the request is assembled, so the component never builds a
+    document it would then have to refuse. That places them beside the other
+    `E_RELATION` work and leaves every earlier refusal in its current
+    position.
 13. **Proof runs in CI.** `scripts/test/shadow-assembler.test.sh` bootstraps
     the pinned jq 1.6 the way the existing slice test does, builds a fixture
     bare repository, and produces a resolved profile the way
     `scripts/test/local-git-materializer-fixtures.sh` produces one — but over
     the **shipped** `profiles/default/v1/` documents, not the five synthetic
     manifests that builder invents for itself, because the pins in
-    requirement 3 admit nothing else. It passes the existing fixture claim as
-    the ninth argument, and asserts: the output validates against the
+    requirement 3 admit nothing else. It runs the assembler twice over that
+    fixture — the prerequisite pass and the final pass the duty paragraph
+    below sets out — passing a claim-position document as the ninth argument
+    and the same requester document as the tenth each time, and asserts of
+    each run: the output validates against the
     materializer protocol; a second run is byte-identical; the read-only
     shape holds in both payload places; the request's
     `environment_ref.environment_id` equals the supplied claim's `.id` and
@@ -441,6 +526,171 @@ lose the verified detail the rounds added.
     catch — a self-consistent profile set that reuses the id
     `profile.default.v1` but whose bytes differ, which must come back
     `E_PROFILE`.
+
+    **The requester is proved against the real duty evaluator, not a
+    fabricated verdict — and the proof is built in two passes, so that no
+    document has to hash a document that hashes it.** The test asserts that
+    `requested_by` in each assembled request equals the tenth argument's bytes
+    exactly, including the presence or absence of `authority_ref`, and that no
+    field of the forge binding leaked into it. Then it runs the shipped
+    `control/v1/evaluate-duty.sh` — `evaluate <policy-set> <request>
+    <resolved> <result>` — over a **prerequisite** assembler run, not over the
+    run whose `input.json` the driver later reads.
+
+    **Why a single pass cannot be built.**
+    `shadow/v1/materialization-input.jq:197` puts the claim's SHA-256 into the
+    request as `environment_ref.fingerprint_sha256`;
+    `control/v1/duty-separation.jq:194` puts that request's SHA-256 into the
+    evaluation; `control/v1/sandbox.jq:204-211` requires the claim to carry
+    that evaluation's digest and its `stage_result_ref`. Claim to request to
+    duty to claim: no ordering of one run's own documents breaks it, and a
+    fixture that tried would have to be rebuilt every time it was corrected.
+    The prerequisite pass breaks the cycle by putting a document in the claim
+    position that carries no reference of any kind, so it can hash nothing.
+    This is the construction the accepted `shadow-self-host-run` plan uses for
+    the same cycle, and this test follows it in the same order. Each entry
+    names what it produces and references only earlier entries, so every
+    digest exists before the document that names it is built.
+
+    1. **`environment-declaration.json`**, written by the test with
+       `jq -S -c -n`: `schema_version` 1, `kind`
+       `execution_environment_claim`, `id` the fixture environment's id, and a
+       body that is the shipped `control/v1/sandbox-policy.json` body's
+       `environment`, `filesystem`, `isolation`, `limits`, `network`,
+       `resources`, `sensitive_material` and `tools` sections copied verbatim,
+       plus `registry_entry_sha256` — the SHA-256 of the canonical bytes of
+       the one fixture registry entry whose `environment_id` and
+       `target_repository_id` match this run, selected and required to match
+       exactly once the way `shadow/v1/reproduce.sh:396-399` selects it. It
+       carries **no `*_ref` field of any kind**, so it can carry no fabricated
+       digest, and it is handed neither to `control/v1/evaluate-sandbox.sh`
+       nor to the driver. This is a bootstrap environment description, not a
+       claim, and the assembler is the only thing that reads it: the assembler
+       checks the claim-position file's `kind` and its `id` and nothing else
+       (`claim_kind_ok` and `claim_id_ok`,
+       `shadow/v1/materialization-input.jq:101-105`, applied at `:213-214`),
+       which is why a document that is not yet a full claim is accepted here
+       and needs no change to the component. In particular this declaration
+       needs neither `declaration_status` nor `effects` nor any other member
+       of the sandbox claim key set to pass `claim_kind_ok` and `claim_id_ok`
+       — those are required only of the final claim in entry 5, which is the
+       only document of the two that reaches the sandbox evaluator.
+    2. **The prerequisite assembler run** — the same invocation as the final
+       one, with that declaration in the claim position, its own frozen
+       `requested_at` and its own fresh output directory. The test extracts
+       `.stage_request.content` and `.resolved_profile.content` from its
+       `input.json` in the assembler's own canonical form and checks their
+       SHA-256s against the assembler's own `stage-request-ref.json` and
+       `resolved-profile-ref.json`. References entry 1.
+    3. **The prerequisite `stage_result`** — the `.stage_result` of a run of
+       `adapters/local-git-materializer/v1/materialize.sh` over that
+       prerequisite `input.json`, the same projection
+       `shadow/v1/reproduce.sh:460` takes. References entry 2.
+    4. **The duty evaluation** — `control/v1/evaluate-duty.sh` over the
+       shipped
+       `control/v1/control-policy-set.json` as the policy set, entry 2's stage
+       request, entry 2's resolved-profile document, and entry 3's stage
+       result. The test asserts this evaluation's `verdict` is `satisfied` and
+       its `reason_ids` are exactly `["duty.satisfied"]`. That assertion is
+       the one that proves the requester, and it is made **about the
+       prerequisite request**, which carries the explicit tenth-argument
+       requester exactly as the final request does. References entries 2 and 3.
+    5. **The final claim**, written by the test with `jq -S -c -n`. Unlike
+       the declaration, this document is handed to
+       `control/v1/evaluate-sandbox.sh`, and `claim_ok`
+       (`control/v1/sandbox.jq:59-88`) checks an **exact** key set at the top
+       level and again in the body: a missing field and an extra field are
+       both `invalid-input`, which makes the evaluator exit non-zero and
+       makes `shadow/v1/reproduce.sh:419-427` record
+       `environment.evaluation-refused` with an `inconclusive` outcome. The
+       claim therefore carries exactly these fields, and no others:
+
+       - **Top level** — exactly `schema_version`, `kind`, `id`, `body`
+         (`sandbox.jq:60`). `schema_version` is the literal `1` and `kind` the
+         literal `execution_environment_claim` (`:61`); `id` is the fixture
+         environment's id and must match `id_ok` (`:62`, `:4-5`).
+       - **`declaration_status`** — the literal string `"complete"`
+         (`sandbox.jq:67`). `"incomplete"` is the only other accepted value
+         and it emits `declaration.incomplete` (`:243`), which forces an
+         `inconclusive` verdict.
+       - **`effects`** — exactly `{external_writes: false, target_writes:
+         false}`: both keys required, no others, each a JSON boolean or the
+         string `"unknown"` (`sandbox.jq:72-73`, `truth_or_unknown` at
+         `:34`). `true` on either is a violation (`:240-241`) and `"unknown"`
+         on either is inconclusive (`:251-252`), so `false` on both is the
+         only pair that reaches `satisfied`.
+       - **`environment`, `filesystem`, `isolation`, `limits`, `network`,
+         `resources`, `sensitive_material`, `tools`** — the eight body
+         sections of the same names from the shipped
+         `control/v1/sandbox-policy.json`, copied verbatim. The evaluator
+         compares each against the policy it is given
+         (`sandbox.jq:213-235`), so a copy is the only value that passes.
+       - **`execution_identity`** — exactly `adapter_instance_id`,
+         `execution_boundary_id`, `principal_id`, `role`, each an `id_ok`
+         string (`identity_ok`, `sandbox.jq:20-23`, applied at `:71`). All
+         four are read out of the resolved profile's `verifier` binding
+         rather than typed, and `role` must equal the policy's
+         `required_role` (`:204-205`), which the shipped policy fixes at
+         `verifier`.
+       - **`policy_set_ref`** — exactly `schema_version`, `kind`, `id`,
+         `sha256` (`document_ref_ok`, `sandbox.jq:15-18`, applied at `:69`
+         with `kind` `control_policy_set` and `schema_version` 1), naming the
+         shipped policy set's own id and the SHA-256 of its bytes; the
+         evaluator rebuilds the same reference and compares (`:206-207`).
+       - **`duty_evaluation_ref`** — the same four keys with `kind`
+         `duty_separation_evaluation` and `schema_version` 1 (`:68`), naming
+         entry 4's id and the SHA-256 of entry 4's bytes (`:208-209`).
+       - **`stage_result_ref`** — the same four keys with `kind`
+         `stage_result` and `schema_version` 2 (`:70`), copied field for
+         field from entry 4's `body.stage.result_ref`, which is exactly what
+         the evaluator compares it against (`:210-211`).
+
+       Only `declaration_status` and `effects` are written as literals, and
+       both are fixed by the policy rather than chosen. Every other value is
+       shipped policy bytes, a value read out of the resolved profile, or a
+       digest of bytes an earlier entry already produced; no digest in it is
+       chosen. The shipped `control/v1/sandbox-policy.json` requires no
+       further claim field beyond this set, and the fixture claim at
+       `scripts/test/shadow-slice.test.sh:178-194` already carries exactly
+       this shape — this entry follows it. References entries 3 and 4.
+    6. **The final assembler run** — the same arguments again with the final
+       claim in the claim position. This is the run whose `input.json` the
+       driver reads below. Its request fingerprints the final claim, and
+       nothing earlier fingerprints that request, so the order closes.
+
+    The prerequisite run and the final run are different documents — different
+    claim-position bytes, different `requested_at`, different output
+    directories — and the test tells them apart by digest, because
+    `materialization-input.jq` gives every request the same id.
+
+    **A fabricated `duty.json` is forbidden in this test.** No document handed
+    to a control evaluator or to the driver in this test may be hand-built
+    with a chosen `verdict`, a chosen `reason_ids`, or a repeated-character
+    digest standing in for a real SHA-256. That is the practice that let the
+    defect this requirement now closes ship: a hand-written verdict proves
+    that the test can write JSON, not that the request the component emits
+    can pass. Every control document this test uses is a shipped file, the
+    output of a shipped tool run on real bytes, or — for the two documents no
+    shipped tool emits, the declaration and the final claim — built only from
+    shipped policy bytes, values read out of the resolved profile, and digests
+    of bytes an earlier entry of the order above already produced, plus the
+    two fixed literals the sandbox policy requires of every claim,
+    `declaration_status: "complete"` and `effects: {external_writes: false,
+    target_writes: false}`. Those two are mandatory members of the claim key
+    set with no shipped bytes to copy from (`control/v1/sandbox.jq:64-73`),
+    and the policy leaves the test no choice about their values: any other
+    accepted value makes the evaluation `violated` or `inconclusive`
+    (`:240-241`, `:243`, `:251-252`). They are policy-required literals, not
+    chosen verdicts, and the rule above permits them.
+
+    Two negative cases come with it, each asserting `E_RELATION` and an empty
+    output directory. A requester identical to the good one except for `role`
+    `observer` — a valid `actor_ref`, and one `duty-separation.jq:55` denies —
+    must be refused. A requester whose `principal_id` equals the forge
+    binding's `principal_id` must be refused, and the test takes that value
+    out of the resolved profile rather than writing a literal, so the case
+    keeps meaning what it says if the fixture profile changes. A third case
+    asserts `E_SHAPE` for a requester that is not an `actor_ref` at all.
 
     The fixture builder needs one change the existing ones do not have.
     `scripts/test/local-git-materializer-fixtures.sh:114` writes
@@ -655,11 +905,19 @@ lose the verified detail the rounds added.
     both new shell files, with no new `shellcheck disable` directive in
     either.
 
-    It then feeds the assembled `sha1` input to `shadow/v1/reproduce.sh` with
-    the existing fixture environment, policy set, and duty, and the same
-    claim file it handed the assembler — so the request's `environment_ref`
-    names the very environment the driver evaluates — and asserts an outcome
-    that is not `inconclusive`.
+    It then feeds the **final** pass's assembled `sha1` input — entry 6 of the
+    order above, never the prerequisite one — to `shadow/v1/reproduce.sh` with
+    the existing fixture environment, the shipped
+    `control/v1/control-policy-set.json`, the duty evaluation the real
+    evaluator produced over the prerequisite run — entry 4, whose SHA-256 is
+    what the final claim's `duty_evaluation_ref` carries — and that same final
+    claim file, the one it handed the final assembler run, so the request's
+    `environment_ref` names the very environment the driver evaluates. It
+    asserts an outcome that is not `inconclusive`.
+    Whether the driver then reaches materialization depends on the sandbox
+    section, which is a separate question and not this component's to settle;
+    what this requirement fixes is that nothing the driver reads about duty is
+    invented by the test.
 14. **Component conventions.** A `docs/components.md` section, one README index
     row pointing at it, a `RESTORE.md` restore block naming the test, and the new
     paths appended at the **end** of `ci/required-files.txt`.
@@ -954,11 +1212,11 @@ lose the verified detail the rounds added.
 
     - **the marker word and verb** — `assemble` where it says `materialize`,
       and `__assemble_clean` where it says `__materialize_clean`;
-    - **the argument count** — `[ "$#" -eq 10 ]`, this component's nine
-      arguments plus the verb, and the exec forwards `"$2"` … `"${10}"`, nine
+    - **the argument count** — `[ "$#" -eq 11 ]`, this component's ten
+      arguments plus the verb, and the exec forwards `"$2"` … `"${11}"`, ten
       words after the marker. Requirement 1's contract is unchanged from the
       caller's side, and the arity check still runs before the dispatch,
-      because the marker form is also ten words;
+      because the marker form is also eleven words;
     - **the script path** — the materializer refuses a relative
       `${BASH_SOURCE[0]}` with `E_USAGE`; the assembler normalizes it against
       `$(pwd -P)` and then requires the result to be an existing non-symlink
@@ -1039,7 +1297,7 @@ lose the verified detail the rounds added.
 
     **Environment pass-through is `PATH` and `LC_ALL`, and nothing else** —
     exactly what the materializer passes. The assembler needs no `TMPDIR`:
-    every directory it touches is one of its nine arguments or is derived from
+    every directory it touches is one of its ten arguments or is derived from
     one. Its scratch `run_root` is a `0700` directory inside the caller's
     output directory (requirement 15 says so and says why), not a `mktemp`
     under `${TMPDIR:-/tmp}`. Git's own temporary files and home go to the
@@ -1222,7 +1480,10 @@ Files, in the order they are written:
      canonicalizing each input, the profile-id check and the eight digest
      comparisons against the pins, requirement 16's producer config digest
      check against the same pin, and the claim checks with the two values
-     derived from the claim (its `id` and the SHA-256 of its bytes).
+     derived from the claim (its `id` and the SHA-256 of its bytes), and last
+     the requester: `actor_ref_ok`, then — once the resolved profile's
+     bindings are in hand — requirement 6's role rule and its three
+     identity-collision rules, all before any request document is built.
    - The Git work under the protective environment: `run_root`'s path
      computed, **then the trap installed, and then** the `0700` directory
      created inside the output directory — that order, for the reason
