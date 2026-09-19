@@ -2558,27 +2558,20 @@ allowlist_data="$allowlist_data /dev/null /usr/bin /bin /resolver/v1"
 
 sweep_absolute_paths() {
   # sweep_absolute_paths FILE -- approximates R10's pass-1 source-role carve-out
-  # for full-line comments only: a whole-line "# ..." comment is prose describing
-  # the shipped mechanism (copy-provenance headers, path references in doc
-  # comments), never an executable command position, so it is excluded before the
-  # token scan. This is still an approximation, not the full three-pass lexical
-  # extraction spec.md:8801-8940 describes (a trailing same-line comment after
-  # real code, and the source-role/quoting/assignment distinctions within actual
-  # code, are not attempted here) -- flagged as a known gap rather than claimed as
-  # complete, matching this test's own comment above at the mechanism-checks
-  # section header.
+  # for full-line comments only: a whole-line "# ..." comment is prose, never an
+  # executable command position, so it is excluded before the token scan. Still
+  # an approximation, not the full three-pass lexical extraction spec.md:8801-
+  # 8940 describes -- a known gap, not claimed complete.
   #
   # Round-4 review: a token match alone cannot tell a standalone literal path
   # (dangerous in argument position, e.g. a bare "/tmp") from the trailing
-  # fragment of a legitimate "$var/join" (the dynamic-join allowlist's whole
-  # reason to exist). The pattern below optionally captures ONE character
-  # immediately before the leading "/": an identifier character or "}" can
-  # only appear there when the match is the tail of a longer "$name/..." or
-  # "${name}/..." expression, never at the start of a standalone path literal
-  # (which is preceded by whitespace, a quote, "=", start-of-line, etc. --
-  # none of which are in the captured class). The caller strips that context
-  # character back off before comparing against an allowlist, but uses its
-  # presence to pick WHICH allowlist a token may match: a standalone token
+  # fragment of a legitimate "$var/join". The pattern below optionally captures
+  # ONE character immediately before the leading "/": an identifier character
+  # or "}" can only appear there when the match is the tail of a longer
+  # "$name/..." expression, never at the start of a standalone path literal.
+  # The caller strips that context character back off before comparing against
+  # an allowlist, but uses its presence to pick WHICH allowlist a token may
+  # match: a standalone token
   # must be a literal command/data path (allowlist_words / allowlist_data);
   # only a joined token may additionally match a dynamic-join fragment.
   # Round-15: "/*" is only a shell PATTERN, never a path, in the two shapes
