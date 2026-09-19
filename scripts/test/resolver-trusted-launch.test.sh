@@ -116,9 +116,12 @@ esac
 
 compile_source() {
   # compile_source SOURCE OUTPUT [EXTRA_ENV...]
+  cs_source=$1
+  cs_output=$2
+  shift 2
   /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$@" \
     "$compiler" "${compiler_extra_flags[@]}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
-    -o "$2" "$1"
+    -o "$cs_output" "$cs_source"
 }
 
 # --- 1. Real profile acquisition (plan.md:76-90; R10's positive-request requirement) ---
@@ -274,14 +277,46 @@ invoke_parent() {
     "$ip_request" "$ip_map" "$ip_output" "$ip_run_arg"
 }
 
+invoke_parent_exec() {
+  # invoke_parent_exec RUN REQUEST MAP OUTPUT [RUN_OVERRIDE] -- identical to
+  # invoke_parent, but for callers that background it and then watch a caller-
+  # owned descriptor's close-ordering (the p1/p2 descriptor cases below).
+  # "invoke_parent ... &" forks a bash process to run the function body, which
+  # then forks *again* to run trusted-launch as its own child and stays alive as
+  # a wrapper doing an implicit wait() -- inheriting every descriptor open at the
+  # point it was backgrounded, including the caller's fifo write end, and never
+  # closing it (trusted-launch's own startup close loop only closes descriptors
+  # trusted-launch itself holds, not its parent's). That wrapper only exits once
+  # trusted-launch's whole subtree -- the resolver runtime and every git/jq/awk it
+  # forks -- finishes, which measurably delayed a fifo reader's EOF: a live run
+  # showed the reader's flag lagging the parent's own "runtime-pgid:" line by
+  # double-digit seconds, while five standalone repros of the same fixture (before
+  # this wrapper was identified) measured no delay at all with nothing watching a
+  # caller descriptor. Every *other* invoke_parent caller (group 2's refusal
+  # cases, R3, etc.) calls it in the foreground, in the same process as the rest
+  # of the suite, where an unconditional "exec" would replace the whole test
+  # script -- so this exec-tail variant exists only for the backgrounded,
+  # ordering-sensitive callers and is not a drop-in replacement for invoke_parent.
+  ipe_run=$1 ipe_request=$2 ipe_map=$3 ipe_output=$4 ipe_run_arg=${5:-$1}
+  exec "$ipe_run/trusted-launch" resolve "$runtime" "$ipe_run/nofollow-snapshot" "$ipe_run/jq" \
+    "$ipe_request" "$ipe_map" "$ipe_output" "$ipe_run_arg"
+}
+
 assert_refused_before_fork() {
   # assert_refused_before_fork NAME STATUS STDOUT STDERR
-  af_name=$1 af_status=$2 af_stdout=$3 af_stderr=$4
+  # assert_refused_before_fork NAME STATUS STDOUT STDERR [EXPECTED_PREFIX]
+  # EXPECTED_PREFIX defaults to E_RUNTIME. The two argv[5]/argv[6] leading-slash
+  # cases (non-absolute request/map) are refused by the copied launcher's unchanged
+  # E_USAGE shape check (portable-profile-resolution-launcher.c:636), not by
+  # deviation 5's new E_RUNTIME regular/non-symlink refinement -- see
+  # trusted-launch.c's comment above that branch -- so those two callers pass
+  # E_USAGE explicitly rather than reusing this default.
+  af_name=$1 af_status=$2 af_stdout=$3 af_stderr=$4 af_prefix=${5:-E_RUNTIME}
   [ "$af_status" -ne 0 ] || fail_case "$af_name: parent exited 0"
   [ ! -s "$af_stdout" ] || fail_case "$af_name: parent wrote stdout before fork"
   [ "$(/usr/bin/wc -l < "$af_stderr" | /usr/bin/awk '{print $1}')" -eq 1 ] ||
     fail_case "$af_name: parent stderr is not exactly one line"
-  /usr/bin/grep -q '^E_RUNTIME' "$af_stderr" || fail_case "$af_name: missing E_RUNTIME line"
+  /usr/bin/grep -q "^$af_prefix" "$af_stderr" || fail_case "$af_name: missing $af_prefix line"
   /usr/bin/grep -q '^runtime-pgid:' "$af_stderr" && fail_case "$af_name: runtime-pgid present on a refusal"
   pass_case "$af_name"
 }
@@ -313,9 +348,21 @@ entry_pin_refusal() {
 
 copy_repo_tree() {
   # copy_repo_tree DEST -- an editable copy of the whole checkout, never the working tree.
+  #
+  # "git archive | tar -xf" extracts git's own recorded modes (100644, 100755, ...),
+  # but tar applies them through this process's umask, and the whole suite runs under
+  # "umask 077" (top of file): a nominally-644 file lands at 600, not 644. The
+  # blanket "chmod -R u+w" below only guarantees the owner can write; it does not
+  # restore group/other bits, so it cannot repair that. Every group-1 case that reads
+  # this tree is a refusal case and tolerates any refusal reason, which is how this
+  # stayed silent -- but resolver/v1/profile-resolve-runtime.sh's mode is a pinned
+  # deviation-1 check the parent enforces at exactly 0644, so a genuine success run
+  # through a copied tree (the descriptor "entry-script-as-descriptor" case below)
+  # refuses "E_RUNTIME binding" on the wrong file entirely without this fix.
   /bin/mkdir -m 700 "$1"
   /usr/bin/git -C "$root" archive "$real_head" | (cd "$1" && /usr/bin/tar -xf -)
   /bin/chmod -R u+w "$1"
+  /bin/chmod 0644 "$1/resolver/v1/profile-resolve-runtime.sh"
 }
 
 if [ ! -f "$entry" ]; then
@@ -374,8 +421,8 @@ if [ -x "$entry" ]; then
     [ "$(/bin/date +%s)" -lt "$tl_deadline" ] || break
     /bin/sleep 0.02
   done
-  wait "$tl_pid" || :
-  tl_status=$?
+  tl_status=0
+  wait "$tl_pid" || tl_status=$?
   [ "$tl_status" -ne 0 ] || fail_case 'group1: edited trusted-launch.c source is refused (status)'
   /usr/bin/grep -qi 'trusted-launch' "$tl_out.stderr" || fail_case 'group1: refusal does not name the parent-source pin'
   [ "$tl_poll_saw_compile" -eq 0 ] || fail_case 'group1: compiler ran before the source pin was checked'
@@ -472,12 +519,12 @@ else
 fi
 
 run_direct_refusal_case() {
-  # run_direct_refusal_case NAME RUN REQUEST MAP OUTPUT [RUN_ARG]
-  rdr_name=$1 rdr_run=$2 rdr_request=$3 rdr_map=$4 rdr_output=$5 rdr_arg=${6:-$2}
+  # run_direct_refusal_case NAME RUN REQUEST MAP OUTPUT [RUN_ARG] [EXPECTED_PREFIX]
+  rdr_name=$1 rdr_run=$2 rdr_request=$3 rdr_map=$4 rdr_output=$5 rdr_arg=${6:-$2} rdr_prefix=${7:-E_RUNTIME}
   rdr_status=0
   invoke_parent "$rdr_run" "$rdr_request" "$rdr_map" "$rdr_output" "$rdr_arg" \
     > "$rdr_output.stdout" 2> "$rdr_output.stderr" || rdr_status=$?
-  assert_refused_before_fork "$rdr_name" "$rdr_status" "$rdr_output.stdout" "$rdr_output.stderr"
+  assert_refused_before_fork "$rdr_name" "$rdr_status" "$rdr_output.stdout" "$rdr_output.stderr" "$rdr_prefix"
 }
 
 if [ "$parent_available" -eq 1 ]; then
@@ -551,12 +598,14 @@ if [ "$parent_available" -eq 1 ]; then
 
   # jq SHA-256 mismatch
   g2out6="$tmp/g2.jq-sha256"; build_run_directory "$g2out6" --skip-jq
-  /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$g2out6/.run/jq"; /bin/chmod 0500 "$g2out6/.run/jq"
+  /bin/chmod u+w "$g2out6/.run"
+  /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$g2out6/.run/jq"; /bin/chmod 0500 "$g2out6/.run/jq" "$g2out6/.run"
   run_direct_refusal_case 'group2: jq SHA-256 mismatch' "$g2out6/.run" "$synthetic_request" "$synthetic_map" "$g2out6.dest"
 
   # jq that does not answer jq-1.6
   g2out7="$tmp/g2.jq-version"; build_run_directory "$g2out7" --skip-jq
-  /usr/bin/printf '#!/bin/sh\necho jq-1.5\n' > "$g2out7/.run/jq"; /bin/chmod 0500 "$g2out7/.run/jq"
+  /bin/chmod u+w "$g2out7/.run"
+  /usr/bin/printf '#!/bin/sh\necho jq-1.5\n' > "$g2out7/.run/jq"; /bin/chmod 0500 "$g2out7/.run/jq" "$g2out7/.run"
   run_direct_refusal_case 'group2: jq answers the wrong version string' "$g2out7/.run" "$synthetic_request" "$synthetic_map" "$g2out7.dest"
 
   # a valid pinned jq that is not the run directory's own, with a negative marker control
@@ -602,14 +651,26 @@ if [ "$parent_available" -eq 1 ]; then
     > "$g2o10dest.stdout" 2> "$g2o10dest.stderr" || g2s10=$?
   assert_refused_before_fork 'group2: hardlinked jq at a sibling directory (directory identity)' "$g2s10" "$g2o10dest.stdout" "$g2o10dest.stderr"
 
-  # non-absolute / symlinked request and map (four cases)
+  # non-absolute / symlinked request and map (four cases). The non-absolute pair
+  # fails the copied launcher's unchanged leading-slash shape check
+  # (portable-profile-resolution-launcher.c:636), which lives in the E_USAGE
+  # argument-parsing branch ahead of deviation 5's E_RUNTIME regular/non-symlink
+  # check -- so, unlike every other case in this group, these two expect E_USAGE.
+  # Run these two directly rather than inside a "( cd ... && run_direct_refusal_case
+  # ... )" subshell: run_direct_refusal_case calls fail_case on a mismatch, and
+  # fail_case's "exit 1" inside a subshell only ends that subshell -- it neither
+  # fails the overall suite nor advances the outer $total/$passed counters, which
+  # is how the previous draft's two non-absolute cases both printed "ok 27" above.
+  # A relative request/map argument does not need an actual chdir either: the
+  # parent's leading-slash shape check is a plain argv[5][0]/argv[6][0] test, never
+  # resolved against a cwd, so the bare basename string is enough on its own.
   g2out11="$tmp/g2.paths"; build_run_directory "$g2out11"
-  ( cd "$synthetic" && \
-    run_direct_refusal_case 'group2: non-absolute request path' "$g2out11/.run" \
-      "$(basename "$synthetic_request")" "$synthetic_map" "$g2out11.dest1" )
-  ( cd "$synthetic" && \
-    run_direct_refusal_case 'group2: non-absolute map path' "$g2out11/.run" \
-      "$synthetic_request" "$(basename "$synthetic_map")" "$g2out11.dest2" )
+  run_direct_refusal_case 'group2: non-absolute request path' "$g2out11/.run" \
+    "$(basename "$synthetic_request")" "$synthetic_map" "$g2out11.dest1" \
+    "$g2out11/.run" E_USAGE
+  run_direct_refusal_case 'group2: non-absolute map path' "$g2out11/.run" \
+    "$synthetic_request" "$(basename "$synthetic_map")" "$g2out11.dest2" \
+    "$g2out11/.run" E_USAGE
   sym_request="$tmp/g2.request.symlink"; /bin/ln -s "$synthetic_request" "$sym_request"
   run_direct_refusal_case 'group2: symlinked request path' "$g2out11/.run" "$sym_request" "$synthetic_map" "$g2out11.dest3"
   sym_map="$tmp/g2.map.symlink"; /bin/ln -s "$synthetic_map" "$sym_map"
@@ -624,8 +685,22 @@ if [ "$parent_available" -eq 1 ]; then
     /bin/mkdir -m 700 "$long_out" 2>/dev/null || break
   done
   if [ "${#long_out}" -ge $((long_ceiling - 16)) ]; then
-    run_direct_refusal_case 'group2: allowlisted output path exceeds the fixed buffer' "$g2out12/.run" \
-      "$synthetic_request" "$synthetic_map" "$long_out"
+    # Capture files must live at a short, fixed path: $long_out itself is already
+    # within 16 bytes of the platform's real filesystem PATH_MAX, so appending
+    # ".stdout"/".stderr" to it (as run_direct_refusal_case's shared helper would)
+    # overflows the OS's own path-length limit before the parent is even
+    # invoked -- an "ENAMETOOLONG"/"File name too long" shell redirection
+    # failure that has nothing to do with the guard under test. Group 1's
+    # equivalent overlong-path case (1g, above) avoids the same trap by
+    # capturing to a short name under $tmp; mirrored here directly rather than
+    # through run_direct_refusal_case, whose capture-path convention this one
+    # case cannot use.
+    g2o12_stdout="$tmp/g2.overlong-output.stdout"
+    g2o12_stderr="$tmp/g2.overlong-output.stderr"
+    g2s12=0
+    invoke_parent "$g2out12/.run" "$synthetic_request" "$synthetic_map" "$long_out" "$g2out12/.run" \
+      > "$g2o12_stdout" 2> "$g2o12_stderr" || g2s12=$?
+    assert_refused_before_fork 'group2: allowlisted output path exceeds the fixed buffer' "$g2s12" "$g2o12_stdout" "$g2o12_stderr"
   else
     fail_case 'group2: overlong output path (platform will not build one)'
   fi
@@ -674,26 +749,63 @@ if [ "$parent_available" -eq 1 ]; then
   /bin/chmod u+w "$g2out18/.run"; /bin/mkdir -m 500 "$g2out18/.run/extra"; /bin/chmod 0500 "$g2out18/.run"
   run_direct_refusal_case 'group2: extra directory in .run' "$g2out18/.run" "$synthetic_request" "$synthetic_map" "$g2out18.dest"
 
+  # The parent opens the helper via openat(run_fd, basename(argv[3]), ...) -- only
+  # the basename is ever looked up inside .run (trusted-launch.c:1661-1673,1691) --
+  # so this case must hand it a helper argument that is itself a real, absolute,
+  # regular, non-symlink file (to clear the E_USAGE argv-shape gate, which stats
+  # argv[3] directly) whose basename is simply absent from .run's actual listing.
+  # run_direct_refusal_case / invoke_parent always point the helper argument at
+  # "<run>/nofollow-snapshot", which --skip-helper leaves nonexistent -- that fails
+  # the E_USAGE gate itself (E_USAGE, not E_RUNTIME) rather than reaching R5's
+  # exact-four-names listing check, so this case is invoked directly instead.
+  # The E_USAGE gate's regular_absolute(argv[3], 1) also requires X_OK (executable),
+  # so the substitute helper argument has to be a real, absolute, regular,
+  # non-symlink, executable file -- a plain data file (e.g. the synthetic request)
+  # fails that gate itself. A compiled binary sitting outside .run, under a name
+  # that does not collide with any of .run's three remaining entries, clears the
+  # gate and then fails R5's exact-four-names openat(run_fd, basename(argv[3]))
+  # lookup instead, which is the refusal this case exists to prove.
   g2out19="$tmp/g2.missing-helper"; build_run_directory "$g2out19" --skip-helper
-  run_direct_refusal_case 'group2: missing helper in .run' "$g2out19/.run" "$synthetic_request" "$synthetic_map" "$g2out19.dest"
+  missing_helper_bin="$tmp/g2.missing-helper.absent-from-run"
+  compile_source "$helper_source" "$missing_helper_bin"; /bin/chmod 0500 "$missing_helper_bin"
+  g2o19dest="$g2out19.dest"; /bin/mkdir -m 700 "$g2o19dest"
+  g2s19=0
+  "$g2out19/.run/trusted-launch" resolve "$runtime" "$missing_helper_bin" "$g2out19/.run/jq" \
+    "$synthetic_request" "$synthetic_map" "$g2o19dest" "$g2out19/.run" \
+    > "$g2o19dest.stdout" 2> "$g2o19dest.stderr" || g2s19=$?
+  assert_refused_before_fork 'group2: missing helper in .run' "$g2s19" "$g2o19dest.stdout" "$g2o19dest.stderr"
 
+  # R5's exact-four-names rule keys the "helper" slot off the *argument's* last path
+  # component, not off whatever the file on disk happens to be named. So the collision
+  # this case must reproduce is: hand trusted-launch a helper argument whose basename is
+  # literally "jq" (the run directory's real jq, left in place), which leaves the
+  # untouched, genuinely-required nofollow-snapshot file as an unaccounted-for fifth
+  # name in the .run listing -- not a helper file renamed to some other, non-colliding
+  # name (a prior draft renamed it to "jq-helper", which does not collide with "jq" at
+  # all and so never reached this refusal).
   g2out20="$tmp/g2.helper-basename"; build_run_directory "$g2out20"
-  /bin/chmod u+w "$g2out20/.run"; /bin/mv "$g2out20/.run/nofollow-snapshot" "$g2out20/.run/jq-helper"; /bin/chmod 0500 "$g2out20/.run"
   g2o20dest="$g2out20.dest"; /bin/mkdir -m 700 "$g2o20dest"
   g2s20=0
-  "$g2out20/.run/trusted-launch" resolve "$runtime" "$g2out20/.run/jq-helper" "$g2out20/.run/jq" \
+  "$g2out20/.run/trusted-launch" resolve "$runtime" "$g2out20/.run/jq" "$g2out20/.run/jq" \
     "$synthetic_request" "$synthetic_map" "$g2o20dest" "$g2out20/.run" \
     > "$g2o20dest.stdout" 2> "$g2o20dest.stderr" || g2s20=$?
   assert_refused_before_fork 'group2: helper argument basename collides with jq' "$g2s20" "$g2o20dest.stdout" "$g2o20dest.stderr"
 
   # .run/awk symlink, directory in its place, wrong-mode copy
+  # build_run_directory tightens .run to 0500 unconditionally, --skip-* flags only
+  # skip creating that one file -- so, like the two --skip-jq cases above, writing
+  # the substitute awk into .run afterwards needs the directory reopened first.
   g2out21="$tmp/g2.awk-symlink"; build_run_directory "$g2out21" --skip-awk
   awk_target="$tmp/g2.awk-symlink.target"; /usr/bin/printf '#!/bin/sh\nexec /usr/bin/awk "$@"\n' > "$awk_target"; /bin/chmod 0500 "$awk_target"
+  /bin/chmod u+w "$g2out21/.run"
   /bin/ln -s "$awk_target" "$g2out21/.run/awk"
+  /bin/chmod 0500 "$g2out21/.run"
   run_direct_refusal_case 'group2: .run/awk is a symlink' "$g2out21/.run" "$synthetic_request" "$synthetic_map" "$g2out21.dest"
 
   g2out22="$tmp/g2.awk-dir"; build_run_directory "$g2out22" --skip-awk
+  /bin/chmod u+w "$g2out22/.run"
   /bin/mkdir -m 500 "$g2out22/.run/awk"
+  /bin/chmod 0500 "$g2out22/.run"
   run_direct_refusal_case 'group2: .run/awk is a directory' "$g2out22/.run" "$synthetic_request" "$synthetic_map" "$g2out22.dest"
 
   g2out23="$tmp/g2.awk-wrongmode"; build_run_directory "$g2out23"
@@ -807,17 +919,30 @@ fi
 # --- 7. R3 no-copy invariant (spec.md:7449-7494) -----------------------------------------
 
 if [ "$parent_available" -eq 1 ]; then
-  r3_run="$tmp/r3.rundir"; build_run_directory "$r3_run"
-  r3_clean_out="$tmp/r3.clean"; /bin/mkdir -m 700 "$r3_clean_out"
-  invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_clean_out" \
+  # R5's output-directory check requires argv[7] (the output root) to contain
+  # *exactly* {".run"} and to be the same object (equal st_dev/st_ino) as argv[8]
+  # (the run-directory argument) -- so, unlike every refusal case above (where any
+  # E_RUNTIME before fork satisfies the assertion, whichever check fires first),
+  # a genuine end-to-end SUCCESS run needs the output argument to be the directory
+  # that directly contains .run, not an unrelated empty directory. A prior draft
+  # shared one build_run_directory output as the RUN argument while pointing each
+  # invocation's OUTPUT argument at a separate, unrelated empty directory -- that
+  # output directory's listing is never exactly {".run"}, so every "clean" call
+  # here always refused at the output check itself (E_RUNTIME output) instead of
+  # completing a resolution, and the bare invocation (no "|| status=$?" capture,
+  # since these calls are expected to succeed) took the whole suite down with it
+  # under set -e. Each invocation below now gets its own build_run_directory
+  # output and passes that same directory as OUTPUT.
+  r3_clean_out="$tmp/r3.clean"; build_run_directory "$r3_clean_out"
+  invoke_parent "$r3_clean_out/.run" "$synthetic_request" "$synthetic_map" "$r3_clean_out" \
     > "$r3_clean_out.stdout" 2> "$r3_clean_out.stderr"
 
-  r3_caller_out="$tmp/r3.caller-pollution"; /bin/mkdir -m 700 "$r3_caller_out"
+  r3_caller_out="$tmp/r3.caller-pollution"; build_run_directory "$r3_caller_out"
   decoy_bin="$tmp/r3.decoy-bin"; /bin/mkdir -m 700 "$decoy_bin"
   marker_script="$tmp/r3.marker.sh"; /usr/bin/printf '#!/bin/sh\nexit 0\n' > "$marker_script"; /bin/chmod 0555 "$marker_script"
   FOO=bar BASH_ENV="$marker_script" ENV="$marker_script" PATH="$decoy_bin:/usr/bin:/bin" \
     YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS=1 YSTACK_RESOLVER_TEST_GIT_STOP=1 \
-    invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_caller_out" \
+    invoke_parent "$r3_caller_out/.run" "$synthetic_request" "$synthetic_map" "$r3_caller_out" \
     > "$r3_caller_out.stdout" 2> "$r3_caller_out.stderr"
   if /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_caller_out.stdout"; then
     pass_case 'R3: caller-environment pollution does not reach the resolver'
@@ -834,16 +959,25 @@ package strict;
 print STDERR "YSTACK-PERL-MARKER\n";
 exit 3;
 PERLMOD
+      r3_perl_status=0
       PERL5LIB="$perl_dir" PERL5OPT=-Mstrict /usr/bin/shasum -a 1 /dev/null \
-        > "$tmp/r3.perlcontrol.stdout" 2> "$tmp/r3.perlcontrol.stderr"; r3_perl_status=$?
+        > "$tmp/r3.perlcontrol.stdout" 2> "$tmp/r3.perlcontrol.stderr" || r3_perl_status=$?
       if ! { [ "$r3_perl_status" -eq 3 ] && /usr/bin/grep -q YSTACK-PERL-MARKER "$tmp/r3.perlcontrol.stderr"; }; then
         fail_case 'R3: perl-pollution negative control did not fire on this machine'
       fi
-      r3_perl_out="$tmp/r3.perl-pollution"; /bin/mkdir -m 700 "$r3_perl_out"
+      r3_perl_out="$tmp/r3.perl-pollution"; build_run_directory "$r3_perl_out"
+      r3_perl_run_status=0
       PERL5LIB="$perl_dir" PERL5OPT=-Mstrict \
-        invoke_parent "$r3_run/.run" "$synthetic_request" "$synthetic_map" "$r3_perl_out" \
-        > "$r3_perl_out.stdout" 2> "$r3_perl_out.stderr"; r3_perl_run_status=$?
-      if [ "$r3_perl_run_status" -eq 0 ] && [ ! -s "$r3_perl_out.stderr" ] &&
+        invoke_parent "$r3_perl_out/.run" "$synthetic_request" "$synthetic_map" "$r3_perl_out" \
+        > "$r3_perl_out.stdout" 2> "$r3_perl_out.stderr" || r3_perl_run_status=$?
+      # A successful run's stderr is never empty -- it always carries the parent's own
+      # "runtime-pgid: <pid>" line (see assert_refused_before_fork's converse assertion,
+      # which requires that line ABSENT only on a refusal) -- so requiring
+      # "[ ! -s ... ]" here, as a prior draft did, would fail every genuinely clean run
+      # and made this case indistinguishable from an actual regression. What proves the
+      # pollution didn't reach the parent's own SHA tool is the matching stdout, the
+      # completed (not early-refused) run, and the marker's total absence.
+      if [ "$r3_perl_run_status" -eq 0 ] && /usr/bin/grep -q '^runtime-pgid:' "$r3_perl_out.stderr" &&
          /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_perl_out.stdout" &&
          ! /usr/bin/grep -q YSTACK-PERL-MARKER "$r3_perl_out.stdout" "$r3_perl_out.stderr" 2>/dev/null; then
         pass_case 'R3: PERL5LIB/PERL5OPT pollution does not reach the parent''s own SHA tool'
@@ -1048,7 +1182,23 @@ POISON
       if [ "$(sha256_file "$clean_bin")" = "$(sha256_file "$polluted_bin")" ]; then
         pass_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries'
       else
-        fail_case 'compiler pollution: binary comparison'
+        # Spec's own escape valve (spec.md ~7690): "If a toolchain turns up where the
+        # two digests differ for a reason the plan judges benign, the behavioural
+        # assertions in half 1 carry the claim on their own and the digest comparison
+        # is relaxed to them, with the reason recorded ... rather than dropped
+        # quietly." Confirmed benign here: two back-to-back *clean* compiles of the
+        # same source (no pollution involved at all) also produce different digests
+        # on this toolchain -- CommandLineTools clang/ld64 embeds a fresh random
+        # Mach-O LC_UUID load command on every link when no -g/debug info requests a
+        # stable one, which this fixed R1 compile line (verbatim, no -Wl flags) does
+        # not suppress and is not free to add flags to suppress. Half 1 (cases 58-59
+        # above) already carries the behavioural claim: byte-identical *stdout*
+        # through the entry, untouched TMPDIR/HOME, and an unchanged xcrun_db
+        # listing. This finding and its relaxation belong in the plan record per the
+        # spec text above; flagged for the manager in this PR rather than silently
+        # dropped (plan.md is not one of this step's eight files).
+        skip_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries' \
+          'CommandLineTools clang/ld64 embeds a fresh random Mach-O LC_UUID per link (confirmed: two clean, unpolluted compiles also differ) -- spec-sanctioned relaxation to half 1''s behavioural assertions'
       fi
       unpoisoned_control="$tmp/compiler.control.bin"
       control_status=0
@@ -1151,11 +1301,13 @@ else
 fi
 
 if [ "$parent_available" -eq 1 ]; then
-  um_run="$tmp/umask.direct"; build_run_directory "$um_run"
-  um_direct_out="$tmp/umask.direct.out"; /bin/mkdir -m 700 "$um_direct_out"
+  # This is a success-path run (it inspects the sandbox files a completed
+  # resolution leaves behind), so -- like R3 above -- OUTPUT must be the
+  # directory that directly contains .run, not a separate empty directory.
+  um_direct_out="$tmp/umask.direct.out"; build_run_directory "$um_direct_out"
   (
     umask 000
-    invoke_parent "$um_run/.run" "$synthetic_request" "$synthetic_map" "$um_direct_out" \
+    invoke_parent "$um_direct_out/.run" "$synthetic_request" "$synthetic_map" "$um_direct_out" \
       > "$um_direct_out.stdout" 2> "$um_direct_out.stderr"
   )
   if [ "$(/usr/bin/stat -c '%a' "$um_direct_out/home" 2>/dev/null || /usr/bin/stat -f '%OLp' "$um_direct_out/home")" = 700 ] &&
@@ -1174,10 +1326,25 @@ fi
 make_fifo_reader() {
   # make_fifo_reader NAME -> sets ${NAME}_fifo, starts /bin/cat>/dev/null reader in bg,
   # sets ${NAME}_reader_flag file that appears once the reader returns.
+  #
+  # The background group's own stdout redirect matters, not just cat's: this whole
+  # function runs inside a command substitution ($(make_fifo_reader d1)), which is a
+  # pipe read by the caller and does not return until every process holding the
+  # write end closes it. "( /bin/cat ... > /dev/null; : > flag ) &" redirects only
+  # cat's own stdout -- the grouping subshell bash forks for "( ... )" still inherits
+  # the substitution's pipe on ITS OWN fd 1 (cat is a separate exec'd child; the
+  # redirect on that one simple command does not touch the group's fd), and that
+  # subshell does not exit until the whole group (both commands) finishes, i.e. until
+  # the fifo it is about to read gets a writer and a close. Nothing opens the fifo for
+  # writing until code AFTER this call returns, so the unclosed inherited pipe
+  # deadlocks the command substitution forever -- confirmed by a live hang with the
+  # reader process blocked and the caller never reaching the line that would open the
+  # fifo. Redirecting the whole group's stdout (not just cat's) closes that inherited
+  # copy before the group can block on anything, matching the usual "$(cmd &)" fix.
   mfr_fifo="$tmp/fifo.$1"
   /usr/bin/mkfifo -m 600 "$mfr_fifo"
   mfr_flag="$tmp/fifo.$1.done"
-  ( /bin/cat "$mfr_fifo" > /dev/null; : > "$mfr_flag" ) &
+  ( /bin/cat "$mfr_fifo" > /dev/null; : > "$mfr_flag" ) > /dev/null 2>&1 &
   printf '%s %s\n' "$mfr_fifo" "$mfr_flag"
 }
 
@@ -1206,9 +1373,19 @@ if [ -x "$entry" ]; then
     fail_case 'descriptor: unrelated object on fd 7'
   fi
 
-  # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 append
+  # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 append.
+  # The copy has to sit at its own full "resolver/v1/resolve-profile.sh" repo-root-
+  # relative path, not a bare file dropped in $tmp: the entry derives its own repo
+  # root from ${BASH_SOURCE[0]} (entry_dir=${script_path%/*};
+  # entry_repo=${entry_dir%/resolver/v1}) and then requires
+  # "$entry_repo/scripts/lib/profile-resolution.sh" to exist, so a flat copy fails
+  # that binding check on its own path shape before ever reaching the fd8 question
+  # this case exists to prove -- confirmed by a live run refusing "E_RUNTIME binding"
+  # with .run never created. copy_repo_tree already builds exactly this shape for
+  # group 1's cases above.
   read -r d2_fifo d2_flag <<< "$(make_fifo_reader d2)"
-  entry_copy="$tmp/descriptor.entry-copy.sh"; /bin/cp "$entry" "$entry_copy"; /bin/chmod 0755 "$entry_copy"
+  d2_tree="$tmp/descriptor.d2-tree"; copy_repo_tree "$d2_tree"
+  entry_copy="$d2_tree/resolver/v1/resolve-profile.sh"; /bin/chmod 0755 "$entry_copy"
   copy_before_size=$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')
   copy_before_sha=$(sha256_file "$entry_copy")
   d2_out="$tmp/descriptor.d2"; /bin/mkdir -m 700 "$d2_out"
@@ -1323,52 +1500,85 @@ fi
 
 if [ "$parent_available" -eq 1 ]; then
   # parent half, run 1: fd 7 ordering vs runtime-pgid line
-  read -r p1_fifo p1_flag <<< "$(make_fifo_reader p1)"
-  p1_run="$tmp/descriptor.p1"; build_run_directory "$p1_run"
-  p1_out="$tmp/descriptor.p1.out"; /bin/mkdir -m 700 "$p1_out"
-  if (
-    exec 7> "$p1_fifo"
-    invoke_parent "$p1_run/.run" "$synthetic_request" "$synthetic_map" "$p1_out" \
-      > "$p1_out.stdout" 2> "$p1_out.stderr" &
-    p1_pid=$!
-    exec 7>&-
-    p1_saw_before=0
-    p1_deadline=$(( $(/bin/date +%s) + 20 ))
-    while [ ! -e "$p1_flag" ]; do
-      /usr/bin/grep -q '^runtime-pgid:' "$p1_out.stderr" 2>/dev/null && p1_saw_before=1
-      [ "$(/bin/date +%s)" -lt "$p1_deadline" ] || break
-      /bin/sleep 0.01
-    done
-    wait "$p1_pid"
-    [ "$p1_saw_before" -eq 0 ] || exit 1
-  ); then
-    pass_case 'descriptor: parent closes an unrelated inherited fd before runtime-pgid is written'
+  # Success-path run (it waits for the parent's own "runtime-pgid:" line, so a
+  # premature E_RUNTIME from a mismatched output/.run pair would make the
+  # "never saw it before the flag" assertion pass vacuously) -- OUTPUT must
+  # directly contain .run, as in R3 above.
+  #
+  # The ordering assertion itself is exactly R10's ("the reader must return before
+  # the runtime-pgid: line appears"), but the *observation* of "the reader
+  # returned" depends on the independently-scheduled /bin/cat reader process being
+  # scheduled promptly -- fd 7's actual close happens at the parent's first
+  # statements, microseconds after start, while a direct-parent run with no
+  # compile step behind it can finish the whole resolution (including the
+  # runtime-pgid write) fast enough that a delayed reader wakeup loses the race
+  # even though the real ordering held. Confirmed benign: five consecutive
+  # standalone repro runs of this exact fixture all measured saw_before=0, and a
+  # false failure seen once mid-suite left no compiled-parent or entry process
+  # alive by the time it was inspected -- i.e. the run had already completed
+  # correctly. A small bounded retry (the same shape sig5 already uses above for
+  # its own inherently racy pre-resolver window) absorbs scheduler noise without
+  # weakening the assertion any single attempt makes.
+  p1_proved=0
+  p1_attempt=1
+  while [ "$p1_attempt" -le 5 ] && [ "$p1_proved" -eq 0 ]; do
+    read -r p1_fifo p1_flag <<< "$(make_fifo_reader "p1.$p1_attempt")"
+    p1_out="$tmp/descriptor.p1.out.$p1_attempt"; build_run_directory "$p1_out"
+    if (
+      exec 7> "$p1_fifo"
+      invoke_parent_exec "$p1_out/.run" "$synthetic_request" "$synthetic_map" "$p1_out" \
+        > "$p1_out.stdout" 2> "$p1_out.stderr" &
+      p1_pid=$!
+      exec 7>&-
+      p1_saw_before=0
+      p1_deadline=$(( $(/bin/date +%s) + 20 ))
+      while [ ! -e "$p1_flag" ]; do
+        /usr/bin/grep -q '^runtime-pgid:' "$p1_out.stderr" 2>/dev/null && p1_saw_before=1
+        [ "$(/bin/date +%s)" -lt "$p1_deadline" ] || break
+        /bin/sleep 0.01
+      done
+      wait "$p1_pid"
+      [ "$p1_saw_before" -eq 0 ] || exit 1
+    ); then
+      p1_proved=1
+    fi
+    p1_attempt=$((p1_attempt + 1))
+  done
+  if [ "$p1_proved" -eq 1 ]; then
+    pass_case "descriptor: parent closes an unrelated inherited fd before runtime-pgid is written (attempt $((p1_attempt - 1)))"
   else
     fail_case 'descriptor: parent fd 7 ordering'
   fi
 
   # parent half, run 2: high descriptor (300) under a soft limit lowered after opening
-  read -r p2_fifo p2_flag <<< "$(make_fifo_reader p2)"
-  p2_run="$tmp/descriptor.p2"; build_run_directory "$p2_run"
-  p2_out="$tmp/descriptor.p2.out"; /bin/mkdir -m 700 "$p2_out"
-  if (
-    eval "exec 300> \"$p2_fifo\""
-    ulimit -S -n 64
-    invoke_parent "$p2_run/.run" "$synthetic_request" "$synthetic_map" "$p2_out" \
-      > "$p2_out.stdout" 2> "$p2_out.stderr" &
-    p2_pid=$!
-    exec 300>&-
-    p2_saw_before=0
-    p2_deadline=$(( $(/bin/date +%s) + 20 ))
-    while [ ! -e "$p2_flag" ]; do
-      /usr/bin/grep -q '^runtime-pgid:' "$p2_out.stderr" 2>/dev/null && p2_saw_before=1
-      [ "$(/bin/date +%s)" -lt "$p2_deadline" ] || break
-      /bin/sleep 0.01
-    done
-    wait "$p2_pid"
-    [ "$p2_saw_before" -eq 0 ] || exit 1
-  ); then
-    pass_case 'descriptor: parent normalises to hard limit (300 closed despite lowered soft limit)'
+  p2_proved=0
+  p2_attempt=1
+  while [ "$p2_attempt" -le 5 ] && [ "$p2_proved" -eq 0 ]; do
+    read -r p2_fifo p2_flag <<< "$(make_fifo_reader "p2.$p2_attempt")"
+    p2_out="$tmp/descriptor.p2.out.$p2_attempt"; build_run_directory "$p2_out"
+    if (
+      eval "exec 300> \"$p2_fifo\""
+      ulimit -S -n 64
+      invoke_parent_exec "$p2_out/.run" "$synthetic_request" "$synthetic_map" "$p2_out" \
+        > "$p2_out.stdout" 2> "$p2_out.stderr" &
+      p2_pid=$!
+      exec 300>&-
+      p2_saw_before=0
+      p2_deadline=$(( $(/bin/date +%s) + 20 ))
+      while [ ! -e "$p2_flag" ]; do
+        /usr/bin/grep -q '^runtime-pgid:' "$p2_out.stderr" 2>/dev/null && p2_saw_before=1
+        [ "$(/bin/date +%s)" -lt "$p2_deadline" ] || break
+        /bin/sleep 0.01
+      done
+      wait "$p2_pid"
+      [ "$p2_saw_before" -eq 0 ] || exit 1
+    ); then
+      p2_proved=1
+    fi
+    p2_attempt=$((p2_attempt + 1))
+  done
+  if [ "$p2_proved" -eq 1 ]; then
+    pass_case "descriptor: parent normalises to hard limit (300 closed despite lowered soft limit) (attempt $((p2_attempt - 1)))"
   else
     fail_case 'descriptor: parent fd 300 under lowered soft limit'
   fi
@@ -1401,7 +1611,8 @@ if [ -x "$entry" ]; then
   sig1_pgid=$(read_runtime_pgid "$sig1_stderr")
   if [ -n "$sig1_pgid" ] && kill -STOP -- "-$sig1_pgid" 2>/dev/null && kill -0 -- "-$sig1_pgid" 2>/dev/null; then
     kill -TERM "$sig1_pid"
-    wait "$sig1_pid"; sig1_status=$?
+    sig1_status=0
+    wait "$sig1_pid" || sig1_status=$?
     if kill -0 -- "-$sig1_pgid" 2>/dev/null; then sig1_group_gone=0; else sig1_group_gone=1; fi
     if [ "$sig1_status" -eq 143 ] && [ "$sig1_group_gone" -eq 1 ] && [ ! -e "$sig1_out/.run" ]; then
       pass_case 'signal: mid-run SIGTERM kills a SIGSTOPped resolver group and cleans up (143)'
@@ -1453,7 +1664,8 @@ if [ -x "$entry" ]; then
       /bin/sleep 0.005
     done
     wait "$sig2_watcher" 2>/dev/null || :
-    wait "$sig2_pid"; sig2_status=$?
+    sig2_status=0
+    wait "$sig2_pid" || sig2_status=$?
     sig2_lines=$(/usr/bin/grep -c '^entry-signal:' "$sig2_stderr" 2>/dev/null || echo 0)
     sig2_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig2_stderr" 2>/dev/null || :)
     if [ "$sig2_status" -eq 143 ] && [ "$sig2_run_gone_early" -eq 0 ] && [ "$sig2_lines" -eq 1 ] &&
@@ -1487,7 +1699,8 @@ if [ -x "$entry" ]; then
     ( /usr/bin/perl -e 'alarm shift; sleep 999' 30
       kill -KILL "$sig3_pid" 2>/dev/null || : ) &
     sig3_watchdog=$!
-    wait "$sig3_pid" 2>/dev/null; sig3_status=$?
+    sig3_status=0
+    wait "$sig3_pid" 2>/dev/null || sig3_status=$?
     kill "$sig3_watchdog" 2>/dev/null || :
     sig3_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig3_stderr" 2>/dev/null || :)
     if [ "$sig3_status" -eq 143 ] && [ "$sig3_line" = 'entry-signal: TERM no-parent' ] &&
@@ -1523,7 +1736,8 @@ if [ -x "$entry" ]; then
     # give the compile a brief head start so the group signal is likelier to land on it
     /bin/sleep 0.05
     kill -TERM -- "-$sig4_pgid" 2>/dev/null || :
-    wait "$sig4_pid" 2>/dev/null; sig4_status=$?
+    sig4_status=0
+    wait "$sig4_pid" 2>/dev/null || sig4_status=$?
     sig4_line=$(/usr/bin/grep -m1 '^entry-signal:' "$sig4_stderr" 2>/dev/null || :)
     if [ "$sig4_status" -eq 143 ] && [ "$sig4_line" = 'entry-signal: TERM no-parent' ] &&
        ! /usr/bin/grep -q '^E_RUNTIME' "$sig4_stderr" 2>/dev/null &&
@@ -1542,18 +1756,28 @@ else
 fi
 
 if [ "$parent_available" -eq 1 ]; then
-  # signal case 5: stopped-parent, no-runtime branch -- retried up to 20 attempts
-  sig5_run="$tmp/signal5"; build_run_directory "$sig5_run"
+  # signal case 5: stopped-parent, no-runtime branch -- retried up to 20 attempts.
+  # Success-path-shaped (it distinguishes "reached runtime-pgid:" from "never got
+  # a parent-signal: line" from the actual proving outcome), so a mismatched
+  # output/.run pair would put every attempt in the "early-signal" bucket without
+  # ever reaching the pre-resolver signal window this case exists to prove -- a
+  # fresh build_run_directory per attempt, with sig5_out as its own output root,
+  # avoids both that and reusing one .run/sandbox tree across 20 launches.
   sig5_proved=0
   sig5_late_stop=0
   sig5_early_signal=0
   attempt=1
   while [ "$attempt" -le 20 ] && [ "$sig5_proved" -eq 0 ]; do
-    sig5_out="$tmp/signal5.attempt$attempt.out"; /bin/mkdir -m 700 "$sig5_out"
+    sig5_out="$tmp/signal5.attempt$attempt.out"; build_run_directory "$sig5_out"
     sig5_stderr="$tmp/signal5.attempt$attempt.stderr"
     (
       set +m
-      invoke_parent "$sig5_run/.run" "$synthetic_request" "$synthetic_map" "$sig5_out" \
+      # invoke_parent_exec, not invoke_parent: this case signals $sig5_pid directly
+      # (STOP/CONT/TERM), so it has to be trusted-launch's own pid, not a bash
+      # wrapper's -- see invoke_parent_exec's comment (same reasoning as p1/p2
+      # above, minus the descriptor angle: signalling the wrapper would leave
+      # trusted-launch itself running right through the STOP this case depends on).
+      invoke_parent_exec "$sig5_out/.run" "$synthetic_request" "$synthetic_map" "$sig5_out" \
         > "$tmp/signal5.attempt$attempt.stdout" 2> "$sig5_stderr" &
       sig5_pid=$!
       /bin/sleep 5 &
@@ -1569,7 +1793,8 @@ if [ "$parent_available" -eq 1 ]; then
       fi
       kill -TERM "$sig5_pid" 2>/dev/null || :
       kill -CONT "$sig5_pid" 2>/dev/null || :
-      wait "$sig5_pid" 2>/dev/null; sig5_status=$?
+      sig5_status=0
+      wait "$sig5_pid" 2>/dev/null || sig5_status=$?
       kill "$sig5_sentinel" 2>/dev/null || :
       echo "$sig5_status" > "$tmp/signal5.attempt$attempt.outcome"
     )
@@ -1628,7 +1853,8 @@ FCNTLPROBE
   done
   sig6_probe_status=$("$fcntl_probe" 3<&9 2>/dev/null || echo error)
   kill -TERM "$sig6_pid" 2>/dev/null || :
-  wait "$sig6_pid" 2>/dev/null; sig6_status=$?
+  sig6_status=0
+  wait "$sig6_pid" 2>/dev/null || sig6_status=$?
   exec 9>&-
   kill "$sig6_drainer" 2>/dev/null || :
   if [ "$sig6_status" -eq 143 ] && [ "$sig6_probe_status" = clear ]; then
@@ -1668,7 +1894,8 @@ if [ -x "$entry" ]; then
     ( /usr/bin/perl -e 'alarm shift; sleep 999' 30
       kill -KILL "$sig7_pid" 2>/dev/null || : ) &
     sig7_watchdog=$!
-    wait "$sig7_pid" 2>/dev/null; sig7_wait_status=$?
+    sig7_wait_status=0
+    wait "$sig7_pid" 2>/dev/null || sig7_wait_status=$?
     kill "$sig7_watchdog" 2>/dev/null || :
   else
     fail_case 'signal: full-pipe case landed too late -- .run never appeared'
@@ -1738,6 +1965,48 @@ if [ -f "$entry" ]; then
   fi
 fi
 
+# --- Copy-identity: every copy-begin/copy-end span in trusted-launch.c must be a byte-
+# for-byte copy of the cited scripts/test/portable-profile-resolution-launcher.c span
+# (spec's launcher-copy provenance). The step-3 include split (deviation 2: <dirent.h>
+# unconditional, spec R5) replaced the original :1-43 span with :1-17 and :19-43 around
+# the inserted include and its comment, dropping the launcher's own blank separator
+# line 18 -- this check follows that split rather than the original single span.
+if [ -f "$parent_source" ]; then
+  copy_bad=0
+  copy_checked=0
+  while IFS=: read -r begin_line rest; do
+    span=${rest#*launcher.c:}
+    span=${span%% at *}
+    case $span in
+      *-*) cs_start=${span%-*}; cs_end=${span#*-} ;;
+      *) cs_start=$span; cs_end=$span ;;
+    esac
+    end_line=$(/usr/bin/awk -v from="$begin_line" 'NR > from && /^\/\* copy-end \*\// { print NR; exit }' "$parent_source")
+    [ -n "$end_line" ] || fail_case "copy-identity: no copy-end found after line $begin_line"
+    copy_checked=$((copy_checked + 1))
+    body_start=$((begin_line + 1))
+    body_end=$((end_line - 1))
+    if [ "$body_start" -gt "$body_end" ]; then
+      copy_body=""
+    else
+      copy_body=$(/usr/bin/sed -n "${body_start},${body_end}p" "$parent_source")
+    fi
+    launcher_span=$(/usr/bin/sed -n "${cs_start},${cs_end}p" "$launcher_source")
+    if [ "$copy_body" != "$launcher_span" ]; then
+      copy_bad=$((copy_bad + 1))
+      printf 'copy-identity mismatch: trusted-launch.c:%s-%s vs launcher.c:%s-%s\n' \
+        "$body_start" "$body_end" "$cs_start" "$cs_end" >&2
+    fi
+  done < <(/usr/bin/grep -n '^/\* copy-begin scripts/test/portable-profile-resolution-launcher\.c:' "$parent_source")
+  if [ "$copy_checked" -gt 0 ] && [ "$copy_bad" -eq 0 ]; then
+    pass_case "copy-identity: all $copy_checked launcher-copy spans in trusted-launch.c match portable-profile-resolution-launcher.c verbatim"
+  else
+    fail_case "copy-identity: $copy_bad of $copy_checked launcher-copy span(s) in trusted-launch.c mismatch"
+  fi
+else
+  fail_case 'copy-identity: launcher-copy spans (trusted-launch.c absent)'
+fi
+
 # --- 17. Mechanism checks: proof-by-reading greps (spec.md:8800-8995) ---------------------
 #
 # These are the automatable readings R10 specifies: the three-pass allowlist sweep, the
@@ -1749,21 +2018,66 @@ fi
 allowlist_words='/bin/bash /bin/mkdir /bin/cp /bin/chmod /bin/rm /bin/cat /usr/bin/uname /usr/bin/printf /usr/bin/env /usr/bin/stat /usr/bin/cc /Library/Developer/CommandLineTools/usr/bin/clang /usr/bin/shasum /usr/bin/sha256sum /usr/bin/sha1sum'
 allowlist_data='/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk /usr/bin:/bin /proc /proc/%s/stat /usr/bin/awk /dev/fd /dev/fd/* /dev/fd/2'
 
+# Dynamic-join suffixes: the regex above has no way to see the "$var" a real
+# absolute-path token is missing, so a literal like "$run/awk" or
+# "$entry_repo/resolver/v1/trusted-launch.c" surfaces here as the bare trailing
+# fragment after the last variable interpolation ("/awk", "/resolver/v1/
+# trusted-launch.c"). Spec's own words for this: "Do not manufacture host paths
+# from dynamic joins, parameter patterns... Preserve dynamic value review" --
+# each one below was read at its call site in resolver/v1/resolve-profile.sh
+# and confirmed to be exactly that, never a literal leading-slash path in the
+# source: "$run/{awk,jq,home,tmp,trusted-launch,nofollow-snapshot}",
+# "$entry_repo/{resolver/v1/*.c,resolver/v1/profile-resolution.jq,
+# scripts/lib/profile-resolution.sh,core/v$core_schema_major}",
+# "$modules_dir/{schema,profile_graph,stage_request,result_facts,result_truth}.jq",
+# "$entry_dir/profile-resolve-runtime.sh", and "$output/.run". "/bin" alone is
+# the second half of the fixed "/usr/bin:/bin" PATH value, already allowlisted
+# whole; the regex's own delimiter (":") splits it into two matched tokens. This
+# is a hand-reviewed approximation of the closure the full lexical pass would
+# compute, not that pass itself.
+allowlist_dynamic_joins='/awk /jq /home /tmp /trusted-launch /nofollow-snapshot /resolver/v1/trusted-launch.c /resolver/v1/nofollow-snapshot.c /resolver/v1/profile-resolution.jq /scripts/lib/profile-resolution.sh /schema.jq /profile_graph.jq /stage_request.jq /result_facts.jq /result_truth.jq /core/v /generations /modules /profile-resolve-runtime.sh /.run /bin /usr/bin /resolver/v1'
+
+# "/dev/null" is the same regex-versus-":"/redirect-operator artefact as "/bin"
+# above (e.g. "2>/dev/null"): it is not a command word or a manufactured host
+# path, and its own roles are independently checked a few hundred lines below
+# ("mechanism: /dev/null discard appears only in its enumerated roles").
+allowlist_data="$allowlist_data /dev/null"
+
 sweep_absolute_paths() {
+  # sweep_absolute_paths FILE -- approximates R10's pass-1 source-role carve-out
+  # for full-line comments only: a whole-line "# ..." comment is prose describing
+  # the shipped mechanism (copy-provenance headers, path references in doc
+  # comments), never an executable command position, so it is excluded before the
+  # token scan. This is still an approximation, not the full three-pass lexical
+  # extraction spec.md:8801-8940 describes (a trailing same-line comment after
+  # real code, and the source-role/quoting/assignment distinctions within actual
+  # code, are not attempted here) -- flagged as a known gap rather than claimed as
+  # complete, matching this test's own comment above at the mechanism-checks
+  # section header.
   sap_file=$1
-  /usr/bin/grep -Eo '(/[A-Za-z0-9_.%*-]+)+' "$sap_file" 2>/dev/null | /usr/bin/sort -u
+  /usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
+    /usr/bin/grep -Eo '(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
 }
 
 if [ -f "$entry" ]; then
   bad_tokens=0
+  set -f
   for tok in $(sweep_absolute_paths "$entry"); do
     match=0
-    for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done
-    case "$tok" in /dev/fd/*) match=1 ;; esac
+    for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done
+    case "$tok" in
+      /dev/fd/*) match=1 ;;
+      # The required self-path case pattern (R1's `case ${BASH_SOURCE[0]} in /*)`)
+      # is classified as a non-path pattern, not an absolute-path token, per spec.
+      # Quoted so this arm matches the literal two-character token "/*" and is not
+      # itself a glob (an unquoted /* would match almost every token above it).
+      '/*') match=1 ;;
+    esac
     [ "$match" -eq 1 ] || { printf 'unlisted absolute path token in entry: %s\n' "$tok" >&2; bad_tokens=$((bad_tokens + 1)); }
   done
+  set +f
   if [ "$bad_tokens" -eq 0 ]; then
-    pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data allowlist'
+    pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data / dynamic-join allowlist'
   else
     fail_case "mechanism: entry has $bad_tokens unlisted absolute-path token(s)"
   fi
@@ -1785,9 +2099,13 @@ if [ -f "$entry" ]; then
   env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
   if [ -n "$env_i_line" ]; then
     bad_printf=0
+    # A full-line "# ..." comment above the re-exec that merely names
+    # /usr/bin/printf in prose (contrasting it with the entry's own builtin
+    # printf, as the header comment above the re-exec does) is not an
+    # occurrence of the command; only non-comment lines count.
     while IFS=: read -r n _; do
       [ "$n" -gt "$env_i_line" ] || bad_printf=$((bad_printf + 1))
-    done < <(/usr/bin/grep -n '/usr/bin/printf' "$entry" || :)
+    done < <(/usr/bin/awk '!/^[[:space:]]*#/ && /\/usr\/bin\/printf/ { print NR ":" $0 }' "$entry")
     if [ "$bad_printf" -eq 0 ]; then
       pass_case 'mechanism: every /usr/bin/printf occurrence sits below the env -i re-exec line'
     else
@@ -1840,7 +2158,36 @@ if [ -f "$parent_source" ]; then
     fail_case "mechanism: $handler_bad forbidden call(s) found near a handler body (heuristic)"
   fi
 
-  if /usr/bin/grep -qE 'environ|execv\(|execvp\(|execlp\(' "$parent_source"; then
+  # Word-bounded and comment-stripped: an unbounded "environ" also matches
+  # inside identifiers like "environment_value" (this file's own helper for
+  # building execve's envp array) and the standalone word "environ" inside a
+  # /* ... */ prose comment describing exactly why this grep exists -- neither
+  # is the libc extern the grep is meant to catch. C block comments can span
+  # multiple lines, so a per-line "#"-style filter (as used for the shell
+  # entry elsewhere in this file) does not apply; this tracks block-comment
+  # state across lines instead.
+  parent_source_nocomments=$(/usr/bin/awk '
+    { line = $0 }
+    in_comment {
+      end = index(line, "*/")
+      if (end == 0) { next }
+      line = substr(line, end + 2)
+      in_comment = 0
+    }
+    {
+      out = ""
+      while ((start = index(line, "/*")) > 0) {
+        out = out substr(line, 1, start - 1)
+        rest = substr(line, start + 2)
+        end = index(rest, "*/")
+        if (end == 0) { line = ""; in_comment = 1; break }
+        line = substr(rest, end + 2)
+      }
+      print out line
+    }
+  ' "$parent_source")
+  if printf '%s' "$parent_source_nocomments" |
+     /usr/bin/grep -qE '(^|[^A-Za-z0-9_])environ([^A-Za-z0-9_]|$)|execv\(|execvp\(|execlp\('; then
     fail_case 'mechanism: parent references environ/execv/execvp/execlp'
   else
     pass_case 'mechanism: parent contains no environ/execv/execvp/execlp'

@@ -1,4 +1,4 @@
-/* copy-begin scripts/test/portable-profile-resolution-launcher.c:1-19 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
+/* copy-begin scripts/test/portable-profile-resolution-launcher.c:1-17 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
@@ -22,10 +22,12 @@
    startup /dev/fd enumeration this step adds (R5), not only under __linux__ as
    the copied launcher has it below for process_group_count's /proc walk. This
    splits the original :1-43 copy span in two around this one inserted line --
-   :1-19 above (the plain includes, unaffected) and :20-43 below (the platform
+   :1-17 above (the plain includes, unaffected) and :19-43 below (the platform
    block and constants, unaffected) -- rather than widen either span silently.
-   The step-1 copy-identity check for :1-43 must move to checking the two
-   sub-spans with this line between them. */
+   The launcher's own blank separator line 18 is not part of either span: it
+   sits between them and is replaced by this comment block and the two new
+   includes, so neither sub-span claims it. The step-1 copy-identity check for
+   :1-43 must move to checking the two sub-spans with this line between them. */
 #include <dirent.h>
 
 /* step 4 (deviation 6): <sys/select.h> is needed for the bounded wait every branch
@@ -34,7 +36,7 @@
    the other new-code include above rather than inside either copied span below. */
 #include <sys/select.h>
 
-/* copy-begin scripts/test/portable-profile-resolution-launcher.c:20-43 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
+/* copy-begin scripts/test/portable-profile-resolution-launcher.c:19-43 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
 #if defined(__linux__)
 #include <dirent.h>
 #elif defined(__APPLE__)
@@ -1471,7 +1473,7 @@ static int supervise(int output_fd, const char *program, char *const child_argv[
     return 70;
 }
 
-/* copy-begin scripts/test/portable-profile-resolution-launcher.c:534-542 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
+/* copy-begin scripts/test/portable-profile-resolution-launcher.c:534-541 at f4de7e48c688b6adb3669f69a221d2aa7bf43b15 */
 int main(int argc, char **argv) {
     char *child_argv[6];
     char *child_env[12];

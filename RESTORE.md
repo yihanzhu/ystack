@@ -54,8 +54,32 @@ That test obtains the pinned jq 1.6 release with its recorded digest, compiles t
 single private no-follow helper and the test-owned direct-`execve` launcher with the
 host compiler, creates hermetic SHA-1/SHA-256 repositories, and validates the output
 with the restored `scripts/core-contract.sh`. No compiled helper is installed or
-restored. A future activation must separately qualify and bind a production trusted
-parent; restoring these files does not select a live profile.
+restored.
+
+### Restore the inactive trusted parent for the profile resolver
+
+Confirm the three files listed under "Inactive trusted parent for the profile
+resolver" in [`ci/required-files.txt`](ci/required-files.txt) —
+`resolver/v1/trusted-launch.c`, `resolver/v1/resolve-profile.sh` (git mode
+`100755`), and `scripts/test/resolver-trusted-launch.test.sh` — then run:
+
+```sh
+bash scripts/test/resolver-trusted-launch.test.sh
+```
+
+That test provisions the pinned jq 1.6 release the way
+`scripts/test/shadow-slice.test.sh` does, runs the shipped entry against a real
+committed `profiles/default/v1` request, resolves it through the shipped parent
+and the existing test launcher, and `cmp`s the two outputs. It also drives the
+parent directly, as a test-only harness, to prove the parent's own refusals
+independent of the entry, and asserts the R10 mechanism, cleanup, umask,
+descriptor, and signal cases. On Darwin it requires the Command Line Tools
+(the entry compiles with `/Library/Developer/CommandLineTools/usr/bin/clang`,
+not the `xcrun` shim). Nothing compiled is installed or cached — the entry
+rebuilds the parent and helper from committed source on every invocation. A
+future activation must separately qualify and bind this as a production launch
+path; restoring these files does not select a live profile, activate a profile,
+or run the Roadmap step-7 self-host run.
 
 ### Restore the inactive offline delivery replay
 
