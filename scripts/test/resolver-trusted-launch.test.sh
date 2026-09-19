@@ -1463,23 +1463,17 @@ POISON
     fi
   }
 
-  # Compare two darwin_snapshot outputs. Equal -> pass. Otherwise: if every
-  # differing line names only Finder/LaunchServices-owned TemporaryItems
-  # (whose mtime bumps from unrelated processes on the machine, not from
-  # anything under test), that is an explicit proof gap, never a silent
-  # pass; any other difference, xcrun_db included, fails outright.
+  # Compare two darwin_snapshot outputs. Equal -> pass. Any difference
+  # fails outright (AGENTS.md:34-36 -- no skipped failures): a changed
+  # entry, TemporaryItems included, is a failed observation for the
+  # operator to rerun, never a silent pass.
   darwin_snapshot_check() {
-    local before=$1 after=$2 pass_msg=$3 fail_msg=$4 skip_msg=$5 d
+    local before=$1 after=$2 pass_msg=$3 fail_msg=$4
     if [ "$before" = "$after" ]; then
       pass_case "$pass_msg"; return
     fi
-    d=$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | /usr/bin/grep -E '^[<>]' || :)
-    if ! printf '%s\n' "$d" | /usr/bin/grep -qv 'TemporaryItems'; then
-      skip_case "$skip_msg" "proof gap -- only TemporaryItems churn: $(printf '%s' "$d" | /usr/bin/tr '\n' '|')"
-    else
-      printf '%s\n' "$d" >&2
-      fail_case "$fail_msg"
-    fi
+    diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | /usr/bin/grep -E '^[<>]' >&2 || :
+    fail_case "$fail_msg"
   }
 
   case "$platform" in
@@ -1492,8 +1486,7 @@ POISON
       after_listing=$(darwin_snapshot "$darwin_temp")
       darwin_snapshot_check "$before_listing" "$after_listing" \
         'compiler pollution (Darwin, operator-run): nothing under the per-user temp dir changes name, size, mtime, or xcrun_db content (no cache-write exemption)' \
-        'compiler pollution: Darwin per-user temp dir changed (name/size/mtime/xcrun_db snapshot mismatch)' \
-        'compiler pollution (Darwin, operator-run): per-user temp dir write-attribution'
+        'compiler pollution: Darwin per-user temp dir changed (name/size/mtime/xcrun_db snapshot mismatch)'
       ;;
     Linux:x86_64)
       skip_case 'compiler pollution: Darwin xcrun_db delta measurement' 'Linux has no such shim or cache file'
@@ -1532,12 +1525,10 @@ POISON
       # -- with its name, size, and mtime unchanged.
       darwin_snapshot_check "$before2" "$mid2" \
         'compiler pollution (Darwin): per-user temp dir unchanged across the clean isolated compile' \
-        'compiler pollution (Darwin): per-user temp dir changed across the clean isolated compile' \
-        'compiler pollution (Darwin): per-user temp dir write-attribution (clean isolated compile)'
+        'compiler pollution (Darwin): per-user temp dir changed across the clean isolated compile'
       darwin_snapshot_check "$mid2" "$after2" \
         'compiler pollution (Darwin): per-user temp dir unchanged across the polluted isolated compile' \
-        'compiler pollution (Darwin): per-user temp dir changed across the polluted isolated compile' \
-        'compiler pollution (Darwin): per-user temp dir write-attribution (polluted isolated compile)'
+        'compiler pollution (Darwin): per-user temp dir changed across the polluted isolated compile'
       if [ "$(sha256_file "$clean_bin")" = "$(sha256_file "$polluted_bin")" ]; then
         pass_case 'compiler pollution: clean and polluted compiles produce byte-identical binaries'
       else
@@ -1626,27 +1617,29 @@ poll_for_home_and_read_modes() {
   printf '%s %s %s\n' "$(stat_mode "$pfh_out/.run")" "$(stat_mode "$pfh_out/.run/tmp")" "$(stat_mode "$pfh_out/.run/home")"
 }
 
-# run_lockdown_modes_ok RUN -> 0 iff RUN and all four run files (trusted-launch,
-# nofollow-snapshot, jq, awk) are exactly 0500 -- the state plan.md:310-313
-# requires while the parent is executing, ahead of the entry's own EXIT-trap
-# removal of RUN once the parent exits.
+# run_lockdown_modes_ok RUN -> 0 iff RUN/tmp (compiler scratch) is gone and RUN
+# plus all four run files are exactly 0500 (plan.md:310-313's completed state).
 run_lockdown_modes_ok() {
   rlm_run=$1
+  [ ! -e "$rlm_run/tmp" ] || return 1
   for rlm_f in "$rlm_run" "$rlm_run/trusted-launch" "$rlm_run/nofollow-snapshot" "$rlm_run/jq" "$rlm_run/awk"; do
     [ "$(stat_mode "$rlm_f")" = 500 ] || return 1
   done
 }
 
 poll_for_lockdown_ok() {
-  # poll_for_lockdown_ok OUTPUT -> 0 once RUN reaches the locked-down state
-  # (bounded like the home-mode poll above), 1 on timeout or a bad mode.
-  pfl_out=$1
-  pfl_deadline=$(( $(/bin/date +%s) + 20 ))
-  while [ ! -e "$pfl_out/.run/awk" ]; do
-    [ "$(/bin/date +%s)" -lt "$pfl_deadline" ] || return 1
+  # poll_for_lockdown_ok OUTPUT -> 0 once the completed lockdown state is
+  # reached, 1 on timeout (prints elapsed time and the last observed modes).
+  pfl_run=$1/.run
+  pfl_start=$(/bin/date +%s); pfl_deadline=$((pfl_start + 20))
+  while ! run_lockdown_modes_ok "$pfl_run" 2>/dev/null; do
+    [ "$(/bin/date +%s)" -lt "$pfl_deadline" ] || { printf 'lockdown timeout after %ss: run=%s launch=%s snap=%s jq=%s awk=%s tmp=%s\n' \
+      "$(( $(/bin/date +%s) - pfl_start ))" \
+      "$(stat_mode "$pfl_run" 2>/dev/null)" "$(stat_mode "$pfl_run/trusted-launch" 2>/dev/null)" \
+      "$(stat_mode "$pfl_run/nofollow-snapshot" 2>/dev/null)" "$(stat_mode "$pfl_run/jq" 2>/dev/null)" \
+      "$(stat_mode "$pfl_run/awk" 2>/dev/null)" "$([ -e "$pfl_run/tmp" ] && echo present || echo gone)" >&2; return 1; }
     /bin/sleep 0.01
   done
-  run_lockdown_modes_ok "$pfl_out/.run"
 }
 
 if [ -x "$entry" ]; then
@@ -3614,23 +3607,30 @@ fi
 
 if [ -f "$parent_source" ]; then
   forbidden_calls='snprintf malloc free fprintf strerror nanosleep usleep'
-  handler_bad=0
-  in_handler=0
-  while IFS= read -r line; do
-    case "$line" in
-      *sigaction*|*'void handle_'*|*'static void '*'signal'*) in_handler=1 ;;
-    esac
-    if [ "$in_handler" -eq 1 ]; then
-      for f in $forbidden_calls; do
-        case "$line" in *"$f("*) handler_bad=$((handler_bad + 1)) ;; esac
-      done
-    fi
-    case "$line" in '}') in_handler=0 ;; esac
-  done < "$parent_source"
-  if [ "$handler_bad" -eq 0 ]; then
-    pass_case 'mechanism: no obviously-forbidden non-async-signal-safe call textually inside a handler body'
+  handler_name=$(/usr/bin/grep -oE '\.sa_(handler|sigaction)[[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' "$parent_source" \
+    | /usr/bin/sed -E 's/.*=[[:space:]]*//' | /usr/bin/grep -vE '^(SIG_DFL|SIG_IGN)$' | /usr/bin/head -n1)
+  # handler_bad_count SRC -> forbidden calls in handler_name's brace-balanced body in SRC.
+  handler_bad_count() {
+    hbc_body=$(/usr/bin/awk -v name="$handler_name" '
+      !f { if ($0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(")) f = 1; else next }
+      { print; d += gsub(/\{/, "{"); d -= gsub(/\}/, "}"); if (d > 0) s = 1; if (s && d == 0) exit }' "$1")
+    hbc_n=0
+    for f in $forbidden_calls; do hbc_n=$((hbc_n + $(printf '%s\n' "$hbc_body" | /usr/bin/grep -c -- "${f}(" || :))); done
+    printf '%s\n' "$hbc_n"
+  }
+  if [ -z "$handler_name" ]; then
+    fail_case 'mechanism: no signal handler resolved from sa_handler/sa_sigaction (also skips its negative control)'
   else
-    fail_case "mechanism: $handler_bad forbidden call(s) found near a handler body (heuristic)"
+    handler_bad=$(handler_bad_count "$parent_source")
+    if [ "$handler_bad" -eq 0 ]; then pass_case 'mechanism: no forbidden non-async-signal-safe call inside the installed signal handler body'
+    else fail_case "mechanism: installed signal handler '$handler_name' has $handler_bad forbidden call(s)"; fi
+    # Negative control: an injected fprintf in the body must be caught.
+    handler_neg_src="$tmp/handler-neg.c"
+    /usr/bin/awk -v name="$handler_name" \
+      '{ print } !d && $0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(") { print "    fprintf(stderr, \"x\");"; d = 1 }' \
+      "$parent_source" > "$handler_neg_src"
+    if [ "$(handler_bad_count "$handler_neg_src")" -gt 0 ]; then pass_case 'mechanism: handler safety check rejects an injected fprintf inside the handler body (negative control)'
+    else fail_case 'mechanism: handler safety check failed to reject an injected fprintf inside the handler body'; fi
   fi
 
   # Word-bounded and comment-stripped: an unbounded "environ" also matches
