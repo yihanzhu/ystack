@@ -18,24 +18,15 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Current evidence-based range: 2850-3200 changed lines** (implementation).
+**Current measured range: 3650-4950 changed lines** (implementation).
 This replaces the historical 2100-2841 band below without changing scope or proof.
-The paused 1242-line test draft is measured; it is not complete or passing proof.
-The current plan estimates parent/entry at 1075/380, while the retained cumulative
-spec estimate is 1228/447. Keeping both as an honest estimate interval, plus the
-measured test and 62 estimated documentation/manifest/schema-inventory lines,
-gives 2759-2979 before the missing proof is written.
-
-Allow an estimated 70-100 added test lines for native Darwin directory/cache
-attribution and isolated compile-cache checks; 15-25 for observing all four run
-files and the run directory at 0500 in the existing bounded mode case; and 40-80
-net lines for replacing the draft's incomplete 74-line sweep with the required
-role checks and lexical distinctions below. These are unwritten-work estimates,
-not measurements. The projected total is 2884-3184, rounded outward to 2850-3200.
-The three additions complete existing proof obligations; they add no component,
-permission or runtime behavior. Measure additions, deletions and net at the full
-implementation head. An unexplained overrun returns through the artifact gate;
-never compress code, drop proof or split off required tests to meet this band.
+Measured at implementation head `5472bdc`: the test is 1865 lines, the parent 1910
+and the entry 400, giving 4175, plus the ~62 documentation/manifest/schema-inventory
+lines and the harness fixes the same change carries; the earlier 2850-3200 estimate
+under-counted the R10 case inventory and the R2/R5 machinery the review rounds added.
+Measure additions, deletions and net at the full implementation head. An unexplained
+overrun returns through the artifact gate; never compress code, drop proof or split
+off required tests to meet this band.
 
 The derivation below records historical source measurements and evolving estimates;
 its earlier ranges and running totals are historical, not the current size gate:
@@ -1003,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8608-11646 lines** — this file's measured 10127 lines plus or minus 15%, rounded. That
+**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10127 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10106 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1208,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8608-11646 lines** — this file's measured 10127 lines plus or minus 15%, rounded. That
+**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2549,12 +2540,12 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8608-11646 lines**, which is this file's measured
-10127 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8590-11622 lines**, which is this file's measured
+10106 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2850-3200 changed lines derived at the top of this section belong to the *implementation*
+3650-4950 changed lines recorded at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -8993,7 +8984,7 @@ Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
 `RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
 exact generation-inventory additions required by R10. All other requirements and
 exclusions remain, including the eighteen blob-pin checks. The implementation
-review-size range is 2850-3200 changed lines; measure the complete change and
+review-size range is 3650-4950 changed lines; measure the complete change and
 return to the artifact gate for an unexplained overrun, never reduce tests to fit.
 
 Order, each step checkable before the next:
