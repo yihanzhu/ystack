@@ -570,7 +570,11 @@ lose the verified detail the rounds added.
        (`claim_kind_ok` and `claim_id_ok`,
        `shadow/v1/materialization-input.jq:101-105`, applied at `:213-214`),
        which is why a document that is not yet a full claim is accepted here
-       and needs no change to the component.
+       and needs no change to the component. In particular this declaration
+       needs neither `declaration_status` nor `effects` nor any other member
+       of the sandbox claim key set to pass `claim_kind_ok` and `claim_id_ok`
+       — those are required only of the final claim in entry 5, which is the
+       only document of the two that reaches the sandbox evaluator.
     2. **The prerequisite assembler run** — the same invocation as the final
        one, with that declaration in the claim position, its own frozen
        `requested_at` and its own fresh output directory. The test extracts
@@ -591,14 +595,64 @@ lose the verified detail the rounds added.
        the one that proves the requester, and it is made **about the
        prerequisite request**, which carries the explicit tenth-argument
        requester exactly as the final request does. References entries 2 and 3.
-    5. **The final claim**, written by the test: the same shipped sandbox
-       policy body sections copied verbatim, an `execution_identity` read out
-       of the resolved profile's `verifier` binding rather than typed,
-       `policy_set_ref` naming the shipped policy set's own id and digest,
-       `duty_evaluation_ref` naming entry 4's id and the SHA-256 of entry 4's
-       bytes, and `stage_result_ref` copied field for field from entry 4's
-       `body.stage.result_ref`. No digest in it is chosen; each is of bytes an
-       earlier entry already produced. References entries 3 and 4.
+    5. **The final claim**, written by the test with `jq -S -c -n`. Unlike
+       the declaration, this document is handed to
+       `control/v1/evaluate-sandbox.sh`, and `claim_ok`
+       (`control/v1/sandbox.jq:59-88`) checks an **exact** key set at the top
+       level and again in the body: a missing field and an extra field are
+       both `invalid-input`, which makes the evaluator exit non-zero and
+       makes `shadow/v1/reproduce.sh:419-427` record
+       `environment.evaluation-refused` with an `inconclusive` outcome. The
+       claim therefore carries exactly these fields, and no others:
+
+       - **Top level** — exactly `schema_version`, `kind`, `id`, `body`
+         (`sandbox.jq:60`). `schema_version` is the literal `1` and `kind` the
+         literal `execution_environment_claim` (`:61`); `id` is the fixture
+         environment's id and must match `id_ok` (`:62`, `:4-5`).
+       - **`declaration_status`** — the literal string `"complete"`
+         (`sandbox.jq:67`). `"incomplete"` is the only other accepted value
+         and it emits `declaration.incomplete` (`:243`), which forces an
+         `inconclusive` verdict.
+       - **`effects`** — exactly `{external_writes: false, target_writes:
+         false}`: both keys required, no others, each a JSON boolean or the
+         string `"unknown"` (`sandbox.jq:72-73`, `truth_or_unknown` at
+         `:34`). `true` on either is a violation (`:240-241`) and `"unknown"`
+         on either is inconclusive (`:251-252`), so `false` on both is the
+         only pair that reaches `satisfied`.
+       - **`environment`, `filesystem`, `isolation`, `limits`, `network`,
+         `resources`, `sensitive_material`, `tools`** — the eight body
+         sections of the same names from the shipped
+         `control/v1/sandbox-policy.json`, copied verbatim. The evaluator
+         compares each against the policy it is given
+         (`sandbox.jq:213-235`), so a copy is the only value that passes.
+       - **`execution_identity`** — exactly `adapter_instance_id`,
+         `execution_boundary_id`, `principal_id`, `role`, each an `id_ok`
+         string (`identity_ok`, `sandbox.jq:20-23`, applied at `:71`). All
+         four are read out of the resolved profile's `verifier` binding
+         rather than typed, and `role` must equal the policy's
+         `required_role` (`:204-205`), which the shipped policy fixes at
+         `verifier`.
+       - **`policy_set_ref`** — exactly `schema_version`, `kind`, `id`,
+         `sha256` (`document_ref_ok`, `sandbox.jq:15-18`, applied at `:69`
+         with `kind` `control_policy_set` and `schema_version` 1), naming the
+         shipped policy set's own id and the SHA-256 of its bytes; the
+         evaluator rebuilds the same reference and compares (`:206-207`).
+       - **`duty_evaluation_ref`** — the same four keys with `kind`
+         `duty_separation_evaluation` and `schema_version` 1 (`:68`), naming
+         entry 4's id and the SHA-256 of entry 4's bytes (`:208-209`).
+       - **`stage_result_ref`** — the same four keys with `kind`
+         `stage_result` and `schema_version` 2 (`:70`), copied field for
+         field from entry 4's `body.stage.result_ref`, which is exactly what
+         the evaluator compares it against (`:210-211`).
+
+       Only `declaration_status` and `effects` are written as literals, and
+       both are fixed by the policy rather than chosen. Every other value is
+       shipped policy bytes, a value read out of the resolved profile, or a
+       digest of bytes an earlier entry already produced; no digest in it is
+       chosen. The shipped `control/v1/sandbox-policy.json` requires no
+       further claim field beyond this set, and the fixture claim at
+       `scripts/test/shadow-slice.test.sh:178-194` already carries exactly
+       this shape — this entry follows it. References entries 3 and 4.
     6. **The final assembler run** — the same arguments again with the final
        claim in the claim position. This is the run whose `input.json` the
        driver reads below. Its request fingerprints the final claim, and
@@ -619,7 +673,15 @@ lose the verified detail the rounds added.
     output of a shipped tool run on real bytes, or — for the two documents no
     shipped tool emits, the declaration and the final claim — built only from
     shipped policy bytes, values read out of the resolved profile, and digests
-    of bytes an earlier entry of the order above already produced.
+    of bytes an earlier entry of the order above already produced, plus the
+    two fixed literals the sandbox policy requires of every claim,
+    `declaration_status: "complete"` and `effects: {external_writes: false,
+    target_writes: false}`. Those two are mandatory members of the claim key
+    set with no shipped bytes to copy from (`control/v1/sandbox.jq:64-73`),
+    and the policy leaves the test no choice about their values: any other
+    accepted value makes the evaluation `violated` or `inconclusive`
+    (`:240-241`, `:243`, `:251-252`). They are policy-required literals, not
+    chosen verdicts, and the rule above permits them.
 
     Two negative cases come with it, each asserting `E_RELATION` and an empty
     output directory. A requester identical to the good one except for `role`
