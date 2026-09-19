@@ -384,8 +384,18 @@ references a later entry.
    exist yet. Build it with `jq -S -c -n` from two real sources and nothing else: the
    shipped `control/v1/sandbox-policy.json` body's `environment`, `filesystem`,
    `isolation`, `limits`, `network`, `resources`, `sensitive_material` and `tools`
-   sections copied verbatim, and `registry_entry_sha256`, the SHA-256 of
-   `"$JQ" -S -c '.environments[] | select(.id == "env.local-macos-ystack-self")' shadow/v1/shadow-environments.json`.
+   sections copied verbatim, and `registry_entry_sha256`, the SHA-256 of the registry
+   entry's canonical bytes. Select the entry by the registry's real field names: the
+   array is `body.environments`, and entries key on `environment_id` and
+   `target_repository_id`, not `id`. Require exactly one match first, the same test
+   `shadow/v1/reproduce.sh:396-399` applies —
+   `"$JQ" -e '[.body.environments[] | select(.environment_id == "env.local-macos-ystack-self" and .target_repository_id == "repo.ystack")] | length == 1' shadow/v1/shadow-environments.json` —
+   and hash the canonical bytes of that one entry,
+   `"$JQ" -S -c '.body.environments[] | select(.environment_id == "env.local-macos-ystack-self" and .target_repository_id == "repo.ystack")' shadow/v1/shadow-environments.json`.
+   Against the registry on `main` that entry is
+   `{"description":"Operator's local macOS checkout, ystack's own scrubbed bare source repository.","environment_id":"env.local-macos-ystack-self","evidence_scope":"self-host","proof_state":"unproven","source_root_commit":"7908b159c0a2d24ce6ccdde6ee0f501acc483e75","target_repository_id":"repo.ystack"}`,
+   whose SHA-256 is
+   `cc259fc1b27956e6e479e05a7f70c6cc350ad65fc6b6583252d142fed91666e8`.
    `schema_version` 1, `kind` `execution_environment_claim`, `id`
    `env.local-macos-ystack-self` — those two fields are all the assembler reads from the
    file it is handed (`shadow/v1/materialization-input.jq:101-105`, `:213-214`). It
