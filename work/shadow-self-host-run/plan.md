@@ -40,8 +40,8 @@ What I verified myself against real history, rather than copying from the spec:
 
 Nothing outside this list. Counts are net changed lines, honest estimates.
 
-**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Fourteen shared
-files and fifteen per case, forty-four in all:
+**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Fifteen shared
+files and fifteen per case, forty-five in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
@@ -51,6 +51,7 @@ files and fifteen per case, forty-four in all:
 | `resolved-profile.json` | The resolver's output, shared by both runs | 1 |
 | `environment-claim.json` | The real claim for `env.local-macos-ystack-self` | 1 |
 | `control-policy-set.json` | The policy set the driver was handed | 1 |
+| `requester.json` | The `actor_ref` requester identity passed as the assembler's tenth input, identical for every assembly | 1 |
 | `core-package-closure.json` | The exact core-contract package closure descriptor bytes that the policy set's `package_ref.sha256` names, stored with no trailing newline | 1 |
 | `duty-evaluation.json` | The duty evaluation the claim references | 1 |
 | `prerequisite/environment-declaration.json` | The bootstrap environment description the prerequisite stage request fingerprints | 1 |
@@ -82,7 +83,7 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 - `ci/required-files.txt` (+47). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
-  listing all forty-four evidence paths and the new test.
+  listing all forty-five evidence paths and the new test.
 - `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
   the assembler write-up, which today runs to line 1395 before
   `## Inactive maintenance loop` at 1397.
@@ -112,10 +113,10 @@ to refine against the real interfaces. Two things grew once I read them:
   it. Against the real consumers that is 310-400: `scope/v1/evaluate-scope.sh` takes
   seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
   `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
-  refusal, on top of the twelve evidence checks requirement 15 lists.
-- The manifest block is 47 lines, not a handful, because the spec's design requires
+  refusal, on top of the thirteen evidence checks requirement 15 lists.
+- The manifest block is 48 lines, not a handful, because the spec's design requires
   every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names forty-four of them.
+  design names forty-five of them.
 
 - The prerequisite stage run adds six committed documents, six manifest lines, the
   README's account of the construction order and the test's recomputation of it:
@@ -218,17 +219,21 @@ required proof green.** This is the single hard gate in this initiative.
    pass", `work/shadow-self-host-run/spec.md`), as does requirement 1's ban on
    substituting a shipped producer.
 
-   So this is an incompatible accepted dependency, and by the same spec rule it returns
-   to its own artifact gate: **`shadow-input-assembler`**. What that initiative has to
-   settle is where a stage request's requester identity comes from when it is not a
-   profile binding — an explicit requester-identity input to
-   `shadow/v1/assemble-materialization-input.sh`, carried into
-   `body.requested_by`, is the shape this plan assumes, but the choice is that gate's,
-   not this one's. Until it is merged on `main` with its proof green and a real tuple
-   evaluates `satisfied`, no step of "Construct the duty evaluation and the claim"
-   executes and no evidence run starts. Nothing else in this plan changes when it
-   lands: entry 4 below still invokes the assembler, with whatever additional argument
-   that gate defines, and entries 5-8 are unaffected.
+   So this is an incompatible accepted dependency, and by the same spec rule it returned
+   to its own artifact gate: **`shadow-input-assembler`**. **That amendment has now
+   landed on `main`** (spec #364, plan #365), and it settles the question the way this
+   plan assumed: the requester identity is an explicit caller input, not a projection of
+   a binding. The contract this plan now writes against is that amendment's, as
+   `work/shadow-input-assembler/plan.md` step 5.1 states it — a **tenth positional
+   argument `<requester-file>`, appended after the claim so the first nine keep their
+   positions**, with nine inputs now refused as `E_USAGE`. The file's single JSON value
+   is emitted verbatim as `body.requested_by`, and the amended
+   `shadow/v1/materialization-input.jq` refuses it unless it satisfies
+   `schema::actor_ref_ok`, carries a role in `["manager","operator","orchestrator"]`,
+   and collides on `adapter_instance_id`, `execution_boundary_id` or `principal_id`
+   with **no** binding in the resolved profile. Every assembler invocation in this plan
+   therefore takes ten inputs; "The requester identity" below defines the one file all
+   of them pass, and entries 4-8 are otherwise unaffected.
 
 **No sandbox dependency gates these runs.** Per requirement 2 the runs use the shipped
 declaration-only evaluation exactly as shipped — `control/v1/evaluate-sandbox.sh` with
@@ -463,7 +468,7 @@ performs the run must not write its own model into the identity.
 
 ### Construct the duty evaluation and the claim (requirements 2, 12)
 
-This section produces `$POLICY_SET`, `$DUTY` and `$CLAIM`. It runs once, before either
+This section produces `$REQUESTER`, `$POLICY_SET`, `$DUTY` and `$CLAIM`. It runs once, before either
 assembly, because the assembler already needs the claim. `$PRE_REQ` is the retained
 `prerequisite/` directory of the evidence bundle; `$OUT_DIR_0`, `$CAND0` and `$SCRATCH0`
 are fresh, empty, private 0700 directories outside `$SRC` and disjoint from it and from
@@ -482,6 +487,60 @@ No committed tuple can be reused instead. Nothing in the repository holds a real
 `stage_request` / `resolved_profile` / `stage_result` triple: the only such documents
 are the synthetic payloads under `evals/v1/` and `scripts/test/`, whose references are
 the repeated-character placeholders the precondition gate refuses.
+
+**The requester identity.** Every assembler invocation below passes the same tenth
+input, `$REQUESTER`, and it is retained as `requester.json`. Like the policy-set copy it
+is produced by no tool and references nothing, so it precedes entry 1 and no entry
+depends on it having been built later. It is the bare `actor_ref` the amended
+`materialization-input.jq` emits verbatim as `body.requested_by`, and its values are
+**the DR-5 identity proposed on intake #262**: role `operator`, principal
+`principal.operator.yihanzhu`, adapter instance `instance.operator.local-macos`,
+execution boundary `boundary.operator.local-macos`, with `implementation_id`
+`implementation.operator.manual` and `implementation_version` `v1` completing the six
+fields `schema::actor_ref_ok` requires. **These values are bound to the operator's
+`approve DR-5` comment on #262. Until that approval exists the run does not start** —
+not the prerequisite assembly, not either case, not the repeatability pass — because an
+identity nobody declared is exactly the fabricated input the precondition gate refuses.
+The distinct `.local-macos` and `.yihanzhu` suffixes are deliberate: they keep the
+retained bytes from being mistaken for the synthetic `instance.operator` /
+`principal.operator` fixture in `evals/v1/seed-set-duty.json`.
+
+Construct it with the same canonical emitter as every other document this run writes:
+
+```sh
+"$JQ" -S -c -n '{role:"operator",
+  implementation_id:"implementation.operator.manual",
+  implementation_version:"v1",
+  adapter_instance_id:"instance.operator.local-macos",
+  principal_id:"principal.operator.yihanzhu",
+  execution_boundary_id:"boundary.operator.local-macos"}' >requester.json
+```
+
+The exact bytes that produces, which are what gets committed, are
+
+```json
+{"adapter_instance_id":"instance.operator.local-macos","execution_boundary_id":"boundary.operator.local-macos","implementation_id":"implementation.operator.manual","implementation_version":"v1","principal_id":"principal.operator.yihanzhu","role":"operator"}
+```
+
+newline-terminated like the other canonical documents, and the offline check is
+`shasum -a 256 shadow/evidence/self-host-transition/v1/requester.json` printing
+`7596d803e09956c24a627d29558b22a583369080ac653941816c0fbadb2d68cd`. If the approved
+DR-5 values differ from the ones above, the file, this recipe and this digest change
+together and the run does not proceed on the stale pair.
+
+**Duty separation accepts this requester, and that is checked, not assumed.**
+`control/v1/duty-separation.jq:55` fixes `requester_roles` to
+`["manager","operator","orchestrator"]`, so the `operator` role passes the role test at
+`:120-121` that a `forge` requester failed. The collision test at `:122-124` compares
+only `identity_dimensions` — `adapter_instance_id`, `execution_boundary_id`,
+`principal_id` (`duty-separation-policy.json`) — against every protected binding, and
+the six committed bindings in `profiles/default/v1/profile.json` are `instance.ci`,
+`instance.forge`, `instance.producer`, `instance.publisher`, `instance.reviewer` and
+`instance.verifier` with matching boundary and principal ids. None equals a
+`.operator.local-macos` or `.operator.yihanzhu` value, and `operator` is in neither
+`protected_roles` nor `dormant_roles` (`:4-5`), so no binding can carry it. The
+prerequisite duty evaluation is what proves this on real bytes; a verdict other than
+`satisfied` stops the run rather than being worked around.
 
 **The order.** Each entry names what it produces and what it references; nothing
 references a later entry.
@@ -599,8 +658,12 @@ references a later entry.
    shadow/v1/assemble-materialization-input.sh assemble \
      repo.ystack "$SRC" d3f6d525328838b9c2de819699e53d8909ab7a3f "$REQUESTED_AT_0" \
      "$REPO/profiles/default/v1" "$RESOLVED_PROFILE" "$JQ" "$OUT_DIR_0" \
-     "$PRE_REQ/environment-declaration.json"
+     "$PRE_REQ/environment-declaration.json" "$REQUESTER"
    ```
+
+   Ten inputs, with `$REQUESTER` last: the amended entry refuses nine with `E_USAGE`,
+   so an invocation copied from this plan's earlier revisions fails closed rather than
+   assembling under a binding-derived requester.
 
    Retain `input.json`, and extract the two documents the duty evaluator needs in the
    assembler's own canonical form — the extraction
@@ -794,8 +857,13 @@ Once per case, with `$OUT_DIR` a fresh empty 0700 directory:
 ```sh
 shadow/v1/assemble-materialization-input.sh assemble \
   repo.ystack "$SRC" "$REV" "$REQUESTED_AT" \
-  "$REPO/profiles/default/v1" "$RESOLVED_PROFILE" "$JQ" "$OUT_DIR" "$CLAIM"
+  "$REPO/profiles/default/v1" "$RESOLVED_PROFILE" "$JQ" "$OUT_DIR" "$CLAIM" \
+  "$REQUESTER"
 ```
+
+`$REQUESTER` is the retained `requester.json` defined above — the same file and the same
+bytes as the prerequisite assembly used, for both cases. A per-case or per-run requester
+would make the two cases incomparable and is not done.
 
 `$REV` is `0427390224c25147650f1bd3b6e43ed6911b97a7` for the post case and
 `d3f6d525328838b9c2de819699e53d8909ab7a3f` for the pre case. `$REQUESTED_AT` is the
@@ -987,7 +1055,9 @@ stop the run on any mismatch.
 ### Repeatability (requirement 18)
 
 Run each fixed tuple a second time, in fresh disposable candidate, scratch and state
-directories, with the same pinned jq, the same `$SRC` and the same environment. Compare:
+directories, with the same pinned jq, the same `$SRC`, the same `$REQUESTER` and the
+same environment — the repeatability assembly is the ten-input invocation above,
+argument for argument, with only the output directory changed. Compare:
 
 ```sh
 diff -r "$OUT_DIR_1" "$OUT_DIR_2"
@@ -1005,7 +1075,7 @@ says so.
 
 ### Capture, recoverability, inventory
 
-Copy the thirty per-case files and the eleven shared documents — everything in the
+Copy the thirty per-case files and the twelve shared documents — everything in the
 table above except `README.md`, `verification-instructions.md` and `checksums.json`,
 which this step writes — into
 `shadow/evidence/self-host-transition/v1/`, unchanged. Build `checksums.json` as a
@@ -1086,7 +1156,15 @@ credentials, no model and no real reproduction. It checks the committed bytes:
     regained the newline fails rather than passing silently. It also parses the
     descriptor and requires its nine `members[].path` entries and their digests to
     equal the live digests of those nine committed files at the pinned generation.
-12. Negative cases: mutate a **copy** of each of an evidence file, a digest in
+12. `requester.json` hashes to
+    `7596d803e09956c24a627d29558b22a583369080ac653941816c0fbadb2d68cd`, satisfies
+    `schema::actor_ref_ok` through the committed core contract, carries role
+    `operator`, and its `adapter_instance_id`, `execution_boundary_id` and
+    `principal_id` equal none of the six `profiles/default/v1/profile.json` bindings'.
+    Every retained `input.json` — both cases' and the prerequisite's — carries
+    `.stage_request.content.body.requested_by` equal to those exact bytes, so all three
+    assemblies demonstrably ran under the one approved identity.
+13. Negative cases: mutate a **copy** of each of an evidence file, a digest in
     `checksums.json`, and an outcome field, and require the test to fail on each. A
     test that passes on altered evidence proves nothing.
 
