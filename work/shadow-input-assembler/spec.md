@@ -72,12 +72,12 @@ the split is about five more. The range above still covers
 all of them.
 
 **This spec pull request.** `review_size: standard`. Its whole diff is this one
-file: the spec goes from 1,607 to 1,730 lines by `wc -l`, 145 added and 22
-removed, 167 changed lines — well inside the standard budget, and no
+file: the spec goes from 1,607 to 1,806 lines by `wc -l`, 223 added and 24
+removed, 247 changed lines — inside the standard budget, and no
 exception is claimed for it.
 
 **The amendment's own implementation pull request.** `review_size: standard`,
-140-270 net lines, and this record is separate from the
+180-330 net lines, and this record is separate from the
 `accepted-exception` above. That exception covers the shipped component and
 its focused test, which have already landed; it is not a standing allowance
 for later work on the same slug. What the requester rule adds to that shipped
@@ -85,9 +85,11 @@ component is one more argument, one more input read, one shape check, two
 relation checks, and their refusals — about 60-120 lines across
 `shadow/v1/materialization-input.jq` and
 `assemble-materialization-input.sh`, of which the removal of the projection
-gives a little back — plus about 80-150 lines of test: the real duty
-evaluation with its policy set, resolved profile and materializer-produced
-stage result, the verbatim-copy assertion, and the three negative cases. The
+gives a little back — plus about 120-200 lines of test: the acyclic two-pass
+construction requirement 13 sets out (the declaration, the prerequisite
+assemble, the materializer run, the real duty evaluation over the shipped
+policy set, the final claim, and the second assemble), the verbatim-copy
+assertion, and the three negative cases. The
 documentation row and the arity change are a handful more. That total sits
 inside the standard budget, so the amendment's implementation PR claims no
 exception of its own.
@@ -508,9 +510,11 @@ lose the verified detail the rounds added.
     `scripts/test/local-git-materializer-fixtures.sh` produces one — but over
     the **shipped** `profiles/default/v1/` documents, not the five synthetic
     manifests that builder invents for itself, because the pins in
-    requirement 3 admit nothing else. It passes the existing fixture claim as
-    the ninth argument and a requester document as the tenth, and asserts: the
-    output validates against the
+    requirement 3 admit nothing else. It runs the assembler twice over that
+    fixture — the prerequisite pass and the final pass the duty paragraph
+    below sets out — passing a claim-position document as the ninth argument
+    and the same requester document as the tenth each time, and asserts of
+    each run: the output validates against the
     materializer protocol; a second run is byte-identical; the read-only
     shape holds in both payload places; the request's
     `environment_ref.environment_id` equals the supplied claim's `.id` and
@@ -524,19 +528,86 @@ lose the verified detail the rounds added.
     `E_PROFILE`.
 
     **The requester is proved against the real duty evaluator, not a
-    fabricated verdict.** The test asserts that `requested_by` in the
-    assembled request equals the tenth argument's bytes exactly, including the
-    presence or absence of `authority_ref`, and that no field of the forge
-    binding leaked into it. Then it runs the shipped
+    fabricated verdict — and the proof is built in two passes, so that no
+    document has to hash a document that hashes it.** The test asserts that
+    `requested_by` in each assembled request equals the tenth argument's bytes
+    exactly, including the presence or absence of `authority_ref`, and that no
+    field of the forge binding leaked into it. Then it runs the shipped
     `control/v1/evaluate-duty.sh` — `evaluate <policy-set> <request>
-    <resolved> <result>` — on the assembled request, with the shipped
-    `control/v1/control-policy-set.json` as the policy set, the same real
-    resolved profile the assembler was given, and a real `stage_result`: the
-    `.stage_result` of a run of
-    `adapters/local-git-materializer/v1/materialize.sh` over the assembled
-    input, the same projection `shadow/v1/reproduce.sh:460` takes. It asserts
-    the evaluation's `verdict` is `satisfied` and its `reason_ids` are exactly
-    `["duty.satisfied"]`.
+    <resolved> <result>` — over a **prerequisite** assembler run, not over the
+    run whose `input.json` the driver later reads.
+
+    **Why a single pass cannot be built.**
+    `shadow/v1/materialization-input.jq:197` puts the claim's SHA-256 into the
+    request as `environment_ref.fingerprint_sha256`;
+    `control/v1/duty-separation.jq:194` puts that request's SHA-256 into the
+    evaluation; `control/v1/sandbox.jq:204-211` requires the claim to carry
+    that evaluation's digest and its `stage_result_ref`. Claim to request to
+    duty to claim: no ordering of one run's own documents breaks it, and a
+    fixture that tried would have to be rebuilt every time it was corrected.
+    The prerequisite pass breaks the cycle by putting a document in the claim
+    position that carries no reference of any kind, so it can hash nothing.
+    This is the construction the accepted `shadow-self-host-run` plan uses for
+    the same cycle, and this test follows it in the same order. Each entry
+    names what it produces and references only earlier entries, so every
+    digest exists before the document that names it is built.
+
+    1. **`environment-declaration.json`**, written by the test with
+       `jq -S -c -n`: `schema_version` 1, `kind`
+       `execution_environment_claim`, `id` the fixture environment's id, and a
+       body that is the shipped `control/v1/sandbox-policy.json` body's
+       `environment`, `filesystem`, `isolation`, `limits`, `network`,
+       `resources`, `sensitive_material` and `tools` sections copied verbatim,
+       plus `registry_entry_sha256` — the SHA-256 of the canonical bytes of
+       the one fixture registry entry whose `environment_id` and
+       `target_repository_id` match this run, selected and required to match
+       exactly once the way `shadow/v1/reproduce.sh:396-399` selects it. It
+       carries **no `*_ref` field of any kind**, so it can carry no fabricated
+       digest, and it is handed neither to `control/v1/evaluate-sandbox.sh`
+       nor to the driver. This is a bootstrap environment description, not a
+       claim, and the assembler is the only thing that reads it: the assembler
+       checks the claim-position file's `kind` and its `id` and nothing else
+       (`claim_kind_ok` and `claim_id_ok`,
+       `shadow/v1/materialization-input.jq:101-105`, applied at `:213-214`),
+       which is why a document that is not yet a full claim is accepted here
+       and needs no change to the component.
+    2. **The prerequisite assembler run** — the same invocation as the final
+       one, with that declaration in the claim position, its own frozen
+       `requested_at` and its own fresh output directory. The test extracts
+       `.stage_request.content` and `.resolved_profile.content` from its
+       `input.json` in the assembler's own canonical form and checks their
+       SHA-256s against the assembler's own `stage-request-ref.json` and
+       `resolved-profile-ref.json`. References entry 1.
+    3. **The prerequisite `stage_result`** — the `.stage_result` of a run of
+       `adapters/local-git-materializer/v1/materialize.sh` over that
+       prerequisite `input.json`, the same projection
+       `shadow/v1/reproduce.sh:460` takes. References entry 2.
+    4. **The duty evaluation** — `control/v1/evaluate-duty.sh` over the
+       shipped
+       `control/v1/control-policy-set.json` as the policy set, entry 2's stage
+       request, entry 2's resolved-profile document, and entry 3's stage
+       result. The test asserts this evaluation's `verdict` is `satisfied` and
+       its `reason_ids` are exactly `["duty.satisfied"]`. That assertion is
+       the one that proves the requester, and it is made **about the
+       prerequisite request**, which carries the explicit tenth-argument
+       requester exactly as the final request does. References entries 2 and 3.
+    5. **The final claim**, written by the test: the same shipped sandbox
+       policy body sections copied verbatim, an `execution_identity` read out
+       of the resolved profile's `verifier` binding rather than typed,
+       `policy_set_ref` naming the shipped policy set's own id and digest,
+       `duty_evaluation_ref` naming entry 4's id and the SHA-256 of entry 4's
+       bytes, and `stage_result_ref` copied field for field from entry 4's
+       `body.stage.result_ref`. No digest in it is chosen; each is of bytes an
+       earlier entry already produced. References entries 3 and 4.
+    6. **The final assembler run** — the same arguments again with the final
+       claim in the claim position. This is the run whose `input.json` the
+       driver reads below. Its request fingerprints the final claim, and
+       nothing earlier fingerprints that request, so the order closes.
+
+    The prerequisite run and the final run are different documents — different
+    claim-position bytes, different `requested_at`, different output
+    directories — and the test tells them apart by digest, because
+    `materialization-input.jq` gives every request the same id.
 
     **A fabricated `duty.json` is forbidden in this test.** No document handed
     to a control evaluator or to the driver in this test may be hand-built
@@ -544,8 +615,11 @@ lose the verified detail the rounds added.
     digest standing in for a real SHA-256. That is the practice that let the
     defect this requirement now closes ship: a hand-written verdict proves
     that the test can write JSON, not that the request the component emits
-    can pass. Every control document this test uses is either a shipped file
-    or the output of the shipped evaluator run on real bytes.
+    can pass. Every control document this test uses is a shipped file, the
+    output of a shipped tool run on real bytes, or — for the two documents no
+    shipped tool emits, the declaration and the final claim — built only from
+    shipped policy bytes, values read out of the resolved profile, and digests
+    of bytes an earlier entry of the order above already produced.
 
     Two negative cases come with it, each asserting `E_RELATION` and an empty
     output directory. A requester identical to the good one except for `role`
@@ -769,13 +843,15 @@ lose the verified detail the rounds added.
     both new shell files, with no new `shellcheck disable` directive in
     either.
 
-    It then feeds the assembled `sha1` input to `shadow/v1/reproduce.sh` with
+    It then feeds the **final** pass's assembled `sha1` input — entry 6 of the
+    order above, never the prerequisite one — to `shadow/v1/reproduce.sh` with
     the existing fixture environment, the shipped
     `control/v1/control-policy-set.json`, the duty evaluation the real
-    evaluator just produced above — whose SHA-256 is what the fixture claim's
-    `duty_evaluation_ref` carries — and the same claim file it handed the
-    assembler, so the request's `environment_ref` names the very environment
-    the driver evaluates. It asserts an outcome that is not `inconclusive`.
+    evaluator produced over the prerequisite run — entry 4, whose SHA-256 is
+    what the final claim's `duty_evaluation_ref` carries — and that same final
+    claim file, the one it handed the final assembler run, so the request's
+    `environment_ref` names the very environment the driver evaluates. It
+    asserts an outcome that is not `inconclusive`.
     Whether the driver then reaches materialization depends on the sandbox
     section, which is a separate question and not this component's to settle;
     what this requirement fixes is that nothing the driver reads about duty is
