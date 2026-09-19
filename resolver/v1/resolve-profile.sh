@@ -213,7 +213,7 @@ trap '
   fi
   if [ -n "$entry_signal" ] && [ -f /dev/fd/2 ]; then
     if [ -n "$parent_pid" ]; then
-      builtin printf "entry-signal: %s forwarded %s\n" "$entry_signal" "$$" >&2
+      builtin printf "entry-signal: %s forwarded %s\n" "$entry_signal" "$parent_pid" >&2
     else
       builtin printf "entry-signal: %s no-parent\n" "$entry_signal" >&2
     fi
@@ -284,7 +284,7 @@ pin_hexes=(
   cfc3ed3b1c3d714412a6dffc85accaabb98cf3df
   6af6f42d9afb073fbc892646fe9cd899f7057700
   cb99a95688f5b141e2a4db787bbc800780f5e59a
-  2397580622404bfcd36f9031fbe90f635ab8ddd8
+  f1b319591841bf5b241bcce2f04ce7282aa5c400
 )
 
 pin_index=0
