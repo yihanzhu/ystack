@@ -1040,6 +1040,33 @@ fi
 
 # --- 7. R3 no-copy invariant (spec.md:7449-7494) -----------------------------------------
 
+# Provisioned here (rather than down at section 8's loader-variable case, which is its
+# only other consumer) so the Linux branch of the pre-resolver-helper pollution case
+# below can exercise the direct-parent invocation with the same marker library, instead
+# of skipping that boundary and relying solely on the later entry-level loader case
+# (which already scrubs the environment before the parent ever starts).
+marker_lib_src="$tmp/marker-lib.c"
+cat > "$marker_lib_src" <<'MARKERLIB'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+__attribute__((constructor))
+static void ystack_marker_ctor(void) {
+  const char *path = getenv("YSTACK_TEST_MARKER_FILE");
+  if (!path) return;
+  FILE *f = fopen(path, "a");
+  if (!f) return;
+  fprintf(f, "argv0=? pid=%ld\n", (long)getpid());
+  fclose(f);
+}
+MARKERLIB
+case "$platform" in
+  Darwin:*) marker_lib="$tmp/marker-lib.dylib"
+    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -dynamiclib "$marker_lib_src" -o "$marker_lib" ;;
+  *) marker_lib="$tmp/marker-lib.so"
+    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$marker_lib_src" -o "$marker_lib" ;;
+esac
+
 if [ "$parent_available" -eq 1 ]; then
   # R5's output-directory check requires argv[7] (the output root) to contain
   # *exactly* {".run"} and to be the same object (equal st_dev/st_ino) as argv[8]
@@ -1106,10 +1133,79 @@ PERLMOD
       else
         fail_case 'R3: perl-variable pollution'
       fi
+
+      # Darwin equivalent of the Linux LD_PRELOAD-marker case below: exercise the
+      # PARENT directly with DYLD_INSERT_LIBRARIES/DYLD_LIBRARY_PATH pollution. Use a
+      # locally-compiled, unsigned control binary rather than a system one (e.g.
+      # /usr/bin/true) for the negative control -- SIP strips DYLD_* from system
+      # binaries' environments unconditionally, which would make the control fire
+      # (or not) for reasons unrelated to whether our own, locally-built,
+      # non-system-path parent binary respects it.
+      r3_dyld_control_src="$tmp/r3.dyld-control.c"
+      /usr/bin/printf 'int main(void){return 0;}\n' > "$r3_dyld_control_src"
+      r3_dyld_control_bin="$tmp/r3.dyld-control"
+      /usr/bin/cc -std=c11 -Wall -Wextra -O2 "$r3_dyld_control_src" -o "$r3_dyld_control_bin"
+      r3_dyld_control_marker="$tmp/r3.dyld-control.marker"
+      DYLD_INSERT_LIBRARIES="$marker_lib" DYLD_LIBRARY_PATH="$tmp" \
+        YSTACK_TEST_MARKER_FILE="$r3_dyld_control_marker" "$r3_dyld_control_bin" 2>/dev/null || :
+      if [ ! -f "$r3_dyld_control_marker" ]; then
+        skip_case 'R3: DYLD_INSERT_LIBRARIES-marker pollution of the parent'\''s own helpers' \
+          'DYLD_INSERT_LIBRARIES did not reach even a locally-built, unsigned control binary on this machine (unexpected -- check SIP/library-validation settings); the Linux LD_PRELOAD-marker case above exercises the same boundary'
+      else
+        r3_dyld_out="$tmp/r3.dyld-pollution"; build_run_directory "$r3_dyld_out"
+        r3_dyld_marker="$tmp/r3.dyld-pollution.marker"
+        DYLD_INSERT_LIBRARIES="$marker_lib" DYLD_LIBRARY_PATH="$tmp" YSTACK_TEST_MARKER_FILE="$r3_dyld_marker" \
+          invoke_parent_exec "$r3_dyld_out/.run" "$synthetic_request" "$synthetic_map" "$r3_dyld_out" \
+          > "$r3_dyld_out.stdout" 2> "$r3_dyld_out.stderr" &
+        r3_dyld_pid=$!
+        r3_dyld_status=0
+        wait "$r3_dyld_pid" 2>/dev/null || r3_dyld_status=$?
+        r3_dyld_bad_children=0
+        if [ -f "$r3_dyld_marker" ]; then
+          /usr/bin/grep -qv "pid=$r3_dyld_pid\$" "$r3_dyld_marker" && r3_dyld_bad_children=1
+        fi
+        if [ "$r3_dyld_status" -eq 0 ] && /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_dyld_out.stdout" &&
+           [ "$r3_dyld_bad_children" -eq 0 ]; then
+          pass_case 'R3: DYLD_INSERT_LIBRARIES-marker pollution of the parent'\''s own helpers is discarded before its SHA/jq children'
+        else
+          fail_case 'R3: DYLD_INSERT_LIBRARIES-marker pollution reached the parent'\''s helper children'
+        fi
+      fi
       ;;
     Linux:x86_64)
-      skip_case 'R3: LD_PRELOAD-marker pollution of the parent'\''s own helpers' \
-        'requires the loader-variable marker library, which is built and used by the loader case below on this platform'
+      # Exercise the PARENT directly (not through $entry, which already clears the
+      # environment before the parent ever starts and so cannot prove anything about
+      # the parent's own children). LD_PRELOAD is inherited by the dynamic loader that
+      # brings up trusted-launch's own process image -- that one marker hit is
+      # unavoidable and expected -- so the assertion is that no *other* process picks
+      # it up: the parent's SHA (nofollow-snapshot) and jq children must not inherit it.
+      r3_ld_control_marker="$tmp/r3.ld-control.marker"
+      LD_PRELOAD="$marker_lib" LD_LIBRARY_PATH="$tmp" YSTACK_TEST_MARKER_FILE="$r3_ld_control_marker" \
+        /bin/true 2>/dev/null || :
+      if [ ! -f "$r3_ld_control_marker" ]; then
+        fail_case 'R3: LD_PRELOAD-marker negative control did not fire on this machine'
+      fi
+      r3_ld_out="$tmp/r3.ld-pollution"; build_run_directory "$r3_ld_out"
+      r3_ld_marker="$tmp/r3.ld-pollution.marker"
+      LD_PRELOAD="$marker_lib" LD_LIBRARY_PATH="$tmp" YSTACK_TEST_MARKER_FILE="$r3_ld_marker" \
+        invoke_parent_exec "$r3_ld_out/.run" "$synthetic_request" "$synthetic_map" "$r3_ld_out" \
+        > "$r3_ld_out.stdout" 2> "$r3_ld_out.stderr" &
+      r3_ld_pid=$!
+      r3_ld_status=0
+      wait "$r3_ld_pid" 2>/dev/null || r3_ld_status=$?
+      r3_ld_bad_children=0
+      if [ -f "$r3_ld_marker" ]; then
+        # Every recorded pid must be the direct-parent process itself (its own
+        # unavoidable load-time hit); any other pid means a forked child inherited
+        # the pollution.
+        /usr/bin/grep -qv "pid=$r3_ld_pid\$" "$r3_ld_marker" && r3_ld_bad_children=1
+      fi
+      if [ "$r3_ld_status" -eq 0 ] && /usr/bin/cmp -s "$r3_clean_out.stdout" "$r3_ld_out.stdout" &&
+         [ "$r3_ld_bad_children" -eq 0 ]; then
+        pass_case 'R3: LD_PRELOAD-marker pollution of the parent'\''s own helpers is discarded before its SHA/jq children'
+      else
+        fail_case 'R3: LD_PRELOAD-marker pollution reached the parent'\''s helper children'
+      fi
       ;;
   esac
 else
@@ -1118,27 +1214,8 @@ fi
 
 # --- 8. Loader-variable case (spec.md:7495-7524) -----------------------------------------
 
-marker_lib_src="$tmp/marker-lib.c"
-cat > "$marker_lib_src" <<'MARKERLIB'
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-__attribute__((constructor))
-static void ystack_marker_ctor(void) {
-  const char *path = getenv("YSTACK_TEST_MARKER_FILE");
-  if (!path) return;
-  FILE *f = fopen(path, "a");
-  if (!f) return;
-  fprintf(f, "argv0=? pid=%ld\n", (long)getpid());
-  fclose(f);
-}
-MARKERLIB
-case "$platform" in
-  Darwin:*) marker_lib="$tmp/marker-lib.dylib"
-    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -dynamiclib "$marker_lib_src" -o "$marker_lib" ;;
-  *) marker_lib="$tmp/marker-lib.so"
-    /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$marker_lib_src" -o "$marker_lib" ;;
-esac
+# marker_lib is provisioned back in section 7, alongside its first consumer (the
+# Linux direct-parent helper-pollution case).
 
 if [ -x "$entry" ]; then
   marker_file="$tmp/loader.marker"
@@ -1654,11 +1731,19 @@ if [ -x "$entry" ]; then
     done
     wait "$d2_pid"
     d2_status=$?
-    [ "$d2_saw_run_before_eof" -eq 0 ] || exit 1
-    [ "$d2_status" -eq 0 ] || exit 1
-    /usr/bin/cmp -s "$clean_out.stdout" "$d2_out.stdout" || exit 1
-    [ "$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')" -eq "$copy_before_size" ] || exit 1
-    [ "$(sha256_file "$entry_copy")" = "$copy_before_sha" ] || exit 1
+    d2_after_size=$(/usr/bin/wc -c < "$entry_copy" | /usr/bin/awk '{print $1}')
+    d2_after_sha=$(sha256_file "$entry_copy")
+    d2_stdout_match=0
+    /usr/bin/cmp -s "$clean_out.stdout" "$d2_out.stdout" && d2_stdout_match=1
+    if [ "$d2_saw_run_before_eof" -ne 0 ] || [ "$d2_status" -ne 0 ] ||
+       [ "$d2_stdout_match" -ne 1 ] || [ "$d2_after_size" -ne "$copy_before_size" ] ||
+       [ "$d2_after_sha" != "$copy_before_sha" ]; then
+      printf 'descriptor: entry-script-as-descriptor: saw_run_before_eof=%s status=%s(expected 0) stdout_match=%s(expected 1) size=%s(expected %s) sha=%s(expected %s) stderr=[%s]\n' \
+        "$d2_saw_run_before_eof" "$d2_status" "$d2_stdout_match" \
+        "$d2_after_size" "$copy_before_size" "$d2_after_sha" "$copy_before_sha" \
+        "$(/usr/bin/tail -c 2000 "$d2_out.stderr" 2>/dev/null)" >&2
+      exit 1
+    fi
   ); then
     pass_case 'descriptor: caller descriptor is the running entry script itself (ordering, resolution, file unchanged)'
   else
@@ -2190,7 +2275,14 @@ if [ -x "$entry" ]; then
   else
     fail_case 'signal: full-pipe case landed too late -- .run never appeared'
   fi
+  # kill only sends the signal -- it returns before the filler has actually
+  # exited and released ITS OWN copy of fd 10. Without waiting for it here,
+  # that copy can still be open (a third writer reference, after this shell's
+  # and the drainer subshell's) when fd 10 is closed below, so EOF never
+  # arrives and the drain deadline is spent waiting on a reference nothing
+  # ever explicitly closes.
   kill "$sig7_filler" 2>/dev/null || :
+  wait "$sig7_filler" 2>/dev/null || :
   sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)
   drained="$tmp/signal7.drained"
   drained_flag="$tmp/signal7.drained.done"
@@ -2204,7 +2296,14 @@ if [ -x "$entry" ]; then
   # was -- once fd 10's close delivers EOF. Completion is a bounded wait on
   # an explicit done flag, not a fixed sleep, and the captured file's
   # existence is asserted before it is trusted as proof of absence.
-  ( /bin/cat "$tmp/signal7.fifo" > "$drained" 2>/dev/null; : > "$drained_flag" ) &
+  # The subshell forks from this shell and inherits fd 10 (the fifo's
+  # read-write descriptor) as its own writer reference. If it kept that
+  # copy open, closing fd 10 in the outer shell below would not be the
+  # last writer -- the subshell's inherited copy would still hold the
+  # pipe open and `cat` would never see EOF. Close the inherited copy
+  # first, before cat's own read-only open (which succeeds immediately:
+  # the outer shell's fd 10 is still open at that point).
+  ( exec 10>&-; /bin/cat "$tmp/signal7.fifo" > "$drained" 2>/dev/null; : > "$drained_flag" ) &
   sig7_drain_pid=$!
   /bin/sleep 0.05
   exec 10>&-
@@ -2431,7 +2530,8 @@ if [ -f "$entry" ]; then
     cps_ctb_s=$1 cps_ctb_n=0
     cps_ctb_len=${#cps_ctb_s}
     while [ "$cps_ctb_len" -gt 0 ]; do
-      [ "${cps_ctb_s:$((cps_ctb_len - 1)):1}" = '\' ] || break
+      cps_ctb_last=${cps_ctb_s:$((cps_ctb_len - 1)):1}
+      [ "$cps_ctb_last" = "\\" ] || break
       cps_ctb_n=$((cps_ctb_n + 1))
       cps_ctb_len=$((cps_ctb_len - 1))
     done
@@ -2465,6 +2565,17 @@ if [ -f "$entry" ]; then
       case "$cps_w" in
         [A-Za-z_][A-Za-z0-9_]*=*|exec|command|env)
           cps_wi=$((cps_wi + 1)); continue ;;
+        # A compound-statement introducer (if/while/until's condition
+        # position, then/elif/else/do's body position) names no command
+        # itself -- it is not a builtin invocation, it is shell grammar --
+        # so it must be peeled the same way exec/command/env are, rather
+        # than accepted as a known reserved word with the real command
+        # word that follows it left unexamined. "for" is deliberately not
+        # here: the word right after "for" is a loop variable name, never
+        # a command position (its own body starts after "do", its own
+        # separate segment).
+        if|then|elif|else|while|until|do)
+          cps_wi=$((cps_wi + 1)); continue ;;
       esac
       # An env-wrapper prefix ("${clean_env[@]}"/"${parent_env[@]}") names
       # the wrapper, not the command it launches -- peel it and keep
@@ -2481,10 +2592,53 @@ if [ -f "$entry" ]; then
     done
     [ -n "$cps_first" ] || return 0
 
+    # "eval STRING" and "bash -c STRING" / "sh -c STRING" (bare or
+    # absolute-path) run STRING as a further command list, not as data --
+    # the same treatment as a trap body or a $(...) substitution above.
+    # This runs before the absolute-path early-return below so an
+    # absolute-path "/bin/bash -c ..." still gets its STRING argument
+    # queued (the /bin/bash word itself is still separately allowlisted).
+    case "$cps_first" in
+      eval)
+        cps_eval_i=$((cps_wi + 1))
+        if [ "$cps_eval_i" -lt "${#cps_cmd_words[@]}" ]; then
+          cps_eval_arg=${cps_cmd_words[$cps_eval_i]}
+          case "$cps_eval_arg" in
+            \"*) cps_eval_arg=${cps_eval_arg#\"}; cps_eval_arg=${cps_eval_arg%\"} ;;
+            \'*) cps_eval_arg=${cps_eval_arg#\'}; cps_eval_arg=${cps_eval_arg%\'} ;;
+          esac
+          [ -n "$cps_eval_arg" ] && cps_queue+=("$cps_eval_arg")
+        fi
+        return 0
+        ;;
+      bash|sh|*/bash|*/sh)
+        cps_shc_i=$((cps_wi + 1))
+        if [ "$cps_shc_i" -lt "${#cps_cmd_words[@]}" ] && [ "${cps_cmd_words[$cps_shc_i]}" = '-c' ]; then
+          cps_shc_arg_i=$((cps_shc_i + 1))
+          if [ "$cps_shc_arg_i" -lt "${#cps_cmd_words[@]}" ]; then
+            cps_shc_arg=${cps_cmd_words[$cps_shc_arg_i]}
+            case "$cps_shc_arg" in
+              \"*) cps_shc_arg=${cps_shc_arg#\"}; cps_shc_arg=${cps_shc_arg%\"} ;;
+              \'*) cps_shc_arg=${cps_shc_arg#\'}; cps_shc_arg=${cps_shc_arg%\'} ;;
+            esac
+            [ -n "$cps_shc_arg" ] && cps_queue+=("$cps_shc_arg")
+          fi
+        fi
+        ;;
+    esac
+
     case "$cps_first" in
       ')'|'{'*|'}'*) return 0 ;;
       /*) return 0 ;;                 # literal absolute path: sweep_absolute_paths above
       *'/'*) return 0 ;;              # variable-joined path: dynamic-join allowlist above
+      # A bare "exec FD>&-" / "exec FD<&-" closes a descriptor and names no
+      # command at all -- this tokenizer has no separate redirection-operator
+      # handling, so a fd-close target like "${fd_name}>&-" (surfaced once
+      # the eval-string case above started queuing "exec ${fd_name}>&-" from
+      # the entry's own descriptor-closing loop) lands here as if it were the
+      # command word. It is a redirection target, not a command; return 0 the
+      # same way the VAR=(...) array-literal case above does.
+      *'>&-'|*'<&-') return 0 ;;
     esac
     cps_verified_match=0
     for cps_vv in $cps_verified_vars; do [ "$cps_first" = "$cps_vv" ] && cps_verified_match=1 && break; done
@@ -2785,7 +2939,13 @@ if [ -f "$entry" ]; then
         cps_await_pattern=0
       fi
 
-      while [[ $cps_rest =~ \$\(([^\(\)]*)\) ]] || [[ $cps_rest =~ \`([^\`]*)\` ]]; do
+      # A process substitution (<(...) / >(...)) runs its body as a real
+      # command list the same way $(...) does -- it is handed to the
+      # calling command as a /dev/fd path, not as data -- so its body is
+      # recursively queued here too, alongside command substitution and
+      # backticks.
+      while [[ $cps_rest =~ \$\(([^\(\)]*)\) ]] || [[ $cps_rest =~ \`([^\`]*)\` ]] ||
+            [[ $cps_rest =~ [\<\>]\(([^\(\)]*)\) ]]; do
         cps_sub=${BASH_REMATCH[1]}
         cps_lit=${BASH_REMATCH[0]}
         [ -n "$cps_sub" ] && cps_queue+=("$cps_sub")
@@ -2851,7 +3011,8 @@ if [ -f "$entry" ]; then
             # operator -- it names a target descriptor, never a command
             # position, so it stays part of the current (redirection) word.
             cps_tlen=${#cps_tok}
-            if [ "$cps_tlen" -gt 0 ] && [ "${cps_tok:$((cps_tlen - 1)):1}" = '>' -o "${cps_tok:$((cps_tlen - 1)):1}" = '<' ]; then
+            cps_tok_last=${cps_tok:$((cps_tlen - 1)):1}
+            if [ "$cps_tlen" -gt 0 ] && { [ "$cps_tok_last" = '>' ] || [ "$cps_tok_last" = '<' ]; }; then
               cps_tok="$cps_tok$cps_c"; cps_i=$((cps_i + 1)); continue
             fi
             [ -n "$cps_tok" ] && { cps_toks+=("$cps_tok"); cps_is_op+=(0); cps_tok=''; }
@@ -2978,6 +3139,40 @@ if [ -f "$entry" ]; then
       pass_case 'mechanism: command-position sweep rejects a command reached only through a one-line case arm' ;;
     *)
       fail_case 'mechanism: command-position sweep failed to reject a command reached through a one-line case arm' ;;
+  esac
+
+  # Round-3 review: builtins and reserved words (eval, if/then/etc.) were
+  # accepted without inspecting the commands they introduce, and a process
+  # substitution's body was never queued at all. Three more shapes, each
+  # proven rejectable rather than merely "not obviously mishandled".
+  cps_neg_eval="$cps_neg_dir/eval.sh"
+  printf '%s\n' "eval 'unallowlisted_command'" > "$cps_neg_eval"
+  cps_neg_eval_findings=$(cps_scan_source "$cps_neg_eval")
+  case "$cps_neg_eval_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through an eval string' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through an eval string' ;;
+  esac
+
+  cps_neg_ifbody="$cps_neg_dir/ifbody.sh"
+  printf '%s\n' 'if true; then unallowlisted_command; fi' > "$cps_neg_ifbody"
+  cps_neg_ifbody_findings=$(cps_scan_source "$cps_neg_ifbody")
+  case "$cps_neg_ifbody_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through an if-body' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through an if-body' ;;
+  esac
+
+  cps_neg_procsub="$cps_neg_dir/procsub.sh"
+  printf '%s\n' 'diff <(unallowlisted_command) /dev/null' > "$cps_neg_procsub"
+  cps_neg_procsub_findings=$(cps_scan_source "$cps_neg_procsub")
+  case "$cps_neg_procsub_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through a process substitution' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through a process substitution' ;;
   esac
 
   env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
