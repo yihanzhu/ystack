@@ -39,6 +39,32 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+The inactive runtime selects Git from one exact installed platform observation:
+`/usr/bin/uname -sm`. Linux x86_64 uses `/usr/bin/git`; Darwin x86_64 and arm64
+use `/Library/Developer/CommandLineTools/usr/bin/git`. The final uname, Git,
+`/bin/dd` and `/usr/bin/od` files must be regular, executable and not symlinks.
+Missing tools, another platform, malformed bytes or a failed pipeline refuse with
+`E_RUNTIME dependency`. There is no discovery, fallback or installer.
+
+The private observer passes at most 65 raw bytes through dd to od before shell
+capture, rejects more than 64, and matches the exact LF-terminated platform bytes.
+It checks every pipeline stage. The existing launcher deadline covers stalled tools;
+a separately sourced component call has no independent probe timeout.
+
+All five Git positions use the initialized selection. Existing object validation,
+source isolation, budgets, watchdog and empty runtime HOME/TMPDIR requirements remain.
+Native proof records the actual tested platform and executable hashes; mapping a
+platform does not qualify an untested architecture. Component controls do not replace
+native launcher evidence. The available native development proof is Darwin arm64;
+Linux x86_64 runs the complete suite in required CI. Darwin x86_64 needs its own
+actual run before qualification. The direct installed CLT Git must continue to meet the
+same behavior and cleanup contract; changed tools require fresh evidence.
+
+This dependency repair does not install or activate a runtime. The production trusted
+parent must separately reconcile its library pin and new fixed dependencies through
+its own artifact gates. No preserved parent work or proposed cache exception is
+accepted by this runtime change.
+
 ## Inactive default profile assembly
 
 `profiles/default/v1/` binds six default adapter packages to exact Git
@@ -103,6 +129,17 @@ generation remains immutable and restorable.
 through the existing local Git materializer. It then checks one repo-relative
 candidate blob against a supplied SHA-256 and records a private, resumable state.
 It never executes candidate code or a user command string.
+
+An optional planner delivery key selects journal version 2 for the one supported
+`dispatch-stage` operation and attempt 1. That format stores the complete validated
+materializer response, its actual typed stage result, and receipt bytes at the same
+atomic journal boundary as the candidate identity. A matching redelivery reuses the
+stored result. Read mode holds the permanent replay lock, rechecks the frozen input,
+tools, source, candidate, response, and result relations, and returns the stored facts
+without advancing a phase or running the verifier. Version 1 remains the unbound
+format and cannot be promoted into original-result evidence. See the
+[stored materialization result guide](replay-materialization-result.md) for the key,
+commands, limits, exit codes, crash behavior, and restoration boundary.
 
 Review and publisher records are supplied offline test observations. Each names the
 exact request digest, candidate tree, and candidate commit, and all three must match
@@ -207,6 +244,12 @@ grants no authority, qualification, or permission. The package stays inactive,
 runs no candidate or adapter, reads no credential, activates no profile, and
 performs no network, publish, deploy, or external-write action.
 
+The [accepted sandbox boundary decision](../work/real-sandbox-boundary/spec.md)
+is complete as an architecture decision; real execution remains blocked.
+Its boundary map and four separately gated implementation concerns define what
+must be resolved before use. This decision ships no runtime, and the evaluator's
+declaration-only result still grants no enforcement proof or qualification.
+
 ## Inactive credential-policy evaluator
 
 `control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
@@ -222,6 +265,30 @@ produce `satisfied`. The package stays inactive, reads no credential material or
 credential-like environment value, grants no authority or qualification, activates
 no profile, and performs no candidate, adapter, network, publish, deploy, or
 external-write action.
+
+The three input-mutation tests allow at most three fully reconciled setups using
+that original evaluator. Only a proved missed setup window may retry; exhaustion
+fails. All original mutation, refusal, restoration and cleanup assertions remain
+required. This test setup grants no credentials, qualification or activation.
+
+The credential-policy test now treats its private outer control handoff as one
+transaction. The child publishes its canonical PID and process-group identity by
+writing, closing and atomically renaming a private record. The parent opens the
+final record without following links, checks that it is a regular file, applies a
+bounded exact grammar, and matches both fields to the Bash job it launched before
+writing the one finite release token.
+
+Once release may have occurred, failure handling becomes wait-only. The launching
+Bash is the only consumer of that saved job and retires its authority only after a
+confirmed direct wait. A trapped signal, release error or later observation cannot
+turn into a successful control. Unconfirmed wait state retains the case evidence;
+actual descendant events and the direct child status are reported as separate
+facts. The regression matrix exercises atomic publication, refusal records, signal
+boundaries, release failures and retirement on real private workers.
+
+This evidence does not identify the unique cause of a historical CI failure. It
+does not change the evaluator or grant credential qualification, authority or
+activation.
 
 ## Inactive evidence-integrity evaluator
 
@@ -279,6 +346,25 @@ pending deliveries, with redeliveries first and stable stage-key order; work tha
 does not fit is listed as deferred. Scanner recovery actions and reasons remain
 data in the plan. The filter does not dispatch, schedule, execute recovery, write
 state, use a credential or network, activate a profile, publish, or touch a target.
+
+## Inactive durable delivery ledger
+
+`orchestrator/v1/delivery-ledger.py` persists the existing planner's delivery
+ledger in a dedicated owned local store. Initialize, read and conditional update
+use a fixed direct Python entry. Canonical exports carry actual SHA256 references.
+The planner itself still only validates reference shape and matching identity.
+
+All calls hold one permanent flock. A single process writes bounded loose Git
+objects and publishes one exact-old-tip ref update by atomic rename. Full history
+validation precedes read, replay and new updates. Exact replay survives a lost
+reply; retained crash residue counts toward all resource limits. No automatic
+cleanup, arbitrary Git writer, subprocess, network or provider action is included.
+
+See [the delivery ledger guide](delivery-ledger.md) for the exact invocation,
+state transitions, limits, recovery boundary and restoration requirements.
+The focused `scripts/test/orchestrator-delivery-ledger.test.sh` covers actual
+public transitions, independent Git/jq/planner checks and held crash boundaries.
+The component remains inactive and grants no qualification or target authority.
 
 ## Inactive GitHub forge normalizer payload
 

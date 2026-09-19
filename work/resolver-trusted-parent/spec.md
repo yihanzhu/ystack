@@ -1,5 +1,5 @@
 ---
-intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f
+intent-blob: bc6e669b755bae6c7f52f10f047c602faa46210a
 risk: high
 drafted: 2026-09-09
 ---
@@ -18,8 +18,20 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Evidence-based range: 2100-2841 changed lines** (implementation). The derivation,
-measured rather than guessed:
+**Current measured range: 3650-4950 changed lines** (implementation).
+This replaces the historical 2100-2841 band below without changing scope or proof.
+Measured at implementation head `5472bdc`: the test is 1865 lines, the parent 1910
+and the entry 400, giving 4175, plus the ~62 documentation/manifest/schema-inventory
+lines and the harness fixes the same change carries; the earlier 2850-3200 estimate
+under-counted the R10 case inventory and the R2/R5 machinery the review rounds added.
+Measure additions, deletions and net at the full implementation head. An unexplained
+overrun returns through the artifact gate; never compress code, drop proof or split
+off required tests to meet this band.
+
+The derivation below records historical source measurements and evolving estimates;
+its earlier ranges and running totals are historical, not the current size gate:
+
+**Historical evidence-based range: 2100-2841 changed lines** (implementation).
 
 - **C parent ~1075 lines** = ~605 copied verbatim + ~470 new. The test launcher is 702
   lines (`wc -l scripts/test/portable-profile-resolution-launcher.c`), and what the parent
@@ -982,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
+**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10025 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10106 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1187,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
+**8590-11622 lines** — this file's measured 10106 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1353,7 +1365,7 @@ being places where an earlier round claimed more than it had. About 90 go to the
 write residual: R7's claim narrowed to name exactly what it covers — everything this
 initiative adds, on both platforms, and the unchanged runtime on Linux — its Darwin
 paragraph rewritten around the runtime's own `/usr/bin/git`
-(`scripts/lib/profile-resolution.sh:313-323` and `:711-714`) reaching the `xcrun` shim
+(`scripts/lib/profile-resolution.sh:390-400` and `:789-792`) reaching the `xcrun` shim
 where the parent cannot redirect it, the deviation from
 `work/resolver-trusted-parent/intent.md:36` stated plainly with DR-2 named as open and
 its two refused-case alternatives given a sentence each, R1's "what this buys" paragraph
@@ -2147,7 +2159,7 @@ checked the helper and its own binary inside `.run` and said nothing about the j
 is handed — and the runtime derives its whole tool root from that one string:
 `${YSTACK_RESOLVER_JQ%/*}`, then `$tool_root/awk`, checked with `[ -x ]` and `[ ! -L ]`
 and nothing else and then executed
-(`scripts/lib/profile-resolution.sh:673-676` and `:99`, read on `origin/main` rather than
+(`scripts/lib/profile-resolution.sh:750-753` and `:176`, read on `origin/main` rather than
 carried over from an earlier round), with the parent's own `PATH` for the child built from
 the same string (`portable-profile-resolution-launcher.c:662-677`). So a genuine pinned jq
 sitting in a directory of the caller's own put the caller's `awk` inside the boundary with
@@ -2528,12 +2540,12 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8521-11529 lines**, which is this file's measured
-10025 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8590-11622 lines**, which is this file's measured
+10106 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2100-2841 changed lines derived at the top of this section belong to the *implementation*
+3650-4950 changed lines recorded at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -2577,7 +2589,7 @@ the spec pull request's range above still blocks review.
   than that, while the directory is still 0700. Nothing shipped reads `scripts/test/`.
   The split follows the test today: the test
   script owns compilation, jq binding and platform choice
-  (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
+  (`scripts/test/portable-profile-resolution.test.sh:282-343`), and the C file owns only
   the launch.
 
   **The signal traps only record, and the main flow acts.** An earlier round of this spec
@@ -4650,7 +4662,7 @@ the spec pull request's range above still blocks review.
   computes the git blob ids of `resolver/v1/nofollow-snapshot.c` and
   `resolver/v1/trusted-launch.c` and compares them against blob ids pinned as constants in
   the entry, the way the runtime pins its own dependencies
-  (`scripts/lib/profile-resolution.sh:7-10,711-717`). It computes them rather than running
+  (`scripts/lib/profile-resolution.sh:7-10,789-795`). It computes them rather than running
   `git hash-object`, for a reason the Darwin toolchain paragraphs below set out: neither
   shipped file runs `git` at all. In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
@@ -4665,6 +4677,13 @@ the spec pull request's range above still blocks review.
   test asserts they equal the working tree's blob ids, so a source edit that forgets the
   pin fails CI rather than shipping. A mismatch on any of them is `E_RUNTIME` before any
   compile.
+
+  The entry locates the five modules using an ordinary copied generation constant,
+  equal to `PORTABLE_CORE_GENERATION` in the accepted, pinned
+  `scripts/core-contract.sh` and `PROFILE_RESOLUTION_CORE_GENERATION` in the accepted
+  library. It does not discover the generation by reading untrusted library text at
+  runtime. Do not split or encode the constant to evade the generation inventory.
+  No unused entry schema-major constant is required.
 
   **The run directory lives inside the caller's output directory, so the caller's output
   path is the only write root.** The entry's positional arguments are
@@ -4820,7 +4839,7 @@ the spec pull request's range above still blocks review.
 
   The entry compiles both C
   files from those pinned sources into the run directory with the fixed flags
-  (`portable-profile-resolution.test.sh:146-149`), with `-o` naming a path inside the run
+  (`portable-profile-resolution.test.sh:338-341`), with `-o` naming a path inside the run
   directory and with the compiler's own `TMPDIR` pointed inside it, so that the compiler's
   intermediates — preprocessor output, assembler input,
   temporary object files — land inside the run directory and are removed by the same
@@ -4978,12 +4997,13 @@ the spec pull request's range above still blocks review.
   both platforms.** Taking the shim out of the compile is only half of it, because
   `/usr/bin/git` is that same single inode — ten `git hash-object` pin checks would have
   reached the same cache the compiles used to. That is why the blob ids are computed
-  instead (above), and why neither the entry nor the parent runs `git` at all. What it does
-  not buy is the runtime: the runtime runs `/usr/bin/git` for itself, this spec leaves the
-  runtime unchanged, and on Darwin that is the one write outside the caller's output path
-  that remains. R7 states that residual in full, and DR-2 accepted it: the operator decided
-  it on 2026-09-10, and the intent now names it as the one accepted exception to its
-  write-root constraint (`work/resolver-trusted-parent/intent.md:36-45`, quoted in R7).
+  instead (above), and why neither the entry nor the parent runs `git` at all. The runtime
+  used to be the one thing this did not buy, because it ran `/usr/bin/git` for itself;
+  `resolver-direct-git-runtime` (`#328`, merged 2026-09-14) has since moved it onto
+  `/Library/Developer/CommandLineTools/usr/bin/git` on Darwin
+  (`scripts/lib/profile-resolution.sh:95-101`), so the residual DR-2 accepted on 2026-09-10
+  is gone and the claim holds for the runtime too. R7 states that in full, beside the
+  amended intent constraint it quotes (`work/resolver-trusted-parent/intent.md:36-45`).
   Linux CI still cannot exercise any of this: the Darwin compile line, the refusal when the
   tools are absent, and the cache measurement are confirmed only when someone runs the
   focused test on a Darwin machine. R10 gives the operator the recipe for that measurement,
@@ -4993,7 +5013,7 @@ the spec pull request's range above still blocks review.
   `<output>/.run/jq`, and the awk either by `/bin/cp` from `/usr/bin/awk` on Linux or, on
   Darwin, as the two-line `#!/bin/bash` / `exec /usr/bin/awk "$@"` shim `/usr/bin/printf`
   writes, the shapes the test uses at
-  `scripts/test/portable-profile-resolution.test.sh:132-141`. Both destinations are fixed
+  `scripts/test/portable-profile-resolution.test.sh:324-333`. Both destinations are fixed
   names inside `.run` and not paths the caller can influence, which is what the parent
   re-establishes from its own side before it launches anything: the jq argument it is
   handed must be that `.run/jq` by descriptor identity, and `.run/awk` must hold exactly
@@ -5014,7 +5034,7 @@ the spec pull request's range above still blocks review.
   0500 files admit no writes, so from that
   moment nothing in the run directory can be added, replaced or overwritten without a
   `chmod` first. This is a deliberate deviation from the test, which uses 0555 for the
-  copied jq and awk (`portable-profile-resolution.test.sh:130-143`); 0500 is the same
+  copied jq and awk (`portable-profile-resolution.test.sh:322-335`); 0500 is the same
   minus the group and other bits, which nothing in the shipped path needs. Only after
   the mode pass does the entry launch the parent, handing it the helper path inside that
   directory along with the directory itself.
@@ -5747,7 +5767,7 @@ the spec pull request's range above still blocks review.
   on Darwin only `MallocNanoZone=0` (`:682-685`). The two test variables
   `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and `YSTACK_RESOLVER_TEST_GIT_STOP` (`:686-689`)
   are never set by the shipped parent; the runtime refuses the launch if either appears
-  alone (`scripts/lib/profile-resolution.sh:656-659`). No caller variable is copied
+  alone (`scripts/lib/profile-resolution.sh:733-736`). No caller variable is copied
   through — and that holds for the parent's *other* children as well, not only for this
   array: the SHA-1 tool, the SHA-256 tool and the jq probe run before this array exists
   and are `execve`d with the fixed two-variable environment R7 specifies, `environ` being
@@ -5764,12 +5784,12 @@ the spec pull request's range above still blocks review.
 - **R5 — refusals, each with an `E_*` line on stderr and a non-zero exit.** The parent
   refuses before `execve` when: the runtime file is not a regular non-symlink absolute
   path (`:635`) **or its mode is not 0644** — today that assertion lives only in the test
-  (`portable-profile-resolution.test.sh:608-614`), and moving it into the parent is a
+  (`portable-profile-resolution.test.sh:945-951`), and moving it into the parent is a
   named deviation; any file in the parent-pinned set — all eight of the loaded files below,
   which is every file the runtime executes or evaluates, and no others — does not match
   its pinned blob id; the jq at the bound path
   does not match the pinned SHA-256 for the platform or does not answer `jq-1.6`
-  (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
+  (`portable-profile-resolution.test.sh:288-297,304-321`, mirroring
   `shadow/v1/reproduce.sh:113-118`), or is not the run directory's own `jq`; the `awk`
   beside it in that directory is not a regular caller-owned mode-0500 file holding the
   bytes the entry put there — the bound-tool-root block below specifies those last two in
@@ -5787,7 +5807,7 @@ the spec pull request's range above still blocks review.
   the same object by descriptor identity, with no symlink followed anywhere in the
   comparison, which the block after this one specifies in full — which mirrors the sandbox
   rule the test uses
-  (`portable-profile-resolution.test.sh:219-222`), allowing for the one entry the run
+  (`portable-profile-resolution.test.sh:507-511`), allowing for the one entry the run
   directory now occupies there (R1). Three orderings inside this are fixed here rather than
   left to the plan: the length guard on the output path (`:641`) runs before any of it, so
   an overlong output path is refused without the parent looking for `.run` at all — R10's
@@ -6087,8 +6107,8 @@ the spec pull request's range above still blocks review.
   `source`. It reads `scripts/lib/profile-resolution.sh` into its own shell
   (`resolver/v1/profile-resolve-runtime.sh:19`, guarded only by `[ -f ]` and `[ ! -L ]` at
   `:12-13`), and that library evaluates the resolver's jq program with `-f`
-  (`scripts/lib/profile-resolution.sh:156`, with module path `-L <repo>/resolver/v1` at
-  `:154`, guarded only by `[ -f ]` and `[ ! -L ]` at `:697-699`). Neither of those two
+  (`scripts/lib/profile-resolution.sh:233`, with module path `-L <repo>/resolver/v1` at
+  `:231`, guarded only by `[ -f ]` and `[ ! -L ]` at `:775-777`). Neither of those two
   files is pinned by anything today. The whole set of files the runtime executes or
   evaluates, read out of the code:
 
@@ -6097,18 +6117,18 @@ the spec pull request's range above still blocks review.
   2. `scripts/lib/profile-resolution.sh` — sourced by it
      (`resolver/v1/profile-resolve-runtime.sh:19`).
   3. `resolver/v1/profile-resolution.jq` — the jq program the library evaluates
-     (`scripts/lib/profile-resolution.sh:154-157`). It contains no `include` or `import`
+     (`scripts/lib/profile-resolution.sh:231-234`). It contains no `include` or `import`
      today, so the `-L` directory contributes no further file; the `-L` is still a load
      path, and a future `include` there would widen this set silently.
   4. `scripts/core-contract.sh` — run as `/bin/bash "$profile_resolution_core"`
-     (`scripts/lib/profile-resolution.sh:163`).
+     (`scripts/lib/profile-resolution.sh:240`).
   5. `core/v2/generations/<generation>/core-ingress.sh` — sourced by it
      (`scripts/core-contract.sh:267`).
   6. `core/v2/generations/<generation>/contracts.jq` — the jq program that ingress
      evaluates (`scripts/core-contract.sh:239`, `core-ingress.sh:297`).
   7. `core/v2/generation-registry.json` — the one entry here that is neither executed nor
      evaluated: nothing in the resolver path reads its content, and the library only
-     hashes it (`scripts/lib/profile-resolution.sh:712`) as a provenance assertion about
+     hashes it (`scripts/lib/profile-resolution.sh:790`) as a provenance assertion about
      the generation. It is listed because it is part of the trusted set the library pins,
      not because the runtime loads it.
   8. The five jq modules under `core/v2/generations/<generation>/modules/` —
@@ -6117,10 +6137,10 @@ the spec pull request's range above still blocks review.
      `-L .../modules` (`core-ingress.sh:295,329`), and checked only for existence and
      non-symlink by `scripts/core-contract.sh:250-259`.
   9. The compiled `resolver/v1/nofollow-snapshot.c` helper, executed by path
-     (`scripts/lib/profile-resolution.sh:209`) — already pinned by the entry (R1).
+     (`scripts/lib/profile-resolution.sh:286`) — already pinned by the entry (R1).
 
   Files 4 through 7 are already pinned by blob inside the library itself
-  (`scripts/lib/profile-resolution.sh:711-714`, against the constants at `:7-10`), and
+  (`scripts/lib/profile-resolution.sh:789-792`, against the constants at `:7-10`), and
   those pins are worth something only once the library that holds them is itself pinned.
   So the set has three owners — the entry, the parent and the library — and which one owns
   what is stated once here and used in
@@ -6148,8 +6168,11 @@ the spec pull request's range above still blocks review.
   `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
   (`scripts/lib/profile-resolution.sh:5,11`) are committed text that nothing computes at
   run time, and the library builds the generation root from them by plain concatenation
-  (`:710`). So the parent carries its own copy of both as constants beside its blob pins
-  and builds `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
+  (`:788`). So the parent carries its own copy of both as constants beside its blob pins.
+  Its generation is an ordinary copied constant, also equal to the selected
+  `PORTABLE_CORE_GENERATION` in the accepted, pinned `scripts/core-contract.sh`;
+  do not split or encode it to evade the generation inventory. The parent builds
+  `<repo>/core/v<major>/generations/<generation>/modules/<name>.jq` for the
   five names `contracts.jq:1-5` imports — `schema.jq`, `profile_graph.jq`,
   `stage_request.jq`, `result_facts.jq`, `result_truth.jq` — from the same repository root
   it already derives. It reads nothing out of the library to do it.
@@ -6188,7 +6211,7 @@ the spec pull request's range above still blocks review.
   **What a caller who drives the parent directly still loses.** Not a pin any more: files
   1, 2, 3 and the five modules are the parent's own, and files 4 through 7 are covered by
   the library's own blob checks at run time
-  (`scripts/lib/profile-resolution.sh:711-714`), which the parent's pin of file 2 is what
+  (`scripts/lib/profile-resolution.sh:789-792`), which the parent's pin of file 2 is what
   makes trustworthy. What such a caller loses is the helper's **provenance**, and it is
   not a gap the parent can close. Every check the parent makes on the helper is
   satisfiable by a caller who built `.run` themselves: a 0500 helper of their own,
@@ -6235,13 +6258,13 @@ the spec pull request's range above still blocks review.
   resolver code moves pins in two files in the same pull request rather than one, and a
   new core generation moves five module pins in each of them plus the generation-id
   constant the parent now carries. That cost is the repository's existing pattern, paid in
-  the library today (`scripts/lib/profile-resolution.sh:7-10,711-714`), and it is now paid
+  the library today (`scripts/lib/profile-resolution.sh:7-10,789-792`), and it is now paid
   twice over.
 
   **The helper's run-directory checks, and what they are worth.** The runtime executes
-  the helper *by path*: `scripts/lib/profile-resolution.sh:209` runs
+  the helper *by path*: `scripts/lib/profile-resolution.sh:286` runs
   `"$YSTACK_RESOLVER_HELPER" snapshot-repository ...`, and its only check on that path is
-  `[ -x ] && [ ! -L ]` (`:664-667`) at launch-check time, not at exec time. So whatever
+  `[ -x ] && [ ! -L ]` (`:741-744`) at launch-check time, not at exec time. So whatever
   the parent checks, the file the runtime finally executes is re-resolved from the path
   later. The parent's job here is therefore not to bind what the runtime executes; it is
   to fail closed on any tampering observable before the launch. It refuses unless, on
@@ -6268,7 +6291,7 @@ the spec pull request's range above still blocks review.
     that same run-directory descriptor, so the directory proved to be `.run` is the
     directory their checks read from.
 
-  There is no identity probe to add. The runtime gives jq a `--version` probe (`:668-671`)
+  There is no identity probe to add. The runtime gives jq a `--version` probe (`:745-748`)
   but gives the helper none, and the helper has exactly one subcommand,
   `snapshot-repository`, with a fixed nine-argument shape
   (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
@@ -6282,8 +6305,8 @@ the spec pull request's range above still blocks review.
   `profile_resolution_bound_tool_root=${YSTACK_RESOLVER_JQ%/*}`, then
   `profile_resolution_bound_core_awk="$profile_resolution_bound_tool_root/awk"`, checked
   with `[ -x ]` and `[ ! -L ]` and nothing else
-  (`scripts/lib/profile-resolution.sh:673-676`, read and verified), and then executed —
-  `"$profile_resolution_bound_core_awk"` is the command word at `:99`, in the function
+  (`scripts/lib/profile-resolution.sh:750-753`, read and verified), and then executed —
+  `"$profile_resolution_bound_core_awk"` is the command word at `:176`, in the function
   that decodes every byte string the resolver writes. The parent's own `PATH` for the
   child is built from the same string, `<dir of the bound jq>:/usr/bin:/bin`
   (`portable-profile-resolution-launcher.c:662-677`). So a caller who invokes
@@ -6369,7 +6392,7 @@ the spec pull request's range above still blocks review.
   Nothing in the parent's descriptors stops that swap from taking effect, because the
   runtime resolves what it runs from *strings*: `YSTACK_RESOLVER_HELPER`,
   `YSTACK_RESOLVER_JQ` and the first `PATH` element are all `<output>/.run/...` paths (R3),
-  and `scripts/lib/profile-resolution.sh:209` execs the helper by that path. The parent's
+  and `scripts/lib/profile-resolution.sh:286` execs the helper by that path. The parent's
   descriptor still refers to the original directory and the original files, and it can prove
   they were right when it looked; it cannot make the runtime use them. The fd-relative
   sandbox creation above closes the race on the parent's own four writes and is not claimed
@@ -6406,7 +6429,7 @@ the spec pull request's range above still blocks review.
   this initiative explicitly does not touch, so it is a separate initiative and is recorded
   under Out of scope as the recommended follow-up. It is not promised here.
 - **R6 — the output is the runtime's bytes.** Success writes exactly the canonical
-  `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:973`),
+  `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:1051`),
   streamed unchanged (`portable-profile-resolution-launcher.c:504-511`). For the same
   request the shipped parent and the test launcher produce byte-identical **stdout**; the
   focused test runs both and `cmp`s them. Stdout is the whole of this claim and stderr is
@@ -6416,10 +6439,12 @@ the spec pull request's range above still blocks review.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
   credential, and **exactly one write root: the output path the caller named** — for
   everything this initiative adds, on every supported platform, and for the unchanged
-  runtime on Linux, where R10 asserts it mechanically in CI. On Darwin the runtime's own
-  `git` calls leave one known write outside that root; the Darwin paragraph below states it
-  exactly, DR-2 accepted it on 2026-09-10, and the intent now names it as the one accepted
-  exception to its own constraint. The one
+  runtime as well, on Linux and on Darwin alike, with no exception on either. On Linux R10
+  asserts it mechanically in CI; on Darwin R10's operator recipe asserts the same thing, and
+  the Darwin paragraph below states why nothing is left outside the root. An earlier round
+  did carry one Darwin exception — DR-2 accepted a write from the runtime's own `git` calls
+  on 2026-09-10 — but `#328` removed its cause, and the intent was amended to drop the
+  exception and keep that as history. The one
   root is what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36-45`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
@@ -6468,10 +6493,9 @@ the spec pull request's range above still blocks review.
   working tree, not a cache, not a
   dotfile, not a temporary file anywhere else on the filesystem.
 
-  **On Darwin one write outside that root remains, and it belongs to the unchanged runtime
-  rather than to anything this initiative adds.** Part of this was already settled and
-  stands. `/usr/bin/cc` and `/usr/bin/git` on Darwin are one and the same `xcrun` shim, and
-  the shim writes a tool-lookup cache — a single `xcrun_db` file in the per-user temp
+  **The single write root holds unqualified, on both platforms and for the runtime too.**
+  Part of this was already settled and stands. `/usr/bin/cc` on Darwin is the `xcrun` shim,
+  and the shim writes a tool-lookup cache — a single `xcrun_db` file in the per-user temp
   directory the platform reports, not in the `TMPDIR` the compile line sets. An earlier
   round admitted that as a residual of the *entry*, and the round after it removed the
   cause instead of narrowing the claim: on Darwin the compiler is the CommandLineTools
@@ -6479,31 +6503,29 @@ the spec pull request's range above still blocks review.
   are computed from a size and the platform's SHA-1 tool so that neither the entry nor the
   parent runs `git` at all (R1, both measured). All of that is still true.
 
-  What that round missed is the one process in the picture it does not get to write.
-  **The resolver runtime runs `/usr/bin/git` itself**, and this spec does not change the
-  runtime — that is a constraint of the intent rather than a choice it made
-  (`work/resolver-trusted-parent/intent.md:32-33`, "the resolver runtime and its rules do
-  not change. This adds the missing parent, not a new resolver behaviour"). The runtime
-  runs it for every repository read, under the hardened wrapper that execs
-  `/usr/bin/git --git-dir=…` (`scripts/lib/profile-resolution.sh:313-323`), and again for
-  the four blob pins it checks for itself at load time (`:711-714`) — the same reads the
-  read list below already attributes to the library. On Darwin every one of those calls is
-  the shim, and the shim can write `xcrun_db` in the per-user temp directory. The parent
-  builds the runtime's environment from empty and controls every variable in it (R3), so it
-  can point the runtime's `HOME` and `TMPDIR` wherever it likes — but the cache is not in
-  `TMPDIR`, which is exactly what R1's measurement establishes, so no environment the
-  parent can hand the runtime prevents a fixed-path shim from writing its own cache.
-  Nothing short of changing the runtime's git path closes it, and changing the runtime is
-  the one thing this initiative may not do.
+  The one process left over was the runtime, and it is no longer an exception. The runtime
+  used to run `/usr/bin/git` — the same inode as `/usr/bin/cc` on Darwin — for every
+  repository read and for its own load-time blob pins, and DR-2 accepted the resulting
+  `xcrun_db` write as a residual on 2026-09-10. `resolver-direct-git-runtime` (pull request
+  `#328`, merged 2026-09-14, commit `ac734ba`) then removed it at the source: the runtime
+  observes the platform once and selects its git path from that observation
+  (`scripts/lib/profile-resolution.sh:95-101`), which is
+  `/Library/Developer/CommandLineTools/usr/bin/git` on both Darwin architectures and
+  `/usr/bin/git` on Linux, and both call sites exec the selected path — the hardened
+  wrapper (`:390-400`) and the four load-time blob pins (`:789-792`). No shim runs, so
+  nothing is written into the per-user temp directory. That change lives in the runtime,
+  which this spec still does not touch (`work/resolver-trusted-parent/intent.md:32-33`,
+  "the resolver runtime and its rules do not change. This adds the missing parent, not a
+  new resolver behaviour"); it arrived through its own initiative and this spec reads the
+  result.
 
-  So the claim is narrowed, and the narrowing is exact rather than a hedge. For everything
-  this initiative adds — the entry, the compiler it runs, the compiled parent, the compiled
-  helper, and the jq and awk copies — the single write root holds on both platforms, and
-  for the runtime it holds on Linux, where R10 asserts it mechanically in CI. On Darwin the
-  one known write outside the caller's output path is the shim's `xcrun_db` under the
-  per-user temp directory, attributable to the runtime's own `git`. That is the whole of the
-  residual: one file, mode 0600, in a per-user directory, written by a process this spec
-  leaves alone.
+  So the claim needs no narrowing. For everything this initiative adds — the entry, the
+  compiler it runs, the compiled parent, the compiled helper, and the jq and awk copies —
+  and for the unchanged runtime as well, the single write root holds on Linux and on Darwin
+  alike. On Linux R10 asserts it mechanically in CI; on Darwin R10's operator recipe asserts
+  the same thing, by a per-user temp-directory listing that must be identical before and
+  after the run. There is no known write outside the caller's output path on either
+  platform.
 
   **One thing that claim used to depend on without saying so is the caller's descriptors,
   and this round removes the dependency.** A write root is a claim about where the
@@ -6551,36 +6573,33 @@ the spec pull request's range above still blocks review.
   qualification at all: nothing in this tree has ever held a descriptor the close did not
   shut first.
 
-  **That residual is no longer a deviation the spec is carrying on its own: it is an
-  accepted exception the intent now names.** The operator decided DR-2 on 2026-09-10,
-  choosing option (a) — accept the residual, name it, and measure exactly it — and the
-  decision was carried into the chain by intent pull request `#282`, which amends the
-  intent's write-root constraint and changes nothing else. This spec pins that amended
-  intent: the `intent-blob` in the frontmatter is
-  `eaa322c405502cc0ca7c453814ca0f005f11b48f`. The amended constraint reads, in full
-  (`work/resolver-trusted-parent/intent.md:36-45`):
+  **The spec's write-root claim and the intent's now say the same unqualified thing.**
+  DR-2, decided by the operator on 2026-09-10, accepted the Darwin residual and was carried
+  into the chain by intent pull request `#282`. `resolver-direct-git-runtime` (`#328`) then
+  removed the residual itself, and the intent was amended again to drop the exception and
+  keep the history in one sentence. This spec pins that amended intent: the `intent-blob`
+  in the frontmatter is `bc6e669b755bae6c7f52f10f047c602faa46210a`. The constraint now
+  reads, in full (`work/resolver-trusted-parent/intent.md:36-45`):
 
-  > No network, no credentials, no writes outside the caller's own output. One
-  > accepted exception, decided as DR-2 on #271: on Darwin the resolver runtime,
-  > which this initiative leaves unchanged, itself runs `/usr/bin/git`
-  > (`scripts/lib/profile-resolution.sh:313-323` and `:711-714`), and that binary is
-  > the xcrun shim, which may write its `xcrun_db` cache in the per-user temp
-  > directory outside the caller's output. That write belongs to the unchanged
-  > runtime, not to the parent this initiative adds; the parent, the entry, the
-  > compiler, the helper and the copies write only inside the caller's output on
-  > both platforms, and on Linux the runtime does too. A later intake may move the
-  > runtime off `/usr/bin/git` on Darwin.
+  > No network, no credentials, no writes outside the caller's own output. This holds
+  > without exception, on both platforms, for the resolver runtime as well as for
+  > everything this initiative adds. The history: DR-2 on #271 (2026-09-10) accepted one
+  > Darwin residual, because the unchanged runtime ran `/usr/bin/git`, which is the
+  > xcrun shim and may write an `xcrun_db` cache in the per-user temp directory outside
+  > the caller's output. `resolver-direct-git-runtime` (PR #328, merged 2026-09-14)
+  > removed that residual by having the runtime select the CommandLineTools git
+  > directly on Darwin (`scripts/lib/profile-resolution.sh:95-101`), so no shim runs and
+  > nothing lands in the temp directory. The constraint is therefore whole again, and
+  > the parent, the entry, the compiler, the helper and the copies are held to it too.
 
-  Read that beside the two paragraphs above and the intent and this spec say the same
-  thing in the same shape: one file, written by the unchanged runtime's own `git`, on
-  Darwin only, with everything this initiative adds inside the caller's output on both
-  platforms. The Darwin operator run measures exactly this and nothing wider (R10). The two
-  alternatives an earlier round of this spec held open against a refusal — widening E to
-  move the runtime off `/usr/bin/git` on Darwin, or dropping the Darwin claim and shipping
-  Linux-only — are history rather than live options, and neither is carried further here.
-  The follow-up that would close the residual for good is the one the amended constraint
-  itself names: a later intake moving the runtime off `/usr/bin/git` on Darwin. It is
-  recorded under Out of scope and is not promised here.
+  Read that beside the two paragraphs above and the intent and this spec say the same thing
+  in the same shape: nothing this initiative adds, and nothing the unchanged runtime does,
+  writes outside the caller's output path, on either platform. The Darwin operator run
+  measures exactly that (R10). The two alternatives an earlier round of this spec held open
+  against a refusal — widening E to move the runtime off `/usr/bin/git` on Darwin, or
+  dropping the Darwin claim and shipping Linux-only — are history rather than live options.
+  The first of them is in substance what `#328` did, in its own initiative and without
+  widening anything here.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -6589,9 +6608,9 @@ the spec pull request's range above still blocks review.
   1. *The resolver's content reads* are confined to the repositories the request's
      repository map names. A repository root is only ever obtained by looking the
      repository id up in the map snapshot
-     (`scripts/lib/profile-resolution.sh:193-198`), a snapshot is refused if the lookup
-     yields nothing (`:205-206`), and every Git read runs as
-     `git --git-dir=<mapped root's gitdir>` under the hardened wrapper (`:313-323`).
+     (`scripts/lib/profile-resolution.sh:270-275`), a snapshot is refused if the lookup
+     yields nothing (`:282-283`), and every Git read runs as
+     `git --git-dir=<mapped root's gitdir>` under the hardened wrapper (`:390-400`).
   2. *The entry and the parent additionally read a fixed, listed set of trusted local
      inputs*, and nothing else: the two committed C sources
      `resolver/v1/trusted-launch.c` and `resolver/v1/nofollow-snapshot.c` (hashed and
@@ -6607,7 +6626,7 @@ the spec pull request's range above still blocks review.
      parent as well as by the entry, at paths the parent builds from its own copies of the
      library's generation-id and schema-major constants (R5)
      (and the runtime file among those eight also mode-checked), the
-     remaining four hashed by the library itself at run time (`:711-714`), and all of them
+     remaining four hashed by the library itself at run time (`:789-792`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the request
      file and the repository-map file named on the command line; the jq binary supplied as
      an argument; `/usr/bin/awk`, read on Linux by **both** shipped files and by neither on
@@ -6633,6 +6652,14 @@ the spec pull request's range above still blocks review.
      descriptor contents. If enumeration fails, the parent refuses with `E_RUNTIME`
      before creating output; the entry refuses on the unmatched `/dev/fd/*` glob as
      R1 requires. These are host-state and metadata reads, included in this boundary.
+
+     The entry also performs the temporary stderr discard already required by R1:
+     exact `2>/dev/null` on the three ulimit rungs, descriptor-close eval, the two
+     unset forms in each required scrub (including the marker branch), and the
+     unique job-table-gated signal-forwarding kill. R10 checks those roles only.
+     This is no general data path, command permission or persistent write-root
+     allowance; no additional diagnostic may be suppressed. The redirection stays
+     outside eval's quoted exec, preserving the existing prohibition.
 
 
      **The executables, listed exactly.** The previous round's list was short enough to be
@@ -6804,9 +6831,9 @@ the spec pull request's range above still blocks review.
      entry's source names `/usr/bin/awk` in exactly two places, both of them argument
      positions and neither of them a command. On Linux it is the source argument of the
      copy — `/bin/cp /usr/bin/awk <run>/awk`, the shape the test uses at
-     `scripts/test/portable-profile-resolution.test.sh:136`. On Darwin it is text inside
+     `scripts/test/portable-profile-resolution.test.sh:328`. On Darwin it is text inside
      the single-quoted string the entry hands to `/usr/bin/printf`, which writes the
-     two-line `#!/bin/bash` and `exec /usr/bin/awk "$@"` shim the test writes at `:138`;
+     two-line `#!/bin/bash` and `exec /usr/bin/awk "$@"` shim the test writes at `:330`;
      that shim is executed by the *resolver*, out of `.run`, long after the entry has
      tightened the directory to 0500, and the entry never runs it. Nothing else touches
      the path: awk is not one of the ten computed blob-id pins and it is not the SHA-256
@@ -6842,7 +6869,7 @@ the spec pull request's range above still blocks review.
      - **The compiler is a fixed path chosen per platform, and `$CC` is not
        honoured.** The test script uses `${CC:-/usr/bin/cc}` on Linux and
        `${CC:-/usr/bin/clang}` on Darwin
-       (`scripts/test/portable-profile-resolution.test.sh:95,102`, invoked at `:146-149`).
+       (`scripts/test/portable-profile-resolution.test.sh:287,294`, invoked at `:338-341`).
        A caller-chosen compiler is a caller-chosen trust base, so the entry drops the
        override — and it drops both of the test's Darwin choices with it, because
        `/usr/bin/cc` and `/usr/bin/clang` there are a single inode and both are the `xcrun`
@@ -6854,11 +6881,11 @@ the spec pull request's range above still blocks review.
        themselves — `blob <size>\0` plus the file bytes, through the platform's SHA-1 tool
        — rather than running `git hash-object` (R1). On Darwin `/usr/bin/git` is the same
        shim inode as `/usr/bin/cc`, so keeping it would have added ten shim invocations and
-       a cache write of this initiative's own on top of the one the runtime already makes;
-       on Linux it is a large dependency for nine
-       bytes of header and a hash. The runtime still runs `/usr/bin/git` for itself, which
-       is where the Darwin residual above comes from; what this deviation removes is the
-       entry's and the parent's own use of it. The focused test still runs git, to assert
+       a cache write of this initiative's own; on Linux it is a large dependency for nine
+       bytes of header and a hash. The runtime used to run `/usr/bin/git` for itself, which
+       is where the Darwin residual came from; `#328` moved it onto the CommandLineTools
+       git, and what this deviation removes is the entry's and the parent's own use of the
+       shim path. The focused test still runs git, to assert
        the computed
        ids match `git hash-object` (R10). This is a named deviation from both the test
        script and `shadow/v1/reproduce.sh`.
@@ -6975,11 +7002,11 @@ the spec pull request's range above still blocks review.
   or already committed in this repository. The runtime's own guarantees are restated, not
   extended: git runs with system and global config disabled,
   `protocol.file.allow=never` and `GIT_NO_LAZY_FETCH=1`
-  (`scripts/lib/profile-resolution.sh:313-322`); every working file goes into the
+  (`scripts/lib/profile-resolution.sh:390-399`); every working file goes into the
   runtime's own `mktemp -d` scratch at umask 077 under the sandbox `TMPDIR` the parent set,
   which is `<output>/tmp` and so inside the one write root
-  (`:688-692`), removed on exit; repository reads go through `git --git-dir` on mapped
-  roots (`:323`). The spec adds no claim beyond restating them.
+  (`:766-770`), removed on exit; repository reads go through `git --git-dir` on mapped
+  roots (`:400`). The spec adds no claim beyond restating them.
 - **R8 — platforms.** Supported: `Darwin:arm64`, `Darwin:x86_64`, `Linux:x86_64` — the
   same set the test and `shadow/v1/reproduce.sh:113-116` support, with the same two
   pinned jq digests. Anything else refuses with `E_RUNTIME` before doing work — a refusal
@@ -7159,7 +7186,7 @@ the spec pull request's range above still blocks review.
   esac
   ```
 
-  mirroring `scripts/test/portable-profile-resolution.test.sh:90-107` and
+  mirroring `scripts/test/portable-profile-resolution.test.sh:282-299` and
   `shadow/v1/reproduce.sh:113-118` in the tuples it accepts — so there is no input CI
   can supply that drives the `*)` arm on a machine CI runs on, and shadowing `uname` on
   `PATH` would prove nothing
@@ -7378,7 +7405,7 @@ the spec pull request's range above still blocks review.
   What group 2 also shows, by omission, is the residual R5 states, and the shape of it
   changed this round. **The module gap is gone**: a caller who reaches the parent directly
   now gets all eight loaded files pinned by the parent itself, files 4 through 7 get the
-  library's own blob checks at run time (`scripts/lib/profile-resolution.sh:711-714`),
+  library's own blob checks at run time (`scripts/lib/profile-resolution.sh:789-792`),
   which the parent's pin of file 2 is what makes worth having, and the edited-module case
   above is the proof — the previous round could only put that case in group 1 and had to
   say why it could not sit here. **What is left by omission is the helper's provenance.**
@@ -7586,16 +7613,13 @@ the spec pull request's range above still blocks review.
      both exit 0, their stdouts are byte-identical, the marker string appears in neither
      run's output, and the watched `TMPDIR` and `HOME` are untouched afterwards — which is
      the same fact R7's one-write-root claim makes about the compile step, asserted here
-     rather than stated. **On Darwin the case measures one thing more, and it measures
-     exactly the narrowed claim rather than a wider one.** The narrowing is R7's: everything
-     this initiative adds writes only inside the output path, while the unchanged runtime's
-     own `/usr/bin/git` is the Darwin `xcrun` shim and can write its `xcrun_db` cache in the
-     per-user temp directory, which is the residual DR-2 accepted and the intent now
-     records (R7). An
-     earlier round of this spec asserted that `xcrun_db` came back *unchanged* across a full
-     entry run, and that assertion is wrong for this half, because this half runs a real
-     resolution and the runtime behind it runs git. So the recipe is a difference, not an
-     equality, and it is written out here because the operator runs it by hand.
+     rather than stated. **On Darwin the case measures one thing more, and since `#328` it
+     measures the strong claim rather than a narrowed one.** The runtime no longer reaches
+     the `xcrun` shim: it selects `/Library/Developer/CommandLineTools/usr/bin/git` from
+     its own platform observation (`scripts/lib/profile-resolution.sh:95-101`), so a full
+     resolution writes nothing into the per-user temp directory. The recipe is therefore an
+     equality rather than a difference, and it is written out here because the operator runs
+     it by hand.
 
      **Every run in this recipe goes through the entry, and this round says so as a rule
      rather than leaving it to the word "resolution".** The operator's measurement is
@@ -7610,33 +7634,32 @@ the spec pull request's range above still blocks review.
      the direct invocation as something an operator does; R5 now states that the entry is
      the only supported launch, and this recipe is written the same way.
 
-     - Before the entry run, record two things in the per-user temp directory — the
-       directory
-       `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports: the state of `xcrun_db` itself,
-       which is either *absent* or *present with a size, an mtime and a SHA-1 of its bytes*
-       (**absent is a state, not a reason to skip** — a skip there would throw away the
-       strongest evidence available), and a listing of the whole directory with each entry's
-       name, size and mtime.
+     - Before the entry run, record the whole per-user temp directory — the directory
+       `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports — as a listing with each entry's
+       name, size and mtime, and record the state of `xcrun_db` itself, which is either
+       *absent* or *present with a size, an mtime and a SHA-1 of its bytes* (**absent is a
+       state, not a reason to skip** — a skip there would throw away the strongest evidence
+       available).
      - Run the resolution through the entry. Then record both again.
-     - The case passes when the only difference between the two listings is `xcrun_db` —
-       created where it was absent, or changed in any of size, mtime and digest where it was
-       present — and nothing else in the directory is new or modified. **Any other new or
-       modified file is a failure**, and so is any change anywhere else the case already
-       watches: the caller's `TMPDIR` and `HOME` must still be untouched.
-     - The same recipe runs around the entry's own pre-launch steps, where the claim is
-       still the strong one: the pin checks and both compiles run no `git` and no shim
-       (R1), so across those `xcrun_db` must come back in the state it started in, absent
-       included. Half 2 below is where that is measured without a runtime behind it.
+     - The case passes when the two listings are identical and `xcrun_db` comes back in the
+       state it started in, absent included. **Any new or modified file in that directory
+       is a failure** — `xcrun_db` included, which since `#328` would mean a shim got back
+       into the entry's path or the runtime's. So is any change anywhere else the case
+       already watches: the caller's `TMPDIR` and `HOME` must still be untouched. No write
+       may appear anywhere outside the output root.
+     - The same recipe runs around the entry's own pre-launch steps, where the claim has
+       always been the strong one: the pin checks and both compiles run no `git` and no
+       shim (R1). Half 2 below measures that with no runtime behind it at all.
 
-     **A cache already primed on the operator's machine may show no write at all**, because
-     the shim writes only when its lookup misses, and the same run on a cold cache would
-     write. That is precisely why the claim is narrowed rather than reported as "measured
-     clean": a clean measurement here is evidence about one machine's cache state, not about
-     the shipped path, and treating it as the latter is the mistake the earlier round made.
-     What the recipe does prove is the part that matters — that the write, when it happens,
-     is that one file and nothing else. The recipe is Darwin-only because Linux has no such
-     file and no shim that would write one, and there the one-write-root claim covers the
-     runtime too and CI asserts it. What this
+     **A primed cache cannot hide a failure here, which is why the claim is now stated
+     absolutely rather than narrowed.** The shim writes only when its lookup misses, so
+     under the old arrangement a clean measurement was evidence about one machine's cache
+     state rather than about the shipped path — which is why earlier rounds narrowed the
+     claim instead of reporting "measured clean". That reasoning is spent: no shim is
+     invoked anywhere in the run now, so an unchanged listing is the expected result on a
+     cold cache and a warm one alike, and any change at all is a real regression to
+     investigate. The recipe is Darwin-only because Linux has no such file and no shim that
+     would write one, and there CI asserts the same claim. What this
      half cannot do is compare the built binaries:
      the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
@@ -7695,7 +7718,7 @@ the spec pull request's range above still blocks review.
      `child.stderr` (R7). The test asserts that exact set of four entries with no `.run`
      among them, asserts `child.stdout` is byte-identical to the entry's own stdout, and
      asserts `child.stderr` and `tmp` are empty — `tmp` because the runtime removes its own
-     scratch under it on exit (`scripts/lib/profile-resolution.sh:688-692`). It makes no
+     scratch under it on exit (`scripts/lib/profile-resolution.sh:766-770`). It makes no
      claim about `home` being empty, because nothing in this initiative's control governs
      what a future git might drop into a `HOME` it was handed.
   2. *A refusal by the entry, at the pin check.* The wrong-digest jq case from group 1. The
@@ -8715,13 +8738,16 @@ the spec pull request's range above still blocks review.
   asserts every pinned blob constant equals the working tree's `git hash-object` output —
   the two C sources and all eight files of the runtime's loaded set that R5 enumerates as
   entry-pinned, and separately, in the parent, **the eight constants of the parent-pinned
-  set**, where three used to stand. Two more constants join that assertion this round and
-  are not blob ids: the generation id and the schema major the parent carries so it can
-  build the five module paths for itself, each required to equal the library's own
-  `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
-  (`scripts/lib/profile-resolution.sh:5,11`) read out of the working tree — a one-line
-  comparison each, and the thing that fails CI when a new core generation moves the
-  library's copy and not the parent's. **And it asserts the computed id equals
+  set**, where three used to stand. Three non-blob constants are checked separately:
+  the parent's generation and schema major, and the entry's generation. Compare the
+  parent and entry generation constants with `PROFILE_RESOLUTION_CORE_GENERATION`
+  in the accepted library and the selected `PORTABLE_CORE_GENERATION` in the accepted,
+  pinned `scripts/core-contract.sh`. Compare the parent schema major with the library's
+  `PROFILE_RESOLUTION_SCHEMA_MAJOR` (`scripts/lib/profile-resolution.sh:5,11`).
+  The focused test derives expected values from those existing sources; it adds no
+  generation literal of its own and needs no entry schema-major check. A changed
+  source constant without its consumer update fails CI. **And it asserts the computed
+  id equals
   `git hash-object` for every one of those
   files** — eighteen pinned blob ids now rather than thirteen, ten in the entry and eight
   in the parent, with all eight loaded files pinned in both places and asserted on both
@@ -8731,6 +8757,14 @@ the spec pull request's range above still blocks review.
   does, and requires the computed id, `git hash-object`'s answer and the pinned constant to
   agree — three values, not two. The test may run git freely: it is not a shipped file, and
   the allowlist grep below covers the two shipped files only.
+
+  In the same implementation PR, add exactly `resolver/v1/resolve-profile.sh` and
+  `resolver/v1/trusted-launch.c` to the closed expected generation-hit list in
+  `scripts/test/portable-core-schema.test.sh`. Preserve every existing entry, sorted
+  exact-path comparison, and the scan of indexed tracked bytes. Change no other
+  behavior in that test. No wildcard, extra path, selected-generation change or
+  split/encoded literal is permitted. The focused test and full schema check must
+  pass together against committed/indexed implementation bytes.
 
   **The read allowlist is a grep, not a promise, it covers external command words only, and
   the mechanism is settled here rather than left to the plan.** The list it checks against is
@@ -8754,9 +8788,9 @@ the spec pull request's range above still blocks review.
   variable expansion standing where a command word goes. Three documented sweeps over both
   shipped files do that.
 
-  1. *Absolute-path tokens.* Every token beginning with `/` is extracted, and each one must
-     be either one of the fifteen words above or one of the six absolute paths these files
-     name as data rather than as commands: the SDK root passed to `-isysroot`
+  1. *Absolute-path tokens.* Extract fixed absolute pathname values in their source
+     roles as clarified below. Each must be one of the fifteen words above or an
+     exact data token at its permitted position. The data list includes the SDK root passed to `-isysroot`
      (`/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, R1), the `PATH` value
      `/usr/bin:/bin` the entry writes into its own environment and into every `env -i` line,
      the two `/proc` paths the copied Linux `process_group_count` uses — `/proc` itself
@@ -8776,6 +8810,49 @@ the spec pull request's range above still blocks review.
      rather than on a list of directories is the point: the Darwin compiler took the prefix
      set to three, and a grep that knew only the prefixes somebody told it about would
      silently pass a shipped file that had grown a fourth.
+
+     **Temporary stderr discard, exact roles only.** Admit `/dev/null` solely as
+     the literal target of `2>/dev/null` on R1's three `ulimit -S -n` ladder rungs,
+     the descriptor-close `eval`, `builtin unset -f` and `builtin unset` in every
+     mandated scrub (including the full marker scrub), and the one forwarding
+     `kill` in the job-table Running arm above `wait`. Check each command's required
+     role and position, not a guessed total occurrence count. Preserve the original
+     command forms and all their existing ordering/behavior checks. Reject this
+     target on any other command, another descriptor, input/append redirection,
+     a variable-selected sink, a prefix such as `/dev/null/anything`, or any C
+     pathname or execve argument. It is not an executable or general data-list
+     member. In particular reject it inside eval's quoted `exec`: that would
+     persistently redirect the shell's stderr, which R1 already forbids.
+
+     **Source roles are explicit, not blanket exclusions.** The required `/*)`
+     self-path case arm is a pattern checking absoluteness, not an expanded host
+     pathname. Classify only that pattern role and still scan the arm's commands;
+     do not allow `/*` as a general data path. The `/dev/fd/*` for-list and quoted
+     unmatched-glob token remain the exact inventoried pathname roles above.
+     C `'/'` character tokens, division and comment delimiters are not pathname
+     string values. C `"/"` used as a pathname remains an unlisted root and fails;
+     `/proc` and `/proc/%s/stat` remain real data strings and are checked.
+
+     Inspect absolute values after assignment delimiters and quoting, including
+     `clean_path=/usr/bin:/bin`, `PATH=/usr/bin:/bin` and C environment strings.
+     Do not exempt whole assignment words. Separators in `$PWD/${BASH_SOURCE[0]}`,
+     `${fd##*/}`, `%s/child.stdout`, `%s/home` and `%s:/usr/bin:/bin` do not create
+     new fixed `/child.stdout`, `/home` or other host-root literals. Their dynamic
+     root/value provenance still requires the existing source and identity checks.
+     This does not hide a real absolute value in a quoted argument, assignment,
+     redirection or embedded executable body.
+
+     The fixed Darwin shim is data written and compared by these files; keep its
+     existing awk position checks rather than treating its text as a command the
+     entry executes. In contrast, inspect executable trap/eval bodies and command
+     substitutions, including jobs/kill and compgen process substitutions. Quoting
+     never makes executable bodies exempt. Passes 2 and 3 classify command roles,
+     not case patterns, for-list data, function declarations or redirection operands.
+     Commands behind exec/env, assignment substitutions and quoted executable
+     bodies remain covered. Preserve the runtime builtin/reserved sets, the two
+     local functions and their definition/call checks, and the five command-variable
+     names and no-default-expansion rule. Use small inspectable extraction and role
+     checks over these specified source shapes, not a full parser or linter AST.
 
      **And `/usr/bin/awk` gets a position assertion of its own, because a data
      classification alone would weaken this invariant rather than strengthen it.** The
@@ -8798,7 +8875,7 @@ the spec pull request's range above still blocks review.
      to the exec sites, asked about one more token. That is what makes an
      accidental host-awk invocation a CI failure rather than an allowlisted path in a new
      place. The test may still run awk freely for its own parsing, the way the existing
-     test does at `scripts/test/portable-profile-resolution.test.sh:448-449`, for the
+     test does at `scripts/test/portable-profile-resolution.test.sh:762-763`, for the
      same reason it may run git: the sweeps cover the two shipped files only.
 
      **And `/usr/bin/printf` gets an ordering assertion, for the mirror-image reason.**
@@ -8900,6 +8977,15 @@ the spec pull request's range above still blocks review.
   `scripts/test/v2-check-rename.test.sh`.
 
 ## Design
+
+Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
+`resolver/v1/resolve-profile.sh`, `scripts/test/resolver-trusted-launch.test.sh`,
+`scripts/test/portable-core-schema.test.sh`, `docs/components.md`, `README.md`,
+`RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
+exact generation-inventory additions required by R10. All other requirements and
+exclusions remain, including the eighteen blob-pin checks. The implementation
+review-size range is 3650-4950 changed lines; measure the complete change and
+return to the artifact gate for an unexplained overrun, never reduce tests to fit.
 
 Order, each step checkable before the next:
 
@@ -9274,15 +9360,15 @@ Order, each step checkable before the next:
    ids of both C sources and of the eight loaded files R5 lists
    as entry-pinned against the pinned constants, each id computed from the file's `stat`
    size and the platform's SHA-1 tool rather than by running `git hash-object` (R1), the way the
-   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`), every
+   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:789-795`), every
    one of those commands run under the `env -i` line R1 quotes, which is why this step
    comes after the run directory and not before it: that line points `TMPDIR` and `HOME`
    at `<output>/.run/tmp` and `<output>/.run/home`, and both have to exist (R1). A refusal
    here is cleaned up by the trap installed above, which R10 asserts;
    **compile** — both C files from those pinned sources into the run directory with the
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
-   (`portable-profile-resolution.test.sh:146-149`), invoking the platform's fixed compiler
-   rather than the test's `${CC:-…}` (`:95,102`; R7) — `/usr/bin/cc` on Linux, and on
+   (`portable-profile-resolution.test.sh:338-341`), invoking the platform's fixed compiler
+   rather than the test's `${CC:-…}` (`:287,294`; R7) — `/usr/bin/cc` on Linux, and on
    Darwin `/Library/Developer/CommandLineTools/usr/bin/clang` with the fixed
    `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, refusing `E_RUNTIME`
    when the Command Line Tools are absent rather than falling back to the `xcrun` shim at
@@ -9292,7 +9378,7 @@ Order, each step checkable before the next:
    plus `-pipe` where
    the compiler accepts it, so no compiler intermediate is written outside the run
    directory and no caller variable steers the compile; then copy in jq and the platform's
-   awk the way the test does (`:130-143`);
+   awk the way the test does (`:322-335`);
    **tighten** — remove the `tmp` and `home` subdirectories and their contents, then
    `chmod 0500` every
    remaining file in the run directory and then `chmod 0500` the run directory itself, so
@@ -9308,7 +9394,9 @@ Order, each step checkable before the next:
    and exit with the child's status (`128 + signal` if it was signalled). No step reaches
    the network.
 3. **`scripts/test/resolver-trusted-launch.test.sh`** — R10.
-4. **Docs and manifest** — R9, in the same pull request as the code.
+4. **`scripts/test/portable-core-schema.test.sh`** — add only the two exact shipped
+   generation consumers to its closed expected-hit list, as R10 requires.
+5. **Docs and manifest** — R9, in the same pull request as the code.
 
 **Distribution** (intent open question 2): build on every invocation from the committed C
 sources into a fresh private run directory, never cached and never reused. No binary is
@@ -9360,23 +9448,22 @@ intent says for this change. Only after the operator's merge does
 - **Closing the same-uid swap window on the helper — the recommended follow-up, not done
   here.** The residual stated in R5 exists because the runtime takes the helper as a path
   and re-resolves it at exec time
-  (`scripts/lib/profile-resolution.sh:209,664-667`). Closing it means changing the runtime
+  (`scripts/lib/profile-resolution.sh:286,741-744`). Closing it means changing the runtime
   to accept an executable descriptor from the parent — a `fexecve`-style handoff, or an
   `/dev/fd` path the parent opened — so the object checked and the object executed are the
   same. That is a change to the runtime and to the resolver's launch contract, both listed
   above as untouched, so it belongs to a separate initiative. This spec records it as the
   recommended next step and promises nothing about it.
-- **Moving the runtime off `/usr/bin/git` on Darwin — the follow-up the amended intent
-  itself names, not done here.** It is the only thing that would close the accepted
-  residual R7 states: the runtime runs `/usr/bin/git` for every repository read and for
-  its own blob pins (`scripts/lib/profile-resolution.sh:313-323`, `:711-714`), that path
-  is the `xcrun` shim on Darwin, and the shim writes its cache where no environment the
-  parent builds can redirect it. Every route to closing it changes the runtime, which the
-  first bullet above puts out of scope and the intent puts out of scope for this
-  initiative (`work/resolver-trusted-parent/intent.md:32-33`). The amended write-root
-  constraint says the same in its last sentence — "A later intake may move the runtime off
-  `/usr/bin/git` on Darwin" (`:44-45`) — and *may* is the right word: this spec records
-  the follow-up and promises nothing about it.
+- **Moving the runtime off `/usr/bin/git` on Darwin — already done elsewhere, not done
+  here.** This used to be the only thing that would close the accepted residual R7 stated.
+  `resolver-direct-git-runtime` (pull request `#328`, merged 2026-09-14) did it in its own
+  initiative: the runtime now observes the platform and selects
+  `/Library/Developer/CommandLineTools/usr/bin/git` on Darwin
+  (`scripts/lib/profile-resolution.sh:95-101`), used by the hardened wrapper (`:390-400`)
+  and by its own load-time blob pins (`:789-792`). The residual is gone, and this spec
+  reads that result rather than producing it: the runtime stays untouched here, as the
+  first bullet above and the intent both require
+  (`work/resolver-trusted-parent/intent.md:32-33`).
 
 ## Areas of concern
 
@@ -9431,8 +9518,8 @@ intent says for this change. Only after the operator's merge does
   tampering that is observable before launch fails closed. What it is *not*: it is not a
   binding between what the parent checked and what the runtime executes. The runtime takes
   the helper by path and re-resolves it at exec time
-  (`scripts/lib/profile-resolution.sh:209`), with only `[ -x ] && [ ! -L ]` of its own
-  (`:664-667`), so a same-uid process can still swap the file in the window between the
+  (`scripts/lib/profile-resolution.sh:286`), with only `[ -x ] && [ ! -L ]` of its own
+  (`:741-744`), so a same-uid process can still swap the file in the window between the
   check and that exec — by loosening modes with `chmod`, or, without touching a mode at all,
   by renaming `<output>/.run` aside and putting its own `.run` in its place, which the
   mode-0700 output directory it owns allows — the runtime resolves the helper, jq and its
@@ -9885,11 +9972,11 @@ intent says for this change. Only after the operator's merge does
   for are the modes that appear (R5). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
-  (`portable-profile-resolution.test.sh:130-143`); the compiler is a fixed path chosen per
+  (`portable-profile-resolution.test.sh:322-335`); the compiler is a fixed path chosen per
   platform with no `$CC` override — `/usr/bin/cc` on Linux, and on Darwin
   `/Library/Developer/CommandLineTools/usr/bin/clang` with an explicit `-isysroot` — where
   the test honours
-  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) and both of those Darwin
+  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:287,294`) and both of those Darwin
   paths are the `xcrun` shim, because a caller-chosen compiler
   would be a caller-chosen trust base and a shim writes outside the output root (R1, R7);
   the entry runs no `git` at all, the ten blob-id pins being computed from a `stat` size
@@ -9981,42 +10068,36 @@ intent says for this change. Only after the operator's merge does
   runs `git` anywhere (R1, both measured on a Darwin 27 machine). What replaces the question
   is a
   prerequisite and a refusal: Darwin needs the Command Line Tools installed, and the entry
-  exits `E_RUNTIME` naming the missing path when they are not. The question does stay open
-  for one process the initiative does not write — the runtime, which runs `/usr/bin/git`
-  itself — and that is the residual in the bullet below rather than a gap in this one.
-  Linux CI cannot exercise any of the Darwin side — not the compile line, not the refusal,
-  not the cache measurement — so those three are confirmed only on an operator's Darwin run.
-  That is the honest gap this concern carries.
-- **One accepted residual on Darwin: the runtime's own git writes outside the output root,
-  and the intent now records it as the one accepted exception.** This is the only place the
-  single-write-root claim does not hold,
-  and it is worth stating as a concern rather than only as a requirement clause. The
-  resolver runtime runs `/usr/bin/git` for every repository read
-  (`scripts/lib/profile-resolution.sh:313-323`) and for the four blob pins it checks at load
-  time (`:711-714`). On Darwin that path is the `xcrun` shim, which can write its `xcrun_db`
-  cache into the per-user temp directory — outside the caller's output path, and outside
-  anywhere the parent can redirect, because the cache is not in `TMPDIR` (R1, measured). The
-  parent controls the runtime's whole environment (R3) and still cannot prevent it. The
-  residual belongs to the runtime and not to the parent, and the runtime is exactly what
-  this initiative may not change (`work/resolver-trusted-parent/intent.md:32-33`), so it
-  cannot be closed from where this spec stands. **The operator decided DR-2 on intake
-  `#271` on 2026-09-10, choosing option (a): accept the residual, name it, and measure
-  exactly it in the Darwin operator run (R10).** The decision is carried into the chain by
-  intent pull request `#282`, which amends the intent's write-root constraint to name this
-  residual as the one accepted exception and changes nothing else, and this spec pins that
-  amended intent (`intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f`). So this is an
-  accepted, intent-recorded residual rather than an open question: it is a concern the plan
-  and the reviewer should keep in view, not a decision anyone is still waiting on. R7 quotes
-  the amended constraint verbatim beside its own statement of the residual, so the two can
-  be read against each other. The two alternatives an earlier round held open against a
-  refusal — widening E to move the runtime off `/usr/bin/git` on Darwin, or dropping the
-  Darwin claim and shipping Linux-only — are history and are not carried further. The
-  follow-up that would close the residual for good is the one the amended constraint itself
-  names — a later intake moving the runtime's git invocation off the fixed shim path — and
-  it is not promised here.
+  exits `E_RUNTIME` naming the missing path when they are not. The question used to stay
+  open for one process the initiative does not write — the runtime, which ran
+  `/usr/bin/git` itself — and `#328` has since closed that one too, as the bullet below
+  records. Linux CI cannot exercise any of the Darwin side — not the compile line, not the
+  refusal, not the cache measurement — so those three are confirmed only on an operator's
+  Darwin run. That is the honest gap this concern carries.
+- **The Darwin residual that DR-2 accepted no longer exists.** This used to be the only
+  place the single-write-root claim did not hold, and the change is worth recording as a
+  concern resolved rather than dropped quietly. The resolver runtime ran `/usr/bin/git`
+  for every repository read and for the four blob pins it checks at load time; on Darwin
+  that path is the `xcrun` shim, which can write its `xcrun_db` cache into the per-user
+  temp directory — outside the caller's output path, and outside anywhere the parent can
+  redirect, because the cache is not in `TMPDIR` (R1, measured). **The operator decided
+  DR-2 on intake `#271` on 2026-09-10, choosing option (a): accept the residual, name it,
+  and measure exactly it in the Darwin operator run.** Intent pull request `#282` carried
+  that into the chain. `resolver-direct-git-runtime` (pull request `#328`, merged
+  2026-09-14, commit `ac734ba`) then removed the cause: the runtime observes the platform
+  once and selects `/Library/Developer/CommandLineTools/usr/bin/git` on both Darwin
+  architectures (`scripts/lib/profile-resolution.sh:95-101`), used by the hardened wrapper
+  (`:390-400`) and by the load-time pins (`:789-792`), so no shim runs and nothing is
+  written outside the output root. The intent was amended again to drop the exception and
+  keep the history in one sentence, and this spec pins that amended intent
+  (`intent-blob: bc6e669b755bae6c7f52f10f047c602faa46210a`). What is left for the plan and
+  the reviewer to keep in view is not the residual but the proof: R10's Darwin operator run
+  must show an identical per-user temp-directory listing before and after and no write
+  anywhere outside the output root, and that run is still a human one, because Linux CI
+  cannot exercise it.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
-  (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
+  (`scripts/lib/profile-resolution.sh:733-736`). The shipped parent cannot set them, and
   the test must prove it cannot — otherwise a production path inherits a test escape. The
   proof is the R3 block in R10: both variables are set in the polluted caller environment,
   and the Linux `/proc/<child pid>/environ` read asserts the child's environment is exactly
