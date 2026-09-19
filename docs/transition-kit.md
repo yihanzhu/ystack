@@ -244,6 +244,6 @@ on the exact head and base, required CI green, operator merges by hand.
    needed.
 2. Step 7, first live action: the shadow slice's read-only self-host run on ystack, as its
    own PR (Claude produces, Codex reviews, the operator merges). Its execution environment
-   must first be listed in `shadow/v1/shadow-environments.json` by its own reviewed PR.
+   is now listed in `shadow/v1/shadow-environments.json`; the run itself is still gated.
 3. Step 7, external-target run on `yihanzhu/ystack-dummy-target`, likewise gated.
 4. Only then step 8's first scope PR, which is the first change to `allowed_live_writes`.
