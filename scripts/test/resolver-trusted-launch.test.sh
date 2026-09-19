@@ -58,8 +58,11 @@ mod_profile_graph="$generation_dir/modules/profile_graph.jq"
 mod_result_facts="$generation_dir/modules/result_facts.jq"
 
 # The eight loaded/pinned files R5 enumerates (parent-pinned set; entry pins these
-# plus its own two C sources -- ten total).
-loaded_files="$runtime $library $jq_program $mod_schema $mod_result_truth $mod_stage_request $mod_profile_graph $mod_result_facts"
+# plus its own two C sources -- ten total). An array, not a scalar: a checkout
+# path containing a space would otherwise split one absolute filename into two
+# words at the unquoted expansions below (round-4 review), handing
+# git hash-object a nonexistent path.
+loaded_files=("$runtime" "$library" "$jq_program" "$mod_schema" "$mod_result_truth" "$mod_stage_request" "$mod_profile_graph" "$mod_result_facts")
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-resolver-trusted-launch-test.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
@@ -1700,7 +1703,7 @@ if [ -x "$entry" ]; then
     fail_case 'descriptor: unrelated object on fd 7'
   fi
 
-  # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 append.
+  # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 read-only.
   # The copy has to sit at its own full "resolver/v1/resolve-profile.sh" repo-root-
   # relative path, not a bare file dropped in $tmp: the entry derives its own repo
   # root from ${BASH_SOURCE[0]} (entry_dir=${script_path%/*};
@@ -1710,6 +1713,16 @@ if [ -x "$entry" ]; then
   # this case exists to prove -- confirmed by a live run refusing "E_RUNTIME binding"
   # with .run never created. copy_repo_tree already builds exactly this shape for
   # group 1's cases above.
+  #
+  # fd8 is opened READ-ONLY on the script (round-4 review, Linux CI diagnostics on
+  # a99d7fc): Linux's exec() returns ETXTBSY for a script whose interpreter line it
+  # must open for reading while ANY process holds that same file open for writing
+  # (append counts), surfacing as "bad interpreter: Text file busy" -- Darwin does
+  # not enforce this, which is why it only failed in CI. The case's own point (an
+  # extra caller-held descriptor that happens to reference the entry's own script
+  # path is closed like any other, ordering/content unaffected) does not depend on
+  # that descriptor being open for writing, so a read-only open proves the same
+  # thing on both platforms without hitting a Linux-only exec restriction.
   read -r d2_fifo d2_flag <<< "$(make_fifo_reader d2)"
   d2_tree="$tmp/descriptor.d2-tree"; copy_repo_tree "$d2_tree"
   entry_copy="$d2_tree/resolver/v1/resolve-profile.sh"; /bin/chmod 0755 "$entry_copy"
@@ -1717,7 +1730,7 @@ if [ -x "$entry" ]; then
   copy_before_sha=$(sha256_file "$entry_copy")
   d2_out="$tmp/descriptor.d2"; /bin/mkdir -m 700 "$d2_out"
   if (
-    exec 7> "$d2_fifo" 8>> "$entry_copy"
+    exec 7> "$d2_fifo" 8< "$entry_copy"
     "$entry_copy" "$bound_jq" "$d2_out" "$synthetic_request" "$synthetic_map" \
       > "$d2_out.stdout" 2> "$d2_out.stderr" &
     d2_pid=$!
@@ -2272,6 +2285,12 @@ if [ -x "$entry" ]; then
     sig7_wait_status=0
     wait "$sig7_pid" 2>/dev/null || sig7_wait_status=$?
     kill "$sig7_watchdog" 2>/dev/null || :
+    # Same reasoning as the filler below: kill only sends the signal. The
+    # watchdog subshell forked above (while fd 10 was still open) inherited
+    # its own copy of fd 10 as a writer reference; without waiting for it
+    # to actually exit here, that copy can outlive the kill and keep the
+    # drain below from ever seeing EOF.
+    wait "$sig7_watchdog" 2>/dev/null || :
   else
     fail_case 'signal: full-pipe case landed too late -- .run never appeared'
   fi
@@ -2286,33 +2305,36 @@ if [ -x "$entry" ]; then
   sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)
   drained="$tmp/signal7.drained"
   drained_flag="$tmp/signal7.drained.done"
-  # Attach the reader to the fifo WHILE fd 10 (still open here, read-write)
-  # is its only remaining reference, before closing fd 10 below: once every
-  # open reference to a fifo drops, the kernel discards whatever it had
-  # buffered, and a fresh read-only open() with no writer left would block
-  # rather than see that data. Opening the reader first lets it inherit
-  # the live pipe object (fd 10 counts as a writer, so open() here returns
-  # immediately) and receive whatever was buffered -- or confirm nothing
-  # was -- once fd 10's close delivers EOF. Completion is a bounded wait on
-  # an explicit done flag, not a fixed sleep, and the captured file's
-  # existence is asserted before it is trusted as proof of absence.
-  # The subshell forks from this shell and inherits fd 10 (the fifo's
-  # read-write descriptor) as its own writer reference. If it kept that
-  # copy open, closing fd 10 in the outer shell below would not be the
-  # last writer -- the subshell's inherited copy would still hold the
-  # pipe open and `cat` would never see EOF. Close the inherited copy
-  # first, before cat's own read-only open (which succeeds immediately:
-  # the outer shell's fd 10 is still open at that point).
-  ( exec 10>&-; /bin/cat "$tmp/signal7.fifo" > "$drained" 2>/dev/null; : > "$drained_flag" ) &
-  sig7_drain_pid=$!
-  /bin/sleep 0.05
+  # Round-4 review: the previous background `cat`-after-a-fixed-50ms-sleep
+  # was a race -- on a loaded runner the drainer subshell can still be
+  # waiting to be scheduled when the sleep elapses and this shell closes
+  # fd 10, so the drainer's own read-only open() then finds no writer left
+  # (the kernel has already discarded whatever fd 10 had buffered) and
+  # blocks forever. Fixed by opening the read end SYNCHRONOUSLY, as fd 11,
+  # in THIS shell, before fd 10 (its remaining writer reference) is closed:
+  # a read-only open on a fifo cannot block here because fd 10 is still a
+  # live writer at the moment fd 11 is opened, so there is no
+  # drainer-startup race left to lose to scheduling delay at all -- the
+  # reader is provably attached before the last writer goes away. The
+  # background `cat` below only READS an already-open fd 11; forking it
+  # afterward is no longer timing-sensitive.
+  exec 11< "$tmp/signal7.fifo"
   exec 10>&-
-  sig7_drain_deadline=$(( $(/bin/date +%s) + 10 ))
+  ( /bin/cat 0<&11 > "$drained" 2>/dev/null; : > "$drained_flag" ) &
+  sig7_drain_pid=$!
+  # 30s, matching this file's other post-signal watchdog bounds (e.g. the
+  # sig7_watchdog alarm above): even with the reader-attachment race fixed,
+  # the kernel does not deliver EOF until every writer reference is closed,
+  # and on a loaded host the entry/parent's own process teardown after TERM
+  # can measurably lag kill+wait returning. 10s was observed to be too
+  # tight under load even though no writer was ever actually leaked.
+  sig7_drain_deadline=$(( $(/bin/date +%s) + 30 ))
   while [ ! -e "$drained_flag" ]; do
     [ "$(/bin/date +%s)" -lt "$sig7_drain_deadline" ] || break
     /bin/sleep 0.02
   done
   kill "$sig7_drain_pid" 2>/dev/null || :
+  exec 11<&-
   if [ "$sig7_wait_status" -eq 143 ] && [ -z "$sig7_after" ] &&
      [ -e "$drained_flag" ] && [ -e "$drained" ] &&
      ! /usr/bin/grep -q '^entry-signal:' "$drained" 2>/dev/null; then
@@ -2335,7 +2357,7 @@ else
 fi
 
 if [ -f "$entry" ]; then
-  for f in "$parent_source" "$helper_source" $loaded_files; do
+  for f in "$parent_source" "$helper_source" "${loaded_files[@]}"; do
     expected=$(/usr/bin/git -C "$root" hash-object "$f")
     /usr/bin/grep -qF -- "$expected" "$entry" ||
       fail_case "pinned blob missing from entry: $f ($expected)"
@@ -2346,7 +2368,7 @@ else
 fi
 
 if [ -f "$parent_source" ]; then
-  for f in $loaded_files; do
+  for f in "${loaded_files[@]}"; do
     expected=$(/usr/bin/git -C "$root" hash-object "$f")
     /usr/bin/grep -qF -- "$expected" "$parent_source" ||
       fail_case "pinned blob missing from parent: $f ($expected)"
@@ -2460,32 +2482,115 @@ sweep_absolute_paths() {
   # code, are not attempted here) -- flagged as a known gap rather than claimed as
   # complete, matching this test's own comment above at the mechanism-checks
   # section header.
+  #
+  # Round-4 review: a token match alone cannot tell a standalone literal path
+  # (dangerous in argument position, e.g. a bare "/tmp") from the trailing
+  # fragment of a legitimate "$var/join" (the dynamic-join allowlist's whole
+  # reason to exist). The pattern below optionally captures ONE character
+  # immediately before the leading "/": an identifier character or "}" can
+  # only appear there when the match is the tail of a longer "$name/..." or
+  # "${name}/..." expression, never at the start of a standalone path literal
+  # (which is preceded by whitespace, a quote, "=", start-of-line, etc. --
+  # none of which are in the captured class). The caller strips that context
+  # character back off before comparing against an allowlist, but uses its
+  # presence to pick WHICH allowlist a token may match: a standalone token
+  # must be a literal command/data path (allowlist_words / allowlist_data);
+  # only a joined token may additionally match a dynamic-join fragment.
   sap_file=$1
   /usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
-    /usr/bin/grep -Eo '(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
+    /usr/bin/grep -Eo '[A-Za-z0-9_}]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
 }
 
 if [ -f "$entry" ]; then
   bad_tokens=0
   set -f
-  for tok in $(sweep_absolute_paths "$entry"); do
+  for tok_raw in $(sweep_absolute_paths "$entry"); do
+    case "$tok_raw" in
+      /*) tok_role=standalone; tok=$tok_raw ;;
+      *) tok_role=joined; tok=${tok_raw#?} ;;
+    esac
     match=0
-    for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done
+    case "$tok_role" in
+      standalone)
+        for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done
+        ;;
+      joined)
+        for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done
+        ;;
+    esac
     case "$tok" in
-      /dev/fd/*) match=1 ;;
       # The required self-path case pattern (R1's `case ${BASH_SOURCE[0]} in /*)`)
       # is classified as a non-path pattern, not an absolute-path token, per spec.
       # Quoted so this arm matches the literal two-character token "/*" and is not
       # itself a glob (an unquoted /* would match almost every token above it).
       '/*') match=1 ;;
     esac
-    [ "$match" -eq 1 ] || { printf 'unlisted absolute path token in entry: %s\n' "$tok" >&2; bad_tokens=$((bad_tokens + 1)); }
+    [ "$match" -eq 1 ] ||
+      { printf 'unlisted absolute path token in entry (%s): %s\n' "$tok_role" "$tok" >&2; bad_tokens=$((bad_tokens + 1)); }
   done
   set +f
   if [ "$bad_tokens" -eq 0 ]; then
-    pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data / dynamic-join allowlist'
+    pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data / dynamic-join allowlist, role-checked'
   else
     fail_case "mechanism: entry has $bad_tokens unlisted absolute-path token(s)"
+  fi
+
+  # Negative controls (round-4 review): a standalone dynamic-join fragment
+  # ("/tmp" with no preceding variable), and an out-of-range /dev/fd/N that
+  # is not one of the three exact entries the entry itself ever emits, must
+  # both be rejected by the role-aware sweep above -- proven by running it
+  # through the same function rather than trusting the allowlist by
+  # inspection. /usr/bin/awk direct execution (COMMAND position, never
+  # ARGUMENT position, for the entry) is proven rejected by the
+  # command-position sweep's negative controls further below.
+  sap_neg_dir="$tmp/sweep-negative"; /bin/mkdir -m 700 "$sap_neg_dir"
+
+  sap_neg_tmp="$sap_neg_dir/bare-tmp.sh"
+  printf '%s\n' '/bin/rm -rf /tmp' > "$sap_neg_tmp"
+  sap_neg_tmp_bad=0
+  set -f
+  for tok_raw in $(sweep_absolute_paths "$sap_neg_tmp"); do
+    case "$tok_raw" in
+      /*) tok_role=standalone; tok=$tok_raw ;;
+      *) tok_role=joined; tok=${tok_raw#?} ;;
+    esac
+    match=0
+    case "$tok_role" in
+      standalone) for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done ;;
+      joined) for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done ;;
+    esac
+    [ "$tok" = '/*' ] && match=1
+    [ "$match" -eq 1 ] || sap_neg_tmp_bad=$((sap_neg_tmp_bad + 1))
+  done
+  set +f
+  if [ "$sap_neg_tmp_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects a bare standalone "/tmp" argument (not a $var/tmp join)'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject a bare standalone "/tmp" argument'
+  fi
+
+  sap_neg_devfd="$sap_neg_dir/dev-fd-n.sh"
+  printf '%s\n' '/bin/cat /dev/fd/42' > "$sap_neg_devfd"
+  sap_neg_devfd_bad=0
+  set -f
+  for tok_raw in $(sweep_absolute_paths "$sap_neg_devfd"); do
+    case "$tok_raw" in
+      /*) tok_role=standalone; tok=$tok_raw ;;
+      *) tok_role=joined; tok=${tok_raw#?} ;;
+    esac
+    match=0
+    case "$tok_role" in
+      standalone) for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done ;;
+      joined) for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done ;;
+    esac
+    [ "$tok" = '/*' ] && match=1
+    [ "$match" -eq 1 ] || sap_neg_devfd_bad=$((sap_neg_devfd_bad + 1))
+  done
+  set +f
+  if [ "$sap_neg_devfd_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects an out-of-range /dev/fd/42 argument (only /dev/fd, /dev/fd/*, /dev/fd/2 are pinned)'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject an out-of-range /dev/fd/42 argument'
   fi
 
   builtins=$(/bin/bash -c 'compgen -b')
@@ -2510,6 +2615,12 @@ if [ -f "$entry" ]; then
   # unexamined command word and must fall through to ordinary
   # classification.
   cps_verified_vars='$compiler $jq_arg ${sha1_args[@]} ${sha256_args[@]}'
+  # Variable-joined suffixes the entry legitimately EXECUTES (command
+  # position), a strict subset of allowlist_dynamic_joins above: the entry
+  # runs the compiled parent at "$run/trusted-launch" (resolve-profile.sh)
+  # and passes "$run/awk", "$run/jq", "$run/nofollow-snapshot" onward as
+  # argv strings for the parent to exec, never execing them itself.
+  cps_command_dynamic_joins='/trusted-launch'
 
   # cps_scan_source FILE -- the lexical extraction the prior draft deferred:
   # strips full-line comments and heredoc bodies (data, never a command
@@ -2629,8 +2740,37 @@ if [ -f "$entry" ]; then
 
     case "$cps_first" in
       ')'|'{'*|'}'*) return 0 ;;
-      /*) return 0 ;;                 # literal absolute path: sweep_absolute_paths above
-      *'/'*) return 0 ;;              # variable-joined path: dynamic-join allowlist above
+      # Round-4 review: this file's own COMMAND-position role check.
+      # sweep_absolute_paths above is a whole-file token census that cannot
+      # tell "/bin/rm" naming a program from "/tmp" naming a doomed
+      # argument, so it accepted anything on the combined word/data/join
+      # list regardless of role. Here the word IS known to be in command
+      # position (that is what this function extracts), so a literal
+      # absolute-path command word must be one of the fifteen allowlisted
+      # programs -- never merely an allowlisted DATA path or dynamic-join
+      # fragment, both of which are legitimate only as arguments.
+      /*)
+        cps_cmdpath_match=0
+        for cps_cwv in $allowlist_words; do [ "$cps_first" = "$cps_cwv" ] && cps_cmdpath_match=1 && break; done
+        [ "$cps_cmdpath_match" -eq 1 ] || printf 'unallowlisted absolute-path command word: %s\n' "$cps_first"
+        return 0
+        ;;
+      # A variable-joined command word (e.g. "$run/trusted-launch") is only
+      # legitimate in command position for the entry's own pinned helper
+      # suffixes it actually execs -- narrower than the full dynamic-join
+      # data allowlist above, which also covers suffixes the entry only
+      # ever passes as arguments (e.g. "$run/awk", "$run/jq" are exec'd by
+      # the parent, not by this shell).
+      *'/'*)
+        cps_cmdjoin_match=0
+        for cps_cjv in $cps_command_dynamic_joins; do
+          case "$cps_first" in
+            *"$cps_cjv") cps_cmdjoin_match=1; break ;;
+          esac
+        done
+        [ "$cps_cmdjoin_match" -eq 1 ] || printf 'unallowlisted variable-joined command word: %s\n' "$cps_first"
+        return 0
+        ;;
       # A bare "exec FD>&-" / "exec FD<&-" closes a descriptor and names no
       # command at all -- this tokenizer has no separate redirection-operator
       # handling, so a fd-close target like "${fd_name}>&-" (surfaced once
@@ -3174,6 +3314,30 @@ if [ -f "$entry" ]; then
     *)
       fail_case 'mechanism: command-position sweep failed to reject a command reached through a process substitution' ;;
   esac
+
+  # Round-4 review: /usr/bin/awk is a legitimate ARGUMENT (e.g. "/bin/cp --
+  # /usr/bin/awk \"\$run/awk\"") but the entry never execs it directly; a
+  # direct COMMAND-position invocation must be rejected by the
+  # allowlist_words-only check added above, not silently accepted the way
+  # the old unconditional "/*) return 0" did.
+  cps_neg_awk="$cps_neg_dir/awk.sh"
+  printf '%s\n' '/usr/bin/awk "$@"' > "$cps_neg_awk"
+  cps_neg_awk_findings=$(cps_scan_source "$cps_neg_awk")
+  case "$cps_neg_awk_findings" in
+    *'/usr/bin/awk'*)
+      pass_case 'mechanism: command-position sweep rejects a direct /usr/bin/awk command-word invocation' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a direct /usr/bin/awk command-word invocation' ;;
+  esac
+
+  # Shipped entry + parent must still pass with the tightened checks above:
+  # its one real variable-joined command word is "$run/trusted-launch",
+  # covered by cps_command_dynamic_joins, and it never execs /usr/bin/awk,
+  # /bin/rm on a bare "/tmp", or /bin/cat on an arbitrary /dev/fd/N
+  # directly -- already proven by the "bare-word command-position sweep
+  # finds no unallowlisted command in the shipped entry" pass_case above,
+  # which runs cps_scan_source "$entry" through this same, now-stricter
+  # cps_classify_command.
 
   env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
   if [ -n "$env_i_line" ]; then
