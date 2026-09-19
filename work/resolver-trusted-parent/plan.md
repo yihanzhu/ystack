@@ -1,5 +1,5 @@
 ---
-spec-blob: 98edf3520b2b7ecd6b8d3a84fd61e317d40fdf64
+spec-blob: 69135783c3c1642d07e9e26cd8ed173d6dd583bc
 drafted: 2026-09-14
 ---
 
@@ -48,7 +48,7 @@ implementation files are 5268 insertions (1988 / 400 / 2880).
 
 `review_size: accepted-exception`, **4600-6300 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
-record (blob `98edf3520b2b7ecd6b8d3a84fd61e317d40fdf64`) and is the only
+record (blob `69135783c3c1642d07e9e26cd8ed173d6dd583bc`) and is the only
 range this implementation is measured against. It brackets the measured
 5370 with an outward margin of roughly a sixth for the work still open.
 
@@ -250,15 +250,22 @@ absolute physical caller-owned empty 0700 directory, no symlink component, and t
 R1 PATH_MAX reserve for `.run/tmp/` plus NAME_MAX. Use platform stat formats and
 builtin glob emptiness, not find or mktemp.
 
-Initialize all five names read by traps/checkpoints before arming traps — `entry_signal`,
-`run_created`, `entry_status`, `parent_pid` and `last_forwarded`, the last because the trap
-bodies read it; assign run from
+Initialize all six names read by traps/checkpoints before arming traps — `entry_signal`,
+`run_created`, `entry_status`, `parent_pid`, `last_forwarded` and `trap_busy`, the last two
+because the forwarding trap bodies read both; assign run from
 validated output. There are exactly two trap-form literals per signal and no third. The
 record-only form is `: "${entry_signal:=NAME}"; wait_interrupted=1`, two statements; the
-forwarding form is `: "${entry_signal:=NAME}"; wait_interrupted=1; case " $(jobs -l) " in
-*" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid"
-|| :; last_forwarded=$entry_signal; };; esac`, three statements, every one a builtin or a
-subshell around one, with no `2>/dev/null` on the trap's kill. The forwarding body sends
+forwarding form is `: "${entry_signal:=NAME}"; wait_interrupted=1; if [ -z "$trap_busy" ];
+then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*)
+[ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :;
+last_forwarded=$entry_signal; };; esac; trap_busy=''; fi`, three statements, every one a
+builtin or a subshell around one. The `trap_busy` flag serialises nested trap bodies —
+Bash 3.2 runs a trap for a signal arriving while another trap body executes, and two
+bodies could otherwise pass the same empty `last_forwarded` and both send; a nested body
+arriving after `trap_busy=1` records only, and one arriving in the two-statement window
+before it runs to completion first and leaves `last_forwarded` set for the outer. Set
+`trap_busy` on the way into the `if` and clear it on the way out, nowhere else. The
+forwarding body sends
 `$entry_signal`, never its own `:=NAME` default: sending the default breaks
 first-signal-wins whenever a second, differently named signal arrives after the first was
 recorded but not sent. Arm the record-only form with the EXIT trap before anything creates
@@ -299,14 +306,17 @@ arrival sent twice, and an INT sent for a run whose recorded signal was TERM —
 in R1.
 There are four job-table-gated forwarding kills — one in each of the three trap bodies'
 forwarding form and one in this section — all sending `$entry_signal`, all on the same
-`case " $(jobs -l) "` read and nowhere else. The section's kill is the only one carrying
-`2>/dev/null`. Set last_forwarded in the loop after the case, even when forwarding is
+`case " $(jobs -l) "` read and nowhere else, and all four carrying `2>/dev/null`, so a
+`kill` at a parent that vanished after the table read cannot produce a stderr write that
+blocks on a pipe whose reader has gone. Set last_forwarded in the loop after the case, even when forwarding is
 skipped, so it cannot be retried later and so the section terminates when the table stops
 listing the parent; in the trap body it is set inside the Running arm, beside the kill.
 Steps 3-5, the second-wait rule and the 127 fallbacks are unchanged. Enumerate every
-`trap` command in R10's trap inventory: the EXIT trap, three pre-parent record-only
-arming commands, three forwarding re-arms after `parent_pid=$!`, and the section's three
-record-only and three forwarding re-arms — thirteen in all, two body literals per signal.
+`trap` command in R10's trap inventory: the `trap … EXIT` command, three pre-parent
+record-only arming commands, three forwarding re-arms after `parent_pid=$!`, the section's
+three record-only and three forwarding re-arms, and `trap '' INT TERM HUP`, the EXIT trap
+body's second statement — fourteen in all, two non-empty body literals per signal plus the
+empty one EXIT sets.
 Pass child stdout/stderr through unchanged. Do not poll pid liveness with kill -0.
 Preserve real status 7/42 in simultaneous-exit
 cases; no fixed two-wait replacement. Never remove .run before the parent is reaped.
@@ -386,9 +396,9 @@ or other command variable is permitted. Review their values separately.
 Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
 `ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
 in every required scrub including the marker branch, and the wait loop's signal
-forwarding kill in the job-table Running arm inside its record-only section — that one
-only of the four job-table-gated forwarding kills; the three trap-body kills carry no
-redirection, so `2>/dev/null` on one of them is a rejection. Check those source roles
+forwarding kill in the job-table Running arm inside its record-only section together with
+the three trap-body forwarding kills — all four job-table-gated kills carry it, and there
+is no fifth kill in the entry. Check those source roles
 and positions, not only an occurrence count. Reject every other command/descriptor,
 input or append redirection, variable sink, prefix path, C pathname or execve
 argument using that target. It is neither an executable nor a general data member.
