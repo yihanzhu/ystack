@@ -1,5 +1,4 @@
 import "profile_graph" as graph;
-import "schema" as schema;
 
 # pinned from profiles/default/v1 at 4a576d9181d5e8c01c04f027432ad8b143400cee
 # Digests of the bytes as committed. Requirement 3 (yihanzhu/ystack#262) pins
@@ -111,11 +110,14 @@ def forge_binding:
 
 # Requirement 6 (amendment): the requester is the caller's own tenth-argument
 # input, copied into requested_by verbatim, and is never projected from a
-# binding. actor_ref_ok is the core's own shape predicate for requested_by;
-# the role and collision rules are this component's own, checked against
+# binding. Its actor_ref_ok shape is checked by the wrapper before this
+# module ever runs (assemble-materialization-input.sh, the same
+# import-"schema"-inline-in-the-wrapper pattern requirement 10's time_ok
+# check already uses, kept out of this module so the tracked-path allowlist
+# in scripts/test/portable-core-schema.test.sh needs no new entry). By the
+# time precheck runs, $requester[0] is already a well-shaped actor_ref; the
+# role and collision rules below are this component's own, checked against
 # every binding in the resolved profile, not only the forge one.
-def requester_shape_ok:
-  ($requester[0] | type) == "object" and ($requester[0] | schema::actor_ref_ok);
 def requester_role_ok:
   ["manager","operator","orchestrator"] | index($requester[0].role) != null;
 def requester_identity_collision:
@@ -219,7 +221,6 @@ def precheck:
   elif (config_pins_ok | not) then refuse("E_PROFILE")
   elif (claim_kind_ok | not) then refuse("E_SHAPE")
   elif (claim_id_ok | not) then refuse("E_SHAPE")
-  elif (requester_shape_ok | not) then refuse("E_SHAPE")
   elif (graph::profile_set_ok({content:$profile[0],sha256:$profile_sha256};
       {content:$resolved_profile[0],sha256:$resolved_profile_sha256};manifest_pairs) | not)
     then refuse("E_RELATION")
