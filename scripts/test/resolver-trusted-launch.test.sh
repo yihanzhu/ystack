@@ -474,6 +474,38 @@ else
   fail_case 'group1: overlong output path (entry absent or platform PATH_MAX unreachable)'
 fi
 
+# 1g2. output path whose length falls strictly between the parent's own,
+# shorter copied guard (`PATH_MAX - 16`, reserving room only for
+# "<output>/child.stdout") and the entry's stricter R1 bound (reserving
+# "/.run/tmp/" -- 10 bytes -- plus a full NAME_MAX name, 255 here, so 265
+# total). A path this long would have been accepted by the parent's own
+# guard alone but must still be refused by the entry before it ever writes
+# a ".run" scratch directory into the target.
+entry_reserve=265
+mid_base="$tmp/g1-mid"
+/bin/mkdir -m 700 "$mid_base"
+mid_dir="$mid_base"
+mid_target=$((long_ceiling - 200))
+while [ "${#mid_dir}" -lt "$mid_target" ]; do
+  mid_dir="$mid_dir/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  /bin/mkdir -m 700 "$mid_dir" 2>/dev/null || break
+done
+if [ -x "$entry" ] &&
+   [ "${#mid_dir}" -gt $((long_ceiling - entry_reserve)) ] &&
+   [ "${#mid_dir}" -le $((long_ceiling - 16)) ]; then
+  mid_status=0
+  "$entry" "$bound_jq" "$mid_dir" "$synthetic_request" "$synthetic_map" \
+    > "$tmp/g1.mid.stdout" 2> "$tmp/g1.mid.stderr" || mid_status=$?
+  if [ "$mid_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$tmp/g1.mid.stderr" &&
+     [ ! -e "$mid_dir/.run" ] && [ -z "$(/usr/bin/find "$mid_dir" -mindepth 1 -maxdepth 1)" ]; then
+    pass_case 'group1: entry refuses a path between the parent guard and its own bound, no scratch dir created'
+  else
+    fail_case 'group1: mid-length output path (accepted, or a scratch directory was created)'
+  fi
+else
+  fail_case 'group1: mid-length output path (entry absent or interval unreachable on this filesystem)'
+fi
+
 # 1h-1l. Five output-root validate-first cases: each asserts the target was never
 # written to (no .run, entry set unchanged) because the refusal precedes any write.
 assert_output_untouched_refusal() {
@@ -885,32 +917,39 @@ if [ "$parent_available" -eq 1 ]; then
   regular_out="$tmp/g2.regular.out"; /bin/mkdir -m 700 "$regular_out"; : > "$regular_out/.run"
   assert_direct_untouched_refusal 'group2: only entry .run is a regular file' "$g2out25/.run" "$regular_out"
 
-  # output ownership refusal via fstat interposition (never a real cross-user launch)
-  interpose_src="$tmp/g2.interpose.c"
-  cat > "$interpose_src" <<'INTERPOSE'
-#define _GNU_SOURCE
-#include <dlfcn.h>
+  # output ownership refusal via a portable test-only translation-unit
+  # interposition of fstat (R10): compile the unchanged parent source with
+  # fstat renamed to test_fstat by a preprocessor macro on the command
+  # line, and link the resulting object against a small test-only wrapper
+  # TU -- compiled WITHOUT that macro, so its own call to fstat() reaches
+  # the real libc one -- that forwards every call unchanged except for the
+  # single fd whose real device/inode match a target path named by an
+  # environment variable, where it substitutes a different uid and marks
+  # that it was reached. No dlsym/RTLD_NEXT, LD_PRELOAD, DYLD_INSERT_LIBRARIES,
+  # shipped switch, environment flag read by the shipped parent, or
+  # privilege change is involved, so this compiles and runs identically on
+  # Linux and Darwin -- there is no platform skip.
+  interpose_wrapper_src="$tmp/g2.interpose-wrapper.c"
+  cat > "$interpose_wrapper_src" <<'INTERPOSE'
 #include <fcntl.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-static dev_t target_dev; static ino_t target_ino; static int have_target;
+static dev_t target_dev; static ino_t target_ino; static int have_target = -1;
 static const char *marker_path;
 static void load_target(void) {
   const char *p = getenv("YSTACK_TEST_INTERPOSE_TARGET");
   marker_path = getenv("YSTACK_TEST_INTERPOSE_MARKER");
+  have_target = 0;
   if (!p) return;
   struct stat st;
   if (stat(p, &st) == 0) { target_dev = st.st_dev; target_ino = st.st_ino; have_target = 1; }
 }
-int fstat(int fd, struct stat *buf) {
-  static int (*real_fstat)(int, struct stat *);
-  if (!real_fstat) real_fstat = dlsym(RTLD_NEXT, "fstat");
-  if (!have_target) load_target();
-  int rc = real_fstat(fd, buf);
-  if (rc == 0 && have_target && buf->st_dev == target_dev && buf->st_ino == target_ino) {
+int test_fstat(int fd, struct stat *buf) {
+  if (have_target < 0) load_target();
+  int rc = fstat(fd, buf);
+  if (rc == 0 && have_target == 1 && buf->st_dev == target_dev && buf->st_ino == target_ino) {
     buf->st_uid = buf->st_uid + 1;
     if (marker_path) {
       int mfd = open(marker_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -920,41 +959,63 @@ int fstat(int fd, struct stat *buf) {
   return rc;
 }
 INTERPOSE
-  case "$platform" in
-    Darwin:*) skip_case 'group2: output ownership refused under injected fstat metadata' \
-      'DYLD interposition of fstat is not portably reachable from this harness' ;;
-    *)
-      interpose_lib="$tmp/g2.interpose.so"
-      /usr/bin/cc -std=c11 -Wall -Wextra -O2 -fPIC -shared "$interpose_src" -o "$interpose_lib" -ldl
 
-      # Positive control first: the SAME kind of valid run/output pair used below,
-      # with no interposition at all, must succeed -- so the refusal case that
-      # follows is attributable to the injected ownership metadata, not to some
-      # other defect in the pairing.
-      own_run_ok="$tmp/g2.ownership-control"; build_run_directory "$own_run_ok"
-      own_ok_status=0
-      invoke_parent "$own_run_ok/.run" "$synthetic_request" "$synthetic_map" "$own_run_ok" \
-        > "$own_run_ok.stdout" 2> "$own_run_ok.stderr" || own_ok_status=$?
-      if [ "$own_ok_status" -eq 0 ]; then
-        pass_case 'group2: unmodified-owner positive control succeeds'
-      else
-        fail_case "group2: unmodified-owner positive control failed (status=$own_ok_status): $(cat "$own_run_ok.stderr" 2>/dev/null)"
-      fi
+  interpose_wrapper_obj="$tmp/g2.interpose-wrapper.o"
+  interpose_parent_obj="$tmp/g2.interpose-parent.o"
+  interpose_bin="$tmp/g2.interpose-parent"
+  # Isolated TMPDIR/HOME for these three compiles, the same way compile_source
+  # scopes the entry's own compiles (build_run_directory) -- otherwise clang's
+  # own scratch/cache usage lands in the shared Darwin per-user temp dir and
+  # trips the later compiler-pollution snapshot (section 11 below), which
+  # expects that directory untouched by anything this suite compiles.
+  interpose_build_tmp="$tmp/g2.interpose-build.tmp"; /bin/mkdir -m 700 "$interpose_build_tmp"
+  interpose_build_home="$tmp/g2.interpose-build.home"; /bin/mkdir -m 700 "$interpose_build_home"
+  /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "TMPDIR=$interpose_build_tmp" "HOME=$interpose_build_home" \
+    "$compiler" "${compiler_extra_flags[@]}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    -c -o "$interpose_wrapper_obj" "$interpose_wrapper_src"
+  /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "TMPDIR=$interpose_build_tmp" "HOME=$interpose_build_home" \
+    "$compiler" "${compiler_extra_flags[@]}" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+    -Dfstat=test_fstat -c -o "$interpose_parent_obj" "$parent_source"
+  /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "TMPDIR=$interpose_build_tmp" "HOME=$interpose_build_home" \
+    "$compiler" "${compiler_extra_flags[@]}" \
+    -o "$interpose_bin" "$interpose_parent_obj" "$interpose_wrapper_obj"
 
-      own_run="$tmp/g2.ownership"; build_run_directory "$own_run"
-      own_marker="$tmp/g2.ownership.marker"; /bin/rm -f "$own_marker"
-      own_before=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
-      own_status=0
-      LD_PRELOAD="$interpose_lib" YSTACK_TEST_INTERPOSE_TARGET="$own_run" YSTACK_TEST_INTERPOSE_MARKER="$own_marker" \
-        invoke_parent "$own_run/.run" "$synthetic_request" "$synthetic_map" "$own_run" \
-        > "$own_run.stdout" 2> "$own_run.stderr" || own_status=$?
-      assert_refused_before_fork 'group2: output ownership refused under injected fstat metadata' \
-        "$own_status" "$own_run.stdout" "$own_run.stderr" 'E_RUNTIME output'
-      [ -e "$own_marker" ] || fail_case 'group2: injected-ownership refusal -- interposed fstat never matched the output descriptor'
-      own_after=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
-      [ "$own_before" = "$own_after" ] || fail_case 'group2: injected-ownership refusal left writes behind'
-      ;;
-  esac
+  invoke_interpose_parent() {
+    # invoke_interpose_parent RUN REQUEST MAP OUTPUT [RUN_OVERRIDE] -- same
+    # argv shape as invoke_parent, against the test-only interposed binary
+    # built above instead of the shipped, compiled-by-the-entry one.
+    iip_run=$1 iip_request=$2 iip_map=$3 iip_output=$4 iip_run_arg=${5:-$1}
+    "$interpose_bin" resolve "$runtime" "$iip_run/nofollow-snapshot" "$iip_run/jq" \
+      "$iip_request" "$iip_map" "$iip_output" "$iip_run_arg"
+  }
+
+  # Positive control first: the SAME kind of valid run/output pair used below,
+  # through the interposed binary but with no target env vars set (so
+  # test_fstat never substitutes anything), must succeed -- so the refusal
+  # case that follows is attributable to the injected ownership metadata,
+  # not to some other defect in the pairing or in this test-only binary.
+  own_run_ok="$tmp/g2.ownership-control"; build_run_directory "$own_run_ok"
+  own_ok_status=0
+  invoke_interpose_parent "$own_run_ok/.run" "$synthetic_request" "$synthetic_map" "$own_run_ok" \
+    > "$own_run_ok.stdout" 2> "$own_run_ok.stderr" || own_ok_status=$?
+  if [ "$own_ok_status" -eq 0 ]; then
+    pass_case 'group2: unmodified-owner positive control succeeds'
+  else
+    fail_case "group2: unmodified-owner positive control failed (status=$own_ok_status): $(cat "$own_run_ok.stderr" 2>/dev/null)"
+  fi
+
+  own_run="$tmp/g2.ownership"; build_run_directory "$own_run"
+  own_marker="$tmp/g2.ownership.marker"; /bin/rm -f "$own_marker"
+  own_before=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
+  own_status=0
+  YSTACK_TEST_INTERPOSE_TARGET="$own_run" YSTACK_TEST_INTERPOSE_MARKER="$own_marker" \
+    invoke_interpose_parent "$own_run/.run" "$synthetic_request" "$synthetic_map" "$own_run" \
+    > "$own_run.stdout" 2> "$own_run.stderr" || own_status=$?
+  assert_refused_before_fork 'group2: output ownership refused under injected fstat metadata' \
+    "$own_status" "$own_run.stdout" "$own_run.stderr" 'E_RUNTIME output'
+  [ -e "$own_marker" ] || fail_case 'group2: injected-ownership refusal -- interposed fstat never matched the output descriptor'
+  own_after=$(/usr/bin/find "$own_run" -mindepth 1 -print | /usr/bin/sort)
+  [ "$own_before" = "$own_after" ] || fail_case 'group2: injected-ownership refusal left writes behind'
 else
   fail_case 'group2: parent-owned refusal cases (trusted-launch.c absent)'
 fi
@@ -1726,7 +1787,16 @@ if [ "$parent_available" -eq 1 ]; then
         [ "$(/bin/date +%s)" -lt "$p1_deadline" ] || break
         /bin/sleep 0.01
       done
-      wait "$p1_pid"
+      # This subshell is an "if" condition, so errexit is off inside it --
+      # a failed wait, a reader that never reached EOF (no flag file), or a
+      # parent that refused before ever writing runtime-pgid: must each be
+      # caught explicitly, or a refusal-before-fork would pass this ordering
+      # assertion vacuously.
+      p1_wait_status=0
+      wait "$p1_pid" || p1_wait_status=$?
+      [ "$p1_wait_status" -eq 0 ] || exit 1
+      [ -e "$p1_flag" ] || exit 1
+      /usr/bin/grep -q '^runtime-pgid:' "$p1_out.stderr" 2>/dev/null || exit 1
       [ "$p1_saw_before" -eq 0 ] || exit 1
     ); then
       p1_proved=1
@@ -1759,7 +1829,12 @@ if [ "$parent_available" -eq 1 ]; then
         [ "$(/bin/date +%s)" -lt "$p2_deadline" ] || break
         /bin/sleep 0.01
       done
-      wait "$p2_pid"
+      # Same explicit success/EOF/diagnostic requirements as p1 above.
+      p2_wait_status=0
+      wait "$p2_pid" || p2_wait_status=$?
+      [ "$p2_wait_status" -eq 0 ] || exit 1
+      [ -e "$p2_flag" ] || exit 1
+      /usr/bin/grep -q '^runtime-pgid:' "$p2_out.stderr" 2>/dev/null || exit 1
       [ "$p2_saw_before" -eq 0 ] || exit 1
     ); then
       p2_proved=1
@@ -2116,14 +2191,31 @@ if [ -x "$entry" ]; then
     fail_case 'signal: full-pipe case landed too late -- .run never appeared'
   fi
   kill "$sig7_filler" 2>/dev/null || :
-  exec 10>&-
   sig7_after=$(/usr/bin/find "$sig7_out" -mindepth 1 -print 2>/dev/null)
   drained="$tmp/signal7.drained"
-  ( exec 11< "$tmp/signal7.fifo"; /bin/cat <&11 > "$drained" 2>/dev/null || : ) &
+  drained_flag="$tmp/signal7.drained.done"
+  # Attach the reader to the fifo WHILE fd 10 (still open here, read-write)
+  # is its only remaining reference, before closing fd 10 below: once every
+  # open reference to a fifo drops, the kernel discards whatever it had
+  # buffered, and a fresh read-only open() with no writer left would block
+  # rather than see that data. Opening the reader first lets it inherit
+  # the live pipe object (fd 10 counts as a writer, so open() here returns
+  # immediately) and receive whatever was buffered -- or confirm nothing
+  # was -- once fd 10's close delivers EOF. Completion is a bounded wait on
+  # an explicit done flag, not a fixed sleep, and the captured file's
+  # existence is asserted before it is trusted as proof of absence.
+  ( /bin/cat "$tmp/signal7.fifo" > "$drained" 2>/dev/null; : > "$drained_flag" ) &
   sig7_drain_pid=$!
-  /bin/sleep 0.2
+  /bin/sleep 0.05
+  exec 10>&-
+  sig7_drain_deadline=$(( $(/bin/date +%s) + 10 ))
+  while [ ! -e "$drained_flag" ]; do
+    [ "$(/bin/date +%s)" -lt "$sig7_drain_deadline" ] || break
+    /bin/sleep 0.02
+  done
   kill "$sig7_drain_pid" 2>/dev/null || :
   if [ "$sig7_wait_status" -eq 143 ] && [ -z "$sig7_after" ] &&
+     [ -e "$drained_flag" ] && [ -e "$drained" ] &&
      ! /usr/bin/grep -q '^entry-signal:' "$drained" 2>/dev/null; then
     pass_case 'signal: entry omits its entry-signal line on a full pipe rather than blocking'
   else
@@ -2309,6 +2401,16 @@ if [ -f "$entry" ]; then
   # "${parent_env[@]}" in command position is a recognised, closed idiom
   # rather than an unresolvable bare variable.
   cps_env_wrappers='${clean_env[@]} ${parent_env[@]}'
+  # The command word actually launched THROUGH an env wrapper, once it is
+  # peeled away rather than short-circuited on: the entry's own fixed,
+  # never-reassigned scalar/array references that name an already-verified
+  # or already-pinned program ($compiler after the -x check, $jq_arg after
+  # its SHA-256/--version identity checks, and the two fixed sha1sum/
+  # sha256sum argv arrays) -- a closed idiom the same way the wrappers
+  # themselves are. Anything else surfacing here after peeling is a real,
+  # unexamined command word and must fall through to ordinary
+  # classification.
+  cps_verified_vars='$compiler $jq_arg ${sha1_args[@]} ${sha256_args[@]}'
 
   # cps_scan_source FILE -- the lexical extraction the prior draft deferred:
   # strips full-line comments and heredoc bodies (data, never a command
@@ -2364,6 +2466,16 @@ if [ -f "$entry" ]; then
         [A-Za-z_][A-Za-z0-9_]*=*|exec|command|env)
           cps_wi=$((cps_wi + 1)); continue ;;
       esac
+      # An env-wrapper prefix ("${clean_env[@]}"/"${parent_env[@]}") names
+      # the wrapper, not the command it launches -- peel it and keep
+      # looking, the same as exec/command/env above, rather than accepting
+      # the whole statement here: that earlier short-circuit is exactly
+      # what let a wrapped unallowlisted command through undetected.
+      cps_env_wrapper_match=0
+      for cps_wv in $cps_env_wrappers; do [ "$cps_w" = "$cps_wv" ] && cps_env_wrapper_match=1 && break; done
+      if [ "$cps_env_wrapper_match" -eq 1 ]; then
+        cps_wi=$((cps_wi + 1)); continue
+      fi
       cps_first=$cps_w
       break
     done
@@ -2374,9 +2486,9 @@ if [ -f "$entry" ]; then
       /*) return 0 ;;                 # literal absolute path: sweep_absolute_paths above
       *'/'*) return 0 ;;              # variable-joined path: dynamic-join allowlist above
     esac
-    cps_env_wrapper_match=0
-    for cps_wv in $cps_env_wrappers; do [ "$cps_first" = "$cps_wv" ] && cps_env_wrapper_match=1 && break; done
-    [ "$cps_env_wrapper_match" -eq 1 ] && return 0
+    cps_verified_match=0
+    for cps_vv in $cps_verified_vars; do [ "$cps_first" = "$cps_vv" ] && cps_verified_match=1 && break; done
+    [ "$cps_verified_match" -eq 1 ] && return 0
     case "$cps_first" in
       \$*)
         printf 'unresolvable variable command word: %s\n' "$cps_first"
@@ -2397,6 +2509,81 @@ if [ -f "$entry" ]; then
     if [ "$cps_known" -ne 1 ]; then
       printf 'unallowlisted bare command: %s\n' "$cps_first"
     fi
+    return 0
+  }
+
+  cps_extract_case_oneline_arms() {
+    # cps_extract_case_oneline_arms LINE -- for a self-contained one-line
+    # "case WORD in PAT) CMD ;; PAT2) CMD2 ;; esac", queues each arm's
+    # command body onto cps_queue (global) so a command hidden in a
+    # one-line case arm is classified like any other command position.
+    # Quote-tracked throughout, same as the tokenizer above.
+    cps_ol_line=$1
+    case "$cps_ol_line" in
+      'case '*|*' case '*) : ;;
+      *) return 0 ;;
+    esac
+    cps_ol_rest=${cps_ol_line#*case }
+    case "$cps_ol_rest" in
+      *' in '*) cps_ol_rest=${cps_ol_rest#*' in '} ;;
+      *) return 0 ;;
+    esac
+    while :; do
+      # Find the next unquoted ")" -- the end of this arm's pattern.
+      cps_ol_i=0 cps_ol_len=${#cps_ol_rest} cps_ol_inq='' cps_ol_paren=0 cps_ol_close=-1
+      while [ "$cps_ol_i" -lt "$cps_ol_len" ]; do
+        cps_ol_c=${cps_ol_rest:$cps_ol_i:1}
+        if [ -n "$cps_ol_inq" ]; then
+          [ "$cps_ol_c" = "$cps_ol_inq" ] && cps_ol_inq=''
+        else
+          case "$cps_ol_c" in
+            \'|\") cps_ol_inq=$cps_ol_c ;;
+            '(') cps_ol_paren=$((cps_ol_paren + 1)) ;;
+            ')')
+              if [ "$cps_ol_paren" -gt 0 ]; then
+                cps_ol_paren=$((cps_ol_paren - 1))
+              else
+                cps_ol_close=$cps_ol_i
+              fi
+              ;;
+          esac
+        fi
+        [ "$cps_ol_close" -ge 0 ] && break
+        cps_ol_i=$((cps_ol_i + 1))
+      done
+      [ "$cps_ol_close" -ge 0 ] || break
+      cps_ol_rest=${cps_ol_rest:$((cps_ol_close + 1))}
+
+      # Find the next unquoted ";;" -- the end of this arm's command body
+      # -- or, absent one, treat up to "esac" as the last arm's body.
+      cps_ol_j=0 cps_ol_jlen=${#cps_ol_rest} cps_ol_inq='' cps_ol_semi=-1
+      while [ "$cps_ol_j" -lt "$cps_ol_jlen" ]; do
+        cps_ol_c=${cps_ol_rest:$cps_ol_j:1}
+        if [ -n "$cps_ol_inq" ]; then
+          [ "$cps_ol_c" = "$cps_ol_inq" ] && cps_ol_inq=''
+        else
+          case "$cps_ol_c" in
+            \'|\") cps_ol_inq=$cps_ol_c ;;
+            ';')
+              [ "${cps_ol_rest:$((cps_ol_j + 1)):1}" = ';' ] && cps_ol_semi=$cps_ol_j
+              ;;
+          esac
+        fi
+        [ "$cps_ol_semi" -ge 0 ] && break
+        cps_ol_j=$((cps_ol_j + 1))
+      done
+      if [ "$cps_ol_semi" -ge 0 ]; then
+        cps_ol_body=${cps_ol_rest:0:$cps_ol_semi}
+        cps_ol_rest=${cps_ol_rest:$((cps_ol_semi + 2))}
+      else
+        case "$cps_ol_rest" in
+          *esac*) cps_ol_body=${cps_ol_rest%%esac*} ;;
+          *) cps_ol_body=$cps_ol_rest ;;
+        esac
+        cps_ol_rest=''
+      fi
+      [ -n "${cps_ol_body//[[:space:]]/}" ] && cps_queue+=("$cps_ol_body")
+    done
     return 0
   }
 
@@ -2523,15 +2710,44 @@ if [ -f "$entry" ]; then
 
       cps_trim=${cps_line#"${cps_line%%[![:space:]]*}"}
       cps_trim=${cps_trim%"${cps_trim##*[![:space:]]}"}
+
+      # A "trap 'BODY' SIG" (or double-quoted) statement's quoted argument
+      # is itself a command list that runs later -- by pass 1 above it is
+      # already one physical line even when the source wrote it across
+      # several, so its content is queued here exactly like a $(...) body,
+      # and the executable it names is classified like any other command.
+      # A "trap "" SIG..." re-disarm has an empty body and queues nothing.
+      case "$cps_trim" in
+        trap[[:space:]]*)
+          cps_trap_rest=${cps_trim#trap}
+          cps_trap_rest=${cps_trap_rest#"${cps_trap_rest%%[![:space:]]*}"}
+          cps_trap_body=''
+          case "$cps_trap_rest" in
+            \'*)
+              cps_trap_body=${cps_trap_rest#\'}
+              cps_trap_body=${cps_trap_body%%\'*}
+              ;;
+            \"*)
+              cps_trap_body=${cps_trap_rest#\"}
+              cps_trap_body=${cps_trap_body%%\"*}
+              ;;
+          esac
+          [ -n "$cps_trap_body" ] && cps_queue+=("$cps_trap_body")
+          ;;
+      esac
+
       cps_padded=" $cps_trim "
       cps_has_case=0; case "$cps_padded" in *' case '*) cps_has_case=1 ;; esac
       cps_has_esac=0; case "$cps_padded" in *' esac '*) cps_has_esac=1 ;; esac
 
       if [ "$cps_has_case" -eq 1 ] && [ "$cps_has_esac" -eq 1 ]; then
-        # Self-contained "case ... in ...) ...;; esac" all on one physical
-        # line: opaque to this sweep (hand-reviewed rather than lexically
-        # re-derived, same carve-out as sweep_absolute_paths' full-line
-        # comments above).
+        # Self-contained "case ... in PAT) CMD ;; ... esac" all on one
+        # physical line: queue each arm's command body (the text after the
+        # pattern's closing, unquoted ")" up to the next unquoted ";;" or
+        # "esac") for ordinary classification, rather than treating the
+        # whole line as opaque -- that wholesale skip is exactly what let a
+        # one-line case arm's command through unexamined.
+        cps_extract_case_oneline_arms "$cps_line"
         continue
       fi
 
@@ -2728,6 +2944,40 @@ if [ -f "$entry" ]; then
       pass_case 'mechanism: command-position sweep rejects a command reached only after an unquoted &&' ;;
     *)
       fail_case 'mechanism: command-position sweep failed to reject a command reached only after an unquoted &&' ;;
+  esac
+
+  # Three more shapes round-2 review found the extractor blind to: the
+  # executable an env-wrapper array actually launches, the executable
+  # string inside a "trap '...' SIG" body, and a command hidden in a
+  # one-line "case ... ) CMD ;; esac" arm.
+  cps_neg_envwrap="$cps_neg_dir/envwrap.sh"
+  printf '%s\n' '"${clean_env[@]}" unallowlisted_command' > "$cps_neg_envwrap"
+  cps_neg_envwrap_findings=$(cps_scan_source "$cps_neg_envwrap")
+  case "$cps_neg_envwrap_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through an env-wrapper array' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through an env-wrapper array' ;;
+  esac
+
+  cps_neg_trap="$cps_neg_dir/trap.sh"
+  printf '%s\n' "trap 'unallowlisted_command' EXIT" > "$cps_neg_trap"
+  cps_neg_trap_findings=$(cps_scan_source "$cps_neg_trap")
+  case "$cps_neg_trap_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through a trap body' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through a trap body' ;;
+  esac
+
+  cps_neg_case="$cps_neg_dir/case.sh"
+  printf '%s\n' 'case "$x" in a) unallowlisted_command ;; esac' > "$cps_neg_case"
+  cps_neg_case_findings=$(cps_scan_source "$cps_neg_case")
+  case "$cps_neg_case_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects a command reached only through a one-line case arm' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject a command reached through a one-line case arm' ;;
   esac
 
   env_i_line=$(/usr/bin/grep -n 'exec /usr/bin/env -i' "$entry" | /usr/bin/head -1 | /usr/bin/cut -d: -f1)
