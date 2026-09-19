@@ -40,8 +40,8 @@ What I verified myself against real history, rather than copying from the spec:
 
 Nothing outside this list. Counts are net changed lines, honest estimates.
 
-**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Twelve shared
-files and fourteen per case, forty in all:
+**New evidence, under `shadow/evidence/self-host-transition/v1/`.** Thirteen shared
+files and fourteen per case, forty-one in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
@@ -57,6 +57,7 @@ files and fourteen per case, forty in all:
 | `prerequisite/stage-request.json` | That run's stage request, the duty evaluation's `request_ref` | 1 |
 | `prerequisite/resolved-profile-document.json` | That run's resolved profile, the duty evaluation's `resolved_profile_ref` | 1 |
 | `prerequisite/stage-result.json` | That run's stage result, the duty evaluation's `result_ref` and the claim's `stage_result_ref` | 1 |
+| `prerequisite/materialization-receipt.json` | The materializer's receipt bytes, which that stage result references by digest | 1 |
 | `{pre,post}/incident.json` | `incident.ystack-transition.{pre,post}` | 2 |
 | `{pre,post}/qualified-identity.json` | The identity each run was performed under | 2 |
 | `{pre,post}/sandbox-evaluation.json` | The shipped evaluator's declaration-only document for that run | 2 |
@@ -77,9 +78,9 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 **Existing files:**
 
-- `ci/required-files.txt` (+43). A block headed
+- `ci/required-files.txt` (+44). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
-  listing all forty evidence paths and the new test.
+  listing all forty-one evidence paths and the new test.
 - `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
   the assembler write-up, which today runs to line 1395 before
   `## Inactive maintenance loop` at 1397.
@@ -100,7 +101,7 @@ component refuses it, the component is right and the run is wrong.
 
 `review_size: accepted-exception` for the **implementation PR**, one concern — the
 first real self-host evidence pair and its durable verification — with an
-evidence-based range of **650-870 net lines**.
+evidence-based range of **660-885 net lines**.
 
 This is above the spec's earlier 250-450 figure, which the spec itself asked this plan
 to refine against the real interfaces. Two things grew once I read them:
@@ -110,24 +111,24 @@ to refine against the real interfaces. Two things grew once I read them:
   seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
   `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
   refusal, on top of the twelve evidence checks requirement 15 lists.
-- The manifest block is 43 lines, not a handful, because the spec's design requires
+- The manifest block is 44 lines, not a handful, because the spec's design requires
   every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names forty of them.
+  design names forty-one of them.
 
-- The prerequisite stage run adds five committed documents, five manifest lines, the
+- The prerequisite stage run adds six committed documents, six manifest lines, the
   README's account of the construction order and the test's recomputation of it:
-  50-70 lines above the figure this plan first carried. It is not optional work —
+  55-80 lines above the figure this plan first carried. It is not optional work —
   without it the duty evaluation has no acyclic source, which is what the rest of this
   plan's "Construct the duty evaluation and the claim" section settles.
 
 The rest is close to the spec's own breakdown: 155-230 for README and verification
-instructions, 65-115 of committed evidence bytes, 50-64 for documentation, index and
-restore. Midpoint 760. If the real diff lands outside 650-870, stop and return to the
+instructions, 70-120 of committed evidence bytes, 50-64 for documentation, index and
+restore. Midpoint 772. If the real diff lands outside 660-885, stop and return to the
 gate rather than compressing the test or dropping evidence files.
 
 `review_size: accepted-exception` for **this plan PR**, one concern — the complete
 pre-code design for the first real self-host run — with an evidence-based range of
-**865-915 lines**. Requirement 2's declaration-only framing carries real cost in this
+**955-1005 lines**. Requirement 2's declaration-only framing carries real cost in this
 plan: the precondition gate, the evaluator call, the marker checks, the consumers'
 vocabulary and the documentation rule each have to state the boundary between a
 declaration and enforcement, and the exact invocations — the validator's verb and the
@@ -142,7 +143,12 @@ precondition-gate entry: the shipped assembler's requester cannot pass duty
 separation, and a blocked dependency has to be stated with the checks it fails, the
 reason ids it produces, why no requester this plan could write would be honest, and
 which gate owns the fix — about 45 lines, and the alternative is a reader who cannot
-tell a blocking finding from an unexplored one.
+tell a blocking finding from an unexplored one. It moved up a third time, from
+865-915, for two review findings: the isolated Git prefix for source preparation,
+written out key by key with the reason each pin is there and the one the resolver
+library pins that this step cannot (about 50 lines), and the receipt retention that
+keeps the prerequisite stage result's own references resolvable (about 30). Both are
+correctness of the operator's run, not commentary.
 
 ## Order of work
 
@@ -268,14 +274,58 @@ Operator-run on Darwin, no network, no credentials. `$SRC` is a fresh path outsi
 user's repository; nothing below ever touches
 `/Users/yihanzhu/git/ystack/.git`.
 
+**Every `git` invocation in this section runs under an isolated Git configuration**, the
+way the shipped tooling already isolates its own (`shadow/v1/reproduce.sh:294-298`,
+`adapters/local-git-materializer/v1/materialize.sh:265-269`,
+`scripts/lib/profile-resolution.sh:390-398`), and on the same terms the
+`resolver-trusted-parent` plan sets for its provisioning step
+(`work/resolver-trusted-parent/plan.md:76-90`): a cleared environment, a disposable
+`HOME`, no system or global configuration, no credential helper, no prompt, no hook, and
+nothing written into the operator's checkout. This is not belt-and-braces. The scrubbing
+below happens *after* the clone, so ambient configuration gets to act first: a global or
+system `url.<base>.insteadOf` whose key matches the absolute source path rewrites this
+local copy into a network URL and invokes whatever credential helper the operator has
+configured, and a global `core.hooksPath` runs a hook on the new repository — either one
+breaks requirement 10's no-network/no-credentials boundary and the authorization
+boundary `AGENTS.md:46-49` fixes. `$GIT_ISO` is that prefix, built once over `$GIT_HOME`,
+a fresh, empty, private 0700 directory outside `$SRC` and disjoint from every other
+directory this plan names, holding no `no-grafts` entry:
+
 ```sh
-git clone --bare --no-hardlinks -- /Users/yihanzhu/git/ystack "$SRC"
-git --git-dir="$SRC" remote remove origin
+GIT_ISO=(/usr/bin/env -i HOME="$GIT_HOME" TMPDIR="$GIT_HOME" PATH=/usr/bin:/bin
+  LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  GIT_CONFIG_SYSTEM=/dev/null GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+  GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 GIT_GRAFT_FILE="$GIT_HOME/no-grafts"
+  GIT_CONFIG_COUNT=6
+  GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+  GIT_CONFIG_KEY_1=core.useReplaceRefs GIT_CONFIG_VALUE_1=false
+  GIT_CONFIG_KEY_2=core.attributesFile GIT_CONFIG_VALUE_2=/dev/null
+  GIT_CONFIG_KEY_3=core.excludesFile GIT_CONFIG_VALUE_3=/dev/null
+  GIT_CONFIG_KEY_4=fetch.fsckObjects GIT_CONFIG_VALUE_4=true
+  GIT_CONFIG_KEY_5=core.multiPackIndex GIT_CONFIG_VALUE_5=false)
+
+"${GIT_ISO[@]}" /usr/bin/git clone --bare --no-hardlinks -- \
+  /Users/yihanzhu/git/ystack "$SRC"
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" remote remove origin
 rm -rf -- "$SRC/logs" "$SRC/info/grafts" "$SRC/objects/info/alternates"
 find "$SRC/hooks" -type f ! -name '*.sample' -delete
 printf '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n' \
   > "$SRC/config"
 ```
+
+`env -i` is what removes `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH*`, `GIT_PROXY_COMMAND`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `http_proxy` and every other inherited Git or proxy
+variable; `GIT_CONFIG_NOSYSTEM=1` with `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` at
+`/dev/null` is what removes `url.*.insteadOf`, `credential.helper`, `http.*` headers and
+every other ambient key, and the disposable `HOME` keeps the search from finding one
+anyway. `GIT_TERMINAL_PROMPT=0` means anything that still tried to authenticate fails
+rather than asking. The six pinned keys are the resolver library's set minus
+`protocol.file.allow`: that library pins it `never` because it never clones from a path,
+whereas this step's source *is* a local absolute path, and `never` would refuse the
+clone itself. Nothing is lost by leaving it out — with system and global configuration
+gone there is no rewrite left to turn that local path into any other transport. Use
+`"${GIT_ISO[@]}"` for the inventory and `cat-file` commands below too, and do not add
+`-c` overrides of your own: the prefix is the whole configuration these invocations see.
 
 `--no-hardlinks` is required: a hardlinked clone shares objects with the original, and
 requirement 9 wants a disposable copy. The rewritten `config` is not cosmetic — the
@@ -290,18 +340,21 @@ Record the source refs and object inventory before and after the whole exercise 
 keep the comparison (requirement 10):
 
 ```sh
-git --git-dir="$SRC" show-ref | shasum -a 256
-git --git-dir="$SRC" cat-file --batch-all-objects --batch-check='%(objectname)' \
-  | shasum -a 256
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" show-ref | shasum -a 256
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" cat-file --batch-all-objects \
+  --batch-check='%(objectname)' | shasum -a 256
 ```
 
 Both digests go in the README, taken before the first run and again after the last one.
 They must be equal. Also confirm both revisions and the root are present:
 
 ```sh
-git --git-dir="$SRC" cat-file -t 0427390224c25147650f1bd3b6e43ed6911b97a7
-git --git-dir="$SRC" cat-file -t d3f6d525328838b9c2de819699e53d8909ab7a3f
-git --git-dir="$SRC" rev-list --max-parents=0 0427390224c25147650f1bd3b6e43ed6911b97a7
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" cat-file -t \
+  0427390224c25147650f1bd3b6e43ed6911b97a7
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" cat-file -t \
+  d3f6d525328838b9c2de819699e53d8909ab7a3f
+"${GIT_ISO[@]}" /usr/bin/git --git-dir="$SRC" rev-list --max-parents=0 \
+  0427390224c25147650f1bd3b6e43ed6911b97a7
 ```
 
 ### Resolve the real profile (requirement 11)
@@ -434,7 +487,8 @@ references a later entry.
    documents. They are not distinguishable by id — `materialization-input.jq` gives every
    request the id `request.shadow-input-assembler` — so the README distinguishes them by
    digest and says so. References entries 2 and 3.
-5. **`prerequisite/stage-result.json`** — produced by the shipped materializer, read-only
+5. **`prerequisite/stage-result.json`** and **`prerequisite/materialization-receipt.json`**
+   — produced by the shipped materializer, read-only
    over the same `$SRC`, with its own fresh, empty, private, mutually disjoint 0700
    `$CAND0` and `$SCRATCH0`:
 
@@ -444,6 +498,8 @@ references a later entry.
      "$OUT_DIR_0/input.json" repo.ystack "$SRC" "$CAND0" "$SCRATCH0" "$CLOSURE" "$JQ" \
      > "$PRE_REQ/materialize.json"
    "$JQ" -S -c '.stage_result' "$PRE_REQ/materialize.json" > "$PRE_REQ/stage-result.json"
+   "$JQ" -j '.payloads[0].data' "$PRE_REQ/materialize.json" \
+     > "$PRE_REQ/materialization-receipt.json"
    ```
 
    That is the driver's own call and its own extraction
@@ -457,8 +513,32 @@ references a later entry.
    so these bytes are produced the way the evidence runs produce theirs. It is a real
    materialization of real history, it writes nothing to `$SRC`, and it happens between
    the two readings of the source inventory, so requirement 10's before/after comparison
-   still has to come out equal. `materialize.json` is scratch and is not retained; the
-   `stage_result` document is. References entry 4.
+   still has to come out equal.
+
+   **The receipt is retained, not just extracted.** The stage result this run keeps does
+   not stand alone: `adapters/local-git-materializer/v1/protocol.jq:370-373` builds one
+   `$receipt_ref` and puts it in `body.evidence[0].proof_ref` (`:415`), in
+   `body.execution.metadata.tools.source_ref` (`:408`) and, for a `changed` outcome, in
+   `body.outputs[0].ref` (`:392`). Those references name the receipt's bytes by digest,
+   and the receipt exists only inside the response envelope, in `.payloads[0].data`. If
+   the envelope is discarded after the `stage_result` extraction, the retained result
+   points at bytes no committed file and no Git object holds, and the spec's
+   recoverability requirement (`work/shadow-self-host-run/spec.md:217-220`) — every
+   referenced document recoverable from the bundle — is not met. So extract the receipt
+   as well, with `-j`: the payload is the exact UTF-8 the materializer hashed, trailing
+   newline included, and `-j` writes it back unchanged, which is how the driver reads it
+   (`shadow/v1/reproduce.sh:463`). It is already canonical `jq -S -c` output from the
+   producer (`adapters/local-git-materializer/v1/materialize.sh:609-617`), so it satisfies
+   the bundle's canonical-JSON rule as emitted; do not re-serialize it, because
+   re-serializing bytes that are referenced by digest breaks the reference. Before going
+   on, check that its SHA-256 equals `payloads[0].sha256` of the envelope **and** equals
+   `body.evidence[0].proof_ref.sha256` and
+   `body.execution.metadata.tools.source_ref.sha256` of the retained
+   `stage-result.json` — and `body.outputs[0].ref.sha256` too if the outcome is
+   `changed`. If any differ, stop: the pair is inconsistent and nothing downstream of it
+   is worth building. `materialize.json` is the response envelope and is scratch; the
+   `stage_result` document and the receipt bytes it references are both retained, and
+   both appear in `checksums.json` and in the manifest. References entry 4.
 6. **`duty-evaluation.json`** — produced by the shipped evaluator, and `$DUTY` is that
    file:
 
@@ -560,7 +640,12 @@ against `prerequisite/input.json`'s
 `.stage_request.content.body.environment_ref.fingerprint_sha256`;
 `prerequisite/stage-request.json`, `prerequisite/resolved-profile-document.json` and
 `prerequisite/stage-result.json` against the duty evaluation's three `body.stage`
-references; the duty evaluation's `body.stage.result_ref` against the claim's
+references; `prerequisite/materialization-receipt.json`'s digest against the retained
+stage result's `body.evidence[0].proof_ref.sha256` and
+`body.execution.metadata.tools.source_ref.sha256` (and `body.outputs[0].ref.sha256`
+where the outcome is `changed`), so the one reference in committed evidence that points
+outside a document resolves to retained bytes; the duty evaluation's
+`body.stage.result_ref` against the claim's
 `body.stage_result_ref`, field for field; `duty-evaluation.json`'s digest against the
 claim's `body.duty_evaluation_ref.sha256`; and `environment-claim.json`'s digest against
 each case's `assembled/input.json`
@@ -695,7 +780,9 @@ says so.
 
 ### Capture, recoverability, inventory
 
-Copy the twenty-eight per-case files and the seven shared files into
+Copy the twenty-eight per-case files and the ten shared documents — everything in the
+table above except `README.md`, `verification-instructions.md` and `checksums.json`,
+which this step writes — into
 `shadow/evidence/self-host-transition/v1/`, unchanged. Build `checksums.json` as a
 canonical document holding a finite relative-path inventory and SHA-256 for every
 bundled file except itself. Every referenced document's raw bytes must be recoverable
