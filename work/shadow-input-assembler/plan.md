@@ -722,8 +722,27 @@ separate implementation pull request on top of the merged component.
   `<requester-file>` after `<environment-claim-file>`, and the section says in one sentence that
   the requester is the caller's identity, refused unless it is an `actor_ref` with an actor role
   that collides with no binding.
+- **`scripts/test/portable-core-schema.test.sh`** — exactly one change: add
+  `shadow/v1/materialization-input.jq` to the `schema_import_path_ok` case list (`:827-849`), as
+  the single added pattern line `    shadow/v1/materialization-input.jq|\` inside that function's
+  first case branch, alongside `adapters/local-git-materializer/v1/protocol.jq` and the other
+  module paths already listed there. No other allowlist in this file changes — not
+  `v1_activation_path_ok`, not `v2_activation_path_ok`, not
+  `private_generation_path_ok`/`v2_generation_path_ok` — and no generation list
+  (`schema_v1_expected_live_hits`, `schema_v2_expected_live_hits`,
+  `schema_v2_corrective_expected_hits`, `schema_v2_allowed_paths`), no `cmp -s` comparison and no
+  `fail_case` message is touched. Requirement 6 makes the assembler call the core's own
+  `schema::actor_ref_ok`, which requires `import "schema" as schema;` in
+  `shadow/v1/materialization-input.jq`, and importing the core module directly is exactly what the
+  allowlist exists to permit — `adapters/local-git-materializer/v1/protocol.jq` and
+  `adapters/deterministic-verifier/v1/normalize.jq` already import `schema` under it, so this is
+  the precedented way for a component to reuse the core predicate rather than a loophole. Copying
+  or re-deriving `actor_ref_ok` into the shadow module to dodge the allowlist is forbidden: a
+  second copy of the predicate would drift from the core's and is the failure the closed allowlist
+  is there to make visible.
 
-No new file, no new error id, no change to `ci/required-files.txt`, `README.md` or `RESTORE.md`.
+No new file, no new error id, no change to `ci/required-files.txt`, `README.md` or `RESTORE.md`,
+and no change to `scripts/test/portable-core-schema.test.sh` beyond that one allowlist line.
 
 5.2 **Refusal-order position.** The requester is the last input read, and its refusals land in the
 positions the spec's requirement 12 fixes. Arity and the absolute-path test are decided by the
@@ -813,14 +832,16 @@ lines, as the spec records. The component's earlier `accepted-exception` covered
 component and its focused test and is not a standing allowance for this slug; this PR claims no
 exception. About 60-120 lines across the jq module and the shell entry, some of it given back by
 deleting the projection, and about 120-200 lines of test — the six-entry two-pass construction of
-5.3, the verbatim-copy assertion and the three negative cases — plus the documentation row and the
-arity change.
+5.3, the verbatim-copy assertion and the three negative cases — plus the documentation row, the
+arity change and the single allowlist line in `scripts/test/portable-core-schema.test.sh`. That one
+line does not move the 180-330 net-line band, so the record stands unchanged.
 
 5.5 **Proof.**
 
 ```
 jq -S -c . <requester.json> | cmp - <requester.json>
 bash scripts/test/shadow-assembler.test.sh
+bash scripts/test/portable-core-schema.test.sh
 shellcheck -x -S style shadow/v1/assemble-materialization-input.sh
 grep -n 'requested_by' shadow/v1/materialization-input.jq
 grep -rn 'verdict' scripts/test/shadow-assembler.test.sh
@@ -830,7 +851,8 @@ git diff --stat <base>..HEAD
 
 The focused test is the load-bearing one: it must pass, and the two `grep`s are the evidence that
 `requested_by` has exactly one source — the input — and that no `verdict` is written by the test
-rather than read from the evaluator. The `diff --stat` shows the four files and nothing else.
+rather than read from the evaluator. The `diff --stat` shows the five files and nothing else,
+with `scripts/test/portable-core-schema.test.sh` at one added line.
 
 ## Risks
 
