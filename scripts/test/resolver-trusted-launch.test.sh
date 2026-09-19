@@ -6,20 +6,14 @@
 # parent (resolver/v1/trusted-launch.c), which do not exist yet at plan step 1 —
 # this run is expected to fail against absent behavior (plan.md:96-97).
 #
-# Case inventory (R10 groups, spec.md lines noted per group):
-#   Group 1 — entry-owned refusals (spec.md:7099-7170)
-#   Group 2 — parent-owned refusals, direct invocation (spec.md:7247-7420)
-#   Group 3 — runtime refusal, labelled (spec.md:7442-7447)
-#   R3 no-copy invariant (spec.md:7449-7524)
-#   Loader-variable case (spec.md:7495-7524)
-#   Entry mode / relative invocation (spec.md:7566-7600)
-#   Compiler-environment pollution (spec.md:7608-7710)
-#   Cleanup cases (spec.md:7716-7764)
-#   Two-umask case (spec.md:7813-7845)
-#   Descriptor cases (spec.md:7846-7975)
-#   Signal cases (spec.md:7976-8385)
-#   Pinned-blob / generation assertions (spec.md:8388-8410)
-#   Mechanism checks / proof-by-reading (spec.md:8460-8995)
+# Case inventory (R10 groups, spec.md lines noted per group): Group 1 entry-owned
+# refusals (7099-7170); Group 2 parent-owned refusals, direct invocation
+# (7247-7420); Group 3 runtime refusal, labelled (7442-7447); R3 no-copy
+# invariant (7449-7524); loader-variable case (7495-7524); entry mode / relative
+# invocation (7566-7600); compiler-environment pollution (7608-7710); cleanup
+# cases (7716-7764); two-umask case (7813-7845); descriptor cases (7846-7975);
+# signal cases (7976-8385); pinned-blob / generation assertions (8388-8410);
+# mechanism checks / proof-by-reading (8460-8995).
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -34,19 +28,14 @@ jq_program="$root/resolver/v1/profile-resolution.jq"
 launcher_source="$root/scripts/test/portable-profile-resolution-launcher.c"
 fixture_builder="$root/scripts/test/portable-profile-resolution-fixtures.sh"
 
-# Derived, not embedded: R10 (spec.md ~8747-8748) requires this focused test to
-# derive the pinned generation id from an existing source rather than carry its
-# own "g-..." literal. The parent's own PARENT_CORE_GENERATION constant is that
-# source -- the same fixed value the eight-pin assertions below are already
-# keyed off, extracted the way the parent-pin hex values are read elsewhere in
-# this file (from the shipped source, not hand-copied).
+# Derived, not embedded (R10, spec.md ~8747-8748): derive the pinned generation
+# id from the parent's own PARENT_CORE_GENERATION constant, the same fixed
+# value the eight-pin assertions below are keyed off, rather than carry a
+# hand-copied "g-..." literal.
 core_generation_value=$(/usr/bin/grep -A1 'static const char \*const PARENT_CORE_GENERATION =' \
   "$parent_source" 2>/dev/null | /usr/bin/grep -oE 'g-[0-9a-f]{64}')
 if [ -z "$core_generation_value" ]; then
-  # fail_case is not defined yet at this point in the script (it is defined
-  # below, alongside the other counters) -- this is a bootstrap failure, not a
-  # test case, so it reports and exits directly the same way a missing entry
-  # or parent source would if checked this early.
+  # fail_case is not defined yet here (bootstrap failure, not a test case).
   printf 'setup: could not derive the pinned core generation id from trusted-launch.c\n' >&2
   exit 1
 fi
@@ -57,20 +46,15 @@ mod_stage_request="$generation_dir/modules/stage_request.jq"
 mod_profile_graph="$generation_dir/modules/profile_graph.jq"
 mod_result_facts="$generation_dir/modules/result_facts.jq"
 
-# The eight loaded/pinned files R5 enumerates (parent-pinned set; entry pins these
-# plus its own two C sources -- ten total). An array, not a scalar: a checkout
-# path containing a space would otherwise split one absolute filename into two
-# words at the unquoted expansions below (round-4 review), handing
-# git hash-object a nonexistent path.
+# The eight loaded/pinned files R5 enumerates (entry pins these plus its own
+# two C sources -- ten total). An array, not a scalar, so a checkout path
+# containing a space cannot split one filename into two words at the
+# unquoted expansions below (round-4 review).
 loaded_files=("$runtime" "$library" "$jq_program" "$mod_schema" "$mod_result_truth" "$mod_stage_request" "$mod_profile_graph" "$mod_result_facts")
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
-  # Darwin's default TMPDIR sits inside $(getconf DARWIN_USER_TEMP_DIR) --
-  # exactly the directory the compiler-pollution write-attribution cases
-  # observe below. Rooting the suite's own scratch there forced those cases
-  # to carve their own directory out of the listing they were supposed to be
-  # watching. /private/tmp (never the /tmp symlink) sits outside it.
+  # Darwin's default TMPDIR sits inside what the write-attribution cases below observe; /private/tmp (never the /tmp symlink) sits outside it.
   Darwin:*) tmp=$(/usr/bin/mktemp -d "/private/tmp/ystack-resolver-trusted-launch-test.XXXXXX") ;;
   *) tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-resolver-trusted-launch-test.XXXXXX") ;;
 esac
@@ -409,9 +393,8 @@ assert_refused_before_fork() {
 }
 
 # --- 4. Group 1 -- entry-owned refusals (spec.md:7099-7170) -----------------------------
-# Driven through the shipped entry. Each of the six pin-check cases asserts the
-# E_RUNTIME line and, afterwards, that the trap removed .run (folded into the
-# generic entry-pin-refusal helper below, which is also cleanup case 2).
+# Driven through the shipped entry. Each pin-check case asserts the E_RUNTIME
+# line and that the trap removed .run (folded into entry_pin_refusal below).
 
 entry_pin_case_n=0
 entry_pin_refusal() {
@@ -435,16 +418,15 @@ entry_pin_refusal() {
 copy_repo_tree() {
   # copy_repo_tree DEST -- an editable copy of the whole checkout, never the working tree.
   #
-  # "git archive | tar -xf" extracts git's own recorded modes (100644, 100755, ...),
-  # but tar applies them through this process's umask, and the whole suite runs under
-  # "umask 077" (top of file): a nominally-644 file lands at 600, not 644. The
-  # blanket "chmod -R u+w" below only guarantees the owner can write; it does not
-  # restore group/other bits, so it cannot repair that. Every group-1 case that reads
-  # this tree is a refusal case and tolerates any refusal reason, which is how this
-  # stayed silent -- but resolver/v1/profile-resolve-runtime.sh's mode is a pinned
-  # deviation-1 check the parent enforces at exactly 0644, so a genuine success run
-  # through a copied tree (the descriptor "entry-script-as-descriptor" case below)
-  # refuses "E_RUNTIME binding" on the wrong file entirely without this fix.
+  # "git archive | tar -xf" preserves git's recorded modes, but tar applies them
+  # through this process's "umask 077" (top of file), so a nominally-644 file
+  # lands at 600; the blanket "chmod -R u+w" below only restores owner-write,
+  # not group/other bits. Every group-1 case reading this tree is a refusal
+  # case tolerant of any reason, which is how this stayed silent -- but
+  # resolver/v1/profile-resolve-runtime.sh's mode is a pinned deviation-1
+  # check enforced at exactly 0644, so a genuine success run through a copied
+  # tree (the "entry-script-as-descriptor" case below) refuses "E_RUNTIME
+  # binding" on the wrong file entirely without this fix.
   /bin/mkdir -m 700 "$1"
   /usr/bin/git -C "$root" archive "$real_head" | (cd "$1" && /usr/bin/tar -xf -)
   /bin/chmod -R u+w "$1"
@@ -474,6 +456,25 @@ if [ "$g1_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$g1_out.stderr" &&
 else
   fail_case 'group1: jq digest mismatch'
 fi
+
+# 1a2. <jq> validated pre-hash/exec (spec.md:4650-4654): relative/symlink/fifo/dev-zero refused, no hang; valid jq resolves.
+jqv_dir="$tmp/g1-jqval"; /bin/mkdir -m 700 "$jqv_dir"; /bin/ln -s "$bound_jq" "$jqv_dir/symlink"; /usr/bin/mkfifo -m 600 "$jqv_dir/fifo"
+jqv_names=(relative symlink fifo dev-zero valid)
+jqv_args=("${bound_jq##*/}" "$jqv_dir/symlink" "$jqv_dir/fifo" /dev/zero "$bound_jq")
+jqv_codes=(E_USAGE E_RUNTIME E_RUNTIME E_RUNTIME '')
+for jqv_i in 0 1 2 3 4; do
+  jqv_out="$tmp/g1.jqval.${jqv_names[$jqv_i]}"; /bin/mkdir -m 700 "$jqv_out"
+  ( "$entry" "${jqv_args[$jqv_i]}" "$jqv_out" "$synthetic_request" "$synthetic_map" \
+      > "$jqv_out.stdout" 2> "$jqv_out.stderr" ) & jqv_pid=$!
+  jqv_deadline=$(( $(/bin/date +%s) + $([ "${jqv_names[$jqv_i]}" = valid ] && echo 30 || echo 5) ))
+  while kill -0 "$jqv_pid" 2>/dev/null && [ "$(/bin/date +%s)" -lt "$jqv_deadline" ]; do /bin/sleep 0.02; done
+  kill -0 "$jqv_pid" 2>/dev/null && { kill -9 "$jqv_pid" 2>/dev/null; fail_case "group1: jq validation (${jqv_names[$jqv_i]}) hung"; }
+  jqv_status=0; wait "$jqv_pid" 2>/dev/null || jqv_status=$?
+  [ "${jqv_names[$jqv_i]}" = valid ] && { [ "$jqv_status" -eq 0 ] || fail_case 'group1: valid jq rejected by argument validation'; continue; }
+  { [ "$jqv_status" -ne 0 ] && /usr/bin/grep -q "^${jqv_codes[$jqv_i]}" "$jqv_out.stderr" &&
+    [ -z "$(/usr/bin/find "$jqv_out" -mindepth 1 -maxdepth 1)" ]; } || fail_case "group1: jq validation (${jqv_names[$jqv_i]})"
+done
+pass_case 'group1: jq argument validated (absolute, regular, non-symlink, executable) before hashing or executing'
 
 # 1b-1f: edited pinned source files, each in its own copy of the tree.
 for target in resolver/v1/nofollow-snapshot.c resolver/v1/trusted-launch.c \
