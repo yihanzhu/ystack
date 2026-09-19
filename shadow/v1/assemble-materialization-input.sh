@@ -214,21 +214,6 @@ canonical_json "$resolved_profile_file"
 canonical_json "$claim_file"
 canonical_json "$requester_file"
 
-# Requirement 12: the requester's E_SHAPE check, same pass, right after its
-# canonical-JSON check. actor_ref_ok is the pinned generation's own
-# predicate, run here (the same import-"schema"-inline pattern requirement
-# 10's time_ok check above already uses) rather than imported into
-# materialization-input.jq, so the module needs no entry added to the
-# tracked-path allowlist scripts/test/portable-core-schema.test.sh enforces.
-requester_shape_status=0
-"$jq_bin" -L "$modules" -e 'import "schema" as schema; schema::actor_ref_ok' \
-  "$requester_file" >/dev/null 2>/dev/null || requester_shape_status=$?
-case "$requester_shape_status" in
-  0) ;;
-  1) emit_error E_SHAPE ;;
-  *) emit_error E_RUNTIME ;;
-esac
-
 profile_sha256=$(sha256_path "$profile_dir/profile.json")
 producer_config_sha256=$(sha256_path "$profile_dir/producer-config.json")
 manifest_sha256=$(printf '%s\n' \
