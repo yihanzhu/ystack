@@ -497,8 +497,13 @@ references a later entry.
 7. **`environment-claim.json`** — **constructed by this run**, and `$CLAIM` is that file;
    no shipped tool emits a claim. Build it with `jq -S -c -n --slurpfile` over
    `control/v1/sandbox-policy.json`, `duty-evaluation.json` and `$RESOLVED_PROFILE`,
-   with these fields and no others — `control/v1/sandbox.jq:63-70` fixes the key set:
+   with these fields and no others — `control/v1/sandbox.jq:60` fixes the top-level key
+   set and `:64-66` the body's, both exact, so a missing or extra field at either level
+   is `invalid-input` and the evaluator refuses the claim outright:
 
+   - Top level, exactly four keys: `schema_version` the literal `1` and `kind` the
+     literal `execution_environment_claim` (`control/v1/sandbox.jq:61`), the `id` below,
+     and `body` holding everything else in this list.
    - `environment`, `filesystem`, `isolation`, `limits`, `network`, `resources`,
      `sensitive_material` and `tools` copied verbatim from the shipped policy's body.
      That copy is what keeps the shipped all-ones verifier digest literal, which
@@ -518,9 +523,11 @@ references a later entry.
        them. Take them from `$RESOLVED_PROFILE` with jq rather than typing the strings,
        so the claim states the identity that was actually resolved and moves with the
        profile if it ever changes.
-
-     `declaration_status` `complete`; `effects` with `external_writes` and
-     `target_writes` both false.
+   - `declaration_status` the literal `complete` (`control/v1/sandbox.jq:67`;
+     `incomplete` is the only other accepted value and it forces an `inconclusive`
+     verdict) and `effects` exactly `{external_writes:false, target_writes:false}`
+     (`:72-73`) — both keys required, and `true` or `"unknown"` on either would make the
+     run `violated` or `inconclusive`. Both are fixed by the policy, not chosen here.
    - `id` `env.local-macos-ystack-self`, because the driver reads the environment id out
      of the claim (`shadow/v1/reproduce.sh:258-264`).
    - `policy_set_ref`: `{schema_version:1, kind:"control_policy_set", id:` the set's own
