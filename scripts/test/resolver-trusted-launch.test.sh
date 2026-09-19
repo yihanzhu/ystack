@@ -2593,6 +2593,131 @@ if [ -f "$entry" ]; then
     fail_case 'mechanism: role-aware sweep failed to reject an out-of-range /dev/fd/42 argument'
   fi
 
+  # Round-5 review: the sweep above ran only on the shell entry; R10 also
+  # requires the C parent's own pathname strings and exec-family/open-family
+  # call sites to be swept, or an unlisted host path or an extra direct exec
+  # in trusted-launch.c can escape this gate. Comments are stripped first
+  # (multi-line /* */ blocks, C's only comment form here) and #include
+  # lines are excluded (a source-role carve-out for system-header names,
+  # same idea as the entry's full-line "#" comment carve-out above), then
+  # the same context-aware token regex used on the entry is applied to what
+  # remains, hand-verified against every quoted absolute-path string
+  # literal trusted-launch.c actually contains.
+  c_strip_comments_and_includes() {
+    /usr/bin/perl -0777 -pe 's{/\*.*?\*/}{}gs' "$1" | /usr/bin/grep -Ev '^[[:space:]]*#include'
+  }
+
+  # Standalone C string literals the shell's own allowlists do not already
+  # cover: the repo-root suffix constant "/resolver/v1", and "/bin"/
+  # "/usr/bin" as they appear split off the parent's fixed
+  # "PATH=/usr/bin:/bin" / "%s:/usr/bin:/bin" literals (the shell's own
+  # allowlist_data does not list these two standalone -- it only lists them
+  # as dynamic-join tail fragments, which does not apply here since these
+  # are not "$var/join" tails in the C source).
+  allowlist_data_parent="/resolver/v1 /bin /usr/bin"
+  # The one C-only combined join the shell's per-field joins don't cover:
+  # build_pin_path()'s single snprintf spells the whole modules path in one
+  # format string, "%s/core/v%s/generations/%s/modules/%s.jq", rather than
+  # the entry's separate "$modules_dir/schema.jq" etc. concatenations.
+  allowlist_dynamic_joins_parent='/core/v%s/generations/%s/modules/%s.jq'
+
+  sweep_parent_pathnames() {
+    spp_file=$1
+    c_strip_comments_and_includes "$spp_file" |
+      /usr/bin/grep -Eo '[A-Za-z0-9_}%]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
+  }
+
+  parent_callsite_count() {
+    c_strip_comments_and_includes "$1" |
+      /usr/bin/grep -cEo '\b(execve|execv[a-z]*|posix_spawn[a-z]*|openat|open|fopen|readlink|stat|lstat|fstat|fstatat|access|opendir)[[:space:]]*\(' \
+      || :
+  }
+
+  if [ -f "$parent_source" ]; then
+    parent_bad_tokens=0
+    set -f
+    for ptok_raw in $(sweep_parent_pathnames "$parent_source"); do
+      case "$ptok_raw" in
+        /*) ptok_role=standalone; ptok=$ptok_raw ;;
+        *) ptok_role=joined; ptok=${ptok_raw#?} ;;
+      esac
+      pmatch=0
+      case "$ptok_role" in
+        standalone)
+          for w in $allowlist_words $allowlist_data $allowlist_data_parent; do
+            [ "$ptok" = "$w" ] && pmatch=1 && break
+          done
+          ;;
+        joined)
+          for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins $allowlist_dynamic_joins_parent; do
+            [ "$ptok" = "$w" ] && pmatch=1 && break
+          done
+          ;;
+      esac
+      [ "$pmatch" -eq 1 ] ||
+        { printf 'unlisted absolute path token in parent (%s): %s\n' "$ptok_role" "$ptok" >&2
+          parent_bad_tokens=$((parent_bad_tokens + 1)); }
+    done
+    set +f
+    if [ "$parent_bad_tokens" -eq 0 ]; then
+      pass_case 'mechanism: parent (trusted-launch.c) contains no absolute-path string literal outside the hand-verified allowlist'
+    else
+      fail_case "mechanism: parent has $parent_bad_tokens unlisted absolute-path token(s)"
+    fi
+
+    parent_baseline_callsites=$(parent_callsite_count "$parent_source")
+
+    parent_neg_dir="$tmp/parent-sweep-negative"; /bin/mkdir -m 700 "$parent_neg_dir"
+
+    # Negative control: an unlisted absolute path literal must be rejected.
+    parent_neg_path="$parent_neg_dir/unlisted-path.c"
+    /bin/cp -- "$parent_source" "$parent_neg_path"
+    printf '%s\n' 'static const char *const YSTACK_TEST_UNLISTED = "/tmp/evil-unlisted-path";' >> "$parent_neg_path"
+    parent_neg_path_bad=0
+    set -f
+    for ptok_raw in $(sweep_parent_pathnames "$parent_neg_path"); do
+      case "$ptok_raw" in
+        /*) ptok_role=standalone; ptok=$ptok_raw ;;
+        *) ptok_role=joined; ptok=${ptok_raw#?} ;;
+      esac
+      pmatch=0
+      case "$ptok_role" in
+        standalone)
+          for w in $allowlist_words $allowlist_data $allowlist_data_parent; do
+            [ "$ptok" = "$w" ] && pmatch=1 && break
+          done
+          ;;
+        joined)
+          for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins $allowlist_dynamic_joins_parent; do
+            [ "$ptok" = "$w" ] && pmatch=1 && break
+          done
+          ;;
+      esac
+      [ "$pmatch" -eq 1 ] || parent_neg_path_bad=$((parent_neg_path_bad + 1))
+    done
+    set +f
+    if [ "$parent_neg_path_bad" -gt 0 ]; then
+      pass_case 'mechanism: parent pathname sweep rejects an unlisted absolute path literal added to a fixture copy'
+    else
+      fail_case 'mechanism: parent pathname sweep failed to reject an unlisted absolute path literal'
+    fi
+
+    # Negative control: an extra direct exec-family call site (beyond the
+    # hand-verified baseline count) must be visible to the call-site
+    # inventory, not silently absorbed.
+    parent_neg_exec="$parent_neg_dir/extra-execve.c"
+    /bin/cp -- "$parent_source" "$parent_neg_exec"
+    printf '%s\n' 'static void ystack_test_extra(char **argv, char **envp) { execve("/usr/bin/evil", argv, envp); }' >> "$parent_neg_exec"
+    parent_neg_exec_callsites=$(parent_callsite_count "$parent_neg_exec")
+    if [ "$parent_neg_exec_callsites" -gt "$parent_baseline_callsites" ]; then
+      pass_case 'mechanism: parent exec/open call-site inventory detects an extra execve call site added to a fixture copy'
+    else
+      fail_case 'mechanism: parent exec/open call-site inventory failed to detect an extra execve call site'
+    fi
+  else
+    fail_case 'mechanism: parent pathname sweep (parent source absent)'
+  fi
+
   builtins=$(/bin/bash -c 'compgen -b')
   reserved=$(/bin/bash -c 'compgen -k')
   # The entry's own two callable-bare functions (spec.md:8801-8940's three-pass
@@ -3358,23 +3483,71 @@ if [ -f "$entry" ]; then
     fail_case 'mechanism: no exec /usr/bin/env -i re-exec line found in entry'
   fi
 
+  # Round-5 review: the previous catch-all accepted any line containing
+  # both '2>/dev/null' and '||', which admits permanent stderr suppression
+  # shaped like a fallback (e.g. "exec 2>/dev/null || :") and any other
+  # unlisted cleanup-style redirect, as long as it had a trailing "|| ...".
+  # Enumerate plan §6's exact roles by full (whitespace-trimmed) line
+  # content instead: the three-rung ulimit ladder, the descriptor-close
+  # eval, both unset scrub forms (including the marker branch's case arm),
+  # the two EXIT-trap cleanup commands, and the unique signal-forwarding
+  # kill. Grep matches whole source lines, so a /dev/null token written
+  # inside a quoted eval argument string is still caught -- it is literal
+  # text on that same line, not something the grep would skip.
+  devnull_role_bad_count() {
+    local file=$1 bad=0 raw trimmed
+    while IFS= read -r raw; do
+      trimmed=$(printf '%s' "$raw" | /usr/bin/sed -e 's/^[[:space:]]*//')
+      case "$trimmed" in
+        'ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || {') ;;
+        'eval "exec ${fd_name}>&-" 2>/dev/null || :') ;;
+        'builtin unset -f "$inherited_function" 2>/dev/null || :') ;;
+        'case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac') ;;
+        '/bin/chmod 0700 "${run:?}" 2>/dev/null || :') ;;
+        '/bin/rm -rf -- "${run:?}" 2>/dev/null || :') ;;
+        '*" $parent_pid Running"*) kill -"$entry_signal" "$parent_pid" 2>/dev/null || : ;;') ;;
+        *) bad=$((bad + 1)) ;;
+      esac
+    done < <(/usr/bin/grep '/dev/null' "$file" || :)
+    printf '%s\n' "$bad"
+  }
+
   devnull_lines=$(/usr/bin/grep -n '/dev/null' "$entry" || :)
-  devnull_bad=0
-  while IFS=: read -r _ text; do
-    case "$text" in
-      *'ulimit -S -n'*'2>/dev/null'*) ;;
-      *'2>/dev/null'*'||'*) ;;
-      *'unset -f'*'2>/dev/null'*) ;;
-      *'kill -"$entry_signal"'*'2>/dev/null'*) ;;
-      *) devnull_bad=$((devnull_bad + 1)) ;;
-    esac
-  done <<< "$devnull_lines"
+  devnull_bad=$(devnull_role_bad_count "$entry")
   if [ -n "$devnull_lines" ]; then
     if [ "$devnull_bad" -eq 0 ]; then
       pass_case 'mechanism: /dev/null discard appears only in its enumerated roles'
     else
       fail_case "mechanism: /dev/null used outside its enumerated roles ($devnull_bad occurrence(s))"
     fi
+  fi
+
+  # Negative controls: the tightened role check must actually be able to
+  # reject, not merely happen to pass on the shipped entry.
+  devnull_neg_dir="$tmp/devnull-neg"
+  /bin/mkdir -p "$devnull_neg_dir"
+
+  devnull_neg_permanent="$devnull_neg_dir/permanent-suppress.sh"
+  /bin/cp -- "$entry" "$devnull_neg_permanent"
+  printf '%s\n' 'exec 2>/dev/null || :' >> "$devnull_neg_permanent"
+  devnull_neg_permanent_bad=$(devnull_role_bad_count "$devnull_neg_permanent")
+  if [ "$devnull_neg_permanent_bad" -gt 0 ]; then
+    pass_case 'mechanism: /dev/null role check rejects permanent stderr suppression (exec 2>/dev/null || :)'
+  else
+    fail_case 'mechanism: /dev/null role check failed to reject exec 2>/dev/null || :'
+  fi
+
+  devnull_neg_cleanup="$devnull_neg_dir/unlisted-cleanup.sh"
+  /bin/cp -- "$entry" "$devnull_neg_cleanup"
+  # Shaped exactly like the two enumerated EXIT-trap cleanup lines, but on
+  # an unlisted target ("${output:?}" instead of "${run:?}") -- a cleanup
+  # redirect outside the enumerated roles must still be rejected.
+  printf '%s\n' '    /bin/rm -rf -- "${output:?}" 2>/dev/null || :' >> "$devnull_neg_cleanup"
+  devnull_neg_cleanup_bad=$(devnull_role_bad_count "$devnull_neg_cleanup")
+  if [ "$devnull_neg_cleanup_bad" -gt 0 ]; then
+    pass_case 'mechanism: /dev/null role check rejects a cleanup redirect outside the enumerated roles'
+  else
+    fail_case 'mechanism: /dev/null role check failed to reject an unlisted cleanup redirect'
   fi
 else
   fail_case 'mechanism: allowlist sweep (entry absent)'
