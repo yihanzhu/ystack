@@ -2183,23 +2183,15 @@ else
 fi
 
 if [ "$parent_available" -eq 1 ]; then
-  # Residual race, noted for the reviewer (fix round r1): this case's 20-attempt
-  # budget is a known-racy window against real process scheduling (proving the
-  # pre-resolver signal is delivered before runtime-pgid: is written) and can
-  # still exhaust its budget on a sufficiently loaded machine without any actual
-  # regression in the parent; making the timing itself deterministic would need
-  # a supervised/instrumented rendezvous point this fix round's scope does not
-  # touch, so the retry loop is left as-is rather than widened.
-  # signal case 5: stopped-parent, no-runtime branch -- retried up to 20 attempts.
-  # Success-path-shaped (it distinguishes "reached runtime-pgid:" from "never got
-  # a parent-signal: line" from the actual proving outcome), so a mismatched
-  # output/.run pair would put every attempt in the "early-signal" bucket without
-  # ever reaching the pre-resolver signal window this case exists to prove -- a
-  # fresh build_run_directory per attempt, with sig5_out as its own output root,
-  # avoids both that and reusing one .run/sandbox tree across 20 launches.
+  # signal case 5: stopped-parent, no-runtime branch. STOP must land after
+  # handler install (else pending, delivered at CONT, default disposition)
+  # but before supervise() publishes runtime-pgid: -- rendezvous on a live
+  # pin-phase child with <out>/home still absent, then prove the STOP itself
+  # via process state before trusting it (20 attempts, case88-diagnosis.md).
   sig5_proved=0
   sig5_late_stop=0
-  sig5_early_signal=0
+  sig5_stop_unproved=0
+  sig5_missed_window=0
   attempt=1
   while [ "$attempt" -le 20 ] && [ "$sig5_proved" -eq 0 ]; do
     sig5_out="$tmp/signal5.attempt$attempt.out"; build_run_directory "$sig5_out"
@@ -2216,15 +2208,33 @@ if [ "$parent_available" -eq 1 ]; then
       sig5_pid=$!
       /bin/sleep 5 &
       sig5_sentinel=$!
-      kill -STOP "$sig5_pid" 2>/dev/null || :
       pgid_parent=$(ps -o pgid= -p "$sig5_pid" 2>/dev/null | /usr/bin/tr -d ' ')
       pgid_sentinel=$(ps -o pgid= -p "$sig5_sentinel" 2>/dev/null | /usr/bin/tr -d ' ')
       pgid_shell=$(ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ')
-      if [ "$pgid_parent" != "$pgid_sentinel" ] || [ "$pgid_parent" != "$pgid_shell" ]; then
+      sig5_bail() {
         kill "$sig5_sentinel" 2>/dev/null || :; kill -CONT "$sig5_pid" 2>/dev/null || :
-        wait "$sig5_pid" 2>/dev/null || :
-        echo mismatch > "$tmp/signal5.attempt$attempt.outcome"; exit 0
-      fi
+        wait "$sig5_pid" 2>/dev/null || :; echo "$1" > "$tmp/signal5.attempt$attempt.outcome"; exit 0
+      }
+      [ "$pgid_parent" = "$pgid_sentinel" ] && [ "$pgid_parent" = "$pgid_shell" ] || sig5_bail mismatch
+      # Rendezvous: a live child (~10s deadline) proves past handler install.
+      sig5_tick=0 sig5_child=0
+      while [ "$sig5_tick" -lt 1000 ] && [ "$sig5_child" -eq 0 ]; do
+        /usr/bin/pgrep -P "$sig5_pid" >/dev/null 2>&1 && sig5_child=1
+        [ "$sig5_child" -eq 1 ] || { /bin/sleep 0.01; sig5_tick=$((sig5_tick + 1)); }
+      done
+      [ "$sig5_child" -eq 1 ] || sig5_bail missed-window
+      [ -e "$sig5_out/home" ] && sig5_bail missed-window
+      kill -STOP "$sig5_pid" 2>/dev/null || :
+      sig5_state='' sig5_stop_tick=0
+      while [ "$sig5_stop_tick" -lt 100 ]; do
+        sig5_state=$(/bin/ps -o state= -p "$sig5_pid" 2>/dev/null | /usr/bin/tr -d ' ')
+        case "$sig5_state" in T*) break ;; esac
+        /bin/sleep 0.01
+        sig5_stop_tick=$((sig5_stop_tick + 1))
+      done
+      case "$sig5_state" in T*) ;; *) sig5_bail stop-unproved ;; esac
+      { [ ! -e "$sig5_out/home" ] && ! /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr" 2>/dev/null; } ||
+        sig5_bail late-stop
       kill -TERM "$sig5_pid" 2>/dev/null || :
       kill -CONT "$sig5_pid" 2>/dev/null || :
       sig5_status=0
@@ -2233,30 +2243,20 @@ if [ "$parent_available" -eq 1 ]; then
       echo "$sig5_status" > "$tmp/signal5.attempt$attempt.outcome"
     )
     outcome=$(cat "$tmp/signal5.attempt$attempt.outcome" 2>/dev/null || echo unknown)
-    if /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr" 2>/dev/null; then
-      sig5_late_stop=$((sig5_late_stop + 1))
-    elif ! /usr/bin/grep -q '^parent-signal:' "$sig5_stderr" 2>/dev/null; then
-      sig5_early_signal=$((sig5_early_signal + 1))
-    else
-      sig5_status=$outcome
-      if [ "$sig5_status" = 143 ] && /usr/bin/grep -q '^parent-signal: TERM no-runtime$' "$sig5_stderr" &&
-         ! /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr"; then
-        sig5_proved=1
-      fi
-    fi
+    case "$outcome" in
+      late-stop) sig5_late_stop=$((sig5_late_stop + 1)) ;;
+      stop-unproved) sig5_stop_unproved=$((sig5_stop_unproved + 1)) ;;
+      missed-window) sig5_missed_window=$((sig5_missed_window + 1)) ;;
+      mismatch) : ;;
+      *) [ "$outcome" = 143 ] && /usr/bin/grep -q '^parent-signal: TERM no-runtime$' "$sig5_stderr" &&
+         ! /usr/bin/grep -q '^runtime-pgid:' "$sig5_stderr" && sig5_proved=1 ;;
+    esac
     attempt=$((attempt + 1))
   done
-  # Residual, pre-existing race (flagged in round 0's review; not touched by round
-  # 2's fix set): this case's STOP has to land in the narrow window before the
-  # parent's own handler registration, and on a loaded or otherwise slower host
-  # every one of the 20 attempts can land as "early-signal" instead, exhausting the
-  # budget without proving the branch. Left for the plan to make deterministic
-  # (e.g. a synchronization point the parent itself writes before that window)
-  # rather than widening this round's scope to redesign the fixture.
   if [ "$sig5_proved" -eq 1 ]; then
-    pass_case "signal: stopped-parent no-runtime branch proved (attempt $((attempt - 1)); late-stop=$sig5_late_stop early-signal=$sig5_early_signal)"
+    pass_case "signal: stopped-parent no-runtime branch proved (attempt $((attempt - 1)); late-stop=$sig5_late_stop stop-unproved=$sig5_stop_unproved missed-window=$sig5_missed_window)"
   else
-    fail_case "signal: stopped-parent no-runtime branch never proved in 20 attempts (late-stop=$sig5_late_stop early-signal=$sig5_early_signal)"
+    fail_case "signal: stopped-parent no-runtime branch never proved in 20 attempts (late-stop=$sig5_late_stop stop-unproved=$sig5_stop_unproved missed-window=$sig5_missed_window)"
   fi
 else
   fail_case 'signal: stopped-parent no-runtime branch (parent absent)'
@@ -2699,6 +2699,8 @@ if [ -f "$entry" ]; then
   # as dynamic-join tail fragments, which does not apply here since these
   # are not "$var/join" tails in the C source).
   allowlist_data_parent="/resolver/v1 /bin /usr/bin"
+  # /dev/null is shell-only (plan.md:351-357), never a C path/execve arg.
+  allowlist_data_parent_c=${allowlist_data/ \/dev\/null/}
   # The one C-only combined join the shell's per-field joins don't cover:
   # build_pin_path()'s single snprintf spells the whole modules path in one
   # format string, "%s/core/v%s/generations/%s/modules/%s.jq", rather than
@@ -2707,8 +2709,11 @@ if [ -f "$entry" ]; then
 
   sweep_parent_pathnames() {
     spp_file=$1
-    c_strip_comments_and_includes "$spp_file" |
-      /usr/bin/grep -Eo '[A-Za-z0-9_}%]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
+    spp_stripped=$(c_strip_comments_and_includes "$spp_file")
+    { printf '%s\n' "$spp_stripped" | /usr/bin/grep -Eo '[A-Za-z0-9_}%]?(/[A-Za-z0-9_.%*-]+)+'
+      # a bare quoted "/" has no char after its slash, invisible above.
+      printf '%s\n' "$spp_stripped" | /usr/bin/grep -q '"/"' && printf '/\n'
+    } | /usr/bin/sort -u
   }
 
   parent_callsite_count() {
@@ -2717,32 +2722,31 @@ if [ -f "$entry" ]; then
       || :
   }
 
-  if [ -f "$parent_source" ]; then
-    parent_bad_tokens=0
+  # parent_sweep_bad_count FILE -- echoes FILE's unlisted-token count.
+  parent_sweep_bad_count() {
+    psb_bad=0
     set -f
-    for ptok_raw in $(sweep_parent_pathnames "$parent_source"); do
+    for ptok_raw in $(sweep_parent_pathnames "$1"); do
       case "$ptok_raw" in
         /*) ptok_role=standalone; ptok=$ptok_raw ;;
         *) ptok_role=joined; ptok=${ptok_raw#?} ;;
       esac
       pmatch=0
       case "$ptok_role" in
-        standalone)
-          for w in $allowlist_words $allowlist_data $allowlist_data_parent; do
-            [ "$ptok" = "$w" ] && pmatch=1 && break
-          done
-          ;;
-        joined)
-          for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins $allowlist_dynamic_joins_parent; do
-            [ "$ptok" = "$w" ] && pmatch=1 && break
-          done
-          ;;
+        standalone) psb_list="$allowlist_words $allowlist_data_parent_c $allowlist_data_parent" ;;
+        joined) psb_list="$allowlist_words $allowlist_data_parent_c $allowlist_dynamic_joins $allowlist_dynamic_joins_parent" ;;
       esac
+      for w in $psb_list; do [ "$ptok" = "$w" ] && pmatch=1 && break; done
       [ "$pmatch" -eq 1 ] ||
         { printf 'unlisted absolute path token in parent (%s): %s\n' "$ptok_role" "$ptok" >&2
-          parent_bad_tokens=$((parent_bad_tokens + 1)); }
+          psb_bad=$((psb_bad + 1)); }
     done
     set +f
+    printf '%s\n' "$psb_bad"
+  }
+
+  if [ -f "$parent_source" ]; then
+    parent_bad_tokens=$(parent_sweep_bad_count "$parent_source")
     if [ "$parent_bad_tokens" -eq 0 ]; then
       pass_case 'mechanism: parent (trusted-launch.c) contains no absolute-path string literal outside the hand-verified allowlist'
     else
@@ -2757,33 +2761,30 @@ if [ -f "$entry" ]; then
     parent_neg_path="$parent_neg_dir/unlisted-path.c"
     /bin/cp -- "$parent_source" "$parent_neg_path"
     printf '%s\n' 'static const char *const YSTACK_TEST_UNLISTED = "/tmp/evil-unlisted-path";' >> "$parent_neg_path"
-    parent_neg_path_bad=0
-    set -f
-    for ptok_raw in $(sweep_parent_pathnames "$parent_neg_path"); do
-      case "$ptok_raw" in
-        /*) ptok_role=standalone; ptok=$ptok_raw ;;
-        *) ptok_role=joined; ptok=${ptok_raw#?} ;;
-      esac
-      pmatch=0
-      case "$ptok_role" in
-        standalone)
-          for w in $allowlist_words $allowlist_data $allowlist_data_parent; do
-            [ "$ptok" = "$w" ] && pmatch=1 && break
-          done
-          ;;
-        joined)
-          for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins $allowlist_dynamic_joins_parent; do
-            [ "$ptok" = "$w" ] && pmatch=1 && break
-          done
-          ;;
-      esac
-      [ "$pmatch" -eq 1 ] || parent_neg_path_bad=$((parent_neg_path_bad + 1))
-    done
-    set +f
+    parent_neg_path_bad=$(parent_sweep_bad_count "$parent_neg_path")
     if [ "$parent_neg_path_bad" -gt 0 ]; then
       pass_case 'mechanism: parent pathname sweep rejects an unlisted absolute path literal added to a fixture copy'
     else
       fail_case 'mechanism: parent pathname sweep failed to reject an unlisted absolute path literal'
+    fi
+
+    parent_neg_root="$parent_neg_dir/root-path.c"
+    /bin/cp -- "$parent_source" "$parent_neg_root"
+    printf '%s\n' 'static void ystack_test_root(void) { open("/", O_RDONLY); }' >> "$parent_neg_root"
+    parent_neg_root_bad=$(parent_sweep_bad_count "$parent_neg_root")
+    if [ "$parent_neg_root_bad" -gt 0 ]; then
+      pass_case 'mechanism: parent pathname sweep rejects a quoted root path literal added to a fixture copy'
+    else
+      fail_case 'mechanism: parent pathname sweep failed to reject a quoted root path literal'
+    fi
+    parent_neg_devnull="$parent_neg_dir/devnull-path.c"
+    /bin/cp -- "$parent_source" "$parent_neg_devnull"
+    printf '%s\n' 'static void ystack_test_devnull(void) { open("/dev/null", O_WRONLY); }' >> "$parent_neg_devnull"
+    parent_neg_devnull_bad=$(parent_sweep_bad_count "$parent_neg_devnull")
+    if [ "$parent_neg_devnull_bad" -gt 0 ]; then
+      pass_case 'mechanism: parent pathname sweep rejects a /dev/null pathname literal added to a fixture copy'
+    else
+      fail_case 'mechanism: parent pathname sweep failed to reject a /dev/null pathname literal'
     fi
 
     # Negative control: an extra direct exec-family call site (beyond the
@@ -3102,18 +3103,15 @@ if [ -f "$entry" ]; then
     # trailing backslashes is a real continuation; an even number is that
     # many literal, already-escaped backslashes) AND a quoted argument that
     # itself spans multiple physical lines (e.g. the EXIT trap's multi-line
-    # single-quoted body below) into one logical line, so each is inspected
-    # as the single command position it actually is. A joined quote-span is
-    # glued with a space rather than its real embedded newline: since the
-    # interior of a quoted span is never itself decomposed into command
-    # positions (cps_classify_command only ever looks at an UNquoted leading
-    # word), only the location of the closing quote matters, not the exact
-    # whitespace inside it.
+    # single-quoted body below) into one logical line. A quote-span join
+    # uses ";" for the erased real newline (a trap body IS decomposed into
+    # command positions below, where a newline is a statement separator);
+    # a backslash-continuation join keeps the shell's own plain-space splice.
     cps_physical=()
     while IFS= read -r cps_pl || [ -n "$cps_pl" ]; do cps_physical+=("$cps_pl"); done < "$cps_file"
-    cps_logical=() cps_acc='' cps_acc_active=0 cps_mlq=''
+    cps_logical=() cps_acc='' cps_acc_active=0 cps_mlq='' cps_acc_sep=''
     for cps_pl in "${cps_physical[@]}"; do
-      if [ "$cps_acc_active" -eq 1 ]; then cps_pl="$cps_acc $cps_pl"; fi
+      if [ "$cps_acc_active" -eq 1 ]; then cps_pl="$cps_acc$cps_acc_sep$cps_pl"; fi
       cps_acc='' cps_acc_active=0
 
       # Always re-derive quote state from the start of cps_pl, never seeded
@@ -3150,14 +3148,14 @@ if [ -f "$entry" ]; then
       done
       cps_mlq=$cps_qc_inq
       if [ -n "$cps_mlq" ]; then
-        cps_acc=$cps_pl; cps_acc_active=1
+        cps_acc=$cps_pl; cps_acc_active=1; cps_acc_sep=';'
         continue
       fi
 
       case "$cps_pl" in
         *\\)
           if [ $(( $(cps_count_trailing_backslashes "$cps_pl") % 2 )) -eq 1 ]; then
-            cps_acc=${cps_pl%?}; cps_acc_active=1
+            cps_acc=${cps_pl%?}; cps_acc_active=1; cps_acc_sep=' '
             continue
           fi
           ;;
@@ -3515,6 +3513,15 @@ if [ -f "$entry" ]; then
       pass_case 'mechanism: command-position sweep rejects a command reached only through a process substitution' ;;
     *)
       fail_case 'mechanism: command-position sweep failed to reject a command reached through a process substitution' ;;
+  esac
+  cps_neg_mltrap="$cps_neg_dir/mltrap.sh"
+  printf '%s\n' $'trap \'\n:\nunallowlisted_command\n\' EXIT' > "$cps_neg_mltrap"
+  cps_neg_mltrap_findings=$(cps_scan_source "$cps_neg_mltrap")
+  case "$cps_neg_mltrap_findings" in
+    *unallowlisted_command*)
+      pass_case 'mechanism: command-position sweep rejects an unallowlisted 2nd statement in a multiline trap body' ;;
+    *)
+      fail_case 'mechanism: command-position sweep failed to reject an unallowlisted statement in a multiline trap body' ;;
   esac
 
   # Round-4 review: /usr/bin/awk is a legitimate ARGUMENT (e.g. "/bin/cp --
