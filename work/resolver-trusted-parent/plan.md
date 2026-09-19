@@ -1,5 +1,5 @@
 ---
-spec-blob: d088f283c4ac03a5d6a8c8dd505a02179ea551ef
+spec-blob: bbec935bfd998665d9471f97909221c1e867435e
 drafted: 2026-09-14
 ---
 
@@ -48,7 +48,7 @@ implementation files are 5268 insertions (1988 / 400 / 2880).
 
 `review_size: accepted-exception`, **4600-6300 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
-record (blob `d088f283c4ac03a5d6a8c8dd505a02179ea551ef`) and is the only
+record (blob `bbec935bfd998665d9471f97909221c1e867435e`) and is the only
 range this implementation is measured against. It brackets the measured
 5370 with an outward margin of roughly a sixth for the work still open.
 
@@ -250,8 +250,15 @@ absolute physical caller-owned empty 0700 directory, no symlink component, and t
 R1 PATH_MAX reserve for `.run/tmp/` plus NAME_MAX. Use platform stat formats and
 builtin glob emptiness, not find or mktemp.
 
-Initialize all names read by traps/checkpoints before arming traps; assign run from
-validated output. Signal traps are exactly `: "${entry_signal:=NAME}"; wait_interrupted=1`.
+Initialize all five names read by traps/checkpoints before arming traps — `entry_signal`,
+`run_created`, `entry_status`, `parent_pid` and `last_forwarded`, the last because the trap
+bodies read it; assign run from
+validated output. Signal traps are exactly
+`: "${entry_signal:=NAME}"; wait_interrupted=1; case " $(jobs -l) " in
+*" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -NAME "$parent_pid" || :;
+last_forwarded=NAME; };; esac` — three statements, every one a builtin or a subshell around
+one, with no `2>/dev/null` on the trap's kill. Do not re-initialize `last_forwarded` above
+the wait loop; that would erase a forward a trap already made.
 EXIT captures status first, ignores INT/TERM/HUP second, restores/removes owned .run,
 prints entry-signal only for `[ -f /dev/fd/2 ]`, then selects the prescribed status.
 Create .run by plain mkdir, derive run_created from captured status including the
@@ -271,7 +278,12 @@ files then directory to 0500, launch parent as child under only PATH and LC_ALL.
 The wait loop follows R1 exactly: clear interruption flag, forward the first recorded
 signal at most once only if jobs lists parent Running, wait, accept uninterrupted
 status, otherwise consult jobs and either loop or use the extra-wait status fallback.
-Set last_forwarded even when forwarding is skipped, so it cannot be retried later.
+Step 2 keeps its own guarded kill unchanged: there are two job-table-gated forwarding
+kills, the trap body's and this one, both on the same `case " $(jobs -l) "` read and
+nowhere else, and `last_forwarded` keeps them from both sending. The loop's kill is the
+only one carrying `2>/dev/null`.
+Set last_forwarded in the loop even when forwarding is skipped, so it cannot be retried
+later; in the trap body it is set inside the Running arm, beside the kill.
 Pass child stdout/stderr through unchanged. Do not poll pid liveness with kill -0.
 Preserve real status 7/42 in simultaneous-exit
 cases; no fixed two-wait replacement. Never remove .run before the parent is reaped.
@@ -350,8 +362,10 @@ or other command variable is permitted. Review their values separately.
 
 Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
 `ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
-in every required scrub including the marker branch, and the unique signal
-forwarding kill in the job-table Running arm above wait. Check those source roles
+in every required scrub including the marker branch, and the wait loop's signal
+forwarding kill in the job-table Running arm above wait — that one only of the two
+job-table-gated forwarding kills; the trap body's carries no redirection, so
+`2>/dev/null` on it is a rejection. Check those source roles
 and positions, not only an occurrence count. Reject every other command/descriptor,
 input or append redirection, variable sink, prefix path, C pathname or execve
 argument using that target. It is neither an executable nor a general data member.
