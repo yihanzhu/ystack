@@ -506,15 +506,19 @@ references a later entry.
    no trailing newline**, and the digest of the newline-terminated form is a different
    value that satisfies nothing. `core-package-closure.json` is therefore written with
    no trailing newline; it is the one bundled `.json` for which that is true, and the
-   README says so beside it. Reconstruct it deterministically from the pinned generation
-   `g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43` — the value
-   `PORTABLE_CORE_GENERATION` pins in `scripts/core-contract.sh` — by hashing the nine
-   closure paths in the order `evaluate-duty.sh:122-130` lists them and feeding the
-   result to the evaluator's own program, from a checkout of the pre-transition
-   revision `d3f6d525328838b9c2de819699e53d8909ab7a3f`:
+   README says so beside it. Reconstruct it deterministically from **the selected
+   generation**, never from a generation id transcribed into this plan: the id is a
+   closed-allowlist value, so the recipe reads it at run time from the one committed
+   source that pins it, `scripts/core-contract.sh`, with the same extraction
+   `control/v1/evaluate-duty.sh:62-69` uses. Hash the nine closure paths in the order
+   `evaluate-duty.sh:122-130` lists them and feed the result to the evaluator's own
+   program, from a checkout of the pre-transition revision
+   `d3f6d525328838b9c2de819699e53d8909ab7a3f`:
 
    ```sh
-   SEL=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
+   SEL=$(sed -n "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'\$/\1/p" \
+     "$REPO/scripts/core-contract.sh")
+   [ -n "$SEL" ] || exit 1
    : >"$SCRATCH/core-members.tsv"
    for rel in scripts/core-contract.sh core/v2/generation-registry.json \
      "core/v2/generations/$SEL/contracts.jq" \
@@ -540,6 +544,10 @@ references a later entry.
 
    The second command is what drops the newline `jq` appends; it is the only
    transformation applied, and it removes bytes rather than re-serializing the document.
+
+   At the pre-transition revision that read yields the `core.contracts.v2` generation
+   whose id begins `g-c83c940a`; the README records the full id it actually read, and
+   this plan deliberately does not.
 
    The offline check is one command and needs no run, no network and no jq:
    `shasum -a 256 < shadow/evidence/self-host-transition/v1/core-package-closure.json`
