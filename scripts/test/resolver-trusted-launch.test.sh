@@ -244,18 +244,15 @@ pass_case 'positive resolution request names the real committed profiles/default
 # inputs: both must exit 0 with byte-identical stdout.
 if [ -x "$entry" ]; then
   eq_out="$tmp/equivalence.entry.out"; /bin/mkdir -m 700 "$eq_out"
-  eq_entry_stdout="$tmp/equivalence.entry.stdout"
-  eq_entry_status=0
+  eq_entry_stdout="$tmp/equivalence.entry.stdout"; eq_entry_status=0
   "$entry" "$bound_jq" "$eq_out" "$real_request" "$real_map" \
     > "$eq_entry_stdout" 2> "$tmp/equivalence.entry.stderr" || eq_entry_status=$?
 
-  eq_launcher_bin="$tmp/equivalence-launcher"
-  eq_launcher_helper="$tmp/equivalence-nofollow-snapshot"
+  eq_launcher_bin="$tmp/equivalence-launcher"; eq_launcher_helper="$tmp/equivalence-nofollow-snapshot"
   compile_source "$launcher_source" "$eq_launcher_bin"
   compile_source "$helper_source" "$eq_launcher_helper"
   eq_sandbox="$tmp/equivalence.launcher.sandbox"; /bin/mkdir -m 700 "$eq_sandbox"
-  eq_launcher_stdout="$tmp/equivalence.launcher.stdout"
-  eq_launcher_status=0
+  eq_launcher_stdout="$tmp/equivalence.launcher.stdout"; eq_launcher_status=0
   YSTACK_TEST_SANDBOX="$eq_sandbox" \
     "$eq_launcher_bin" resolve "$runtime" "$eq_launcher_helper" "$bound_jq" \
     "$real_request" "$real_map" \
