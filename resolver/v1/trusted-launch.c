@@ -1713,6 +1713,71 @@ int main(int argc, char **argv) {
                 return 70;
             }
         }
+
+        /* R5: helper identity -- argv[3] is the path this process actually binds
+           into YSTACK_RESOLVER_HELPER and execs later; the check above only proved
+           that *some* file named helper_basename_storage inside run_fd is a
+           caller-owned mode-0500 regular file, not that argv[3] names that same
+           object. An external executable sharing the basename would pass that
+           check while a different, uninspected file is what actually runs. Bind
+           argv[3] to the checked run_fd entry exactly as jq's identity check does
+           below: same object (st_dev/st_ino) and the argument's containing
+           directory must be run_fd itself. */
+        {
+            const char *helper_arg_basename = strrchr(argv[3], '/');
+            char helper_dir[PATH_MAX];
+            size_t helper_dir_length;
+            int run_helper_fd;
+            int arg_helper_fd;
+            int helper_dir_fd;
+            struct stat run_helper_state;
+            struct stat arg_helper_state;
+            struct stat helper_dir_state;
+            int helper_identity_ok;
+
+            helper_arg_basename =
+                (helper_arg_basename != NULL) ? helper_arg_basename + 1 : argv[3];
+            helper_dir_length = (size_t)(helper_arg_basename - argv[3]);
+            if (strcmp(helper_arg_basename, helper_basename_storage) != 0 ||
+                helper_dir_length == 0U || helper_dir_length >= sizeof(helper_dir)) {
+                (void)close(run_fd);
+                (void)close(out_fd);
+                fputs("E_RUNTIME run-directory\n", stderr);
+                return 70;
+            }
+            memcpy(helper_dir, argv[3], helper_dir_length - 1U);
+            helper_dir[helper_dir_length - 1U] = '\0';
+
+            run_helper_fd = openat(run_fd, helper_basename_storage,
+                                   O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            arg_helper_fd = open(argv[3], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            helper_dir_fd =
+                open(helper_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            helper_identity_ok = run_helper_fd >= 0 && arg_helper_fd >= 0 &&
+                     helper_dir_fd >= 0 &&
+                     fstat(run_helper_fd, &run_helper_state) == 0 &&
+                     fstat(arg_helper_fd, &arg_helper_state) == 0 &&
+                     fstat(helper_dir_fd, &helper_dir_state) == 0 &&
+                     run_helper_state.st_dev == arg_helper_state.st_dev &&
+                     run_helper_state.st_ino == arg_helper_state.st_ino &&
+                     helper_dir_state.st_dev == run_state.st_dev &&
+                     helper_dir_state.st_ino == run_state.st_ino;
+            if (run_helper_fd >= 0) {
+                (void)close(run_helper_fd);
+            }
+            if (arg_helper_fd >= 0) {
+                (void)close(arg_helper_fd);
+            }
+            if (helper_dir_fd >= 0) {
+                (void)close(helper_dir_fd);
+            }
+            if (!helper_identity_ok) {
+                (void)close(run_fd);
+                (void)close(out_fd);
+                fputs("E_RUNTIME run-directory\n", stderr);
+                return 70;
+            }
+        }
     }
 
     /* R5: jq identity -- the argument's basename must be exactly "jq", the object
