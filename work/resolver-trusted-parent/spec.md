@@ -994,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8843-11965 lines** — this file's measured 10404 lines plus or minus 15%, rounded. That
+**8868-11998 lines** — this file's measured 10433 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10404 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10433 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1199,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8843-11965 lines** — this file's measured 10404 lines plus or minus 15%, rounded. That
+**8868-11998 lines** — this file's measured 10433 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -2542,8 +2542,8 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8843-11965 lines**, which is this file's measured
-10404 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8868-11998 lines**, which is this file's measured
+10433 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
@@ -3242,7 +3242,10 @@ the spec pull request's range above still blocks review.
      `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else. **There are
      exactly four of them and they ask the table the same question and send the same
      `$entry_signal`: one in each of the three trap bodies' forwarding form, and one in
-     this loop.** The loop's stands *above* the `wait` rather than
+     this loop.** Four is the count of *roles*, and the count of source occurrences is
+     seven, because the entry writes each forwarding trap literal at two sites — the
+     arming after `parent_pid=$!` and the re-arm at the foot of the section — and a
+     literal written twice is one trap body, not two. The loop's stands *above* the `wait` rather than
      below it, which changes what asks
      the question and not what the question is: a recorded name nothing has forwarded
      yet, checked against the table, on every pass including the first. The traps' answer
@@ -6855,10 +6858,15 @@ the spec pull request's range above still blocks review.
      The entry also performs the temporary stderr discard already required by R1:
      exact `2>/dev/null` on the three ulimit rungs, descriptor-close eval, the two
      unset forms in each required scrub (including the marker branch), and the wait
-     four job-table-gated signal-forwarding kills. There are exactly **four** of them in
-     the entry — one in each of the three trap bodies' forwarding form
-     and one in the wait loop's section — and
-     **all four carry this redirection**, which is a change from the draft that admitted
+     job-table-gated signal-forwarding kills, of which there are **four roles and seven
+     source occurrences**, and the two numbers are counted separately because a role that
+     is written twice is still one role. The roles: one in each of the three trap bodies'
+     forwarding form, and one in the wait loop's section. The occurrences: each of the
+     three forwarding trap literals is written **twice** in the entry — once at the arming
+     site on the statement after `parent_pid=$!`, and once at the re-arm at the foot of
+     the loop's record-only section — which is six, plus the loop's own `kill`, which is
+     written once. Seven in all, and **every one of the seven carries this redirection**,
+     which is a change from the draft that admitted
      it on the loop's kill alone. The reason is the same one the ladder rungs have: a
      `kill` at a job the table listed as `Running` an instant earlier can still fail on a
      parent that has since exited, and the diagnostic bash would write for it goes to the
@@ -8008,7 +8016,24 @@ the spec pull request's range above still blocks review.
   every forwarding body carries its `[ -z "$trap_busy" ]` guard, its `trap_busy=1` and its
   `trap_busy=''` in that order, since a body missing the clear forwards once per run and
   then never again, and a body missing the guard is the nested-trap double send R1
-  argues — and that every one of the four forwarding `kill`s carries `2>/dev/null`.
+  argues — and that every forwarding `kill` carries `2>/dev/null`.
+
+  **The reviewer counts forwarding `kill`s twice over, once as roles and once as source
+  occurrences, and this round says so because the two numbers differ and a check that
+  knows only one of them is wrong either way.** There are **four roles**: the forwarding
+  `kill` in each of the three trap bodies, and the one in the wait loop's section. There
+  are **seven source occurrences**: each of the three forwarding trap literals is written
+  at two sites — the arming on the statement after `parent_pid=$!` and the re-arm at the
+  foot of the section — which is six, plus the loop's own `kill`, which is written once.
+  A read-check that expects four occurrences fails a correct entry; one that expects seven
+  roles invents three trap bodies that do not exist. Both numbers are exact and neither is
+  a ceiling to be rounded up to: an eighth occurrence is a `kill` this spec does not
+  authorise, and a fifth role is the same. **The two writings of a signal's forwarding
+  literal must be byte-identical**, which is the check that makes the pair safe to have at
+  all: an entry whose arming site and re-arm site have drifted apart has two different
+  trap bodies wearing one name, and the drift is invisible at runtime until the section
+  runs for the first time — which is only on a run that was signalled. Compare the three
+  pairs literally, character for character, before reading either for content.
   **A body carrying the record-only form
   where the forwarding one belongs is the second untestable form**: it needs a signal
   delivered between the loop's forwarding check and the `wait` under it, and what it
@@ -8027,8 +8052,9 @@ the spec pull request's range above still blocks review.
   between two adjacent statements (R1). The reviewer counts the forwarding kills as well:
   four, one in each of the three trap bodies' forwarding form and one in the loop's
   section, all four gated on the same
-  `case " $(jobs -l) "` read, all four sending `$entry_signal`, all four carrying
-  `2>/dev/null`, and none anywhere else.
+  `case " $(jobs -l) "` read, all four sending `$entry_signal`, and none anywhere else —
+  and then counts the *occurrences*, which are seven and not four, because each of the
+  three forwarding trap literals is written at two sites. All seven carry `2>/dev/null`.
   It also checks the two statements the section's termination rests on: the guard is
   `[ -z "$last_forwarded" ]` and not a comparison against `entry_signal`, and
   `last_forwarded=$entry_signal` stands after the loop's `case` rather than inside its
@@ -9073,9 +9099,12 @@ the spec pull request's range above still blocks review.
      the literal target of `2>/dev/null` on R1's three `ulimit -S -n` ladder rungs,
      the descriptor-close `eval`, `builtin unset -f` and `builtin unset` in every
      mandated scrub (including the full marker scrub), and the wait loop's forwarding
-     `kill` in the job-table Running arm inside its record-only section **and** the three
-     forwarding `kill`s, one in each trap body's forwarding form — four in all, every one
-     of them carrying it, and no fifth `kill` anywhere in the entry. Check each command's required
+     `kill` in the job-table Running arm inside its record-only section **and** the
+     forwarding `kill` inside each of the three trap bodies' forwarding form — four
+     roles, seven source occurrences, because each forwarding literal is written at two
+     sites (the arming after `parent_pid=$!` and the re-arm at the foot of the section)
+     and the loop's is written at one. Every one of the seven carries it. Admit no eighth
+     occurrence and no fifth role. Check each command's required
      role and position, not a guessed total occurrence count. Preserve the original
      command forms and all their existing ordering/behavior checks. Reject this
      target on any other command, another descriptor, input/append redirection,
