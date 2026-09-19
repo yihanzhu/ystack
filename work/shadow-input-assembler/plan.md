@@ -1,7 +1,7 @@
 ---
-spec-blob: ab212e82359ba3132fa6127194b61fa484bb1a85
+spec-blob: e76e8e878282b49bc8265f02ff92c5f742714e30
 drafted: 2026-09-10
-amended: 2026-09-13
+amended: 2026-09-18
 ---
 
 # Plan: shadow-input-assembler
@@ -175,7 +175,10 @@ SHA-256 of `profiles/default/v1/producer-config.json`
 (`ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61`) — not the stand-in digest
 `scripts/test/default-profile-assembly.test.sh:310-311` reuses, which requirement 16 refuses.
 Pass the existing fixture claim — built the way `scripts/test/shadow-slice.test.sh:128-194` builds
-`policy-set.json`, `duty.json` and `claim.json` — as the ninth argument.
+`policy-set.json` and `claim.json` — as the ninth argument, and a requester `actor_ref` as the
+tenth. The `duty.json` that builder fabricates is no longer usable here: requirement 13 forbids a
+hand-written verdict, so the duty document this test uses is the output of the real evaluator
+(step 5.3).
 
 0.4 **The positive assertion groups**, each from requirement 13: `validate-input` accepts the
 output; a second run is byte-identical; the read-only shape holds in `.payloads` and
@@ -403,8 +406,13 @@ uses. `finish_condition` and `verification_instruction` are `delivered_scope_ok`
 (`schema.jq:375-380`), so each carries a `ref` plus an `input_id`; the output contract is
 `operation.arguments.materialization_contract.ref`; the policy ref sits in the risk claim, the
 shape `scripts/test/portable-core-stage-request-fixtures.jq:210` shows. `selection_ref` and
-`repository_context_ref` are copied unchanged from the resolved profile, and `requested_by` is
-projected from the resolved forge binding.
+`repository_context_ref` are copied unchanged from the resolved profile —
+`stage_request_resolved_relation_ok` (`stage_request.jq:296-301`) requires those two and says
+nothing about the requester. `requested_by` is **not** projected from any binding: it is the
+caller's requester input, read from the tenth argument, validated against the pinned generation's
+`schema::actor_ref_ok` and against requirement 6's role and identity-collision rules, then copied
+verbatim — `authority_ref` present only when the caller supplied one, and no field of the forge
+binding carried over.
 
 1.7 `environment_ref` from the claim (requirement 7): `environment_id` from the claim's `.id`,
 `fingerprint_sha256` from the SHA-256 of the claim's canonical bytes, both arriving as arguments.
@@ -429,8 +437,8 @@ copied scrub `materialize.sh:4-13` at the top of the file under the copy header,
 assembler's own `set -euo pipefail`, `emit_error` and `umask 077` in the places
 `materialize.sh:15`, `:17-20` and `:31` put them — `emit_error` before the arity check, so
 `E_USAGE` can be said at all — then the copied `materialize.sh:22-29` with exactly four
-deviations: the marker word and verb (`assemble`, `__assemble_clean`); `[ "$#" -eq 10 ]` with the
-exec forwarding `"$2"` … `"${10}"`; the script path normalized against `$(pwd -P)` and then
+deviations: the marker word and verb (`assemble`, `__assemble_clean`); `[ "$#" -eq 11 ]` with the
+exec forwarding `"$2"` … `"${11}"`; the script path normalized against `$(pwd -P)` and then
 required to be an existing non-symlink regular file or `E_RUNTIME`, the way
 `shadow/v1/reproduce.sh:94-96` does; and `builtin unalias -a` plus `builtin shopt -u expand_aliases`
 as the first two lines of the marker branch, above every other line in it, because bash expands
@@ -441,7 +449,7 @@ if it has merged, take the scrub bytes from there rather than retaking the copy,
 components hold one text and not two. Use the same `# copy-begin`/`# copy-end` marker convention,
 since step 0.6(b) extracts by it.
 
-2.2 **Argument and workspace checks first, then the pinned jq, then `time_ok`.** Nine positional
+2.2 **Argument and workspace checks first, then the pinned jq, then `time_ok`.** Ten positional
 arguments per requirement 1, checked in seven steps in this order — the order the spec gives at
 lines 1217-1219. The order is the point, not a preference: every cheap check below decides
 `E_USAGE`, and each has to answer before the component does anything that can only fail as
@@ -452,12 +460,13 @@ already refused the same run as `E_RUNTIME`.
 (1) **Arity and verb**, decided by 2.1's copied entry before anything else runs.
 
 (2) **Every path argument absolute.** `<source-git-dir>`, `<profile-dir>`,
-`<resolved-profile-file>`, `<jq-binary>`, `<output-dir>` and `<environment-claim-file>`, each
+`<resolved-profile-file>`, `<jq-binary>`, `<output-dir>`, `<environment-claim-file>` and
+`<requester-file>`, each
 matched against `/*` in the shell — a `case` or `[[ ]]` pattern, no external command, nothing
 opened, stat'ed or executed. A relative `<jq-binary>` is `E_USAGE` here and never reaches step
 (7). Existence and non-symlinkness are **not** checked here, and where they are checked differs by
 argument. The **file** arguments — the profile directory's eight documents, the resolved profile,
-the claim and the jq binary — defer to step (7), because requirement 12 files a missing or
+the claim, the requester and the jq binary — defer to step (7), because requirement 12 files a missing or
 symlinked required file under `E_RUNTIME`. `<source-git-dir>` is **excluded** from that bucket:
 whether it is a physical directory is decided by 2.4's own explicit
 `physical_dir "$source_git_dir" || emit_error E_TARGET`, on the line above the `source_pure` call,
@@ -687,6 +696,90 @@ restoring the records materializes nothing on its own.
 
 ### Step 4 — run the Proof section on the final commit and paste it into the PR body.
 
+### Step 5 — amendment: the requester is an explicit input (requirements 1, 6, 12, 13, 17)
+
+Steps 0-4 shipped. This step is the amendment the spec's requirement 6 now states, and it is a
+separate implementation pull request on top of the merged component.
+
+5.1 **Files, and nothing else.**
+
+- **`shadow/v1/materialization-input.jq`** — delete `forge_binding`'s use as the requester source
+  and the `requested_by($binding)` projection (today's `:108-118`, used at `:181`), take the
+  requester as a new `--slurpfile`/`--argjson` input, and emit `requested_by` as that input
+  verbatim. Add the three predicates requirement 6 states: `schema::actor_ref_ok`, the role
+  membership test against `["manager","operator","orchestrator"]`, and the collision test over
+  `adapter_instance_id`, `execution_boundary_id` and `principal_id` against **every** binding in
+  `$resolved_profile[0].body.bindings`, not only the forge one. `forge_binding` itself stays: the
+  operation still selects it.
+- **`shadow/v1/assemble-materialization-input.sh`** — a tenth positional argument
+  `<requester-file>`, appended after the claim so the first nine keep their positions; the copied
+  entry's arity becomes `[ "$#" -eq 11 ]` with the exec forwarding `"$2"` … `"${11}"`, which is
+  still one of the four allowed deviations and not a fifth; the requester joins the absolute-path
+  check in 2.2(2) and the existence/non-symlink bucket in 2.2(7); and it is read, size-bounded,
+  parsed and canonicality-checked in the same pass as the other caller documents.
+- **`scripts/test/shadow-assembler.test.sh`** — 5.3 below.
+- **`docs/components.md`** — the invocation line at `:1376-1378` gains
+  `<requester-file>` after `<environment-claim-file>`, and the section says in one sentence that
+  the requester is the caller's identity, refused unless it is an `actor_ref` with an actor role
+  that collides with no binding.
+
+No new file, no new error id, no change to `ci/required-files.txt`, `README.md` or `RESTORE.md`.
+
+5.2 **Refusal-order position.** The requester is the last input read, and its refusals land in the
+positions the spec's requirement 12 fixes. Arity and the absolute-path test are decided by the
+copied entry and by 2.2(2), ahead of everything, as `E_USAGE`. Missing or symlinked is `E_RUNTIME`
+in 2.2(7) with the other required files. Over 1 MiB is `E_LIMIT`, not exactly one JSON value is
+`E_PARSE`, not its own `jq -S -c` bytes is `E_CANONICAL`, and failing `actor_ref_ok` is `E_SHAPE`
+— all in the same read-and-canonicalize pass as the claim, after it. The role rule and the three
+collision rules are `E_RELATION` and run **after** the resolved profile has been read and
+validated, because they need its bindings, and **before** any request document is built, so the
+component never constructs a document it would then refuse. Nothing earlier moves.
+
+5.3 **The test runs the real duty evaluator; the fabricated `duty.json` goes.** Delete the
+hand-built duty document (today `scripts/test/shadow-assembler.test.sh:697-714`, `verdict:
+satisfied` and repeated-character digests) and the fabricated policy set with it. In their place:
+
+- assert `requested_by` in the assembled request equals the tenth argument's bytes, including the
+  presence or absence of `authority_ref`, and that no field of the forge binding appears in it;
+- run `adapters/local-git-materializer/v1/materialize.sh` over the assembled input and take
+  `.stage_result` from its output, the same projection `shadow/v1/reproduce.sh:460` takes, to get
+  a real stage result;
+- run `control/v1/evaluate-duty.sh evaluate <policy-set> <request> <resolved> <result>` with the
+  shipped `control/v1/control-policy-set.json`, the assembled request, the same real resolved
+  profile the assembler was given, and that stage result; assert the evaluation's `verdict` is
+  `satisfied` and its `reason_ids` are exactly `["duty.satisfied"]`;
+- hand the driver run that same evaluation as its duty document, with the fixture claim's
+  `duty_evaluation_ref` carrying its real SHA-256, and keep the existing not-`inconclusive`
+  assertion.
+
+Three negative cases, each asserting the refusal id and an empty output directory: role
+`observer`, otherwise identical to the good requester, `E_RELATION`; a requester whose
+`principal_id` is read out of the resolved profile's forge binding rather than written as a
+literal, `E_RELATION`; and a requester that is not an `actor_ref` at all, `E_SHAPE`.
+
+5.4 **`review_size` for this implementation pull request.** `review_size: standard`, 140-270 net
+lines, as the spec records. The component's earlier `accepted-exception` covered the shipped
+component and its focused test and is not a standing allowance for this slug; this PR claims no
+exception. About 60-120 lines across the jq module and the shell entry, some of it given back by
+deleting the projection, and about 80-150 lines of test for the real duty evaluation and the three
+negative cases.
+
+5.5 **Proof.**
+
+```
+jq -S -c . <requester.json> | cmp - <requester.json>
+bash scripts/test/shadow-assembler.test.sh
+shellcheck -x -S style shadow/v1/assemble-materialization-input.sh
+grep -n 'requested_by' shadow/v1/materialization-input.jq
+grep -rn 'verdict' scripts/test/shadow-assembler.test.sh
+grep -n 'requester-file' docs/components.md
+git diff --stat <base>..HEAD
+```
+
+The focused test is the load-bearing one: it must pass, and the two `grep`s are the evidence that
+`requested_by` has exactly one source — the input — and that no `verdict` is written by the test
+rather than read from the evaluator. The `diff --stat` shows the four files and nothing else.
+
 ## Risks
 
 **The verbatim copies are the riskiest thing here, and 2.5 is the riskiest step.** About 95 lines
@@ -755,8 +848,8 @@ normal exit, with no error id and an empty directory as the only evidence. The `
 rather than leaving it to the implementer: the correct code and the broken code differ by one
 line's position.
 
-**What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 10 ]`
-before the dispatch, and the marker form is also ten words. A relative path is refused in the
+**What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 11 ]`
+before the dispatch, and the marker form is also eleven words. A relative path is refused in the
 re-exec'd process, not the caller's; `exec` preserves the working directory so the `pwd -P`
 normalization agrees on both sides, and stderr survives `exec` so the error vocabulary still
 reaches the test. Write 0.5's cases with that in mind.
@@ -856,10 +949,10 @@ run under `env -i` gets its own `/bin/bash -c '…'` wrapper, for the reason the
   cmp <(sed -n 1p "$m") <(sed -n 1p shadow/v1/assemble-materialization-input.sh)
   ```
   The four `cmp`s and the scrub `cmp` are byte-equal, exit 0. The shebang `cmp` confirms
-  `#!/bin/bash -p`. The `diff -u` shows only the four named deviations — `-eq 8` → `-eq 10`; the
+  `#!/bin/bash -p`. The `diff -u` shows only the four named deviations — `-eq 8` → `-eq 11`; the
   `case … E_USAGE` line replaced by the `pwd -P` normalization plus the `-f`/`-L` check;
   `materialize` → `assemble` and `__materialize_clean` → `__assemble_clean`; and the exec
-  forwarding `"$2"` … `"${10}"` — and no fifth hunk. The alias reset is outside the markers, so it
+  forwarding `"$2"` … `"${11}"` — and no fifth hunk. The alias reset is outside the markers, so it
   is not in that diff; show it separately with
   `grep -n -A2 '__assemble_clean' shadow/v1/assemble-materialization-input.sh`.
 - **The shared lines match the driver.** `cmp "$t/copy-a" <(awk '…271-332…'
