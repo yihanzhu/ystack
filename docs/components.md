@@ -1439,11 +1439,15 @@ Two invocations are supported: executing the file so its `#!/bin/bash -p`
 shebang starts bash, or `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
 <script> assemble <repository-id> <source-git-dir> <commit-id>
 <attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
-<output-dir> <environment-claim-file>`. Invoking the `__assemble_clean` marker
-verb directly is not one of them and carries no safety claim. Tree content is
-the materializer's own check, not this component's, so a source that trips
-its tree scan comes back `materialization.refused` from the driver rather
-than a refusal from this component.
+<output-dir> <environment-claim-file> <requester-file>`. Invoking the
+`__assemble_clean` marker verb directly is not one of them and carries no
+safety claim. Tree content is the materializer's own check, not this
+component's, so a source that trips its tree scan comes back
+`materialization.refused` from the driver rather than a refusal from this
+component. The requester file is the caller's own identity: it is refused
+unless it is an `actor_ref` with an actor role (`manager`, `operator`, or
+`orchestrator`) that collides with no binding in the supplied resolved
+profile.
 
 The profile, the six shipped manifests, and the producer config are pinned by
 SHA-256 in `shadow/v1/materialization-input.jq`: any supplied document whose

@@ -147,10 +147,20 @@ claim="$tmp/claim.json"
 "$jq_bin" -S -c -n '{schema_version:1,kind:"execution_environment_claim",
   id:"env.local-macos-fixture",body:{declaration_status:"complete"}}' > "$claim"
 
+# Requirement 6's tenth-argument requester: an explicit actor_ref, never a
+# binding's identity. Values per DR-5 (issue #262): role operator.
+requester="$tmp/requester.json"
+"$jq_bin" -S -c -n '{role:"operator",implementation_id:"implementation.operator.manual",
+  implementation_version:"v1",adapter_instance_id:"instance.operator.local-macos",
+  principal_id:"principal.operator.yihanzhu",
+  execution_boundary_id:"boundary.operator.local-macos"}' > "$requester"
+
 assemble() {
-  local out=$1 repo=$2 source=$3 commit_id=$4 time=$5 pdir=$6 resolved=$7 jq_arg=$8 claim_arg=$9
+  local out=$1 repo=$2 source=$3 commit_id=$4 time=$5 pdir=$6 resolved=$7 jq_arg=$8 \
+    claim_arg=$9 requester_arg=${10}
   /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p "$assembler" assemble \
-    "$repo" "$source" "$commit_id" "$time" "$pdir" "$resolved" "$jq_arg" "$out" "$claim_arg"
+    "$repo" "$source" "$commit_id" "$time" "$pdir" "$resolved" "$jq_arg" "$out" \
+    "$claim_arg" "$requester_arg"
 }
 expect_error() {
   local name=$1 expected=$2 status=0 err
@@ -162,7 +172,7 @@ expect_error() {
   pass "$name -> $expected"
 }
 good=(fixture.target "$tmp/source.git" "$commit" 2026-09-10T00:00:00Z "$profile_dir" \
-  "$resolved_profile" "$jq_bin" "$claim")
+  "$resolved_profile" "$jq_bin" "$claim" "$requester")
 
 # 0.4 — the positive assertions.
 good_out="$tmp/out-good"
@@ -205,6 +215,22 @@ JQEOF
   --slurpfile resolved "$good_out/resolved-profile-ref.json" -f "$tmp/program-2.jq" "$good_out/input.json" >/dev/null || fail pair-refs
 pass 'read-only shape, environment_ref, and both pair_refs match what the driver compares'
 
+cat > "$tmp/program-requested-by.jq" <<'JQEOF'
+  def identity($binding): {adapter_instance_id:$binding.adapter_instance_id,
+    execution_boundary_id:$binding.execution_boundary_id,
+    principal_id:$binding.principal_id};
+  .stage_request.content.body.requested_by as $rb |
+  ($rb == $requester[0]) and
+  ($resolved[0].body.bindings[] | select(.binding.role=="forge") | .binding |
+    identity(.) as $forge |
+    $rb.adapter_instance_id != $forge.adapter_instance_id and
+    $rb.execution_boundary_id != $forge.execution_boundary_id and
+    $rb.principal_id != $forge.principal_id)
+JQEOF
+"$jq_bin" -e --slurpfile requester "$requester" --slurpfile resolved "$resolved_profile" \
+  -f "$tmp/program-requested-by.jq" "$good_out/input.json" >/dev/null || fail requested-by-verbatim
+pass 'requested_by equals the tenth argument verbatim and no forge-binding field leaked into it'
+
 cat > "$tmp/content-digests.jq" <<'JQEOF'
 .stage_request.sha256==$request and .resolved_profile.sha256==$resolved and
 (.stage_request.content.body.finish_condition.ref |
@@ -228,7 +254,7 @@ pass 'emitted document and decision-record digests match the actual bytes'
 sha256_out="$tmp/out-sha256"
 /bin/mkdir -m 700 "$sha256_out"
 assemble "$sha256_out" fixture.target "$tmp/source256.git" "$commit256" 2026-09-10T00:00:00Z \
-  "$profile_dir" "$resolved_profile" "$jq_bin" "$claim"
+  "$profile_dir" "$resolved_profile" "$jq_bin" "$claim" "$requester"
 "$jq_bin" -e '.stage_request.content.body.target_revision.value.hash_algorithm=="sha256" and
   (.stage_request.content.body.target_revision.value.commit_id|length)==64' \
   "$sha256_out/input.json" >/dev/null || fail sha256-width
@@ -274,9 +300,9 @@ assembler=$original_assembler
 chmod 700 "$module_root/core/v2/generations/$generation/modules"
 
 # 0.5 — one case per refusal class named in requirement 12.
-expect_error usage-relative-jq E_USAGE "${good[@]:0:6}" relative/jq "$claim"
+expect_error usage-relative-jq E_USAGE "${good[@]:0:6}" relative/jq "$claim" "$requester"
 expect_error usage-time-precedence E_USAGE fixture.target "$tmp/source.git" "$commit" bad \
-  "$profile_dir" "$resolved_profile" /missing/jq "$claim"
+  "$profile_dir" "$resolved_profile" /missing/jq "$claim" "$requester"
 for bad_source in config hooks packed commit; do
   cp -R "$tmp/source.git" "$tmp/source-$bad_source.git"
 done
@@ -293,10 +319,10 @@ for bad_source in config hooks packed commit; do
 done
 expect_error target-algorithm-width E_TARGET fixture.target "$tmp/source256.git" "$commit" "${good[@]:3}"
 expect_error usage-impossible-date E_USAGE fixture.target "$tmp/source.git" "$commit" \
-  2026-02-30T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$claim"
+  2026-02-30T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$claim" "$requester"
 /bin/ln -s "$tmp/source.git" "$tmp/source-link.git"
 expect_error target-symlinked-source E_TARGET fixture.target "$tmp/source-link.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$claim" "$requester"
 nonempty_out="$tmp/out-workspace-nonempty-output"
 /bin/rm -rf "$nonempty_out"; /bin/mkdir -m 700 "$nonempty_out"
 : > "$nonempty_out/stray"
@@ -309,7 +335,7 @@ jq_wrong_digest="$tmp/bin-jq-wrong"
 /bin/cp "$jq_bin" "$jq_wrong_digest"
 /bin/chmod 0755 "$jq_wrong_digest"; printf 'x' >> "$jq_wrong_digest"; /bin/chmod 0555 "$jq_wrong_digest"
 expect_error runtime-wrong-jq-digest E_RUNTIME fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_wrong_digest" "$claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_wrong_digest" "$claim" "$requester"
 big_claim="$tmp/big-claim.json"
 "$jq_bin" -S -c -n '{schema_version:1,kind:"execution_environment_claim",
   id:"env.local-macos-fixture",body:{padding:("y"*1100000)}}' > "$big_claim"
@@ -317,7 +343,7 @@ claim_bytes=$(wc -c < "$big_claim" | tr -d ' ')
 [ "$claim_bytes" -gt 1048576 ] || fail padded-claim-precondition
 pass "padded claim bytes=$claim_bytes exceeds 1048576"
 expect_error limit-oversized-claim E_LIMIT fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$big_claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$big_claim" "$requester"
 good_bytes=$(wc -c < "$good_out/input.json" | tr -d ' ')
 base_bytes=$(wc -c < "$resolved_profile" | tr -d ' ')
 other=$((good_bytes - base_bytes))
@@ -331,30 +357,30 @@ padded_bytes=$(wc -c < "$tmp/padded-resolved.json" | tr -d ' ')
 [ "$padded_bytes" -eq $((8388608 - 1024)) ] || fail padded-resolved-input-bound
 pass "output cap fixture: good=$good_bytes resolved=$padded_bytes projected-output=$((good_bytes + pad))"
 expect_error limit-finished-output E_LIMIT fixture.target "$tmp/source.git" "$commit" "${good[@]:3:2}" \
-  "$tmp/padded-resolved.json" "$jq_bin" "$claim"
+  "$tmp/padded-resolved.json" "$jq_bin" "$claim" "$requester"
 two_roots="$tmp/two-roots-resolved.json"
 printf '{}{}' > "$two_roots"
 expect_error parse-two-values E_PARSE fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$two_roots" "$jq_bin" "$claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$two_roots" "$jq_bin" "$claim" "$requester"
 { printf '\357\273\277'; cat "$claim"; } > "$tmp/bom-claim.json"
-expect_error parse-bom E_PARSE "${good[@]:0:7}" "$tmp/bom-claim.json"
+expect_error parse-bom E_PARSE "${good[@]:0:7}" "$tmp/bom-claim.json" "$requester"
 noncanon_claim="$tmp/noncanon-claim.json"
 "$jq_bin" -c -n '{schema_version:1,body:{declaration_status:"complete"},
   id:"env.local-macos-fixture",kind:"execution_environment_claim"}' > "$noncanon_claim"
 expect_error canonical-claim E_CANONICAL fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$noncanon_claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$noncanon_claim" "$requester"
 badkind_claim="$tmp/badkind-claim.json"
 "$jq_bin" -S -c -n '{schema_version:1,kind:"something_else",
   id:"env.local-macos-fixture",body:{}}' > "$badkind_claim"
 expect_error shape-claim-kind E_SHAPE fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$badkind_claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$resolved_profile" "$jq_bin" "$badkind_claim" "$requester"
 "$jq_bin" -S -c '.id="INVALID ID"' "$claim" > "$tmp/bad-id-claim.json"
-expect_error shape-claim-id E_SHAPE "${good[@]:0:7}" "$tmp/bad-id-claim.json"
+expect_error shape-claim-id E_SHAPE "${good[@]:0:7}" "$tmp/bad-id-claim.json" "$requester"
 "$jq_bin" -S -c '.body.bindings[0].binding.role="unknown"' "$resolved_profile" > "$tmp/bad-shape-resolved.json"
-expect_error shape-resolved E_SHAPE "${good[@]:0:5}" "$tmp/bad-shape-resolved.json" "$jq_bin" "$claim"
+expect_error shape-resolved E_SHAPE "${good[@]:0:5}" "$tmp/bad-shape-resolved.json" "$jq_bin" "$claim" "$requester"
 for claim_value in '[]' true 42 '"text"' null; do
   printf '%s\n' "$claim_value" > "$tmp/nonobject-claim.json"
-  expect_error "shape-claim-$claim_value" E_SHAPE "${good[@]:0:7}" "$tmp/nonobject-claim.json"
+  expect_error "shape-claim-$claim_value" E_SHAPE "${good[@]:0:7}" "$tmp/nonobject-claim.json" "$requester"
 done
 lookalike_dir="$tmp/lookalike-dir"
 /bin/mkdir -p "$lookalike_dir/manifests"
@@ -376,7 +402,7 @@ JQEOF
   --arg profile_sha "$(sha_file "$lookalike_dir/profile.json")" \
   --arg resolved_sha "$(sha_file "$tmp/lookalike-resolved.json")" -f "$tmp/profile-set-check.jq" >/dev/null || fail lookalike-self-consistency
 expect_error profile-lookalike-default "E_PROFILE profile.json" fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$lookalike_dir" "$tmp/lookalike-resolved.json" "$jq_bin" "$claim"
+  2026-09-10T00:00:00Z "$lookalike_dir" "$tmp/lookalike-resolved.json" "$jq_bin" "$claim" "$requester"
 "$jq_bin" -S -c '.id="profile.other.v1"' "$profile_dir/profile.json" > "$lookalike_dir/profile.json"
 expect_error profile-wrong-id E_PROFILE "${good[@]:0:4}" "$lookalike_dir" "${good[@]:5}"
 for profile_value in '[]' true 42 '"text"' null; do
@@ -385,13 +411,13 @@ for profile_value in '[]' true 42 '"text"' null; do
 done
 "$jq_bin" -S -c '(.body.bindings[]|select(.binding.role=="producer")|.config_source.value.value_sha256)="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
   "$resolved_profile" > "$tmp/config-swapped.json"
-expect_error profile-config-digest E_PROFILE "${good[@]:0:5}" "$tmp/config-swapped.json" "$jq_bin" "$claim"
+expect_error profile-config-digest E_PROFILE "${good[@]:0:5}" "$tmp/config-swapped.json" "$jq_bin" "$claim" "$requester"
 # Another document's genuine pin must not stand in for the named producer config.
 cat > "$tmp/config-wrong-pin.jq" <<'JQEOF'
 (.body.bindings[]|select(.binding.role=="producer")|.config_source.value.value_sha256)=$pin
 JQEOF
 "$jq_bin" -S -c --arg pin "$profile_sha256" -f "$tmp/config-wrong-pin.jq" "$resolved_profile" > "$tmp/config-other-pin.json"
-expect_error profile-config-other-pin E_PROFILE "${good[@]:0:5}" "$tmp/config-other-pin.json" "$jq_bin" "$claim"
+expect_error profile-config-other-pin E_PROFILE "${good[@]:0:5}" "$tmp/config-other-pin.json" "$jq_bin" "$claim" "$requester"
 inconsistent_resolved="$tmp/inconsistent-resolved.json"
 cat > "$tmp/program-3.jq" <<'JQEOF'
 (.body.bindings|map(select(.binding.role=="verifier"))[0].manifest_source.value_sha256)
@@ -400,8 +426,18 @@ cat > "$tmp/program-3.jq" <<'JQEOF'
 JQEOF
 "$jq_bin" -S -c -f "$tmp/program-3.jq" "$resolved_profile" > "$inconsistent_resolved"
 expect_error relation-inconsistent-set E_RELATION fixture.target "$tmp/source.git" "$commit" \
-  2026-09-10T00:00:00Z "$profile_dir" "$inconsistent_resolved" "$jq_bin" "$claim"
+  2026-09-10T00:00:00Z "$profile_dir" "$inconsistent_resolved" "$jq_bin" "$claim" "$requester"
 pass 'one case fires per refusal class in requirement 12'
+requester_badshape="$tmp/requester-badshape.json"
+printf '[]\n' > "$requester_badshape"
+expect_error requester-shape E_SHAPE "${good[@]:0:8}" "$requester_badshape"
+requester_badrole="$tmp/requester-badrole.json"
+"$jq_bin" -S -c '.role="verifier"' "$requester" > "$requester_badrole"
+expect_error requester-role E_RELATION "${good[@]:0:8}" "$requester_badrole"
+requester_collision="$tmp/requester-collision.json"
+"$jq_bin" -S -c '.principal_id="principal.reviewer"' "$requester" > "$requester_collision"
+expect_error requester-collision E_RELATION "${good[@]:0:8}" "$requester_collision"
+pass 'requirement 6: a non-actor_ref requester, a non-actor role, and a binding identity collision each refuse'
 # The second half of E_RELATION — a finished input that fails validate-input
 # after passing every earlier check — has no case here: nothing that passes
 # 2.2-2.6 can reach a failing self-check, and the only way to force one is a
@@ -445,7 +481,7 @@ for poison in find grep alias; do
           bash) command_line=(/bin/bash "$assembler") ;;
           clean) command_line=(/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p "$assembler") ;;
         esac
-        "${command_line[@]}" assemble fixture.target "$env_source" "$commit" "${good[@]:3:4}" "$env_out" "$claim"
+        "${command_line[@]}" assemble fixture.target "$env_source" "$commit" "${good[@]:3:4}" "$env_out" "$claim" "$requester"
       ) > "$tmp/env-stdout" 2> "$tmp/env-stderr" || status=$?
       if [ "$fixture" = hooks ]; then
         [ "$status" -ne 0 ] && [ "$(cat "$tmp/env-stderr")" = E_TARGET ] &&
@@ -504,14 +540,14 @@ extract 22-29 > "$tmp/copy-entry"
 entry_anchor=$(grep -nFx "[ \"\$#\" -eq 8 ] || emit_error E_USAGE" "$materializer")
 [ "$entry_anchor" = "22:[ \"\$#\" -eq 8 ] || emit_error E_USAGE" ] || fail entry-anchor
 cat > "$tmp/expected-entry" <<'ENTRY'
-[ "$#" -eq 10 ] || emit_error E_USAGE
+[ "$#" -eq 11 ] || emit_error E_USAGE
 script_path=${BASH_SOURCE[0]}
 case "$script_path" in /*) ;; *) script_path="$(pwd -P)/$script_path" ;; esac
 [ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_RUNTIME
 if [ "$1" = assemble ]; then
   exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
     /bin/bash "$script_path" __assemble_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8" \
-    "$9" "${10}"
+    "$9" "${10}" "${11}"
 fi
 [ "$1" = __assemble_clean ] || emit_error E_USAGE
 ENTRY
@@ -519,7 +555,7 @@ cmp -s "$tmp/expected-entry" "$tmp/copy-entry" || fail entry-deviations
 [ "$(wc -l < "$tmp/copy-entry")" -eq 10 ] || fail adapted-entry-length
 # Normalize only the three adaptations within the markers; alias reset stays outside them.
 cat > "$tmp/normalize-entry.sed" <<'SED'
-s/-eq 10/-eq 8/
+s/-eq 11/-eq 8/
 /^\[ -f /d
 /^case /c\
 case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac
@@ -591,7 +627,7 @@ while IFS=: read -r trap_position rest; do
   [ "$trap_position" -lt "${order[3]}" ] || fail signal-trap-after-mkdir
 done < <(grep -n '^trap ' "$assembler")
 cat > "$tmp/cheap-check-lines" <<'CHEAP'
-[ "$#" -eq 10 ] || emit_error E_USAGE
+[ "$#" -eq 11 ] || emit_error E_USAGE
   case "$path_argument" in /*) ;; *) emit_error E_USAGE ;; esac
 [[ "$repository_id" =~ ^[a-z0-9][a-z0-9._:-]{0,127}$ ]] || emit_error E_USAGE
 if [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
@@ -673,67 +709,103 @@ FAULT_SETUP
 done < "$tmp/fault-lines"
 pass "source order: physical=${order[0]} purity=${order[1]} trap=${order[2]} mkdir=${order[3]} validate=${order[4]} moves=${order[6]},${order[8]} committed=${order[9]}"
 
-# 0.7 — the driver run.
+# 0.7 — the requester proved against the real duty evaluator, in two acyclic
+# passes (requirement 13). No hand-built duty.json, no chosen verdict: the
+# claim-to-request-to-duty-to-claim cycle is broken by a prerequisite pass
+# whose claim-position document carries no *_ref field of any kind, the same
+# construction the accepted shadow-self-host-run plan uses.
 sandbox_policy="$root/control/v1/sandbox-policy.json"
-sandbox_decision="$root/control/v1/sandbox-decision.json"
-policy_set="$tmp/policy-set.json"
-cat > "$tmp/program-4.jq" <<'JQEOF'
-  def ref($id;$m;$s): {content_id:$id,media_type:$m,sha256:$s};
-  def section($id;$p;$d): {section_id:$id,
-    policy_ref:ref("control-policy."+$id;"application/vnd.ystack.control-policy+json";$p),
-    decision_ref:ref("control-decision."+$id;"application/vnd.ystack.control-decision+json";$d)};
-  {schema_version:1,kind:"control_policy_set",id:"control-policy-set.shadow-fixture",
-   body:{activation_state:"inactive",core_contract:{generation_id:("g-"+("7"*64)),
-       package_ref:ref("core-contract-package.v2";"application/vnd.ystack.core-contract+json";("9"*64)),
-       semantic_identity:"core.contracts.v2"},
-     fail_mode:"closed",policy_version:"v1",
-     sections:[section("credential-policy";("1"*64);("a"*64)),
-       section("duty-separation";("2"*64);("b"*64)),section("evidence-integrity";("3"*64);("c"*64)),
-       section("kill-switch";("4"*64);("d"*64)),section("risk-gates";("5"*64);("e"*64)),
-       section("sandbox";$sp;$sd)]}}
-JQEOF
-"$jq_bin" -S -c -n --arg sp "$(sha_file "$sandbox_policy")" --arg sd "$(sha_file "$sandbox_decision")" -f "$tmp/program-4.jq" > "$policy_set"
+policy_set="$root/control/v1/control-policy-set.json"
 policy_set_sha=$(sha_file "$policy_set")
-duty="$tmp/duty.json"
-cat > "$tmp/program-5.jq" <<'JQEOF'
-  def content($id;$s): {content_id:$id,media_type:"application/vnd.ystack.control-decision+json",sha256:$s};
-  def document($k;$id;$s): {schema_version:2,kind:$k,id:$id,sha256:$s};
-  {schema_version:1,kind:"duty_separation_evaluation",id:"result.shadow-fixture",
-   body:{activation_state:"inactive",core_contract:$set[0].body.core_contract,
-     decision_ref:content("control-decision.duty-separation";("b"*64)),
-     evaluation_mode:"observation-only",
-     policy_ref:(content("control-policy.duty-separation";("2"*64))|
-       .media_type="application/vnd.ystack.control-policy+json"),
-     policy_set:{id:"control-policy-set.shadow-fixture",sha256:$set_sha},
-     reason_ids:["duty.satisfied"],reference_semantics:"identity-only",
-     stage:{request_ref:document("stage_request";"request.shadow-fixture";("3"*64)),
-       resolved_profile_ref:document("resolved_profile";"profile.shadow-fixture";("4"*64)),
-       result_ref:document("stage_result";"result.shadow-fixture";("5"*64))},
-     verdict:"satisfied"}}
-JQEOF
-"$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" --slurpfile set "$policy_set" -f "$tmp/program-5.jq" > "$duty"
-driver_claim="$tmp/driver-claim.json"
-cat > "$tmp/program-6.jq" <<'JQEOF'
-  def document($v;$k;$id;$s): {schema_version:$v,kind:$k,id:$id,sha256:$s};
+
+registry_entry="$tmp/registry-entry.json"
+[ "$("$jq_bin" -c '[.body.environments[] |
+  select(.environment_id=="env.local-macos-fixture" and .target_repository_id=="fixture.target")] |
+  length' "$root/shadow/v1/shadow-environments.json")" -eq 1 ] || fail registry-entry-unique
+"$jq_bin" -S -c '.body.environments[] |
+  select(.environment_id=="env.local-macos-fixture" and .target_repository_id=="fixture.target")' \
+  "$root/shadow/v1/shadow-environments.json" > "$registry_entry"
+env_decl="$tmp/environment-declaration.json"
+cat > "$tmp/program-env-decl.jq" <<'JQEOF'
+  ($policy[0].body | {environment,filesystem,isolation,limits,network,resources,
+    sensitive_material,tools}) as $sections |
   {schema_version:1,kind:"execution_environment_claim",id:"env.local-macos-fixture",
-   body:{declaration_status:"complete",
-     duty_evaluation_ref:document(1;"duty_separation_evaluation";"result.shadow-fixture";$duty_sha),
-     effects:{external_writes:false,target_writes:false},environment:$policy[0].body.environment,
-     execution_identity:{adapter_instance_id:"instance.verifier",
-       execution_boundary_id:"boundary.verifier",principal_id:"principal.verifier",role:"verifier"},
-     filesystem:$policy[0].body.filesystem,isolation:$policy[0].body.isolation,
-     limits:$policy[0].body.limits,network:$policy[0].body.network,
-     policy_set_ref:document(1;"control_policy_set";"control-policy-set.shadow-fixture";$set_sha),
-     resources:$policy[0].body.resources,sensitive_material:$policy[0].body.sensitive_material,
-     stage_result_ref:document(2;"stage_result";"result.shadow-fixture";("5"*64)),
-     tools:$policy[0].body.tools}}
+   body:($sections + {registry_entry_sha256:$reg})}
 JQEOF
-"$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" --arg duty_sha "$(sha_file "$duty")" \
-  --slurpfile policy "$sandbox_policy" -f "$tmp/program-6.jq" > "$driver_claim"
+"$jq_bin" -S -c -n --slurpfile policy "$sandbox_policy" --arg reg "$(sha_file "$registry_entry")" \
+  -f "$tmp/program-env-decl.jq" > "$env_decl"
+
+# 1. the prerequisite assembler run: the declaration in the claim position,
+# its own frozen requested_at, its own fresh output directory.
+pre_out="$tmp/out-prerequisite"
+/bin/mkdir -m 700 "$pre_out"
+assemble "$pre_out" fixture.target "$tmp/source.git" "$commit" 2026-09-11T00:00:00Z \
+  "$profile_dir" "$resolved_profile" "$jq_bin" "$env_decl" "$requester"
+pre_request="$tmp/prerequisite-stage-request.json"
+pre_resolved="$tmp/prerequisite-resolved-profile.json"
+"$jq_bin" -S -c '.stage_request.content' "$pre_out/input.json" > "$pre_request"
+"$jq_bin" -S -c '.resolved_profile.content' "$pre_out/input.json" > "$pre_resolved"
+[ "$(sha_file "$pre_request")" = "$("$jq_bin" -r '.sha256' "$pre_out/stage-request-ref.json")" ] ||
+  fail prerequisite-request-digest
+[ "$(sha_file "$pre_resolved")" = "$("$jq_bin" -r '.sha256' "$pre_out/resolved-profile-ref.json")" ] ||
+  fail prerequisite-resolved-digest
+pass 'the prerequisite run references its own stage-request-ref and resolved-profile-ref'
+
+# 2. the prerequisite stage result: a real materializer run over that input.
+pre_candidate="$tmp/prerequisite-candidate"
+pre_scratch="$tmp/prerequisite-scratch"
+/bin/mkdir -m 700 "$pre_candidate" "$pre_scratch"
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash "$materializer" materialize \
+  "$pre_out/input.json" fixture.target "$tmp/source.git" "$pre_candidate" "$pre_scratch" \
+  "$closure_helper" "$jq_bin" > "$tmp/prerequisite-materialize.json"
+pre_result="$tmp/prerequisite-stage-result.json"
+"$jq_bin" -S -c '.stage_result' "$tmp/prerequisite-materialize.json" > "$pre_result"
+pass 'the prerequisite stage result is a real materializer run over the prerequisite input'
+
+# 3. the duty evaluation: the shipped evaluator over the shipped policy set
+# and the prerequisite's own request, resolved profile and stage result. This
+# is the assertion that proves the requester (requirement 13).
+duty="$tmp/duty-evaluation.json"
+PATH="$bin:/usr/bin:/bin" "$root/control/v1/evaluate-duty.sh" evaluate \
+  "$policy_set" "$pre_request" "$pre_resolved" "$pre_result" > "$duty"
+duty_verdict=$("$jq_bin" -r '.body.verdict' "$duty")
+duty_reasons=$("$jq_bin" -c '.body.reason_ids' "$duty")
+[ "$duty_verdict" = satisfied ] && [ "$duty_reasons" = '["duty.satisfied"]' ] ||
+  fail "duty-evaluation-verdict verdict=$duty_verdict reasons=$duty_reasons"
+pass 'the real duty evaluator is satisfied for the prerequisite request'
+
+# 4. the final claim, handed to evaluate-sandbox.sh: exactly the fields
+# requirement 13's entry 5 names, declaration_status and effects the only
+# literals, everything else shipped bytes or an earlier entry's digest.
+final_claim="$tmp/final-claim.json"
+cat > "$tmp/program-final-claim.jq" <<'JQEOF'
+  ($policy[0].body | {environment,filesystem,isolation,limits,network,resources,
+    sensitive_material,tools}) as $sections |
+  ($resolved[0].body.bindings[] | select(.binding.role=="verifier") | .binding |
+    {adapter_instance_id,execution_boundary_id,principal_id}) as $verifier |
+  {schema_version:1,kind:"execution_environment_claim",id:"env.local-macos-fixture",
+   body:($sections + {declaration_status:"complete",
+     effects:{external_writes:false,target_writes:false},
+     execution_identity:($verifier + {role:"verifier"}),
+     policy_set_ref:{schema_version:1,kind:"control_policy_set",id:$set[0].id,sha256:$set_sha},
+     duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
+       id:$duty[0].id,sha256:$duty_sha},
+     stage_result_ref:$duty[0].body.stage.result_ref})}
+JQEOF
+"$jq_bin" -S -c -n --slurpfile policy "$sandbox_policy" --slurpfile resolved "$resolved_profile" \
+  --slurpfile set "$policy_set" --arg set_sha "$policy_set_sha" --slurpfile duty "$duty" \
+  --arg duty_sha "$(sha_file "$duty")" -f "$tmp/program-final-claim.jq" > "$final_claim"
+pass 'the final claim carries only shipped policy bytes, the resolved verifier identity, and earlier digests'
+
+# 5. the final assembler run: the same arguments, the final claim in the
+# claim position. This is the only input.json the driver reads.
 driver_out="$tmp/out-driver"
 /bin/mkdir -m 700 "$driver_out"
 assemble "$driver_out" fixture.target "$tmp/source.git" "$commit" 2026-09-10T00:00:00Z \
-  "$profile_dir" "$resolved_profile" "$jq_bin" "$driver_claim"
+  "$profile_dir" "$resolved_profile" "$jq_bin" "$final_claim" "$requester"
+[ "$(sha_file "$pre_out/input.json")" != "$(sha_file "$driver_out/input.json")" ] ||
+  fail prerequisite-and-final-runs-distinct
+pass 'the prerequisite and final runs are distinct documents, told apart by digest'
 expected_digest=$(printf 'alpha\nbeta\n' | sha_file /dev/stdin)
 incident="$tmp/incident.json"
 cat > "$tmp/program-7.jq" <<'JQEOF'
@@ -767,7 +839,7 @@ JQEOF
   > "$identity"
 driver_case="$tmp/driver-case"
 /bin/mkdir -m 700 "$driver_case" "$driver_case/candidate" "$driver_case/scratch" "$driver_case/state"
-"$root/shadow/v1/reproduce.sh" reproduce "$incident" "$driver_claim" "$policy_set" "$duty" \
+"$root/shadow/v1/reproduce.sh" reproduce "$incident" "$final_claim" "$policy_set" "$duty" \
   "$driver_out/input.json" "$identity" "$tmp/source.git" "$driver_case/candidate" \
   "$driver_case/scratch" "$driver_case/state" "$closure_helper" "$jq_bin" \
   > "$driver_case/out.json" 2> "$driver_case/err"
