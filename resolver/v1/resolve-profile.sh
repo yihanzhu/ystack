@@ -130,10 +130,12 @@ checkpoint() {
   [ -z "$entry_signal" ] || exit
 }
 
-# The four names every trap and checkpoint reads, declared empty before any
+# The six names every trap and checkpoint reads, declared empty before any
 # trap is armed and before the first external command, so set -u never turns
 # a signal-free run's first checkpoint into a fatal unbound read (R1).
-entry_signal='' wait_interrupted='' run_created='' entry_status='' parent_pid=''
+# wait_interrupted is deliberately not among them: the traps only write it,
+# and its one read is always preceded by the loop's own clear, same iteration.
+entry_signal='' run_created='' entry_status='' parent_pid='' last_forwarded='' trap_busy=''
 
 jq_arg=$1
 output=$2
@@ -238,10 +240,11 @@ shopt -u dotglob nullglob
 
 run="$output/.run"
 
-# Traps installed only now: after the four names above and after run is
+# Traps installed only now: after the seven names above and after run is
 # assigned, so nothing a trap or a checkpoint reads is unset when armed (R1).
-# The three signal traps only record the first signal's name and set the
-# wait loop's flag -- two statements, and the whole of each body.
+# Pre-parent arming uses the record-only form only: no parent exists yet for
+# a forwarding body to target, so this is the two-statement literal, and
+# nothing besides.
 trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
 trap ': "${entry_signal:=INT}"; wait_interrupted=1' INT
 trap ': "${entry_signal:=HUP}"; wait_interrupted=1' HUP
@@ -419,27 +422,39 @@ parent_env=(/usr/bin/env -i "PATH=/usr/bin:/bin" "LC_ALL=C")
   "$run/jq" "$request" "$map" "$output" "$run" &
 parent_pid=$!
 
-# The wait loop: forward the first recorded signal at most once, only while
-# the parent's job is still listed Running, ahead of each wait; leave as soon
-# as an uninterrupted wait reaps the parent; otherwise ask the job table
-# again to decide whether to go round or spend one more wait on the spot.
-last_forwarded=''
+# The forwarding form arms the instant a parent exists to target.
+trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' TERM
+trap ': "${entry_signal:=INT}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' INT
+trap ': "${entry_signal:=HUP}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' HUP
+
+# The wait loop: step 2 is the record-only section (disarms forwarding for
+# its own guarded check-send-record so the trap and the loop can never both
+# send), then wait, then the clear-flag break, then the set-flag table read
+# with its continue and second wait -- see plan.md for why each position.
 while :; do
   wait_interrupted=''
-  if [ -n "$entry_signal" ] && [ "$entry_signal" != "$last_forwarded" ]; then
-    case " $(jobs -l) " in
-      *" $parent_pid Running"*) kill -"$entry_signal" "$parent_pid" 2>/dev/null || : ;;
-    esac
-    last_forwarded=$entry_signal
-  fi
+  while [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; do
+    trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
+    trap ': "${entry_signal:=INT}"; wait_interrupted=1' INT
+    trap ': "${entry_signal:=HUP}"; wait_interrupted=1' HUP
+    if [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; then
+      case " $(jobs -l) " in
+        *" $parent_pid Running"*)
+          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
+          ;;
+      esac
+      last_forwarded=$entry_signal
+    fi
+    trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' TERM
+    trap ': "${entry_signal:=INT}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' INT
+    trap ': "${entry_signal:=HUP}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' HUP
+  done
   wait "$parent_pid"; status=$?
   if [ -z "$wait_interrupted" ]; then
     entry_status=$status
     break
   fi
-  case " $(jobs -l) " in
-    *" $parent_pid Running"*) continue ;;
-  esac
+  case " $(jobs -l) " in *" $parent_pid Running"*) continue ;; esac
   wait "$parent_pid"; second=$?
   [ "$second" -ne 127 ] || second=$status
   [ "$second" -ne 127 ] || second=$((128 + $(kill -l "$entry_signal")))

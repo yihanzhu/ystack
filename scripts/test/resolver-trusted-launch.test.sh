@@ -6,14 +6,13 @@
 # parent (resolver/v1/trusted-launch.c), which do not exist yet at plan step 1 —
 # this run is expected to fail against absent behavior (plan.md:96-97).
 #
-# Case inventory (R10 groups, spec.md lines noted per group): Group 1 entry-owned
-# refusals (7099-7170); Group 2 parent-owned refusals, direct invocation
-# (7247-7420); Group 3 runtime refusal, labelled (7442-7447); R3 no-copy
-# invariant (7449-7524); loader-variable case (7495-7524); entry mode / relative
-# invocation (7566-7600); compiler-environment pollution (7608-7710); cleanup
-# cases (7716-7764); two-umask case (7813-7845); descriptor cases (7846-7975);
-# signal cases (7976-8385); pinned-blob / generation assertions (8388-8410);
-# mechanism checks / proof-by-reading (8460-8995).
+# Case inventory (R10 groups, spec.md lines per group): Group 1 entry-owned
+# refusals (7099-7170); Group 2 parent-owned, direct invocation (7247-7420);
+# Group 3 runtime refusal (7442-7447); R3 no-copy invariant (7449-7524);
+# loader-variable (7495-7524); entry mode/relative invocation (7566-7600);
+# compiler-env pollution (7608-7710); cleanup (7716-7764); two-umask
+# (7813-7845); descriptor (7846-7975); signal (7976-8385); pinned-blob /
+# generation (8388-8410); mechanism checks / proof-by-reading (8460-8995).
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -648,13 +647,10 @@ if [ "$parent_available" -eq 1 ]; then
   group2_counter=$((group2_counter + 1))
 
   # Positive control for this entire group's output/run pairing: deviation 4
-  # requires the OUTPUT argument to be the directory that directly contains
-  # .run (exactly {".run"}, same object as the RUN argument) -- an unrelated
-  # empty directory fails that check immediately with E_RUNTIME output before
-  # any other R5 check runs, which would silently swallow every refusal case
-  # below regardless of its own specific tamper. Prove the pairing itself
-  # works first: an untampered build_run_directory, invoked with genuine
-  # sources and OUTPUT set to its own container, must succeed end-to-end.
+  # requires OUTPUT to directly contain .run (same object as RUN) -- an
+  # unrelated empty directory fails that check immediately, which would
+  # silently swallow every refusal case below regardless of its own tamper.
+  # Prove the pairing works first: untampered, must succeed end-to-end.
   g2_control_out="$tmp/g2.positive-control"; build_run_directory "$g2_control_out"
   g2_control_status=0
   invoke_parent "$g2_control_out/.run" "$synthetic_request" "$synthetic_map" "$g2_control_out" \
@@ -785,18 +781,12 @@ if [ "$parent_available" -eq 1 ]; then
   assert_refused_before_fork 'group2: hardlinked jq at a sibling directory (directory identity)' "$g2s10" "$g2o10dest.stdout" "$g2o10dest.stderr" 'E_RUNTIME jq'
 
   # non-absolute / symlinked request and map (four cases). The non-absolute pair
-  # fails the copied launcher's unchanged leading-slash shape check
-  # (portable-profile-resolution-launcher.c:636), which lives in the E_USAGE
-  # argument-parsing branch ahead of deviation 5's E_RUNTIME regular/non-symlink
-  # check -- so, unlike every other case in this group, these two expect E_USAGE.
-  # Run these two directly rather than inside a "( cd ... && run_direct_refusal_case
-  # ... )" subshell: run_direct_refusal_case calls fail_case on a mismatch, and
-  # fail_case's "exit 1" inside a subshell only ends that subshell -- it neither
-  # fails the overall suite nor advances the outer $total/$passed counters, which
-  # is how the previous draft's two non-absolute cases both printed "ok 27" above.
-  # A relative request/map argument does not need an actual chdir either: the
-  # parent's leading-slash shape check is a plain argv[5][0]/argv[6][0] test, never
-  # resolved against a cwd, so the bare basename string is enough on its own.
+  # fails the leading-slash shape check ahead of deviation 5's E_RUNTIME
+  # regular/non-symlink check, so unlike every other case here these two expect
+  # E_USAGE. Run directly, not inside a subshell: a subshell's fail_case "exit
+  # 1" only ends the subshell, never advancing the outer $total/$passed (how a
+  # prior draft's two non-absolute cases both printed "ok 27"). No chdir
+  # needed either: the shape check is argv[5][0]/argv[6][0], never cwd-resolved.
   g2out11="$tmp/g2.paths"; build_run_directory "$g2out11"
   run_direct_refusal_case 'group2: non-absolute request path' "$g2out11/.run" \
     "$(basename "$synthetic_request")" "$synthetic_map" "$g2out11.dest1" \
@@ -820,16 +810,12 @@ if [ "$parent_available" -eq 1 ]; then
     /bin/mkdir -m 700 "$long_out" 2>/dev/null || break
   done
   if [ "${#long_out}" -ge $((long_ceiling - 16)) ]; then
-    # Capture files must live at a short, fixed path: $long_out itself is already
-    # within 16 bytes of the platform's real filesystem PATH_MAX, so appending
-    # ".stdout"/".stderr" to it (as run_direct_refusal_case's shared helper would)
-    # overflows the OS's own path-length limit before the parent is even
-    # invoked -- an "ENAMETOOLONG"/"File name too long" shell redirection
-    # failure that has nothing to do with the guard under test. Group 1's
-    # equivalent overlong-path case (1g, above) avoids the same trap by
-    # capturing to a short name under $tmp; mirrored here directly rather than
-    # through run_direct_refusal_case, whose capture-path convention this one
-    # case cannot use.
+    # Capture files must live at a short, fixed path: $long_out is already
+    # within 16 bytes of the real PATH_MAX, so appending ".stdout"/".stderr"
+    # (the shared helper's convention) overflows it before the parent even
+    # runs -- an ENAMETOOLONG unrelated to the guard under test. Mirrored
+    # here directly, capturing to a short name under $tmp, as group 1's
+    # equivalent overlong-path case (1g) does.
     g2o12_stdout="$tmp/g2.overlong-output.stdout"
     g2o12_stderr="$tmp/g2.overlong-output.stderr"
     g2s12=0
@@ -885,14 +871,11 @@ if [ "$parent_available" -eq 1 ]; then
   run_direct_refusal_case 'group2: extra directory in .run' "$g2out18/.run" "$synthetic_request" "$synthetic_map" "$g2out18" "$g2out18/.run" 'E_RUNTIME run-directory'
 
   # The parent opens the helper via openat(run_fd, basename(argv[3]), ...) -- only
-  # the basename is looked up inside .run (trusted-launch.c:1661-1673,1691) -- so
-  # this case needs a real, absolute, regular, non-symlink, EXECUTABLE (X_OK; a
-  # plain data file fails the E_USAGE argv-shape gate itself) helper argument
-  # whose basename is absent from .run's actual listing. run_direct_refusal_case /
-  # invoke_parent always point the helper at "<run>/nofollow-snapshot" (which
-  # --skip-helper leaves nonexistent, failing E_USAGE before reaching R5's check),
-  # so this case is invoked directly with a compiled binary outside .run, under a
-  # non-colliding name, to clear the gate and fail R5's exact-four-names lookup.
+  # the basename is looked up inside .run -- so this needs a real, absolute,
+  # non-symlink, EXECUTABLE helper argument whose basename is absent from
+  # .run's listing. Invoked directly with a compiled binary outside .run,
+  # under a non-colliding name, to clear the E_USAGE gate and fail R5's
+  # exact-four-names lookup (the usual helpers always point inside .run).
   g2out19="$tmp/g2.missing-helper"; build_run_directory "$g2out19" --skip-helper
   missing_helper_bin="$tmp/g2.missing-helper.absent-from-run"
   compile_source "$helper_source" "$missing_helper_bin"; /bin/chmod 0500 "$missing_helper_bin"
@@ -903,14 +886,11 @@ if [ "$parent_available" -eq 1 ]; then
     > "$g2o19dest.stdout" 2> "$g2o19dest.stderr" || g2s19=$?
   assert_refused_before_fork 'group2: missing helper in .run' "$g2s19" "$g2o19dest.stdout" "$g2o19dest.stderr" 'E_RUNTIME run-directory'
 
-  # R5's exact-four-names rule keys the "helper" slot off the *argument's* last path
-  # component, not off whatever the file on disk happens to be named. So the collision
-  # this case must reproduce is: hand trusted-launch a helper argument whose basename is
-  # literally "jq" (the run directory's real jq, left in place), which leaves the
-  # untouched, genuinely-required nofollow-snapshot file as an unaccounted-for fifth
-  # name in the .run listing -- not a helper file renamed to some other, non-colliding
-  # name (a prior draft renamed it to "jq-helper", which does not collide with "jq" at
-  # all and so never reached this refusal).
+  # R5's exact-four-names rule keys the "helper" slot off the *argument's* last
+  # path component, not the on-disk name. The collision to reproduce: a helper
+  # argument whose basename is literally "jq" (the real jq, left in place),
+  # leaving the untouched nofollow-snapshot as an unaccounted-for fifth name
+  # (a prior draft's "jq-helper" rename never collided, so never refused).
   g2out20="$tmp/g2.helper-basename"; build_run_directory "$g2out20"
   g2o20dest="$g2out20"
   g2s20=0
@@ -980,16 +960,12 @@ if [ "$parent_available" -eq 1 ]; then
 
   # output ownership refusal via a portable test-only translation-unit
   # interposition of fstat (R10): compile the unchanged parent source with
-  # fstat renamed to test_fstat by a preprocessor macro on the command
-  # line, and link the resulting object against a small test-only wrapper
-  # TU -- compiled WITHOUT that macro, so its own call to fstat() reaches
-  # the real libc one -- that forwards every call unchanged except for the
-  # single fd whose real device/inode match a target path named by an
-  # environment variable, where it substitutes a different uid and marks
-  # that it was reached. No dlsym/RTLD_NEXT, LD_PRELOAD, DYLD_INSERT_LIBRARIES,
-  # shipped switch, environment flag read by the shipped parent, or
-  # privilege change is involved, so this compiles and runs identically on
-  # Linux and Darwin -- there is no platform skip.
+  # fstat renamed to test_fstat by a preprocessor macro, linked against a
+  # wrapper TU (compiled without that macro, so its own fstat() reaches the
+  # real libc one) that forwards every call unchanged except the one fd
+  # matching a target path named by an env var, where it substitutes a uid.
+  # No dlsym/RTLD_NEXT/LD_PRELOAD/DYLD_INSERT_LIBRARIES or privilege change,
+  # so this runs identically on Linux and Darwin -- no platform skip.
   interpose_wrapper_src="$tmp/g2.interpose-wrapper.c"
   cat > "$interpose_wrapper_src" <<'INTERPOSE'
 #include <fcntl.h>
@@ -1305,13 +1281,11 @@ read_runtime_pgid() {
   done
 }
 
-# Runtime-environment allowlist assertion (spec.md:7495, plan.md's "Check exact Linux
-# runtime environment and R10's Darwin alternative"): the resolver runtime must run
-# under exactly the eight fixed names trusted-launch.c's child_env builds (HOME, TMPDIR,
-# LC_ALL, PATH, YSTACK_RESOLVER_TRUSTED, YSTACK_RESOLVER_HELPER, YSTACK_RESOLVER_JQ,
-# GIT_TERMINAL_PROMPT), plus MallocNanoZone on Darwin -- never the caller's own
-# environment, and never a superset (the loader-marker case above already proves no
-# *values* leak through; this proves no *names* do either).
+# Runtime-environment allowlist assertion (spec.md:7495): the resolver runtime
+# must run under exactly the eight fixed names trusted-launch.c's child_env
+# builds, plus MallocNanoZone on Darwin -- never the caller's own environment
+# or a superset (the loader-marker case above proves no *values* leak; this
+# proves no *names* do either).
 runtime_env_expected='GIT_TERMINAL_PROMPT
 HOME
 LC_ALL
@@ -1356,22 +1330,13 @@ case "$platform" in
     fi
     ;;
   Darwin:*)
-    # R10's Darwin alternative -- a source-order proof in place of the Linux
-    # case's observed-behavior one (the same observed/source-order split
-    # plan.md draws for the cleanup cases): Darwin has no /proc, and reading
-    # another process's real environ needs root, which this suite must not
-    # require (confirmed locally: "ps eww" prints no environment for a
-    # same-user, non-root process on this OS version any more). trusted-launch
-    # itself DOES pin the runtime script's own identity (repo_root_from_runtime
-    # plus its SHA-1 against the R5 pin set), so -- unlike group 2's other
-    # direct-invocation fixtures -- a stand-in runtime cannot be substituted
-    # for it either. What IS directly readable is the shipped source: every
-    # name child_env is ever assigned, between its first assignment and the
-    # NULL-termination/no-NULL-hole check, read verbatim out of
-    # trusted-launch.c. This is the exact set R7 fixes execve's envp to, by
-    # construction (there is no other path into child_env), so a name-for-name
-    # match against R3's expected set is the direct Darwin equivalent of the
-    # Linux case's /proc reading, not a weaker proxy for it.
+    # R10's Darwin alternative to the Linux /proc-environ case: Darwin has no
+    # /proc, and reading another process's real environ needs root (confirmed:
+    # "ps eww" prints none for a same-user process here). trusted-launch also
+    # pins the runtime's own identity, so a stand-in can't substitute for it.
+    # What's readable is the source itself: every name child_env is assigned,
+    # verbatim out of trusted-launch.c -- the exact set execve's envp gets by
+    # construction, so a name match against R3's set is the direct equivalent.
     if [ -f "$parent_source" ]; then
       renv_src_names=$(/usr/bin/sed -n '/child_env\[0\] = environment_value/,/child_env\[child_env_count\] = NULL;/p' "$parent_source" |
         /usr/bin/grep -oE '(environment_value\("[A-Za-z_][A-Za-z0-9_]*"|strdup\("[A-Za-z_][A-Za-z0-9_]*=)' |
@@ -1539,17 +1504,10 @@ POISON
   # half 2: group-2 style, binaries compared directly, no runtime behind the compiles
   case "$platform" in
     Darwin:*)
-      # Same basename in two separate directories, not "compiler.clean.bin"
-      # vs "compiler.polluted.bin": on arm64, CommandLineTools' ad-hoc
-      # linker signature embeds the OUTPUT BASENAME as the code-signing
-      # identifier, so two differently-named outputs produce different
-      # bytes (a 351-byte delta covering the embedded CodeDirectory and
-      # LC_UUID) even when compiled from byte-identical sources with
-      # identical flags -- a false "nondeterminism" that has nothing to do
-      # with the poisoned-environment fixture under test. Using the same
-      # basename in each of the two directories keeps that identifier
-      # identical and isolates the comparison to what compiler-environment
-      # pollution can actually change.
+      # Same basename in two separate directories: arm64 CommandLineTools'
+      # ad-hoc linker signature embeds the OUTPUT BASENAME, so differently
+      # named outputs differ in bytes even from identical sources -- a false
+      # "nondeterminism" unrelated to the poisoned-environment fixture.
       clean_dir="$tmp/compiler.clean.d"; /bin/mkdir -m 700 "$clean_dir"
       clean_bin="$clean_dir/trusted-launch"
       darwin_temp2=$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)
@@ -1766,15 +1724,10 @@ fi
 make_fifo_reader() {
   # make_fifo_reader NAME -> sets ${NAME}_fifo, starts /bin/cat>/dev/null reader in bg,
   # sets ${NAME}_reader_flag file that appears once the reader returns.
-  #
   # The background GROUP's own stdout redirect matters, not just cat's: this
-  # function runs inside a command substitution, a pipe that does not return
-  # until every write-end holder closes it. "( /bin/cat ... >/dev/null; : >flag ) &"
-  # redirects only cat's stdout -- the grouping subshell still inherits the
-  # substitution's pipe on its OWN fd 1, and does not exit until the fifo (opened
-  # for writing only after this call returns) gets a writer and a close -- a
-  # confirmed live hang. Redirecting the whole group's stdout closes that
-  # inherited copy first, matching the usual "$(cmd &)" fix.
+  # runs inside a command substitution's pipe, which the grouping subshell
+  # also inherits on fd 1 -- redirecting only cat's stdout left it open and
+  # hung (confirmed). Redirecting the whole group closes that copy first.
   mfr_fifo="$tmp/fifo.$1"
   /usr/bin/mkfifo -m 600 "$mfr_fifo"
   mfr_flag="$tmp/fifo.$1.done"
@@ -1802,20 +1755,12 @@ if [ -x "$entry" ]; then
   fi
 
   # run 2: caller descriptor is the entry script itself (copy), fd7 fifo + fd8 read-only.
-  # The copy must sit at its own full "resolver/v1/resolve-profile.sh" repo-root-
-  # relative path, not a bare file in $tmp: the entry derives its repo root from
-  # ${BASH_SOURCE[0]} and requires "$entry_repo/scripts/lib/profile-resolution.sh"
-  # to exist, so a flat copy fails that binding check first -- confirmed by a live
-  # run refusing "E_RUNTIME binding" with .run never created. copy_repo_tree
-  # already builds this shape for group 1's cases above.
-  #
-  # fd8 is opened READ-ONLY on the script (round-4 review, Linux CI diagnostics on
-  # a99d7fc): Linux's exec() returns ETXTBSY ("Text file busy") for a script whose
-  # interpreter line it must open for reading while ANY process holds it open for
-  # writing (append counts) -- Darwin does not enforce this. The case's own point
-  # (an extra caller-held descriptor on the entry's own script path is closed like
-  # any other) does not depend on that descriptor being open for writing, so a
-  # read-only open proves the same thing on both platforms.
+  # The copy must sit at its full repo-root-relative path (entry derives its repo
+  # root from ${BASH_SOURCE[0]} and requires profile-resolution.sh there, so a
+  # flat copy fails binding first) -- copy_repo_tree already builds this shape.
+  # fd8 is READ-ONLY (round-4, Linux CI on a99d7fc): Linux's exec() returns
+  # ETXTBSY for a script open for writing anywhere -- Darwin doesn't enforce
+  # this, and the case's point (an extra descriptor is closed) holds either way.
   read -r d2_fifo d2_flag <<< "$(make_fifo_reader d2)"
   d2_tree="$tmp/descriptor.d2-tree"; copy_repo_tree "$d2_tree"
   entry_copy="$d2_tree/resolver/v1/resolve-profile.sh"; /bin/chmod 0755 "$entry_copy"
@@ -1931,21 +1876,12 @@ else
 fi
 
 if [ "$parent_available" -eq 1 ]; then
-  # parent half, run 1: fd 7 ordering vs runtime-pgid line
-  # Success-path run (it waits for the parent's "runtime-pgid:" line, so a
-  # premature E_RUNTIME from a mismatched output/.run pair would make the "never
-  # saw it before the flag" assertion pass vacuously) -- OUTPUT must directly
-  # contain .run, as in R3 above.
-  #
-  # The ordering assertion is R10's own ("the reader must return before
-  # runtime-pgid: appears"), but *observing* that return depends on the
-  # independently-scheduled /bin/cat reader being scheduled promptly -- a direct-
-  # parent run with no compile step can finish fast enough that a delayed reader
-  # wakeup loses the race even though the real ordering held. Confirmed benign
-  # (five standalone repros all measured saw_before=0; a mid-suite false failure
-  # left no live process, i.e. the run had already completed correctly). A small
-  # bounded retry (sig5's shape above) absorbs scheduler noise without weakening
-  # what any single attempt asserts.
+  # parent half, run 1: fd 7 ordering vs runtime-pgid line. Success-path run
+  # (waits for "runtime-pgid:", so a premature E_RUNTIME would pass the "never
+  # saw it before the flag" assertion vacuously) -- OUTPUT must directly
+  # contain .run, as in R3 above. Ordering is R10's own, but *observing* it
+  # depends on the independently-scheduled reader running promptly; confirmed
+  # benign (five repros all saw_before=0). Bounded retry absorbs the noise.
   p1_proved=0
   p1_attempt=1
   while [ "$p1_attempt" -le 5 ] && [ "$p1_proved" -eq 0 ]; do
@@ -2217,13 +2153,24 @@ if [ "$parent_available" -eq 1 ]; then
         wait "$sig5_pid" 2>/dev/null || :; echo "$1" > "$tmp/signal5.attempt$attempt.outcome"; exit 0
       }
       [ "$pgid_parent" = "$pgid_sentinel" ] && [ "$pgid_parent" = "$pgid_shell" ] || sig5_bail mismatch
-      # Rendezvous: a live child (~10s deadline) proves past handler install.
-      sig5_tick=0 sig5_child=0
-      while [ "$sig5_tick" -lt 1000 ] && [ "$sig5_child" -eq 0 ]; do
-        /usr/bin/pgrep -P "$sig5_pid" >/dev/null 2>&1 && sig5_child=1
-        [ "$sig5_child" -eq 1 ] || { /bin/sleep 0.01; sig5_tick=$((sig5_tick + 1)); }
-      done
-      [ "$sig5_child" -eq 1 ] || sig5_bail missed-window
+      # Rendezvous (~10s deadline) proves past handler install. Linux: poll
+      # /proc's SigCgt mask for the TERM bit (bit 14) -- fast runners reap
+      # pin-phase children before a child-sighting can ever land. Darwin
+      # (no /proc): fall back to sighting a live child, as before.
+      sig5_tick=0 sig5_rdv=0
+      if [ -e "/proc/$sig5_pid/status" ]; then
+        while [ "$sig5_tick" -lt 1000 ] && [ "$sig5_rdv" -eq 0 ]; do
+          sig5_cgt=$(/usr/bin/awk '/^SigCgt:/{print $2}' "/proc/$sig5_pid/status" 2>/dev/null)
+          [ -n "$sig5_cgt" ] && [ $(( (16#$sig5_cgt >> 14) & 1 )) -eq 1 ] && sig5_rdv=1
+          [ "$sig5_rdv" -eq 1 ] || { /bin/sleep 0.01; sig5_tick=$((sig5_tick + 1)); }
+        done
+      else
+        while [ "$sig5_tick" -lt 1000 ] && [ "$sig5_rdv" -eq 0 ]; do
+          /usr/bin/pgrep -P "$sig5_pid" >/dev/null 2>&1 && sig5_rdv=1
+          [ "$sig5_rdv" -eq 1 ] || { /bin/sleep 0.01; sig5_tick=$((sig5_tick + 1)); }
+        done
+      fi
+      [ "$sig5_rdv" -eq 1 ] || sig5_bail missed-window
       [ -e "$sig5_out/home" ] && sig5_bail missed-window
       kill -STOP "$sig5_pid" 2>/dev/null || :
       sig5_state='' sig5_stop_tick=0
@@ -2261,6 +2208,53 @@ if [ "$parent_available" -eq 1 ]; then
   fi
 else
   fail_case 'signal: stopped-parent no-runtime branch (parent absent)'
+fi
+
+# signal case 5b (review r16/r17): forwarding must not depend on the loop
+# reaching its own record-only section first -- the forwarding form stays
+# armed everywhere else, including across `wait`, so a signal at any point
+# is either forwarded by the trap or, in the brief disarmed window, by the
+# loop's own check. Extracted loop (TERM-only), verbatim except $boundary_out:
+# STOP/TERM/CONT the harness so delivery lands at an arbitrary point.
+boundary_out="$tmp/wait-boundary.out"
+boundary_src="$tmp/wait-boundary.sh"
+cat > "$boundary_src" <<'BOUNDARY'
+set -u
+entry_signal='' wait_interrupted='' last_forwarded='' trap_busy=''
+trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
+/bin/sleep 5 &
+parent_pid=$!
+trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=""; fi' TERM
+while :; do
+  wait_interrupted=''
+  while [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; do
+    trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
+    if [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; then
+      case " $(jobs -l) " in
+        *" $parent_pid Running"*)
+          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
+          ;;
+      esac
+      last_forwarded=$entry_signal
+    fi
+    trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=""; fi' TERM
+  done
+  wait "$parent_pid"; status=$?
+  [ -z "$wait_interrupted" ] && break
+done
+builtin printf 'forwarded=%s status=%s\n' "$last_forwarded" "$status"
+BOUNDARY
+/bin/bash "$boundary_src" > "$boundary_out" 2>&1 &
+boundary_pid=$!
+/bin/sleep 0.2
+kill -STOP "$boundary_pid" 2>/dev/null || :
+kill -TERM "$boundary_pid" 2>/dev/null || :
+kill -CONT "$boundary_pid" 2>/dev/null || :
+wait "$boundary_pid" 2>/dev/null || :
+if /usr/bin/grep -q '^forwarded=TERM status=143$' "$boundary_out" 2>/dev/null; then
+  pass_case 'signal: boundary between the forwarding check and wait now forwards (trap-side kill)'
+else
+  fail_case "signal: boundary regression -- $(cat "$boundary_out" 2>/dev/null || echo no-output)"
 fi
 
 if [ -x "$entry" ]; then
@@ -2366,10 +2360,9 @@ if [ -x "$entry" ]; then
   # race -- a slow-to-schedule drainer could still be waiting when this shell
   # closes fd 10, so its read-only open() finds no writer left and blocks
   # forever. Fixed by opening the read end SYNCHRONOUSLY, as fd 11, in THIS
-  # shell, before fd 10 (the remaining writer) is closed: the open cannot block
-  # since fd 10 is still a live writer, so the reader is provably attached
-  # before the last writer goes away. The background `cat` below only reads an
-  # already-open fd 11, no longer timing-sensitive.
+  # shell, before fd 10 (the remaining writer) is closed: the open can't block
+  # since fd 10 is a live writer, so the reader is provably attached before
+  # the last writer goes away. The `cat` below reads an already-open fd 11.
   exec 11< "$tmp/signal7.fifo"
   exec 10>&-
   ( /bin/cat 0<&11 > "$drained" 2>/dev/null; : > "$drained_flag" ) &
@@ -2809,15 +2802,11 @@ execve(program, child_argv, child_env)'
   # "${parent_env[@]}" in command position is a recognised, closed idiom
   # rather than an unresolvable bare variable.
   cps_env_wrappers='${clean_env[@]} ${parent_env[@]}'
-  # The command word actually launched THROUGH an env wrapper, once it is
-  # peeled away rather than short-circuited on: the entry's own fixed,
-  # never-reassigned scalar/array references that name an already-verified
-  # or already-pinned program ($compiler after the -x check, $jq_arg after
-  # its SHA-256/--version identity checks, and the two fixed sha1sum/
-  # sha256sum argv arrays) -- a closed idiom the same way the wrappers
-  # themselves are. Anything else surfacing here after peeling is a real,
-  # unexamined command word and must fall through to ordinary
-  # classification.
+  # The command word actually launched through an env wrapper, once peeled:
+  # the entry's own fixed, never-reassigned references naming an already-
+  # verified/pinned program ($compiler post -x check, $jq_arg post identity
+  # checks, the fixed sha1sum/sha256sum arrays) -- a closed idiom like the
+  # wrappers themselves. Anything else here falls through to classification.
   cps_verified_vars='$compiler $jq_arg ${sha1_args[@]} ${sha256_args[@]}'
   # Variable-joined suffixes the entry legitimately EXECUTES (command
   # position), a strict subset of allowlist_dynamic_joins above: the entry
@@ -2827,18 +2816,14 @@ execve(program, child_argv, child_env)'
   cps_command_dynamic_joins='/trusted-launch'
 
   # cps_scan_source FILE -- the lexical extraction the prior draft deferred:
-  # strips full-line comments and heredoc bodies (data, never a command
-  # position), then walks every logical line, recursively queuing the body
-  # of each $(...) / `...` command substitution as a further line to scan,
-  # and splitting on unquoted ; & | && || into one command position per
-  # segment (quote-tracked, so an operator character inside a quoted
-  # argument is not mistaken for a separator). Each segment's leading word
-  # has one layer of surrounding quotes unwrapped (never skipped wholesale --
-  # that let a quoted or variable-led token through unexamined) and any
-  # leading VAR=value assignments or exec/command prefix words are peeled
-  # so the position actually naming the program is what gets classified.
-  # Prints one finding line per rejected or unresolved command word to
-  # stdout; silence means the file passed.
+  # strips full-line comments and heredoc bodies, walks every logical line,
+  # recursively queues each $(...)/`...` body as a further line, and splits
+  # on unquoted ; & | && || into one command position per segment (quote-
+  # tracked). Each segment's leading word gets one layer of quotes unwrapped
+  # (never skipped wholesale) and leading VAR= / exec/command prefixes
+  # peeled, so the position naming the program is what gets classified.
+  # Prints one finding line per rejected/unresolved command word; silence
+  # means the file passed.
   cps_count_trailing_backslashes() {
     # Portable to bash 3.2 (macOS's shipped bash): no negative substring
     # offsets, no mapfile.
@@ -2885,15 +2870,11 @@ execve(program, child_argv, child_env)'
       case "$cps_w" in
         [A-Za-z_][A-Za-z0-9_]*=*|exec|command|env)
           cps_wi=$((cps_wi + 1)); continue ;;
-        # A compound-statement introducer (if/while/until's condition
-        # position, then/elif/else/do's body position) names no command
-        # itself -- it is not a builtin invocation, it is shell grammar --
-        # so it must be peeled the same way exec/command/env are, rather
-        # than accepted as a known reserved word with the real command
-        # word that follows it left unexamined. "for" is deliberately not
-        # here: the word right after "for" is a loop variable name, never
-        # a command position (its own body starts after "do", its own
-        # separate segment).
+        # A compound-statement introducer (if/while/until/then/elif/else/do)
+        # names no command itself -- shell grammar, not a builtin -- so it
+        # is peeled like exec/command/env rather than left unexamined.
+        # "for" is deliberately absent: the word after it is a loop
+        # variable, never a command position.
         if|then|elif|else|while|until|do)
           cps_wi=$((cps_wi + 1)); continue ;;
       esac
@@ -3563,17 +3544,30 @@ execve(program, child_argv, child_env)'
 
   # Enumerate plan §6's exact /dev/null roles by full trimmed line content:
   # ulimit ladder, descriptor-close eval, both unset scrub forms, and the
-  # signal-forwarding kill (cleanup excluded -- plan.md:351-359).
+  # signal-forwarding kills (cleanup excluded -- plan.md:351-359). A `trap`
+  # line is unwrapped to its body first (shortest prefix/suffix strip around
+  # the delimiting quotes) since the forwarding trap literal now carries
+  # 2>/dev/null too and its own embedded quotes would break a literal match.
   devnull_role_bad_count() {
-    local file=$1 bad=0 raw trimmed
+    local file=$1 bad=0 raw trimmed body
     while IFS= read -r raw; do
       trimmed=$(printf '%s' "$raw" | /usr/bin/sed -e 's/^[[:space:]]*//')
       case "$trimmed" in
+        "trap '"*)
+          body=${trimmed#trap \'}
+          body=${body%\' *}
+          case "$body" in
+            ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy='"''"'; fi') ;;
+            ': "${entry_signal:=INT}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy='"''"'; fi') ;;
+            ': "${entry_signal:=HUP}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy='"''"'; fi') ;;
+            *) bad=$((bad + 1)) ;;
+          esac
+          ;;
         'ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || {') ;;
         'eval "exec ${fd_name}>&-" 2>/dev/null || :') ;;
         'builtin unset -f "$inherited_function" 2>/dev/null || :') ;;
         'case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac') ;;
-        '*" $parent_pid Running"*) kill -"$entry_signal" "$parent_pid" 2>/dev/null || : ;;') ;;
+        'kill -"$entry_signal" "$parent_pid" 2>/dev/null || :') ;;
         *) bad=$((bad + 1)) ;;
       esac
     done < <(/usr/bin/grep '/dev/null' "$file" || :)
@@ -3616,6 +3610,32 @@ execve(program, child_argv, child_env)'
     pass_case 'mechanism: /dev/null role check rejects a cleanup redirect outside the enumerated roles'
   else
     fail_case 'mechanism: /dev/null role check failed to reject an unlisted cleanup redirect'
+  fi
+
+  # R10 (r17): trap inventory -- fourteen `trap` commands (EXIT; its own
+  # nested "trap '' INT TERM HUP"; 3 pre-parent record-only; 3 post-
+  # parent_pid forwarding; 3 loop-section record-only; 3 loop-section-foot
+  # forwarding), two distinct signal-trap body literals, each forwarding one
+  # armed twice byte-identically (post-parent_pid, loop-section-foot). Seven
+  # forwarding-kill occurrences in all (four logical roles: each of the three
+  # forwarding bodies armed twice, plus the loop's own once), every one
+  # sending $entry_signal with 2>/dev/null.
+  entry_trap_total=$(/usr/bin/grep -c '^\s*trap ' "$entry" || :)
+  entry_fwd_lines=$(/usr/bin/grep -c 'Running"\*) \[ -n "\$last_forwarded" \] || { kill -"\$entry_signal" "\$parent_pid" 2>/dev/null || :' "$entry" || :)
+  entry_ro_lines=$(/usr/bin/grep -c "^\s*trap ':.*entry_signal:=[A-Z]*}.; wait_interrupted=1'" "$entry" || :)
+  entry_loop_kill=$(/usr/bin/grep -c '^\s*kill -"\$entry_signal" "\$parent_pid" 2>/dev/null || :$' "$entry" || :)
+  entry_fwd_total=$((entry_fwd_lines + entry_loop_kill))
+  entry_fwd_dup_bad=0
+  for sig in TERM INT HUP; do
+    sig_fwd_count=$(/usr/bin/grep -Fc "entry_signal:=$sig}\"; wait_interrupted=1; if" "$entry" || :)
+    sig_fwd_uniq=$(/usr/bin/grep -F "entry_signal:=$sig}\"; wait_interrupted=1; if" "$entry" |
+      /usr/bin/sed -e 's/^[[:space:]]*//' | /usr/bin/sort -u | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [ "$sig_fwd_count" -eq 2 ] && [ "$sig_fwd_uniq" -eq 1 ] || entry_fwd_dup_bad=$((entry_fwd_dup_bad + 1))
+  done
+  if [ "$entry_trap_total" -eq 14 ] && [ "$entry_fwd_total" -eq 7 ] && [ "$entry_ro_lines" -eq 6 ] && [ "$entry_fwd_dup_bad" -eq 0 ]; then
+    pass_case 'mechanism: trap inventory is fourteen commands, seven forwarding-kill occurrences, each forwarding body armed twice byte-identically'
+  else
+    fail_case "mechanism: trap inventory mismatch (total=$entry_trap_total fwd-kills=$entry_fwd_total ro=$entry_ro_lines dup-bad=$entry_fwd_dup_bad)"
   fi
 else
   fail_case 'mechanism: allowlist sweep (entry absent)'
