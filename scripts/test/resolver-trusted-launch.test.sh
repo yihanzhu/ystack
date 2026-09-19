@@ -2581,39 +2581,43 @@ sweep_absolute_paths() {
   # presence to pick WHICH allowlist a token may match: a standalone token
   # must be a literal command/data path (allowlist_words / allowlist_data);
   # only a joined token may additionally match a dynamic-join fragment.
+  # Round-15 review: a bare "/*" is only the R1 self-path case pattern
+  # (`case ${BASH_SOURCE[0]} in /*)`) when it IS that pattern's own arm
+  # line; anywhere else (e.g. an argument) it is a real unlisted token and
+  # must not be exempted. Drop that one case-arm line before extraction so
+  # it never yields a token, rather than exempting the "/*" value globally.
   sap_file=$1
   /usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
+    /usr/bin/grep -Ev '^[[:space:]]*/\*\)[[:space:]]' |
     /usr/bin/grep -Eo '[A-Za-z0-9_}]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
 }
 
-if [ -f "$entry" ]; then
-  bad_tokens=0
+# entry_sweep_bad_count FILE -- echoes FILE's unlisted role-checked
+# absolute-path token count (factored out of the single call site so every
+# negative control below runs the exact same check as the real entry, not a
+# hand-copied approximation of it).
+entry_sweep_bad_count() {
+  esb_bad=0
   set -f
-  for tok_raw in $(sweep_absolute_paths "$entry"); do
+  for tok_raw in $(sweep_absolute_paths "$1"); do
     case "$tok_raw" in
       /*) tok_role=standalone; tok=$tok_raw ;;
       *) tok_role=joined; tok=${tok_raw#?} ;;
     esac
     match=0
     case "$tok_role" in
-      standalone)
-        for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done
-        ;;
-      joined)
-        for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done
-        ;;
-    esac
-    case "$tok" in
-      # The required self-path case pattern (R1's `case ${BASH_SOURCE[0]} in /*)`)
-      # is classified as a non-path pattern, not an absolute-path token, per spec.
-      # Quoted so this arm matches the literal two-character token "/*" and is not
-      # itself a glob (an unquoted /* would match almost every token above it).
-      '/*') match=1 ;;
+      standalone) for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done ;;
+      joined) for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done ;;
     esac
     [ "$match" -eq 1 ] ||
-      { printf 'unlisted absolute path token in entry (%s): %s\n' "$tok_role" "$tok" >&2; bad_tokens=$((bad_tokens + 1)); }
+      { printf 'unlisted absolute path token in entry (%s): %s\n' "$tok_role" "$tok" >&2; esb_bad=$((esb_bad + 1)); }
   done
   set +f
+  printf '%s\n' "$esb_bad"
+}
+
+if [ -f "$entry" ]; then
+  bad_tokens=$(entry_sweep_bad_count "$entry")
   if [ "$bad_tokens" -eq 0 ]; then
     pass_case 'mechanism: entry contains no absolute-path token outside the fifteen-command / data / dynamic-join allowlist, role-checked'
   else
@@ -2632,46 +2636,31 @@ if [ -f "$entry" ]; then
 
   sap_neg_tmp="$sap_neg_dir/bare-tmp.sh"
   printf '%s\n' '/bin/rm -rf /tmp' > "$sap_neg_tmp"
-  sap_neg_tmp_bad=0
-  set -f
-  for tok_raw in $(sweep_absolute_paths "$sap_neg_tmp"); do
-    case "$tok_raw" in
-      /*) tok_role=standalone; tok=$tok_raw ;;
-      *) tok_role=joined; tok=${tok_raw#?} ;;
-    esac
-    match=0
-    case "$tok_role" in
-      standalone) for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done ;;
-      joined) for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done ;;
-    esac
-    [ "$tok" = '/*' ] && match=1
-    [ "$match" -eq 1 ] || sap_neg_tmp_bad=$((sap_neg_tmp_bad + 1))
-  done
-  set +f
+  sap_neg_tmp_bad=$(entry_sweep_bad_count "$sap_neg_tmp")
   if [ "$sap_neg_tmp_bad" -gt 0 ]; then
     pass_case 'mechanism: role-aware sweep rejects a bare standalone "/tmp" argument (not a $var/tmp join)'
   else
     fail_case 'mechanism: role-aware sweep failed to reject a bare standalone "/tmp" argument'
   fi
 
+  # Round-15 review: "/*" must be rejected in argument position -- only the
+  # R1 self-path case-arm line itself is exempt (enforced by extraction, not
+  # by token value, since the fix above). /bin/chmod is an allowlisted
+  # command word, so this also proves the command-position sweep further
+  # below does not need to (and does not) reject the line: the argument
+  # sweep alone is what must catch it.
+  sap_neg_argstar="$sap_neg_dir/arg-star.sh"
+  printf '%s\n' '/bin/chmod 0700 /*' > "$sap_neg_argstar"
+  sap_neg_argstar_bad=$(entry_sweep_bad_count "$sap_neg_argstar")
+  if [ "$sap_neg_argstar_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects "/*" in argument position (not the self-path case arm)'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject "/*" in argument position'
+  fi
+
   sap_neg_devfd="$sap_neg_dir/dev-fd-n.sh"
   printf '%s\n' '/bin/cat /dev/fd/42' > "$sap_neg_devfd"
-  sap_neg_devfd_bad=0
-  set -f
-  for tok_raw in $(sweep_absolute_paths "$sap_neg_devfd"); do
-    case "$tok_raw" in
-      /*) tok_role=standalone; tok=$tok_raw ;;
-      *) tok_role=joined; tok=${tok_raw#?} ;;
-    esac
-    match=0
-    case "$tok_role" in
-      standalone) for w in $allowlist_words $allowlist_data; do [ "$tok" = "$w" ] && match=1 && break; done ;;
-      joined) for w in $allowlist_words $allowlist_data $allowlist_dynamic_joins; do [ "$tok" = "$w" ] && match=1 && break; done ;;
-    esac
-    [ "$tok" = '/*' ] && match=1
-    [ "$match" -eq 1 ] || sap_neg_devfd_bad=$((sap_neg_devfd_bad + 1))
-  done
-  set +f
+  sap_neg_devfd_bad=$(entry_sweep_bad_count "$sap_neg_devfd")
   if [ "$sap_neg_devfd_bad" -gt 0 ]; then
     pass_case 'mechanism: role-aware sweep rejects an out-of-range /dev/fd/42 argument (only /dev/fd, /dev/fd/*, /dev/fd/2 are pinned)'
   else
@@ -2717,11 +2706,25 @@ if [ -f "$entry" ]; then
     } | /usr/bin/sort -u
   }
 
-  parent_callsite_count() {
+  # Round-15 review: a call-site COUNT compared against a baseline taken
+  # from the candidate itself only catches an ADDED call, never one whose
+  # executable/envp argument was silently swapped for a host path (e.g.
+  # execve("/usr/bin/awk", argv, FIXED_CHILD_ENVP) at the position of the
+  # existing execve(program, ...) call). Instead extract every exec-family
+  # call site's full text, in source order, and compare it EXACTLY against
+  # an independently fixed inventory below -- this file's only two such
+  # sites, hand-verified against the source (R10/plan.md's parent exec
+  # inventory): both run through a variable "program" argument, never a
+  # literal host path. awk is never exec'd by this parent at all --
+  # check_run_directory_awk only opens and reads /usr/bin/awk to compare
+  # bytes against the bound ".run/awk", which is exec'd only from the
+  # resolver child's own bash script, never here.
+  parent_exec_callsites() {
     c_strip_comments_and_includes "$1" |
-      /usr/bin/grep -cEo '\b(execve|execv[a-z]*|posix_spawn[a-z]*|openat|open|fopen|readlink|stat|lstat|fstat|fstatat|access|opendir)[[:space:]]*\(' \
-      || :
+      /usr/bin/grep -Eo '\b(execve|execv[a-z]*|posix_spawn[a-z]*)[[:space:]]*\([^;]*\)'
   }
+  parent_exec_expected='execve(program, argv, FIXED_CHILD_ENVP)
+execve(program, child_argv, child_env)'
 
   # parent_sweep_bad_count FILE -- echoes FILE's unlisted-token count.
   parent_sweep_bad_count() {
@@ -2754,7 +2757,12 @@ if [ -f "$entry" ]; then
       fail_case "mechanism: parent has $parent_bad_tokens unlisted absolute-path token(s)"
     fi
 
-    parent_baseline_callsites=$(parent_callsite_count "$parent_source")
+    parent_exec_actual=$(parent_exec_callsites "$parent_source")
+    if [ "$parent_exec_actual" = "$parent_exec_expected" ]; then
+      pass_case 'mechanism: parent exec-family call sites exactly match the independently fixed inventory (2 sites, source order)'
+    else
+      fail_case 'mechanism: parent exec-family call sites do not match the fixed inventory'
+    fi
 
     parent_neg_dir="$tmp/parent-sweep-negative"; /bin/mkdir -m 700 "$parent_neg_dir"
 
@@ -2788,17 +2796,28 @@ if [ -f "$entry" ]; then
       fail_case 'mechanism: parent pathname sweep failed to reject a /dev/null pathname literal'
     fi
 
-    # Negative control: an extra direct exec-family call site (beyond the
-    # hand-verified baseline count) must be visible to the call-site
-    # inventory, not silently absorbed.
+    # Negative control: an extra direct exec-family call site -- here the
+    # exact one R10 forbids, a literal host awk with the otherwise-legitimate
+    # fixed envp -- must be visible to the fixed-inventory comparison.
     parent_neg_exec="$parent_neg_dir/extra-execve.c"
     /bin/cp -- "$parent_source" "$parent_neg_exec"
-    printf '%s\n' 'static void ystack_test_extra(char **argv, char **envp) { execve("/usr/bin/evil", argv, envp); }' >> "$parent_neg_exec"
-    parent_neg_exec_callsites=$(parent_callsite_count "$parent_neg_exec")
-    if [ "$parent_neg_exec_callsites" -gt "$parent_baseline_callsites" ]; then
-      pass_case 'mechanism: parent exec/open call-site inventory detects an extra execve call site added to a fixture copy'
+    printf '%s\n' 'static void ystack_test_extra(char **argv) { execve("/usr/bin/awk", argv, FIXED_CHILD_ENVP); }' >> "$parent_neg_exec"
+    if [ "$(parent_exec_callsites "$parent_neg_exec")" != "$parent_exec_expected" ]; then
+      pass_case 'mechanism: parent exec-site inventory rejects an extra execve("/usr/bin/awk", ...) call site added to a fixture copy'
     else
-      fail_case 'mechanism: parent exec/open call-site inventory failed to detect an extra execve call site'
+      fail_case 'mechanism: parent exec-site inventory failed to reject an extra execve call site'
+    fi
+
+    # Negative control: an EXISTING call site's executable argument changed
+    # to a host path (never added, never counted -- the exact gap the prior
+    # baseline-count check had) must also be caught.
+    parent_neg_awkpos="$parent_neg_dir/awk-position.c"
+    /usr/bin/sed 's/execve(program, child_argv, child_env);/execve("\/usr\/bin\/awk", child_argv, child_env);/' \
+      "$parent_source" > "$parent_neg_awkpos"
+    if [ "$(parent_exec_callsites "$parent_neg_awkpos")" != "$parent_exec_expected" ]; then
+      pass_case 'mechanism: parent exec-site inventory rejects the supervise() call site executable changed to a host awk path'
+    else
+      fail_case 'mechanism: parent exec-site inventory failed to reject a changed call-site executable argument'
     fi
   else
     fail_case 'mechanism: parent pathname sweep (parent source absent)'
