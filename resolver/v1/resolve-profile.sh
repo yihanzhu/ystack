@@ -71,8 +71,21 @@ clean_path=/usr/bin:/bin
 while IFS= builtin read -r inherited_function; do
   builtin unset -f "$inherited_function" 2>/dev/null || :
 done < <(builtin compgen -A function)
-# (adapted: park BASH_XTRACEFD on an owned fd so the unset below closes that.)
-[ -n "${BASH_XTRACEFD+x}" ] && { exec 9>/dev/null; BASH_XTRACEFD=9; }
+# BASH_XTRACEFD (r10 P1): Bash >=4.1 closes the fd assigned away from,
+# and closes the new one on unset -- save/restore a standard caller fd
+# around the park (a non-standard value, e.g. 5, may lose that fd here;
+# harmless, every fd above 2 is closed already).
+if [ -n "${BASH_XTRACEFD+x}" ]; then
+  saved=$BASH_XTRACEFD
+  case $saved in
+    0) exec 8<&0 ;; 1|2) exec 8>&"$saved" ;; *) saved='' ;;
+  esac
+  exec 9>&2; BASH_XTRACEFD=9
+  case $saved in
+    0) exec 0<&8 8<&- ;; 1) exec 1>&8 8>&- ;; 2) exec 2>&8 8>&- ;;
+  esac
+  unset BASH_XTRACEFD
+fi
 while IFS= builtin read -r exported_name; do
   case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
 done < <(builtin compgen -e)

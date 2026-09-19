@@ -316,10 +316,9 @@ synthetic_request="$request"
 synthetic_map="$map"
 
 # --- 3. Shared run-directory ("group 2") fixture builder --------------------------------
-#
-# This shape is the only legitimate user of a direct trusted-launch invocation: it
-# proves the parent's own refusals. Nothing shipped detects the difference, and a
-# passing group-2 case is not permission for anyone else to launch the parent this way.
+# The only legitimate direct trusted-launch caller: it proves the parent's own
+# refusals. A passing group-2 case is not permission for anyone else to launch
+# the parent this way.
 
 group2_counter=0
 build_run_directory() {
@@ -419,7 +418,6 @@ assert_refused_before_fork() {
 }
 
 # --- 4. Group 1 -- entry-owned refusals (spec.md:7099-7170) -----------------------------
-#
 # Driven through the shipped entry. Each of the six pin-check cases asserts the
 # E_RUNTIME line and, afterwards, that the trap removed .run (folded into the
 # generic entry-pin-refusal helper below, which is also cleanup case 2).
@@ -554,13 +552,11 @@ else
   fail_case 'group1: overlong output path (entry absent or platform PATH_MAX unreachable)'
 fi
 
-# 1g2. output path whose length falls strictly between the parent's own,
-# shorter copied guard (`PATH_MAX - 16`, reserving room only for
-# "<output>/child.stdout") and the entry's stricter R1 bound (reserving
-# "/.run/tmp/" -- 10 bytes -- plus a full NAME_MAX name, 255 here, so 265
-# total). A path this long would have been accepted by the parent's own
-# guard alone but must still be refused by the entry before it ever writes
-# a ".run" scratch directory into the target.
+# 1g2. output path length strictly between the parent's own shorter copied
+# guard (PATH_MAX-16, room for "<output>/child.stdout") and the entry's
+# stricter R1 bound (10 bytes for "/.run/tmp/" + a full 255-byte NAME_MAX
+# name = 265 total). The parent's guard alone would accept this path, but
+# the entry must still refuse it before writing a ".run" scratch directory.
 entry_reserve=265
 mid_base="$tmp/g1-mid"
 /bin/mkdir -m 700 "$mid_base"
@@ -3571,18 +3567,9 @@ if [ -f "$entry" ]; then
     fail_case 'mechanism: no exec /usr/bin/env -i re-exec line found in entry'
   fi
 
-  # Round-5 review: the previous catch-all accepted any line containing
-  # both '2>/dev/null' and '||', which admits permanent stderr suppression
-  # shaped like a fallback (e.g. "exec 2>/dev/null || :") and any other
-  # unlisted cleanup-style redirect, as long as it had a trailing "|| ...".
-  # Enumerate plan §6's exact roles by full (whitespace-trimmed) line
-  # content instead: the three-rung ulimit ladder, the descriptor-close
-  # eval, both unset scrub forms (including the marker branch's case arm),
-  # and the unique signal-forwarding kill (cleanup is excluded from this
-  # allowance: a chmod/rm failure there must reach stderr, plan.md:351-359).
-  # Grep matches whole source lines, so a /dev/null token written
-  # inside a quoted eval argument string is still caught -- it is literal
-  # text on that same line, not something the grep would skip.
+  # Enumerate plan §6's exact /dev/null roles by full trimmed line content:
+  # ulimit ladder, descriptor-close eval, both unset scrub forms, and the
+  # signal-forwarding kill (cleanup excluded -- plan.md:351-359).
   devnull_role_bad_count() {
     local file=$1 bad=0 raw trimmed
     while IFS= read -r raw; do
