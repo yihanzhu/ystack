@@ -1,5 +1,5 @@
 ---
-spec-blob: bbec935bfd998665d9471f97909221c1e867435e
+spec-blob: 98edf3520b2b7ecd6b8d3a84fd61e317d40fdf64
 drafted: 2026-09-14
 ---
 
@@ -48,7 +48,7 @@ implementation files are 5268 insertions (1988 / 400 / 2880).
 
 `review_size: accepted-exception`, **4600-6300 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
-record (blob `bbec935bfd998665d9471f97909221c1e867435e`) and is the only
+record (blob `98edf3520b2b7ecd6b8d3a84fd61e317d40fdf64`) and is the only
 range this implementation is measured against. It brackets the measured
 5370 with an outward margin of roughly a sixth for the work still open.
 
@@ -253,12 +253,19 @@ builtin glob emptiness, not find or mktemp.
 Initialize all five names read by traps/checkpoints before arming traps — `entry_signal`,
 `run_created`, `entry_status`, `parent_pid` and `last_forwarded`, the last because the trap
 bodies read it; assign run from
-validated output. Signal traps are exactly
-`: "${entry_signal:=NAME}"; wait_interrupted=1; case " $(jobs -l) " in
-*" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -NAME "$parent_pid" || :;
-last_forwarded=NAME; };; esac` — three statements, every one a builtin or a subshell around
-one, with no `2>/dev/null` on the trap's kill. Do not re-initialize `last_forwarded` above
-the wait loop; that would erase a forward a trap already made.
+validated output. There are exactly two trap-form literals per signal and no third. The
+record-only form is `: "${entry_signal:=NAME}"; wait_interrupted=1`, two statements; the
+forwarding form is `: "${entry_signal:=NAME}"; wait_interrupted=1; case " $(jobs -l) " in
+*" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid"
+|| :; last_forwarded=$entry_signal; };; esac`, three statements, every one a builtin or a
+subshell around one, with no `2>/dev/null` on the trap's kill. The forwarding body sends
+`$entry_signal`, never its own `:=NAME` default: sending the default breaks
+first-signal-wins whenever a second, differently named signal arrives after the first was
+recorded but not sent. Arm the record-only form with the EXIT trap before anything creates
+the run directory, and re-arm the forwarding form on the statement immediately after
+`parent_pid=$!`; those are the only form changes outside the wait loop. Do not
+re-initialize `last_forwarded` above the wait loop; that would erase a forward a trap
+already made.
 EXIT captures status first, ignores INT/TERM/HUP second, restores/removes owned .run,
 prints entry-signal only for `[ -f /dev/fd/2 ]`, then selects the prescribed status.
 Create .run by plain mkdir, derive run_created from captured status including the
@@ -278,12 +285,28 @@ files then directory to 0500, launch parent as child under only PATH and LC_ALL.
 The wait loop follows R1 exactly: clear interruption flag, forward the first recorded
 signal at most once only if jobs lists parent Running, wait, accept uninterrupted
 status, otherwise consult jobs and either loop or use the extra-wait status fallback.
-Step 2 keeps its own guarded kill unchanged: there are two job-table-gated forwarding
-kills, the trap body's and this one, both on the same `case " $(jobs -l) "` read and
-nowhere else, and `last_forwarded` keeps them from both sending. The loop's kill is the
-only one carrying `2>/dev/null`.
-Set last_forwarded in the loop even when forwarding is skipped, so it cannot be retried
-later; in the trap body it is set inside the Running arm, beside the kill.
+Step 2 is a record-only section and the loop's only forwarding decision is made inside it:
+while `[ -n "$entry_signal" ] && [ -z "$last_forwarded" ]`, re-arm all three traps in the
+record-only form, then under the same guard consult the job table and send
+`kill -"$entry_signal" "$parent_pid" 2>/dev/null || :` on the Running arm, then set
+`last_forwarded=$entry_signal`, then re-arm the forwarding form, then test the guard again
+and run the section once more if it still holds. Only after the section exits does the
+entry wait. Two invariants: with the forwarding form armed a trap sends exactly when
+`last_forwarded` is empty, and inside a section no trap sends — so at most one send per
+run, always the first recorded signal. The section exists because a loop racing an armed
+trap cannot be arbitrated by `last_forwarded` alone; both reproduced failures — one
+arrival sent twice, and an INT sent for a run whose recorded signal was TERM — are named
+in R1.
+There are four job-table-gated forwarding kills — one in each of the three trap bodies'
+forwarding form and one in this section — all sending `$entry_signal`, all on the same
+`case " $(jobs -l) "` read and nowhere else. The section's kill is the only one carrying
+`2>/dev/null`. Set last_forwarded in the loop after the case, even when forwarding is
+skipped, so it cannot be retried later and so the section terminates when the table stops
+listing the parent; in the trap body it is set inside the Running arm, beside the kill.
+Steps 3-5, the second-wait rule and the 127 fallbacks are unchanged. Enumerate every
+`trap` command in R10's trap inventory: the EXIT trap, three pre-parent record-only
+arming commands, three forwarding re-arms after `parent_pid=$!`, and the section's three
+record-only and three forwarding re-arms — thirteen in all, two body literals per signal.
 Pass child stdout/stderr through unchanged. Do not poll pid liveness with kill -0.
 Preserve real status 7/42 in simultaneous-exit
 cases; no fixed two-wait replacement. Never remove .run before the parent is reaped.
@@ -363,9 +386,9 @@ or other command variable is permitted. Review their values separately.
 Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
 `ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
 in every required scrub including the marker branch, and the wait loop's signal
-forwarding kill in the job-table Running arm above wait — that one only of the two
-job-table-gated forwarding kills; the trap body's carries no redirection, so
-`2>/dev/null` on it is a rejection. Check those source roles
+forwarding kill in the job-table Running arm inside its record-only section — that one
+only of the four job-table-gated forwarding kills; the three trap-body kills carry no
+redirection, so `2>/dev/null` on one of them is a rejection. Check those source roles
 and positions, not only an occurrence count. Reject every other command/descriptor,
 input or append redirection, variable sink, prefix path, C pathname or execve
 argument using that target. It is neither an executable nor a general data member.
