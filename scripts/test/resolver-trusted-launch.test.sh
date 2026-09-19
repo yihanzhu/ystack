@@ -2581,21 +2581,22 @@ sweep_absolute_paths() {
   # presence to pick WHICH allowlist a token may match: a standalone token
   # must be a literal command/data path (allowlist_words / allowlist_data);
   # only a joined token may additionally match a dynamic-join fragment.
-  # Round-15 review: a bare "/*" is only the R1 self-path case pattern
-  # (`case ${BASH_SOURCE[0]} in /*)`) when it IS that pattern's own arm
-  # line; anywhere else (e.g. an argument) it is a real unlisted token and
-  # must not be exempted. Drop that one case-arm line before extraction so
-  # it never yields a token, rather than exempting the "/*" value globally.
+  # Round-15: "/*" is only a shell PATTERN, never a path, in the two shapes
+  # this entry actually uses it in -- a case pattern (`case ... in /*)`,
+  # preceded by start-of-line/whitespace, immediately before the closing
+  # ")") and a "${var%/*}" trim-operator pattern (immediately after "%" or
+  # "#", immediately before "}") -- never when it is a standalone token in
+  # argument position (e.g. "chmod 0700 /*", neither shape). Strip just
+  # that pattern text before extraction so it never yields a token, instead
+  # of exempting the "/*" value globally.
   sap_file=$1
   /usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
-    /usr/bin/grep -Ev '^[[:space:]]*/\*\)[[:space:]]' |
+    /usr/bin/sed -E 's#(^|[[:space:]])/\*\)#\1#g; s#([%#])/\*(\}|$|[[:space:]])#\1\2#g' |
     /usr/bin/grep -Eo '[A-Za-z0-9_}]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
 }
 
-# entry_sweep_bad_count FILE -- echoes FILE's unlisted role-checked
-# absolute-path token count (factored out of the single call site so every
-# negative control below runs the exact same check as the real entry, not a
-# hand-copied approximation of it).
+# entry_sweep_bad_count FILE -- echoes FILE's unlisted role-checked token
+# count; factored out so every negative control below runs this exact check.
 entry_sweep_bad_count() {
   esb_bad=0
   set -f
@@ -2624,13 +2625,9 @@ if [ -f "$entry" ]; then
     fail_case "mechanism: entry has $bad_tokens unlisted absolute-path token(s)"
   fi
 
-  # Negative controls (round-4 review): a standalone dynamic-join fragment
-  # ("/tmp" with no preceding variable), and an out-of-range /dev/fd/N that
-  # is not one of the three exact entries the entry itself ever emits, must
-  # both be rejected by the role-aware sweep above -- proven by running it
-  # through the same function rather than trusting the allowlist by
-  # inspection. /usr/bin/awk direct execution (COMMAND position, never
-  # ARGUMENT position, for the entry) is proven rejected by the
+  # Negative controls (round-4 review): a standalone "/tmp" and an
+  # out-of-range /dev/fd/N must both be rejected by the sweep above.
+  # /usr/bin/awk direct exec (COMMAND position) is covered by the
   # command-position sweep's negative controls further below.
   sap_neg_dir="$tmp/sweep-negative"; /bin/mkdir -m 700 "$sap_neg_dir"
 
@@ -2643,12 +2640,9 @@ if [ -f "$entry" ]; then
     fail_case 'mechanism: role-aware sweep failed to reject a bare standalone "/tmp" argument'
   fi
 
-  # Round-15 review: "/*" must be rejected in argument position -- only the
-  # R1 self-path case-arm line itself is exempt (enforced by extraction, not
-  # by token value, since the fix above). /bin/chmod is an allowlisted
-  # command word, so this also proves the command-position sweep further
-  # below does not need to (and does not) reject the line: the argument
-  # sweep alone is what must catch it.
+  # Round-15: "/*" in ARGUMENT position must be rejected (only the R1
+  # case-arm line is exempt). /bin/chmod is an allowlisted command word, so
+  # this is caught by the argument sweep alone, not the command-position one.
   sap_neg_argstar="$sap_neg_dir/arg-star.sh"
   printf '%s\n' '/bin/chmod 0700 /*' > "$sap_neg_argstar"
   sap_neg_argstar_bad=$(entry_sweep_bad_count "$sap_neg_argstar")
@@ -2667,16 +2661,10 @@ if [ -f "$entry" ]; then
     fail_case 'mechanism: role-aware sweep failed to reject an out-of-range /dev/fd/42 argument'
   fi
 
-  # Round-5 review: the sweep above ran only on the shell entry; R10 also
-  # requires the C parent's own pathname strings and exec-family/open-family
-  # call sites to be swept, or an unlisted host path or an extra direct exec
-  # in trusted-launch.c can escape this gate. Comments are stripped first
-  # (multi-line /* */ blocks, C's only comment form here) and #include
-  # lines are excluded (a source-role carve-out for system-header names,
-  # same idea as the entry's full-line "#" comment carve-out above), then
-  # the same context-aware token regex used on the entry is applied to what
-  # remains, hand-verified against every quoted absolute-path string
-  # literal trusted-launch.c actually contains.
+  # Round-5 review: R10 also requires the C parent's own pathname strings
+  # and exec-family call sites to be swept. Strip comments (/* */, C's only
+  # form) and #include lines, then apply the same context-aware token regex
+  # used on the entry, hand-verified against trusted-launch.c's literals.
   c_strip_comments_and_includes() {
     /usr/bin/perl -0777 -pe 's{/\*.*?\*/}{}gs' "$1" | /usr/bin/grep -Ev '^[[:space:]]*#include'
   }
@@ -2706,19 +2694,15 @@ if [ -f "$entry" ]; then
     } | /usr/bin/sort -u
   }
 
-  # Round-15 review: a call-site COUNT compared against a baseline taken
-  # from the candidate itself only catches an ADDED call, never one whose
-  # executable/envp argument was silently swapped for a host path (e.g.
-  # execve("/usr/bin/awk", argv, FIXED_CHILD_ENVP) at the position of the
-  # existing execve(program, ...) call). Instead extract every exec-family
+  # Round-15: a call-site COUNT against a baseline from the candidate
+  # itself only catches an ADDED call, never one whose executable/envp
+  # argument was silently swapped for a host path. Extract every exec-family
   # call site's full text, in source order, and compare it EXACTLY against
-  # an independently fixed inventory below -- this file's only two such
-  # sites, hand-verified against the source (R10/plan.md's parent exec
-  # inventory): both run through a variable "program" argument, never a
-  # literal host path. awk is never exec'd by this parent at all --
-  # check_run_directory_awk only opens and reads /usr/bin/awk to compare
-  # bytes against the bound ".run/awk", which is exec'd only from the
-  # resolver child's own bash script, never here.
+  # an independently fixed inventory below -- this file's only two sites,
+  # hand-verified (R10/plan.md parent exec inventory), both through a
+  # variable "program", never a literal host path. awk is never exec'd by
+  # this parent -- check_run_directory_awk only opens+reads /usr/bin/awk to
+  # compare bytes; it is exec'd only from the resolver child's bash script.
   parent_exec_callsites() {
     c_strip_comments_and_includes "$1" |
       /usr/bin/grep -Eo '\b(execve|execv[a-z]*|posix_spawn[a-z]*)[[:space:]]*\([^;]*\)'
@@ -2796,9 +2780,7 @@ execve(program, child_argv, child_env)'
       fail_case 'mechanism: parent pathname sweep failed to reject a /dev/null pathname literal'
     fi
 
-    # Negative control: an extra direct exec-family call site -- here the
-    # exact one R10 forbids, a literal host awk with the otherwise-legitimate
-    # fixed envp -- must be visible to the fixed-inventory comparison.
+    # Negative control: an extra call site (R10's forbidden host awk exec).
     parent_neg_exec="$parent_neg_dir/extra-execve.c"
     /bin/cp -- "$parent_source" "$parent_neg_exec"
     printf '%s\n' 'static void ystack_test_extra(char **argv) { execve("/usr/bin/awk", argv, FIXED_CHILD_ENVP); }' >> "$parent_neg_exec"
@@ -2808,9 +2790,8 @@ execve(program, child_argv, child_env)'
       fail_case 'mechanism: parent exec-site inventory failed to reject an extra execve call site'
     fi
 
-    # Negative control: an EXISTING call site's executable argument changed
-    # to a host path (never added, never counted -- the exact gap the prior
-    # baseline-count check had) must also be caught.
+    # Negative control: an EXISTING call site's executable changed to a host
+    # path (the exact gap the prior baseline-count check had) must be caught.
     parent_neg_awkpos="$parent_neg_dir/awk-position.c"
     /usr/bin/sed 's/execve(program, child_argv, child_env);/execve("\/usr\/bin\/awk", child_argv, child_env);/' \
       "$parent_source" > "$parent_neg_awkpos"
