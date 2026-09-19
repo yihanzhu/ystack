@@ -2882,6 +2882,17 @@ if [ -f "$entry" ]; then
         \"*) cps_w=${cps_w#\"}; cps_w=${cps_w%\"} ;;
         \'*) cps_w=${cps_w#\'}; cps_w=${cps_w%\'} ;;
       esac
+      # A pure descriptor duplication/redirection word (">&2", "8<&0",
+      # "9>&2", "0<&8", "8>&\"\$saved\"", ...) names no command at all --
+      # it is a redirection operator plus its target descriptor (a literal
+      # fd number, or a quoted variable holding one), not a command
+      # position. The tokenizer above has no separate redirection-operator
+      # handling (round-12 review), so this can surface here as if it were
+      # the leading word once exec/command/env has been peeled off. Peel it
+      # too and keep looking, the same as those prefixes.
+      if [[ $cps_w =~ ^[0-9]*[\<\>]\&?([0-9-]*|[\'\"][^\'\"]*[\'\"])$ ]]; then
+        cps_wi=$((cps_wi + 1)); continue
+      fi
       case "$cps_w" in
         [A-Za-z_][A-Za-z0-9_]*=*|exec|command|env)
           cps_wi=$((cps_wi + 1)); continue ;;
@@ -3256,25 +3267,19 @@ if [ -f "$entry" ]; then
 
       cps_rest=$cps_line
       if [ "$cps_case_depth" -gt 0 ] && [ "$cps_await_pattern" -eq 1 ] && [ "$cps_has_case" -eq 0 ]; then
-        cps_pat_i=0 cps_pat_inq='' cps_pat_len=${#cps_line} cps_pattern_paren=-1
-        while [ "$cps_pat_i" -lt "$cps_pat_len" ]; do
-          cps_pc=${cps_line:$cps_pat_i:1}
-          if [ -n "$cps_pat_inq" ]; then
-            [ "$cps_pc" = "$cps_pat_inq" ] && cps_pat_inq=''
-            cps_pat_i=$((cps_pat_i + 1)); continue
-          fi
-          case "$cps_pc" in
-            \'|\") cps_pat_inq=$cps_pc ;;
-            ')') cps_pattern_paren=$cps_pat_i ;;
-          esac
-          [ "$cps_pattern_paren" -ge 0 ] && break
-          cps_pat_i=$((cps_pat_i + 1))
-        done
-        if [ "$cps_pattern_paren" -ge 0 ]; then
-          cps_rest=${cps_line:$((cps_pattern_paren + 1))}
-        else
-          cps_rest=''
-        fi
+        # Same-physical-line case arms (round-12 review): a continuation
+        # line inside an already-open case body may itself carry several
+        # "PATTERN) CMD ;;" arms (e.g. "0) exec 8<&0 ;; 1|2) exec
+        # 8>&\"$saved\" ;; *) saved='' ;;"). Stripping only the first
+        # pattern and handing the remainder to the ordinary tokenizer
+        # doesn't know case grammar: it mis-splits "1|2)" on the pipe
+        # operator and misreads "2)"/"*)" as bare command words. Reuse the
+        # one-line case/esac arm extractor with a synthetic "case x in"
+        # prefix instead -- it already walks repeated PATTERN) BODY ;;
+        # groups correctly and queues each BODY for ordinary
+        # classification.
+        cps_extract_case_oneline_arms "case x in $cps_line"
+        cps_rest=''
         cps_await_pattern=0
       fi
 

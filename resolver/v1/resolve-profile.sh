@@ -28,7 +28,7 @@ umask 077
 # printf. bash 3.2 (Darwin) still prints regardless; bash 5.2 (Linux)
 # otherwise prints its own "redirection error" instead of E_RUNTIME (CI case 75).
 ulimit -S -n 1024 2>/dev/null || ulimit -S -n 256 2>/dev/null || ulimit -S -n 64 2>/dev/null || {
-  ulimit -S -n hard 2>/dev/null || :
+  ulimit -S -n hard
   exec >&2
   builtin printf '%s\n' E_RUNTIME
   exit 1
@@ -44,7 +44,7 @@ for fd_entry in /dev/fd/*; do
       if [ "$fd_entry" = '/dev/fd/*' ]; then
         # Same ulimit-then-exec reasoning as the ladder above: opendir("/dev/fd")
         # itself hit EMFILE, so `exec >&2`'s undo-list fd (bash 5.2) is starved too.
-        ulimit -S -n hard 2>/dev/null || :
+        ulimit -S -n hard
         exec >&2
         builtin printf '%s\n' E_RUNTIME
         exit 1
