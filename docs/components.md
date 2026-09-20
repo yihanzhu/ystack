@@ -1465,7 +1465,7 @@ bash scripts/test/shadow-assembler.test.sh
 ## First self-host shadow evidence
 
 `shadow/evidence/self-host-transition/v1/` holds the repository's first pair
-of real, unfabricated self-host shadow runs (issue #264, `work/shadow-self-host-run/`):
+of real, genuine self-host shadow runs (issue #264, `work/shadow-self-host-run/`):
 one file-digest check (`config/construction-mode.json`) evaluated at the
 post-transition revision `0427390224c25147650f1bd3b6e43ed6911b97a7` (outcome
 `reproduced`) and again at its pre-transition first parent

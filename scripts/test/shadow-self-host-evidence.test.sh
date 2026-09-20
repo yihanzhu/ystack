@@ -360,6 +360,35 @@ check_evidence() {
       { /usr/bin/printf '%s: %s: %s\n' "$label" "$step" "$case_name" >&2; return 1; }
   done
 
+  # --- check 9b: each case's sandbox evaluation claim_ref and shadow
+  # record's environment.claim_ref are each bound to the retained
+  # environment-claim.json bytes, not only to each other. Check 9 above and
+  # requirement 2's reference recomputation (check 10 below) both leave a gap:
+  # neither the sandbox evaluation's own claim_ref nor the shadow record's
+  # environment.claim_ref is ever compared against the retained claim's
+  # recomputed digest, so a case's evaluation and record could certify a claim
+  # different from the one actually committed under this evidence tree. This
+  # recomputes the claim's SHA-256 once and checks both consumer references
+  # against it (all fields of each ref, not only sha256).
+  step='claim-binding'
+  local claim_sha; claim_sha=$(sha_file "$dir/environment-claim.json")
+  for case_name in pre post; do
+    "$jq_bin" -e -n --slurpfile claim "$dir/environment-claim.json" \
+      --slurpfile ev "$dir/$case_name/sandbox-evaluation.json" --arg sha "$claim_sha" '
+      $ev[0].body.claim_ref == {schema_version: $claim[0].schema_version,
+        kind: $claim[0].kind, id: $claim[0].id, sha256: $sha}
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s sandbox evaluation claim_ref does not bind the retained environment-claim.json\n' \
+        "$label" "$step" "$case_name" >&2; return 1; }
+    "$jq_bin" -e -n --slurpfile rec "$dir/$case_name/state/shadow-record.json" --arg sha "$claim_sha" '
+      $rec[0].body.environment.claim_ref == {content_id: "shadow-environment-claim",
+        media_type: "application/vnd.ystack.control-execution-environment-claim+json",
+        sha256: $sha}
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s shadow record environment.claim_ref does not bind the retained environment-claim.json\n' \
+        "$label" "$step" "$case_name" >&2; return 1; }
+  done
+
   # --- check 10: the declaration-only marker, the all-ones demonstration
   # verifier digest kept and labelled (never absent), no overclaiming prose,
   # and requirement 2's full reference-field recomputation.
@@ -593,7 +622,7 @@ check_evidence() {
 }
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
-pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation, declaration-only marker with reference recomputation, core package closure, and the approved requester'
+pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
@@ -757,6 +786,29 @@ if check_evidence "$mutant_dir" 'mutant-patch-duplicate' 2>/dev/null; then
   fail 'a duplicated producer-patch verified-payload entry must be refused'
 fi
 pass 'a duplicated producer-patch verified-payload entry (two empty strings where the driver requires exactly one) is refused'
+
+# (i) the retained environment-claim.json is swapped for a claim that differs
+# from the one the sandbox evaluations and shadow records were actually
+# produced from (body.network.mode flipped to "allow"), with checksums.json
+# refreshed so only the new claim-binding check (check 9b) — not the
+# checksums-inventory check — can catch it. Every other retained document
+# (sandbox-evaluation.json's claim_ref, the shadow records' environment.
+# claim_ref, the duty evaluation, the policy set) still names the original
+# claim bytes by digest, so this proves the binding check actually compares
+# those references against the retained claim's own recomputed hash, not
+# just against each other.
+fresh_mutant_copy
+"$jq_bin" -S -c '.body.network.mode = "allow"' \
+  "$mutant_dir/environment-claim.json" >"$mutant_dir/environment-claim.json.new"
+/bin/mv "$mutant_dir/environment-claim.json.new" "$mutant_dir/environment-claim.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-claim-network-mode' 2>"$tmp/claim-binding.err"; then
+  fail 'a retained environment claim with its network.mode swapped to allow must be refused'
+fi
+/usr/bin/grep -q 'claim_ref does not bind the retained environment-claim.json' \
+  "$tmp/claim-binding.err" ||
+  fail "a retained environment claim with its network.mode swapped to allow must fail specifically on the claim-binding check ($(cat "$tmp/claim-binding.err"))"
+pass 'a retained environment claim whose network.mode is swapped to allow (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the claim-binding check'
 /bin/rm -rf -- "$mutant_dir"
 
 # ===========================================================================
@@ -1025,7 +1077,7 @@ fi
 # The accepted spec (requirement 2) and the plan's consumer section
 # (work/shadow-self-host-run/plan.md, "The consumers") both require this
 # scope's classification to be the evaluator's real "not-proposable" answer,
-# not a fabricated "proposable" one: there is no real sandbox and this
+# not a manufactured "proposable" one: there is no real sandbox and this
 # fixture is declaration-only. The dashboard's one seeded family
 # ("stale-moved-artifacts") is deliberately given a failing case above
 # (family("stale-moved-artifacts";"seeded";7;1;0)) so the gate stage stays

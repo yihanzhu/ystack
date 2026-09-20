@@ -1,7 +1,7 @@
 # First self-host shadow run: evidence
 
 Issue #264. This directory holds the repository's first pair of real,
-unfabricated self-host shadow runs against ystack's own history, plus the
+genuine self-host shadow runs against ystack's own history, plus the
 durable verification for them. It is inactive, read-only evidence: it
 registers, activates, or qualifies nothing, and it changes no registry
 `proof_state`.
