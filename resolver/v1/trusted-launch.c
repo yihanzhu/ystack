@@ -930,27 +930,26 @@ static int build_pin_path(size_t index, const char *repo_root,
     return (written > 0 && (size_t)written < buffer_size) ? 0 : -1;
 }
 
-/* R5/R7: git blob id of the file at `path` against `pinned_hex`, computed by the
-   parent itself -- fstat for the size, then the header and the bytes written to the
-   platform SHA-1 tool's stdin, never git. */
-static int check_blob_pin(const char *path, const char *pinned_hex) {
-    /* O_NONBLOCK here means open() itself cannot block on a FIFO (it would
-       otherwise wait for a writer), and O_NOFOLLOW refuses a symlink (e.g.
-       to /dev/zero) outright. Only after fstat() confirms a regular file --
-       which never returns EAGAIN -- do we clear O_NONBLOCK so the read
-       below keeps its normal blocking semantics. */
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    struct stat state;
-    unsigned char *combined;
-    size_t header_length;
-    size_t total;
-    char header[64];
-    char digest[256];
-    size_t digest_length = 0U;
-    int ok;
+/* R5/R7: open `path` (or, if `dir_fd` is not YSTACK_NO_DIR_FD, the entry named
+   `path` relative to `dir_fd`) as a regular file only, never blocking on a FIFO
+   (e.g. a `.run` entry replaced by a pipe with no writer). O_NONBLOCK during the
+   open itself is what prevents the block -- it would otherwise wait for a writer
+   before fstat() ever runs -- and O_NOFOLLOW refuses a symlink (e.g. to
+   /dev/zero) outright. Only after fstat() confirms S_ISREG (which never returns
+   EAGAIN) do we clear O_NONBLOCK, so a caller doing blocking reads afterward gets
+   normal blocking semantics. On any failure the descriptor, if opened, is closed
+   and -1 is returned; `*out_state` is valid only on success. */
+#define YSTACK_NO_DIR_FD (-1)
+
+static int open_regular_nonblock(int dir_fd, const char *path,
+                                 struct stat *out_state) {
+    int fd = (dir_fd == YSTACK_NO_DIR_FD)
+                 ? open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+                 : openat(dir_fd, path,
+                         O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     int flags;
 
-    if (fd < 0 || fstat(fd, &state) != 0 || !S_ISREG(state.st_mode)) {
+    if (fd < 0 || fstat(fd, out_state) != 0 || !S_ISREG(out_state->st_mode)) {
         if (fd >= 0) {
             (void)close(fd);
         }
@@ -959,6 +958,26 @@ static int check_blob_pin(const char *path, const char *pinned_hex) {
     flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) != 0) {
         (void)close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* R5/R7: git blob id of the file at `path` against `pinned_hex`, computed by the
+   parent itself -- fstat for the size, then the header and the bytes written to the
+   platform SHA-1 tool's stdin, never git. */
+static int check_blob_pin(const char *path, const char *pinned_hex) {
+    struct stat state;
+    int fd = open_regular_nonblock(YSTACK_NO_DIR_FD, path, &state);
+    unsigned char *combined;
+    size_t header_length;
+    size_t total;
+    char header[64];
+    char digest[256];
+    size_t digest_length = 0U;
+    int ok;
+
+    if (fd < 0) {
         return -1;
     }
     total = (size_t)state.st_size;
@@ -1006,18 +1025,15 @@ static int check_blob_pin(const char *path, const char *pinned_hex) {
 /* R5/R7: SHA-256 of the bound jq against this platform's pin, same mechanism as
    check_blob_pin but with no "blob <size>\0" header -- a plain file digest. */
 static int check_jq_sha256(const char *jq_path) {
-    int fd = open(jq_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     struct stat state;
+    int fd = open_regular_nonblock(YSTACK_NO_DIR_FD, jq_path, &state);
     unsigned char *bytes;
     size_t total;
     char digest[256];
     size_t digest_length = 0U;
     int ok;
 
-    if (fd < 0 || fstat(fd, &state) != 0 || !S_ISREG(state.st_mode)) {
-        if (fd >= 0) {
-            (void)close(fd);
-        }
+    if (fd < 0) {
         return -1;
     }
     total = (size_t)state.st_size;
@@ -1076,24 +1092,21 @@ static int check_jq_version(const char *jq_path) {
    platform path's own symlinks (Debian/Ubuntu route it through
    /etc/alternatives); .run/awk itself keeps its O_NOFOLLOW. */
 static int check_run_directory_awk(int run_fd) {
-    int copy_fd = openat(run_fd, "awk", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-    int system_fd = -1;
     struct stat copy_state;
     struct stat system_state;
+    int copy_fd = open_regular_nonblock(run_fd, "awk", &copy_state);
+    int system_fd = -1;
     int ok = -1;
 
-    if (copy_fd < 0 || fstat(copy_fd, &copy_state) != 0 ||
-        !S_ISREG(copy_state.st_mode) || copy_state.st_uid != geteuid() ||
+    if (copy_fd < 0 || copy_state.st_uid != geteuid() ||
         (copy_state.st_mode & 07777U) != 0500U) {
         if (copy_fd >= 0) {
             (void)close(copy_fd);
         }
         return -1;
     }
-    system_fd = open("/usr/bin/awk", O_RDONLY | O_CLOEXEC);
-    if (system_fd < 0 || fstat(system_fd, &system_state) != 0 ||
-        !S_ISREG(system_state.st_mode) ||
-        copy_state.st_size != system_state.st_size) {
+    system_fd = open_regular_nonblock(YSTACK_NO_DIR_FD, "/usr/bin/awk", &system_state);
+    if (system_fd < 0 || copy_state.st_size != system_state.st_size) {
         (void)close(copy_fd);
         if (system_fd >= 0) {
             (void)close(system_fd);
@@ -1148,13 +1161,12 @@ static int check_run_directory_awk(int run_fd) {
 static const char DARWIN_AWK_SHIM[] = "#!/bin/bash\nexec /usr/bin/awk \"$@\"\n";
 
 static int check_run_directory_awk(int run_fd) {
-    int copy_fd = openat(run_fd, "awk", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     struct stat copy_state;
+    int copy_fd = open_regular_nonblock(run_fd, "awk", &copy_state);
     char buffer[YSTACK_DARWIN_AWK_SHIM_LENGTH];
     size_t total = 0U;
 
-    if (copy_fd < 0 || fstat(copy_fd, &copy_state) != 0 ||
-        !S_ISREG(copy_state.st_mode) || copy_state.st_uid != geteuid() ||
+    if (copy_fd < 0 || copy_state.st_uid != geteuid() ||
         (copy_state.st_mode & 07777U) != 0500U ||
         copy_state.st_size != (off_t)YSTACK_DARWIN_AWK_SHIM_LENGTH) {
         if (copy_fd >= 0) {
@@ -1726,16 +1738,12 @@ int main(int argc, char **argv) {
         /* R5: the compiled parent binary and the helper -- regular, caller-owned,
            mode exactly 0500, opened relative to run_fd. */
         {
-            int self_fd =
-                openat(run_fd, "trusted-launch", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-            int helper_fd = openat(run_fd, helper_basename_storage,
-                                   O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
             struct stat self_state;
             struct stat helper_state;
+            int self_fd = open_regular_nonblock(run_fd, "trusted-launch", &self_state);
+            int helper_fd = open_regular_nonblock(run_fd, helper_basename_storage,
+                                                  &helper_state);
             int ok = self_fd >= 0 && helper_fd >= 0 &&
-                     fstat(self_fd, &self_state) == 0 &&
-                     fstat(helper_fd, &helper_state) == 0 &&
-                     S_ISREG(self_state.st_mode) && S_ISREG(helper_state.st_mode) &&
                      self_state.st_uid == geteuid() &&
                      helper_state.st_uid == geteuid() &&
                      (self_state.st_mode & 07777U) == 0500U &&
@@ -1788,15 +1796,14 @@ int main(int argc, char **argv) {
             memcpy(helper_dir, argv[3], helper_dir_length - 1U);
             helper_dir[helper_dir_length - 1U] = '\0';
 
-            run_helper_fd = openat(run_fd, helper_basename_storage,
-                                   O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-            arg_helper_fd = open(argv[3], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            run_helper_fd = open_regular_nonblock(run_fd, helper_basename_storage,
+                                                  &run_helper_state);
+            arg_helper_fd =
+                open_regular_nonblock(YSTACK_NO_DIR_FD, argv[3], &arg_helper_state);
             helper_dir_fd =
                 open(helper_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
             helper_identity_ok = run_helper_fd >= 0 && arg_helper_fd >= 0 &&
                      helper_dir_fd >= 0 &&
-                     fstat(run_helper_fd, &run_helper_state) == 0 &&
-                     fstat(arg_helper_fd, &arg_helper_state) == 0 &&
                      fstat(helper_dir_fd, &helper_dir_state) == 0 &&
                      run_helper_state.st_dev == arg_helper_state.st_dev &&
                      run_helper_state.st_ino == arg_helper_state.st_ino &&
@@ -1849,12 +1856,10 @@ int main(int argc, char **argv) {
         memcpy(jq_dir, argv[4], jq_dir_length - 1U);
         jq_dir[jq_dir_length - 1U] = '\0';
 
-        run_jq_fd = openat(run_fd, "jq", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-        arg_jq_fd = open(argv[4], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        run_jq_fd = open_regular_nonblock(run_fd, "jq", &run_jq_state);
+        arg_jq_fd = open_regular_nonblock(YSTACK_NO_DIR_FD, argv[4], &arg_jq_state);
         jq_dir_fd = open(jq_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         identity_ok = run_jq_fd >= 0 && arg_jq_fd >= 0 && jq_dir_fd >= 0 &&
-                     fstat(run_jq_fd, &run_jq_state) == 0 &&
-                     fstat(arg_jq_fd, &arg_jq_state) == 0 &&
                      fstat(jq_dir_fd, &jq_dir_state) == 0 &&
                      run_jq_state.st_dev == arg_jq_state.st_dev &&
                      run_jq_state.st_ino == arg_jq_state.st_ino &&
