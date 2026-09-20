@@ -89,6 +89,20 @@ in the expanded documents, not the line count. The four assembler decision texts
   `## Inactive maintenance loop` at 1397.
 - `README.md` (+2). One index row after the assembler row at line 289.
 - `RESTORE.md` (+18-22). A restore block after the assembler block at lines 223-241.
+- `scripts/test/portable-core-schema.test.sh` (+2). Exactly one permitted change: the
+  two paths `shadow/evidence/self-host-transition/v1/control-policy-set.json` and
+  `shadow/evidence/self-host-transition/v1/core-package-closure.json` are added to the
+  `schema_v2_corrective_expected_hits` list, in that list's existing sorted order, after
+  `scripts/test/portable-core-v2-evidence-identity.test.sh`; no other allowlist, no
+  generation list, no comparison and no import list changes. Both files are evidence
+  that must retain their bytes verbatim under requirements 2, 12 and 14 — one is a
+  byte-exact copy of `control/v1/control-policy-set.json` and the other the closure
+  descriptor that policy set's `package_ref.sha256` names — so the corrective v2
+  generation id beginning `g-c83c940a` necessarily appears in two tracked paths the
+  closed allowlist does not yet name, and CI fails with "corrective v2 generation ID
+  appears outside its closed tracked-path allowlist" until it does. #370 set the
+  precedent for adding a single allowlist line under a plan amendment rather than
+  editing the evidence bytes or dropping the files.
 
 ### What does not change
 
@@ -97,8 +111,11 @@ in the expanded documents, not the line count. The four assembler decision texts
 `shadow/v1/qualified-identity.jq`, `shadow/v1/shadow-environments.json`,
 `adapters/local-git-materializer/v1/*`, `control/v1/*`, `scope/v1/*`,
 `maintenance/v1/*`, `evals/v1/seed-set.json`, `profiles/default/v1/*`, and every
-accepted intent, spec or plan. The evidence is committed output; if a shipped
-component refuses it, the component is right and the run is wrong.
+accepted intent, spec or plan. Inside
+`scripts/test/portable-core-schema.test.sh` nothing changes but the two added
+`schema_v2_corrective_expected_hits` lines named above. The evidence is committed
+output; if a shipped component refuses it, the component is right and the run is
+wrong.
 
 ### Review size
 
@@ -571,8 +588,12 @@ references a later entry.
    source that pins it, `scripts/core-contract.sh`, with the same extraction
    `control/v1/evaluate-duty.sh:62-69` uses. Hash the nine closure paths in the order
    `evaluate-duty.sh:122-130` lists them and feed the result to the evaluator's own
-   program, from a checkout of the pre-transition revision
-   `d3f6d525328838b9c2de819699e53d8909ab7a3f`:
+   program. The source is the **live committed tree at the run's `main`**, which is what
+   `$REPO` is below and what the focused test's step 11 hashes; the nine member files are
+   byte-identical at `d3f6d525328838b9c2de819699e53d8909ab7a3f`, at
+   `0427390224c25147650f1bd3b6e43ed6911b97a7` and at `main`, so no revision checkout is
+   performed and the `eff044bd…` digest below is the check that decides whether the
+   right bytes were read:
 
    ```sh
    SEL=$(sed -n "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'\$/\1/p" \
@@ -604,9 +625,8 @@ references a later entry.
    The second command is what drops the newline `jq` appends; it is the only
    transformation applied, and it removes bytes rather than re-serializing the document.
 
-   At the pre-transition revision that read yields the `core.contracts.v2` generation
-   whose id begins `g-c83c940a`; the README records the full id it actually read, and
-   this plan deliberately does not.
+   That read yields the `core.contracts.v2` generation whose id begins `g-c83c940a`;
+   the README records the full id it actually read, and this plan deliberately does not.
 
    The offline check is one command and needs no run, no network and no jq:
    `shasum -a 256 < shadow/evidence/self-host-transition/v1/core-package-closure.json`
@@ -909,11 +929,18 @@ is the helper already compiled before the session from
 `adapters/local-git-materializer/v1/object-closure.c`, and `$JQ` the already
 provisioned pinned binary; neither is built or fetched here.
 
+The driver's scratch argument must be a **fresh, empty** directory created immediately
+before each invocation — `$SCRATCH_D` below, not the `$SCRATCH` the closure
+reconstruction already wrote `core-members.tsv` and `core-closure.nl.json` into, because
+`empty_private_dir` at `shadow/v1/reproduce.sh:113-115` refuses a non-empty scratch root
+with `E_WORKSPACE`.
+
 ```sh
+mkdir -m 0700 "$SCRATCH_D"
 shadow/v1/reproduce.sh reproduce \
   "$CASE/incident.json" "$CLAIM" "$POLICY_SET" "$DUTY" \
   "$CASE/assembled/input.json" "$CASE/qualified-identity.json" \
-  "$SRC" "$CANDIDATE" "$SCRATCH" "$STATE" "$CLOSURE" "$JQ"
+  "$SRC" "$CANDIDATE" "$SCRATCH_D" "$STATE" "$CLOSURE" "$JQ"
 ```
 
 Post case: outcome `reproduced`, reason `check.failed-at-revision`
@@ -1083,7 +1110,8 @@ canonical document holding a finite relative-path inventory and SHA-256 for ever
 bundled file except itself. Every referenced document's raw bytes must be recoverable
 from this directory, or from an exact committed Git object the README names by id.
 
-Do not commit `$SRC`, `$CANDIDATE`, `$SCRATCH`, any binary, any credential, or any
+Do not commit `$SRC`, `$CANDIDATE`, `$SCRATCH`, `$SCRATCH_D`, any binary, any
+credential, or any
 machine-specific absolute path. The replay recipe uses caller-supplied scratch paths,
 written as `$SRC`, `$CANDIDATE` and so on, exactly as in this plan. Do not redact or
 re-serialize a hashed document to make it committable: if a document cannot be committed
