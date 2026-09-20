@@ -425,3 +425,17 @@ scripts/test/shadow-assembler.test.sh
 orchestrator/v1/delivery-ledger.py
 scripts/test/orchestrator-delivery-ledger.test.sh
 docs/delivery-ledger.md
+
+# First self-host shadow evidence
+#
+# The evidence documents under shadow/evidence/self-host-transition/v1/ are
+# NOT listed here yet: they are produced by the operator's own local macOS
+# evidence session (work/shadow-self-host-run/plan.md, "Operator steps"), not
+# by this PR, and this manifest check fails CI hard on any file it lists that
+# is not yet on disk (.github/workflows/ci.yml, "Check required files exist").
+# They are added to this list in the same commit that adds the evidence
+# itself, once the operator hands it back, so a restore that is missing any
+# of them fails the same way any other restore-critical omission does. Until
+# then the focused test below is the thing that fails loudly on their
+# absence, with an explicit "evidence not yet captured" message.
+scripts/test/shadow-self-host-evidence.test.sh

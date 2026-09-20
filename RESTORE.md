@@ -264,6 +264,35 @@ oversized input, and a finished input over the driver's own size cap.
 Restoring these records materializes nothing on its own: the assembler is
 read-only and resolves no profile.
 
+### Restore the first self-host shadow evidence
+
+Restore `shadow/evidence/self-host-transition/v1/` (once its files are listed
+under “First self-host shadow evidence” in
+[`ci/required-files.txt`](ci/required-files.txt) — see that file's own note on
+when they are added) and `scripts/test/shadow-self-host-evidence.test.sh`,
+together with the shadow reproduction slice, the shadow materialization input
+assembler, the control policy set and its evaluators, the workflow-scope
+qualification evaluator, and the maintenance loop the evidence was checked
+against, then run:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
+The proof reads the committed evidence bytes only: the inventory in
+`checksums.json`, canonical JSON, incident validation, identity and reference
+equality, the two required outcomes, the empty patch payload and network-deny
+stage request, the materialization result and its receipt, the trace seal,
+the retained declaration-only sandbox evaluation and its all-ones
+demonstration verifier digest, the core package closure, and the approved
+requester identity — plus negative cases that mutate a copy of the evidence
+and require the check to fail. It then exercises the shipped scope evaluator
+as a clearly marked inactive compatibility harness and the shipped
+maintenance converter, both read-only. Restoring these records performs no
+self-host reproduction, obtains no credential, calls no model, registers or
+qualifies no environment, and changes the registry's `proof_state` not at
+all: `env.local-macos-ystack-self` stays `unproven`.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in

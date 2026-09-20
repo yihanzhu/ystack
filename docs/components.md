@@ -1462,6 +1462,67 @@ tree-content scan is not duplicated. Run the focused proof with:
 bash scripts/test/shadow-assembler.test.sh
 ```
 
+## First self-host shadow evidence
+
+`shadow/evidence/self-host-transition/v1/` holds the repository's first pair
+of real, unfabricated self-host shadow runs (issue #264, `work/shadow-self-host-run/`):
+one file-digest check (`config/construction-mode.json`) evaluated at the
+post-transition revision `0427390224c25147650f1bd3b6e43ed6911b97a7` (outcome
+`reproduced`) and again at its pre-transition first parent
+`d3f6d525328838b9c2de819699e53d8909ab7a3f` (outcome `no-change`, a control
+observation rather than a second reported incident). Both runs used the
+accepted `resolver-trusted-parent` and `shadow-input-assembler` dependencies,
+the shipped, unmodified `shadow/v1/reproduce.sh` driver, and the shipped
+`control/v1/evaluate-sandbox.sh` evaluated exactly as shipped — a
+declaration-only evaluation with no real execution boundary.
+
+This is evidence, not a capability. The retained `sandbox-evaluation.json`
+documents carry the shipped `enforcement_proof: "declaration-only"`,
+`authority_effect: "none"` and `qualification_effect: "none"` markers, and any
+`satisfied` verdict among them carries only `sandbox.declaration-satisfied`:
+the claim matched the declared policy, and enforcement stays `unproven`. The
+retained policy and claim bytes keep the shipped verifier tool digest of 64
+ones that `control/v1/sandbox-policy.json` pins; that value is the shipped
+demonstration value, never a real tool identity
+(`work/real-sandbox-boundary/spec.md` requirement 5), and it is retained
+rather than scrubbed because rewriting it would make the shipped evaluator's
+`satisfied` verdict unreachable and would misstate what was evaluated. Every
+other digest this evidence carries names real, recomputable committed bytes:
+none of it is the repeated-character placeholder style
+`scripts/test/shadow-slice.test.sh` builds its own fixtures from. A real
+execution boundary remains a separate, step-8 prerequisite
+(`work/real-sandbox-boundary/spec.md`); nothing here substitutes for it, and
+the `env.local-macos-ystack-self` registry entry
+(`shadow/v1/shadow-environments.json`) stays `proof_state: unproven`.
+
+Both cases' unchanged shadow records were also fed, read-only, through the
+shipped `scope/v1/evaluate-scope.sh` (a clearly marked inactive compatibility
+harness — compatibility is not qualification, and the harness creates no live
+scope authority) and the shipped `maintenance/v1/incident-to-eval.sh`. The
+scope evaluator accepts both records under its complete shape and reference
+checks and classifies the workflow in its own vocabulary,
+`outcome: "not-proposable"` with
+`qualification: {state: "unavailable", reason_id: "scope.enablement-requires-operator-pr"}`.
+The maintenance converter maps each incident and its matching record to the
+`stale-moved-artifacts` family — `{accepted, stale}` for the post case,
+`{accepted, completed}` for the pre case — with
+`qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`,
+and refuses either cross-pairing of an incident with the other case's record.
+No live eval seed case was added or changed by this task.
+
+See `shadow/evidence/self-host-transition/v1/README.md` for the two input
+tuples, the real dependency commits and digests, the replay recipe, and the
+before/after source-integrity comparison, and
+`shadow/evidence/self-host-transition/v1/verification-instructions.md` for
+the minimal, tool-free procedure to check the one file-digest condition by
+hand. Run the focused offline proof, which reads only the committed evidence
+bytes and performs no self-host reproduction, credential use, or model call,
+with:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
 ## Inactive maintenance loop
 
 `maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item
