@@ -691,6 +691,28 @@ check_evidence() {
     $claim[0].body.stage_result_ref.sha256 == $result_sha
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: environment-claim reference mismatch\n' "$label" "$step" >&2; return 1; }
+  # plan.md ~855-857: each assembled request's environment_ref.fingerprint_sha256
+  # must equal the SHA-256 recomputed from the retained document it actually
+  # names — the prerequisite request fingerprints
+  # prerequisite/environment-declaration.json, and each case's request
+  # fingerprints the retained environment-claim.json
+  # (shadow/v1/materialization-input.jq:204: environment_ref is
+  # {environment_id, fingerprint_sha256:$claim_sha256} for the case requests,
+  # and the analogous prerequisite assembler fingerprints the declaration).
+  # Nothing above this line ever compares the fingerprint field against the
+  # document it claims to name, so a request could retain a fingerprint for a
+  # different environment document than the one actually captured beside it.
+  local decl_sha; decl_sha=$(sha_file "$dir/prerequisite/environment-declaration.json")
+  "$jq_bin" -e -n --slurpfile input "$dir/prerequisite/input.json" --arg sha "$decl_sha" '
+    $input[0].stage_request.content.body.environment_ref.fingerprint_sha256 == $sha
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite assembled/input.json environment_ref.fingerprint_sha256 does not equal the retained environment-declaration.json digest\n' "$label" "$step" >&2; return 1; }
+  for case_name in pre post; do
+    "$jq_bin" -e -n --slurpfile input "$dir/$case_name/assembled/input.json" --arg sha "$claim_sha" '
+      $input[0].stage_request.content.body.environment_ref.fingerprint_sha256 == $sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s assembled/input.json environment_ref.fingerprint_sha256 does not equal the retained environment-claim.json digest\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
   # None of the reference fields requirement 2 names as identifying real
   # committed bytes may be a repeated-character placeholder of the kind
   # scripts/test/shadow-slice.test.sh builds its fixtures from
@@ -803,7 +825,7 @@ check_evidence() {
 }
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
-pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
+pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
@@ -846,6 +868,34 @@ refresh_checksums() {
     '.body.files = ($entries[0] | sort_by(.path))' \
     "$dir/checksums.json" >"$dir/checksums.json.new"
   /bin/mv "$dir/checksums.json.new" "$dir/checksums.json"
+}
+
+# refresh_claim_chain: after environment-claim.json's bytes change (so its own
+# digest moves), rewrite every downstream reference that names that digest by
+# value rather than deriving it: both cases' sandbox-evaluation.json
+# claim_ref.sha256 (check 9b), and both shadow records' own
+# environment.claim_ref.sha256 (check 9b) plus
+# environment.evaluation.value.evaluation_ref.sha256 (check 9), which must
+# also move because rewriting a sandbox evaluation's claim_ref changes that
+# file's own digest in turn. Without this, a negative case that mutates
+# environment-claim.json to reach some check deeper than 9b/9 (for example the
+# duty-verdict or environment-claim reference-mismatch assertions in check 10)
+# would instead be refused by check 9b or check 9 first, proving nothing about
+# the check it actually targets.
+refresh_claim_chain() {
+  local dir=$1 case_name claim_sha eval_sha
+  claim_sha=$(sha_file "$dir/environment-claim.json")
+  for case_name in pre post; do
+    "$jq_bin" -S -c --arg sha "$claim_sha" '.body.claim_ref.sha256 = $sha' \
+      "$dir/$case_name/sandbox-evaluation.json" >"$dir/$case_name/sandbox-evaluation.json.new"
+    /bin/mv "$dir/$case_name/sandbox-evaluation.json.new" "$dir/$case_name/sandbox-evaluation.json"
+    eval_sha=$(sha_file "$dir/$case_name/sandbox-evaluation.json")
+    "$jq_bin" -S -c --arg claim_sha "$claim_sha" --arg eval_sha "$eval_sha" '
+      .body.environment.claim_ref.sha256 = $claim_sha |
+      .body.environment.evaluation.value.evaluation_ref.sha256 = $eval_sha
+    ' "$dir/$case_name/state/shadow-record.json" >"$dir/$case_name/state/shadow-record.json.new"
+    /bin/mv "$dir/$case_name/state/shadow-record.json.new" "$dir/$case_name/state/shadow-record.json"
+  done
 }
 
 # (a) a single evidence file's bytes change.
@@ -911,19 +961,24 @@ pass 'a retained materialization result reporting a changed outcome instead of n
 
 # (e) the environment claim's stage_result_ref points at an unrelated result
 # rather than the duty evaluation's own stage.result_ref and the retained
-# prerequisite stage result, with checksums.json refreshed so only the
-# claim-binding assertion above — not the checksums-inventory check — can
-# catch it.
+# prerequisite stage result, with the claim-reference chain and
+# checksums.json refreshed so only the environment-claim reference-mismatch
+# assertion in check 10 — not the earlier claim-binding check (9b), which
+# would otherwise refuse first on the claim's own now-moved digest, and not
+# the checksums-inventory check — can catch it.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.stage_result_ref.sha256 =
     "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' \
   "$mutant_dir/environment-claim.json" >"$mutant_dir/environment-claim.json.new"
 /bin/mv "$mutant_dir/environment-claim.json.new" "$mutant_dir/environment-claim.json"
+refresh_claim_chain "$mutant_dir"
 refresh_checksums "$mutant_dir"
-if check_evidence "$mutant_dir" 'mutant-claim-stage-result' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-claim-stage-result' 2>"$tmp/claim-stage-result.err"; then
   fail 'an environment claim pointing at an unrelated stage result must be refused'
 fi
-pass 'an environment claim whose stage_result_ref does not match the duty evaluation and the retained prerequisite stage result is refused'
+/usr/bin/grep -q 'environment-claim reference mismatch' "$tmp/claim-stage-result.err" ||
+  fail "an environment claim pointing at an unrelated stage result must fail specifically on the environment-claim reference-mismatch check ($(cat "$tmp/claim-stage-result.err"))"
+pass 'an environment claim whose stage_result_ref does not match the duty evaluation and the retained prerequisite stage result (claim-reference chain and checksums refreshed) is refused specifically by the environment-claim reference-mismatch check'
 
 # (f) the retained verification-instructions.md bytes are edited after the
 # qualified-identity.json refs were computed, with checksums.json refreshed
@@ -1123,11 +1178,15 @@ pass "a pre identity's model_request altered consistently in the identity and it
 
 # (p) the retained duty evaluation's verdict is changed to "violated" with its
 # downstream reference refreshed (environment-claim.json's duty_evaluation_ref
-# points at the mutated bytes) and checksums.json refreshed, so only the new
-# verdict assertion — not the reference-equality checks above it, and not the
-# checksums-inventory check — can catch it. A verdict a real evaluator would
-# never emit for this policy set must still be refused even when every
-# reference to it is internally consistent.
+# points at the mutated bytes), which moves the claim's own digest, so the
+# whole downstream claim-reference chain (both cases' sandbox-evaluation.json
+# claim_ref, both shadow records' environment.claim_ref and evaluation_ref)
+# and checksums.json are refreshed too, so only the new verdict assertion —
+# not the claim-binding check (9b), which would otherwise refuse first on the
+# claim's now-moved digest before check_evidence ever reaches the
+# duty-verdict assertion — and not the checksums-inventory check, can catch
+# it. A verdict a real evaluator would never emit for this policy set must
+# still be refused even when every reference to it is internally consistent.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["reporter.role-mismatch"]' \
   "$mutant_dir/duty-evaluation.json" >"$mutant_dir/duty-evaluation.json.new"
@@ -1136,13 +1195,14 @@ mutated_duty_sha=$(sha_file "$mutant_dir/duty-evaluation.json")
 "$jq_bin" -S -c --arg sha "$mutated_duty_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
   "$mutant_dir/environment-claim.json" >"$mutant_dir/environment-claim.json.new"
 /bin/mv "$mutant_dir/environment-claim.json.new" "$mutant_dir/environment-claim.json"
+refresh_claim_chain "$mutant_dir"
 refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-duty-verdict' 2>"$tmp/duty-verdict.err"; then
   fail 'a retained duty evaluation reporting a violated verdict must be refused'
 fi
 /usr/bin/grep -q 'duty-evaluation verdict is not satisfied' "$tmp/duty-verdict.err" ||
   fail "a retained duty evaluation reporting a violated verdict must fail specifically on the new verdict assertion ($(cat "$tmp/duty-verdict.err"))"
-pass 'a retained duty evaluation reporting a violated verdict with its downstream reference refreshed is refused specifically by the verdict assertion'
+pass 'a retained duty evaluation reporting a violated verdict with its downstream reference and the whole claim-reference chain refreshed is refused specifically by the verdict assertion'
 
 # (q) the prerequisite materialization receipt is swapped for unrelated
 # canonical JSON, with checksums.json refreshed so only the new
@@ -1161,6 +1221,27 @@ fi
 /usr/bin/grep -q 'prerequisite receipt does not resolve against its stage result' "$tmp/prereq-receipt.err" ||
   fail "a prerequisite receipt swapped for unrelated canonical JSON must fail specifically on the prerequisite-receipt-binding assertion ($(cat "$tmp/prereq-receipt.err"))"
 pass 'a prerequisite receipt swapped for unrelated canonical JSON is refused specifically by the prerequisite-receipt-binding assertion'
+
+# (r) the retained prerequisite/environment-declaration.json is swapped for
+# unrelated canonical JSON, with checksums.json refreshed so only the new
+# prerequisite fingerprint check above — not the checksums-inventory check —
+# can catch it. Nothing else in this suite reads
+# prerequisite/environment-declaration.json, so before that check existed a
+# retained request could fingerprint a wholly different environment
+# declaration than the one actually committed beside it and still pass every
+# check.
+fresh_mutant_copy
+"$jq_bin" -S -c -n \
+  '{schema_version:1,kind:"unrelated_document",id:"mutant.unrelated-declaration",body:{note:"not a declaration"}}' \
+  >"$mutant_dir/prerequisite/environment-declaration.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-prereq-declaration' 2>"$tmp/prereq-decl.err"; then
+  fail 'a prerequisite environment declaration swapped for unrelated canonical JSON must be refused'
+fi
+/usr/bin/grep -q 'prerequisite assembled/input.json environment_ref.fingerprint_sha256 does not equal the retained environment-declaration.json digest' \
+  "$tmp/prereq-decl.err" ||
+  fail "a prerequisite environment declaration swapped for unrelated canonical JSON must fail specifically on the prerequisite fingerprint check ($(cat "$tmp/prereq-decl.err"))"
+pass 'a prerequisite environment declaration swapped for unrelated canonical JSON (checksums refreshed) is refused specifically by the prerequisite fingerprint check'
 
 /bin/rm -rf -- "$mutant_dir"
 
