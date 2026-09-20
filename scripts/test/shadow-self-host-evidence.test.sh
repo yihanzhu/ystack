@@ -146,6 +146,25 @@ check_evidence() {
   local dir=$1 label=${2:-evidence}
   local case_name step
 
+  # --- check 2 (run early, on the manifest itself, ahead of check 1):
+  # checksums.json is itself required to be canonical jq -S -c single-root
+  # JSON by requirement 15 item 2 ("every .json under the evidence path is
+  # canonical"), same as every other evidence document. found_files (built
+  # below, for check 1) deliberately excludes checksums.json because the
+  # manifest cannot list its own digest, and the check-2 loop further down
+  # only ever walks found_files, so nothing in this suite previously
+  # exercised canonical_ok on the manifest's own bytes. Without this, a
+  # manifest with non-canonical bytes (extra whitespace, reordered keys, a
+  # duplicate key that jq's parser silently collapses) still passes check 1
+  # and every reference check, because they only ever inspect jq's
+  # already-parsed .body.files values, never the manifest file's own
+  # on-disk bytes (plan.md ~1127-1131).
+  step='canonical-json'
+  [ -f "$dir/checksums.json" ] ||
+    { /usr/bin/printf '%s: %s\n' "$label" "$step: absent" >&2; return 1; }
+  canonical_ok "$dir/checksums.json" ||
+    { /usr/bin/printf '%s: %s: checksums.json not canonical single-root JSON\n' "$label" "$step" >&2; return 1; }
+
   # --- check 1: checksums.json inventory is exact and every digest matches.
   step='checksums-inventory'
   [ -f "$dir/checksums.json" ] || { /usr/bin/printf '%s: %s\n' "$label" "$step: absent" >&2; return 1; }
@@ -1029,6 +1048,7 @@ neg_case_step() {
     l | r) printf '%s' 'declaration-only-and-references' ;;
     o) printf '%s' 'identity-provenance' ;;
     t) printf '%s' 'prerequisite-input-binds-retained-bytes' ;;
+    v) printf '%s' 'canonical-json' ;;
     *) printf '%s' 'unknown-case'; return 1 ;;
   esac
 }
@@ -1059,6 +1079,7 @@ neg_case_message() {
       'materialization result request_ref/resolved_profile_ref does not equal the assembled references' ;;
     t) printf '%s' \
       'prerequisite/input.json embedded stage_request/resolved_profile content does not equal the retained prerequisite/stage-request.json or resolved-profile-document.json bytes' ;;
+    v) printf '%s' 'checksums.json not canonical single-root JSON' ;;
     *) printf '%s' ''; return 1 ;;
   esac
 }
@@ -1505,6 +1526,26 @@ if check_evidence "$mutant_dir" 'mutant-sandbox-eval-duty-ref' 2>"$tmp/sandbox-e
 fi
 assert_case_check u "$tmp/sandbox-eval-ref.err"
 pass 'a retained sandbox evaluation with a corrupted duty_evaluation_ref (record digest and checksums refreshed downstream) is refused specifically by the sandbox-evaluation-inputs check'
+
+# (v) round 11 review P2: checksums.json itself is rewritten with
+# non-canonical bytes (here, jq's default pretty-printed, multi-line,
+# unsorted-key form instead of -S -c) while every path/sha256 pair it lists
+# stays byte-for-byte identical to the committed manifest's parsed values.
+# found_files (built at the top of check_evidence, for check 1) deliberately
+# excludes checksums.json, and the check-2 loop over .json files only ever
+# walks found_files too, so neither previously exercised canonical_ok on the
+# manifest's own bytes. With an unmutated inventory and every other file's
+# digest untouched, check 1 and every later reference check still pass, so
+# only the canonical-json assertion now run early against checksums.json
+# itself can catch this.
+fresh_mutant_copy
+"$jq_bin" '.' "$mutant_dir/checksums.json" >"$mutant_dir/checksums.json.new"
+/bin/mv "$mutant_dir/checksums.json.new" "$mutant_dir/checksums.json"
+if check_evidence "$mutant_dir" 'mutant-manifest-noncanonical' 2>"$tmp/manifest-canonical.err"; then
+  fail 'a non-canonical checksums.json (identical parsed values, reformatted bytes) must be refused'
+fi
+assert_case_check v "$tmp/manifest-canonical.err"
+pass 'a checksums.json rewritten with non-canonical bytes but identical parsed values is refused specifically by the canonical-json check on the manifest itself'
 
 /bin/rm -rf -- "$mutant_dir"
 
