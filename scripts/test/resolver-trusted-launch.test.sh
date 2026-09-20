@@ -287,6 +287,50 @@ else
   fail_case 'environment: BASH_XTRACEFD pollution cases (entry absent)'
 fi
 
+# --- 1d. jq path containing shell-hostile characters (round-17 finding 1;
+# review-366-r17.txt): GNU sha256sum and Darwin shasum both prefix their
+# digest line with a backslash when the hashed argument's path itself
+# contains a backslash or newline (filename-escaping mode). The entry must
+# hash <jq> through stdin, as its source-pin checks already do, so a
+# genuinely valid pinned jq is never refused merely because of its path.
+if [ -x "$entry" ]; then
+  bs_dir="$tmp"/'g1.jq-has\-backslash'
+  if /bin/mkdir -m 700 "$bs_dir" 2>/dev/null; then
+    bs_jq="$bs_dir/jq"
+    /bin/cp "$bound_jq" "$bs_jq"; /bin/chmod 0500 "$bs_jq"
+    bs_out="$tmp/g1.jq-backslash.out"; /bin/mkdir -m 700 "$bs_out"
+    bs_stdout="$tmp/g1.jq-backslash.stdout"; bs_status=0
+    "$entry" "$bs_jq" "$bs_out" "$real_request" "$real_map" \
+      > "$bs_stdout" 2> "$tmp/g1.jq-backslash.stderr" || bs_status=$?
+    if [ "$bs_status" -eq 0 ] && /usr/bin/cmp -s "$bs_stdout" "$eq_entry_stdout"; then
+      pass_case 'group1: pinned jq at a path containing a backslash resolves byte-identically (round-17 regression, positive control)'
+    else
+      fail_case "jq path with backslash: status=$bs_status stderr=$(/usr/bin/tail -c 300 "$tmp/g1.jq-backslash.stderr")"
+    fi
+  else
+    fail_case 'group1: jq path with backslash (filesystem would not create the directory)'
+  fi
+
+  nl_dir="$tmp/g1.jq-has"$'\n'"-newline"
+  if /bin/mkdir -m 700 "$nl_dir" 2>/dev/null; then
+    nl_jq="$nl_dir/jq"
+    /bin/cp "$bound_jq" "$nl_jq"; /bin/chmod 0500 "$nl_jq"
+    nl_out="$tmp/g1.jq-newline.out"; /bin/mkdir -m 700 "$nl_out"
+    nl_stdout="$tmp/g1.jq-newline.stdout"; nl_status=0
+    "$entry" "$nl_jq" "$nl_out" "$real_request" "$real_map" \
+      > "$nl_stdout" 2> "$tmp/g1.jq-newline.stderr" || nl_status=$?
+    if [ "$nl_status" -eq 0 ] && /usr/bin/cmp -s "$nl_stdout" "$eq_entry_stdout"; then
+      pass_case 'group1: pinned jq at a path containing a newline resolves byte-identically (round-17 regression, positive control)'
+    else
+      fail_case "jq path with newline: status=$nl_status stderr=$(/usr/bin/tail -c 300 "$tmp/g1.jq-newline.stderr")"
+    fi
+  else
+    skip_case 'group1: jq path with newline' 'filesystem/platform will not create a newline-named directory'
+  fi
+else
+  fail_case 'group1: jq path with shell-hostile characters (entry absent)'
+fi
+
 # --- 2. Synthetic fixture, for auxiliary/hostile cases (plan.md: fixture helpers) -------
 
 synthetic="$tmp/synthetic"

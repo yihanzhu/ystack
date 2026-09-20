@@ -355,7 +355,7 @@ done
 # <jq>, validated pre-hash/exec (spec.md:4650-4654) as absolute/regular/non-symlink/executable: SHA-256 for this platform, then the jq-1.6 identity probe, both under the same fixed env as the pin checks above.
 case "$jq_arg" in /*) ;; *) builtin printf '%s\n' E_USAGE >&2; exit 64 ;; esac
 [ -f "$jq_arg" ] && [ ! -L "$jq_arg" ] && [ -x "$jq_arg" ] || refuse 'E_RUNTIME binding'
-jq_digest_line=$("${clean_env[@]}" "${sha256_args[@]}" "$jq_arg"); status=$?
+jq_digest_line=$("${clean_env[@]}" "${sha256_args[@]}" < "$jq_arg"); status=$?
 checkpoint
 [ "$status" -eq 0 ] || refuse 'E_RUNTIME binding'
 jq_digest=${jq_digest_line%% *}
