@@ -1005,14 +1005,83 @@ refresh_claim_chain() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Negative-case table (round 10 review: "make the negative-case section
+# systematic"). This is the single source of truth for which check_evidence
+# step each mutation below must be refused by. Every case still builds its
+# own mutant tree with its own rationale comment (why THIS check and not an
+# earlier one), but the assertion itself is driven from this table through
+# assert_case_check, instead of one hand-written grep/fail pair per case, so
+# the mutation-to-check mapping lives in one place and every case is checked
+# the same way. Two case/esac lookups, not associative arrays: the operator's
+# own runs are on macOS (plan.md's "Operator steps"), whose shipped /bin/bash
+# is 3.2 and has no `declare -A`, and every other script in this repo is
+# written to run under it too.
+neg_case_step() {
+  case "$1" in
+    a | b | c) printf '%s' 'checksums-inventory' ;;
+    d | q | s) printf '%s' 'materialization-result' ;;
+    e | p | u) printf '%s' 'sandbox-evaluation-inputs' ;;
+    f | j | m | n) printf '%s' 'identity-binds-assembler-output' ;;
+    g | h) printf '%s' 'no-patch-no-network' ;;
+    i) printf '%s' 'claim-binding' ;;
+    k) printf '%s' 'record-binds-own-identity' ;;
+    l | r) printf '%s' 'declaration-only-and-references' ;;
+    o) printf '%s' 'identity-provenance' ;;
+    t) printf '%s' 'prerequisite-input-binds-retained-bytes' ;;
+    *) printf '%s' 'unknown-case'; return 1 ;;
+  esac
+}
+neg_case_message() {
+  case "$1" in
+    a) printf '%s' 'pre/state/shadow-record.json digest mismatch' ;;
+    b) printf '%s' 'README.md digest mismatch' ;;
+    c) printf '%s' 'post/state/shadow-record.json digest mismatch' ;;
+    d) printf '%s' 'materialization result is not a completed no-change materialization' ;;
+    e | p | u) printf '%s' \
+      'retained sandbox-evaluation.json is not byte-identical to the shipped evaluate-sandbox.sh output' ;;
+    f) printf '%s' \
+      'verification_instructions_ref does not name the retained verification-instructions.md bytes' ;;
+    g | h) printf '%s' 'patch/network invariant wrong' ;;
+    i) printf '%s' 'claim_ref does not bind the retained environment-claim.json' ;;
+    j) printf '%s' \
+      'resolved_profile embedded in input.json does not equal the retained resolved-profile.json bytes' ;;
+    k) printf '%s' 'shadow record does not bind its own retained qualified-identity.json' ;;
+    l) printf '%s' 'marker or recorded-evaluation mismatch' ;;
+    m | n) printf '%s' \
+      'embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies' ;;
+    o) printf '%s' \
+      'model_request/adapter_config_refs/prompt_refs/skill_refs do not derive from the retained resolved-profile.json producer binding and the pinned producer config' ;;
+    q) printf '%s' 'prerequisite receipt does not resolve against its stage result' ;;
+    r) printf '%s' \
+      'prerequisite assembled/input.json environment_ref.fingerprint_sha256 does not equal the retained environment-declaration.json digest' ;;
+    s) printf '%s' \
+      'materialization result request_ref/resolved_profile_ref does not equal the assembled references' ;;
+    t) printf '%s' \
+      'prerequisite/input.json embedded stage_request/resolved_profile content does not equal the retained prerequisite/stage-request.json or resolved-profile-document.json bytes' ;;
+    *) printf '%s' ''; return 1 ;;
+  esac
+}
+# assert_case_check: look up case_id's expected message in the table above and
+# require it verbatim in err_file, so a case that is caught by the wrong
+# (earlier or later) check fails loudly and names both the expected step and
+# the actual check_evidence output.
+assert_case_check() {
+  local case_id=$1 err_file=$2 expect
+  expect=$(neg_case_message "$case_id")
+  /usr/bin/grep -qF "$expect" "$err_file" ||
+    fail "case ($case_id) must fail specifically on the '$(neg_case_step "$case_id")' check, asserting message '$expect' ($(cat "$err_file"))"
+}
+
 # (a) a single evidence file's bytes change.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.reason_id = "check.failed-at-revision-mutated"' \
   "$mutant_dir/pre/state/shadow-record.json" >"$mutant_dir/pre/state/shadow-record.json.new"
 /bin/mv "$mutant_dir/pre/state/shadow-record.json.new" "$mutant_dir/pre/state/shadow-record.json"
-if check_evidence "$mutant_dir" 'mutant-file' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-file' 2>"$tmp/case-a.err"; then
   fail 'a mutated evidence file must be refused'
 fi
+assert_case_check a "$tmp/case-a.err"
 pass 'a mutated evidence file is refused'
 
 # (b) a digest inside checksums.json is corrupted, restoring the file itself.
@@ -1022,9 +1091,10 @@ fresh_mutant_copy
     then .sha256 = ("0" * 64) else . end)
 ' "$mutant_dir/checksums.json" >"$mutant_dir/checksums.json.new"
 /bin/mv "$mutant_dir/checksums.json.new" "$mutant_dir/checksums.json"
-if check_evidence "$mutant_dir" 'mutant-checksum' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-checksum' 2>"$tmp/case-b.err"; then
   fail 'a corrupted checksums.json digest must be refused'
 fi
+assert_case_check b "$tmp/case-b.err"
 pass 'a corrupted checksums.json digest is refused'
 
 # (c) an outcome field is changed.
@@ -1032,9 +1102,10 @@ fresh_mutant_copy
 "$jq_bin" -S -c '.body.outcome = "no-change" | .body.reason_id = "check.passed-at-revision"' \
   "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
 /bin/mv "$mutant_dir/post/state/shadow-record.json.new" "$mutant_dir/post/state/shadow-record.json"
-if check_evidence "$mutant_dir" 'mutant-outcome' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-outcome' 2>"$tmp/case-c.err"; then
   fail 'a mutated outcome field must be refused'
 fi
+assert_case_check c "$tmp/case-c.err"
 pass 'a mutated outcome field is refused'
 
 # (d) a retained materialization result reports a changed outcome instead of
@@ -1061,18 +1132,25 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-materialization-outcome' 2>"$tmp/mat-outcome.err"; then
   fail 'a retained materialization result reporting a changed outcome must be refused'
 fi
-/usr/bin/grep -q 'materialization result is not a completed no-change materialization' \
-  "$tmp/mat-outcome.err" ||
-  fail "a retained materialization result reporting a changed outcome must fail specifically on the completed/no-change assertion, not an earlier one ($(cat "$tmp/mat-outcome.err"))"
+assert_case_check d "$tmp/mat-outcome.err"
 pass 'a retained materialization result reporting a changed outcome instead of no-change is refused specifically by the completed/no-change assertion'
 
-# (e) the environment claim's stage_result_ref points at an unrelated result
-# rather than the duty evaluation's own stage.result_ref and the retained
-# prerequisite stage result, with the claim-reference chain and
-# checksums.json refreshed so only the environment-claim reference-mismatch
-# assertion in check 10 — not the earlier claim-binding check (9b), which
-# would otherwise refuse first on the claim's own now-moved digest, and not
-# the checksums-inventory check — can catch it.
+# (e) round 10 review P2: the environment claim's stage_result_ref points at
+# an unrelated result rather than the duty evaluation's own stage.result_ref,
+# with the claim-reference chain and checksums.json refreshed. Mutating
+# environment-claim.json necessarily moves its own bytes, and check 9c
+# (sandbox-evaluation-inputs) recomputes the sandbox evaluation for real,
+# through the shipped evaluate-sandbox.sh, over this exact mutated claim and
+# the retained duty-evaluation.json: sandbox.jq's own comparison of
+# claim.body.stage_result_ref against duty.body.stage.result_ref (the same
+# fields this case's mutation targets) fires inside that recomputation, so
+# the real evaluator now returns a "violated"/"duty.stage-result-mismatch"
+# result that is no longer byte-identical to the retained per-case
+# sandbox-evaluation.json. Check 9c runs before check 10's environment-claim
+# reference-mismatch assertion, so it refuses first — this mutation can no
+# longer reach check 10 independently, because the same claim/duty pair that
+# feeds that later assertion is also what the earlier recomputation checks.
+# See the negative-case table's entry 'e'.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.stage_result_ref.sha256 =
     "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' \
@@ -1083,9 +1161,8 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-claim-stage-result' 2>"$tmp/claim-stage-result.err"; then
   fail 'an environment claim pointing at an unrelated stage result must be refused'
 fi
-/usr/bin/grep -q 'environment-claim reference mismatch' "$tmp/claim-stage-result.err" ||
-  fail "an environment claim pointing at an unrelated stage result must fail specifically on the environment-claim reference-mismatch check ($(cat "$tmp/claim-stage-result.err"))"
-pass 'an environment claim whose stage_result_ref does not match the duty evaluation and the retained prerequisite stage result (claim-reference chain and checksums refreshed) is refused specifically by the environment-claim reference-mismatch check'
+assert_case_check e "$tmp/claim-stage-result.err"
+pass 'an environment claim whose stage_result_ref does not match the duty evaluation and the retained prerequisite stage result (claim-reference chain and checksums refreshed) is refused specifically by the sandbox-evaluation-inputs check, which recomputes the mismatch for real before check 10 is ever reached'
 
 # (f) the retained verification-instructions.md bytes are edited after the
 # qualified-identity.json refs were computed, with checksums.json refreshed
@@ -1097,9 +1174,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-verification-instructions' 2>"$tmp/vi.err"; then
   fail 'edited verification-instructions.md bytes must be refused'
 fi
-/usr/bin/grep -q 'verification_instructions_ref does not name the retained verification-instructions.md bytes' \
-  "$tmp/vi.err" ||
-  fail "edited verification-instructions.md bytes must fail specifically on the verification_instructions_ref digest check ($(cat "$tmp/vi.err"))"
+assert_case_check f "$tmp/vi.err"
 pass "edited verification-instructions.md bytes are refused because the identities' verification_instructions_ref no longer names them"
 
 # (g) the producer-patch payload entry is removed entirely (an empty array),
@@ -1110,9 +1185,10 @@ fresh_mutant_copy
   "$mutant_dir/post/assembled/input.json" >"$mutant_dir/post/assembled/input.json.new"
 /bin/mv "$mutant_dir/post/assembled/input.json.new" "$mutant_dir/post/assembled/input.json"
 refresh_checksums "$mutant_dir"
-if check_evidence "$mutant_dir" 'mutant-patch-missing' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-patch-missing' 2>"$tmp/case-g.err"; then
   fail 'a missing producer-patch payload entry must be refused'
 fi
+assert_case_check g "$tmp/case-g.err"
 pass 'a missing producer-patch payload entry (an empty array where the driver requires exactly one empty string) is refused'
 
 # (h) the producer-patch entry is duplicated in trust_context.verified_payloads
@@ -1125,9 +1201,10 @@ fresh_mutant_copy
   "$mutant_dir/post/assembled/input.json" >"$mutant_dir/post/assembled/input.json.new"
 /bin/mv "$mutant_dir/post/assembled/input.json.new" "$mutant_dir/post/assembled/input.json"
 refresh_checksums "$mutant_dir"
-if check_evidence "$mutant_dir" 'mutant-patch-duplicate' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-patch-duplicate' 2>"$tmp/case-h.err"; then
   fail 'a duplicated producer-patch verified-payload entry must be refused'
 fi
+assert_case_check h "$tmp/case-h.err"
 pass 'a duplicated producer-patch verified-payload entry (two empty strings where the driver requires exactly one) is refused'
 
 # (i) the retained environment-claim.json is swapped for a claim that differs
@@ -1148,9 +1225,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-claim-network-mode' 2>"$tmp/claim-binding.err"; then
   fail 'a retained environment claim with its network.mode swapped to allow must be refused'
 fi
-/usr/bin/grep -q 'claim_ref does not bind the retained environment-claim.json' \
-  "$tmp/claim-binding.err" ||
-  fail "a retained environment claim with its network.mode swapped to allow must fail specifically on the claim-binding check ($(cat "$tmp/claim-binding.err"))"
+assert_case_check i "$tmp/claim-binding.err"
 pass 'a retained environment claim whose network.mode is swapped to allow (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the claim-binding check'
 
 # (j) the shared resolved-profile.json is replaced by a different (but still
@@ -1170,9 +1245,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-resolved-profile-swap' 2>"$tmp/resolved-profile.err"; then
   fail 'a replaced shared resolved-profile.json must be refused'
 fi
-/usr/bin/grep -q 'resolved_profile embedded in input.json does not equal the retained resolved-profile.json bytes' \
-  "$tmp/resolved-profile.err" ||
-  fail "a replaced shared resolved-profile.json must fail specifically on the recomputed resolved_profile_ref check ($(cat "$tmp/resolved-profile.err"))"
+assert_case_check j "$tmp/resolved-profile.err"
 pass 'a replaced shared resolved-profile.json (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the recomputed resolved_profile_ref check'
 
 # (k) the pre case's qualified-identity.json has its model_request changed,
@@ -1190,37 +1263,41 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-pre-identity-model' 2>"$tmp/pre-identity.err"; then
   fail "a mutated pre identity's model_request must be refused"
 fi
-/usr/bin/grep -q 'shadow record does not bind its own retained qualified-identity.json' \
-  "$tmp/pre-identity.err" ||
-  fail "a mutated pre identity's model_request must fail specifically on the record-binds-own-identity check ($(cat "$tmp/pre-identity.err"))"
+assert_case_check k "$tmp/pre-identity.err"
 pass "a mutated pre identity's model_request (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the record-binds-own-identity check"
 
-# (l) the post case's retained sandbox-evaluation.json reports a violated
-# verdict, with the shadow record's own evaluation_ref digest and
-# checksums.json refreshed so only check 10's new requirement — that the
-# retained verdict and reason_ids equal the record's own recorded
-# evaluation.value and are themselves "satisfied" — can catch it. The
-# record's own recorded verdict/reason_ids are left untouched at
-# satisfied/["sandbox.declaration-satisfied"], so before this addition the
-# scope consumer (which reads only the record's recorded copy) would accept
-# contradictory evidence the driver could never actually produce.
+# (l) round 10 review P2: the post case's shadow record reports a violated
+# verdict in its OWN recorded environment.evaluation.value, while the
+# retained post/sandbox-evaluation.json is left byte-for-byte unchanged.
+# Mutating the retained sandbox-evaluation.json file itself (as this case
+# previously did) moves that file's own bytes, and check 9c
+# (sandbox-evaluation-inputs) recomputes the real evaluator over the
+# unchanged control-policy-set.json/duty-evaluation.json/environment-claim.json
+# it names: that recomputation reproduces the original, unmutated ("satisfied")
+# output, which is no longer byte-identical to the mutated retained file, so
+# check 9c refuses first -- before check_evidence ever reaches check 10's
+# marker/recorded-evaluation mismatch assertion this case exists to exercise.
+# Mutating only the shadow record's recorded copy instead leaves the retained
+# sandbox-evaluation.json, its evaluation_ref digest (check 9), its claim_ref
+# (check 9b) and the sandbox-evaluation-inputs recomputation (check 9c) all
+# untouched and passing, so only check 10's requirement that the record's
+# recorded verdict/reason_ids equal the retained evaluation's own -- and are
+# themselves "satisfied" -- can catch it: the scope consumer (which reads
+# only the record's recorded copy) would otherwise accept contradictory
+# evidence the driver could never actually produce. See the negative-case
+# table's entry 'l'.
 fresh_mutant_copy
-"$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["sandbox.violated"]' \
-  "$mutant_dir/post/sandbox-evaluation.json" >"$mutant_dir/post/sandbox-evaluation.json.new"
-/bin/mv "$mutant_dir/post/sandbox-evaluation.json.new" "$mutant_dir/post/sandbox-evaluation.json"
-mutated_sandbox_sha=$(sha_file "$mutant_dir/post/sandbox-evaluation.json")
-"$jq_bin" -S -c --arg sha "$mutated_sandbox_sha" \
-  '.body.environment.evaluation.value.evaluation_ref.sha256 = $sha' \
+"$jq_bin" -S -c \
+  '.body.environment.evaluation.value.verdict = "violated" |
+   .body.environment.evaluation.value.reason_ids = ["sandbox.violated"]' \
   "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
 /bin/mv "$mutant_dir/post/state/shadow-record.json.new" "$mutant_dir/post/state/shadow-record.json"
 refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-sandbox-verdict-violated' 2>"$tmp/sandbox-verdict.err"; then
-  fail 'a retained sandbox evaluation reporting a violated verdict must be refused'
+  fail 'a shadow record whose recorded evaluation contradicts the retained sandbox evaluation must be refused'
 fi
-/usr/bin/grep -q 'marker or recorded-evaluation mismatch' \
-  "$tmp/sandbox-verdict.err" ||
-  fail "a retained sandbox evaluation reporting a violated verdict must fail specifically on the declaration-only-and-references check ($(cat "$tmp/sandbox-verdict.err"))"
-pass 'a retained sandbox evaluation reporting a violated verdict (record digest and checksums refreshed, recorded verdict left satisfied) is refused specifically by the declaration-only-and-references check'
+assert_case_check l "$tmp/sandbox-verdict.err"
+pass "a shadow record whose recorded environment.evaluation.value reports a violated verdict, while the retained sandbox-evaluation.json is left unchanged (checksums refreshed), is refused specifically by the declaration-only-and-references marker/recorded-evaluation check"
 
 # (m) the pre case's assembled/input.json has its embedded
 # .stage_request.sha256 field corrupted while the .content it accompanies,
@@ -1237,9 +1314,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-embedded-stage-request-sha' 2>"$tmp/embed-req.err"; then
   fail 'a corrupted embedded stage_request.sha256 field in assembled/input.json must be refused'
 fi
-/usr/bin/grep -q 'embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies' \
-  "$tmp/embed-req.err" ||
-  fail "a corrupted embedded stage_request.sha256 field must fail specifically on the new embedded-digest check ($(cat "$tmp/embed-req.err"))"
+assert_case_check m "$tmp/embed-req.err"
 pass 'a corrupted embedded stage_request.sha256 field in assembled/input.json (content, reference files and resolved-profile.json all left untouched) is refused specifically by the embedded-digest check'
 
 # (n) the same, but for the embedded .resolved_profile.sha256 field, proving
@@ -1253,9 +1328,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-embedded-resolved-profile-sha' 2>"$tmp/embed-prof.err"; then
   fail 'a corrupted embedded resolved_profile.sha256 field in assembled/input.json must be refused'
 fi
-/usr/bin/grep -q 'embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies' \
-  "$tmp/embed-prof.err" ||
-  fail "a corrupted embedded resolved_profile.sha256 field must fail specifically on the new embedded-digest check ($(cat "$tmp/embed-prof.err"))"
+assert_case_check n "$tmp/embed-prof.err"
 pass 'a corrupted embedded resolved_profile.sha256 field in assembled/input.json (content, reference files and resolved-profile.json all left untouched) is refused specifically by the embedded-digest check'
 
 # (o) the pre case's qualified-identity.json has its model_request changed
@@ -1278,22 +1351,31 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-pre-identity-model-consistent' 2>"$tmp/pre-identity-provenance.err"; then
   fail "a pre identity's model_request altered consistently in the identity and its own shadow record must be refused"
 fi
-/usr/bin/grep -q 'model_request/adapter_config_refs/prompt_refs/skill_refs do not derive from the retained resolved-profile.json producer binding and the pinned producer config' \
-  "$tmp/pre-identity-provenance.err" ||
-  fail "a pre identity's model_request altered consistently in the identity and its own shadow record must fail specifically on the identity-provenance check ($(cat "$tmp/pre-identity-provenance.err"))"
+assert_case_check o "$tmp/pre-identity-provenance.err"
 pass "a pre identity's model_request altered consistently in the identity and its own shadow record (recomputed hashes, record-binds-own-identity satisfied) is refused specifically by the identity-provenance check"
 
-# (p) the retained duty evaluation's verdict is changed to "violated" with its
-# downstream reference refreshed (environment-claim.json's duty_evaluation_ref
-# points at the mutated bytes), which moves the claim's own digest, so the
-# whole downstream claim-reference chain (both cases' sandbox-evaluation.json
-# claim_ref, both shadow records' environment.claim_ref and evaluation_ref)
-# and checksums.json are refreshed too, so only the new verdict assertion —
-# not the claim-binding check (9b), which would otherwise refuse first on the
-# claim's now-moved digest before check_evidence ever reaches the
-# duty-verdict assertion — and not the checksums-inventory check, can catch
-# it. A verdict a real evaluator would never emit for this policy set must
-# still be refused even when every reference to it is internally consistent.
+# (p) round 10 review P2: the retained duty evaluation's verdict is changed to
+# "violated" with its downstream reference refreshed (environment-claim.json's
+# duty_evaluation_ref points at the mutated bytes), which moves the claim's
+# own digest, so the whole downstream claim-reference chain (both cases'
+# sandbox-evaluation.json claim_ref, both shadow records' environment.claim_ref
+# and evaluation_ref) and checksums.json are refreshed too. Mutating
+# duty-evaluation.json necessarily moves its own bytes, and check 9c
+# (sandbox-evaluation-inputs) recomputes the sandbox evaluation for real,
+# through the shipped evaluate-sandbox.sh, over the retained
+# control-policy-set.json, this exact mutated duty-evaluation.json and the
+# refreshed environment-claim.json: sandbox.jq's own
+# "$duty_doc.body.verdict == \"violated\"" comparison fires inside that
+# recomputation (for the "pre" case, evaluated first), so the real evaluator
+# now returns a "violated"/"duty.violated" result that is no longer
+# byte-identical to the retained per-case sandbox-evaluation.json. Check 9c
+# runs before check 10's duty-verdict assertion, so it refuses first — the
+# claim's now-moved digest is refreshed downstream precisely so claim-binding
+# (9b) does not refuse first either, but that only clears the path to check
+# 9c, not all the way to check 10. A verdict a real evaluator would never
+# emit for this policy set must still be refused even when every reference to
+# it is internally consistent — it is refused earlier than previously
+# asserted, not left unrefused. See the negative-case table's entry 'p'.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["reporter.role-mismatch"]' \
   "$mutant_dir/duty-evaluation.json" >"$mutant_dir/duty-evaluation.json.new"
@@ -1307,9 +1389,8 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-duty-verdict' 2>"$tmp/duty-verdict.err"; then
   fail 'a retained duty evaluation reporting a violated verdict must be refused'
 fi
-/usr/bin/grep -q 'duty-evaluation verdict is not satisfied' "$tmp/duty-verdict.err" ||
-  fail "a retained duty evaluation reporting a violated verdict must fail specifically on the new verdict assertion ($(cat "$tmp/duty-verdict.err"))"
-pass 'a retained duty evaluation reporting a violated verdict with its downstream reference and the whole claim-reference chain refreshed is refused specifically by the verdict assertion'
+assert_case_check p "$tmp/duty-verdict.err"
+pass 'a retained duty evaluation reporting a violated verdict with its downstream reference and the whole claim-reference chain refreshed is refused specifically by the sandbox-evaluation-inputs check, which recomputes the mismatch for real (on the pre case) before check 10 is ever reached'
 
 # (q) the prerequisite materialization receipt is swapped for unrelated
 # canonical JSON, with checksums.json refreshed so only the new
@@ -1325,8 +1406,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-prereq-receipt' 2>"$tmp/prereq-receipt.err"; then
   fail 'a prerequisite receipt swapped for unrelated canonical JSON must be refused'
 fi
-/usr/bin/grep -q 'prerequisite receipt does not resolve against its stage result' "$tmp/prereq-receipt.err" ||
-  fail "a prerequisite receipt swapped for unrelated canonical JSON must fail specifically on the prerequisite-receipt-binding assertion ($(cat "$tmp/prereq-receipt.err"))"
+assert_case_check q "$tmp/prereq-receipt.err"
 pass 'a prerequisite receipt swapped for unrelated canonical JSON is refused specifically by the prerequisite-receipt-binding assertion'
 
 # (r) the retained prerequisite/environment-declaration.json is swapped for
@@ -1345,9 +1425,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-prereq-declaration' 2>"$tmp/prereq-decl.err"; then
   fail 'a prerequisite environment declaration swapped for unrelated canonical JSON must be refused'
 fi
-/usr/bin/grep -q 'prerequisite assembled/input.json environment_ref.fingerprint_sha256 does not equal the retained environment-declaration.json digest' \
-  "$tmp/prereq-decl.err" ||
-  fail "a prerequisite environment declaration swapped for unrelated canonical JSON must fail specifically on the prerequisite fingerprint check ($(cat "$tmp/prereq-decl.err"))"
+assert_case_check r "$tmp/prereq-decl.err"
 pass 'a prerequisite environment declaration swapped for unrelated canonical JSON (checksums refreshed) is refused specifically by the prerequisite fingerprint check'
 
 # (s) a retained materialization result's body.request_ref.sha256 is changed
@@ -1379,9 +1457,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-result-request-ref' 2>"$tmp/result-request-ref.err"; then
   fail 'a retained materialization result whose request_ref points at an unrelated stage request must be refused'
 fi
-/usr/bin/grep -q 'materialization result request_ref/resolved_profile_ref does not equal the assembled references' \
-  "$tmp/result-request-ref.err" ||
-  fail "a retained materialization result whose request_ref points at an unrelated stage request must fail specifically on the new request/profile binding assertion ($(cat "$tmp/result-request-ref.err"))"
+assert_case_check s "$tmp/result-request-ref.err"
 pass 'a retained materialization result whose request_ref is changed, with its own digest refreshed downstream in the shadow record and checksums.json, is refused specifically by the request/profile binding assertion'
 
 # (t) review round 9's P2: prerequisite/input.json's embedded stage request
@@ -1401,9 +1477,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-prereq-input-network-mode' 2>"$tmp/prereq-input.err"; then
   fail 'a prerequisite/input.json embedded request with network_mode changed to allow must be refused'
 fi
-/usr/bin/grep -q 'prerequisite/input.json embedded stage_request/resolved_profile content does not equal the retained prerequisite/stage-request.json or resolved-profile-document.json bytes' \
-  "$tmp/prereq-input.err" ||
-  fail "a prerequisite/input.json embedded request with network_mode changed to allow must fail specifically on the new prerequisite-input-binds-retained-bytes check ($(cat "$tmp/prereq-input.err"))"
+assert_case_check t "$tmp/prereq-input.err"
 pass 'a prerequisite/input.json embedded request with network_mode changed to allow (retained extracts and checksums otherwise consistent) is refused specifically by the prerequisite-input-binds-retained-bytes check'
 
 # (u) review round 9's other P2: one of a retained sandbox evaluation's own
@@ -1429,9 +1503,7 @@ refresh_checksums "$mutant_dir"
 if check_evidence "$mutant_dir" 'mutant-sandbox-eval-duty-ref' 2>"$tmp/sandbox-eval-ref.err"; then
   fail 'a retained sandbox evaluation with a corrupted duty_evaluation_ref must be refused'
 fi
-/usr/bin/grep -q 'retained sandbox-evaluation.json is not byte-identical to the shipped evaluate-sandbox.sh output' \
-  "$tmp/sandbox-eval-ref.err" ||
-  fail "a retained sandbox evaluation with a corrupted duty_evaluation_ref must fail specifically on the new sandbox-evaluation-inputs check ($(cat "$tmp/sandbox-eval-ref.err"))"
+assert_case_check u "$tmp/sandbox-eval-ref.err"
 pass 'a retained sandbox evaluation with a corrupted duty_evaluation_ref (record digest and checksums refreshed downstream) is refused specifically by the sandbox-evaluation-inputs check'
 
 /bin/rm -rf -- "$mutant_dir"
