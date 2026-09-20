@@ -1067,6 +1067,51 @@ if [ "$parent_available" -eq 1 ]; then
   g2awkfifo_status=0; wait "$g2awkfifo_pid" 2>/dev/null || g2awkfifo_status=$?
   assert_refused_before_fork 'group2: .run/awk as a FIFO with no writer refuses promptly' "$g2awkfifo_status" "$g2out_awkfifo.stdout" "$g2out_awkfifo.stderr" 'E_RUNTIME awk'
 
+  # Regression (review r20 P1): the trusted HOST awk reference
+  # (check_run_directory_awk's "/usr/bin/awk" open, Linux only -- Darwin never
+  # opens a host path at all, see DARWIN_AWK_SHIM) must follow symlinks, since
+  # Debian/Ubuntu route /usr/bin/awk through /etc/alternatives; before the fix
+  # open_regular_nonblock() always added O_NOFOLLOW there and every valid
+  # launch on such a host failed ELOOP -> "E_RUNTIME awk". There is no way to
+  # make the literal system path /usr/bin/awk itself a symlink from this
+  # suite (no root, no rebinding of a fixed system path), so this fixture
+  # copies trusted-launch.c and redirects that one open()'s path argument --
+  # sed on the exact, single occurrence of the "/usr/bin/awk" string literal
+  # -- to a path this suite controls and makes a symlink to a real awk copy,
+  # exercising the identical open_regular_nonblock_ex(..., 1, ...) call with a
+  # symlinked target. The unchanged .run/awk-is-a-symlink refusal above
+  # (g2out21) still guards the other side: .run/awk itself must stay
+  # O_NOFOLLOW.
+  case "$platform" in
+    Linux:x86_64)
+      awk_host_dir="$tmp/g2.awk-host-symlink"; /bin/mkdir -m 700 "$awk_host_dir"
+      awk_host_real="$awk_host_dir/awk-real"; /bin/cp /usr/bin/awk "$awk_host_real"; /bin/chmod 0500 "$awk_host_real"
+      awk_host_link="$awk_host_dir/awk-link"; /bin/ln -s "$awk_host_real" "$awk_host_link"
+      awk_follow_src="$tmp/g2.awk-host-symlink-src.c"
+      awk_host_link_escaped=$(printf '%s\n' "$awk_host_link" | /usr/bin/sed 's/[\/&]/\\&/g')
+      /usr/bin/sed "s/\"\/usr\/bin\/awk\"/\"$awk_host_link_escaped\"/" "$parent_source" > "$awk_follow_src"
+      /usr/bin/grep -qF "\"$awk_host_link\"" "$awk_follow_src" ||
+        fail_case 'group2: host-awk-follow fixture failed to redirect the system awk path literal'
+      g2out_awkfollow="$tmp/g2.awk-host-follow"
+      build_run_directory "$g2out_awkfollow" --parent-source "$awk_follow_src" --skip-awk
+      /bin/chmod u+w "$g2out_awkfollow/.run"
+      /bin/cp "$awk_host_real" "$g2out_awkfollow/.run/awk"
+      /bin/chmod 0500 "$g2out_awkfollow/.run/awk" "$g2out_awkfollow/.run"
+      g2s_awkfollow=0
+      invoke_parent "$g2out_awkfollow/.run" "$synthetic_request" "$synthetic_map" "$g2out_awkfollow" \
+        > "$g2out_awkfollow.stdout" 2> "$g2out_awkfollow.stderr" || g2s_awkfollow=$?
+      if [ "$g2s_awkfollow" -eq 0 ]; then
+        pass_case 'group2: host awk reference reached through a symlink (e.g. /etc/alternatives) launches successfully'
+      else
+        fail_case "group2: host awk reference through a symlink was refused (status=$g2s_awkfollow): $(cat "$g2out_awkfollow.stderr" 2>/dev/null)"
+      fi
+      ;;
+    *)
+      skip_case 'group2: host awk reference reached through a symlink launches successfully' \
+        'Darwin never opens a host path for awk (DARWIN_AWK_SHIM); the follow-symlinks branch is Linux-only'
+      ;;
+  esac
+
   # output path itself a symlink to an otherwise valid output directory
   g2out24="$tmp/g2.output-symlink"; build_run_directory "$g2out24"
   real_dest24="$tmp/g2.output-symlink.real"; /bin/mkdir -m 700 "$real_dest24"

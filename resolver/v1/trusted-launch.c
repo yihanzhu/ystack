@@ -935,18 +935,20 @@ static int build_pin_path(size_t index, const char *repo_root,
    (e.g. a `.run` entry replaced by a pipe with no writer). O_NONBLOCK during the
    open itself is what prevents the block -- it would otherwise wait for a writer
    before fstat() ever runs -- and O_NOFOLLOW refuses a symlink (e.g. to
-   /dev/zero) outright. Only after fstat() confirms S_ISREG (which never returns
-   EAGAIN) do we clear O_NONBLOCK, so a caller doing blocking reads afterward gets
-   normal blocking semantics. On any failure the descriptor, if opened, is closed
-   and -1 is returned; `*out_state` is valid only on success. */
+   /dev/zero) outright, unless the caller explicitly opts out via `follow` (used
+   only for the trusted host awk reference below -- every `.run` entry and every
+   pinned open keeps O_NOFOLLOW). Only after fstat() confirms S_ISREG (which
+   never returns EAGAIN) do we clear O_NONBLOCK, so a caller doing blocking reads
+   afterward gets normal blocking semantics. On any failure the descriptor, if
+   opened, is closed and -1 is returned; `*out_state` is valid only on success. */
 #define YSTACK_NO_DIR_FD (-1)
 
-static int open_regular_nonblock(int dir_fd, const char *path,
-                                 struct stat *out_state) {
-    int fd = (dir_fd == YSTACK_NO_DIR_FD)
-                 ? open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-                 : openat(dir_fd, path,
-                         O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+static int open_regular_nonblock_ex(int dir_fd, const char *path, int follow,
+                                    struct stat *out_state) {
+    int base_flags = O_RDONLY | O_NONBLOCK | O_CLOEXEC |
+                     (follow ? 0 : O_NOFOLLOW);
+    int fd = (dir_fd == YSTACK_NO_DIR_FD) ? open(path, base_flags)
+                                          : openat(dir_fd, path, base_flags);
     int flags;
 
     if (fd < 0 || fstat(fd, out_state) != 0 || !S_ISREG(out_state->st_mode)) {
@@ -961,6 +963,11 @@ static int open_regular_nonblock(int dir_fd, const char *path,
         return -1;
     }
     return fd;
+}
+
+static int open_regular_nonblock(int dir_fd, const char *path,
+                                 struct stat *out_state) {
+    return open_regular_nonblock_ex(dir_fd, path, 0, out_state);
 }
 
 /* R5/R7: git blob id of the file at `path` against `pinned_hex`, computed by the
@@ -1088,9 +1095,15 @@ static int check_jq_version(const char *jq_path) {
 }
 
 #if defined(__linux__)
-/* R5: on Linux, .run/awk must be byte-identical to /usr/bin/awk, following that
-   platform path's own symlinks (Debian/Ubuntu route it through
-   /etc/alternatives); .run/awk itself keeps its O_NOFOLLOW. */
+/* R5/r20: on Linux, .run/awk must be byte-identical to /usr/bin/awk. Per
+   spec.md's "On Linux compare against /usr/bin/awk ... Follow this platform
+   path's symlinks: Debian and Ubuntu commonly route it through
+   /etc/alternatives, and the entry's /bin/cp follows the same links. Keep
+   O_NOFOLLOW for .run/awk, which is caller-supplied," the host reference is
+   opened with `follow` so the alternatives symlink resolves instead of
+   failing with ELOOP; .run/awk itself keeps its O_NOFOLLOW (still
+   O_NONBLOCK|O_CLOEXEC either way, and fstat() + S_ISREG() gate both before
+   use). */
 static int check_run_directory_awk(int run_fd) {
     struct stat copy_state;
     struct stat system_state;
@@ -1105,7 +1118,8 @@ static int check_run_directory_awk(int run_fd) {
         }
         return -1;
     }
-    system_fd = open_regular_nonblock(YSTACK_NO_DIR_FD, "/usr/bin/awk", &system_state);
+    system_fd = open_regular_nonblock_ex(YSTACK_NO_DIR_FD, "/usr/bin/awk", 1,
+                                         &system_state);
     if (system_fd < 0 || copy_state.st_size != system_state.st_size) {
         (void)close(copy_fd);
         if (system_fd >= 0) {
