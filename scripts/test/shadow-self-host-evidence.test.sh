@@ -469,6 +469,19 @@ check_evidence() {
       { /usr/bin/printf '%s: %s: %s materialization result is not a completed no-change materialization\n' "$label" "$step" "$case_name" >&2; return 1; }
   done
   local prereq_receipt_sha; prereq_receipt_sha=$(sha_file "$dir/prerequisite/materialization-receipt.json")
+  # The prerequisite receipt must resolve against the prerequisite stage
+  # result's own receipt-reference fields, exactly as check 7 requires of
+  # each case's receipt above (plan.md ~750-755): otherwise a receipt
+  # containing unrelated canonical JSON, with checksums.json refreshed to
+  # match, would pass every check here by being merely present and distinct
+  # from the two case receipts, leaving the duty evaluation's prerequisite
+  # proof unrecoverable.
+  "$jq_bin" -e -n --slurpfile result "$dir/prerequisite/stage-result.json" --arg sha "$prereq_receipt_sha" '
+    $result[0].body.evidence[0].proof_ref.sha256 == $sha and
+    $result[0].body.execution.metadata.tools.source_ref.sha256 == $sha and
+    (($result[0].body.outputs // [])[0].ref.sha256 // $sha) == $sha
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite receipt does not resolve against its stage result\n' "$label" "$step" >&2; return 1; }
   if [ "${receipts[0]}" = "${receipts[1]}" ] || \
      [ "${receipts[0]}" = "$prereq_receipt_sha" ] || \
      [ "${receipts[1]}" = "$prereq_receipt_sha" ]; then
@@ -650,6 +663,16 @@ check_evidence() {
     $duty[0].body.stage.result_ref.sha256 == $result_sha
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: duty-evaluation reference mismatch\n' "$label" "$step" >&2; return 1; }
+  # The retained duty evaluation must actually be the satisfied verdict this
+  # run needs, not merely reference-consistent (control/v1/duty-separation.jq:180,
+  # the only satisfied form control/v1/sandbox.jq:135-137 accepts): a result
+  # doctored to "violated" with its downstream hashes refreshed still passes
+  # every reference check above.
+  "$jq_bin" -e -n --slurpfile duty "$dir/duty-evaluation.json" '
+    $duty[0].body.verdict == "satisfied" and
+    $duty[0].body.reason_ids == ["duty.satisfied"]
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: duty-evaluation verdict is not satisfied\n' "$label" "$step" >&2; return 1; }
   # The claim's stage_result_ref is compared field for field against the duty
   # evaluation's own body.stage.result_ref (plan.md: "stage_result_ref copied
   # field for field from duty-evaluation.json's body.stage.result_ref") and
@@ -1097,6 +1120,47 @@ fi
   "$tmp/pre-identity-provenance.err" ||
   fail "a pre identity's model_request altered consistently in the identity and its own shadow record must fail specifically on the identity-provenance check ($(cat "$tmp/pre-identity-provenance.err"))"
 pass "a pre identity's model_request altered consistently in the identity and its own shadow record (recomputed hashes, record-binds-own-identity satisfied) is refused specifically by the identity-provenance check"
+
+# (p) the retained duty evaluation's verdict is changed to "violated" with its
+# downstream reference refreshed (environment-claim.json's duty_evaluation_ref
+# points at the mutated bytes) and checksums.json refreshed, so only the new
+# verdict assertion — not the reference-equality checks above it, and not the
+# checksums-inventory check — can catch it. A verdict a real evaluator would
+# never emit for this policy set must still be refused even when every
+# reference to it is internally consistent.
+fresh_mutant_copy
+"$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["reporter.role-mismatch"]' \
+  "$mutant_dir/duty-evaluation.json" >"$mutant_dir/duty-evaluation.json.new"
+/bin/mv "$mutant_dir/duty-evaluation.json.new" "$mutant_dir/duty-evaluation.json"
+mutated_duty_sha=$(sha_file "$mutant_dir/duty-evaluation.json")
+"$jq_bin" -S -c --arg sha "$mutated_duty_sha" '.body.duty_evaluation_ref.sha256 = $sha' \
+  "$mutant_dir/environment-claim.json" >"$mutant_dir/environment-claim.json.new"
+/bin/mv "$mutant_dir/environment-claim.json.new" "$mutant_dir/environment-claim.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-duty-verdict' 2>"$tmp/duty-verdict.err"; then
+  fail 'a retained duty evaluation reporting a violated verdict must be refused'
+fi
+/usr/bin/grep -q 'duty-evaluation verdict is not satisfied' "$tmp/duty-verdict.err" ||
+  fail "a retained duty evaluation reporting a violated verdict must fail specifically on the new verdict assertion ($(cat "$tmp/duty-verdict.err"))"
+pass 'a retained duty evaluation reporting a violated verdict with its downstream reference refreshed is refused specifically by the verdict assertion'
+
+# (q) the prerequisite materialization receipt is swapped for unrelated
+# canonical JSON, with checksums.json refreshed so only the new
+# prerequisite-receipt-binding assertion — not the checksums-inventory check
+# — can catch it. Distinctness from the two case receipts alone is not
+# enough: the swapped receipt is still distinct from both, but no longer
+# resolves against the prerequisite stage result's own receipt-reference
+# fields, so the duty evaluation's prerequisite proof would be unrecoverable.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{schema_version:1,kind:"unrelated_document",id:"mutant.unrelated",body:{note:"not a receipt"}}' \
+  >"$mutant_dir/prerequisite/materialization-receipt.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-prereq-receipt' 2>"$tmp/prereq-receipt.err"; then
+  fail 'a prerequisite receipt swapped for unrelated canonical JSON must be refused'
+fi
+/usr/bin/grep -q 'prerequisite receipt does not resolve against its stage result' "$tmp/prereq-receipt.err" ||
+  fail "a prerequisite receipt swapped for unrelated canonical JSON must fail specifically on the prerequisite-receipt-binding assertion ($(cat "$tmp/prereq-receipt.err"))"
+pass 'a prerequisite receipt swapped for unrelated canonical JSON is refused specifically by the prerequisite-receipt-binding assertion'
 
 /bin/rm -rf -- "$mutant_dir"
 
