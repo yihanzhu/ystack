@@ -89,6 +89,20 @@ in the expanded documents, not the line count. The four assembler decision texts
   `## Inactive maintenance loop` at 1397.
 - `README.md` (+2). One index row after the assembler row at line 289.
 - `RESTORE.md` (+18-22). A restore block after the assembler block at lines 223-241.
+- `scripts/test/portable-core-schema.test.sh` (+2). Exactly one permitted change: the
+  two paths `shadow/evidence/self-host-transition/v1/control-policy-set.json` and
+  `shadow/evidence/self-host-transition/v1/core-package-closure.json` are added to the
+  `schema_v2_corrective_expected_hits` list, in that list's existing sorted order, after
+  `scripts/test/portable-core-v2-evidence-identity.test.sh`; no other allowlist, no
+  generation list, no comparison and no import list changes. Both files are evidence
+  that must retain their bytes verbatim under requirements 2, 12 and 14 — one is a
+  byte-exact copy of `control/v1/control-policy-set.json` and the other the closure
+  descriptor that policy set's `package_ref.sha256` names — so the corrective v2
+  generation id beginning `g-c83c940a` necessarily appears in two tracked paths the
+  closed allowlist does not yet name, and CI fails with "corrective v2 generation ID
+  appears outside its closed tracked-path allowlist" until it does. #370 set the
+  precedent for adding a single allowlist line under a plan amendment rather than
+  editing the evidence bytes or dropping the files.
 
 ### What does not change
 
@@ -97,8 +111,11 @@ in the expanded documents, not the line count. The four assembler decision texts
 `shadow/v1/qualified-identity.jq`, `shadow/v1/shadow-environments.json`,
 `adapters/local-git-materializer/v1/*`, `control/v1/*`, `scope/v1/*`,
 `maintenance/v1/*`, `evals/v1/seed-set.json`, `profiles/default/v1/*`, and every
-accepted intent, spec or plan. The evidence is committed output; if a shipped
-component refuses it, the component is right and the run is wrong.
+accepted intent, spec or plan. Inside
+`scripts/test/portable-core-schema.test.sh` nothing changes but the two added
+`schema_v2_corrective_expected_hits` lines named above. The evidence is committed
+output; if a shipped component refuses it, the component is right and the run is
+wrong.
 
 ### Review size
 
