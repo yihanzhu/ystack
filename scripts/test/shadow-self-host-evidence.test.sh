@@ -292,6 +292,44 @@ check_evidence() {
     fi
   done
 
+  # Review round 9's P2: prerequisite/input.json is never bound to the
+  # retained prerequisite/stage-request.json and
+  # prerequisite/resolved-profile-document.json bytes anywhere above -- the
+  # duty evaluation's stage.request_ref/resolved_profile_ref (step
+  # 'duty-evaluation' below) recompute against those two files directly, not
+  # against prerequisite/input.json, and the fingerprint check further down
+  # only reads prerequisite/environment-declaration.json. Bind
+  # prerequisite/input.json to the same two retained files exactly as each
+  # case's assembled/input.json is bound to its own retained bytes above:
+  # recompute both embedded .content digests independently and compare them
+  # (a) to the retained file bytes and (b) to the embedded .sha256 fields
+  # that accompany them. Without this, prerequisite/input.json's embedded
+  # request could disagree with the execution that actually produced the
+  # duty evidence -- for example, a network_mode of "allow" -- while every
+  # check in this suite still passed.
+  step='prerequisite-input-binds-retained-bytes'
+  local prereq_input="$dir/prerequisite/input.json"
+  local prereq_req_sha prereq_prof_sha prereq_computed_req_sha prereq_computed_prof_sha
+  prereq_req_sha=$(sha_file "$dir/prerequisite/stage-request.json")
+  prereq_prof_sha=$(sha_file "$dir/prerequisite/resolved-profile-document.json")
+  prereq_computed_req_sha=$("$jq_bin" -S -c '.stage_request.content' "$prereq_input" 2>/dev/null |
+    sha_file /dev/stdin) ||
+    { /usr/bin/printf '%s: %s: prerequisite stage_request content unreadable\n' "$label" "$step" >&2; return 1; }
+  prereq_computed_prof_sha=$("$jq_bin" -S -c '.resolved_profile.content' "$prereq_input" 2>/dev/null |
+    sha_file /dev/stdin) ||
+    { /usr/bin/printf '%s: %s: prerequisite resolved_profile content unreadable\n' "$label" "$step" >&2; return 1; }
+  [ "$prereq_computed_req_sha" = "$prereq_req_sha" ] &&
+    [ "$prereq_computed_prof_sha" = "$prereq_prof_sha" ] ||
+    { /usr/bin/printf '%s: %s: prerequisite/input.json embedded stage_request/resolved_profile content does not equal the retained prerequisite/stage-request.json or resolved-profile-document.json bytes\n' \
+      "$label" "$step" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile input "$prereq_input" \
+    --arg req_sha "$prereq_computed_req_sha" --arg prof_sha "$prereq_computed_prof_sha" '
+    $input[0].stage_request.sha256 == $req_sha and
+    $input[0].resolved_profile.sha256 == $prof_sha
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite/input.json embedded stage_request.sha256/resolved_profile.sha256 does not match the content it accompanies\n' \
+      "$label" "$step" >&2; return 1; }
+
   # --- check 4b (requirement 16): each case's own shadow record must embed
   # the identity it actually ran under, byte for byte, and its
   # qualified_identity_ref must name the retained qualified-identity.json
@@ -583,6 +621,41 @@ check_evidence() {
         "$label" "$step" "$case_name" >&2; return 1; }
   done
 
+  # --- check 9c (review round 9's other P2): each retained
+  # sandbox-evaluation.json's own policy_ref, decision_ref, policy_set and
+  # duty_evaluation_ref are never resolved against the actual inputs
+  # anywhere else in this suite -- check 9 only hashes the whole retained
+  # file against the shadow record's evaluation_ref, check 9b only binds
+  # claim_ref, and neither consumer (scope-gates.jq, control/v1/sandbox.jq)
+  # reads the retained sandbox-evaluation.json at all (both consume the
+  # shadow record's recorded copy). Replacing one of those four reference
+  # digests and refreshing the shadow record's evaluation digest and
+  # checksums.json downstream would satisfy every check above while naming
+  # different or nonexistent policy/duty evidence.
+  #
+  # control/v1/sandbox.jq's own output (read above, "check 10" derivation)
+  # embeds no timestamp or other run-varying field -- it is a pure function
+  # of policy.json, decision.json, policy-set.json, duty.json and claim.json
+  # -- so the strongest available check is to recompute it for real, through
+  # the shipped, unmodified control/v1/evaluate-sandbox.sh, over the
+  # retained control-policy-set.json/duty-evaluation.json/environment-claim.json
+  # this evidence already commits to, and require the result to be
+  # byte-identical to the retained sandbox-evaluation.json: identical bytes
+  # can only occur when every one of those four reference fields (and the
+  # verdict together with them) already names the real, retained inputs.
+  step='sandbox-evaluation-inputs'
+  for case_name in pre post; do
+    PATH="$run_path" "$root/control/v1/evaluate-sandbox.sh" evaluate \
+      "$dir/control-policy-set.json" "$dir/duty-evaluation.json" "$dir/environment-claim.json" \
+      >"$tmp/$case_name.sandbox-eval-recomputed.json" 2>"$tmp/$case_name.sandbox-eval.err" ||
+      { /usr/bin/printf '%s: %s: %s sandbox evaluation does not recompute over the retained control-policy-set.json/duty-evaluation.json/environment-claim.json (%s)\n' \
+        "$label" "$step" "$case_name" "$(cat "$tmp/$case_name.sandbox-eval.err")" >&2; return 1; }
+    /usr/bin/cmp -s "$tmp/$case_name.sandbox-eval-recomputed.json" \
+      "$dir/$case_name/sandbox-evaluation.json" ||
+      { /usr/bin/printf '%s: %s: %s retained sandbox-evaluation.json is not byte-identical to the shipped evaluate-sandbox.sh output over the retained control-policy-set.json/duty-evaluation.json/environment-claim.json (policy_ref/decision_ref/policy_set/duty_evaluation_ref do not all resolve)\n' \
+        "$label" "$step" "$case_name" >&2; return 1; }
+  done
+
   # --- check 10: the declaration-only marker, the all-ones demonstration
   # verifier digest kept and labelled (never absent), no overclaiming prose,
   # and requirement 2's full reference-field recomputation. The two runs the
@@ -859,7 +932,7 @@ check_evidence() {
 }
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
-pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
+pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), the prerequisite input binding to its retained request/profile extracts, each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, sandbox evaluation recomputing byte-identical through the shipped evaluator over the retained policy-set/duty/claim, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
@@ -1310,6 +1383,56 @@ fi
   "$tmp/result-request-ref.err" ||
   fail "a retained materialization result whose request_ref points at an unrelated stage request must fail specifically on the new request/profile binding assertion ($(cat "$tmp/result-request-ref.err"))"
 pass 'a retained materialization result whose request_ref is changed, with its own digest refreshed downstream in the shadow record and checksums.json, is refused specifically by the request/profile binding assertion'
+
+# (t) review round 9's P2: prerequisite/input.json's embedded stage request
+# has its network_mode flipped to "allow", with only checksums.json
+# refreshed -- the retained prerequisite/stage-request.json and
+# prerequisite/resolved-profile-document.json extracts, and every other
+# assertion in this suite (requester, environment fingerprint, duty
+# evaluation's own recomputed stage.request_ref/resolved_profile_ref, which
+# read the retained extract files directly, not the embedded input), are
+# left untouched, so only the new prerequisite-input-binds-retained-bytes
+# check can catch it.
+fresh_mutant_copy
+"$jq_bin" -S -c '.stage_request.content.body.operation.arguments.network_mode = "allow"' \
+  "$mutant_dir/prerequisite/input.json" >"$mutant_dir/prerequisite/input.json.new"
+/bin/mv "$mutant_dir/prerequisite/input.json.new" "$mutant_dir/prerequisite/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-prereq-input-network-mode' 2>"$tmp/prereq-input.err"; then
+  fail 'a prerequisite/input.json embedded request with network_mode changed to allow must be refused'
+fi
+/usr/bin/grep -q 'prerequisite/input.json embedded stage_request/resolved_profile content does not equal the retained prerequisite/stage-request.json or resolved-profile-document.json bytes' \
+  "$tmp/prereq-input.err" ||
+  fail "a prerequisite/input.json embedded request with network_mode changed to allow must fail specifically on the new prerequisite-input-binds-retained-bytes check ($(cat "$tmp/prereq-input.err"))"
+pass 'a prerequisite/input.json embedded request with network_mode changed to allow (retained extracts and checksums otherwise consistent) is refused specifically by the prerequisite-input-binds-retained-bytes check'
+
+# (u) review round 9's other P2: one of a retained sandbox evaluation's own
+# reference fields (duty_evaluation_ref.sha256) is replaced with an
+# unrelated digest, with the shadow record's own evaluation_ref refreshed
+# downstream to match the mutated file's new digest, and checksums.json
+# refreshed too, so only the new sandbox-evaluation-inputs check -- which
+# recomputes the evaluation for real through the shipped evaluator, not
+# check 9 (which only hashes the whole retained file against the record) or
+# check 10's field-level assertions (which never inspect duty_evaluation_ref)
+# -- can catch it.
+fresh_mutant_copy
+bad_duty_ref_sha=$(/usr/bin/printf 'd%.0s' $(seq 1 64))
+"$jq_bin" -S -c --arg s "$bad_duty_ref_sha" '.body.duty_evaluation_ref.sha256 = $s' \
+  "$mutant_dir/post/sandbox-evaluation.json" >"$mutant_dir/post/sandbox-evaluation.json.new"
+/bin/mv "$mutant_dir/post/sandbox-evaluation.json.new" "$mutant_dir/post/sandbox-evaluation.json"
+mutated_eval_sha=$(sha_file "$mutant_dir/post/sandbox-evaluation.json")
+"$jq_bin" -S -c --arg sha "$mutated_eval_sha" \
+  '.body.environment.evaluation.value.evaluation_ref.sha256 = $sha' \
+  "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
+/bin/mv "$mutant_dir/post/state/shadow-record.json.new" "$mutant_dir/post/state/shadow-record.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-sandbox-eval-duty-ref' 2>"$tmp/sandbox-eval-ref.err"; then
+  fail 'a retained sandbox evaluation with a corrupted duty_evaluation_ref must be refused'
+fi
+/usr/bin/grep -q 'retained sandbox-evaluation.json is not byte-identical to the shipped evaluate-sandbox.sh output' \
+  "$tmp/sandbox-eval-ref.err" ||
+  fail "a retained sandbox evaluation with a corrupted duty_evaluation_ref must fail specifically on the new sandbox-evaluation-inputs check ($(cat "$tmp/sandbox-eval-ref.err"))"
+pass 'a retained sandbox evaluation with a corrupted duty_evaluation_ref (record digest and checksums refreshed downstream) is refused specifically by the sandbox-evaluation-inputs check'
 
 /bin/rm -rf -- "$mutant_dir"
 
