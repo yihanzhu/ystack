@@ -251,6 +251,22 @@ check_evidence() {
       { /usr/bin/printf '%s: %s: %s resolved_profile content unreadable\n' "$label" "$step" "$case_name" >&2; return 1; }
     [ "$computed_prof_sha" = "$resolved_profile_sha" ] ||
       { /usr/bin/printf '%s: %s: %s resolved_profile embedded in input.json does not equal the retained resolved-profile.json bytes\n' "$label" "$step" "$case_name" >&2; return 1; }
+    # input.json embeds each document alongside its own sha256 field
+    # (shadow/v1/materialization-input.jq's input_document: stage_request and
+    # resolved_profile are each {content, sha256}). The reference-file
+    # comparisons above hash the embedded .content and compare it only to the
+    # separate stage-request-ref.json/resolved-profile-ref.json files and to
+    # the retained resolved-profile.json; neither the materializer nor any
+    # other consumer validates the assembled input itself, so nothing before
+    # this line has ever compared the embedded .sha256 fields against the
+    # content they accompany. A digest field edited alone, with checksums.json
+    # refreshed, would otherwise pass every check above.
+    "$jq_bin" -e -n --slurpfile input "$input" \
+      --arg req_sha "$computed_req_sha" --arg prof_sha "$computed_prof_sha" '
+      $input[0].stage_request.sha256 == $req_sha and
+      $input[0].resolved_profile.sha256 == $prof_sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies\n' "$label" "$step" "$case_name" >&2; return 1; }
     "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile req "$req_ref" \
       --slurpfile prof "$prof_ref" \
       --arg req_sha "$computed_req_sha" --arg prof_sha "$computed_prof_sha" '
@@ -303,6 +319,42 @@ check_evidence() {
   done
   [ -n "$pre_vi_ref" ] && [ "$pre_vi_ref" = "$post_vi_ref" ] ||
     { /usr/bin/printf '%s: %s: pre and post verification_instructions_ref (media type/content id/digest) do not agree on the one shared instructions file\n' "$label" "$step" >&2; return 1; }
+
+  # --- check 4c (spec requirements 12-13): the identity's model_request,
+  # adapter_config_refs, prompt_refs and skill_refs must actually come from
+  # the selected profile, not merely be well-shaped and self-consistent with
+  # the shadow record. qualified-identity.jq's qualified_identity_ok (copied
+  # from scope/v1/workflow-scope.jq) only checks the shape of these fields,
+  # and check 4b above only checks that a record embeds its own identity
+  # byte for byte, so a fixture model/config/prompt/skill set consistently
+  # carried by both documents would still pass. Derive the expected values
+  # from the retained resolved-profile.json's producer binding (the only
+  # binding with execution_kind "model") and the pinned producer config
+  # (materialization-input.jq's producer_config_pin), per plan.md's
+  # qualified-identity section: adapter_config_refs is the producer binding's
+  # config ref (one entry, digest-bound to the pinned producer-config.json),
+  # prompt_refs is the routines/coder.md prompt object the binding names,
+  # skill_refs is the binding's own (empty) skill_refs, and model_request is
+  # the model request the binding carries.
+  step='identity-provenance'
+  local producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
+  for case_name in pre post; do
+    local identity="$dir/$case_name/qualified-identity.json"
+    "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile profile "$dir/resolved-profile.json" \
+      --arg pin "$producer_config_pin" '
+      ([$profile[0].body.bindings[] | select(.binding.role == "producer")]) as $producers |
+      ($producers | length) == 1 and
+      $producers[0] as $producer |
+      $producer.config_source.state == "present" and
+      $producer.config_source.value.value_sha256 == $pin and
+      $identity[0].body.model_request == $producer.binding.model_request and
+      $identity[0].body.prompt_refs == [$producer.binding.prompt_ref] and
+      $identity[0].body.skill_refs == $producer.binding.skill_refs and
+      ($identity[0].body.adapter_config_refs | length) == 1 and
+      $identity[0].body.adapter_config_refs[0].sha256 == $pin
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s model_request/adapter_config_refs/prompt_refs/skill_refs do not derive from the retained resolved-profile.json producer binding and the pinned producer config\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
 
   # --- check 5: the two required outcomes, and the shared shadow-record
   # invariants. The failing check plan.md's "The two runs" (requirement 8)
@@ -728,7 +780,7 @@ check_evidence() {
 }
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
-pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes), each record binding its own retained identity, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
+pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
@@ -984,6 +1036,67 @@ fi
   "$tmp/sandbox-verdict.err" ||
   fail "a retained sandbox evaluation reporting a violated verdict must fail specifically on the declaration-only-and-references check ($(cat "$tmp/sandbox-verdict.err"))"
 pass 'a retained sandbox evaluation reporting a violated verdict (record digest and checksums refreshed, recorded verdict left satisfied) is refused specifically by the declaration-only-and-references check'
+
+# (m) the pre case's assembled/input.json has its embedded
+# .stage_request.sha256 field corrupted while the .content it accompanies,
+# every reference file and the retained resolved-profile.json are left
+# untouched, so only the new embedded-digest comparison added to check 4 —
+# not the existing reference-file comparisons, none of which read this
+# field — can catch it.
+fresh_mutant_copy
+bad_sha=$(/usr/bin/printf 'f%.0s' $(seq 1 64))
+"$jq_bin" -S -c --arg s "$bad_sha" '.stage_request.sha256 = $s' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-embedded-stage-request-sha' 2>"$tmp/embed-req.err"; then
+  fail 'a corrupted embedded stage_request.sha256 field in assembled/input.json must be refused'
+fi
+/usr/bin/grep -q 'embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies' \
+  "$tmp/embed-req.err" ||
+  fail "a corrupted embedded stage_request.sha256 field must fail specifically on the new embedded-digest check ($(cat "$tmp/embed-req.err"))"
+pass 'a corrupted embedded stage_request.sha256 field in assembled/input.json (content, reference files and resolved-profile.json all left untouched) is refused specifically by the embedded-digest check'
+
+# (n) the same, but for the embedded .resolved_profile.sha256 field, proving
+# the new check covers both embedded digest fields independently.
+fresh_mutant_copy
+bad_sha=$(/usr/bin/printf 'e%.0s' $(seq 1 64))
+"$jq_bin" -S -c --arg s "$bad_sha" '.resolved_profile.sha256 = $s' \
+  "$mutant_dir/post/assembled/input.json" >"$mutant_dir/post/assembled/input.json.new"
+/bin/mv "$mutant_dir/post/assembled/input.json.new" "$mutant_dir/post/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-embedded-resolved-profile-sha' 2>"$tmp/embed-prof.err"; then
+  fail 'a corrupted embedded resolved_profile.sha256 field in assembled/input.json must be refused'
+fi
+/usr/bin/grep -q 'embedded stage_request.sha256/resolved_profile.sha256 in assembled/input.json does not match the content it accompanies' \
+  "$tmp/embed-prof.err" ||
+  fail "a corrupted embedded resolved_profile.sha256 field must fail specifically on the new embedded-digest check ($(cat "$tmp/embed-prof.err"))"
+pass 'a corrupted embedded resolved_profile.sha256 field in assembled/input.json (content, reference files and resolved-profile.json all left untouched) is refused specifically by the embedded-digest check'
+
+# (o) the pre case's qualified-identity.json has its model_request changed
+# consistently with its own shadow record (both documents, both hashes
+# refreshed together), so check 4b's byte-for-byte record/identity binding
+# still passes and only the new identity-provenance check — comparing the
+# identity's model_request against the retained resolved-profile.json's
+# producer binding — can catch it.
+fresh_mutant_copy
+"$jq_bin" -S -c '.body.model_request.model_id = "claude-mutant-5"' \
+  "$mutant_dir/pre/qualified-identity.json" >"$mutant_dir/pre/qualified-identity.json.new"
+/bin/mv "$mutant_dir/pre/qualified-identity.json.new" "$mutant_dir/pre/qualified-identity.json"
+mutated_identity_sha=$(sha_file "$mutant_dir/pre/qualified-identity.json")
+"$jq_bin" -S -c --arg sha "$mutated_identity_sha" '
+  .body.qualified_identity.model_request.model_id = "claude-mutant-5" |
+  .body.qualified_identity_ref.sha256 = $sha
+' "$mutant_dir/pre/state/shadow-record.json" >"$mutant_dir/pre/state/shadow-record.json.new"
+/bin/mv "$mutant_dir/pre/state/shadow-record.json.new" "$mutant_dir/pre/state/shadow-record.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-pre-identity-model-consistent' 2>"$tmp/pre-identity-provenance.err"; then
+  fail "a pre identity's model_request altered consistently in the identity and its own shadow record must be refused"
+fi
+/usr/bin/grep -q 'model_request/adapter_config_refs/prompt_refs/skill_refs do not derive from the retained resolved-profile.json producer binding and the pinned producer config' \
+  "$tmp/pre-identity-provenance.err" ||
+  fail "a pre identity's model_request altered consistently in the identity and its own shadow record must fail specifically on the identity-provenance check ($(cat "$tmp/pre-identity-provenance.err"))"
+pass "a pre identity's model_request altered consistently in the identity and its own shadow record (recomputed hashes, record-binds-own-identity satisfied) is refused specifically by the identity-provenance check"
 
 /bin/rm -rf -- "$mutant_dir"
 
