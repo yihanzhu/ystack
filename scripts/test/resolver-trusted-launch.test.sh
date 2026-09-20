@@ -749,16 +749,39 @@ if [ "$parent_available" -eq 1 ]; then
     fail_case "group2: positive control failed (status=$g2_control_status): $(cat "$g2_control_out.stderr" 2>/dev/null)"
   fi
 
+  # Round-19 re-review: the tampered runtime file used to live alone under
+  # $tmp, outside any repository tree, so the very next pin check (the
+  # library, at $tmp/scripts/lib/profile-resolution.sh) also failed on a
+  # missing file with the identical "E_RUNTIME pin" line -- the case passed
+  # even with the runtime blob check itself removed. Build a complete copied
+  # tree instead (as the library/jq-program cases below already do), prove it
+  # resolves successfully untampered first, then tamper only the runtime file
+  # inside that same tree: every other one of the eight pins is now known-good
+  # from the positive control, so a refusal can only be the runtime pin firing.
+  g2_runtime_tree="$tmp/g2-runtime-blob-tree"
+  copy_repo_tree "$g2_runtime_tree"
+  g2_runtime_runtime="$g2_runtime_tree/resolver/v1/profile-resolve-runtime.sh"
+
+  g2out_pos="$tmp/g2.runtime-blob.positive"
+  build_run_directory "$g2out_pos"
+  g2status_pos=0
+  "$g2out_pos/.run/trusted-launch" resolve "$g2_runtime_runtime" "$g2out_pos/.run/nofollow-snapshot" \
+    "$g2out_pos/.run/jq" "$synthetic_request" "$synthetic_map" "$g2out_pos" "$g2out_pos/.run" \
+    > "$g2out_pos.stdout" 2> "$g2out_pos.stderr" || g2status_pos=$?
+  if [ "$g2status_pos" -eq 0 ]; then
+    pass_case 'group2: positive control -- untampered copied-tree runtime file resolves successfully'
+  else
+    fail_case "group2: positive control for runtime-blob case failed (status=$g2status_pos): $(cat "$g2out_pos.stderr" 2>/dev/null)"
+  fi
+
+  /usr/bin/printf '\n' >> "$g2_runtime_runtime"
   g2out="$tmp/g2.runtime-blob"
   build_run_directory "$g2out"
-  /bin/chmod u+w "$g2out"
-  runtime_copy="$tmp/g2.runtime-copy.sh"
-  /bin/cp "$runtime" "$runtime_copy"; /usr/bin/printf '\n' >> "$runtime_copy"; /bin/chmod 0644 "$runtime_copy"
   g2status=0
-  "$g2out/.run/trusted-launch" resolve "$runtime_copy" "$g2out/.run/nofollow-snapshot" \
+  "$g2out/.run/trusted-launch" resolve "$g2_runtime_runtime" "$g2out/.run/nofollow-snapshot" \
     "$g2out/.run/jq" "$synthetic_request" "$synthetic_map" "$g2out" "$g2out/.run" \
     > "$g2out.stdout" 2> "$g2out.stderr" || g2status=$?
-  assert_refused_before_fork 'group2: runtime file blob id mismatch' "$g2status" "$g2out.stdout" "$g2out.stderr" 'E_RUNTIME pin'
+  assert_refused_before_fork 'group2: runtime file blob id mismatch (copied-tree fixture, positive control proven first)' "$g2status" "$g2out.stdout" "$g2out.stderr" 'E_RUNTIME pin'
 
   # runtime file mode 0755 instead of 0644
   g2out2="$tmp/g2.runtime-mode"; build_run_directory "$g2out2"
@@ -1025,6 +1048,24 @@ if [ "$parent_available" -eq 1 ]; then
   g2out23="$tmp/g2.awk-wrongmode"; build_run_directory "$g2out23"
   /bin/chmod u+w "$g2out23/.run"; /bin/chmod 0700 "$g2out23/.run/awk"; /bin/chmod 0500 "$g2out23/.run"
   run_direct_refusal_case 'group2: .run/awk wrong-mode copy' "$g2out23/.run" "$synthetic_request" "$synthetic_map" "$g2out23" "$g2out23/.run" 'E_RUNTIME awk'
+
+  # Regression (review r19 P2): .run/awk replaced by a FIFO with no writer.
+  # check_run_directory_awk's openat() is now O_NONBLOCK|O_NOFOLLOW so it
+  # cannot block on the FIFO, and fstat/S_ISREG runs before any read -- same
+  # discipline, and the same bounded-background pattern, as the FIFO-pinned-
+  # source regression above (there is no supervisor timeout at this point, so
+  # a regression here would hang the suite, not just fail a case).
+  g2out_awkfifo="$tmp/g2.awk-fifo"; build_run_directory "$g2out_awkfifo" --skip-awk
+  /bin/chmod u+w "$g2out_awkfifo/.run"
+  /usr/bin/mkfifo -m 500 "$g2out_awkfifo/.run/awk"
+  /bin/chmod 0500 "$g2out_awkfifo/.run"
+  ( invoke_parent "$g2out_awkfifo/.run" "$synthetic_request" "$synthetic_map" "$g2out_awkfifo" \
+      > "$g2out_awkfifo.stdout" 2> "$g2out_awkfifo.stderr" ) & g2awkfifo_pid=$!
+  g2awkfifo_deadline=$(( $(/bin/date +%s) + 5 ))
+  while kill -0 "$g2awkfifo_pid" 2>/dev/null && [ "$(/bin/date +%s)" -lt "$g2awkfifo_deadline" ]; do /bin/sleep 0.02; done
+  kill -0 "$g2awkfifo_pid" 2>/dev/null && { kill -9 "$g2awkfifo_pid" 2>/dev/null; fail_case 'group2: .run/awk as a FIFO hung instead of refusing'; }
+  g2awkfifo_status=0; wait "$g2awkfifo_pid" 2>/dev/null || g2awkfifo_status=$?
+  assert_refused_before_fork 'group2: .run/awk as a FIFO with no writer refuses promptly' "$g2awkfifo_status" "$g2out_awkfifo.stdout" "$g2out_awkfifo.stderr" 'E_RUNTIME awk'
 
   # output path itself a symlink to an otherwise valid output directory
   g2out24="$tmp/g2.output-symlink"; build_run_directory "$g2out24"
@@ -2681,10 +2722,24 @@ sweep_absolute_paths() {
   # argument position (e.g. "chmod 0700 /*", neither shape). Strip just
   # that pattern text before extraction so it never yields a token, instead
   # of exempting the "/*" value globally.
+  # Round-19: the main token regex below requires at least one character after
+  # the leading "/", so a standalone root argument ("/", quoted or unquoted)
+  # never yields a token at all -- `/bin/chmod 0700 /` passed the sweep
+  # silently. Recognise it separately as its own whitespace-delimited word
+  # (after stripping one layer of surrounding quotes), a plain word-boundary
+  # reading rather than a regex extension of the join-aware pattern above.
   sap_file=$1
-  /usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
-    /usr/bin/sed -E 's#(^|[[:space:]])/\*\)#\1#g; s#([%#])/\*(\}|$|[[:space:]])#\1\2#g' |
-    /usr/bin/grep -Eo '[A-Za-z0-9_}]?(/[A-Za-z0-9_.%*-]+)+' | /usr/bin/sort -u
+  sap_lines=$(/usr/bin/grep -Ev '^[[:space:]]*#' "$sap_file" 2>/dev/null |
+    /usr/bin/sed -E 's#(^|[[:space:]])/\*\)#\1#g; s#([%#])/\*(\}|$|[[:space:]])#\1\2#g')
+  { printf '%s\n' "$sap_lines" | /usr/bin/grep -Eo '[A-Za-z0-9_}]?(/[A-Za-z0-9_.%*-]+)+'
+    printf '%s\n' "$sap_lines" | /usr/bin/awk '{
+      for (i = 1; i <= NF; i++) {
+        w = $i
+        gsub(/^["'"'"']|["'"'"']$/, "", w)
+        if (w == "/") print "/"
+      }
+    }'
+  } | /usr/bin/sort -u
 }
 
 # entry_sweep_bad_count FILE -- echoes FILE's unlisted role-checked token
@@ -2751,6 +2806,35 @@ if [ -f "$entry" ]; then
     pass_case 'mechanism: role-aware sweep rejects an out-of-range /dev/fd/42 argument (only /dev/fd, /dev/fd/*, /dev/fd/2 are pinned)'
   else
     fail_case 'mechanism: role-aware sweep failed to reject an out-of-range /dev/fd/42 argument'
+  fi
+
+  # Round-19 review: a standalone root argument, unquoted or quoted, must be
+  # recognised as an absolute-path token and rejected (it is not allowlisted).
+  sap_neg_root_unquoted="$sap_neg_dir/root-unquoted.sh"
+  printf '%s\n' '/bin/chmod 0700 /' > "$sap_neg_root_unquoted"
+  sap_neg_root_unquoted_bad=$(entry_sweep_bad_count "$sap_neg_root_unquoted")
+  if [ "$sap_neg_root_unquoted_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects a standalone unquoted "/" argument'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject a standalone unquoted "/" argument'
+  fi
+
+  sap_neg_root_dquoted="$sap_neg_dir/root-dquoted.sh"
+  printf '%s\n' '/bin/chmod 0700 "/"' > "$sap_neg_root_dquoted"
+  sap_neg_root_dquoted_bad=$(entry_sweep_bad_count "$sap_neg_root_dquoted")
+  if [ "$sap_neg_root_dquoted_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects a standalone double-quoted "/" argument'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject a standalone double-quoted "/" argument'
+  fi
+
+  sap_neg_root_squoted="$sap_neg_dir/root-squoted.sh"
+  printf '%s\n' "/bin/chmod 0700 '/'" > "$sap_neg_root_squoted"
+  sap_neg_root_squoted_bad=$(entry_sweep_bad_count "$sap_neg_root_squoted")
+  if [ "$sap_neg_root_squoted_bad" -gt 0 ]; then
+    pass_case 'mechanism: role-aware sweep rejects a standalone single-quoted "/" argument'
+  else
+    fail_case 'mechanism: role-aware sweep failed to reject a standalone single-quoted "/" argument'
   fi
 
   # Round-5 review: R10 also requires the C parent's own pathname strings
@@ -3748,7 +3832,10 @@ else
 fi
 
 if [ -f "$parent_source" ]; then
-  forbidden_calls='snprintf malloc free fprintf strerror nanosleep usleep'
+  # R10's full eight-call forbidden list (spec.md:5691-5692, 8818-8819); grep with
+  # an identifier-boundary and optional whitespace before "(" so "printf(...)" and
+  # "fprintf (...)" are both caught, not just a bare "name(" with no gap.
+  forbidden_calls='snprintf malloc free fprintf printf strerror nanosleep usleep'
   handler_name=$(/usr/bin/grep -oE '\.sa_(handler|sigaction)[[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' "$parent_source" \
     | /usr/bin/sed -E 's/.*=[[:space:]]*//' | /usr/bin/grep -vE '^(SIG_DFL|SIG_IGN)$' | /usr/bin/head -n1)
   # handler_bad_count SRC -> forbidden calls in handler_name's brace-balanced body in SRC.
@@ -3757,7 +3844,10 @@ if [ -f "$parent_source" ]; then
       !f { if ($0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(")) f = 1; else next }
       { print; d += gsub(/\{/, "{"); d -= gsub(/\}/, "}"); if (d > 0) s = 1; if (s && d == 0) exit }' "$1")
     hbc_n=0
-    for f in $forbidden_calls; do hbc_n=$((hbc_n + $(printf '%s\n' "$hbc_body" | /usr/bin/grep -c -- "${f}(" || :))); done
+    for f in $forbidden_calls; do
+      hbc_n=$((hbc_n + $(printf '%s\n' "$hbc_body" \
+        | /usr/bin/grep -cE -- "(^|[^A-Za-z0-9_])${f}[[:space:]]*\\(" || :)))
+    done
     printf '%s\n' "$hbc_n"
   }
   if [ -z "$handler_name" ]; then
@@ -3766,13 +3856,28 @@ if [ -f "$parent_source" ]; then
     handler_bad=$(handler_bad_count "$parent_source")
     if [ "$handler_bad" -eq 0 ]; then pass_case 'mechanism: no forbidden non-async-signal-safe call inside the installed signal handler body'
     else fail_case "mechanism: installed signal handler '$handler_name' has $handler_bad forbidden call(s)"; fi
-    # Negative control: an injected fprintf in the body must be caught.
+    # Negative controls: an injected fprintf(...), a bare printf(...), and a
+    # fprintf (...) with whitespace before the parenthesis must each be caught.
     handler_neg_src="$tmp/handler-neg.c"
     /usr/bin/awk -v name="$handler_name" \
       '{ print } !d && $0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(") { print "    fprintf(stderr, \"x\");"; d = 1 }' \
       "$parent_source" > "$handler_neg_src"
     if [ "$(handler_bad_count "$handler_neg_src")" -gt 0 ]; then pass_case 'mechanism: handler safety check rejects an injected fprintf inside the handler body (negative control)'
     else fail_case 'mechanism: handler safety check failed to reject an injected fprintf inside the handler body'; fi
+
+    handler_neg_printf_src="$tmp/handler-neg-printf.c"
+    /usr/bin/awk -v name="$handler_name" \
+      '{ print } !d && $0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(") { print "    printf(\"x\");"; d = 1 }' \
+      "$parent_source" > "$handler_neg_printf_src"
+    if [ "$(handler_bad_count "$handler_neg_printf_src")" -gt 0 ]; then pass_case 'mechanism: handler safety check rejects an injected bare printf inside the handler body (negative control)'
+    else fail_case 'mechanism: handler safety check failed to reject an injected bare printf inside the handler body'; fi
+
+    handler_neg_space_src="$tmp/handler-neg-space.c"
+    /usr/bin/awk -v name="$handler_name" \
+      '{ print } !d && $0 ~ ("(^|[^A-Za-z0-9_])" name "[[:space:]]*\\(") { print "    fprintf (stderr, \"x\");"; d = 1 }' \
+      "$parent_source" > "$handler_neg_space_src"
+    if [ "$(handler_bad_count "$handler_neg_space_src")" -gt 0 ]; then pass_case 'mechanism: handler safety check rejects an injected fprintf with a space before "(" inside the handler body (negative control)'
+    else fail_case 'mechanism: handler safety check failed to reject an injected fprintf with a space before "(" inside the handler body'; fi
   fi
 
   # Word-bounded and comment-stripped: an unbounded "environ" also matches
