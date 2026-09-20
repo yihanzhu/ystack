@@ -205,9 +205,18 @@ check_evidence() {
         "$(cat "$tmp/$case_name.verr")" >&2; return 1; }
   done
 
-  # --- check 4: qualified-identity binds the assembler's own emitted refs
-  # and target_revision equals the case's own git_revision_ref.
+  # --- check 4: qualified-identity binds the assembler's own emitted refs,
+  # target_revision equals the case's own git_revision_ref, and each case's
+  # verification_instructions_ref actually names the retained
+  # verification-instructions.md bytes: the shape check in
+  # shadow/v1/qualified-identity.jq only confirms this field is *a*
+  # content_ref, never that it names the bundled file this offline proof
+  # advertises as its minimal digest procedure. Both cases share the one
+  # committed instructions file, so their refs must also agree with each
+  # other, not merely each pass in isolation.
   step='identity-binds-assembler-output'
+  local vi_sha; vi_sha=$(sha_file "$dir/verification-instructions.md")
+  local pre_vi_ref post_vi_ref
   for case_name in pre post; do
     local identity="$dir/$case_name/qualified-identity.json"
     local req_ref="$dir/$case_name/assembled/stage-request-ref.json"
@@ -223,7 +232,18 @@ check_evidence() {
       $identity[0].body.target_revision == $incident[0].body.git_revision_ref
     ' >/dev/null 2>&1 ||
       { /usr/bin/printf '%s: %s: %s target_revision mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
+    "$jq_bin" -e -n --slurpfile identity "$identity" --arg sha "$vi_sha" '
+      $identity[0].body.verification_instructions_ref.sha256 == $sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s verification_instructions_ref does not name the retained verification-instructions.md bytes\n' "$label" "$step" "$case_name" >&2; return 1; }
+    if [ "$case_name" = pre ]; then
+      pre_vi_ref=$("$jq_bin" -c '.body.verification_instructions_ref' "$identity" 2>/dev/null)
+    else
+      post_vi_ref=$("$jq_bin" -c '.body.verification_instructions_ref' "$identity" 2>/dev/null)
+    fi
   done
+  [ -n "$pre_vi_ref" ] && [ "$pre_vi_ref" = "$post_vi_ref" ] ||
+    { /usr/bin/printf '%s: %s: pre and post verification_instructions_ref (media type/content id/digest) do not agree on the one shared instructions file\n' "$label" "$step" >&2; return 1; }
 
   # --- check 5: the two required outcomes, and the shared shadow-record
   # invariants.
@@ -249,15 +269,18 @@ check_evidence() {
       { /usr/bin/printf '%s: %s: %s shared invariants wrong\n' "$label" "$step" "$case_name" >&2; return 1; }
   done
 
-  # --- check 6: empty patch payload in both locations, network deny.
+  # --- check 6: empty patch payload in both locations, network deny. The
+  # cardinality check is copied verbatim from the driver's own guard
+  # (shadow/v1/reproduce.sh:278-280: "== [\"\"]", not "all(. == \"\")"): the
+  # driver's check requires the extracted array to have exactly one element,
+  # the empty string, so a missing entry ([]) or a duplicate one (["", ""])
+  # would satisfy "all(. == \"\")" while the real driver rejects both.
   step='no-patch-no-network'
   for case_name in pre post; do
     "$jq_bin" -e -n --slurpfile input "$dir/$case_name/assembled/input.json" '
-      ([$input[0].payloads[] | select(.input_id == "input.producer-patch") | .data] |
-        all(. == "")) and
+      ([$input[0].payloads[] | select(.input_id == "input.producer-patch") | .data] == [""]) and
       ([$input[0].trust_context.verified_payloads[] |
-        select(.input_id == "input.producer-patch") | .content.data] |
-        all(. == "")) and
+        select(.input_id == "input.producer-patch") | .content.data] == [""]) and
       $input[0].stage_request.content.body.operation.arguments.network_mode == "deny"
     ' >/dev/null 2>&1 ||
       { /usr/bin/printf '%s: %s: %s patch/network invariant wrong\n' "$label" "$step" "$case_name" >&2; return 1; }
@@ -648,19 +671,33 @@ fi
 pass 'a mutated outcome field is refused'
 
 # (d) a retained materialization result reports a changed outcome instead of
-# no-change, with checksums.json refreshed so only check 7's new completed/
-# no-change assertion — not the checksums-inventory check — can catch it.
+# no-change, with the shadow record's own result reference AND checksums.json
+# both refreshed, so only check 7's new completed/no-change assertion — not
+# its earlier "record does not bind its own result" assertion, and not the
+# checksums-inventory check — can catch it. Leaving the shadow record's
+# stage_result_ref pointing at the original bytes would make this case fail
+# on that earlier, unrelated assertion instead, proving nothing about the
+# completed/no-change check this case exists to exercise.
 fresh_mutant_copy
 "$jq_bin" -S -c '.body.outcome.value = "changed"' \
   "$mutant_dir/post/state/materialization-result.json" \
   >"$mutant_dir/post/state/materialization-result.json.new"
 /bin/mv "$mutant_dir/post/state/materialization-result.json.new" \
   "$mutant_dir/post/state/materialization-result.json"
+mutated_result_sha=$(sha_file "$mutant_dir/post/state/materialization-result.json")
+"$jq_bin" -S -c --arg sha "$mutated_result_sha" \
+  '.body.materialization.value.stage_result_ref.sha256 = $sha' \
+  "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
+/bin/mv "$mutant_dir/post/state/shadow-record.json.new" \
+  "$mutant_dir/post/state/shadow-record.json"
 refresh_checksums "$mutant_dir"
-if check_evidence "$mutant_dir" 'mutant-materialization-outcome' 2>/dev/null; then
+if check_evidence "$mutant_dir" 'mutant-materialization-outcome' 2>"$tmp/mat-outcome.err"; then
   fail 'a retained materialization result reporting a changed outcome must be refused'
 fi
-pass 'a retained materialization result reporting a changed outcome instead of no-change is refused'
+/usr/bin/grep -q 'materialization result is not a completed no-change materialization' \
+  "$tmp/mat-outcome.err" ||
+  fail "a retained materialization result reporting a changed outcome must fail specifically on the completed/no-change assertion, not an earlier one ($(cat "$tmp/mat-outcome.err"))"
+pass 'a retained materialization result reporting a changed outcome instead of no-change is refused specifically by the completed/no-change assertion'
 
 # (e) the environment claim's stage_result_ref points at an unrelated result
 # rather than the duty evaluation's own stage.result_ref and the retained
@@ -677,6 +714,49 @@ if check_evidence "$mutant_dir" 'mutant-claim-stage-result' 2>/dev/null; then
   fail 'an environment claim pointing at an unrelated stage result must be refused'
 fi
 pass 'an environment claim whose stage_result_ref does not match the duty evaluation and the retained prerequisite stage result is refused'
+
+# (f) the retained verification-instructions.md bytes are edited after the
+# qualified-identity.json refs were computed, with checksums.json refreshed
+# so only the new verification_instructions_ref digest check (check 4) —
+# not the checksums-inventory check — can catch it.
+fresh_mutant_copy
+/usr/bin/printf '\n<!-- mutated -->\n' >>"$mutant_dir/verification-instructions.md"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-verification-instructions' 2>"$tmp/vi.err"; then
+  fail 'edited verification-instructions.md bytes must be refused'
+fi
+/usr/bin/grep -q 'verification_instructions_ref does not name the retained verification-instructions.md bytes' \
+  "$tmp/vi.err" ||
+  fail "edited verification-instructions.md bytes must fail specifically on the verification_instructions_ref digest check ($(cat "$tmp/vi.err"))"
+pass "edited verification-instructions.md bytes are refused because the identities' verification_instructions_ref no longer names them"
+
+# (g) the producer-patch payload entry is removed entirely (an empty array),
+# which the driver's exact cardinality check ([...] == [""]) refuses but the
+# earlier, looser "all(. == \"\")" predicate would vacuously accept.
+fresh_mutant_copy
+"$jq_bin" -S -c '.payloads |= map(select(.input_id != "input.producer-patch"))' \
+  "$mutant_dir/post/assembled/input.json" >"$mutant_dir/post/assembled/input.json.new"
+/bin/mv "$mutant_dir/post/assembled/input.json.new" "$mutant_dir/post/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-patch-missing' 2>/dev/null; then
+  fail 'a missing producer-patch payload entry must be refused'
+fi
+pass 'a missing producer-patch payload entry (an empty array where the driver requires exactly one empty string) is refused'
+
+# (h) the producer-patch entry is duplicated in trust_context.verified_payloads
+# (two elements, both the empty string), which the same exact cardinality
+# check refuses but "all(. == \"\")" would again vacuously accept.
+fresh_mutant_copy
+"$jq_bin" -S -c \
+  '.trust_context.verified_payloads +=
+     ([.trust_context.verified_payloads[] | select(.input_id == "input.producer-patch")] | .[0:1])' \
+  "$mutant_dir/post/assembled/input.json" >"$mutant_dir/post/assembled/input.json.new"
+/bin/mv "$mutant_dir/post/assembled/input.json.new" "$mutant_dir/post/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-patch-duplicate' 2>/dev/null; then
+  fail 'a duplicated producer-patch verified-payload entry must be refused'
+fi
+pass 'a duplicated producer-patch verified-payload entry (two empty strings where the driver requires exactly one) is refused'
 /bin/rm -rf -- "$mutant_dir"
 
 # ===========================================================================
@@ -801,7 +881,7 @@ post_identity=$("$jq_bin" -c '.body' "$evdir/post/qualified-identity.json")
        family("protected-path-credential-network-publisher-boundaries";"declared";0;0;0),
        family("repeated-cancelled-missed-events";"declared";0;0;0),
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
-       family("stale-moved-artifacts";"seeded";7;0;0)]}}' \
+       family("stale-moved-artifacts";"seeded";7;1;0)]}}' \
   >"$scope_dir/dashboard.json"
 "$jq_bin" -e '
   [.body.core_contract.package_ref.sha256, .body.catalog_ref.sha256,
@@ -942,35 +1022,34 @@ if ! PATH="$run_path" "$evaluator" evaluate \
     "$scope_dir/marker.json" >"$scope_dir/evaluation.json" 2>"$tmp/scope.err"; then
   fail "scope harness: evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope.err"))"
 fi
-# With valid surrounding fixtures (nine real gate families, 64-hex digests, and
-# the gate stage bound to the tested post identity), the real gates the harness
-# built above are actually satisfied and the shipped evaluator's own gate math
-# reports "proposable" with no refusal reason at all — asserted here by exact
-# value, not by the earlier, looser "not-proposable or proposable" check, so a
-# malformed input that quietly forced not-proposable/scope.malformed through
-# cannot pass silently. This is still never live authority: qualification stays
-# unavailable, enablement stays blocked, and enabling this scope remains an
-# independent operator-merged pull request, which the proposal document itself
-# records — checked below field for field.
+# The accepted spec (requirement 2) and the plan's consumer section
+# (work/shadow-self-host-run/plan.md, "The consumers") both require this
+# scope's classification to be the evaluator's real "not-proposable" answer,
+# not a fabricated "proposable" one: there is no real sandbox and this
+# fixture is declaration-only. The dashboard's one seeded family
+# ("stale-moved-artifacts") is deliberately given a failing case above
+# (family("stale-moved-artifacts";"seeded";7;1;0)) so the gate stage stays
+# well-formed under scope-gates.jq's own shape and reference checks (nine
+# real gate families, 64-hex digests, gates bound to the tested post
+# identity, gates mutually consistent) and refuses for a real, specific,
+# non-malformed reason instead: "scope.eval-failing"
+# (scope/v1/scope-gates.jq:887-890), reported distinctly from
+# "scope.malformed" as the plan's consumer section requires. This is still
+# never live authority: qualification stays unavailable, enablement stays
+# blocked, and enabling this scope remains an independent operator-merged
+# pull request — the qualification field itself records that regardless of
+# outcome, checked below field for field.
 "$jq_bin" -e -n --slurpfile e "$scope_dir/evaluation.json" '
-  $e[0].body.outcome == "proposable" and
-  $e[0].body.reason_ids == ["scope.proposable"] and
+  $e[0].body.outcome == "not-proposable" and
+  $e[0].body.reason_ids == ["scope.eval-failing"] and
   $e[0].body.qualification ==
     {state:"unavailable",reason_id:"scope.enablement-requires-operator-pr"} and
   $e[0].body.authority == "none" and $e[0].body.enabled == false and
   ($e[0].body.evidence.shadow_records | length) == 2 and
-  $e[0].body.proposal.state == "present" and
-  $e[0].body.proposal.document.kind == "scope_enablement_proposal" and
-  $e[0].body.proposal.document.body.enabled == false and
-  $e[0].body.proposal.document.body.push_allowed == false and
-  $e[0].body.proposal.document.body.risk_tier == "routine" and
-  $e[0].body.proposal.document.body.authority == "none" and
-  $e[0].body.proposal.document.body.enablement.state == "blocked" and
-  $e[0].body.proposal.document.body.qualification ==
-    {state:"unavailable",reason_id:"scope.enablement-requires-operator-pr"}
+  $e[0].body.proposal.state == "absent"
 ' >/dev/null 2>&1 ||
-  fail 'scope harness: the evaluator did not report the exact proposable classification, with no refusal reasons and no live authority'
-pass 'scope harness (inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, and reports the exact proposable classification in its own vocabulary with qualification still unavailable and enablement still blocked — never live authority'
+  fail 'scope harness: the evaluator did not report the exact not-proposable classification, with the specific scope.eval-failing refusal reason and no live authority'
+pass 'scope harness (inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, and reports the exact not-proposable classification in its own vocabulary — refused for the specific scope.eval-failing reason, distinct from scope.malformed — with qualification still unavailable and no live authority'
 
 # Negative control: a dashboard missing eight of the nine required gate
 # families is malformed under scope-gates.jq's own dashboard_shape, and must be
