@@ -467,6 +467,24 @@ check_evidence() {
       $result[0].body.outcome == {family:"change",value:"no-change"}
     ' >/dev/null 2>&1 ||
       { /usr/bin/printf '%s: %s: %s materialization result is not a completed no-change materialization\n' "$label" "$step" "$case_name" >&2; return 1; }
+    # Review round 8's P2: everything above resolves the result against its
+    # own receipt and binds the shadow record to the result, but neither
+    # consumer (scope-gates.jq, control/v1/sandbox.jq) ever checks that the
+    # result's own body.request_ref/body.resolved_profile_ref actually name
+    # this case's execution request and profile -- both consume the shadow
+    # record, not the materialization result. Without this, a result naming
+    # an unrelated stage request/profile would still pass every check above
+    # by referencing itself and its own receipt consistently. Compare
+    # against this case's own assembled reference files (already recomputed
+    # from retained bytes and bound to qualified-identity.json in check 4:
+    # "identity-binds-assembler-output"), all fields, not merely sha256.
+    "$jq_bin" -e -n --slurpfile result "$result" \
+      --slurpfile req "$dir/$case_name/assembled/stage-request-ref.json" \
+      --slurpfile prof "$dir/$case_name/assembled/resolved-profile-ref.json" '
+      $result[0].body.request_ref == $req[0] and
+      $result[0].body.resolved_profile_ref == $prof[0]
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s materialization result request_ref/resolved_profile_ref does not equal the assembled references\n' "$label" "$step" "$case_name" >&2; return 1; }
   done
   local prereq_receipt_sha; prereq_receipt_sha=$(sha_file "$dir/prerequisite/materialization-receipt.json")
   # The prerequisite receipt must resolve against the prerequisite stage
@@ -482,6 +500,22 @@ check_evidence() {
     (($result[0].body.outputs // [])[0].ref.sha256 // $sha) == $sha
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: prerequisite receipt does not resolve against its stage result\n' "$label" "$step" >&2; return 1; }
+  # Same binding as above for the prerequisite result, applying the round-5/6
+  # derivation (plan.md ~1150-1158): the prerequisite has no separate
+  # stage-request-ref.json/resolved-profile-ref.json pair, so its
+  # request_ref/resolved_profile_ref are compared by digest against the
+  # retained prerequisite/stage-request.json and
+  # prerequisite/resolved-profile-document.json bytes -- the same two files
+  # the duty-evaluation reference-mismatch check (step 'duty-evaluation')
+  # already recomputes duty[0].body.stage.request_ref.sha256/
+  # resolved_profile_ref.sha256 against.
+  "$jq_bin" -e -n --slurpfile result "$dir/prerequisite/stage-result.json" \
+    --arg req_sha "$(sha_file "$dir/prerequisite/stage-request.json")" \
+    --arg prof_sha "$(sha_file "$dir/prerequisite/resolved-profile-document.json")" '
+    $result[0].body.request_ref.sha256 == $req_sha and
+    $result[0].body.resolved_profile_ref.sha256 == $prof_sha
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite materialization result request_ref/resolved_profile_ref does not match its stage request/profile\n' "$label" "$step" >&2; return 1; }
   if [ "${receipts[0]}" = "${receipts[1]}" ] || \
      [ "${receipts[0]}" = "$prereq_receipt_sha" ] || \
      [ "${receipts[1]}" = "$prereq_receipt_sha" ]; then
@@ -1242,6 +1276,40 @@ fi
   "$tmp/prereq-decl.err" ||
   fail "a prerequisite environment declaration swapped for unrelated canonical JSON must fail specifically on the prerequisite fingerprint check ($(cat "$tmp/prereq-decl.err"))"
 pass 'a prerequisite environment declaration swapped for unrelated canonical JSON (checksums refreshed) is refused specifically by the prerequisite fingerprint check'
+
+# (s) a retained materialization result's body.request_ref.sha256 is changed
+# to name an unrelated stage request, with the shadow record's own result
+# reference and checksums.json both refreshed (the same refresh shape as
+# case (d)), so only the new request_ref/resolved_profile_ref binding
+# assertion added to check 7 -- not the earlier "record does not bind its
+# own result" assertion, and not the checksums-inventory check -- can catch
+# it. Review round 8's P2: before this check existed, a materialization
+# result could name an unrelated execution request while still resolving
+# against its own receipt and being bound to the shadow record, because
+# neither consumer of the evidence (scope-gates.jq, control/v1/sandbox.jq)
+# reads the result's request_ref/resolved_profile_ref at all -- both consume
+# the shadow record instead.
+fresh_mutant_copy
+"$jq_bin" -S -c '.body.request_ref.sha256 =
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"' \
+  "$mutant_dir/post/state/materialization-result.json" \
+  >"$mutant_dir/post/state/materialization-result.json.new"
+/bin/mv "$mutant_dir/post/state/materialization-result.json.new" \
+  "$mutant_dir/post/state/materialization-result.json"
+mutated_result_sha=$(sha_file "$mutant_dir/post/state/materialization-result.json")
+"$jq_bin" -S -c --arg sha "$mutated_result_sha" \
+  '.body.materialization.value.stage_result_ref.sha256 = $sha' \
+  "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
+/bin/mv "$mutant_dir/post/state/shadow-record.json.new" \
+  "$mutant_dir/post/state/shadow-record.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-result-request-ref' 2>"$tmp/result-request-ref.err"; then
+  fail 'a retained materialization result whose request_ref points at an unrelated stage request must be refused'
+fi
+/usr/bin/grep -q 'materialization result request_ref/resolved_profile_ref does not equal the assembled references' \
+  "$tmp/result-request-ref.err" ||
+  fail "a retained materialization result whose request_ref points at an unrelated stage request must fail specifically on the new request/profile binding assertion ($(cat "$tmp/result-request-ref.err"))"
+pass 'a retained materialization result whose request_ref is changed, with its own digest refreshed downstream in the shadow record and checksums.json, is refused specifically by the request/profile binding assertion'
 
 /bin/rm -rf -- "$mutant_dir"
 
