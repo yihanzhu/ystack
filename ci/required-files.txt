@@ -134,6 +134,11 @@ scripts/test/portable-profile-resolution-loader-trap.c
 scripts/test/portable-profile-resolution-fixtures.sh
 scripts/test/portable-profile-resolution.test.sh
 
+# Inactive trusted parent for the profile resolver
+resolver/v1/trusted-launch.c
+resolver/v1/resolve-profile.sh
+scripts/test/resolver-trusted-launch.test.sh
+
 # Inactive portable core accounted-validation generation
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/schema.jq
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/core-ingress.sh

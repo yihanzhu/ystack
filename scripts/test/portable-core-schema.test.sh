@@ -940,6 +940,8 @@ printf '%s\n' \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
+  resolver/v1/resolve-profile.sh \
+  resolver/v1/trusted-launch.c \
   scripts/core-contract.sh \
   scripts/lib/profile-resolution.sh \
   scripts/test/orchestrator-state-scanner.test.sh \
