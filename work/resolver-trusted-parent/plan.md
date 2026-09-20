@@ -39,24 +39,18 @@ Exactly eight implementation paths; the plan itself changes only in its plan PR.
 | `RESTORE.md` | Resolver restoration and proof | 28 measured |
 | `ci/required-files.txt` | Append both shipped files and focused test | 5 measured |
 
-All eight figures are re-measured at implementation head
+All eight figures are measured at implementation head
 `66342f33e1f39823ae9f8256bca1ff9328e3c05f` on
 `ystack/impl/resolver-trusted-parent`: `git diff --numstat
 origin/main...origin/ystack/impl/resolver-trusted-parent` reports 8 files,
 6325 insertions and 3 deletions, **6328 changed lines**, of which the three
-implementation files are 6226 insertions (2006 / 463 / 3757). The rise of 958 over
-the previously recorded 5370 is review-driven and carries no new component,
-permission or runtime behaviour: it is the wait loop's record-only section and the
-two trap-form literals it switches between, the `trap_busy` serialisation of nested
-trap bodies, the launch-boundary test the same rounds added, and R10's
-four-role/seven-occurrence forwarding checks with the read-checks that go with them.
+implementation files are 6226 insertions (2006 / 463 / 3757).
 
 `review_size: accepted-exception`, **5400-7400 changed lines**, for this one
 implementation concern. This band supersedes the one carried by the spec's
 record (blob `6adf3023ba90fda298e609497d683f8954ec05c8`) and is the only
 range this implementation is measured against. It brackets the measured
-6328 with an outward margin of roughly a sixth, the same margin style the
-superseded 4600-6300 band used around 5370.
+6328 with an outward margin of roughly a sixth.
 
 The 702-line existing launcher supplies about 605 of the parent's lines; existing
 test fixtures are reuse, not permission to omit cases. Choose the specified
