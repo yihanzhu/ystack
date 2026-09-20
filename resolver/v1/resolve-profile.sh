@@ -334,13 +334,17 @@ pin_hexes=(
   cfc3ed3b1c3d714412a6dffc85accaabb98cf3df
   6af6f42d9afb073fbc892646fe9cd899f7057700
   cb99a95688f5b141e2a4db787bbc800780f5e59a
-  20be9aeecf7f7ad4a7f37940647ae3b8bcb8e6af
+  f81a186cab0813bbef54150726e9ff1ca3d6270e
 )
 
 pin_index=0
 while [ "$pin_index" -lt "${#pin_paths[@]}" ]; do
   pin_path=${pin_paths[$pin_index]}
   pin_name=${pin_path##*/}
+  # Regular/non-symlink check via bash test builtins (no open()) before any
+  # read: a FIFO in place of a pinned file would pass stat but block the
+  # cat/hash below forever, and a symlink to /dev/zero hashes unbounded.
+  [ -f "$pin_path" ] && [ ! -L "$pin_path" ] || refuse "E_RUNTIME pin $pin_name"
   pin_size=$("${clean_env[@]}" /usr/bin/stat "${stat_size_fmt[@]}" "$pin_path"); status=$?
   checkpoint
   [ "$status" -eq 0 ] || refuse "E_RUNTIME pin $pin_name"

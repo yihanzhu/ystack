@@ -529,6 +529,50 @@ for target in resolver/v1/nofollow-snapshot.c resolver/v1/trusted-launch.c \
   entry_pin_refusal "group1: edited $target is refused on its own pin" "$edited_tree"
 done
 
+# 1f2. Regression (review r18 P2): a pinned file replaced by a FIFO must be refused by
+# the entry's "[ -f ] && [ ! -L ]" guard before the cat/hash, which would otherwise
+# block forever waiting for a writer -- bounded here so a regression fails fast
+# instead of hanging the suite.
+fifo_pin_tree="$tmp/group1-fifo-pin"
+copy_repo_tree "$fifo_pin_tree"
+/bin/rm -f "$fifo_pin_tree/resolver/v1/profile-resolution.jq"
+/usr/bin/mkfifo -m 600 "$fifo_pin_tree/resolver/v1/profile-resolution.jq"
+fifo_pin_out="$tmp/g1.fifo-pin"; /bin/mkdir -m 700 "$fifo_pin_out"
+( "$fifo_pin_tree/resolver/v1/resolve-profile.sh" "$bound_jq" "$fifo_pin_out" \
+    "$synthetic_request" "$synthetic_map" \
+    > "$fifo_pin_out.stdout" 2> "$fifo_pin_out.stderr" ) & fifo_pin_pid=$!
+fifo_pin_deadline=$(( $(/bin/date +%s) + 5 ))
+while kill -0 "$fifo_pin_pid" 2>/dev/null && [ "$(/bin/date +%s)" -lt "$fifo_pin_deadline" ]; do /bin/sleep 0.02; done
+kill -0 "$fifo_pin_pid" 2>/dev/null && { kill -9 "$fifo_pin_pid" 2>/dev/null; fail_case 'group1: pinned file replaced by FIFO hung instead of refusing'; }
+fifo_pin_status=0; wait "$fifo_pin_pid" 2>/dev/null || fifo_pin_status=$?
+if [ "$fifo_pin_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$fifo_pin_out.stderr" &&
+   [ -z "$(/usr/bin/find "$fifo_pin_out" -mindepth 1 -maxdepth 1)" ]; then
+  pass_case 'group1: pinned file replaced by FIFO refuses promptly, no .run left behind'
+else
+  fail_case "group1: pinned file replaced by FIFO (status=$fifo_pin_status): $(cat "$fifo_pin_out.stderr" 2>/dev/null)"
+fi
+
+# 1f3. Regression (review r18 P2): a pinned file that is a symlink (e.g. to /dev/zero)
+# must be refused by the same guard before hashing unbounded bytes.
+symlink_pin_tree="$tmp/group1-symlink-pin"
+copy_repo_tree "$symlink_pin_tree"
+/bin/rm -f "$symlink_pin_tree/resolver/v1/profile-resolution.jq"
+/bin/ln -s /dev/zero "$symlink_pin_tree/resolver/v1/profile-resolution.jq"
+symlink_pin_out="$tmp/g1.symlink-pin"; /bin/mkdir -m 700 "$symlink_pin_out"
+( "$symlink_pin_tree/resolver/v1/resolve-profile.sh" "$bound_jq" "$symlink_pin_out" \
+    "$synthetic_request" "$synthetic_map" \
+    > "$symlink_pin_out.stdout" 2> "$symlink_pin_out.stderr" ) & symlink_pin_pid=$!
+symlink_pin_deadline=$(( $(/bin/date +%s) + 5 ))
+while kill -0 "$symlink_pin_pid" 2>/dev/null && [ "$(/bin/date +%s)" -lt "$symlink_pin_deadline" ]; do /bin/sleep 0.02; done
+kill -0 "$symlink_pin_pid" 2>/dev/null && { kill -9 "$symlink_pin_pid" 2>/dev/null; fail_case 'group1: pinned file as symlink to /dev/zero hung instead of refusing'; }
+symlink_pin_status=0; wait "$symlink_pin_pid" 2>/dev/null || symlink_pin_status=$?
+if [ "$symlink_pin_status" -ne 0 ] && /usr/bin/grep -q '^E_RUNTIME' "$symlink_pin_out.stderr" &&
+   [ -z "$(/usr/bin/find "$symlink_pin_out" -mindepth 1 -maxdepth 1)" ]; then
+  pass_case 'group1: pinned file as a symlink to /dev/zero is refused, no .run left behind'
+else
+  fail_case "group1: pinned file as symlink to /dev/zero (status=$symlink_pin_status): $(cat "$symlink_pin_out.stderr" 2>/dev/null)"
+fi
+
 # The trusted-launch.c case carries two extra assertions: no compiler ever ran, and the
 # neighbouring nofollow-snapshot.c pin is untouched.
 tl_tree="$tmp/group1-trusted-launch"
@@ -741,6 +785,24 @@ if [ "$parent_available" -eq 1 ]; then
       "$g2o3" "$g2out3/.run" > "$g2o3.stdout" 2> "$g2o3.stderr" || g2s3=$?
     assert_refused_before_fork "group2: $lib_target blob mismatch (parent's own copy)" "$g2s3" "$g2o3.stdout" "$g2o3.stderr" 'E_RUNTIME pin'
   done
+
+  # Regression (review r18 P2): direct-parent invocation with a FIFO in place of a
+  # pinned source -- check_blob_pin's open() is O_NONBLOCK|O_NOFOLLOW so it cannot
+  # block on the FIFO, and fstat/S_ISREG runs before any read. Bounded the same way
+  # as the entry-level FIFO cases above so a regression fails fast, not hangs.
+  fifo_lib_tree="$tmp/g2-fifo-lib"
+  copy_repo_tree "$fifo_lib_tree"
+  /bin/rm -f "$fifo_lib_tree/scripts/lib/profile-resolution.sh"
+  /usr/bin/mkfifo -m 600 "$fifo_lib_tree/scripts/lib/profile-resolution.sh"
+  g2fifo_out="$tmp/g2.fifo-lib"; build_run_directory "$g2fifo_out"
+  ( "$g2fifo_out/.run/trusted-launch" resolve "$fifo_lib_tree/resolver/v1/profile-resolve-runtime.sh" \
+      "$g2fifo_out/.run/nofollow-snapshot" "$g2fifo_out/.run/jq" "$synthetic_request" "$synthetic_map" \
+      "$g2fifo_out" "$g2fifo_out/.run" > "$g2fifo_out.stdout" 2> "$g2fifo_out.stderr" ) & g2fifo_pid=$!
+  g2fifo_deadline=$(( $(/bin/date +%s) + 5 ))
+  while kill -0 "$g2fifo_pid" 2>/dev/null && [ "$(/bin/date +%s)" -lt "$g2fifo_deadline" ]; do /bin/sleep 0.02; done
+  kill -0 "$g2fifo_pid" 2>/dev/null && { kill -9 "$g2fifo_pid" 2>/dev/null; fail_case 'group2: direct-parent invocation with FIFO pinned source hung instead of refusing'; }
+  g2fifo_status=0; wait "$g2fifo_pid" 2>/dev/null || g2fifo_status=$?
+  assert_refused_before_fork 'group2: direct-parent invocation refuses a FIFO in place of a pinned source' "$g2fifo_status" "$g2fifo_out.stdout" "$g2fifo_out.stderr" 'E_RUNTIME pin'
 
   # edited jq module under modules/ (this round's case: schema.jq).
   mod_tree="$tmp/g2-module"

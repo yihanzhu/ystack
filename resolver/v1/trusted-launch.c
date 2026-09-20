@@ -934,7 +934,12 @@ static int build_pin_path(size_t index, const char *repo_root,
    parent itself -- fstat for the size, then the header and the bytes written to the
    platform SHA-1 tool's stdin, never git. */
 static int check_blob_pin(const char *path, const char *pinned_hex) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    /* O_NONBLOCK here means open() itself cannot block on a FIFO (it would
+       otherwise wait for a writer), and O_NOFOLLOW refuses a symlink (e.g.
+       to /dev/zero) outright. Only after fstat() confirms a regular file --
+       which never returns EAGAIN -- do we clear O_NONBLOCK so the read
+       below keeps its normal blocking semantics. */
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     struct stat state;
     unsigned char *combined;
     size_t header_length;
@@ -943,11 +948,17 @@ static int check_blob_pin(const char *path, const char *pinned_hex) {
     char digest[256];
     size_t digest_length = 0U;
     int ok;
+    int flags;
 
     if (fd < 0 || fstat(fd, &state) != 0 || !S_ISREG(state.st_mode)) {
         if (fd >= 0) {
             (void)close(fd);
         }
+        return -1;
+    }
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) != 0) {
+        (void)close(fd);
         return -1;
     }
     total = (size_t)state.st_size;
