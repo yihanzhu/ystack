@@ -214,19 +214,52 @@ check_evidence() {
   # advertises as its minimal digest procedure. Both cases share the one
   # committed instructions file, so their refs must also agree with each
   # other, not merely each pass in isolation.
+  #
+  # The stage/profile ref comparison below used to stop at "the identity
+  # names the same object as assembled/stage-request-ref.json and
+  # assembled/resolved-profile-ref.json": three documents the assembler
+  # itself emits together, so a mutation replacing the shared resolved
+  # profile and refreshing all three consistently would sail through. Per
+  # plan.md's own extraction recipe (`jq -S -c '.resolved_profile.content'
+  # / '.stage_request.content'` on assembled/input.json, verified against
+  # the assembler's stage-request-ref.json / resolved-profile-ref.json
+  # sha256 fields), recompute both digests independently from the retained
+  # bytes: resolved_profile_ref from the shared, retained resolved-profile.json
+  # file (shadow/v1/materialization-input.jq: resolved_profile_sha256 is the
+  # raw sha256 of that file, per assemble-materialization-input.sh:227), and
+  # stage_request_ref from the canonicalized stage-request content embedded
+  # in this case's own assembled/input.json (assemble-materialization-input.sh:
+  # 404-411 canonicalizes the produced request with `jq -S -c` before hashing
+  # it). Then require every one of the three documents (identity, assembled
+  # ref file, and the input.json-embedded content) to agree with that
+  # independently recomputed digest, not merely with each other.
   step='identity-binds-assembler-output'
   local vi_sha; vi_sha=$(sha_file "$dir/verification-instructions.md")
   local pre_vi_ref post_vi_ref
+  local resolved_profile_sha; resolved_profile_sha=$(sha_file "$dir/resolved-profile.json")
   for case_name in pre post; do
     local identity="$dir/$case_name/qualified-identity.json"
     local req_ref="$dir/$case_name/assembled/stage-request-ref.json"
     local prof_ref="$dir/$case_name/assembled/resolved-profile-ref.json"
+    local input="$dir/$case_name/assembled/input.json"
+    local computed_req_sha computed_prof_sha
+    computed_req_sha=$("$jq_bin" -S -c '.stage_request.content' "$input" 2>/dev/null |
+      sha_file /dev/stdin) ||
+      { /usr/bin/printf '%s: %s: %s stage_request content unreadable\n' "$label" "$step" "$case_name" >&2; return 1; }
+    computed_prof_sha=$("$jq_bin" -S -c '.resolved_profile.content' "$input" 2>/dev/null |
+      sha_file /dev/stdin) ||
+      { /usr/bin/printf '%s: %s: %s resolved_profile content unreadable\n' "$label" "$step" "$case_name" >&2; return 1; }
+    [ "$computed_prof_sha" = "$resolved_profile_sha" ] ||
+      { /usr/bin/printf '%s: %s: %s resolved_profile embedded in input.json does not equal the retained resolved-profile.json bytes\n' "$label" "$step" "$case_name" >&2; return 1; }
     "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile req "$req_ref" \
-      --slurpfile prof "$prof_ref" '
+      --slurpfile prof "$prof_ref" \
+      --arg req_sha "$computed_req_sha" --arg prof_sha "$computed_prof_sha" '
       $identity[0].body.stage_request_ref == $req[0] and
-      $identity[0].body.resolved_profile_ref == $prof[0]
+      $identity[0].body.resolved_profile_ref == $prof[0] and
+      $req[0].sha256 == $req_sha and
+      $prof[0].sha256 == $prof_sha
     ' >/dev/null 2>&1 ||
-      { /usr/bin/printf '%s: %s: %s stage/profile ref mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
+      { /usr/bin/printf '%s: %s: %s stage/profile ref mismatch or does not recompute from retained bytes\n' "$label" "$step" "$case_name" >&2; return 1; }
     "$jq_bin" -e -n --slurpfile identity "$identity" \
       --slurpfile incident "$dir/$case_name/incident.json" '
       $identity[0].body.target_revision == $incident[0].body.git_revision_ref
@@ -242,12 +275,74 @@ check_evidence() {
       post_vi_ref=$("$jq_bin" -c '.body.verification_instructions_ref' "$identity" 2>/dev/null)
     fi
   done
+
+  # --- check 4b (requirement 16): each case's own shadow record must embed
+  # the identity it actually ran under, byte for byte, and its
+  # qualified_identity_ref must name the retained qualified-identity.json
+  # bytes by digest. scope-gates.jq's shadow_record_ok only shape-checks a
+  # record's embedded qualified_identity (comment at scope/v1/scope-gates.jq
+  # ~618-622: "the field rules inside them are not repeated here"); full
+  # field-level identity validation happens only for whichever single
+  # identity is passed as the scope's own qualified_identity, and a record
+  # that fails to match it is silently excluded from "mine" rather than
+  # refused. So this offline check must independently bind each of the two
+  # records to its own case's retained identity document — not rely on the
+  # scope harness below, which only exercises one identity per invocation.
+  step='record-binds-own-identity'
+  for case_name in pre post; do
+    local identity="$dir/$case_name/qualified-identity.json"
+    local record="$dir/$case_name/state/shadow-record.json"
+    local identity_sha; identity_sha=$(sha_file "$identity")
+    "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile rec "$record" \
+      --arg sha "$identity_sha" '
+      $rec[0].body.qualified_identity == $identity[0].body and
+      $rec[0].body.qualified_identity_ref == {content_id:"shadow-qualified-identity",
+        media_type:"application/vnd.ystack.qualified-identity+json",sha256:$sha}
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s shadow record does not bind its own retained qualified-identity.json\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
   [ -n "$pre_vi_ref" ] && [ "$pre_vi_ref" = "$post_vi_ref" ] ||
     { /usr/bin/printf '%s: %s: pre and post verification_instructions_ref (media type/content id/digest) do not agree on the one shared instructions file\n' "$label" "$step" >&2; return 1; }
 
   # --- check 5: the two required outcomes, and the shared shadow-record
-  # invariants.
+  # invariants. The failing check plan.md's "The two runs" (requirement 8)
+  # names is the exact one this evidence must be proof of: file-digest at
+  # config/construction-mode.json, expected b913cf62... (the pre-revision
+  # blob at d3f6d52), observed b913cf62... on pre (matched) and 5b3e0baf...
+  # on post (differed). check_block_ok in scope/v1/scope-gates.jq only
+  # checks that the incident's own execution.value.matches_expected agrees
+  # with its own failing_check.expected_sha256 — internal self-consistency —
+  # never that either digest is the specific value the plan's outcome
+  # section fixes, so evidence for an entirely different path or digest
+  # would still pass every shape and consumer check. Assert the exact
+  # object on both the retained incident and the shadow record it produced.
   step='outcomes'
+  local expected_sha=b913cf629566dd532ca507a591cdec5cccb2611b12c63949daca6eb33cd15a93
+  local post_observed_sha=5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda
+  local pre_observed_sha=$expected_sha
+  for case_name in pre post; do
+    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg exp "$expected_sha" '
+      $i[0].body.failing_check ==
+        {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp}
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s incident.json does not name the exact failing check (config/construction-mode.json, expected b913cf62...)\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
+  "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" \
+    --arg exp "$expected_sha" --arg obs "$post_observed_sha" '
+    $r[0].body.check.failing_check ==
+      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+    $r[0].body.check.execution.value.observed_sha256 == $obs and
+    $r[0].body.check.execution.value.matches_expected == false
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: post shadow record does not assert the exact failing-check object (config/construction-mode.json, expected b913cf62..., observed 5b3e0baf...)\n' "$label" "$step" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" \
+    --arg exp "$expected_sha" --arg obs "$pre_observed_sha" '
+    $r[0].body.check.failing_check ==
+      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+    $r[0].body.check.execution.value.observed_sha256 == $obs and
+    $r[0].body.check.execution.value.matches_expected == true
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: pre shadow record does not assert the exact failing-check object (config/construction-mode.json, expected and observed both b913cf62...)\n' "$label" "$step" >&2; return 1; }
   "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" '
     $r[0].body.outcome == "reproduced" and
     $r[0].body.reason_id == "check.failed-at-revision" and
@@ -391,16 +486,27 @@ check_evidence() {
 
   # --- check 10: the declaration-only marker, the all-ones demonstration
   # verifier digest kept and labelled (never absent), no overclaiming prose,
-  # and requirement 2's full reference-field recomputation.
+  # and requirement 2's full reference-field recomputation. The two runs the
+  # plan describes both succeeded, so the retained sandbox-evaluation.json
+  # for each case must itself be "satisfied" with the declaration-only
+  # reason, and the shadow record's own recorded evaluation.value (verdict,
+  # reason_ids — shadow/v1/reproduce.sh:430-434) must equal it field for
+  # field: the record's consumers read that recorded copy, never the
+  # retained sandbox-evaluation.json directly, so a mismatch there would let
+  # the record claim a different result than the one actually evaluated.
   step='declaration-only-and-references'
   for case_name in pre post; do
-    "$jq_bin" -e -n --slurpfile ev "$dir/$case_name/sandbox-evaluation.json" '
+    "$jq_bin" -e -n --slurpfile ev "$dir/$case_name/sandbox-evaluation.json" \
+      --slurpfile rec "$dir/$case_name/state/shadow-record.json" '
       $ev[0].body.enforcement_proof == "declaration-only" and
       $ev[0].body.authority_effect == "none" and
       $ev[0].body.qualification_effect == "none" and
-      ($ev[0].body.verdict != "satisfied" or $ev[0].body.reason_ids == ["sandbox.declaration-satisfied"])
+      $ev[0].body.verdict == "satisfied" and
+      $ev[0].body.reason_ids == ["sandbox.declaration-satisfied"] and
+      $rec[0].body.environment.evaluation.value.verdict == $ev[0].body.verdict and
+      $rec[0].body.environment.evaluation.value.reason_ids == $ev[0].body.reason_ids
     ' >/dev/null 2>&1 ||
-      { /usr/bin/printf '%s: %s: %s marker\n' "$label" "$step" "$case_name" >&2; return 1; }
+      { /usr/bin/printf '%s: %s: %s marker or recorded-evaluation mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
   done
   local all_ones; all_ones=$(printf '1%.0s' $(seq 1 64))
   "$jq_bin" -e -n --slurpfile claim "$dir/environment-claim.json" --arg ones "$all_ones" '
@@ -622,7 +728,7 @@ check_evidence() {
 }
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
-pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
+pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes), each record binding its own retained identity, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, satisfied verdict, claim binding, declaration-only marker with reference recomputation, core package closure, and the approved requester'
 
 # ---------------------------------------------------------------------------
 # check 13: negative cases. A copy of the evidence tree, mutated one way at a
@@ -809,6 +915,76 @@ fi
   "$tmp/claim-binding.err" ||
   fail "a retained environment claim with its network.mode swapped to allow must fail specifically on the claim-binding check ($(cat "$tmp/claim-binding.err"))"
 pass 'a retained environment claim whose network.mode is swapped to allow (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the claim-binding check'
+
+# (j) the shared resolved-profile.json is replaced by a different (but still
+# canonical) resolved profile document, with checksums.json refreshed, so
+# only the recomputation added to check 4 — comparing both assemblers'
+# resolved_profile_ref against the retained resolved-profile.json's own
+# recomputed SHA-256, and the content embedded in each case's
+# assembled/input.json against those same retained bytes — can catch it.
+# Before that recomputation, every reference agreed only with every other
+# reference, so swapping the shared document out from under all of them
+# while refreshing checksums.json left every check passing.
+fresh_mutant_copy
+"$jq_bin" -S -c '. + {"self-host-fix-373-mutant": true}' \
+  "$mutant_dir/resolved-profile.json" >"$mutant_dir/resolved-profile.json.new"
+/bin/mv "$mutant_dir/resolved-profile.json.new" "$mutant_dir/resolved-profile.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-resolved-profile-swap' 2>"$tmp/resolved-profile.err"; then
+  fail 'a replaced shared resolved-profile.json must be refused'
+fi
+/usr/bin/grep -q 'resolved_profile embedded in input.json does not equal the retained resolved-profile.json bytes' \
+  "$tmp/resolved-profile.err" ||
+  fail "a replaced shared resolved-profile.json must fail specifically on the recomputed resolved_profile_ref check ($(cat "$tmp/resolved-profile.err"))"
+pass 'a replaced shared resolved-profile.json (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the recomputed resolved_profile_ref check'
+
+# (k) the pre case's qualified-identity.json has its model_request changed,
+# with checksums.json refreshed, so only the new check 4b — binding each
+# case's own shadow record to its own retained identity document, byte for
+# byte — can catch it: every other check compares the identity only against
+# the assembler's own emitted refs and the incident, none of which name the
+# model_request field this mutation touches.
+fresh_mutant_copy
+"$jq_bin" -S -c \
+  '.body.model_request.model_id = "claude-mutant-5"' \
+  "$mutant_dir/pre/qualified-identity.json" >"$mutant_dir/pre/qualified-identity.json.new"
+/bin/mv "$mutant_dir/pre/qualified-identity.json.new" "$mutant_dir/pre/qualified-identity.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-pre-identity-model' 2>"$tmp/pre-identity.err"; then
+  fail "a mutated pre identity's model_request must be refused"
+fi
+/usr/bin/grep -q 'shadow record does not bind its own retained qualified-identity.json' \
+  "$tmp/pre-identity.err" ||
+  fail "a mutated pre identity's model_request must fail specifically on the record-binds-own-identity check ($(cat "$tmp/pre-identity.err"))"
+pass "a mutated pre identity's model_request (recomputed checksums, otherwise-unchanged consumer references) is refused specifically by the record-binds-own-identity check"
+
+# (l) the post case's retained sandbox-evaluation.json reports a violated
+# verdict, with the shadow record's own evaluation_ref digest and
+# checksums.json refreshed so only check 10's new requirement — that the
+# retained verdict and reason_ids equal the record's own recorded
+# evaluation.value and are themselves "satisfied" — can catch it. The
+# record's own recorded verdict/reason_ids are left untouched at
+# satisfied/["sandbox.declaration-satisfied"], so before this addition the
+# scope consumer (which reads only the record's recorded copy) would accept
+# contradictory evidence the driver could never actually produce.
+fresh_mutant_copy
+"$jq_bin" -S -c '.body.verdict = "violated" | .body.reason_ids = ["sandbox.violated"]' \
+  "$mutant_dir/post/sandbox-evaluation.json" >"$mutant_dir/post/sandbox-evaluation.json.new"
+/bin/mv "$mutant_dir/post/sandbox-evaluation.json.new" "$mutant_dir/post/sandbox-evaluation.json"
+mutated_sandbox_sha=$(sha_file "$mutant_dir/post/sandbox-evaluation.json")
+"$jq_bin" -S -c --arg sha "$mutated_sandbox_sha" \
+  '.body.environment.evaluation.value.evaluation_ref.sha256 = $sha' \
+  "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
+/bin/mv "$mutant_dir/post/state/shadow-record.json.new" "$mutant_dir/post/state/shadow-record.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-sandbox-verdict-violated' 2>"$tmp/sandbox-verdict.err"; then
+  fail 'a retained sandbox evaluation reporting a violated verdict must be refused'
+fi
+/usr/bin/grep -q 'marker or recorded-evaluation mismatch' \
+  "$tmp/sandbox-verdict.err" ||
+  fail "a retained sandbox evaluation reporting a violated verdict must fail specifically on the declaration-only-and-references check ($(cat "$tmp/sandbox-verdict.err"))"
+pass 'a retained sandbox evaluation reporting a violated verdict (record digest and checksums refreshed, recorded verdict left satisfied) is refused specifically by the declaration-only-and-references check'
+
 /bin/rm -rf -- "$mutant_dir"
 
 # ===========================================================================
@@ -843,6 +1019,7 @@ post_record_sha=$("$jq_bin" -S -c '.body.records[1]' "$scope_dir/shadow-set.json
 pre_id=$("$jq_bin" -r '.id' "$pre_record")
 post_id=$("$jq_bin" -r '.id' "$post_record")
 post_identity=$("$jq_bin" -c '.body' "$evdir/post/qualified-identity.json")
+pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
 
 # The dashboard fixture: a whole eval_dashboard in evals/v1/evals.jq's shape,
 # complete and valid under scope-gates.jq's own dashboard_shape (nine gate
@@ -957,20 +1134,6 @@ post_identity=$("$jq_bin" -c '.body' "$evdir/post/qualified-identity.json")
   fail 'scope harness: dashboard fixture must declare all nine gate families'
 
 harness_policy_set='{"id":"control.policy-set.self-host-harness","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}'
-# The gate stage's request_ref and resolved_profile_ref are bound to the tested
-# post identity's own stage_request_ref and resolved_profile_ref: scope-gates.jq
-# (gates_bound) requires the risk and duty evaluations' stage references to
-# equal the scope's qualified_identity references exactly, so a harness stage
-# naming placeholder documents instead of the identity under test would make
-# every gate binding refuse as malformed regardless of the rest of this fixture.
-# Only result_ref is free to name an inert placeholder: nothing here compares it
-# against the identity.
-harness_stage=$("$jq_bin" -c -n --argjson identity "$post_identity" '{
-  request_ref:$identity.stage_request_ref,
-  resolved_profile_ref:$identity.resolved_profile_ref,
-  result_ref:{id:"stage.self-host-harness.result",kind:"stage_result",
-    schema_version:2,
-    sha256:"2222222222222222222222222222222222222222222222222222222222222222"}}')
 harness_core_contract='{
   "generation_id":"g-0bef6d994accaf957358a8f9c833c0ce64bb71fe2bc934b9569277bbe19b8d29",
   "package_ref":{"content_id":"core-contract-package.v2",
@@ -987,132 +1150,168 @@ harness_claim_ref='{"content_id":"risk.decision-claim.self-host-harness",
 harness_kill_state_ref='{"schema_version":1,"kind":"kill_switch_state",
   "id":"kill.state.self-host-harness","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}'
 
-"$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
-  --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
-  --argjson decision_ref "$harness_duty_decision_ref" '
-  {schema_version:1,kind:"duty_separation_evaluation",
-   id:"stage.self-host-harness.result",
-   body:{activation_state:"inactive",core_contract:$core_contract,
-     decision_ref:$decision_ref,evaluation_mode:"observation-only",
-     policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
-     reference_semantics:"identity-only",verdict:"satisfied",
-     reason_ids:["duty.satisfied"]}}' >"$scope_dir/duty.json"
-harness_duty_sha=$(sha_file "$scope_dir/duty.json")
-
-"$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
-  --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
-  --argjson decision_ref "$harness_decision_ref" --argjson claim_ref "$harness_claim_ref" \
-  --arg duty_sha "$harness_duty_sha" '
-  {schema_version:1,kind:"risk_gate_evaluation",id:"stage.self-host-harness.result",
-   body:{activation_state:"inactive",authority_effect:"none",
-     classification:{declared_tier:"routine",minimum_tier:"routine"},
-     core_contract:$core_contract,decision_claim_ref:$claim_ref,decision_ref:$decision_ref,
-     duty_evaluation_ref:{content_id:"stage.self-host-harness.result",
-       media_type:"application/vnd.ystack.duty-separation-evaluation+json",sha256:$duty_sha},
-     policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
-     evaluation_mode:"observation-only",reference_semantics:"identity-only",
-     verdict:"inconclusive",reason_ids:["decision.provenance-unqualified"]}}' \
-  >"$scope_dir/risk.json"
-
-"$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --arg duty_sha "$harness_duty_sha" \
-  --argjson policy_ref "$harness_policy_ref" --argjson decision_ref "$harness_decision_ref" \
-  --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" '
-  {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.self-host-harness",
-   body:{activation_state:"inactive",authority_effect:"none",
-     decision_ref:$decision_ref,duty_decision_ref:$duty_decision_ref,
-     duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
-       id:"stage.self-host-harness.result",sha256:$duty_sha},
-     policy_ref:$policy_ref,policy_set:$policy_set,state_ref:$state_ref,
-     attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
-       id:"kill-attempt.self-host-harness",sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
-     evaluation_mode:"observation-only",reference_semantics:"identity-only",
-     verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$scope_dir/kill.json"
-
 "$jq_bin" -S -c . "$repo_marker" >"$scope_dir/marker.json"
 
 gate_ref() {
   "$jq_bin" -S -c -n --arg sha "$(sha_file "$1")" --arg id "$("$jq_bin" -r '.id' "$1")" \
     --arg kind "$("$jq_bin" -r '.kind' "$1")" '{schema_version:1,kind:$kind,id:$id,sha256:$sha}'
 }
-risk_ref=$(gate_ref "$scope_dir/risk.json")
-kill_ref=$(gate_ref "$scope_dir/kill.json")
-duty_ref=$(gate_ref "$scope_dir/duty.json")
 
-"$jq_bin" -S -c -n --arg pre_id "$pre_id" --arg pre_sha "$pre_record_sha" \
-  --arg post_id "$post_id" --arg post_sha "$post_record_sha" \
-  --argjson identity "$post_identity" \
-  --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" '
-  {schema_version:1,kind:"workflow_scope",id:"scope.self-host-transition.v1",
-   body:{activation_state:"inactive",authority:"none",enabled:false,
-     push_allowed:false,scope_version:"v1",
-     target_repository_id:"repo.ystack",
-     workflow_id:"workflow.self-host-transition",
-     task_class:"task.self-host-transition",
-     risk_tier:"routine",
-     allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
-     required_proof_kinds:["deterministic","independent-review"],
-     required_eval_families:["stale-moved-artifacts"],
-     required_shadow_environments:["env.local-macos-ystack-self"],
-     shadow_evidence_refs:([
-       {schema_version:1,kind:"shadow_reproduction_record",id:$pre_id,sha256:$pre_sha},
-       {schema_version:1,kind:"shadow_reproduction_record",id:$post_id,sha256:$post_sha}] |
-       # workflow-scope.jq bounded_set requires the array to equal its own
-       # plain sort, not a sort keyed on one field: with two refs sharing
-       # every key name, the generic object sort compares "id" before
-       # "sha256" ever enters it, so sorting by sha256 alone could disagree
-       # with the shape check depending on which digest happened to be
-       # smaller; sort here exactly as bounded_set does.
-       sort),
-     qualified_identity:$identity,
-     gate_evidence_refs:{risk_gate_evaluation_ref:$risk_ref,
-       kill_switch_evaluation_ref:$kill_ref,duty_separation_evaluation_ref:$duty_ref},
-     max_attempts:2}}' >"$scope_dir/scope.json"
+# Requirement 16 exercises BOTH cases, not just post: scope-gates.jq's
+# shadow_record_ok only shape-checks a record's embedded qualified_identity
+# and gives full field-level validation only to whichever single identity is
+# passed as the scope's own qualified_identity (scope/v1/scope-gates.jq
+# ~618-622). Running this harness once with post_identity alone would never
+# exercise that full validation against the pre record's identity, so a
+# harness that always used post_identity could not tell a byte-mutated pre
+# identity from a genuine one. Loop over both cases, each time supplying
+# THAT case's own retained qualified-identity.json as the scope identity
+# under test, so each of the two identities gets the evaluator's complete
+# field-level treatment in turn.
+for scope_case in pre post; do
+  if [ "$scope_case" = pre ]; then
+    case_identity=$pre_identity
+  else
+    case_identity=$post_identity
+  fi
+  # The gate stage's request_ref and resolved_profile_ref are bound to the
+  # identity under test: scope-gates.jq (gates_bound) requires the risk and
+  # duty evaluations' stage references to equal the scope's qualified_identity
+  # references exactly, so a harness stage naming placeholder documents
+  # instead of the identity under test would make every gate binding refuse
+  # as malformed regardless of the rest of this fixture. Only result_ref is
+  # free to name an inert placeholder: nothing here compares it against the
+  # identity.
+  harness_stage=$("$jq_bin" -c -n --argjson identity "$case_identity" '{
+    request_ref:$identity.stage_request_ref,
+    resolved_profile_ref:$identity.resolved_profile_ref,
+    result_ref:{id:"stage.self-host-harness.result",kind:"stage_result",
+      schema_version:2,
+      sha256:"2222222222222222222222222222222222222222222222222222222222222222"}}')
 
-if ! PATH="$run_path" "$evaluator" evaluate \
-    "$scope_dir/scope.json" "$scope_dir/shadow-set.json" "$scope_dir/dashboard.json" \
-    "$scope_dir/risk.json" "$scope_dir/kill.json" "$scope_dir/duty.json" \
-    "$scope_dir/marker.json" >"$scope_dir/evaluation.json" 2>"$tmp/scope.err"; then
-  fail "scope harness: evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope.err"))"
-fi
-# The accepted spec (requirement 2) and the plan's consumer section
-# (work/shadow-self-host-run/plan.md, "The consumers") both require this
-# scope's classification to be the evaluator's real "not-proposable" answer,
-# not a manufactured "proposable" one: there is no real sandbox and this
-# fixture is declaration-only. The dashboard's one seeded family
-# ("stale-moved-artifacts") is deliberately given a failing case above
-# (family("stale-moved-artifacts";"seeded";7;1;0)) so the gate stage stays
-# well-formed under scope-gates.jq's own shape and reference checks (nine
-# real gate families, 64-hex digests, gates bound to the tested post
-# identity, gates mutually consistent) and refuses for a real, specific,
-# non-malformed reason instead: "scope.eval-failing"
-# (scope/v1/scope-gates.jq:887-890), reported distinctly from
-# "scope.malformed" as the plan's consumer section requires. This is still
-# never live authority: qualification stays unavailable, enablement stays
-# blocked, and enabling this scope remains an independent operator-merged
-# pull request — the qualification field itself records that regardless of
-# outcome, checked below field for field.
-"$jq_bin" -e -n --slurpfile e "$scope_dir/evaluation.json" '
-  $e[0].body.outcome == "not-proposable" and
-  $e[0].body.reason_ids == ["scope.eval-failing"] and
-  $e[0].body.qualification ==
-    {state:"unavailable",reason_id:"scope.enablement-requires-operator-pr"} and
-  $e[0].body.authority == "none" and $e[0].body.enabled == false and
-  ($e[0].body.evidence.shadow_records | length) == 2 and
-  $e[0].body.proposal.state == "absent"
-' >/dev/null 2>&1 ||
-  fail 'scope harness: the evaluator did not report the exact not-proposable classification, with the specific scope.eval-failing refusal reason and no live authority'
-pass 'scope harness (inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, and reports the exact not-proposable classification in its own vocabulary — refused for the specific scope.eval-failing reason, distinct from scope.malformed — with qualification still unavailable and no live authority'
+  "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
+    --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
+    --argjson decision_ref "$harness_duty_decision_ref" '
+    {schema_version:1,kind:"duty_separation_evaluation",
+     id:"stage.self-host-harness.result",
+     body:{activation_state:"inactive",core_contract:$core_contract,
+       decision_ref:$decision_ref,evaluation_mode:"observation-only",
+       policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
+       reference_semantics:"identity-only",verdict:"satisfied",
+       reason_ids:["duty.satisfied"]}}' >"$scope_dir/duty-$scope_case.json"
+  harness_duty_sha=$(sha_file "$scope_dir/duty-$scope_case.json")
+
+  "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
+    --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
+    --argjson decision_ref "$harness_decision_ref" --argjson claim_ref "$harness_claim_ref" \
+    --arg duty_sha "$harness_duty_sha" '
+    {schema_version:1,kind:"risk_gate_evaluation",id:"stage.self-host-harness.result",
+     body:{activation_state:"inactive",authority_effect:"none",
+       classification:{declared_tier:"routine",minimum_tier:"routine"},
+       core_contract:$core_contract,decision_claim_ref:$claim_ref,decision_ref:$decision_ref,
+       duty_evaluation_ref:{content_id:"stage.self-host-harness.result",
+         media_type:"application/vnd.ystack.duty-separation-evaluation+json",sha256:$duty_sha},
+       policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
+       evaluation_mode:"observation-only",reference_semantics:"identity-only",
+       verdict:"inconclusive",reason_ids:["decision.provenance-unqualified"]}}' \
+    >"$scope_dir/risk-$scope_case.json"
+
+  "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --arg duty_sha "$harness_duty_sha" \
+    --argjson policy_ref "$harness_policy_ref" --argjson decision_ref "$harness_decision_ref" \
+    --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" '
+    {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.self-host-harness",
+     body:{activation_state:"inactive",authority_effect:"none",
+       decision_ref:$decision_ref,duty_decision_ref:$duty_decision_ref,
+       duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
+         id:"stage.self-host-harness.result",sha256:$duty_sha},
+       policy_ref:$policy_ref,policy_set:$policy_set,state_ref:$state_ref,
+       attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
+         id:"kill-attempt.self-host-harness",sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
+       evaluation_mode:"observation-only",reference_semantics:"identity-only",
+       verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$scope_dir/kill-$scope_case.json"
+
+  risk_ref=$(gate_ref "$scope_dir/risk-$scope_case.json")
+  kill_ref=$(gate_ref "$scope_dir/kill-$scope_case.json")
+  duty_ref=$(gate_ref "$scope_dir/duty-$scope_case.json")
+
+  "$jq_bin" -S -c -n --arg pre_id "$pre_id" --arg pre_sha "$pre_record_sha" \
+    --arg post_id "$post_id" --arg post_sha "$post_record_sha" \
+    --argjson identity "$case_identity" \
+    --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" '
+    {schema_version:1,kind:"workflow_scope",id:"scope.self-host-transition.v1",
+     body:{activation_state:"inactive",authority:"none",enabled:false,
+       push_allowed:false,scope_version:"v1",
+       target_repository_id:"repo.ystack",
+       workflow_id:"workflow.self-host-transition",
+       task_class:"task.self-host-transition",
+       risk_tier:"routine",
+       allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
+       required_proof_kinds:["deterministic","independent-review"],
+       required_eval_families:["stale-moved-artifacts"],
+       required_shadow_environments:["env.local-macos-ystack-self"],
+       shadow_evidence_refs:([
+         {schema_version:1,kind:"shadow_reproduction_record",id:$pre_id,sha256:$pre_sha},
+         {schema_version:1,kind:"shadow_reproduction_record",id:$post_id,sha256:$post_sha}] |
+         # workflow-scope.jq bounded_set requires the array to equal its own
+         # plain sort, not a sort keyed on one field: with two refs sharing
+         # every key name, the generic object sort compares "id" before
+         # "sha256" ever enters it, so sorting by sha256 alone could disagree
+         # with the shape check depending on which digest happened to be
+         # smaller; sort here exactly as bounded_set does.
+         sort),
+       qualified_identity:$identity,
+       gate_evidence_refs:{risk_gate_evaluation_ref:$risk_ref,
+         kill_switch_evaluation_ref:$kill_ref,duty_separation_evaluation_ref:$duty_ref},
+       max_attempts:2}}' >"$scope_dir/scope-$scope_case.json"
+
+  if ! PATH="$run_path" "$evaluator" evaluate \
+      "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$scope_dir/dashboard.json" \
+      "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
+      "$scope_dir/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
+    fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope-$scope_case.err"))"
+  fi
+  # The accepted spec (requirement 2) and the plan's consumer section
+  # (work/shadow-self-host-run/plan.md, "The consumers") both require this
+  # scope's classification to be the evaluator's real "not-proposable" answer,
+  # not a manufactured "proposable" one: there is no real sandbox and this
+  # fixture is declaration-only. The dashboard's one seeded family
+  # ("stale-moved-artifacts") is deliberately given a failing case above
+  # (family("stale-moved-artifacts";"seeded";7;1;0)) so the gate stage stays
+  # well-formed under scope-gates.jq's own shape and reference checks (nine
+  # real gate families, 64-hex digests, gates bound to the tested identity,
+  # gates mutually consistent) and refuses for a real, specific,
+  # non-malformed reason instead: "scope.eval-failing"
+  # (scope/v1/scope-gates.jq:887-890), reported distinctly from
+  # "scope.malformed" as the plan's consumer section requires. This is still
+  # never live authority: qualification stays unavailable, enablement stays
+  # blocked, and enabling this scope remains an independent operator-merged
+  # pull request — the qualification field itself records that regardless of
+  # outcome, checked below field for field.
+  "$jq_bin" -e -n --slurpfile e "$scope_dir/evaluation-$scope_case.json" '
+    $e[0].body.outcome == "not-proposable" and
+    $e[0].body.reason_ids == ["scope.eval-failing"] and
+    $e[0].body.qualification ==
+      {state:"unavailable",reason_id:"scope.enablement-requires-operator-pr"} and
+    $e[0].body.authority == "none" and $e[0].body.enabled == false and
+    ($e[0].body.evidence.shadow_records | length) == 2 and
+    $e[0].body.proposal.state == "absent"
+  ' >/dev/null 2>&1 ||
+    fail "scope harness ($scope_case): the evaluator did not report the exact not-proposable classification, with the specific scope.eval-failing refusal reason and no live authority"
+  pass "scope harness ($scope_case case's own identity, inactive compatibility only): the shipped evaluate-scope.sh accepts the two real unchanged shadow records and the nine-family dashboard under its complete shape and reference checks, with this case's own identity fully field-validated, and reports the exact not-proposable classification in its own vocabulary — refused for the specific scope.eval-failing reason, distinct from scope.malformed — with qualification still unavailable and no live authority"
+done
 
 # Negative control: a dashboard missing eight of the nine required gate
 # families is malformed under scope-gates.jq's own dashboard_shape, and must be
 # refused with "scope.malformed" and outcome "not-proposable". Without this
 # check, the positive assertion above could pass vacuously against a harness
-# that always reported proposable regardless of what the dashboard said.
+# that always reported proposable regardless of what the dashboard said. Uses
+# the post case's fixtures; either case's would do since this checks the
+# dashboard, not the identity.
 malformed_dashboard="$scope_dir/dashboard-malformed.json"
 "$jq_bin" -S -c '.body.families |= .[0:1]' "$scope_dir/dashboard.json" >"$malformed_dashboard"
 if ! PATH="$run_path" "$evaluator" evaluate \
-    "$scope_dir/scope.json" "$scope_dir/shadow-set.json" "$malformed_dashboard" \
-    "$scope_dir/risk.json" "$scope_dir/kill.json" "$scope_dir/duty.json" \
+    "$scope_dir/scope-post.json" "$scope_dir/shadow-set.json" "$malformed_dashboard" \
+    "$scope_dir/risk-post.json" "$scope_dir/kill-post.json" "$scope_dir/duty-post.json" \
     "$scope_dir/marker.json" >"$scope_dir/evaluation-malformed.json" \
     2>"$tmp/scope-malformed.err"; then
   fail "scope harness: evaluate-scope.sh refused a well-formed call with a malformed dashboard ($(cat "$tmp/scope-malformed.err"))"
