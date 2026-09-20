@@ -123,8 +123,18 @@ canonical_ok() {
   [ -s "$f" ] || return 1
   "$jq_bin" -e 'type != null' "$f" >/dev/null 2>&1 || return 1
   [ "$("$jq_bin" -s 'length' "$f" 2>/dev/null)" = 1 ] || return 1
-  "$jq_bin" -S -c . "$f" >"$f.canon" 2>/dev/null || return 1
-  /usr/bin/cmp -s "$f" "$f.canon"
+  # Write the canonicalised copy under $tmp, never beside the file being
+  # checked: this runs against the committed evidence tree itself first, and
+  # a stray "$f.canon" left there would break the exact-inventory check
+  # (check 1) on a second invocation and contaminate every negative-case copy
+  # made from it.
+  local canon rc
+  canon=$(/usr/bin/mktemp "$tmp/canon.XXXXXX") || return 1
+  "$jq_bin" -S -c . "$f" >"$canon" 2>/dev/null || { /bin/rm -f "$canon"; return 1; }
+  /usr/bin/cmp -s "$f" "$canon"
+  rc=$?
+  /bin/rm -f "$canon"
+  return $rc
 }
 
 # check_evidence: run requirement 15's thirteen checks (minus 13 itself,
@@ -288,7 +298,7 @@ check_evidence() {
   for case_name in pre post; do
     local record_id
     record_id=$("$jq_bin" -r '.id' "$dir/$case_name/state/shadow-record.json")
-    "$root/telemetry/v1/validate-trace-ledger.sh" validate "$record_id" \
+    PATH="$run_path" "$root/telemetry/v1/validate-trace-ledger.sh" validate "$record_id" \
       attempt.shadow-reproduce "$dir/$case_name/state/trace-ledger.json" \
       >"$tmp/$case_name.trace-receipt.json" 2>"$tmp/$case_name.trace.err" ||
       { /usr/bin/printf '%s: %s: %s trace ledger does not reseal (%s)\n' "$label" "$step" \
@@ -336,21 +346,59 @@ check_evidence() {
   /usr/bin/grep -Fq "$all_ones" "$root/shadow/evidence/self-host-transition/v1/README.md" 2>/dev/null ||
     /usr/bin/grep -Fq "$all_ones" "$dir/README.md" 2>/dev/null ||
     { /usr/bin/printf '%s: %s: README must label the shipped demonstration value\n' "$label" "$step" >&2; return 1; }
-  if /usr/bin/grep -EiIrq \
-      'sandbox-enforced|sandbox is enforced|enforcement is proven|proven enforcement|is qualified|workflow.{0,20}qualified|is proposable' \
-      "$root/shadow/evidence/self-host-transition/v1/README.md" \
-      "$root/shadow/evidence/self-host-transition/v1/verification-instructions.md" \
-      "$root/RESTORE.md" \
-      "$root/docs/components.md" 2>/dev/null; then
-    /usr/bin/printf '%s: %s: prose overclaims sandbox enforcement or qualification\n' "$label" "$step" >&2
-    return 1
-  fi
+  # Ban affirmative overclaims ("this is sandbox-enforced / qualified /
+  # proposable") without also banning a disclaimer that merely names and
+  # negates the same phrase (the committed README's "It is **not**
+  # sandbox-enforced", docs/components.md's "Nothing here is qualified").
+  # Markdown emphasis characters are stripped first so "**not**" still reads
+  # as the word "not" immediately before the phrase it negates.
+  overclaim_found() {
+    local f=$1
+    [ -f "$f" ] || return 1
+    /usr/bin/perl -0777 -ne '
+      (my $t = $_) =~ tr/*`_//d;
+      my @phrases = ("sandbox-enforced", "sandbox is enforced",
+        "enforcement is proven", "proven enforcement", "is qualified",
+        "is proposable");
+      for my $p (@phrases) {
+        while ($t =~ /\Q$p\E/gi) {
+          my $s = $-[0];
+          my $ctx = substr($t, $s > 60 ? $s - 60 : 0, $s > 60 ? 60 : $s);
+          exit 0 unless $ctx =~ /\b(?:not|never|no|nothing)\b/i;
+        }
+      }
+      while ($t =~ /workflow.{0,20}qualified/gis) {
+        my $s = $-[0];
+        my $ctx = substr($t, $s > 60 ? $s - 60 : 0, $s > 60 ? 60 : $s);
+        exit 0 unless $ctx =~ /\b(?:not|never|no|nothing)\b/i;
+      }
+      exit 1
+    ' "$f"
+  }
+  for f in "$root/shadow/evidence/self-host-transition/v1/README.md" \
+    "$root/shadow/evidence/self-host-transition/v1/verification-instructions.md" \
+    "$root/RESTORE.md" "$root/docs/components.md"; do
+    if overclaim_found "$f"; then
+      /usr/bin/printf '%s: %s: %s overclaims sandbox enforcement or qualification\n' \
+        "$label" "$step" "$f" >&2
+      return 1
+    fi
+  done
   # requirement 2's reference-field recomputation, over the real committed
-  # bytes those fields name.
+  # bytes those fields name. Only the credential-policy section's shipped
+  # policy filename omits the section's own "-policy" suffix a second time
+  # (control/v1/credential-policy.json, not credential-policy-policy.json);
+  # every other section follows the plain "$section-policy.json" pattern.
+  policy_filename_for_section() {
+    case "$1" in
+      credential-policy) /usr/bin/printf '%s' 'credential-policy.json' ;;
+      *) /usr/bin/printf '%s-policy.json' "$1" ;;
+    esac
+  }
   for section in credential-policy duty-separation evidence-integrity kill-switch \
     risk-gates sandbox; do
     local expect_policy expect_decision actual_policy actual_decision
-    expect_policy=$(sha_file "$root/control/v1/$section-policy.json")
+    expect_policy=$(sha_file "$root/control/v1/$(policy_filename_for_section "$section")")
     expect_decision=$(sha_file "$root/control/v1/$section-decision.json")
     actual_policy=$("$jq_bin" -r --arg s "$section" \
       '.body.sections[] | select(.section_id == $s) | .policy_ref.sha256' "$dir/control-policy-set.json")
@@ -386,19 +434,44 @@ check_evidence() {
     $claim[0].body.duty_evaluation_ref.sha256 == $duty_sha
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: environment-claim reference mismatch\n' "$label" "$step" >&2; return 1; }
-  # None of the retained reference fields may be a repeated-character
-  # placeholder of the kind scripts/test/shadow-slice.test.sh builds its
-  # fixtures from.
-  for probe in "$dir/control-policy-set.json" "$dir/duty-evaluation.json" \
-    "$dir/environment-claim.json"; do
-    if "$jq_bin" -e '
-        [.. | strings | select(test("\\A(.)\\1{63}\\z"))] | length > 0
-      ' "$probe" >/dev/null 2>&1; then
-      /usr/bin/printf '%s: %s: %s carries a repeated-character placeholder digest\n' \
-        "$label" "$step" "$probe" >&2
-      return 1
-    fi
-  done
+  # None of the reference fields requirement 2 names as identifying real
+  # committed bytes may be a repeated-character placeholder of the kind
+  # scripts/test/shadow-slice.test.sh builds its fixtures from
+  # (work/shadow-self-host-run/spec.md requirement 2's precondition-gate
+  # field list). This is scoped to exactly those fields, not every string in
+  # the document: a whole-document scan would also reject the claim's
+  # body.tools[].sha256, the shipped all-ones demonstration verifier digest
+  # that requirement 2 requires this same claim to retain literally (checked
+  # a few lines above).
+  local placeholder_pat='\\A(.)\\1{63}\\z'
+  if "$jq_bin" -e --arg pat "$placeholder_pat" '
+      [.body.core_contract.package_ref.sha256,
+       (.body.sections[].policy_ref.sha256), (.body.sections[].decision_ref.sha256)] |
+      map(select(test($pat))) | length > 0
+    ' "$dir/control-policy-set.json" >/dev/null 2>&1; then
+    /usr/bin/printf '%s: %s: control-policy-set.json carries a placeholder reference digest\n' \
+      "$label" "$step" >&2
+    return 1
+  fi
+  if "$jq_bin" -e --arg pat "$placeholder_pat" '
+      [.body.policy_ref.sha256, .body.decision_ref.sha256, .body.policy_set.sha256,
+       .body.stage.request_ref.sha256, .body.stage.resolved_profile_ref.sha256,
+       .body.stage.result_ref.sha256] |
+      map(select(test($pat))) | length > 0
+    ' "$dir/duty-evaluation.json" >/dev/null 2>&1; then
+    /usr/bin/printf '%s: %s: duty-evaluation.json carries a placeholder reference digest\n' \
+      "$label" "$step" >&2
+    return 1
+  fi
+  if "$jq_bin" -e --arg pat "$placeholder_pat" '
+      [.body.policy_set_ref.sha256, .body.duty_evaluation_ref.sha256,
+       (.body.stage_result_ref.sha256 // empty)] |
+      map(select(test($pat))) | length > 0
+    ' "$dir/environment-claim.json" >/dev/null 2>&1; then
+    /usr/bin/printf '%s: %s: environment-claim.json carries a placeholder reference digest\n' \
+      "$label" "$step" >&2
+    return 1
+  fi
 
   # --- check 11: core-package-closure.json recovers the package reference
   # offline and its members recompute.
@@ -414,13 +487,24 @@ check_evidence() {
   members_count=$("$jq_bin" -e '.members | length' "$dir/core-package-closure.json" 2>/dev/null) &&
     [ "$members_count" -eq 9 ] ||
     { /usr/bin/printf '%s: %s: must name exactly nine members\n' "$label" "$step" >&2; return 1; }
+  # Per the plan, this recovers the package reference from the live
+  # committed working tree, not from a historical Git revision: a shallow CI
+  # checkout (actions/checkout's default depth) does not carry the object for
+  # d3f6d525328838b9c2de819699e53d8909ab7a3f, so `git show <rev>:<path>` would
+  # fail every run once the earlier checks pass, regardless of the evidence.
+  # The closure names a fixed, immutable generation (scripts/core-contract.sh
+  # and core/v2/generations/<selected-generation>/**), so its nine members'
+  # committed bytes at the current head equal their bytes at the pinned
+  # revision; requirement 11 is "the nine members' digests equal the live
+  # digests of those nine committed files at the pinned generation."
   local i mpath msha live_sha
   i=0
   while [ "$i" -lt 9 ]; do
     mpath=$("$jq_bin" -r --argjson i "$i" '.members[$i].path' "$dir/core-package-closure.json")
     msha=$("$jq_bin" -r --argjson i "$i" '.members[$i].sha256' "$dir/core-package-closure.json")
-    live_sha=$(git -C "$root" show "d3f6d525328838b9c2de819699e53d8909ab7a3f:$mpath" 2>/dev/null | sha_file /dev/stdin) ||
-      { /usr/bin/printf '%s: %s: member %s not resolvable at the pinned revision\n' "$label" "$step" "$mpath" >&2; return 1; }
+    [ -f "$root/$mpath" ] ||
+      { /usr/bin/printf '%s: %s: member %s not resolvable in the committed tree\n' "$label" "$step" "$mpath" >&2; return 1; }
+    live_sha=$(sha_file "$root/$mpath")
     [ "$msha" = "$live_sha" ] ||
       { /usr/bin/printf '%s: %s: member %s digest mismatch\n' "$label" "$step" "$mpath" >&2; return 1; }
     i=$((i + 1))
@@ -470,10 +554,23 @@ pass 'the committed evidence passes checksums.json inventory, canonical JSON, in
 # proves nothing.
 # ---------------------------------------------------------------------------
 mutant_dir="$tmp/mutant"
-/bin/cp -R "$evdir" "$mutant_dir"
-/bin/chmod -R u+w "$mutant_dir"
+
+# Give each negative case a fresh, unmutated copy of the evidence tree: a
+# reused directory that already exists makes "cp -R $evdir $mutant_dir" nest
+# a second "v1" directory inside it instead of restoring the original files,
+# so every case after the first would fail from the leftover extra inventory
+# and prior corruption rather than from its own mutation. Confirming the
+# fresh copy passes first proves each case starts from a clean baseline.
+fresh_mutant_copy() {
+  /bin/rm -rf -- "$mutant_dir"
+  /bin/cp -R "$evdir" "$mutant_dir"
+  /bin/chmod -R u+w "$mutant_dir"
+  check_evidence "$mutant_dir" 'mutant-baseline' >/dev/null 2>&1 ||
+    fail 'a freshly copied, unmutated evidence tree must pass before it is mutated'
+}
 
 # (a) a single evidence file's bytes change.
+fresh_mutant_copy
 "$jq_bin" -S -c '.body.reason_id = "check.failed-at-revision-mutated"' \
   "$mutant_dir/pre/state/shadow-record.json" >"$mutant_dir/pre/state/shadow-record.json.new"
 /bin/mv "$mutant_dir/pre/state/shadow-record.json.new" "$mutant_dir/pre/state/shadow-record.json"
@@ -483,8 +580,7 @@ fi
 pass 'a mutated evidence file is refused'
 
 # (b) a digest inside checksums.json is corrupted, restoring the file itself.
-/bin/cp -R "$evdir" "$mutant_dir"
-/bin/chmod -R u+w "$mutant_dir"
+fresh_mutant_copy
 "$jq_bin" -S -c '
   .body.files |= map(if .path == "README.md"
     then .sha256 = ("0" * 64) else . end)
@@ -496,8 +592,7 @@ fi
 pass 'a corrupted checksums.json digest is refused'
 
 # (c) an outcome field is changed.
-/bin/cp -R "$evdir" "$mutant_dir"
-/bin/chmod -R u+w "$mutant_dir"
+fresh_mutant_copy
 "$jq_bin" -S -c '.body.outcome = "no-change" | .body.reason_id = "check.passed-at-revision"' \
   "$mutant_dir/post/state/shadow-record.json" >"$mutant_dir/post/state/shadow-record.json.new"
 /bin/mv "$mutant_dir/post/state/shadow-record.json.new" "$mutant_dir/post/state/shadow-record.json"

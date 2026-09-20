@@ -66,17 +66,23 @@ SHA-256 digests.
 
 This document is `shadow/evidence/self-host-transition/v1/verification-instructions.md`,
 written by hand for a human reader who wants to check the one changed-file
-condition without any of the shipped tooling. It is a new, freestanding
-document; it is not read by any shipped script and no shipped schema names it.
+condition without any of the shipped tooling. Per
+`work/shadow-self-host-run/spec.md` requirement 14, its exact bytes are what
+each case's `qualified-identity.json` binds by digest as
+`verification_instructions_ref`: that is the accepted identity's
+verification-instructions reference, and it names this document, not a tool
+output.
 
 It is distinct from each case's own `assembled/verification-instructions.txt`,
 which is the shipped `shadow/v1/assemble-materialization-input.sh`'s own
-emitted decision text for that run, retained unchanged in
-`{pre,post}/assembled/`. That per-case file, not this one, is what each case's
-`qualified-identity.json` binds by digest as `verification_instructions_ref`:
-that field names the assembler's own accepted output, and rewriting it with
-this document's bytes would misstate what the identity was resolved under.
-This document has no `*_ref` field pointing at it and is not a shape any
-shipped validator checks; it is retained here, and listed in
-`checksums.json`, purely as human-readable, independently verifiable
+emitted decision text for that run. Requirement 14 retains that per-case
+assembler output unchanged in `{pre,post}/assembled/` as well, but it is kept
+there purely for provenance of what the assembler itself emitted; no
+`*_ref` field points at it, and it is not the bytes any shipped validator
+resolves `verification_instructions_ref` against. Retaining both, and
+documenting which one the identity actually binds, avoids rewriting an
+already-accepted assembler output while still keeping this hand-written
+procedure as the identity's own verification-instructions reference.
+This document is listed in `checksums.json` and, in addition to being the
+bound reference, remains human-readable, independently verifiable
 documentation of the one condition the pair observes.
