@@ -1110,6 +1110,11 @@ canonical document holding a finite relative-path inventory and SHA-256 for ever
 bundled file except itself. Every referenced document's raw bytes must be recoverable
 from this directory, or from an exact committed Git object the README names by id.
 
+The README must also carry the delegation statement described under "Operator steps":
+in plain words, who executed the evidence session, on whose machine and under which
+session, and — when the operator delegated it — the operator's own quoted confirmations
+of the environment registry entry and the two incident timestamps.
+
 Do not commit `$SRC`, `$CANDIDATE`, `$SCRATCH`, `$SCRATCH_D`, any binary, any
 credential, or any
 machine-specific absolute path. The replay recipe uses caller-supplied scratch paths,
@@ -1254,14 +1259,21 @@ SHAs.
 
 Everything in "Prepare the disposable source", "Resolve the real profile", "Assemble
 each run's input", "The two runs" and "Repeatability" runs natively on the operator's
-macOS machine, by the operator, against the operator's own ystack history. No agent
-session performs them and no CI job performs them. The operator hands back the
-evidence files; the coder commits them unchanged and writes the test, README and docs
-around them.
+macOS machine, under the operator's own user account, against the operator's own ystack
+history. The operator may execute the session by hand, or delegate execution to the
+manager session running on that machine — never to CI, never to a remote or cloud
+session, and never to a coder subagent. When the session is delegated, the README and
+the requester record state the delegation explicitly: who executed it, on whose machine
+and under which session. The requester identity stays the DR-5 operator identity,
+because the machine, the account and the authority are the operator's. The operator
+hands back the evidence files; the coder commits them unchanged and writes the test,
+README and docs around them.
 
 The operator also confirms the environment registry entry and the incident timestamps,
 because only the person who watched the transition can say when each digest was
-actually checked.
+actually checked. These two hand-confirmed items remain the operator's own
+confirmations even when execution is delegated: the operator gives them in chat or on
+the intake issue, and the README quotes them.
 
 ## Risks
 
