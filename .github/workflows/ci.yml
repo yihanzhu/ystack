@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -116,7 +116,7 @@ jobs:
         run: |
           # Construction installs tests by filename; this fixed runner makes every
           # scripts/test/*.test.sh file part of required CI without workflow edits.
-          bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
+          bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/10
 
   ci:
     runs-on: ubuntu-latest

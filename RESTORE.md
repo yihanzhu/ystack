@@ -458,7 +458,7 @@ That checklist covers:
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.
 - **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml): a
-  `checks` job (structure check, shellcheck, sharding proof, rename gate), six
+  `checks` job (structure check, shellcheck, sharding proof, rename gate), ten
   parallel `test` shards each running
   `scripts/test/run-all.sh --shard <index>/<count>`, and an aggregate `ci` job
   that stays the **hard merge gate**. Restore it by having this repo's
