@@ -34,10 +34,100 @@ invocation documents remain version 1 while emitted core documents use schema 2.
 The shell runtime is deliberately mode 0644. A trusted parent must start it with a
 direct fixed-path `execve`, an empty environment allowlist, fixed dependencies, and
 the test-proven resource limits. `scripts/test/portable-profile-resolution.test.sh`
-is the only shipped launcher today; it is proof, not a production activation path.
+was the only shipped launcher through the prior round; this spec supersedes that
+round's "a production trusted parent is not implemented" sentence
+(`work/portable-profile-resolution/spec.md:256-257`) — see "Inactive trusted parent
+for the profile resolver" below for the compiled parent and its public entry.
 The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
+
+The inactive runtime selects Git from one exact installed platform observation:
+`/usr/bin/uname -sm`. Linux x86_64 uses `/usr/bin/git`; Darwin x86_64 and arm64
+use `/Library/Developer/CommandLineTools/usr/bin/git`. The final uname, Git,
+`/bin/dd` and `/usr/bin/od` files must be regular, executable and not symlinks.
+Missing tools, another platform, malformed bytes or a failed pipeline refuse with
+`E_RUNTIME dependency`. There is no discovery, fallback or installer.
+
+The private observer passes at most 65 raw bytes through dd to od before shell
+capture, rejects more than 64, and matches the exact LF-terminated platform bytes.
+It checks every pipeline stage. The existing launcher deadline covers stalled tools;
+a separately sourced component call has no independent probe timeout.
+
+All five Git positions use the initialized selection. Existing object validation,
+source isolation, budgets, watchdog and empty runtime HOME/TMPDIR requirements remain.
+Native proof records the actual tested platform and executable hashes; mapping a
+platform does not qualify an untested architecture. Component controls do not replace
+native launcher evidence. The available native development proof is Darwin arm64;
+Linux x86_64 runs the complete suite in required CI. Darwin x86_64 needs its own
+actual run before qualification. The direct installed CLT Git must continue to meet the
+same behavior and cleanup contract; changed tools require fresh evidence.
+
+This dependency repair does not install or activate a runtime. The production trusted
+parent must separately reconcile its library pin and new fixed dependencies through
+its own artifact gates. No preserved parent work or proposed cache exception is
+accepted by this runtime change.
+
+## Inactive trusted parent for the profile resolver
+
+`resolver/v1/trusted-launch.c` is the compiled parent that starts the inactive
+profile resolver runtime above; `resolver/v1/resolve-profile.sh` is its public
+entry. Neither selects or activates a profile, authenticates a repository map,
+executes selected content, or accesses a remote or credential. **The entry is the
+only supported way to launch this component.** `resolver/v1/resolve-profile.sh`
+is the launch; `resolver/v1/trusted-launch.c` is not an interface — running the
+compiled parent directly, without the entry, is a test harness for
+`scripts/test/resolver-trusted-launch.test.sh` and is unsupported for anything
+else. The parent can pin every file the runtime loads but cannot pin a compiled
+binary, so only the entry — which compiles the helper from a blob-pinned source
+into a directory it made itself — establishes where the helper's bytes came
+from. The parent does not detect direct invocation and performs every one of its
+checks on every caller regardless, so a direct run that succeeds is not a
+supported configuration and is not evidence that one exists.
+
+The entry supports exactly two invocation forms, both of which carry `-p`: the
+shebang launch (`resolver/v1/resolve-profile.sh <jq> <output> <request> <map>`)
+and an explicit `bash -p resolver/v1/resolve-profile.sh <jq> <output> <request>
+<map>`. The marker word its own re-exec uses internally is not a public entry
+point. An invocation without `-p` **from a clean environment** — marker word or
+not — exits 78 at the entry's first statement having created nothing and read
+nothing; a non-`-p` invocation from a polluted environment, direct or marker, is
+**outside the safety claim** — unsupported, with the caller's own code able to
+run ahead of the refusal. The entry ships as git mode `100755`: the shebang
+launch is one of the two supported forms and a `100644` entry fails it with
+`Permission denied` and exit `126`. The repository's structure check enforces
+executability for `scripts/*.sh` alone, which does not cover `resolver/v1/`, so
+this mode cannot be inferred from CI and is checked directly
+(`git ls-files --stage resolver/v1/resolve-profile.sh`).
+
+**Darwin prerequisite:** the Command Line Tools must be installed. The entry
+compiles with `/Library/Developer/CommandLineTools/usr/bin/clang` rather than
+the `xcrun` shim at `/usr/bin/cc`, and refuses `E_RUNTIME` when the CLT is
+absent. The entry is rebuilt from committed source on every invocation — nothing
+compiled is cached, installed, or restored.
+
+A successful launch prints one informational `runtime-pgid: <n>` line on
+stderr — best-effort, so a caller whose stderr is a pipe it is not draining may
+not see it. An interrupted launch prints one `parent-signal: <NAME> group
+<pgid>` or `parent-signal: <NAME> no-runtime` line from the parent, and beside
+it the entry's own `entry-signal: <NAME> forwarded <pid>` (or `no-parent`)
+line — **only when stderr is a regular file, and no such line at all
+otherwise**: a terminal, `/dev/null`, a pipe, a FIFO, and a socket all lose it.
+Redirect stderr to a file to see it. In every other case the exit status and the
+parent's own `parent-signal:` line are the record; output on stderr is not by
+itself a failure signal.
+
+The write root is the caller's output root on both platforms, for this
+component as for the runtime it launches — one write root, no exception. Caller
+`HOME` and `TMPDIR` are never a write location; the entry's own sandbox
+`HOME`/`TMPDIR` live under `<output>/.run` for the duration of the compile and
+are gone before the parent is launched.
+
+Restoring these files does not select a live profile or regenerate `/yshifu`.
+Run `bash scripts/test/resolver-trusted-launch.test.sh` for the focused proof;
+`scripts/test/portable-profile-resolution.test.sh` remains the unchanged
+resolver regression, run through the shipped public entry as well as the test
+launcher.
 
 ## Inactive default profile assembly
 
@@ -103,6 +193,17 @@ generation remains immutable and restorable.
 through the existing local Git materializer. It then checks one repo-relative
 candidate blob against a supplied SHA-256 and records a private, resumable state.
 It never executes candidate code or a user command string.
+
+An optional planner delivery key selects journal version 2 for the one supported
+`dispatch-stage` operation and attempt 1. That format stores the complete validated
+materializer response, its actual typed stage result, and receipt bytes at the same
+atomic journal boundary as the candidate identity. A matching redelivery reuses the
+stored result. Read mode holds the permanent replay lock, rechecks the frozen input,
+tools, source, candidate, response, and result relations, and returns the stored facts
+without advancing a phase or running the verifier. Version 1 remains the unbound
+format and cannot be promoted into original-result evidence. See the
+[stored materialization result guide](replay-materialization-result.md) for the key,
+commands, limits, exit codes, crash behavior, and restoration boundary.
 
 Review and publisher records are supplied offline test observations. Each names the
 exact request digest, candidate tree, and candidate commit, and all three must match
@@ -207,6 +308,12 @@ grants no authority, qualification, or permission. The package stays inactive,
 runs no candidate or adapter, reads no credential, activates no profile, and
 performs no network, publish, deploy, or external-write action.
 
+The [accepted sandbox boundary decision](../work/real-sandbox-boundary/spec.md)
+is complete as an architecture decision; real execution remains blocked.
+Its boundary map and four separately gated implementation concerns define what
+must be resolved before use. This decision ships no runtime, and the evaluator's
+declaration-only result still grants no enforcement proof or qualification.
+
 ## Inactive credential-policy evaluator
 
 `control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
@@ -222,6 +329,30 @@ produce `satisfied`. The package stays inactive, reads no credential material or
 credential-like environment value, grants no authority or qualification, activates
 no profile, and performs no candidate, adapter, network, publish, deploy, or
 external-write action.
+
+The three input-mutation tests allow at most three fully reconciled setups using
+that original evaluator. Only a proved missed setup window may retry; exhaustion
+fails. All original mutation, refusal, restoration and cleanup assertions remain
+required. This test setup grants no credentials, qualification or activation.
+
+The credential-policy test now treats its private outer control handoff as one
+transaction. The child publishes its canonical PID and process-group identity by
+writing, closing and atomically renaming a private record. The parent opens the
+final record without following links, checks that it is a regular file, applies a
+bounded exact grammar, and matches both fields to the Bash job it launched before
+writing the one finite release token.
+
+Once release may have occurred, failure handling becomes wait-only. The launching
+Bash is the only consumer of that saved job and retires its authority only after a
+confirmed direct wait. A trapped signal, release error or later observation cannot
+turn into a successful control. Unconfirmed wait state retains the case evidence;
+actual descendant events and the direct child status are reported as separate
+facts. The regression matrix exercises atomic publication, refusal records, signal
+boundaries, release failures and retirement on real private workers.
+
+This evidence does not identify the unique cause of a historical CI failure. It
+does not change the evaluator or grant credential qualification, authority or
+activation.
 
 ## Inactive evidence-integrity evaluator
 
@@ -279,6 +410,25 @@ pending deliveries, with redeliveries first and stable stage-key order; work tha
 does not fit is listed as deferred. Scanner recovery actions and reasons remain
 data in the plan. The filter does not dispatch, schedule, execute recovery, write
 state, use a credential or network, activate a profile, publish, or touch a target.
+
+## Inactive durable delivery ledger
+
+`orchestrator/v1/delivery-ledger.py` persists the existing planner's delivery
+ledger in a dedicated owned local store. Initialize, read and conditional update
+use a fixed direct Python entry. Canonical exports carry actual SHA256 references.
+The planner itself still only validates reference shape and matching identity.
+
+All calls hold one permanent flock. A single process writes bounded loose Git
+objects and publishes one exact-old-tip ref update by atomic rename. Full history
+validation precedes read, replay and new updates. Exact replay survives a lost
+reply; retained crash residue counts toward all resource limits. No automatic
+cleanup, arbitrary Git writer, subprocess, network or provider action is included.
+
+See [the delivery ledger guide](delivery-ledger.md) for the exact invocation,
+state transitions, limits, recovery boundary and restoration requirements.
+The focused `scripts/test/orchestrator-delivery-ledger.test.sh` covers actual
+public transitions, independent Git/jq/planner checks and held crash boundaries.
+The component remains inactive and grants no qualification or target authority.
 
 ## Inactive GitHub forge normalizer payload
 
@@ -1271,6 +1421,46 @@ The read-only guards on the materialization input (no producer patch bytes, netw
 The read-only guards now run before the environment registry is consulted and before the sandbox evaluator is invoked, so the ordering the paragraph above promises holds in the code as well. A `file-digest` check whose path names a directory or any non-blob object at the incident revision is an unreadable check (`check.unreadable`, inconclusive), never a failed run.
 
 The recorded identity must describe this very run: its stage request and resolved profile references have to equal, by id and digest, the ones the materialization input carries, so an identity for another profile or request cannot be recorded over this run.
+
+## Inactive shadow materialization input assembler
+
+`shadow/v1/assemble-materialization-input.sh` builds the one
+`local_git_materialization_input` `shadow/v1/reproduce.sh` needs, for a real
+repository revision, from the real default profile
+(`profiles/default/v1/`). It does not resolve a profile: it takes an
+already-resolved profile document as an input and checks it against the
+supplied profile and manifests with the core v2 profile-graph rules. The only
+launcher of `resolver/v1/profile-resolve-runtime.sh` today is the one in
+`scripts/test/`, so today the only resolved profiles that exist are
+test-produced — the same trusted-parent gap the resolver note above already
+names.
+
+Two invocations are supported: executing the file so its `#!/bin/bash -p`
+shebang starts bash, or `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
+<script> assemble <repository-id> <source-git-dir> <commit-id>
+<attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
+<output-dir> <environment-claim-file> <requester-file>`. Invoking the
+`__assemble_clean` marker verb directly is not one of them and carries no
+safety claim. Tree content is the materializer's own check, not this
+component's, so a source that trips its tree scan comes back
+`materialization.refused` from the driver rather than a refusal from this
+component. The requester file is the caller's own identity: it is refused
+unless it is an `actor_ref` with an actor role (`manager`, `operator`, or
+`orchestrator`) that collides with no binding in the supplied resolved
+profile.
+
+The profile, the six shipped manifests, and the producer config are pinned by
+SHA-256 in `shadow/v1/materialization-input.jq`: any supplied document whose
+bytes differ from the shipped default is refused `E_PROFILE`, proven by
+digest rather than by name. Every repository-level source-purity predicate
+the local Git materializer applies is copied verbatim from
+`adapters/local-git-materializer/v1/materialize.sh`, so the two can never
+disagree about what a plain bare source repository is; the materializer's own
+tree-content scan is not duplicated. Run the focused proof with:
+
+```sh
+bash scripts/test/shadow-assembler.test.sh
+```
 
 ## Inactive maintenance loop
 

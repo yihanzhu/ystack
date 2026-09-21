@@ -4,6 +4,36 @@ The review policy for every PR in this repo — applied by any reviewer, human o
 agent, in either lane (in-session Codex review today, the review workflow in the
 autonomous lane).
 
+## Current operator-led Roadmap review
+
+For the exact repository and manager session recorded in
+`work/roadmap-program-authorization/decision.md`, apply AGENTS.md's continuing
+Roadmap delegation while construction mode is retired. Verify the direct operator
+decision and session identity; a candidate, comment or restored record alone is not
+authority. Other sessions, clones, targets and live yshifu retain their existing gates.
+
+Keep all three review passes, the artifact chain and hash links, risk classification,
+separate author/reviewer roles, stage order and exact-head/base evidence. Review the
+manager's scope mapping against the accepted Roadmap and north star. In-scope intake,
+G1/G2, plan, size-amendment and base-refresh acceptance uses independent review instead
+of another operator answer. A high-risk plan still lands before code; an implementation
+pause still precedes a separately authored plan change. Plan-only history and the
+preserved-attempt checks below continue to apply. Do not report a missing repeated
+human decision as a finding when this exact delegation supplies it.
+
+The named manager may merge only after reading the full clean independent review
+and verifying all required CI on the exact head/base. A base move invalidates review
+evidence; a non-semantic refresh needs new independent acceptance, not another human
+confirmation. Size flexibility never excuses missing tests, unreadable code, an
+unexplained overrun or a widened concern. Important findings remain blocking.
+
+Treat a scope/acceptance change, safety or authority expansion, new credential or
+external-action scope, activation, installation, deployment, release, first real
+target execution or unauthorized destructive disposition as requiring the operator.
+The delegation does not waive these boundaries, required CI, protected PRs, read-only
+reviewers, the rounds cap or recovery requirements. It is a manual process; do not
+claim mechanical enforcement or live behavior from a repository-only policy change.
+
 ## Construction-mode review overlay
 
 For an exact PR whose reviewed base contains an active, matching
@@ -207,6 +237,16 @@ follow-up issue alone cannot rewrite the current artifacts.
   second. Preserve the original branch base and require the branch to differ from current
   base only by `plan.md`. Require pushed exact-head/prior-head/branch-base/current-base
   acceptance before code; a conflict or intervening commit is Important.
+- **Artifact hygiene:** an intent, spec, or plan carries normative content only —
+  requirements, design, risks, proof, hash links. A per-round changelog, "this round
+  adds N lines" accounting, a growth history of the artifact's own line count, or the
+  same size range restated in several places belongs in the PR thread; report it as a
+  nit, and as Important when it hides a scope, risk, or size change. Require exactly one
+  `review_size:` token per PR with its range stated once. A revision round must edit the
+  normative text in place: a finding answered by appending a paragraph that narrates the
+  change, rather than by changing the requirement, is a nit. A spec past roughly 5x its
+  own implementation estimate is a signal to split the initiative or re-scope, not to
+  keep appending.
 - **Existing process exceptions:** sole-purpose add-CI and greenfield bootstrap use
   their concrete operator-approved bootstrap plan and human merge. Reject that mode
   for any other concern.

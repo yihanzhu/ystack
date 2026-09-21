@@ -1,6 +1,7 @@
 ---
-spec-blob: ab212e82359ba3132fa6127194b61fa484bb1a85
+spec-blob: 753e643259a02643e1a03132dcbe5aa56a15c8d9
 drafted: 2026-09-10
+amended: 2026-09-18
 ---
 
 # Plan: shadow-input-assembler
@@ -48,46 +49,72 @@ Seven files, nothing else. Counts are net changed lines, honest estimates.
   appended at the **end** of the file after today's last line `docs/transition-kit.md`
   (requirement 14).
 
-Estimate total: about 865 net lines.
+The per-file estimates above are the original planning estimates. DR-3 replaces their total
+and implementation review range with the measured baseline and restoration estimate below.
+It changes no file allowance, behavior, test requirement, or security boundary.
 
-**Implementation PR figure — this plan proposes `review_size: accepted-exception` at a widened
-range.** One concern, unchanged: one inactive component whose focused test must drive the real
-`reproduce.sh` end to end over fixture ground it has to build first.
+**Implementation PR figure — DR-3 size amendment.** `review_size: accepted-exception`.
+One concern remains: one inactive assembler with its complete focused test and documentation.
+The preserved implementation head `06b379bd2456cac781079db2a74afb10bb95d167` contains **1199 net
+lines**, measured against its merge base with `main` at
+`e62b90ba07c905e2d31a8a0f47eb5c63431b9d19`: shell 473, jq 242, focused test 422, documentation,
+index and manifest 62. The seven-path diff contains additions only. This is a baseline, not a complete result:
+the test omits required cases and some required assertions. Passing that reduced test is not
+acceptance evidence.
 
-The spec recorded **610-840 net lines** — about 430 of component (jq plus shell), about 330 of
-test, and the documentation rows. The estimate above no longer sits inside that range, and the
-reason is the review rounds, not scope creep. Each round added a requirement that was asked for and
-checked: the physical-source check, the ten refusal-class negatives, the `E_LIMIT` padding
-fixtures, the clean entry, and the alias reset. Every one of those is real code and real test
-lines, so the honest figure is now about 865.
+Restore every requirement in step 0 and Proof, including exported-function cases through the
+shebang and nonprivileged `/bin/bash <script> assemble` forms. Test `BASH_ENV` aliases only
+through the supported forms named in requirement 13; this gives no nonprivileged alias guarantee.
+Also restore unreadable-module `time_ok` failure, producer-config digest swap, leap-day success,
+and refusal followed by retry in the same output directory. The audit
+also found missing negative source fixtures, cheap-check precedence cases, the finished-output
+size bound, the BOM case, and incomplete algorithm, copy and source-order assertions. The
+implementer must check the whole accepted matrix; this list is not a replacement for it.
 
-So this plan proposes an evidence-based range of **700-1000 net lines** — the ~865 estimate above,
-plus or minus 15%, rounded. The `/plan-draft` skill lets a plan propose a size exception with one
-concern, the reason and a range, and the merge of this high-risk plan PR is that proposal's
-pre-code acceptance (operator decision OD-1 applies to merges). Once this PR merges, 700-1000 is
-the implementation PR's figure in place of the spec's 610-840. This plan does not amend the spec
-text.
+The remaining work is estimated at **200-400 added test lines**: 60-100 for environment entry
+cases and their invocation helper; 35-60 for negative sources and retry; 45-90 for module,
+profile, claim, date and argument-order cases; 25-50 for size and BOM cases; and 35-100 for
+algorithm, copy, pin and source-order assertions and fixture corrections. These are estimates
+from the existing 422-line test and the named gaps, not measurements of tests already written.
+They put the complete result near 1400-1600 lines before ordinary corrections. The proposed
+range is therefore **1350-1650 net lines**, with room for readable fixes and removal of clear
+redundancy. A figure near 1300 alone is not evidence that all required tests are present.
 
-The exception waives only the soft line signal in `AGENTS.md:102-106`. Scope (still one concern),
-readability, tests, CI, review, the high-risk gate and operator merge are all unchanged, and it
-grants nothing to any other PR. Roughly 130 of the total is copied text this initiative did not
-write. Take the count when the test lands rather than once at the very end. Do not trim the
-refusal-class cases to fit — requirements 12 and 13 are what they serve. **Above 1000, stop and
-re-decide with the operator** rather than splitting: the component and its focused test are one
-concern, and requirement 17's entry is the first lines of the same script as requirement 15's
-predicates.
+The operator approved DR-3's direction for issue #262 in the current handoff: retain one component
+and restore all required tests through a separate plan amendment. Acceptance of this exact range
+still uses the high-risk plan gate. After independent review, required CI and operator merge of
+this plan-only amendment, 1350-1650 replaces the previous plan's 700-1000 implementation range
+and the spec's earlier 610-840 estimate. The spec text and accepted scope remain unchanged.
 
-**Artifact PR figure — size exception for this plan PR itself, not the implementation.** This
-file is 880 lines by `wc -l`, self-inclusive of this paragraph as committed, so this artifact
-PR carries the same ~300-400 net-line soft budget as any other and would otherwise read as an
-unexplained overrun under `AGENTS.md:102-106`. One concern: one high-risk plan whose copy and
-proof instructions carry exact line ranges and commands for a 1600-line spec, and whose refusal
-order and success-path guarantee are each spelled out step by step because both are one line's
-position away from being wrong. Evidence-based
-range **750-1010 net lines** — the measured count above, plus or minus 15%. This exception waives
-only the soft line signal for this artifact PR. Scope (still one concern), readability, review,
-CI and operator merge are unchanged, and it grants nothing to the implementation PR, whose own
-figure is the 700-1000 range proposed above.
+This exception waives only the soft line signal. Readability, complete tests, CI, independent
+review, the high-risk gate and operator merge remain required. It applies to this implementation
+only. Measure when the restored tests land and again on the final head. Do not trim cases,
+compress code, weaken assertions or split component from test to fit. **Above 1650, stop and
+re-decide with the operator** using the actual diff and remaining requirements.
+
+**Artifact PR figure.** The original plan was 880 lines and carried a 750-1010 net-line exception
+for its initial creation. This amendment is reviewed as its own diff against the accepted plan;
+it does not inherit that exception or grant another artifact a size waiver.
+
+**Resume the preserved attempt only.** Implementation stays paused until this amendment passes
+independent review and required CI and is operator-merged on `ystack/plan/shadow-input-assembler`.
+Every non-merge amendment commit changes only `work/shadow-input-assembler/plan.md`; use
+`Tracks #262`, not a closing reference. The implementation coder does not author or accept this
+plan amendment. Record the current operator's DR-3 decision and sole-manager handoff on #262,
+then reconcile its retained claim and `needs-human` state before issuing any new coder brief.
+
+Preserve `ystack/impl/shadow-input-assembler` at the exact head above until the manager verifies
+the local and remote identities, PR number-or-absent, old and freshly fetched base, and clean
+worktree. Do not reset, rebase, force-push or start a replacement implementation. After this
+plan merges, merge updated `main` into that same implementation branch, recheck the intent and
+spec blobs, their hash links, accepted high risk and the amended plan blob, and record the new
+exact clean tuple. A moved base invalidates old review and proof; an unexpected implementation
+head or PR identity change stops for reconciliation. Keep `ready` absent while unresolved.
+Only the correct verified build or fix claim permits the separate coder to resume. Restore and
+run the full tests, fix failures within the accepted scope, then obtain fresh final-head proof,
+CI and independent implementation review. Existing commits and omitted tests cannot be made
+compliant retroactively by this amendment; keep their history visible and record the corrected
+coverage on the resumed head.
 
 **What does not change.** `shadow/v1/reproduce.sh`, `adapters/local-git-materializer/v1/**`
 (`materialize.sh` and `protocol.jq` both), `core/v2/**`, `profiles/default/v1/**`,
@@ -148,7 +175,10 @@ SHA-256 of `profiles/default/v1/producer-config.json`
 (`ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61`) — not the stand-in digest
 `scripts/test/default-profile-assembly.test.sh:310-311` reuses, which requirement 16 refuses.
 Pass the existing fixture claim — built the way `scripts/test/shadow-slice.test.sh:128-194` builds
-`policy-set.json`, `duty.json` and `claim.json` — as the ninth argument.
+`policy-set.json` and `claim.json` — as the ninth argument, and a requester `actor_ref` as the
+tenth. The `duty.json` that builder fabricates is no longer usable here: requirement 13 forbids a
+hand-written verdict, so the duty document this test uses is the output of the real evaluator
+(step 5.3).
 
 0.4 **The positive assertion groups**, each from requirement 13: `validate-input` accepts the
 output; a second run is byte-identical; the read-only shape holds in `.payloads` and
@@ -376,8 +406,13 @@ uses. `finish_condition` and `verification_instruction` are `delivered_scope_ok`
 (`schema.jq:375-380`), so each carries a `ref` plus an `input_id`; the output contract is
 `operation.arguments.materialization_contract.ref`; the policy ref sits in the risk claim, the
 shape `scripts/test/portable-core-stage-request-fixtures.jq:210` shows. `selection_ref` and
-`repository_context_ref` are copied unchanged from the resolved profile, and `requested_by` is
-projected from the resolved forge binding.
+`repository_context_ref` are copied unchanged from the resolved profile —
+`stage_request_resolved_relation_ok` (`stage_request.jq:296-301`) requires those two and says
+nothing about the requester. `requested_by` is **not** projected from any binding: it is the
+caller's requester input, read from the tenth argument, validated against the pinned generation's
+`schema::actor_ref_ok` and against requirement 6's role and identity-collision rules, then copied
+verbatim — `authority_ref` present only when the caller supplied one, and no field of the forge
+binding carried over.
 
 1.7 `environment_ref` from the claim (requirement 7): `environment_id` from the claim's `.id`,
 `fingerprint_sha256` from the SHA-256 of the claim's canonical bytes, both arriving as arguments.
@@ -402,8 +437,8 @@ copied scrub `materialize.sh:4-13` at the top of the file under the copy header,
 assembler's own `set -euo pipefail`, `emit_error` and `umask 077` in the places
 `materialize.sh:15`, `:17-20` and `:31` put them — `emit_error` before the arity check, so
 `E_USAGE` can be said at all — then the copied `materialize.sh:22-29` with exactly four
-deviations: the marker word and verb (`assemble`, `__assemble_clean`); `[ "$#" -eq 10 ]` with the
-exec forwarding `"$2"` … `"${10}"`; the script path normalized against `$(pwd -P)` and then
+deviations: the marker word and verb (`assemble`, `__assemble_clean`); `[ "$#" -eq 11 ]` with the
+exec forwarding `"$2"` … `"${11}"`; the script path normalized against `$(pwd -P)` and then
 required to be an existing non-symlink regular file or `E_RUNTIME`, the way
 `shadow/v1/reproduce.sh:94-96` does; and `builtin unalias -a` plus `builtin shopt -u expand_aliases`
 as the first two lines of the marker branch, above every other line in it, because bash expands
@@ -414,7 +449,7 @@ if it has merged, take the scrub bytes from there rather than retaking the copy,
 components hold one text and not two. Use the same `# copy-begin`/`# copy-end` marker convention,
 since step 0.6(b) extracts by it.
 
-2.2 **Argument and workspace checks first, then the pinned jq, then `time_ok`.** Nine positional
+2.2 **Argument and workspace checks first, then the pinned jq, then `time_ok`.** Ten positional
 arguments per requirement 1, checked in seven steps in this order — the order the spec gives at
 lines 1217-1219. The order is the point, not a preference: every cheap check below decides
 `E_USAGE`, and each has to answer before the component does anything that can only fail as
@@ -425,12 +460,13 @@ already refused the same run as `E_RUNTIME`.
 (1) **Arity and verb**, decided by 2.1's copied entry before anything else runs.
 
 (2) **Every path argument absolute.** `<source-git-dir>`, `<profile-dir>`,
-`<resolved-profile-file>`, `<jq-binary>`, `<output-dir>` and `<environment-claim-file>`, each
+`<resolved-profile-file>`, `<jq-binary>`, `<output-dir>`, `<environment-claim-file>` and
+`<requester-file>`, each
 matched against `/*` in the shell — a `case` or `[[ ]]` pattern, no external command, nothing
 opened, stat'ed or executed. A relative `<jq-binary>` is `E_USAGE` here and never reaches step
 (7). Existence and non-symlinkness are **not** checked here, and where they are checked differs by
 argument. The **file** arguments — the profile directory's eight documents, the resolved profile,
-the claim and the jq binary — defer to step (7), because requirement 12 files a missing or
+the claim, the requester and the jq binary — defer to step (7), because requirement 12 files a missing or
 symlinked required file under `E_RUNTIME`. `<source-git-dir>` is **excluded** from that bucket:
 whether it is a physical directory is decided by 2.4's own explicit
 `physical_dir "$source_git_dir" || emit_error E_TARGET`, on the line above the `source_pure` call,
@@ -660,6 +696,164 @@ restoring the records materializes nothing on its own.
 
 ### Step 4 — run the Proof section on the final commit and paste it into the PR body.
 
+### Step 5 — amendment: the requester is an explicit input (requirements 1, 6, 12, 13, 17)
+
+Steps 0-4 shipped. This step is the amendment the spec's requirement 6 now states, and it is a
+separate implementation pull request on top of the merged component.
+
+5.1 **Files, and nothing else.**
+
+- **`shadow/v1/materialization-input.jq`** — delete `forge_binding`'s use as the requester source
+  and the `requested_by($binding)` projection (today's `:108-118`, used at `:181`), take the
+  requester as a new `--slurpfile`/`--argjson` input, and emit `requested_by` as that input
+  verbatim. Add the three predicates requirement 6 states: `schema::actor_ref_ok`, the role
+  membership test against `["manager","operator","orchestrator"]`, and the collision test over
+  `adapter_instance_id`, `execution_boundary_id` and `principal_id` against **every** binding in
+  `$resolved_profile[0].body.bindings`, not only the forge one. `forge_binding` itself stays: the
+  operation still selects it.
+- **`shadow/v1/assemble-materialization-input.sh`** — a tenth positional argument
+  `<requester-file>`, appended after the claim so the first nine keep their positions; the copied
+  entry's arity becomes `[ "$#" -eq 11 ]` with the exec forwarding `"$2"` … `"${11}"`, which is
+  still one of the four allowed deviations and not a fifth; the requester joins the absolute-path
+  check in 2.2(2) and the existence/non-symlink bucket in 2.2(7); and it is read, size-bounded,
+  parsed and canonicality-checked in the same pass as the other caller documents.
+- **`scripts/test/shadow-assembler.test.sh`** — 5.3 below.
+- **`docs/components.md`** — the invocation line at `:1376-1378` gains
+  `<requester-file>` after `<environment-claim-file>`, and the section says in one sentence that
+  the requester is the caller's identity, refused unless it is an `actor_ref` with an actor role
+  that collides with no binding.
+- **`scripts/test/portable-core-schema.test.sh`** — exactly one change: add
+  `shadow/v1/materialization-input.jq` to the `schema_import_path_ok` case list (`:827-849`), as
+  the single added pattern line `    shadow/v1/materialization-input.jq|\` inside that function's
+  first case branch, alongside `adapters/local-git-materializer/v1/protocol.jq` and the other
+  module paths already listed there. No other allowlist in this file changes — not
+  `v1_activation_path_ok`, not `v2_activation_path_ok`, not
+  `private_generation_path_ok`/`v2_generation_path_ok` — and no generation list
+  (`schema_v1_expected_live_hits`, `schema_v2_expected_live_hits`,
+  `schema_v2_corrective_expected_hits`, `schema_v2_allowed_paths`), no `cmp -s` comparison and no
+  `fail_case` message is touched. Requirement 6 makes the assembler call the core's own
+  `schema::actor_ref_ok`, which requires `import "schema" as schema;` in
+  `shadow/v1/materialization-input.jq`, and importing the core module directly is exactly what the
+  allowlist exists to permit — `adapters/local-git-materializer/v1/protocol.jq` and
+  `adapters/deterministic-verifier/v1/normalize.jq` already import `schema` under it, so this is
+  the precedented way for a component to reuse the core predicate rather than a loophole. Copying
+  or re-deriving `actor_ref_ok` into the shadow module to dodge the allowlist is forbidden: a
+  second copy of the predicate would drift from the core's and is the failure the closed allowlist
+  is there to make visible.
+
+No new file, no new error id, no change to `ci/required-files.txt`, `README.md` or `RESTORE.md`,
+and no change to `scripts/test/portable-core-schema.test.sh` beyond that one allowlist line.
+
+5.2 **Refusal-order position.** The requester is the last input read, and its refusals land in the
+positions the spec's requirement 12 fixes. Arity and the absolute-path test are decided by the
+copied entry and by 2.2(2), ahead of everything, as `E_USAGE`. Missing or symlinked is `E_RUNTIME`
+in 2.2(7) with the other required files. Over 1 MiB is `E_LIMIT`, not exactly one JSON value is
+`E_PARSE`, not its own `jq -S -c` bytes is `E_CANONICAL`, and failing `actor_ref_ok` is `E_SHAPE`
+— all in the same read-and-canonicalize pass as the claim, after it. The role rule and the three
+collision rules are `E_RELATION` and run **after** the resolved profile has been read and
+validated, because they need its bindings, and **before** any request document is built, so the
+component never constructs a document it would then refuse. Nothing earlier moves.
+
+5.3 **The test runs the real duty evaluator, in two acyclic passes; the fabricated `duty.json`
+goes.** Delete the hand-built duty document (today `scripts/test/shadow-assembler.test.sh:697-714`,
+`verdict: satisfied` and repeated-character digests) and the fabricated policy set with it. No
+document this test hands to a control evaluator or to the driver may be hand-built with a chosen
+`verdict`, a chosen `reason_ids`, or a repeated-character digest standing in for a real SHA-256.
+
+A single pass cannot be built: the claim's digest goes into the request
+(`materialization-input.jq:197`), the request's digest into the evaluation
+(`duty-separation.jq:194`), and `sandbox.jq:204-211` requires the claim to carry that evaluation's
+digest and its `stage_result_ref`. The test therefore runs the assembler twice — the same nine
+arguments and the same tenth-argument requester each time, differing only in the claim-position
+file, the frozen `requested_at` and the output directory — in the order requirement 13 sets out,
+the same construction the accepted `shadow-self-host-run` plan uses. Exactly two documents are
+constructed by the test, and each entry references only earlier ones:
+
+1. **`environment-declaration.json`** — written with `jq -S -c -n`: `schema_version` 1, `kind`
+   `execution_environment_claim`, `id` the fixture environment's id, the shipped
+   `control/v1/sandbox-policy.json` body's `environment`, `filesystem`, `isolation`, `limits`,
+   `network`, `resources`, `sensitive_material` and `tools` sections verbatim, plus
+   `registry_entry_sha256` over the one matching fixture registry entry, selected the way
+   `reproduce.sh:396-399` selects it. It carries **no `*_ref` field of any kind**, so it can hash
+   nothing and can fabricate nothing, and it goes neither to `evaluate-sandbox.sh` nor to the
+   driver. The assembler checks only the claim-position file's `kind` and `id`
+   (`materialization-input.jq:101-105`, applied at `:213-214`), so this needs no component change
+   and needs none of `declaration_status`, `effects` or the other claim-only fields entry 5 lists.
+2. **The prerequisite assembler run** — that declaration in the claim position, its own
+   `requested_at` and its own output directory. Assert `requested_by` equals the tenth argument's
+   bytes exactly, including the presence or absence of `authority_ref`, and that no field of the
+   forge binding leaked into it; check `.stage_request.content` and `.resolved_profile.content`
+   against the run's own `stage-request-ref.json` and `resolved-profile-ref.json`.
+3. **The prerequisite stage result** — `.stage_result` of a real
+   `adapters/local-git-materializer/v1/materialize.sh` run over that `input.json`, the same
+   projection `reproduce.sh:460` takes.
+4. **The duty evaluation** — the real `control/v1/evaluate-duty.sh evaluate <policy-set> <request>
+   <resolved> <result>` over the shipped `control/v1/control-policy-set.json`, entry 2's stage
+   request, entry 2's resolved-profile document and entry 3's stage result. Assert `verdict` is
+   `satisfied` and `reason_ids` are exactly `["duty.satisfied"]`. This is the assertion that proves
+   the requester, and it is made about the **prerequisite** request, which carries the explicit
+   tenth-argument requester exactly as the final one does.
+5. **The final claim** — the one document here that reaches `evaluate-sandbox.sh`, so it must
+   carry the exact key set `claim_ok` demands (`control/v1/sandbox.jq:59-88`); a missing or extra
+   field is `invalid-input`, the evaluator exits non-zero, and `reproduce.sh:419-427` records
+   `environment.evaluation-refused` with an `inconclusive` outcome. Requirement 13 enumerates the
+   fields; write all of them and nothing else: top level `schema_version` 1, `kind`
+   `execution_environment_claim`, `id` the fixture environment's id, `body`; and in the body
+   `declaration_status` the literal `"complete"` (`sandbox.jq:67`, `:243`); `effects` exactly
+   `{external_writes: false, target_writes: false}` (`:72-73`, `:240-241`, `:251-252`); the eight
+   shipped sandbox policy body sections `environment`, `filesystem`, `isolation`, `limits`,
+   `network`, `resources`, `sensitive_material`, `tools` verbatim (`:213-235`); an
+   `execution_identity` of exactly `adapter_instance_id`, `execution_boundary_id`, `principal_id`
+   and `role`, read out of the resolved profile's `verifier` binding rather than typed (`:20-23`,
+   `:204-205`); `policy_set_ref` naming the shipped policy set's own id and digest (`:69`,
+   `:206-207`); `duty_evaluation_ref` naming entry 4's id and the SHA-256 of entry 4's bytes
+   (`:68`, `:208-209`); and `stage_result_ref` copied field for field from entry 4's
+   `body.stage.result_ref` (`:70`, `:210-211`). `declaration_status` and `effects` are the only
+   literals, and the policy fixes both values, so they are not chosen verdicts; the fixture claim
+   at `scripts/test/shadow-slice.test.sh:178-194` already has this shape. No digest in it is
+   chosen.
+6. **The final assembler run** — the same arguments with that claim in the claim position. Its
+   request fingerprints the final claim and nothing earlier fingerprints that request, so the order
+   closes. This is the only `input.json` the driver reads.
+
+The two runs are told apart by digest, because `materialization-input.jq` gives every request the
+same id. The driver run then takes the **final** pass's `sha1` input, the fixture environment, the
+shipped policy set, entry 4's evaluation as its duty document — the one the final claim's
+`duty_evaluation_ref` already names — and that same final claim, and keeps the existing
+not-`inconclusive` assertion.
+
+Three negative cases, each asserting the refusal id and an empty output directory: role
+`observer`, otherwise identical to the good requester, `E_RELATION`; a requester whose
+`principal_id` is read out of the resolved profile's forge binding rather than written as a
+literal, `E_RELATION`; and a requester that is not an `actor_ref` at all, `E_SHAPE`.
+
+5.4 **`review_size` for this implementation pull request.** `review_size: standard`, 180-330 net
+lines, as the spec records. The component's earlier `accepted-exception` covered the shipped
+component and its focused test and is not a standing allowance for this slug; this PR claims no
+exception. About 60-120 lines across the jq module and the shell entry, some of it given back by
+deleting the projection, and about 120-200 lines of test — the six-entry two-pass construction of
+5.3, the verbatim-copy assertion and the three negative cases — plus the documentation row, the
+arity change and the single allowlist line in `scripts/test/portable-core-schema.test.sh`. That one
+line does not move the 180-330 net-line band, so the record stands unchanged.
+
+5.5 **Proof.**
+
+```
+jq -S -c . <requester.json> | cmp - <requester.json>
+bash scripts/test/shadow-assembler.test.sh
+bash scripts/test/portable-core-schema.test.sh
+shellcheck -x -S style shadow/v1/assemble-materialization-input.sh
+grep -n 'requested_by' shadow/v1/materialization-input.jq
+grep -rn 'verdict' scripts/test/shadow-assembler.test.sh
+grep -n 'requester-file' docs/components.md
+git diff --stat <base>..HEAD
+```
+
+The focused test is the load-bearing one: it must pass, and the two `grep`s are the evidence that
+`requested_by` has exactly one source — the input — and that no `verdict` is written by the test
+rather than read from the evaluator. The `diff --stat` shows the five files and nothing else,
+with `scripts/test/portable-core-schema.test.sh` at one added line.
+
 ## Risks
 
 **The verbatim copies are the riskiest thing here, and 2.5 is the riskiest step.** About 95 lines
@@ -728,8 +922,8 @@ normal exit, with no error id and an empty directory as the only evidence. The `
 rather than leaving it to the implementer: the correct code and the broken code differ by one
 line's position.
 
-**What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 10 ]`
-before the dispatch, and the marker form is also ten words. A relative path is refused in the
+**What the clean entry breaks first is the test's own invocations.** Arity is `[ "$#" -eq 11 ]`
+before the dispatch, and the marker form is also eleven words. A relative path is refused in the
 re-exec'd process, not the caller's; `exec` preserves the working directory so the `pwd -P`
 normalization agrees on both sides, and stderr survives `exec` so the error vocabulary still
 reaches the test. Write 0.5's cases with that in mind.
@@ -829,10 +1023,10 @@ run under `env -i` gets its own `/bin/bash -c '…'` wrapper, for the reason the
   cmp <(sed -n 1p "$m") <(sed -n 1p shadow/v1/assemble-materialization-input.sh)
   ```
   The four `cmp`s and the scrub `cmp` are byte-equal, exit 0. The shebang `cmp` confirms
-  `#!/bin/bash -p`. The `diff -u` shows only the four named deviations — `-eq 8` → `-eq 10`; the
+  `#!/bin/bash -p`. The `diff -u` shows only the four named deviations — `-eq 8` → `-eq 11`; the
   `case … E_USAGE` line replaced by the `pwd -P` normalization plus the `-f`/`-L` check;
   `materialize` → `assemble` and `__materialize_clean` → `__assemble_clean`; and the exec
-  forwarding `"$2"` … `"${10}"` — and no fifth hunk. The alias reset is outside the markers, so it
+  forwarding `"$2"` … `"${11}"` — and no fifth hunk. The alias reset is outside the markers, so it
   is not in that diff; show it separately with
   `grep -n -A2 '__assemble_clean' shadow/v1/assemble-materialization-input.sh`.
 - **The shared lines match the driver.** `cmp "$t/copy-a" <(awk '…271-332…'
@@ -861,9 +1055,10 @@ run under `env -i` gets its own `/bin/bash -c '…'` wrapper, for the reason the
 - `bash scripts/test/portable-core-schema.test.sh` — final line `failures: 0`, exit 0.
 - `bash scripts/check-rename.sh` — `check-rename: clean — no old names in tracked files.`
 - **Scope and size.** `git diff --stat main` lists exactly the seven files this plan names and
-  nothing else. Paste the net total, against the **700-1000** range this plan's merge accepts in
-  place of the spec's 610-840. The estimate here is about 865, so expect to land inside it. Above
-  1000, stop and re-decide with the operator — do not trim the refusal-class cases to fit.
+  nothing else. Paste the net total against the freshly fetched base and the **1350-1650**
+  DR-3 range this amendment's merge accepts. The 1199-line preserved head is incomplete; the
+  estimated restored result is about 1400-1600. Above 1650, stop and re-decide with the operator —
+  do not trim the refusal-class cases to fit.
 - **Output directory contract**, which is the spec's guarantee at lines 1159-1164 read back as
   two commands. After a successful run, `ls -a "$out"` shows exactly the seven documents and no
   `run_root` — the trap fired on that run's normal `EXIT` and spared them. After the `hooks/`
