@@ -34,7 +34,10 @@ invocation documents remain version 1 while emitted core documents use schema 2.
 The shell runtime is deliberately mode 0644. A trusted parent must start it with a
 direct fixed-path `execve`, an empty environment allowlist, fixed dependencies, and
 the test-proven resource limits. `scripts/test/portable-profile-resolution.test.sh`
-is the only shipped launcher today; it is proof, not a production activation path.
+was the only shipped launcher through the prior round; this spec supersedes that
+round's "a production trusted parent is not implemented" sentence
+(`work/portable-profile-resolution/spec.md:256-257`) — see "Inactive trusted parent
+for the profile resolver" below for the compiled parent and its public entry.
 The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
@@ -64,6 +67,67 @@ This dependency repair does not install or activate a runtime. The production tr
 parent must separately reconcile its library pin and new fixed dependencies through
 its own artifact gates. No preserved parent work or proposed cache exception is
 accepted by this runtime change.
+
+## Inactive trusted parent for the profile resolver
+
+`resolver/v1/trusted-launch.c` is the compiled parent that starts the inactive
+profile resolver runtime above; `resolver/v1/resolve-profile.sh` is its public
+entry. Neither selects or activates a profile, authenticates a repository map,
+executes selected content, or accesses a remote or credential. **The entry is the
+only supported way to launch this component.** `resolver/v1/resolve-profile.sh`
+is the launch; `resolver/v1/trusted-launch.c` is not an interface — running the
+compiled parent directly, without the entry, is a test harness for
+`scripts/test/resolver-trusted-launch.test.sh` and is unsupported for anything
+else. The parent can pin every file the runtime loads but cannot pin a compiled
+binary, so only the entry — which compiles the helper from a blob-pinned source
+into a directory it made itself — establishes where the helper's bytes came
+from. The parent does not detect direct invocation and performs every one of its
+checks on every caller regardless, so a direct run that succeeds is not a
+supported configuration and is not evidence that one exists.
+
+The entry supports exactly two invocation forms, both of which carry `-p`: the
+shebang launch (`resolver/v1/resolve-profile.sh <jq> <output> <request> <map>`)
+and an explicit `bash -p resolver/v1/resolve-profile.sh <jq> <output> <request>
+<map>`. The marker word its own re-exec uses internally is not a public entry
+point. An invocation without `-p` **from a clean environment** — marker word or
+not — exits 78 at the entry's first statement having created nothing and read
+nothing; a non-`-p` invocation from a polluted environment, direct or marker, is
+**outside the safety claim** — unsupported, with the caller's own code able to
+run ahead of the refusal. The entry ships as git mode `100755`: the shebang
+launch is one of the two supported forms and a `100644` entry fails it with
+`Permission denied` and exit `126`. The repository's structure check enforces
+executability for `scripts/*.sh` alone, which does not cover `resolver/v1/`, so
+this mode cannot be inferred from CI and is checked directly
+(`git ls-files --stage resolver/v1/resolve-profile.sh`).
+
+**Darwin prerequisite:** the Command Line Tools must be installed. The entry
+compiles with `/Library/Developer/CommandLineTools/usr/bin/clang` rather than
+the `xcrun` shim at `/usr/bin/cc`, and refuses `E_RUNTIME` when the CLT is
+absent. The entry is rebuilt from committed source on every invocation — nothing
+compiled is cached, installed, or restored.
+
+A successful launch prints one informational `runtime-pgid: <n>` line on
+stderr — best-effort, so a caller whose stderr is a pipe it is not draining may
+not see it. An interrupted launch prints one `parent-signal: <NAME> group
+<pgid>` or `parent-signal: <NAME> no-runtime` line from the parent, and beside
+it the entry's own `entry-signal: <NAME> forwarded <pid>` (or `no-parent`)
+line — **only when stderr is a regular file, and no such line at all
+otherwise**: a terminal, `/dev/null`, a pipe, a FIFO, and a socket all lose it.
+Redirect stderr to a file to see it. In every other case the exit status and the
+parent's own `parent-signal:` line are the record; output on stderr is not by
+itself a failure signal.
+
+The write root is the caller's output root on both platforms, for this
+component as for the runtime it launches — one write root, no exception. Caller
+`HOME` and `TMPDIR` are never a write location; the entry's own sandbox
+`HOME`/`TMPDIR` live under `<output>/.run` for the duration of the compile and
+are gone before the parent is launched.
+
+Restoring these files does not select a live profile or regenerate `/yshifu`.
+Run `bash scripts/test/resolver-trusted-launch.test.sh` for the focused proof;
+`scripts/test/portable-profile-resolution.test.sh` remains the unchanged
+resolver regression, run through the shipped public entry as well as the test
+launcher.
 
 ## Inactive default profile assembly
 
@@ -1375,11 +1439,15 @@ Two invocations are supported: executing the file so its `#!/bin/bash -p`
 shebang starts bash, or `env -i PATH=/usr/bin:/bin LC_ALL=C /bin/bash -p
 <script> assemble <repository-id> <source-git-dir> <commit-id>
 <attempt-timestamp> <profile-dir> <resolved-profile-file> <jq-binary>
-<output-dir> <environment-claim-file>`. Invoking the `__assemble_clean` marker
-verb directly is not one of them and carries no safety claim. Tree content is
-the materializer's own check, not this component's, so a source that trips
-its tree scan comes back `materialization.refused` from the driver rather
-than a refusal from this component.
+<output-dir> <environment-claim-file> <requester-file>`. Invoking the
+`__assemble_clean` marker verb directly is not one of them and carries no
+safety claim. Tree content is the materializer's own check, not this
+component's, so a source that trips its tree scan comes back
+`materialization.refused` from the driver rather than a refusal from this
+component. The requester file is the caller's own identity: it is refused
+unless it is an `actor_ref` with an actor role (`manager`, `operator`, or
+`orchestrator`) that collides with no binding in the supplied resolved
+profile.
 
 The profile, the six shipped manifests, and the producer config are pinned by
 SHA-256 in `shadow/v1/materialization-input.jq`: any supplied document whose

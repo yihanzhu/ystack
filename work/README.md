@@ -155,6 +155,27 @@ plan with main's operator-merged plan blob; routine implementation compares with
 latest exact accepted head/plan blob for its recorded acceptance kind. The first commit
 proves only the initial plan-before-code order.
 
+## Artifact hygiene
+
+An artifact carries normative content only: requirements, design, risks, proof, and
+its hash links. It does not carry a per-round changelog, "this round adds N lines"
+accounting, a history of its own line count, or the same size range restated in more
+than one place. That material is the review record, not a requirement — it belongs in
+the PR description and PR comments.
+
+- `review_size` records stay; the gate requires them. Exactly one `review_size:` token
+  per PR: one for the implementation, plus — only when an artifact PR itself exceeds the
+  soft budget — one artifact-PR record with one concern and one evidence-based range.
+  State that range once. A later revision edits that line in place instead of adding a
+  second statement of it.
+- A revision round edits the normative text in place. Answer a reviewer finding by
+  changing the requirement, design, risk, or proof — never by appending a paragraph that
+  narrates the change. The PR thread already records what moved and why.
+- When a spec runs past roughly 5x its own implementation estimate, that is a signal to
+  split the initiative or to stop the round loop and re-scope — not to keep appending.
+  `work/resolver-trusted-parent/spec.md` (10,129 lines after 46 review rounds) is the
+  cautionary example.
+
 **Deterministic branches:** `ystack/intent/<slug>`, `ystack/spec/<slug>`, high-risk
 `ystack/plan/<slug>`, and `ystack/impl/<slug>`. A re-run updates the existing open
 branch/PR; it never keeps two PRs open for one slug and stage. After a merged stage needs

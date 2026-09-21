@@ -1,5 +1,5 @@
 ---
-intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f
+intent-blob: bc6e669b755bae6c7f52f10f047c602faa46210a
 risk: high
 drafted: 2026-09-09
 ---
@@ -18,24 +18,15 @@ under it are the *implementation* pull request's exception, not this spec pull r
 section). One concern: this is a single security-boundary component whose only honest
 proof runs the real resolver twice and compares the output.
 
-**Current evidence-based range: 2850-3200 changed lines** (implementation).
+**Current measured range: 3650-4950 changed lines** (implementation).
 This replaces the historical 2100-2841 band below without changing scope or proof.
-The paused 1242-line test draft is measured; it is not complete or passing proof.
-The current plan estimates parent/entry at 1075/380, while the retained cumulative
-spec estimate is 1228/447. Keeping both as an honest estimate interval, plus the
-measured test and 62 estimated documentation/manifest/schema-inventory lines,
-gives 2759-2979 before the missing proof is written.
-
-Allow an estimated 70-100 added test lines for native Darwin directory/cache
-attribution and isolated compile-cache checks; 15-25 for observing all four run
-files and the run directory at 0500 in the existing bounded mode case; and 40-80
-net lines for replacing the draft's incomplete 74-line sweep with the required
-role checks and lexical distinctions below. These are unwritten-work estimates,
-not measurements. The projected total is 2884-3184, rounded outward to 2850-3200.
-The three additions complete existing proof obligations; they add no component,
-permission or runtime behavior. Measure additions, deletions and net at the full
-implementation head. An unexplained overrun returns through the artifact gate;
-never compress code, drop proof or split off required tests to meet this band.
+Measured at implementation head `5472bdc`: the test is 1865 lines, the parent 1910
+and the entry 400, giving 4175, plus the ~62 documentation/manifest/schema-inventory
+lines and the harness fixes the same change carries; the earlier 2850-3200 estimate
+under-counted the R10 case inventory and the R2/R5 machinery the review rounds added.
+Measure additions, deletions and net at the full implementation head. An unexplained
+overrun returns through the artifact gate; never compress code, drop proof or split
+off required tests to meet this band.
 
 The derivation below records historical source measurements and evolving estimates;
 its earlier ranges and running totals are historical, not the current size gate:
@@ -1003,14 +994,14 @@ here it is for this pull request, on its own line:
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
+**8868-11998 lines** — this file's measured 10433 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
 
 The `AGENTS.md:102-106` soft budget of ~300-400 net lines applies to artifact pull
 requests too, and this one exceeds it by about ten times: `wc -l
-work/resolver-trusted-parent/spec.md` is 10025 lines. Accepted as one concern — the
+work/resolver-trusted-parent/spec.md` is 10433 lines. Accepted as one concern — the
 launch boundary as a security control, the same one the waiver at the end of this section
 records: one
 high-risk security-boundary spec whose review
@@ -1208,7 +1199,7 @@ The same record again here, where the count it rests on is derived, on its own l
 `review_size: accepted-exception` (this spec PR)
 
 One concern: **the launch boundary as a security control**. Evidence-based range:
-**8521-11529 lines** — this file's measured 10025 lines plus or minus 15%, rounded. That
+**8868-11998 lines** — this file's measured 10433 lines plus or minus 15%, rounded. That
 token is this spec pull request's; the `review_size: accepted-exception` recorded at the
 top of this section is the *implementation* pull request's, and the two are never compared
 or summed.
@@ -1374,7 +1365,7 @@ being places where an earlier round claimed more than it had. About 90 go to the
 write residual: R7's claim narrowed to name exactly what it covers — everything this
 initiative adds, on both platforms, and the unchanged runtime on Linux — its Darwin
 paragraph rewritten around the runtime's own `/usr/bin/git`
-(`scripts/lib/profile-resolution.sh:313-323` and `:711-714`) reaching the `xcrun` shim
+(`scripts/lib/profile-resolution.sh:390-400` and `:789-792`) reaching the `xcrun` shim
 where the parent cannot redirect it, the deviation from
 `work/resolver-trusted-parent/intent.md:36` stated plainly with DR-2 named as open and
 its two refused-case alternatives given a sentence each, R1's "what this buys" paragraph
@@ -1470,8 +1461,8 @@ back up. About 153 go to the entry's signal handling. The command-substitution g
 delivered to the whole foreground process group can kill that substitution's child between
 the `mkdir` and the `printf`, leaving `.run` on disk with the guard empty and the cleanup
 deliberately skipped: the exact leak the guard exists to prevent. What replaces it is a
-split R1 now states in full — the three signal traps record the signal's name and do
-nothing else, the `EXIT` trap does the guarded cleanup and writes the one line last, and
+split R1 stated in full from that round — the three signal traps record the signal's name
+and do nothing else, the `EXIT` trap does the guarded cleanup and writes the one line last, and
 the main flow acts at `checkpoint` calls and at the wait on the parent — with the guard set
 from `/bin/mkdir`'s own captured status behind an `[ -e ]` pre-check, including the status
 above 128 that means the caller's signal killed `mkdir` after it had created the directory.
@@ -2073,7 +2064,8 @@ of the ~2420 it is derived from.
 
 This round is +270 net over two P2s, and both are one finding in two places: a
 statement sitting in the right block and in the wrong position relative to the `wait` it
-exists to protect. About 55 go to the traps. The normative form is now the two-statement
+exists to protect. About 55 go to the traps. The normative form that round set was the
+two-statement
 `: "${entry_signal:=TERM}"; wait_interrupted=1`, written that way in the traps-only-record
 block, in the first-signal-wins block and in Design step 2, with the flag write stated to
 be part of *recording* rather than an exception to it, and with the failure a
@@ -2103,7 +2095,8 @@ narrow — two builtins and a subshell — rather than closed; and a signal that
 the parent's own exit is forwarded to nobody, with both of the statuses a caller can see
 there named and each tied to which `wait` answered. The remaining ~80 are the ripples and
 the bookkeeping: Design step 2's trap and wait clauses, R10's read-and-check list, which
-now reads the trap bodies for two statements and the loop for its five steps in order,
+which that round set to read the trap bodies for two statements and the loop for its five
+steps in order,
 because both of the windows those positions close need a signal delivered between two
 adjacent statements and so cannot be tested; the repeated-signal case's job-table
 paragraph; the Copy-versus-adapt trap item; the signals bullet under Areas of concern; the
@@ -2168,7 +2161,7 @@ checked the helper and its own binary inside `.run` and said nothing about the j
 is handed — and the runtime derives its whole tool root from that one string:
 `${YSTACK_RESOLVER_JQ%/*}`, then `$tool_root/awk`, checked with `[ -x ]` and `[ ! -L ]`
 and nothing else and then executed
-(`scripts/lib/profile-resolution.sh:673-676` and `:99`, read on `origin/main` rather than
+(`scripts/lib/profile-resolution.sh:750-753` and `:176`, read on `origin/main` rather than
 carried over from an earlier round), with the parent's own `PATH` for the child built from
 the same string (`portable-profile-resolution-launcher.c:662-677`). So a genuine pinned jq
 sitting in a directory of the caller's own put the caller's `awk` inside the boundary with
@@ -2549,12 +2542,12 @@ This waives only the soft line signal for this artifact pull request, and
 than inferred, so both are recorded here in the waiver itself. **The one concern is the
 launch boundary as a security control** — the single concern this whole spec has, named at
 the top of this section and carried by every requirement in it. **The evidence-based range
-for this spec pull request is 8521-11529 lines**, which is this file's measured
-10025 lines plus or minus 15%, the same two figures the self-count paragraph above
+for this spec pull request is 8868-11998 lines**, which is this file's measured
+10433 lines plus or minus 15%, the same two figures the self-count paragraph above
 states. **The exact value is `review_size: accepted-exception` (this spec PR)**, recorded
 on its own line in the artifact-PR waiver at the start of this exception and in the
 self-count paragraph above. That is the *spec* pull request's range and nothing else's: the
-2850-3200 changed lines derived at the top of this section belong to the *implementation*
+3650-4950 changed lines recorded at the top of this section belong to the *implementation*
 pull request, they measure a different artifact, and the two are never compared or summed.
 It waives nothing
 else: one concern per PR, readability, the review itself, CI, and operator merge all
@@ -2575,10 +2568,14 @@ the spec pull request's range above still blocks review.
   stdout and stderr through unchanged (it does not capture, buffer or rewrite them), and
   exits with the child's own exit status, or `128 + signal` when the child died on a
   signal. Its `EXIT` trap removes the run directory. It also traps `INT`, `TERM` and
-  `HUP`, and those three traps do one thing only, and do it in two statements: they record
-  the *first* signal's name in an `entry_signal` variable and set the `wait_interrupted`
-  flag the wait loop below reads. Everything else happens in the main flow afterwards, at the
-  checkpoints set out below. When the parent is still listed as `Running`, the entry forwards the first
+  `HUP`, and those three traps are armed in **two forms**, a record-only form of two
+  statements and a forwarding form of three, with the entry switching between them at
+  stated points. Both forms record the *first* signal's name in an `entry_signal` variable
+  and set the `wait_interrupted` flag the wait loop below reads. The forwarding form adds
+  one thing: it forwards **the recorded signal** — `$entry_signal`, never the name of the
+  signal whose trap is running — once to the parent, and only while bash's own job table
+  still lists the parent's job as `Running` and nothing has forwarded already. Everything
+  else happens in the main flow afterwards, at the checkpoints set out below. When the parent is still listed as `Running`, the entry forwards the first
   recorded signal at most once, waits for the parent to exit, and only then lets the
   `EXIT` trap remove the run directory. If the parent has already exited before the
   forwarding check, the entry preserves its actual exit status, including `7` or `42`,
@@ -2598,10 +2595,11 @@ the spec pull request's range above still blocks review.
   than that, while the directory is still 0700. Nothing shipped reads `scripts/test/`.
   The split follows the test today: the test
   script owns compilation, jq binding and platform choice
-  (`scripts/test/portable-profile-resolution.test.sh:90-151`), and the C file owns only
+  (`scripts/test/portable-profile-resolution.test.sh:282-343`), and the C file owns only
   the launch.
 
-  **The signal traps only record, and the main flow acts.** An earlier round of this spec
+  **The signal traps record and forward under the job table's gate, and the main flow does
+  everything else.** An earlier round of this spec
   put the whole of the signal path inside the `INT`/`TERM`/`HUP` trap bodies — the forward,
   the chmod, the removal and the exit — and armed the removal with a `run_created` guard
   that a command substitution produced:
@@ -2614,12 +2612,82 @@ the spec pull request's range above still blocks review.
   precisely the `.run` directory the guard was meant to cover. No ordering of statements
   fixes that, because the loss happens inside a child process rather than in the shell.
 
-  So the signal path is split in two. **The three traps are exactly two statements each,
-  and this is the normative form every place in this spec that quotes them uses** —
-  `: "${entry_signal:=TERM}"; wait_interrupted=1`, and its `INT` and `HUP` siblings, which
-  differ in the name and in nothing else —
-  and nothing else: no
-  forward, no chmod, no removal, no write, no exit. The flag write is *part of* recording
+  So the disk half of the signal path comes out of the traps and the forwarding half stays
+  in. **There are exactly two trap-form literals per signal and these are they, and every
+  place in this spec that quotes a trap body uses one of the two.** The **forwarding
+  form**, three statements — the assign-if-empty, the flag write, and one `if` that holds
+  the whole of the forwarding:
+
+  ```
+  : "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi
+  ```
+
+  and the **record-only form**, two statements:
+
+  ```
+  : "${entry_signal:=TERM}"; wait_interrupted=1
+  ```
+
+  each with its `INT` and `HUP` siblings, which differ in the `:=NAME` default and in
+  nothing else —
+  and nothing else in either: no chmod, no removal, no write, no exit. Every statement in
+  either body is
+  a shell builtin or a subshell around one — `:`, an assignment, `if`, `case`, `[`,
+  `kill`, and
+  `$(jobs -l)`, which forks a subshell and no external command — so a trap body runs no
+  program a group signal can cut short part-way, which is the property the withdrawn design
+  lost and the reason the chmod and the removal are still not here.
+
+  **A trap body is not atomic, so the forwarding form serialises itself with
+  `trap_busy`.** Bash 3.2 runs a trap for a signal that arrives while another trap body is
+  executing, nested inside it, and the `$(jobs -l)` subshell in the middle of this body is
+  a wide enough place for that to happen in practice. Without the flag two sends come out
+  of one window: the `TERM` body passes `[ -n "$last_forwarded" ]` with the variable still
+  empty, a `HUP` is delivered before the `kill`, the `HUP` body finds the same empty
+  variable, sends and records — and the `TERM` body, already past its guard, sends again.
+  `trap_busy` is the serialisation, and the two orderings it has to survive are worth
+  writing out rather than asserting:
+
+  1. **A nested trap arriving anywhere after `trap_busy=1`** — which is every instant of
+     the `case`, the `$(jobs -l)` subshell, the `kill` and the assignment — finds the flag
+     set, skips the whole `if`, and records only. It has still done the two things a
+     record-only body does, so nothing about the name or the wait flag is lost; what it
+     does not do is send. The outer body then finishes its own send and clears the flag.
+  2. **A nested trap arriving between the `[ -z "$trap_busy" ]` test and `trap_busy=1`** —
+     a two-statement window, and the one ordering the flag cannot exclude. The inner body
+     finds the flag still empty, runs the whole `if` to completion first, and may send and
+     record. Control then returns to the outer body, which sets `trap_busy=1` and reaches
+     its own `[ -n "$last_forwarded" ]` — and finds it **set**, because the inner body
+     wrote it before returning. So the outer sends nothing.
+
+  Either way at most one `kill` goes out, and `last_forwarded` carries the name that was
+  actually sent. The flag is cleared on the way out of the `if` and nowhere else, so a body
+  that is skipped never clears a flag it did not set. Note which guard does the work in
+  each case: `trap_busy` in the first, `last_forwarded` in the second. Neither alone is
+  enough, which is why both are there. The loop's record-only section needs no part of
+  this, because during it no trap can send at all.
+
+  **The forwarding form sends `$entry_signal` and not the name in its own `:=NAME`
+  default, and that is not a stylistic choice.** The default is what this body contributes
+  when it is the *first* arrival; the variable is what the entry has actually committed to.
+  A body that sent its own name would break first-signal-wins at the one moment the rule
+  exists for: a `TERM` arrives and is recorded, the job table does not yet say `Running`
+  so nothing is sent and `last_forwarded` stays empty, an `INT` follows, and the `INT`
+  body — finding `entry_signal` already `TERM` and `last_forwarded` still empty — would
+  send `INT` and record `INT`. The caller would then see `entry-signal: TERM forwarded`
+  while the parent received `SIGINT`, and the `128 + signal` the `EXIT` trap derives from
+  `entry_signal` would name a third number. Reading `$entry_signal` in both the `kill` and
+  the assignment makes the body's own default matter only when it is the name that won.
+
+  **The two arming points.** The three traps are armed in the **record-only** form with
+  the `EXIT` trap, before anything creates the run directory, and they stay in that form
+  for the whole pre-parent flow: there is no parent to forward to there, `parent_pid` is
+  still empty, and the checkpoints are what act on a signal recorded in that stretch. The
+  entry re-arms all three in the **forwarding** form on the statement immediately after
+  `parent_pid=$!`, and that is the only place outside the wait loop where the form
+  changes. From then on the wait loop owns the switching, in the section described below.
+
+  The flag write is *part of* recording
   rather than an exception to it: the assign-if-empty records **which** signal arrived and
   `wait_interrupted=1` records **that** one did, and the wait loop below needs both
   answers. A trap body carrying only the assignment is the bug that reading makes easy to
@@ -2628,7 +2696,60 @@ the spec pull request's range above still blocks review.
   read that wait's `128 + signal` return as the parent's own status, break, and let the
   `EXIT` trap remove `.run` while the parent — and therefore possibly the resolver's
   process group — was still alive, which is the one ordering this whole requirement exists
-  to prevent. Two statements, three times, and nothing else in any of them.
+  to prevent.
+
+  **Why the forwarding form exists at all, in one paragraph.** The loop below asks whether
+  to forward and blocks in `wait` immediately after, and those are two adjacent statements
+  with a window between them. A `TERM`, `INT`
+  or `HUP` delivered inside that window is consumed by the trap, so nothing is left pending
+  and the `wait` the loop then enters is **not** interrupted: the signal is recorded, the flag
+  is set, and no `wait` ever returns early to act on either. With record-only traps and
+  nothing else, the
+  entry blocks there for as long as the parent takes to finish of its own accord, the
+  parent is never signalled at all, and when it completes normally step 5's second read
+  hands back the parent's own status — so a cancelled run waits out its full natural
+  length and then exits `0`, reporting success for work the caller asked to stop. Putting
+  the forward in the trap closes that window rather than narrowing it, because the trap is
+  the one piece of the entry that runs *inside* it.
+
+  **Why the loop does not simply keep its old `kill` beside the new trap one, and why the
+  record-only section exists.** An earlier draft of this round armed the forwarding form
+  once and left the loop's guarded `kill` where it was, and two failures were reproduced
+  against it on `GNU bash, version 3.2.57(1)-release`. Both are the same shape — two
+  senders and no way for either to see the other in time — and they are why the loop now
+  disarms the forwarding form around its own decision instead of racing it.
+
+  1. **Two sends for one signal.** The loop evaluates `[ -n "$entry_signal" ]` and
+     `[ -z "$last_forwarded" ]`, both true, and enters the job-table `case`. A signal is
+     delivered between that test and the `kill` — or between the `$(jobs -l)` subshell and
+     the `kill`, which is wider. The forwarding trap runs, finds `last_forwarded` empty,
+     sends, and sets it. The loop's own `kill` is already committed and sends a second
+     time, because a test that passed cannot be un-passed. Measured: the stand-in parent's
+     handler is entered twice on one arrival, and on a run where the parent's group had
+     already been terminated the second send went to a pid bash had reaped between the two.
+     `last_forwarded` cannot fix this from inside the loop; it is checked before the
+     window and written after it.
+  2. **The wrong signal forwarded.** The one above, and separately the own-name bug the
+     previous block describes — a `TERM` recorded with the table not yet `Running`, an
+     `INT` arriving after, and the `INT` body sending `INT` for a run whose recorded signal
+     is `TERM`. Reproduced by stopping the stand-in parent's job before the first signal
+     and releasing it between the two.
+
+  **So the loop makes its decision inside a section in which no trap can send.** Before it
+  decides, it re-arms all three traps in the record-only form; it then performs the single
+  guarded check-send-record; it then re-arms the forwarding form; and it then re-checks
+  whether a signal is recorded and unforwarded, repeating the section if so, because a
+  signal that arrived while the section was open was recorded and not sent. The section
+  is written as its own small loop and the `wait` comes only after it exits. Two rules make
+  it sound, and they are worth stating as rules rather than leaving in the code: **with the
+  forwarding form armed, a trap sends exactly when `last_forwarded` is empty**, and
+  **inside a section no trap sends**. Both paths write `last_forwarded` from
+  `entry_signal`, so there is at most one send per run and it always carries the first
+  recorded name. The loop's own `kill` is unchanged in everything but where it stands: the
+  same `[ -n "$entry_signal" ]` guard, the same `case " $(jobs -l) "` gate, the same
+  `2>/dev/null || :`, and it is still what sends a signal recorded before the loop began —
+  one recorded under the record-only form of the pre-parent flow, which no trap forwarded
+  because no trap could.
   The `EXIT` trap does the cleanup, and
   the main flow decides when to leave. That costs nothing in latency, and the reason is the
   same bash rule the rest of this requirement rests on: while a foreground command runs, a
@@ -2651,8 +2772,10 @@ the spec pull request's range above still blocks review.
   given the same treatment: it is a fact about the wait the loop is in the middle of, not
   about which signal was first, and the loop clears it itself at the top of every
   iteration, so a second arrival is *supposed* to set it again. The name is first-wins,
-  the flag is latest-wins, and the two statements sit side by side in every one of the
-  three bodies. The
+  the flag is latest-wins, the forward is once-only under `last_forwarded` — and it
+  forwards `$entry_signal`, so first-wins governs what is *sent* and not only what is
+  reported. The statements sit side by side in every one of the
+  three bodies, two of them in the record-only form and three in the forwarding one. The
   alternative — record the latest — was considered and is not taken, because it makes
   every one of those observables depend on when the caller's second press landed relative
   to a compile, which is exactly the kind of scheduling-dependent output a test cannot
@@ -2672,10 +2795,13 @@ the spec pull request's range above still blocks review.
   compile and before the parent is launched. The `EXIT` trap is the same problem on every
   refusal path: it reads `run_created`, then `entry_signal`, then `parent_pid` to choose
   its line's second word, then `entry_status`, and an `E_RUNTIME` that happens before the
-  run directory exists reaches it with all four unassigned.
+  run directory exists reaches it with all four unassigned. The forwarding trap bodies add
+  a fifth and a sixth name to the same rule, `last_forwarded` and `trap_busy`, for the
+  reason set out below.
 
-  So the entry declares all four empty — `entry_signal=''`, `run_created=''`,
-  `entry_status=''`, `parent_pid=''` — among its first builtins, after the seven opening
+  So the entry declares all six empty — `entry_signal=''`, `run_created=''`,
+  `entry_status=''`, `parent_pid=''`, `last_forwarded=''`, `trap_busy=''` — among its
+  first builtins, after the seven opening
   steps below — the `-p` refusal, the `umask 077`, the descriptor-headroom precondition,
   the descriptor close, the scrub, the
   re-exec and the marker branch — and before it runs any external command, and the
@@ -2685,11 +2811,21 @@ the spec pull request's range above still blocks review.
   has by then validated; that assignment precedes the `trap` builtins for the same reason.
   The rule is one line long and the plan should carry it as one: **no trap is installed
   until every variable that trap, the checkpoint or the `EXIT` trap can read has been
-  assigned.** The `last_forwarded` variable the wait loop below uses is deliberately not
-  in that list and does not belong among these four: no trap, no checkpoint and no part
-  of the `EXIT` trap reads it, it is assigned empty on the statement immediately above the
-  loop, and nothing under `set -u` can reach a read of it before that.
-  `wait_interrupted` is outside the rule too, and for a sharper reason: the three traps
+  assigned.** **`last_forwarded` is the fifth name and `trap_busy` the sixth, and both are
+  in the list because the forwarding trap bodies read them** — `[ -n "$last_forwarded" ]`
+  and `[ -z "$trap_busy" ]` each stand inside all three of those bodies. The arming that
+  installs them is the one after `parent_pid=$!` rather than the one before the `mkdir`,
+  so on a strict reading of the rule they could be assigned later; they are not, because
+  the rule is worth keeping as one rule and the read-check cheap as one glance, and because
+  a name assigned next to the statement that first needs it is a name a later edit moves
+  without noticing. `last_forwarded`'s initialisation therefore moves from the statement
+  immediately above the wait loop up
+  among these six, and the loop does **not** re-initialise it — an empty assignment above
+  the loop would erase a forward a trap had already made and let the section send a second
+  one. `trap_busy` sits beside it and nothing outside a forwarding body ever writes it: it
+  is set on the way into the `if` and cleared on the way out, both inside the same body, so
+  it is empty whenever no trap is executing.
+  `wait_interrupted` is outside the rule, and for a sharper reason: the three traps
   *write* it, and a write is not a read, so `set -u` has nothing to say about it however
   early a signal arrives. Its only read is the loop's own `[ -n "$wait_interrupted" ]`,
   which is always preceded in the same iteration by the loop's `wait_interrupted=''`.
@@ -2700,7 +2836,7 @@ the spec pull request's range above still blocks review.
   `${entry_signal:-}` and leaving the variables undeclared would satisfy `set -u` too. An
   explicit initialisation is preferred for two reasons. It puts the entry's whole signal
   state in one place a reviewer can see at a glance, which is what makes R10's read-check
-  of the arming order cheap — four assignments, then the `trap` lines, in that order on
+  of the arming order cheap — six assignments, then the `trap` lines, in that order on
   the page. And a `${var:-}` written at every read is indistinguishable from a misspelled
   name, so it switches off exactly the thing `set -u` is on for: with the defaults in
   place, `${entry_signl:-}` is a silent empty string on every path rather than an error on
@@ -2725,8 +2861,9 @@ the spec pull request's range above still blocks review.
 
   **The `trap ''` line is there for the `chmod` and the `/bin/rm`, not for the shell, and
   saying why makes clear that recording is not enough here.** Everywhere else in this entry
-  a signal trap only records a name, because the shell is the thing at risk and the next
-  checkpoint is where it can act. Cleanup is the one place where that shape is wrong. A
+  a signal trap does nothing that touches the disk — it records a name, sets a flag and at
+  most sends one job-table-gated `kill`, all of them builtins — because the shell is the
+  thing at risk and the next checkpoint is where it can act. Cleanup is the one place where that shape is wrong. A
   caller's `Ctrl-C` goes to the whole foreground process group, so a signal arriving while
   the trap is running is delivered to `chmod` and `/bin/rm` as well as to the entry — and a
   recording trap does nothing for them, because a trap protects the shell that installed it
@@ -2877,23 +3014,32 @@ the spec pull request's range above still blocks review.
   a subshell around a bash builtin, which forks nothing and cannot be interrupted the way
   an external command can.
 
-  **The wait on the parent is the last checkpoint, and it is the one that forwards. It is
-  a loop, and the loop ends only when the parent has been reaped.** The
+  **The wait on the parent is the last checkpoint, and it forwards too — the same
+  job-table-gated `kill` of the same `$entry_signal` the trap bodies carry, made inside a
+  section in which those bodies are disarmed so that the two can never both send. It
+  is a loop, and the loop ends only when the parent has been reaped.** The
   entry records the parent's pid in `parent_pid` the instant it starts the parent, and
   then waits for it like this and not with a fixed number of `wait` calls:
 
   ```
-  last_forwarded=''
   while :; do
     wait_interrupted=''
-    if [ -n "$entry_signal" ] && [ "$entry_signal" != "$last_forwarded" ]; then
-      case " $(jobs -l) " in
-        *" $parent_pid Running"*)
-          kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
-          ;;
-      esac
-      last_forwarded=$entry_signal
-    fi
+    while [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; do
+      trap ': "${entry_signal:=TERM}"; wait_interrupted=1' TERM
+      trap ': "${entry_signal:=INT}"; wait_interrupted=1' INT
+      trap ': "${entry_signal:=HUP}"; wait_interrupted=1' HUP
+      if [ -n "$entry_signal" ] && [ -z "$last_forwarded" ]; then
+        case " $(jobs -l) " in
+          *" $parent_pid Running"*)
+            kill -"$entry_signal" "$parent_pid" 2>/dev/null || :
+            ;;
+        esac
+        last_forwarded=$entry_signal
+      fi
+      trap ': "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' TERM
+      trap ': "${entry_signal:=INT}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' INT
+      trap ': "${entry_signal:=HUP}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*) [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :; last_forwarded=$entry_signal; };; esac; trap_busy=''; fi' HUP
+    done
     wait "$parent_pid"; status=$?
     if [ -z "$wait_interrupted" ]; then
       entry_status=$status
@@ -2909,10 +3055,14 @@ the spec pull request's range above still blocks review.
 
   **The order of those five steps is the whole of the loop's correctness, so it is written
   out as an order rather than left to be read off the block.** Per iteration, and in this
-  sequence and no other: (1) `wait_interrupted=''` clears the flag; (2) if `entry_signal`
-  is set and differs from `last_forwarded`, consult the job table and send
+  sequence and no other: (1) `wait_interrupted=''` clears the flag; (2) the **record-only
+  section**, which runs while `entry_signal` is set and `last_forwarded` is empty and
+  which is the only part of this list that changed this round — re-arm the three traps in
+  the record-only form, then, still under that guard, consult the job table and send
   `kill -"$entry_signal" "$parent_pid"` — only when `$(jobs -l)` shows that pid `Running`
-  — then record the attempt in `last_forwarded`; (3) `wait "$parent_pid"; status=$?`;
+  — then record the attempt in `last_forwarded`, then re-arm the three traps in the
+  forwarding form, and then test the guard again and run the section once more if it still
+  holds; (3) `wait "$parent_pid"; status=$?`;
   (4) if `wait_interrupted` is empty this wait was not cut short, so it reaped the parent:
   `entry_status=$status` and break; (5) the flag is set, so consult the job table a second
   time — if it still says `Running` the parent is alive and the loop goes round, and if it
@@ -2921,12 +3071,24 @@ the spec pull request's range above still blocks review.
   entry_signal>` only if both of them returned `127`.
   The forward is step 2 and not a step after the `wait`, and the clear is step 1 and not
   the statement before the `wait` — those two positions are what an earlier round fixed,
-  and the paragraphs below say which window each one closes. Step 5's second table read and
+  and the paragraphs below say which window each one closes. **Three things about step 2
+  are load-bearing and none of them is obvious from the block.** The guard is
+  `[ -z "$last_forwarded" ]` and no longer a comparison against `entry_signal`, because
+  the question is whether *anything* has been sent rather than whether this name has.
+  `last_forwarded=$entry_signal` stands after the `case` and not inside its `Running` arm,
+  which is what makes the section terminate: a parent the table no longer lists is a
+  parent nothing will ever be sent to, and an assignment confined to the arm would leave
+  the guard true and spin the section forever. And the section's re-test at the bottom is
+  not the `while` header being evaluated twice for tidiness — it is the whole mechanism by
+  which a signal that arrived while the traps were disarmed, and was therefore recorded
+  and not sent, still gets sent before the `wait`. Step 5's second table read and
   second `wait` are what **this** round fixes, and the paragraph after those says which
   status each one saves.
 
-  The three recording traps set `wait_interrupted` as well as the name, which is why each
-  of them is the two-statement `: "${entry_signal:=TERM}"; wait_interrupted=1` stated
+  The three traps set `wait_interrupted` as well as the name in both of their forms, and
+  in the forwarding form they forward under
+  the same job-table gate this loop uses, which is why each
+  of them is one of the two literals stated
   above and not the assignment alone.
   That the trap body's own success does not become `$?` is bash's rule rather than an
   accident of writing — the shell saves the exit status before it runs a trap and restores
@@ -3075,11 +3237,23 @@ the spec pull request's range above still blocks review.
      coincidence as well — and a loop
      that forwarded on the flag alone would `kill` a pid the shell has already reaped,
      which after pid reuse is a signal at an unrelated process and is the very hazard the
-     surrounding text says this loop avoids. So the `kill` sits inside a
-     `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else — and that
-     `case` stands *above* the `wait` rather than below it, which changes what asks
-     the question and not what the question is: a recorded name the loop has not forwarded
-     yet, checked against the table, on every pass including the first.
+     surrounding text says this loop avoids. So every `kill` on the entry's signal path
+     sits inside a
+     `case " $(jobs -l) " in *" $parent_pid Running"*)` and runs nowhere else. **There are
+     exactly four of them and they ask the table the same question and send the same
+     `$entry_signal`: one in each of the three trap bodies' forwarding form, and one in
+     this loop.** Four is the count of *roles*, and the count of source occurrences is
+     seven, because the entry writes each forwarding trap literal at two sites — the
+     arming after `parent_pid=$!` and the re-arm at the foot of the section — and a
+     literal written twice is one trap body, not two. The loop's stands *above* the `wait` rather than
+     below it, which changes what asks
+     the question and not what the question is: a recorded name nothing has forwarded
+     yet, checked against the table, on every pass including the first. The traps' answer
+     the same question at the moments the loop cannot — anywhere outside the section,
+     including inside the `wait` itself. What keeps the two paths from both sending is not
+     `last_forwarded` alone, which a loop racing an armed trap can read before the trap
+     writes it: it is that the loop disarms the forwarding form for the length of its own
+     decision, so that at any instant either a trap may send or the loop may, never both.
   3. **Whether an *interrupted* wait was also a reaping one is the job table's decision
      too, and this round is where the loop asks it.** That is the same table and a
      different question: not "may I send a signal to this job" but "is there still a parent
@@ -3187,7 +3361,10 @@ the spec pull request's range above still blocks review.
   trap, no checkpoint and no `EXIT` trap can ever read it at all.
 
   **Forwarding is at most once, using the first recorded signal.** The
-  `[ "$entry_signal" != "$last_forwarded" ]` test is what makes that true: without it every
+  `[ -z "$last_forwarded" ]` test is what makes that true, in the trap bodies and in the
+  loop's section alike — it replaces the earlier
+  `[ "$entry_signal" != "$last_forwarded" ]` comparison, because the question two senders
+  make it is whether *anything* has been sent and not whether this name has. Without it every
   pass with the parent still listed as `Running` would send another `kill`, so
   a user holding `Ctrl-C` would produce a
   stream of signals at a parent that is already terminating — and with the forward moved
@@ -3195,20 +3372,36 @@ the spec pull request's range above still blocks review.
   interruption to reach the `kill`. `last_forwarded` records the *attempt* rather than the
   send: it is assigned after the `case` whether or not the table let the `kill` through,
   and that loses nothing, because the only way the table withholds it is that the parent
-  has already exited, and a parent that has exited does not come back. The guard does more than keep
+  has already exited, and a parent that has exited does not come back. It is also what makes
+  the section terminate, which is the sharper reason: the section runs while
+  `last_forwarded` is empty, and an assignment confined to the `Running` arm would never
+  be reached on a parent the table has stopped listing. **In the trap body the same
+  variable records the send rather than the attempt**, because there
+  `last_forwarded=$entry_signal` sits inside the `Running` arm's brace group beside the
+  `kill`: a
+  trap that finds the parent gone, or finds `parent_pid` not yet assigned, leaves the
+  variable empty and leaves the decision to the loop, which asks the same table and
+  withholds the send for the same reason. Nothing spins on that, because the trap runs once
+  per arrival rather than in a loop. One send is the ceiling either way, and what enforces
+  it is the disarm rather than the variable: inside the section no trap can send, and
+  outside it the loop is not deciding. The guard does more than keep
   the noise down. Bash reaps the parent the instant it exits, before
   the `wait` that reports its status returns, so from that instant `parent_pid` is a number
   the kernel may give to anybody — and a `kill` the loop sends afterwards is a `kill` at
   whatever now holds it. At most one forward in the run is what bounds that, and the table
-  check above is what makes the bound narrow rather than merely finite. The loop sends
-  at most one signal in the whole run; it sends it on the first pass that finds a recorded
-  name it has not already forwarded and the parent's job listed as `Running`, which is the
+  check above is what makes the bound narrow rather than merely finite. The entry sends
+  at most one signal in the whole run, from a trap body or from the loop's section and
+  never from both, since the section is exactly the window in which the traps cannot send;
+  the loop sends it on the first pass whose section finds a recorded
+  name with `last_forwarded` still empty and the parent's job listed as `Running`, which is the
   pass after the one a signal cut short, or the very first pass when the signal was
   recorded before the loop began — and which
   in every ordinary case is while the parent is still running its termination sequence.
   Since the traps keep the *first* name (above), `entry_signal` never changes
-  after it is set, so the loop can attempt forwarding at most once per run — but the
-  comparison is not therefore redundant, because what it suppresses is the re-forward on
+  after it is set, so the loop can attempt forwarding at most once per run, and only when
+  no trap has already sent — but the
+  `[ -z "$last_forwarded" ]` guard is not therefore redundant, because what it suppresses
+  is the re-forward on
   every subsequent pass, not a second name.
 
   **What that leaves is one send in one instant, and it is stated rather than argued
@@ -3242,7 +3435,7 @@ the spec pull request's range above still blocks review.
   3.2.57(1)-release` the other measurement in this requirement used, and it was re-run
   from scratch this round because step 5 is what changed and every one of these runs goes
   through it.** A script built as the five steps above describe — three traps that are the
-  two-statement bodies this requirement fixes, a child standing in for the
+  two trap-form literals this requirement fixes, a child standing in for the
   parent whose own `TERM` handler takes 0.6 s to finish terminating its group before it
   exits `143`, and the loop printing one line per pass — was started in the
   background of a driving shell with `set -m`, so the entry has a process group of its
@@ -4671,7 +4864,7 @@ the spec pull request's range above still blocks review.
   computes the git blob ids of `resolver/v1/nofollow-snapshot.c` and
   `resolver/v1/trusted-launch.c` and compares them against blob ids pinned as constants in
   the entry, the way the runtime pins its own dependencies
-  (`scripts/lib/profile-resolution.sh:7-10,711-717`). It computes them rather than running
+  (`scripts/lib/profile-resolution.sh:7-10,789-795`). It computes them rather than running
   `git hash-object`, for a reason the Darwin toolchain paragraphs below set out: neither
   shipped file runs `git` at all. In the same pass it pins the whole
   set of files the runtime itself loads, which R5 enumerates: the runtime script, the
@@ -4848,7 +5041,7 @@ the spec pull request's range above still blocks review.
 
   The entry compiles both C
   files from those pinned sources into the run directory with the fixed flags
-  (`portable-profile-resolution.test.sh:146-149`), with `-o` naming a path inside the run
+  (`portable-profile-resolution.test.sh:338-341`), with `-o` naming a path inside the run
   directory and with the compiler's own `TMPDIR` pointed inside it, so that the compiler's
   intermediates — preprocessor output, assembler input,
   temporary object files — land inside the run directory and are removed by the same
@@ -5006,12 +5199,13 @@ the spec pull request's range above still blocks review.
   both platforms.** Taking the shim out of the compile is only half of it, because
   `/usr/bin/git` is that same single inode — ten `git hash-object` pin checks would have
   reached the same cache the compiles used to. That is why the blob ids are computed
-  instead (above), and why neither the entry nor the parent runs `git` at all. What it does
-  not buy is the runtime: the runtime runs `/usr/bin/git` for itself, this spec leaves the
-  runtime unchanged, and on Darwin that is the one write outside the caller's output path
-  that remains. R7 states that residual in full, and DR-2 accepted it: the operator decided
-  it on 2026-09-10, and the intent now names it as the one accepted exception to its
-  write-root constraint (`work/resolver-trusted-parent/intent.md:36-45`, quoted in R7).
+  instead (above), and why neither the entry nor the parent runs `git` at all. The runtime
+  used to be the one thing this did not buy, because it ran `/usr/bin/git` for itself;
+  `resolver-direct-git-runtime` (`#328`, merged 2026-09-14) has since moved it onto
+  `/Library/Developer/CommandLineTools/usr/bin/git` on Darwin
+  (`scripts/lib/profile-resolution.sh:95-101`), so the residual DR-2 accepted on 2026-09-10
+  is gone and the claim holds for the runtime too. R7 states that in full, beside the
+  amended intent constraint it quotes (`work/resolver-trusted-parent/intent.md:36-45`).
   Linux CI still cannot exercise any of this: the Darwin compile line, the refusal when the
   tools are absent, and the cache measurement are confirmed only when someone runs the
   focused test on a Darwin machine. R10 gives the operator the recipe for that measurement,
@@ -5021,7 +5215,7 @@ the spec pull request's range above still blocks review.
   `<output>/.run/jq`, and the awk either by `/bin/cp` from `/usr/bin/awk` on Linux or, on
   Darwin, as the two-line `#!/bin/bash` / `exec /usr/bin/awk "$@"` shim `/usr/bin/printf`
   writes, the shapes the test uses at
-  `scripts/test/portable-profile-resolution.test.sh:132-141`. Both destinations are fixed
+  `scripts/test/portable-profile-resolution.test.sh:324-333`. Both destinations are fixed
   names inside `.run` and not paths the caller can influence, which is what the parent
   re-establishes from its own side before it launches anything: the jq argument it is
   handed must be that `.run/jq` by descriptor identity, and `.run/awk` must hold exactly
@@ -5042,7 +5236,7 @@ the spec pull request's range above still blocks review.
   0500 files admit no writes, so from that
   moment nothing in the run directory can be added, replaced or overwritten without a
   `chmod` first. This is a deliberate deviation from the test, which uses 0555 for the
-  copied jq and awk (`portable-profile-resolution.test.sh:130-143`); 0500 is the same
+  copied jq and awk (`portable-profile-resolution.test.sh:322-335`); 0500 is the same
   minus the group and other bits, which nothing in the shipped path needs. Only after
   the mode pass does the entry launch the parent, handing it the helper path inside that
   directory along with the directory itself.
@@ -5775,7 +5969,7 @@ the spec pull request's range above still blocks review.
   on Darwin only `MallocNanoZone=0` (`:682-685`). The two test variables
   `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and `YSTACK_RESOLVER_TEST_GIT_STOP` (`:686-689`)
   are never set by the shipped parent; the runtime refuses the launch if either appears
-  alone (`scripts/lib/profile-resolution.sh:656-659`). No caller variable is copied
+  alone (`scripts/lib/profile-resolution.sh:733-736`). No caller variable is copied
   through — and that holds for the parent's *other* children as well, not only for this
   array: the SHA-1 tool, the SHA-256 tool and the jq probe run before this array exists
   and are `execve`d with the fixed two-variable environment R7 specifies, `environ` being
@@ -5792,12 +5986,12 @@ the spec pull request's range above still blocks review.
 - **R5 — refusals, each with an `E_*` line on stderr and a non-zero exit.** The parent
   refuses before `execve` when: the runtime file is not a regular non-symlink absolute
   path (`:635`) **or its mode is not 0644** — today that assertion lives only in the test
-  (`portable-profile-resolution.test.sh:608-614`), and moving it into the parent is a
+  (`portable-profile-resolution.test.sh:945-951`), and moving it into the parent is a
   named deviation; any file in the parent-pinned set — all eight of the loaded files below,
   which is every file the runtime executes or evaluates, and no others — does not match
   its pinned blob id; the jq at the bound path
   does not match the pinned SHA-256 for the platform or does not answer `jq-1.6`
-  (`portable-profile-resolution.test.sh:96-105,112-129`, mirroring
+  (`portable-profile-resolution.test.sh:288-297,304-321`, mirroring
   `shadow/v1/reproduce.sh:113-118`), or is not the run directory's own `jq`; the `awk`
   beside it in that directory is not a regular caller-owned mode-0500 file holding the
   bytes the entry put there — the bound-tool-root block below specifies those last two in
@@ -5815,7 +6009,7 @@ the spec pull request's range above still blocks review.
   the same object by descriptor identity, with no symlink followed anywhere in the
   comparison, which the block after this one specifies in full — which mirrors the sandbox
   rule the test uses
-  (`portable-profile-resolution.test.sh:219-222`), allowing for the one entry the run
+  (`portable-profile-resolution.test.sh:507-511`), allowing for the one entry the run
   directory now occupies there (R1). Three orderings inside this are fixed here rather than
   left to the plan: the length guard on the output path (`:641`) runs before any of it, so
   an overlong output path is refused without the parent looking for `.run` at all — R10's
@@ -6115,8 +6309,8 @@ the spec pull request's range above still blocks review.
   `source`. It reads `scripts/lib/profile-resolution.sh` into its own shell
   (`resolver/v1/profile-resolve-runtime.sh:19`, guarded only by `[ -f ]` and `[ ! -L ]` at
   `:12-13`), and that library evaluates the resolver's jq program with `-f`
-  (`scripts/lib/profile-resolution.sh:156`, with module path `-L <repo>/resolver/v1` at
-  `:154`, guarded only by `[ -f ]` and `[ ! -L ]` at `:697-699`). Neither of those two
+  (`scripts/lib/profile-resolution.sh:233`, with module path `-L <repo>/resolver/v1` at
+  `:231`, guarded only by `[ -f ]` and `[ ! -L ]` at `:775-777`). Neither of those two
   files is pinned by anything today. The whole set of files the runtime executes or
   evaluates, read out of the code:
 
@@ -6125,18 +6319,18 @@ the spec pull request's range above still blocks review.
   2. `scripts/lib/profile-resolution.sh` — sourced by it
      (`resolver/v1/profile-resolve-runtime.sh:19`).
   3. `resolver/v1/profile-resolution.jq` — the jq program the library evaluates
-     (`scripts/lib/profile-resolution.sh:154-157`). It contains no `include` or `import`
+     (`scripts/lib/profile-resolution.sh:231-234`). It contains no `include` or `import`
      today, so the `-L` directory contributes no further file; the `-L` is still a load
      path, and a future `include` there would widen this set silently.
   4. `scripts/core-contract.sh` — run as `/bin/bash "$profile_resolution_core"`
-     (`scripts/lib/profile-resolution.sh:163`).
+     (`scripts/lib/profile-resolution.sh:240`).
   5. `core/v2/generations/<generation>/core-ingress.sh` — sourced by it
      (`scripts/core-contract.sh:267`).
   6. `core/v2/generations/<generation>/contracts.jq` — the jq program that ingress
      evaluates (`scripts/core-contract.sh:239`, `core-ingress.sh:297`).
   7. `core/v2/generation-registry.json` — the one entry here that is neither executed nor
      evaluated: nothing in the resolver path reads its content, and the library only
-     hashes it (`scripts/lib/profile-resolution.sh:712`) as a provenance assertion about
+     hashes it (`scripts/lib/profile-resolution.sh:790`) as a provenance assertion about
      the generation. It is listed because it is part of the trusted set the library pins,
      not because the runtime loads it.
   8. The five jq modules under `core/v2/generations/<generation>/modules/` —
@@ -6145,10 +6339,10 @@ the spec pull request's range above still blocks review.
      `-L .../modules` (`core-ingress.sh:295,329`), and checked only for existence and
      non-symlink by `scripts/core-contract.sh:250-259`.
   9. The compiled `resolver/v1/nofollow-snapshot.c` helper, executed by path
-     (`scripts/lib/profile-resolution.sh:209`) — already pinned by the entry (R1).
+     (`scripts/lib/profile-resolution.sh:286`) — already pinned by the entry (R1).
 
   Files 4 through 7 are already pinned by blob inside the library itself
-  (`scripts/lib/profile-resolution.sh:711-714`, against the constants at `:7-10`), and
+  (`scripts/lib/profile-resolution.sh:789-792`, against the constants at `:7-10`), and
   those pins are worth something only once the library that holds them is itself pinned.
   So the set has three owners — the entry, the parent and the library — and which one owns
   what is stated once here and used in
@@ -6176,7 +6370,7 @@ the spec pull request's range above still blocks review.
   `PROFILE_RESOLUTION_CORE_GENERATION` and `PROFILE_RESOLUTION_SCHEMA_MAJOR`
   (`scripts/lib/profile-resolution.sh:5,11`) are committed text that nothing computes at
   run time, and the library builds the generation root from them by plain concatenation
-  (`:710`). So the parent carries its own copy of both as constants beside its blob pins.
+  (`:788`). So the parent carries its own copy of both as constants beside its blob pins.
   Its generation is an ordinary copied constant, also equal to the selected
   `PORTABLE_CORE_GENERATION` in the accepted, pinned `scripts/core-contract.sh`;
   do not split or encode it to evade the generation inventory. The parent builds
@@ -6219,7 +6413,7 @@ the spec pull request's range above still blocks review.
   **What a caller who drives the parent directly still loses.** Not a pin any more: files
   1, 2, 3 and the five modules are the parent's own, and files 4 through 7 are covered by
   the library's own blob checks at run time
-  (`scripts/lib/profile-resolution.sh:711-714`), which the parent's pin of file 2 is what
+  (`scripts/lib/profile-resolution.sh:789-792`), which the parent's pin of file 2 is what
   makes trustworthy. What such a caller loses is the helper's **provenance**, and it is
   not a gap the parent can close. Every check the parent makes on the helper is
   satisfiable by a caller who built `.run` themselves: a 0500 helper of their own,
@@ -6266,13 +6460,13 @@ the spec pull request's range above still blocks review.
   resolver code moves pins in two files in the same pull request rather than one, and a
   new core generation moves five module pins in each of them plus the generation-id
   constant the parent now carries. That cost is the repository's existing pattern, paid in
-  the library today (`scripts/lib/profile-resolution.sh:7-10,711-714`), and it is now paid
+  the library today (`scripts/lib/profile-resolution.sh:7-10,789-792`), and it is now paid
   twice over.
 
   **The helper's run-directory checks, and what they are worth.** The runtime executes
-  the helper *by path*: `scripts/lib/profile-resolution.sh:209` runs
+  the helper *by path*: `scripts/lib/profile-resolution.sh:286` runs
   `"$YSTACK_RESOLVER_HELPER" snapshot-repository ...`, and its only check on that path is
-  `[ -x ] && [ ! -L ]` (`:664-667`) at launch-check time, not at exec time. So whatever
+  `[ -x ] && [ ! -L ]` (`:741-744`) at launch-check time, not at exec time. So whatever
   the parent checks, the file the runtime finally executes is re-resolved from the path
   later. The parent's job here is therefore not to bind what the runtime executes; it is
   to fail closed on any tampering observable before the launch. It refuses unless, on
@@ -6299,7 +6493,7 @@ the spec pull request's range above still blocks review.
     that same run-directory descriptor, so the directory proved to be `.run` is the
     directory their checks read from.
 
-  There is no identity probe to add. The runtime gives jq a `--version` probe (`:668-671`)
+  There is no identity probe to add. The runtime gives jq a `--version` probe (`:745-748`)
   but gives the helper none, and the helper has exactly one subcommand,
   `snapshot-repository`, with a fixed nine-argument shape
   (`resolver/v1/nofollow-snapshot.c:2678-2682`), so there is nothing safe to call for an
@@ -6313,8 +6507,8 @@ the spec pull request's range above still blocks review.
   `profile_resolution_bound_tool_root=${YSTACK_RESOLVER_JQ%/*}`, then
   `profile_resolution_bound_core_awk="$profile_resolution_bound_tool_root/awk"`, checked
   with `[ -x ]` and `[ ! -L ]` and nothing else
-  (`scripts/lib/profile-resolution.sh:673-676`, read and verified), and then executed —
-  `"$profile_resolution_bound_core_awk"` is the command word at `:99`, in the function
+  (`scripts/lib/profile-resolution.sh:750-753`, read and verified), and then executed —
+  `"$profile_resolution_bound_core_awk"` is the command word at `:176`, in the function
   that decodes every byte string the resolver writes. The parent's own `PATH` for the
   child is built from the same string, `<dir of the bound jq>:/usr/bin:/bin`
   (`portable-profile-resolution-launcher.c:662-677`). So a caller who invokes
@@ -6400,7 +6594,7 @@ the spec pull request's range above still blocks review.
   Nothing in the parent's descriptors stops that swap from taking effect, because the
   runtime resolves what it runs from *strings*: `YSTACK_RESOLVER_HELPER`,
   `YSTACK_RESOLVER_JQ` and the first `PATH` element are all `<output>/.run/...` paths (R3),
-  and `scripts/lib/profile-resolution.sh:209` execs the helper by that path. The parent's
+  and `scripts/lib/profile-resolution.sh:286` execs the helper by that path. The parent's
   descriptor still refers to the original directory and the original files, and it can prove
   they were right when it looked; it cannot make the runtime use them. The fd-relative
   sandbox creation above closes the race on the parent's own four writes and is not claimed
@@ -6437,7 +6631,7 @@ the spec pull request's range above still blocks review.
   this initiative explicitly does not touch, so it is a separate initiative and is recorded
   under Out of scope as the recommended follow-up. It is not promised here.
 - **R6 — the output is the runtime's bytes.** Success writes exactly the canonical
-  `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:973`),
+  `resolved_profile` the runtime prints on stdout (`scripts/lib/profile-resolution.sh:1051`),
   streamed unchanged (`portable-profile-resolution-launcher.c:504-511`). For the same
   request the shipped parent and the test launcher produce byte-identical **stdout**; the
   focused test runs both and `cmp`s them. Stdout is the whole of this claim and stderr is
@@ -6447,10 +6641,12 @@ the spec pull request's range above still blocks review.
 - **R7 — the shipped path never touches the network, and widens nothing.** No network, no
   credential, and **exactly one write root: the output path the caller named** — for
   everything this initiative adds, on every supported platform, and for the unchanged
-  runtime on Linux, where R10 asserts it mechanically in CI. On Darwin the runtime's own
-  `git` calls leave one known write outside that root; the Darwin paragraph below states it
-  exactly, DR-2 accepted it on 2026-09-10, and the intent now names it as the one accepted
-  exception to its own constraint. The one
+  runtime as well, on Linux and on Darwin alike, with no exception on either. On Linux R10
+  asserts it mechanically in CI; on Darwin R10's operator recipe asserts the same thing, and
+  the Darwin paragraph below states why nothing is left outside the root. An earlier round
+  did carry one Darwin exception — DR-2 accepted a write from the runtime's own `git` calls
+  on 2026-09-10 — but `#328` removed its cause, and the intent was amended to drop the
+  exception and keep that as history. The one
   root is what the intent asks for — "no writes outside the caller's own output"
   (`work/resolver-trusted-parent/intent.md:36-45`) — and an earlier round of this spec did not
   deliver it, because its run directory under the caller's `TMPDIR` was a second write
@@ -6499,10 +6695,9 @@ the spec pull request's range above still blocks review.
   working tree, not a cache, not a
   dotfile, not a temporary file anywhere else on the filesystem.
 
-  **On Darwin one write outside that root remains, and it belongs to the unchanged runtime
-  rather than to anything this initiative adds.** Part of this was already settled and
-  stands. `/usr/bin/cc` and `/usr/bin/git` on Darwin are one and the same `xcrun` shim, and
-  the shim writes a tool-lookup cache — a single `xcrun_db` file in the per-user temp
+  **The single write root holds unqualified, on both platforms and for the runtime too.**
+  Part of this was already settled and stands. `/usr/bin/cc` on Darwin is the `xcrun` shim,
+  and the shim writes a tool-lookup cache — a single `xcrun_db` file in the per-user temp
   directory the platform reports, not in the `TMPDIR` the compile line sets. An earlier
   round admitted that as a residual of the *entry*, and the round after it removed the
   cause instead of narrowing the claim: on Darwin the compiler is the CommandLineTools
@@ -6510,31 +6705,29 @@ the spec pull request's range above still blocks review.
   are computed from a size and the platform's SHA-1 tool so that neither the entry nor the
   parent runs `git` at all (R1, both measured). All of that is still true.
 
-  What that round missed is the one process in the picture it does not get to write.
-  **The resolver runtime runs `/usr/bin/git` itself**, and this spec does not change the
-  runtime — that is a constraint of the intent rather than a choice it made
-  (`work/resolver-trusted-parent/intent.md:32-33`, "the resolver runtime and its rules do
-  not change. This adds the missing parent, not a new resolver behaviour"). The runtime
-  runs it for every repository read, under the hardened wrapper that execs
-  `/usr/bin/git --git-dir=…` (`scripts/lib/profile-resolution.sh:313-323`), and again for
-  the four blob pins it checks for itself at load time (`:711-714`) — the same reads the
-  read list below already attributes to the library. On Darwin every one of those calls is
-  the shim, and the shim can write `xcrun_db` in the per-user temp directory. The parent
-  builds the runtime's environment from empty and controls every variable in it (R3), so it
-  can point the runtime's `HOME` and `TMPDIR` wherever it likes — but the cache is not in
-  `TMPDIR`, which is exactly what R1's measurement establishes, so no environment the
-  parent can hand the runtime prevents a fixed-path shim from writing its own cache.
-  Nothing short of changing the runtime's git path closes it, and changing the runtime is
-  the one thing this initiative may not do.
+  The one process left over was the runtime, and it is no longer an exception. The runtime
+  used to run `/usr/bin/git` — the same inode as `/usr/bin/cc` on Darwin — for every
+  repository read and for its own load-time blob pins, and DR-2 accepted the resulting
+  `xcrun_db` write as a residual on 2026-09-10. `resolver-direct-git-runtime` (pull request
+  `#328`, merged 2026-09-14, commit `ac734ba`) then removed it at the source: the runtime
+  observes the platform once and selects its git path from that observation
+  (`scripts/lib/profile-resolution.sh:95-101`), which is
+  `/Library/Developer/CommandLineTools/usr/bin/git` on both Darwin architectures and
+  `/usr/bin/git` on Linux, and both call sites exec the selected path — the hardened
+  wrapper (`:390-400`) and the four load-time blob pins (`:789-792`). No shim runs, so
+  nothing is written into the per-user temp directory. That change lives in the runtime,
+  which this spec still does not touch (`work/resolver-trusted-parent/intent.md:32-33`,
+  "the resolver runtime and its rules do not change. This adds the missing parent, not a
+  new resolver behaviour"); it arrived through its own initiative and this spec reads the
+  result.
 
-  So the claim is narrowed, and the narrowing is exact rather than a hedge. For everything
-  this initiative adds — the entry, the compiler it runs, the compiled parent, the compiled
-  helper, and the jq and awk copies — the single write root holds on both platforms, and
-  for the runtime it holds on Linux, where R10 asserts it mechanically in CI. On Darwin the
-  one known write outside the caller's output path is the shim's `xcrun_db` under the
-  per-user temp directory, attributable to the runtime's own `git`. That is the whole of the
-  residual: one file, mode 0600, in a per-user directory, written by a process this spec
-  leaves alone.
+  So the claim needs no narrowing. For everything this initiative adds — the entry, the
+  compiler it runs, the compiled parent, the compiled helper, and the jq and awk copies —
+  and for the unchanged runtime as well, the single write root holds on Linux and on Darwin
+  alike. On Linux R10 asserts it mechanically in CI; on Darwin R10's operator recipe asserts
+  the same thing, by a per-user temp-directory listing that must be identical before and
+  after the run. There is no known write outside the caller's output path on either
+  platform.
 
   **One thing that claim used to depend on without saying so is the caller's descriptors,
   and this round removes the dependency.** A write root is a claim about where the
@@ -6582,36 +6775,33 @@ the spec pull request's range above still blocks review.
   qualification at all: nothing in this tree has ever held a descriptor the close did not
   shut first.
 
-  **That residual is no longer a deviation the spec is carrying on its own: it is an
-  accepted exception the intent now names.** The operator decided DR-2 on 2026-09-10,
-  choosing option (a) — accept the residual, name it, and measure exactly it — and the
-  decision was carried into the chain by intent pull request `#282`, which amends the
-  intent's write-root constraint and changes nothing else. This spec pins that amended
-  intent: the `intent-blob` in the frontmatter is
-  `eaa322c405502cc0ca7c453814ca0f005f11b48f`. The amended constraint reads, in full
-  (`work/resolver-trusted-parent/intent.md:36-45`):
+  **The spec's write-root claim and the intent's now say the same unqualified thing.**
+  DR-2, decided by the operator on 2026-09-10, accepted the Darwin residual and was carried
+  into the chain by intent pull request `#282`. `resolver-direct-git-runtime` (`#328`) then
+  removed the residual itself, and the intent was amended again to drop the exception and
+  keep the history in one sentence. This spec pins that amended intent: the `intent-blob`
+  in the frontmatter is `bc6e669b755bae6c7f52f10f047c602faa46210a`. The constraint now
+  reads, in full (`work/resolver-trusted-parent/intent.md:36-45`):
 
-  > No network, no credentials, no writes outside the caller's own output. One
-  > accepted exception, decided as DR-2 on #271: on Darwin the resolver runtime,
-  > which this initiative leaves unchanged, itself runs `/usr/bin/git`
-  > (`scripts/lib/profile-resolution.sh:313-323` and `:711-714`), and that binary is
-  > the xcrun shim, which may write its `xcrun_db` cache in the per-user temp
-  > directory outside the caller's output. That write belongs to the unchanged
-  > runtime, not to the parent this initiative adds; the parent, the entry, the
-  > compiler, the helper and the copies write only inside the caller's output on
-  > both platforms, and on Linux the runtime does too. A later intake may move the
-  > runtime off `/usr/bin/git` on Darwin.
+  > No network, no credentials, no writes outside the caller's own output. This holds
+  > without exception, on both platforms, for the resolver runtime as well as for
+  > everything this initiative adds. The history: DR-2 on #271 (2026-09-10) accepted one
+  > Darwin residual, because the unchanged runtime ran `/usr/bin/git`, which is the
+  > xcrun shim and may write an `xcrun_db` cache in the per-user temp directory outside
+  > the caller's output. `resolver-direct-git-runtime` (PR #328, merged 2026-09-14)
+  > removed that residual by having the runtime select the CommandLineTools git
+  > directly on Darwin (`scripts/lib/profile-resolution.sh:95-101`), so no shim runs and
+  > nothing lands in the temp directory. The constraint is therefore whole again, and
+  > the parent, the entry, the compiler, the helper and the copies are held to it too.
 
-  Read that beside the two paragraphs above and the intent and this spec say the same
-  thing in the same shape: one file, written by the unchanged runtime's own `git`, on
-  Darwin only, with everything this initiative adds inside the caller's output on both
-  platforms. The Darwin operator run measures exactly this and nothing wider (R10). The two
-  alternatives an earlier round of this spec held open against a refusal — widening E to
-  move the runtime off `/usr/bin/git` on Darwin, or dropping the Darwin claim and shipping
-  Linux-only — are history rather than live options, and neither is carried further here.
-  The follow-up that would close the residual for good is the one the amended constraint
-  itself names: a later intake moving the runtime off `/usr/bin/git` on Darwin. It is
-  recorded under Out of scope and is not promised here.
+  Read that beside the two paragraphs above and the intent and this spec say the same thing
+  in the same shape: nothing this initiative adds, and nothing the unchanged runtime does,
+  writes outside the caller's output path, on either platform. The Darwin operator run
+  measures exactly that (R10). The two alternatives an earlier round of this spec held open
+  against a refusal — widening E to move the runtime off `/usr/bin/git` on Darwin, or
+  dropping the Darwin claim and shipping Linux-only — are history rather than live options.
+  The first of them is in substance what `#328` did, in its own initiative and without
+  widening anything here.
 
   **Reads, stated precisely.** The blanket "no read outside the repositories named in the
   map" is wrong as written, because the entry and the parent read local files before the
@@ -6620,9 +6810,9 @@ the spec pull request's range above still blocks review.
   1. *The resolver's content reads* are confined to the repositories the request's
      repository map names. A repository root is only ever obtained by looking the
      repository id up in the map snapshot
-     (`scripts/lib/profile-resolution.sh:193-198`), a snapshot is refused if the lookup
-     yields nothing (`:205-206`), and every Git read runs as
-     `git --git-dir=<mapped root's gitdir>` under the hardened wrapper (`:313-323`).
+     (`scripts/lib/profile-resolution.sh:270-275`), a snapshot is refused if the lookup
+     yields nothing (`:282-283`), and every Git read runs as
+     `git --git-dir=<mapped root's gitdir>` under the hardened wrapper (`:390-400`).
   2. *The entry and the parent additionally read a fixed, listed set of trusted local
      inputs*, and nothing else: the two committed C sources
      `resolver/v1/trusted-launch.c` and `resolver/v1/nofollow-snapshot.c` (hashed and
@@ -6638,7 +6828,7 @@ the spec pull request's range above still blocks review.
      parent as well as by the entry, at paths the parent builds from its own copies of the
      library's generation-id and schema-major constants (R5)
      (and the runtime file among those eight also mode-checked), the
-     remaining four hashed by the library itself at run time (`:711-714`), and all of them
+     remaining four hashed by the library itself at run time (`:789-792`), and all of them
      bar the registry then read by the resolver under the bound `/bin/bash`; the request
      file and the repository-map file named on the command line; the jq binary supplied as
      an argument; `/usr/bin/awk`, read on Linux by **both** shipped files and by neither on
@@ -6667,8 +6857,23 @@ the spec pull request's range above still blocks review.
 
      The entry also performs the temporary stderr discard already required by R1:
      exact `2>/dev/null` on the three ulimit rungs, descriptor-close eval, the two
-     unset forms in each required scrub (including the marker branch), and the
-     unique job-table-gated signal-forwarding kill. R10 checks those roles only.
+     unset forms in each required scrub (including the marker branch), and the wait
+     job-table-gated signal-forwarding kills, of which there are **four roles and seven
+     source occurrences**, and the two numbers are counted separately because a role that
+     is written twice is still one role. The roles: one in each of the three trap bodies'
+     forwarding form, and one in the wait loop's section. The occurrences: each of the
+     three forwarding trap literals is written **twice** in the entry — once at the arming
+     site on the statement after `parent_pid=$!`, and once at the re-arm at the foot of
+     the loop's record-only section — which is six, plus the loop's own `kill`, which is
+     written once. Seven in all, and **every one of the seven carries this redirection**,
+     which is a change from the draft that admitted
+     it on the loop's kill alone. The reason is the same one the ladder rungs have: a
+     `kill` at a job the table listed as `Running` an instant earlier can still fail on a
+     parent that has since exited, and the diagnostic bash would write for it goes to the
+     entry's stderr — which on a signal path may be a pipe whose reader has gone, where a
+     write can block and hold the entry open past the parent's exit. A trap body is the
+     worst place in the entry for that, because it is reached with the caller already
+     waiting. R10 checks those roles only.
      This is no general data path, command permission or persistent write-root
      allowance; no additional diagnostic may be suppressed. The redirection stays
      outside eval's quoted exec, preserving the existing prohibition.
@@ -6843,9 +7048,9 @@ the spec pull request's range above still blocks review.
      entry's source names `/usr/bin/awk` in exactly two places, both of them argument
      positions and neither of them a command. On Linux it is the source argument of the
      copy — `/bin/cp /usr/bin/awk <run>/awk`, the shape the test uses at
-     `scripts/test/portable-profile-resolution.test.sh:136`. On Darwin it is text inside
+     `scripts/test/portable-profile-resolution.test.sh:328`. On Darwin it is text inside
      the single-quoted string the entry hands to `/usr/bin/printf`, which writes the
-     two-line `#!/bin/bash` and `exec /usr/bin/awk "$@"` shim the test writes at `:138`;
+     two-line `#!/bin/bash` and `exec /usr/bin/awk "$@"` shim the test writes at `:330`;
      that shim is executed by the *resolver*, out of `.run`, long after the entry has
      tightened the directory to 0500, and the entry never runs it. Nothing else touches
      the path: awk is not one of the ten computed blob-id pins and it is not the SHA-256
@@ -6881,7 +7086,7 @@ the spec pull request's range above still blocks review.
      - **The compiler is a fixed path chosen per platform, and `$CC` is not
        honoured.** The test script uses `${CC:-/usr/bin/cc}` on Linux and
        `${CC:-/usr/bin/clang}` on Darwin
-       (`scripts/test/portable-profile-resolution.test.sh:95,102`, invoked at `:146-149`).
+       (`scripts/test/portable-profile-resolution.test.sh:287,294`, invoked at `:338-341`).
        A caller-chosen compiler is a caller-chosen trust base, so the entry drops the
        override — and it drops both of the test's Darwin choices with it, because
        `/usr/bin/cc` and `/usr/bin/clang` there are a single inode and both are the `xcrun`
@@ -6893,11 +7098,11 @@ the spec pull request's range above still blocks review.
        themselves — `blob <size>\0` plus the file bytes, through the platform's SHA-1 tool
        — rather than running `git hash-object` (R1). On Darwin `/usr/bin/git` is the same
        shim inode as `/usr/bin/cc`, so keeping it would have added ten shim invocations and
-       a cache write of this initiative's own on top of the one the runtime already makes;
-       on Linux it is a large dependency for nine
-       bytes of header and a hash. The runtime still runs `/usr/bin/git` for itself, which
-       is where the Darwin residual above comes from; what this deviation removes is the
-       entry's and the parent's own use of it. The focused test still runs git, to assert
+       a cache write of this initiative's own; on Linux it is a large dependency for nine
+       bytes of header and a hash. The runtime used to run `/usr/bin/git` for itself, which
+       is where the Darwin residual came from; `#328` moved it onto the CommandLineTools
+       git, and what this deviation removes is the entry's and the parent's own use of the
+       shim path. The focused test still runs git, to assert
        the computed
        ids match `git hash-object` (R10). This is a named deviation from both the test
        script and `shadow/v1/reproduce.sh`.
@@ -7014,11 +7219,11 @@ the spec pull request's range above still blocks review.
   or already committed in this repository. The runtime's own guarantees are restated, not
   extended: git runs with system and global config disabled,
   `protocol.file.allow=never` and `GIT_NO_LAZY_FETCH=1`
-  (`scripts/lib/profile-resolution.sh:313-322`); every working file goes into the
+  (`scripts/lib/profile-resolution.sh:390-399`); every working file goes into the
   runtime's own `mktemp -d` scratch at umask 077 under the sandbox `TMPDIR` the parent set,
   which is `<output>/tmp` and so inside the one write root
-  (`:688-692`), removed on exit; repository reads go through `git --git-dir` on mapped
-  roots (`:323`). The spec adds no claim beyond restating them.
+  (`:766-770`), removed on exit; repository reads go through `git --git-dir` on mapped
+  roots (`:400`). The spec adds no claim beyond restating them.
 - **R8 — platforms.** Supported: `Darwin:arm64`, `Darwin:x86_64`, `Linux:x86_64` — the
   same set the test and `shadow/v1/reproduce.sh:113-116` support, with the same two
   pinned jq digests. Anything else refuses with `E_RUNTIME` before doing work — a refusal
@@ -7198,7 +7403,7 @@ the spec pull request's range above still blocks review.
   esac
   ```
 
-  mirroring `scripts/test/portable-profile-resolution.test.sh:90-107` and
+  mirroring `scripts/test/portable-profile-resolution.test.sh:282-299` and
   `shadow/v1/reproduce.sh:113-118` in the tuples it accepts — so there is no input CI
   can supply that drives the `*)` arm on a machine CI runs on, and shadowing `uname` on
   `PATH` would prove nothing
@@ -7417,7 +7622,7 @@ the spec pull request's range above still blocks review.
   What group 2 also shows, by omission, is the residual R5 states, and the shape of it
   changed this round. **The module gap is gone**: a caller who reaches the parent directly
   now gets all eight loaded files pinned by the parent itself, files 4 through 7 get the
-  library's own blob checks at run time (`scripts/lib/profile-resolution.sh:711-714`),
+  library's own blob checks at run time (`scripts/lib/profile-resolution.sh:789-792`),
   which the parent's pin of file 2 is what makes worth having, and the edited-module case
   above is the proof — the previous round could only put that case in group 1 and had to
   say why it could not sit here. **What is left by omission is the helper's provenance.**
@@ -7625,16 +7830,13 @@ the spec pull request's range above still blocks review.
      both exit 0, their stdouts are byte-identical, the marker string appears in neither
      run's output, and the watched `TMPDIR` and `HOME` are untouched afterwards — which is
      the same fact R7's one-write-root claim makes about the compile step, asserted here
-     rather than stated. **On Darwin the case measures one thing more, and it measures
-     exactly the narrowed claim rather than a wider one.** The narrowing is R7's: everything
-     this initiative adds writes only inside the output path, while the unchanged runtime's
-     own `/usr/bin/git` is the Darwin `xcrun` shim and can write its `xcrun_db` cache in the
-     per-user temp directory, which is the residual DR-2 accepted and the intent now
-     records (R7). An
-     earlier round of this spec asserted that `xcrun_db` came back *unchanged* across a full
-     entry run, and that assertion is wrong for this half, because this half runs a real
-     resolution and the runtime behind it runs git. So the recipe is a difference, not an
-     equality, and it is written out here because the operator runs it by hand.
+     rather than stated. **On Darwin the case measures one thing more, and since `#328` it
+     measures the strong claim rather than a narrowed one.** The runtime no longer reaches
+     the `xcrun` shim: it selects `/Library/Developer/CommandLineTools/usr/bin/git` from
+     its own platform observation (`scripts/lib/profile-resolution.sh:95-101`), so a full
+     resolution writes nothing into the per-user temp directory. The recipe is therefore an
+     equality rather than a difference, and it is written out here because the operator runs
+     it by hand.
 
      **Every run in this recipe goes through the entry, and this round says so as a rule
      rather than leaving it to the word "resolution".** The operator's measurement is
@@ -7649,33 +7851,32 @@ the spec pull request's range above still blocks review.
      the direct invocation as something an operator does; R5 now states that the entry is
      the only supported launch, and this recipe is written the same way.
 
-     - Before the entry run, record two things in the per-user temp directory — the
-       directory
-       `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports: the state of `xcrun_db` itself,
-       which is either *absent* or *present with a size, an mtime and a SHA-1 of its bytes*
-       (**absent is a state, not a reason to skip** — a skip there would throw away the
-       strongest evidence available), and a listing of the whole directory with each entry's
-       name, size and mtime.
+     - Before the entry run, record the whole per-user temp directory — the directory
+       `/usr/bin/getconf DARWIN_USER_TEMP_DIR` reports — as a listing with each entry's
+       name, size and mtime, and record the state of `xcrun_db` itself, which is either
+       *absent* or *present with a size, an mtime and a SHA-1 of its bytes* (**absent is a
+       state, not a reason to skip** — a skip there would throw away the strongest evidence
+       available).
      - Run the resolution through the entry. Then record both again.
-     - The case passes when the only difference between the two listings is `xcrun_db` —
-       created where it was absent, or changed in any of size, mtime and digest where it was
-       present — and nothing else in the directory is new or modified. **Any other new or
-       modified file is a failure**, and so is any change anywhere else the case already
-       watches: the caller's `TMPDIR` and `HOME` must still be untouched.
-     - The same recipe runs around the entry's own pre-launch steps, where the claim is
-       still the strong one: the pin checks and both compiles run no `git` and no shim
-       (R1), so across those `xcrun_db` must come back in the state it started in, absent
-       included. Half 2 below is where that is measured without a runtime behind it.
+     - The case passes when the two listings are identical and `xcrun_db` comes back in the
+       state it started in, absent included. **Any new or modified file in that directory
+       is a failure** — `xcrun_db` included, which since `#328` would mean a shim got back
+       into the entry's path or the runtime's. So is any change anywhere else the case
+       already watches: the caller's `TMPDIR` and `HOME` must still be untouched. No write
+       may appear anywhere outside the output root.
+     - The same recipe runs around the entry's own pre-launch steps, where the claim has
+       always been the strong one: the pin checks and both compiles run no `git` and no
+       shim (R1). Half 2 below measures that with no runtime behind it at all.
 
-     **A cache already primed on the operator's machine may show no write at all**, because
-     the shim writes only when its lookup misses, and the same run on a cold cache would
-     write. That is precisely why the claim is narrowed rather than reported as "measured
-     clean": a clean measurement here is evidence about one machine's cache state, not about
-     the shipped path, and treating it as the latter is the mistake the earlier round made.
-     What the recipe does prove is the part that matters — that the write, when it happens,
-     is that one file and nothing else. The recipe is Darwin-only because Linux has no such
-     file and no shim that would write one, and there the one-write-root claim covers the
-     runtime too and CI asserts it. What this
+     **A primed cache cannot hide a failure here, which is why the claim is now stated
+     absolutely rather than narrowed.** The shim writes only when its lookup misses, so
+     under the old arrangement a clean measurement was evidence about one machine's cache
+     state rather than about the shipped path — which is why earlier rounds narrowed the
+     claim instead of reporting "measured clean". That reasoning is spent: no shim is
+     invoked anywhere in the run now, so an unchanged listing is the expected result on a
+     cold cache and a warm one alike, and any change at all is a real regression to
+     investigate. The recipe is Darwin-only because Linux has no such file and no shim that
+     would write one, and there CI asserts the same claim. What this
      half cannot do is compare the built binaries:
      the entry's
      trap removes `.run` and everything in it before the entry returns, and a way to keep
@@ -7734,7 +7935,7 @@ the spec pull request's range above still blocks review.
      `child.stderr` (R7). The test asserts that exact set of four entries with no `.run`
      among them, asserts `child.stdout` is byte-identical to the entry's own stdout, and
      asserts `child.stderr` and `tmp` are empty — `tmp` because the runtime removes its own
-     scratch under it on exit (`scripts/lib/profile-resolution.sh:688-692`). It makes no
+     scratch under it on exit (`scripts/lib/profile-resolution.sh:766-770`). It makes no
      claim about `home` being empty, because nothing in this initiative's control governs
      what a future git might drop into a `HOME` it was handed.
   2. *A refusal by the entry, at the pin check.* The wrong-digest jq case from group 1. The
@@ -7774,25 +7975,91 @@ the spec pull request's range above still blocks review.
   into the microseconds between the two `mkdir` calls, which is a flaky test dressed as a
   deterministic one. A test-only hook inside the entry is the thing this spec refuses
   everywhere else. So the arming order is covered the way R2's mask window is: by reading,
-  with the plan quoting the statements in order — the four empty initialisations
-  `entry_signal=''`, `run_created=''`, `entry_status=''` and `parent_pid=''`, then the
+  with the plan quoting the statements in order — the six empty initialisations
+  `entry_signal=''`, `run_created=''`, `entry_status=''`, `parent_pid=''`,
+  `last_forwarded=''` and `trap_busy=''`, then the
   `trap` lines, then the `[ -e ]`
   refusal, then `/bin/mkdir -- "$run"` with the guard set from its captured status, then
   the two subdirectories — and the
-  reviewer checking that those four initialisations all precede the `trap` builtins, so
+  reviewer checking that those six initialisations all precede the `trap` builtins, so
   that no variable a trap, a checkpoint or the `EXIT` trap reads can be unset when `set -u`
-  meets it, that no statement between them can create `.run` without the guard,
-  and that each signal trap body is the two statements R1 fixes — the assign-if-empty and
-  `wait_interrupted=1` — and nothing besides: a body carrying only the assignment is the
+  meets it — `last_forwarded` and `trap_busy` among them, because the forwarding bodies
+  read both —
+  that no statement between them can create `.run` without the guard,
+  and that the pre-parent arming uses the **record-only** two-statement form R1 fixes —
+  the assign-if-empty and `wait_interrupted=1` — and nothing besides: a body
+  carrying only the assignment is the
   one form of this bug a test cannot catch, because the loop it breaks needs a signal
-  inside a `wait` to break it. The wait loop's own statement order joins that list for the
+  inside a `wait` to break it.
+
+  **The trap inventory is a read-check of its own this round, because the entry now holds
+  two trap-form literals per signal and the `trap` builtins that switch between them are
+  shipped statements like any other.** The reviewer enumerates every `trap` command in the
+  entry and classifies each one, and the list is closed: the `trap … EXIT` command that
+  arms the cleanup; the three
+  pre-parent arming commands, which carry the record-only form; the three that re-arm the
+  forwarding form on the statement after `parent_pid=$!`; the three inside the wait loop's
+  section that put the record-only form back; the three at the foot of that section
+  that restore the forwarding form; and **`trap '' INT TERM HUP`, the second statement of
+  the `EXIT` trap body**, which is a `trap` command in the shipped text like any other and
+  belongs in this count even though it stands inside another trap — it is the one that
+  makes the `chmod` and the `/bin/rm` uninterruptible, and a reader who leaves it out of
+  the inventory is a reader who can delete it without noticing. Fourteen `trap` commands
+  in all: two distinct non-empty body literals
+  per signal and no third, plus the one empty body the `EXIT` trap sets. The record-only
+  literal is a prefix of the forwarding one
+  so a body that has been half-edited is visible as a body that is neither. The reviewer
+  checks that no forwarding body sends its own `:=NAME` default instead of
+  `$entry_signal` — that is the first of the two failures R1 reproduces, and it is
+  unreachable by test because provoking it needs a second, differently named signal to
+  arrive after the job table has stopped saying `Running` and before the loop looks — that
+  every forwarding body carries its `[ -z "$trap_busy" ]` guard, its `trap_busy=1` and its
+  `trap_busy=''` in that order, since a body missing the clear forwards once per run and
+  then never again, and a body missing the guard is the nested-trap double send R1
+  argues — and that every forwarding `kill` carries `2>/dev/null`.
+
+  **The reviewer counts forwarding `kill`s twice over, once as roles and once as source
+  occurrences, and this round says so because the two numbers differ and a check that
+  knows only one of them is wrong either way.** There are **four roles**: the forwarding
+  `kill` in each of the three trap bodies, and the one in the wait loop's section. There
+  are **seven source occurrences**: each of the three forwarding trap literals is written
+  at two sites — the arming on the statement after `parent_pid=$!` and the re-arm at the
+  foot of the section — which is six, plus the loop's own `kill`, which is written once.
+  A read-check that expects four occurrences fails a correct entry; one that expects seven
+  roles invents three trap bodies that do not exist. Both numbers are exact and neither is
+  a ceiling to be rounded up to: an eighth occurrence is a `kill` this spec does not
+  authorise, and a fifth role is the same. **The two writings of a signal's forwarding
+  literal must be byte-identical**, which is the check that makes the pair safe to have at
+  all: an entry whose arming site and re-arm site have drifted apart has two different
+  trap bodies wearing one name, and the drift is invisible at runtime until the section
+  runs for the first time — which is only on a run that was signalled. Compare the three
+  pairs literally, character for character, before reading either for content.
+  **A body carrying the record-only form
+  where the forwarding one belongs is the second untestable form**: it needs a signal
+  delivered between the loop's forwarding check and the `wait` under it, and what it
+  produces is an entry that blocks for the parent's whole natural life and then exits with
+  the parent's own status, forwarding nothing.
+
+  The wait loop's own statement order joins that list for the
   same reason and is read the same way, with the plan quoting the five steps in sequence —
-  the flag cleared at the top of the body, the forward of an already-recorded signal above
-  the `wait`, the `wait`, the clear-flag break, and the set-flag table read with its
+  the flag cleared at the top of the body, the record-only section with its disarm,
+  its single guarded forward, its re-arm and its re-test, then
+  the `wait`, the clear-flag break, and the set-flag table read with its
   `continue` and its second `wait` — and the reviewer checking
-  that no statement stands between the clear and the loop header and that no `kill` stands
-  below the `wait`, since both of the windows those positions close need a signal delivered
-  between two adjacent statements (R1). **Step 5's own three lines join that list this
+  that no statement stands between the clear and the loop header, that no `kill` stands
+  below the `wait`, and that no `kill` stands inside the section outside the disarmed
+  window, since the windows those positions close need a signal delivered
+  between two adjacent statements (R1). The reviewer counts the forwarding kills as well:
+  four, one in each of the three trap bodies' forwarding form and one in the loop's
+  section, all four gated on the same
+  `case " $(jobs -l) "` read, all four sending `$entry_signal`, and none anywhere else —
+  and then counts the *occurrences*, which are seven and not four, because each of the
+  three forwarding trap literals is written at two sites. All seven carry `2>/dev/null`.
+  It also checks the two statements the section's termination rests on: the guard is
+  `[ -z "$last_forwarded" ]` and not a comparison against `entry_signal`, and
+  `last_forwarded=$entry_signal` stands after the loop's `case` rather than inside its
+  `Running` arm — confined to the arm it would leave the guard true whenever the table
+  says the parent is gone, and the section would never exit. **Step 5's own three lines join that list this
   round**, because the failure they fix also needs a signal between two adjacent
   statements and no case in this suite can place one there. The reviewer reads that the
   second table read's only action is `continue` — no `kill` on that arm, which would be a
@@ -8597,7 +8864,8 @@ the spec pull request's range above still blocks review.
   cases was checked rather than assumed.** R2's handler and R1's `EXIT` trap write their
   `parent-signal:` and `entry-signal:` lines last, after the killing and the removal, so
   the assertions above are worth re-reading in that order. This round's redesign of the
-  entry's signal path — traps that only record, a main flow that acts at checkpoints (R1) —
+  entry's signal path — traps that record and forward under the job table's gate, a main
+  flow that acts at checkpoints (R1) —
   changes none of the three either: it moves where each step is written, not which steps
   run, in what order, or what any of them leaves observable. The mid-run case does not read
   either line — it reads the `runtime-pgid:` line, which is still written on the normal path
@@ -8830,8 +9098,13 @@ the spec pull request's range above still blocks review.
      **Temporary stderr discard, exact roles only.** Admit `/dev/null` solely as
      the literal target of `2>/dev/null` on R1's three `ulimit -S -n` ladder rungs,
      the descriptor-close `eval`, `builtin unset -f` and `builtin unset` in every
-     mandated scrub (including the full marker scrub), and the one forwarding
-     `kill` in the job-table Running arm above `wait`. Check each command's required
+     mandated scrub (including the full marker scrub), and the wait loop's forwarding
+     `kill` in the job-table Running arm inside its record-only section **and** the
+     forwarding `kill` inside each of the three trap bodies' forwarding form — four
+     roles, seven source occurrences, because each forwarding literal is written at two
+     sites (the arming after `parent_pid=$!` and the re-arm at the foot of the section)
+     and the loop's is written at one. Every one of the seven carries it. Admit no eighth
+     occurrence and no fifth role. Check each command's required
      role and position, not a guessed total occurrence count. Preserve the original
      command forms and all their existing ordering/behavior checks. Reject this
      target on any other command, another descriptor, input/append redirection,
@@ -8891,7 +9164,7 @@ the spec pull request's range above still blocks review.
      to the exec sites, asked about one more token. That is what makes an
      accidental host-awk invocation a CI failure rather than an allowlisted path in a new
      place. The test may still run awk freely for its own parsing, the way the existing
-     test does at `scripts/test/portable-profile-resolution.test.sh:448-449`, for the
+     test does at `scripts/test/portable-profile-resolution.test.sh:762-763`, for the
      same reason it may run git: the sweeps cover the two shipped files only.
 
      **And `/usr/bin/printf` gets an ordering assertion, for the mirror-image reason.**
@@ -9000,7 +9273,7 @@ Exactly eight implementation paths may change: `resolver/v1/trusted-launch.c`,
 `RESTORE.md`, and `ci/required-files.txt`. The schema-test change is only the two
 exact generation-inventory additions required by R10. All other requirements and
 exclusions remain, including the eighteen blob-pin checks. The implementation
-review-size range is 2850-3200 changed lines; measure the complete change and
+review-size range is 3650-4950 changed lines; measure the complete change and
 return to the artifact gate for an unexplained overrun, never reduce tests to fit.
 
 Order, each step checkable before the next:
@@ -9260,15 +9533,27 @@ Order, each step checkable before the next:
    read with the platform's `/usr/bin/stat` format, and empty by a `dotglob nullglob` glob
    (R1);
    then install the `EXIT`/`INT`/`TERM`/`HUP` traps **before** anything creates the run
-   directory — and after the four empty initialisations above and after `run` itself is
+   directory — and after the six empty initialisations above and after `run` itself is
    assigned from the validated output root, so nothing any trap reads is unset when it is
    armed (R1) — the three signal traps recording the **first** signal's name in
-   `entry_signal` with an assign-if-empty and setting the wait loop's flag beside it,
-   `: "${entry_signal:=TERM}"; wait_interrupted=1` and its `INT` and `HUP` siblings, which
-   is two statements in each of the three bodies and the whole of each of them, so that a
+   `entry_signal` with an assign-if-empty and setting the wait loop's flag beside it, armed
+   here in the **record-only** form `: "${entry_signal:=TERM}"; wait_interrupted=1` and its
+   `INT` and `HUP` siblings, two statements each and the whole of each — there is no parent
+   to forward to yet — and re-armed in the **forwarding** form
+   `: "${entry_signal:=TERM}"; wait_interrupted=1; if [ -z "$trap_busy" ]; then
+   trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*)
+   [ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :;
+   last_forwarded=$entry_signal; };; esac; trap_busy=''; fi` on the statement
+   immediately after `parent_pid=$!`, three statements each, every one
+   a builtin or a subshell around one, forwarding `$entry_signal` and never the body's own
+   `:=NAME` default, and serialised against a nested trap by the `trap_busy` flag the
+   third statement sets and clears, so that a
    repeat or a second, different signal cannot overwrite a name the entry
-   has already acted on and no signal arriving during a `wait` can leave the loop below
-   reading an interrupted wait's return as the parent's own status (R1), and
+   has already acted on or be sent in its place, no signal arriving during a `wait` can
+   leave the loop below
+   reading an interrupted wait's return as the parent's own status, and no signal arriving
+   between the loop's forwarding check and the `wait` under it can go unforwarded while the
+   entry blocks for the parent's whole natural life (R1), and
    doing nothing else, and the `EXIT` trap's removal guarded by a `run_created` variable
    that stays unset until the directory is the entry's own; then refuse a pre-existing
    `.run` with `[ -e ]`; then create the run directory `<output>/.run` at mode 0700 with a
@@ -9317,10 +9602,14 @@ Order, each step checkable before the next:
    back with it clear was not cut short, so its status is the parent's own — the entry
    records it in `entry_status`, breaks and exits, forwarding nothing, because the parent
    has been reaped. **Whether to forward** is bash's job table's, and the question is asked
-   *before* each `wait` rather than after an interrupted one: if `entry_signal` is set and
-   differs from `last_forwarded`, the entry consults `$(jobs -l)` and sends
-   `kill -"$entry_signal"` only if the
-   parent's job is listed as `Running`, because the flag says a trap ran and not that the
+   *before* each `wait` rather than after an interrupted one, and in the trap bodies as
+   well: inside a record-only section that re-arms the two-statement form first, if
+   `entry_signal` is set and `last_forwarded` is empty, the entry consults `$(jobs -l)` and
+   sends `kill -"$entry_signal"` only if the
+   parent's job is listed as `Running`, records `last_forwarded=$entry_signal` after the
+   `case` whether or not the table let it through, re-arms the forwarding form and runs the
+   section again if a signal arrived while it was open; each trap body makes the same gated
+   send, with the same `$entry_signal`, at every moment outside that section, because the flag says a trap ran and not that the
    parent was alive when it ran — a signal landing after a `wait` has reaped the parent but
    before the loop reads the return sets it too, and forwarding there is a `kill` at a pid
    the shell
@@ -9376,15 +9665,15 @@ Order, each step checkable before the next:
    ids of both C sources and of the eight loaded files R5 lists
    as entry-pinned against the pinned constants, each id computed from the file's `stat`
    size and the platform's SHA-1 tool rather than by running `git hash-object` (R1), the way the
-   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:711-717`), every
+   runtime pins its own dependencies (`scripts/lib/profile-resolution.sh:789-795`), every
    one of those commands run under the `env -i` line R1 quotes, which is why this step
    comes after the run directory and not before it: that line points `TMPDIR` and `HOME`
    at `<output>/.run/tmp` and `<output>/.run/home`, and both have to exist (R1). A refusal
    here is cleaned up by the trap installed above, which R10 asserts;
    **compile** — both C files from those pinned sources into the run directory with the
    exact flags the test uses, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`
-   (`portable-profile-resolution.test.sh:146-149`), invoking the platform's fixed compiler
-   rather than the test's `${CC:-…}` (`:95,102`; R7) — `/usr/bin/cc` on Linux, and on
+   (`portable-profile-resolution.test.sh:338-341`), invoking the platform's fixed compiler
+   rather than the test's `${CC:-…}` (`:287,294`; R7) — `/usr/bin/cc` on Linux, and on
    Darwin `/Library/Developer/CommandLineTools/usr/bin/clang` with the fixed
    `-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`, refusing `E_RUNTIME`
    when the Command Line Tools are absent rather than falling back to the `xcrun` shim at
@@ -9394,7 +9683,7 @@ Order, each step checkable before the next:
    plus `-pipe` where
    the compiler accepts it, so no compiler intermediate is written outside the run
    directory and no caller variable steers the compile; then copy in jq and the platform's
-   awk the way the test does (`:130-143`);
+   awk the way the test does (`:322-335`);
    **tighten** — remove the `tmp` and `home` subdirectories and their contents, then
    `chmod 0500` every
    remaining file in the run directory and then `chmod 0500` the run directory itself, so
@@ -9464,23 +9753,22 @@ intent says for this change. Only after the operator's merge does
 - **Closing the same-uid swap window on the helper — the recommended follow-up, not done
   here.** The residual stated in R5 exists because the runtime takes the helper as a path
   and re-resolves it at exec time
-  (`scripts/lib/profile-resolution.sh:209,664-667`). Closing it means changing the runtime
+  (`scripts/lib/profile-resolution.sh:286,741-744`). Closing it means changing the runtime
   to accept an executable descriptor from the parent — a `fexecve`-style handoff, or an
   `/dev/fd` path the parent opened — so the object checked and the object executed are the
   same. That is a change to the runtime and to the resolver's launch contract, both listed
   above as untouched, so it belongs to a separate initiative. This spec records it as the
   recommended next step and promises nothing about it.
-- **Moving the runtime off `/usr/bin/git` on Darwin — the follow-up the amended intent
-  itself names, not done here.** It is the only thing that would close the accepted
-  residual R7 states: the runtime runs `/usr/bin/git` for every repository read and for
-  its own blob pins (`scripts/lib/profile-resolution.sh:313-323`, `:711-714`), that path
-  is the `xcrun` shim on Darwin, and the shim writes its cache where no environment the
-  parent builds can redirect it. Every route to closing it changes the runtime, which the
-  first bullet above puts out of scope and the intent puts out of scope for this
-  initiative (`work/resolver-trusted-parent/intent.md:32-33`). The amended write-root
-  constraint says the same in its last sentence — "A later intake may move the runtime off
-  `/usr/bin/git` on Darwin" (`:44-45`) — and *may* is the right word: this spec records
-  the follow-up and promises nothing about it.
+- **Moving the runtime off `/usr/bin/git` on Darwin — already done elsewhere, not done
+  here.** This used to be the only thing that would close the accepted residual R7 stated.
+  `resolver-direct-git-runtime` (pull request `#328`, merged 2026-09-14) did it in its own
+  initiative: the runtime now observes the platform and selects
+  `/Library/Developer/CommandLineTools/usr/bin/git` on Darwin
+  (`scripts/lib/profile-resolution.sh:95-101`), used by the hardened wrapper (`:390-400`)
+  and by its own load-time blob pins (`:789-792`). The residual is gone, and this spec
+  reads that result rather than producing it: the runtime stays untouched here, as the
+  first bullet above and the intent both require
+  (`work/resolver-trusted-parent/intent.md:32-33`).
 
 ## Areas of concern
 
@@ -9535,8 +9823,8 @@ intent says for this change. Only after the operator's merge does
   tampering that is observable before launch fails closed. What it is *not*: it is not a
   binding between what the parent checked and what the runtime executes. The runtime takes
   the helper by path and re-resolves it at exec time
-  (`scripts/lib/profile-resolution.sh:209`), with only `[ -x ] && [ ! -L ]` of its own
-  (`:664-667`), so a same-uid process can still swap the file in the window between the
+  (`scripts/lib/profile-resolution.sh:286`), with only `[ -x ] && [ ! -L ]` of its own
+  (`:741-744`), so a same-uid process can still swap the file in the window between the
   check and that exec — by loosening modes with `chmod`, or, without touching a mode at all,
   by renaming `<output>/.run` aside and putting its own `.run` in its place, which the
   mode-0700 output directory it owns allows — the runtime resolves the helper, jq and its
@@ -9601,7 +9889,23 @@ intent says for this change. Only after the operator's merge does
   of recording, so a signal delivered inside `wait` cannot pass for the parent's own exit;
   and the loop forwards an already-recorded signal *before* each `wait`, so a signal that
   arrived before the loop began is not left unsent while the entry blocks for the parent's
-  whole natural life — measured on bash 3.2 both ways, and the old order exits `0` on a run
+  whole natural life. A later round adds the third position, and it is read rather than
+  tested for the same reason: the trap bodies carry the same job-table-gated forward of the
+  same `$entry_signal`, so a
+  signal landing between the loop's forwarding check and the `wait` under it — recorded by
+  the trap, leaving nothing pending, and therefore interrupting no `wait` at all — is sent
+  by the trap itself instead of sitting in `entry_signal` until the parent finishes of its
+  own accord and the entry reports success on a run the caller cancelled. Two senders need
+  an arbiter and `last_forwarded` alone is not one, so the loop disarms the forwarding form
+  around its own decision: the traps are re-armed record-only, the single guarded send is
+  made, the forwarding form goes back, and the section repeats if a signal arrived while it
+  was open. Both failures that design answers were reproduced on bash 3.2 rather than
+  argued — one arrival sent twice, and an `INT` sent for a run whose recorded signal was
+  `TERM`. A third was found the same way and is answered inside the trap rather than around
+  it: bash runs a trap for a signal that arrives while another trap body is executing, so
+  two bodies can pass the same empty `last_forwarded`, and the forwarding form therefore
+  serialises itself with a `trap_busy` flag it sets on the way in and clears on the way out
+  (R1) — measured on bash 3.2 both ways, and the old order exits `0` on a run
   the caller sent a `TERM` to (R1). The third test drives the
   entry's
   other branch — a signal that arrives after `.run` exists and before any parent does, where
@@ -9749,8 +10053,8 @@ intent says for this change. Only after the operator's merge does
   the directory on disk and nothing registered to remove it (R1). This round closes the
   last version of that hole, and it was on the inside of the trap rather than in front of
   it: the `chmod` and the `/bin/rm` are external commands, a terminal signal goes to the
-  whole foreground group, and a trap that only records a name protects the shell and not
-  its children — so a third `Ctrl-C` could stop the removal part-way and leave behind the
+  whole foreground group, and a trap that runs nothing but builtins protects the shell and
+  not its children — so a third `Ctrl-C` could stop the removal part-way and leave behind the
   directory the trap exists to remove. The `EXIT` trap now runs `trap '' INT TERM HUP`
   straight after its status capture and before it touches the disk, and an ignored
   disposition is the one thing children inherit, so
@@ -9989,11 +10293,11 @@ intent says for this change. Only after the operator's merge does
   for are the modes that appear (R5). Eight more
   are in the entry rather than the parent: the run directory's files are 0500,
   where the test uses 0555 for the copied jq and awk
-  (`portable-profile-resolution.test.sh:130-143`); the compiler is a fixed path chosen per
+  (`portable-profile-resolution.test.sh:322-335`); the compiler is a fixed path chosen per
   platform with no `$CC` override — `/usr/bin/cc` on Linux, and on Darwin
   `/Library/Developer/CommandLineTools/usr/bin/clang` with an explicit `-isysroot` — where
   the test honours
-  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:95,102`) and both of those Darwin
+  `${CC:-/usr/bin/cc}` and `${CC:-/usr/bin/clang}` (`:287,294`) and both of those Darwin
   paths are the `xcrun` shim, because a caller-chosen compiler
   would be a caller-chosen trust base and a shim writes outside the output root (R1, R7);
   the entry runs no `git` at all, the ten blob-id pins being computed from a `stat` size
@@ -10005,8 +10309,14 @@ intent says for this change. Only after the operator's merge does
   would be a second write root (R1, R7) — and that item grows this round rather than a
   ninth being added, because the run directory's whole lifecycle is one deviation from the
   same lines: `reproduce.sh` cleans up inside its `EXIT`/`HUP`/`INT`/`TERM` trap bodies,
-  where the entry's three signal traps only record — the signal's name and the wait loop's
-  `wait_interrupted` flag, two statements each — its `EXIT` trap does
+  where the entry's three signal traps record and, in their forwarding form, forward under
+  a job-table gate — the
+  signal's name, the wait loop's `wait_interrupted` flag and one `trap_busy`-serialised
+  guarded `kill` of
+  `$entry_signal`, three
+  statements each and every one a builtin, against two in the record-only form the same
+  three traps carry before the parent exists and inside the wait loop's section — its
+  `EXIT` trap does
   the cleanup under a `run_created` guard, and the main flow does the forwarding and the
   leaving at `checkpoint` calls, with the guard set from `/bin/mkdir`'s own status behind
   an `[ -e ]` refusal rather than from a command substitution a group signal can kill
@@ -10085,42 +10395,36 @@ intent says for this change. Only after the operator's merge does
   runs `git` anywhere (R1, both measured on a Darwin 27 machine). What replaces the question
   is a
   prerequisite and a refusal: Darwin needs the Command Line Tools installed, and the entry
-  exits `E_RUNTIME` naming the missing path when they are not. The question does stay open
-  for one process the initiative does not write — the runtime, which runs `/usr/bin/git`
-  itself — and that is the residual in the bullet below rather than a gap in this one.
-  Linux CI cannot exercise any of the Darwin side — not the compile line, not the refusal,
-  not the cache measurement — so those three are confirmed only on an operator's Darwin run.
-  That is the honest gap this concern carries.
-- **One accepted residual on Darwin: the runtime's own git writes outside the output root,
-  and the intent now records it as the one accepted exception.** This is the only place the
-  single-write-root claim does not hold,
-  and it is worth stating as a concern rather than only as a requirement clause. The
-  resolver runtime runs `/usr/bin/git` for every repository read
-  (`scripts/lib/profile-resolution.sh:313-323`) and for the four blob pins it checks at load
-  time (`:711-714`). On Darwin that path is the `xcrun` shim, which can write its `xcrun_db`
-  cache into the per-user temp directory — outside the caller's output path, and outside
-  anywhere the parent can redirect, because the cache is not in `TMPDIR` (R1, measured). The
-  parent controls the runtime's whole environment (R3) and still cannot prevent it. The
-  residual belongs to the runtime and not to the parent, and the runtime is exactly what
-  this initiative may not change (`work/resolver-trusted-parent/intent.md:32-33`), so it
-  cannot be closed from where this spec stands. **The operator decided DR-2 on intake
-  `#271` on 2026-09-10, choosing option (a): accept the residual, name it, and measure
-  exactly it in the Darwin operator run (R10).** The decision is carried into the chain by
-  intent pull request `#282`, which amends the intent's write-root constraint to name this
-  residual as the one accepted exception and changes nothing else, and this spec pins that
-  amended intent (`intent-blob: eaa322c405502cc0ca7c453814ca0f005f11b48f`). So this is an
-  accepted, intent-recorded residual rather than an open question: it is a concern the plan
-  and the reviewer should keep in view, not a decision anyone is still waiting on. R7 quotes
-  the amended constraint verbatim beside its own statement of the residual, so the two can
-  be read against each other. The two alternatives an earlier round held open against a
-  refusal — widening E to move the runtime off `/usr/bin/git` on Darwin, or dropping the
-  Darwin claim and shipping Linux-only — are history and are not carried further. The
-  follow-up that would close the residual for good is the one the amended constraint itself
-  names — a later intake moving the runtime's git invocation off the fixed shim path — and
-  it is not promised here.
+  exits `E_RUNTIME` naming the missing path when they are not. The question used to stay
+  open for one process the initiative does not write — the runtime, which ran
+  `/usr/bin/git` itself — and `#328` has since closed that one too, as the bullet below
+  records. Linux CI cannot exercise any of the Darwin side — not the compile line, not the
+  refusal, not the cache measurement — so those three are confirmed only on an operator's
+  Darwin run. That is the honest gap this concern carries.
+- **The Darwin residual that DR-2 accepted no longer exists.** This used to be the only
+  place the single-write-root claim did not hold, and the change is worth recording as a
+  concern resolved rather than dropped quietly. The resolver runtime ran `/usr/bin/git`
+  for every repository read and for the four blob pins it checks at load time; on Darwin
+  that path is the `xcrun` shim, which can write its `xcrun_db` cache into the per-user
+  temp directory — outside the caller's output path, and outside anywhere the parent can
+  redirect, because the cache is not in `TMPDIR` (R1, measured). **The operator decided
+  DR-2 on intake `#271` on 2026-09-10, choosing option (a): accept the residual, name it,
+  and measure exactly it in the Darwin operator run.** Intent pull request `#282` carried
+  that into the chain. `resolver-direct-git-runtime` (pull request `#328`, merged
+  2026-09-14, commit `ac734ba`) then removed the cause: the runtime observes the platform
+  once and selects `/Library/Developer/CommandLineTools/usr/bin/git` on both Darwin
+  architectures (`scripts/lib/profile-resolution.sh:95-101`), used by the hardened wrapper
+  (`:390-400`) and by the load-time pins (`:789-792`), so no shim runs and nothing is
+  written outside the output root. The intent was amended again to drop the exception and
+  keep the history in one sentence, and this spec pins that amended intent
+  (`intent-blob: bc6e669b755bae6c7f52f10f047c602faa46210a`). What is left for the plan and
+  the reviewer to keep in view is not the residual but the proof: R10's Darwin operator run
+  must show an identical per-user temp-directory listing before and after and no write
+  anywhere outside the output root, and that run is still a human one, because Linux CI
+  cannot exercise it.
 - **Test-only variables.** The runtime accepts `YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS` and
   `YSTACK_RESOLVER_TEST_GIT_STOP` when both are `1`
-  (`scripts/lib/profile-resolution.sh:656-659`). The shipped parent cannot set them, and
+  (`scripts/lib/profile-resolution.sh:733-736`). The shipped parent cannot set them, and
   the test must prove it cannot — otherwise a production path inherits a test escape. The
   proof is the R3 block in R10: both variables are set in the polluted caller environment,
   and the Linux `/proc/<child pid>/environ` read asserts the child's environment is exactly
