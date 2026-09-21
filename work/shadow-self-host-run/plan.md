@@ -1273,17 +1273,18 @@ never relabelled as the accepted pair.
 
 ## Proof
 
-Run on the final implementation head, with the head SHA pasted beside each command in
-the PR body.
+Bind the following proof to the final implementation head in the PR body. Run the
+focused suite once locally; use the required CI logs for full-suite coverage.
 
 1. `bash scripts/test/shadow-self-host-evidence.test.sh` — the offline evidence check,
    both consumer harnesses, and the three required negative controls. Paste the full
    output.
-2. `bash scripts/test/run-all.sh` — the whole suite, showing nothing else regressed.
-3. `bash scripts/test/shadow-slice.test.sh` and
-   `bash scripts/test/shadow-assembler.test.sh` — the two shipped slices this work
-   consumes, still green and still unmodified.
-4. The operator or delegated manager's run transcript for both cases: the two
+2. Required CI shard logs at that same head must show the complete
+   `scripts/test/run-all.sh` suite passing, including `shadow-slice.test.sh` and
+   `shadow-assembler.test.sh`. Link the run and shard logs; omit no suite. Do not
+   repeat the full suite or dependency tests locally unless a new failure or change
+   requires it.
+3. The operator or delegated manager's run transcript for both cases: the two
    `reproduce.sh` command lines
    with their outcome and reason ids, the two assembler command lines, the resolver
    command line with the `PATH` it ran under, the two standalone
@@ -1294,14 +1295,14 @@ the PR body.
    frozen runtime commit (separate from the final implementation head), dependency
    heads (`resolver-trusted-parent` and explicit-requester assembler implementation
    commits), requester bytes and digest, and README delegation provenance.
-5. The repeatability comparison: `diff -r` over both assembler output directories and
+4. The repeatability comparison: `diff -r` over both assembler output directories and
    `shasum -a 256` over both state directories, showing byte-identical results.
-6. The source integrity comparison: the `show-ref` and `cat-file --batch-all-objects`
+5. The source integrity comparison: the `show-ref` and `cat-file --batch-all-objects`
    digests before the first run and after the last, equal.
-7. `git show <head>:shadow/evidence/self-host-transition/v1/checksums.json` alongside a
+6. `git show <head>:shadow/evidence/self-host-transition/v1/checksums.json` alongside a
    fresh `shasum -a 256` walk of the committed directory, showing the inventory is
    complete and current.
-8. Required CI green and independent non-author review on that exact final head.
+7. Required CI green and independent non-author review on that exact final head.
 
 None of this changes the registry's `proof_state`, grants write permission, or completes
 a Roadmap step beyond this bounded observation.
