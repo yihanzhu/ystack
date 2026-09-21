@@ -556,17 +556,40 @@ a missing native capability is a refusal with a recorded support limitation, not
 a skipped passing test. Linux and Darwin component results remain separate from
 native VM, fixed-root verifier or qualified workflow proof.
 
-`review_size: accepted-exception`. Estimate 1,200–2,200 added plus removed lines:
-650–1,150 for the bounded preparation/export/inspection component, 400–750 for real
-fixtures and adversarial/process proof, and 150–300 for documentation/manifest.
-The current replay is 875 lines and the existing source snapshot helper is 2,700+
-lines; neither should be copied. This narrower bare-only normal Python boundary
-avoids general repository-layout resolution, materialization, arbitrary execution
-and a generic storage layer. Its exact byte checks, ownership and crash proof belong
-to one complete preparation concern. The separate plan must refine this allocation
-from actual design and later review must measure the complete diff. Any overrun,
-additional path or changed dependency goes back through the appropriate amendment;
-never reduce tests or compress code to fit the estimate.
+`review_size: accepted-exception`. The amended envelope is 3,100–4,600 added
+plus removed implementation lines across the same seven allowed paths. This changes
+only the size estimate; all requirements, proof and safety boundaries stay intact.
+The earlier 1,200–2,200 estimate did not leave enough room for the complete source
+observation, reverse-index, resource-limit, race and publication proof.
+
+The design forecast is 3,180–4,360 lines:
+
+| Area | Forecast |
+| --- | ---: |
+| Bounded preparation/export/inspection component | 1,500–2,000 |
+| Real fixtures and complete adversarial/process proof in the two new test files | 1,500–2,100 |
+| Documentation and restore-manifest entries | 180–260 |
+| Total | 3,180–4,360 |
+
+The component allocation covers descriptor admission and counters, measured dependency
+copies and validation, closed bare storage and reverse-index checks, bounded child
+I/O and raw object export, then full remeasurement, publication and inspection.
+The proof allocation covers every existing proof row with independent byte oracles,
+inclusive limits, source-mutation controls and real crash/recovery assertions.
+Shared setup is counted once; no proof is deferred to fit the range. The 4,600 ceiling
+leaves 240 lines above the upper forecast for implementation uncertainty.
+
+At sizing base `b873a171c550ca68f440b8c454b89ccd49304499`, the replay is 1,412
+lines, its receiver-result suite is 2,660 and the source snapshot helper is 2,732.
+These are evidence of the boundary and proof costs, not code to copy. This narrower
+bare-only Python component avoids general repository-layout resolution,
+materialization, arbitrary execution and a generic storage layer. Its exact byte
+checks, ownership and crash proof remain one complete preparation concern.
+
+The separate plan must refine this allocation from the actual design; later review
+must measure the complete diff against the accepted base. Any overrun, additional
+path or changed dependency returns through the appropriate amendment. Never reduce
+tests or compress code to fit the estimate.
 
 ## Out of scope and remaining gates
 

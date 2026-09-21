@@ -832,7 +832,8 @@ schema_import_path_ok() {
     adapters/deterministic-verifier/v1/normalize.jq|\
     evals/v1/framework.jq|\
     evals/v1/evals.jq|\
-    orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
+    orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq|\
+    shadow/v1/materialization-input.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\
     scripts/test/default-dormant-publisher-adapter.test.sh|\
     scripts/test/default-deterministic-verifier-adapter.test.sh|\
@@ -939,6 +940,8 @@ printf '%s\n' \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
+  resolver/v1/resolve-profile.sh \
+  resolver/v1/trusted-launch.c \
   scripts/core-contract.sh \
   scripts/lib/profile-resolution.sh \
   scripts/test/orchestrator-state-scanner.test.sh \

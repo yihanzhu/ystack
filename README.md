@@ -250,6 +250,7 @@ and one row here.
 | Component | Path | What it is | Write-up |
 |---|---|---|---|
 | Inactive portable profile resolver | `resolver/v1/` | Reads exact local Git objects and assembles a portable-core `resolved_profile`; selects and activates nothing. | [read](docs/components.md#inactive-portable-profile-resolver) |
+| Inactive trusted parent for the profile resolver | `resolver/v1/trusted-launch.c`, `resolver/v1/resolve-profile.sh` | The compiled, source-pinned parent that launches the resolver runtime and its public `resolve-profile.sh` entry; a direct `trusted-launch` invocation is test-only. Not a production launch path. | [read](docs/components.md#inactive-trusted-parent-for-the-profile-resolver) |
 | Inactive default profile assembly | `profiles/default/v1/` | Binds six default adapter packages to exact Git objects from one durable main commit. Source data only. | [read](docs/components.md#inactive-default-profile-assembly) |
 | Inactive alternative profile assembly | `profiles/alternative/v1/` | The same six-role team with the Codex CLI producer (openai provider) swapped in; the other five manifests are the default ones byte for byte. Selects nothing. | [read](docs/components.md#inactive-alternative-profile-assembly) |
 | Inactive portable core v2 fake-forge contract | `core/v2/` | The contract for deterministic candidate materialization by a fake forge adapter; a repo-only compatibility switch that is not qualified for a real forge. | [read](docs/components.md#inactive-portable-core-v2-fake-forge-contract) |
