@@ -16,23 +16,24 @@ accepted and merged before implementation. The current operator-led authorizatio
 supplies the applicable authorship and acceptance authority; this spec grants none.
 `review_size: standard`.
 
-## Count-only scope
+## Shard count and prerequisite scope
 
-The implementation changes only `.github/workflows/ci.yml` (the matrix list and
-invocation denominator), the CI sentence in `AGENTS.md`, and the matching sentence
-in `RESTORE.md`. The runner, sharding proof, all suites, manifest, workflow triggers,
-permissions, checkout pin, `checks` steps, aggregate gate and branch rules stay
-unchanged. No suite is added, removed, renamed or skipped, including on document-only
+The implementation changes only `.github/workflows/ci.yml` (the matrix list,
+invocation denominator and shared jq prerequisite setup), the CI sentence in
+`AGENTS.md`, and the matching sentence in `RESTORE.md`. The runner, sharding proof,
+all suites, manifest, workflow triggers, permissions, checkout pin, `checks` steps,
+aggregate gate and branch rules stay unchanged. No suite is added, removed, renamed or skipped, including on document-only
 changes. Requirements 1–9 and 12 preserve the existing runner contract; they do not
 ask for its reimplementation.
 
 Validation uses the existing sharding proof, which covers every count from 1 to 16
 and checks matrix/denominator equality, plus a fresh complete required CI run at the
-implementation head. Inspect the diff to confirm the unchanged boundaries above.
-No new unit tests, temporary failing suite, red-test commits, duplicate serial run,
-proposal patch or initial-install sequence is required for this count-only change.
-The initial introduction of sharding and its failure-gate proof are complete; this
-change does not alter that gate logic.
+implementation head. The existing producer suites verify the jq file, digest and
+version. Their failures in run 35660956979 and success in the new complete run
+provide the prerequisite regression evidence. Inspect the diff to confirm the
+unchanged boundaries above. No new unit tests, temporary failing suite, red-test
+commits, duplicate serial run, proposal patch or initial-install sequence is
+required. The aggregate gate logic stays unchanged.
 
 ## Requirements
 
@@ -140,9 +141,20 @@ change does not alter that gate logic.
     - `checks` — the existing checkout, required-files check, pinned-shellcheck,
       sharding proof and rename gate, unchanged.
     - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6,7,8,9,10]}}`,
-      the existing checkout, then
+      the existing checkout, shared prerequisite setup, then
       `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/10`.
-      The matrix list and denominator are the only workflow edits.
+      Before any selected suite runs, each test job prepares executable jq 1.6 at
+      `${TMPDIR:-/tmp}/ystack-portable-core-jq16/jq-linux64`. Download the existing
+      release asset from
+      `https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64` over HTTPS
+      into a temporary file. Verify SHA-256
+      `af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44`
+      before executing or placing it at the cache path, then require `jq-1.6` from
+      its version check. A download, digest or version failure fails the job before
+      the runner starts. This one workflow step supplies the existing shared
+      prerequisite; it runs no suite, changes no system installation or PATH, and
+      relies on no earlier suite or cached runner state. The matrix list,
+      denominator and this setup step are the only workflow edits.
     - `ci` — unchanged `needs: [checks, test]`, `if: always()`, and the step that
       fails unless both dependency results equal `success`. Failed, cancelled or
       skipped dependencies must still make the aggregate gate fail.
@@ -151,8 +163,9 @@ change does not alter that gate logic.
     touched. The sole required check stays `ci` from the same app (`15368`),
     with strict up-to-date protection. A green `ci` still means every gate and every suite
     passed. Read the final PR's check name and results. The aggregate job must be
-    byte-identical to the accepted base; no repeat of the initial red-shard proof
-    is required when only the count changes.
+    byte-identical to the accepted base. Require `checks`, all ten `test` shards
+    and `ci` to succeed at the implementation head; no repeat of the initial
+    red-shard proof is required because the gate logic is unchanged.
 
 12. **Existing pins.** Three suites assert that run-all.sh still contains the exact
     discovery string in requirement 3:
@@ -199,6 +212,14 @@ Suite additions or renames change modulo assignment and can move the bottleneck.
 The longest measured suite, `evals-dashboard`, took 940 seconds; raising the count
 cannot beat that individual-suite floor. The existing partition proof verifies
 coverage independently of these performance estimates.
+
+The producer suites require a shared digest-pinned jq 1.6 binary but do not download
+it. Run [35660956979](https://github.com/yihanzhu/ystack/actions/runs/35660956979)
+failed in shards 3 and 4 at that prerequisite: the ten-shard assignment no longer
+puts a downloading suite before each producer suite. Preparing the same binary in
+each test job removes that order dependency without changing suite membership,
+order or identity checks. Running an extra suite as setup, changing assignment, or
+copying download helpers across suites is outside this design.
 
 ## Out of scope
 

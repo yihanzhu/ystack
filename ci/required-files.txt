@@ -425,3 +425,7 @@ scripts/test/shadow-assembler.test.sh
 orchestrator/v1/delivery-ledger.py
 scripts/test/orchestrator-delivery-ledger.test.sh
 docs/delivery-ledger.md
+
+# Current Roadmap minimal CI decision and proof
+work/ci-minimum-roadmap/decision.md
+scripts/test/ci-minimum.check.sh
