@@ -134,6 +134,11 @@ scripts/test/portable-profile-resolution-loader-trap.c
 scripts/test/portable-profile-resolution-fixtures.sh
 scripts/test/portable-profile-resolution.test.sh
 
+# Inactive trusted parent for the profile resolver
+resolver/v1/trusted-launch.c
+resolver/v1/resolve-profile.sh
+scripts/test/resolver-trusted-launch.test.sh
+
 # Inactive portable core accounted-validation generation
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/schema.jq
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/core-ingress.sh
@@ -211,6 +216,11 @@ control/v1/sandbox.jq
 control/v1/evaluate-sandbox.sh
 scripts/test/control-sandbox-policy.test.sh
 
+# Sandbox boundary decision records
+work/real-sandbox-boundary/intent.md
+work/real-sandbox-boundary/spec.md
+work/real-sandbox-boundary/plan.md
+
 # Inactive credential policy and evaluator
 control/v1/credential-policy.json
 control/v1/credential-policy-decision.json
@@ -273,6 +283,8 @@ scripts/test/local-git-materializer-adapter.test.sh
 # Inactive offline delivery replay
 delivery/v1/replay.py
 scripts/test/delivery-replay.test.sh
+scripts/test/replay-materialization-result.test.sh
+docs/replay-materialization-result.md
 work/delivery-loop-first/plan.md
 
 # Inactive Claude Code producer normalizer payload
@@ -400,3 +412,16 @@ scripts/test/maintenance-loop.test.sh
 docs/transition.md
 docs/transition-kit.md
 scripts/test/run-all-sharding.check.sh
+
+# Current operator-led Roadmap decision
+work/roadmap-program-authorization/decision.md
+
+# Inactive shadow materialization input assembler
+shadow/v1/assemble-materialization-input.sh
+shadow/v1/materialization-input.jq
+scripts/test/shadow-assembler.test.sh
+
+# Inactive durable delivery ledger
+orchestrator/v1/delivery-ledger.py
+scripts/test/orchestrator-delivery-ledger.test.sh
+docs/delivery-ledger.md

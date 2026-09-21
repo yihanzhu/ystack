@@ -54,8 +54,32 @@ That test obtains the pinned jq 1.6 release with its recorded digest, compiles t
 single private no-follow helper and the test-owned direct-`execve` launcher with the
 host compiler, creates hermetic SHA-1/SHA-256 repositories, and validates the output
 with the restored `scripts/core-contract.sh`. No compiled helper is installed or
-restored. A future activation must separately qualify and bind a production trusted
-parent; restoring these files does not select a live profile.
+restored.
+
+### Restore the inactive trusted parent for the profile resolver
+
+Confirm the three files listed under "Inactive trusted parent for the profile
+resolver" in [`ci/required-files.txt`](ci/required-files.txt) —
+`resolver/v1/trusted-launch.c`, `resolver/v1/resolve-profile.sh` (git mode
+`100755`), and `scripts/test/resolver-trusted-launch.test.sh` — then run:
+
+```sh
+bash scripts/test/resolver-trusted-launch.test.sh
+```
+
+That test provisions the pinned jq 1.6 release the way
+`scripts/test/shadow-slice.test.sh` does, runs the shipped entry against a real
+committed `profiles/default/v1` request, resolves it through the shipped parent
+and the existing test launcher, and `cmp`s the two outputs. It also drives the
+parent directly, as a test-only harness, to prove the parent's own refusals
+independent of the entry, and asserts the R10 mechanism, cleanup, umask,
+descriptor, and signal cases. On Darwin it requires the Command Line Tools
+(the entry compiles with `/Library/Developer/CommandLineTools/usr/bin/clang`,
+not the `xcrun` shim). Nothing compiled is installed or cached — the entry
+rebuilds the parent and helper from committed source on every invocation. A
+future activation must separately qualify and bind this as a production launch
+path; restoring these files does not select a live profile, activate a profile,
+or run the Roadmap step-7 self-host run.
 
 ### Restore the inactive offline delivery replay
 
@@ -219,6 +243,26 @@ multi-root, oversized, symlinked, or relative inputs. Restoring these records
 reproduces nothing on its own: the slice
 is read-only, grants no authority and no deploy authority, and performs no model,
 credential, forge, network, publish, or target operation.
+
+### Restore the inactive shadow materialization input assembler
+
+Restore the three paths listed under “Inactive shadow materialization input
+assembler” in [`ci/required-files.txt`](ci/required-files.txt), together with
+the local Git materializer and `profiles/default/v1/`, then run:
+
+```sh
+bash scripts/test/shadow-assembler.test.sh
+```
+
+The proof builds a fixture bare repository and a resolved profile over the
+shipped default, assembles a materialization input, and shows it validating
+against the materializer protocol, byte-identical on a repeat run, read-only
+in both payload places, and accepted by `shadow/v1/reproduce.sh`. It also
+shows every refusal: an impure or non-physical source repository, a
+look-alike default profile, an unpinned config source, a malformed or
+oversized input, and a finished input over the driver's own size cap.
+Restoring these records materializes nothing on its own: the assembler is
+read-only and resolves no profile.
 
 ### Restore the inactive maintenance loop
 
@@ -595,6 +639,14 @@ output, snapshotted jq execution, and postflight mutation detection. The result 
 inactive and declaration-only. It does not enforce or qualify a real sandbox, run
 a candidate or adapter, use a credential, activate a profile, or perform a network
 or external-write action.
+
+Restore the sandbox decision's [intent](work/real-sandbox-boundary/intent.md),
+[spec](work/real-sandbox-boundary/spec.md) and
+[plan](work/real-sandbox-boundary/plan.md) from the same commit, using the
+decision-record block in [the manifest](ci/required-files.txt). Read the spec
+for the accepted blockers and later implementation dependencies. Restoring
+these records and the declaration evaluator does not restore a qualified
+launcher; real execution remains blocked.
 
 Restore the five paths in the manifest's inactive credential-policy block, then
 run:
