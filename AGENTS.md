@@ -137,7 +137,7 @@ Two goals drive the backlog:
   still to come.
 - CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
   it is the hard merge gate.** Add real tests as code lands. Runs as a `checks` job,
-  six parallel `test` shards (`scripts/test/run-all.sh --shard <index>/<count>`), and
+  ten parallel `test` shards (`scripts/test/run-all.sh --shard <index>/<count>`), and
   an aggregate `ci` job that is the one required check.
   - **Shellcheck is pinned to `0.11.0`** (the `SHELLCHECK_VERSION` constant in
     `ci.yml` is the single source of truth). CI downloads that exact static release and
