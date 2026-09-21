@@ -14,6 +14,7 @@ producer_config="$root/profiles/alternative/v1/producer-config.json"
 roadmap="$root/ROADMAP.md"
 roadmap_sha='1466262c8994d637a02cc3503c35e3254ecce28479f9847589cb112e42b00107'
 package_commit='a637451d4b3fbef6b516a9c08f68c0dde46a7059'
+materializer_package_commit='8fc0675eb4e34acbebe9c8ab0310e64328a6114e'
 producer_package_commit='d31d6adb01268957228363aa74a92956e6b5db98'
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 pass=0
@@ -104,8 +105,140 @@ history_fetch() {
     GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
     GIT_CONFIG_COUNT="$fetch_config_count" ${fetch_config[@]+"${fetch_config[@]}"} \
     /usr/bin/git -C "$history_repo" -c credential.helper= -c core.askPass= \
-    fetch -q --no-tags --depth=1 "$origin_url" "$@"
+    fetch -q --no-tags --depth=1 --no-auto-gc "$origin_url" "$@"
 }
+(
+  control="$tmp/history-fetch-control"
+  /bin/mkdir -p "$control/home"
+  history_home="$control/home"
+  fetch_config=()
+  fetch_config_count=0
+  fixture_git() {
+    /usr/bin/env -i HOME="$history_home" PATH=/usr/bin:/bin LC_ALL=C \
+      GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+      GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+      GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+      /usr/bin/git "$@" 2>"$control/setup-stderr" || fail history-control-setup
+  }
+  fixture_git init --bare -q "$control/source"
+  tree=$(printf '' | fixture_git -C "$control/source" hash-object -t tree --stdin)
+  parent=$(printf 'first\n' | fixture_git -C "$control/source" commit-tree "$tree")
+  tip=$(printf 'second\n' | fixture_git -C "$control/source" commit-tree "$tree" -p "$parent")
+  fixture_git -C "$control/source" update-ref refs/heads/control "$tip"
+  fixture_git -C "$control/source" update-ref refs/tags/control "$tip"
+  fixture_git init --bare -q "$control/positive"
+  fixture_git init --bare -q "$control/negative"
+  origin_url="file://$control/source"
+  trace="$control/events.jsonl"
+  fixture_git config --global maintenance.auto true
+  fixture_git config --global maintenance.autoDetach false
+  fixture_git config --global gc.autoDetach false
+  fixture_git config --global trace2.eventTarget "$trace"
+  for case_name in first successive enabled error; do
+    history_repo="$control/positive"
+    options=()
+    case "$case_name" in
+      first) destination=refs/ystack/control-first ;;
+      successive) destination=refs/ystack/control-next ;;
+      enabled)
+        history_repo="$control/negative"
+        destination=refs/ystack/control-enabled
+        options=(--auto-gc)
+        ;;
+      error) destination=refs/ystack/control-error ;;
+    esac
+    refspec="+$tip:$destination"
+    [ "$case_name" != error ] || refspec="+refs/heads/control-missing:$destination"
+    : >"$trace"
+    if history_fetch ${options[@]+"${options[@]}"} "$refspec" 2>"$control/stderr"; then
+      status=0
+    else
+      status=$?
+    fi
+    /bin/cp "$trace" "$control/$case_name.jsonl"
+    observation=$(jq -c -e -s --arg receiver "$history_repo" --arg origin "$origin_url" \
+      --arg refspec "$refspec" --arg case_name "$case_name" --argjson status "$status" '
+      def require($condition): if $condition then . else error("trace-shape") end;
+      def integer: type == "number" and floor == .;
+      def argv: type == "array" and length > 0 and all(.[]; type == "string");
+      require(length > 0 and all(.[]; type == "object" and
+        (.event | type == "string") and (.sid | type == "string" and length > 0))) |
+      . as $events |
+      [to_entries[] | select(.value.event == "cmd_name" and .value.name == "fetch")] as $fetch |
+      require($fetch | length == 1) |
+      $fetch[0].value.sid as $sid |
+      [to_entries[] | select(.value.sid == $sid)] as $session |
+      [$session[] | select(.value.event == "start")] as $start |
+      [$session[] | select(.value.event == "exit")] as $exit |
+      require(($start | length == 1) and ($exit | length == 1)) |
+      require($start[0].key < $fetch[0].key and $fetch[0].key < $exit[0].key) |
+      $start[0].value.argv as $args |
+      require(($args | argv) and
+        ($args[0] == "/usr/bin/git" or $args[0] == "/Library/Developer/CommandLineTools/usr/bin/git") and
+        $args[1:] == (["-C", $receiver, "-c", "credential.helper=", "-c", "core.askPass=",
+          "fetch", "-q", "--no-tags", "--depth=1", "--no-auto-gc", $origin] +
+          (if $case_name == "enabled" then ["--auto-gc"] else [] end) + [$refspec])) |
+      require(($exit[0].value.code | integer) and $exit[0].value.code == $status) |
+      [$session[] | select(.value.event == "child_start")] as $children |
+      require(all($children[]; (.value.argv | argv) and (.value.child_id | integer))) |
+      [$children[] |
+        .value.argv as $a |
+        require(if ($a | index("maintenance")) != null or ($a | index("gc")) != null then
+          ($a[0] == "git" or $a[0] == "/usr/bin/git") and
+          ($a[1:3] == ["maintenance", "run"] or $a[1] == "gc")
+          else true end) |
+        select(($a[0] == "git" or $a[0] == "/usr/bin/git") and
+          (($a[1:3] == ["maintenance", "run"] and ($a[3:] | index("--auto")) != null) or
+           ($a[1] == "gc" and ($a[2:] | index("--auto")) != null)))] as $maintenance |
+      [$maintenance[] as $child |
+        require($start[0].key < $child.key and $child.key < $exit[0].key) |
+        [$session[] | select((.value.event == "child_exit" or .value.event == "child_ready") and
+          .value.child_id == $child.value.child_id)] as $terminal |
+        require(($terminal | length == 1) and $terminal[0].value.event == "child_exit" and
+          $child.key < $terminal[0].key and $terminal[0].key < $exit[0].key and
+          ($terminal[0].value.code | integer) and $terminal[0].value.code == 0) |
+        $terminal[0]] as $completed |
+      {events:($events | length),fetches:($fetch | length),exit:$exit[0].value.code,
+       maintenance_starts:($maintenance | length),maintenance_completions:($completed | length),
+       absence:($maintenance | length == 0)}
+    ' "$control/$case_name.jsonl" 2>"$control/observer-stderr") || fail "history-control-$case_name-trace"
+    exact=null depth=null no_tags=null absent_ref=null
+    if [ "$case_name" = error ]; then
+      [ "$status" -ne 0 ] || fail history-control-error-status
+      if history_git show-ref --verify --quiet "$destination"; then
+        absent_ref=false
+      else
+        verify_status=$?
+        [ "$verify_status" -eq 1 ] || fail history-control-error-verification
+        absent_ref=true
+      fi
+      [ "$absent_ref" = true ] || fail history-control-error-ref
+    else
+      [ "$status" -eq 0 ] || fail "history-control-$case_name-status"
+      actual_tip=$(history_git rev-parse "$destination^{commit}") || fail "history-control-$case_name-commit"
+      actual_depth=$(history_git rev-list --count "$destination") || fail "history-control-$case_name-depth"
+      actual_tags=$(history_git for-each-ref --format='%(refname)' refs/tags) || fail "history-control-$case_name-tags"
+      exact=false depth=false no_tags=false
+      [ "$actual_tip" != "$tip" ] || exact=true
+      [ "$actual_depth" -ne 1 ] || depth=true
+      [ -n "$actual_tags" ] || no_tags=true
+      [ "$exact" = true ] && [ "$depth" = true ] && [ "$no_tags" = true ] ||
+        fail "history-control-$case_name-history"
+      if [ "$case_name" = enabled ]; then
+        jq -e '.absence == false and .maintenance_starts == 1 and .maintenance_completions == 1' \
+          <<<"$observation" >/dev/null || fail history-control-enabled-detector
+      else
+        jq -e '.absence == true' <<<"$observation" >/dev/null || fail "history-control-$case_name-maintenance"
+      fi
+    fi
+    record=$(jq -c --arg id "alternative.$case_name" --argjson exact "$exact" --argjson depth "$depth" \
+      --argjson no_tags "$no_tags" --argjson absent_ref "$absent_ref" \
+      '. + {id:$id,exact_commit:$exact,depth_one:$depth,no_tags:$no_tags,absent_ref:$absent_ref}' \
+      <<<"$observation")
+    [ "${#record}" -le 1024 ] || fail "history-control-$case_name-record-size"
+    printf 'history-fetch-proof %s\n' "$record"
+  done
+)
 origin_url=$(/usr/bin/git -C "$root" remote get-url origin)
 [[ "$origin_url" =~ ^https://[^/@[:space:]]+/[^?#[:space:]]+$ ]] ||
   fail origin-url
@@ -114,6 +247,11 @@ history_fetch "+$package_commit:refs/ystack/package"
   fail package-fetch
 [ "$(history_git rev-list --count refs/ystack/package)" -eq 1 ] ||
   fail package-fetch-depth
+history_fetch "+$materializer_package_commit:refs/ystack/materializer-package"
+[ "$(history_git rev-parse 'refs/ystack/materializer-package^{commit}')" = \
+  "$materializer_package_commit" ] || fail materializer-package-fetch
+[ "$(history_git rev-list --count refs/ystack/materializer-package)" -eq 1 ] ||
+  fail materializer-package-fetch-depth
 history_fetch "+$producer_package_commit:refs/ystack/producer-package"
 [ "$(history_git rev-parse 'refs/ystack/producer-package^{commit}')" = \
   "$producer_package_commit" ] || fail producer-package-fetch
@@ -247,6 +385,9 @@ for manifest in "${manifests[@]}"; do
   commit=$(jq -r .body.package_ref.revision.commit_id "$manifest")
   if [ "$id" = adapter.codex-cli-producer.v1 ]; then
     [ "$commit" = "$producer_package_commit" ] || fail "package-commit-$id"
+  elif [ "$id" = adapter.local-git-materializer.v1 ]; then
+    [ "$commit" = "$materializer_package_commit" ] ||
+      fail "package-commit-$id"
   else
     [ "$commit" = "$package_commit" ] || fail "package-commit-$id"
   fi
