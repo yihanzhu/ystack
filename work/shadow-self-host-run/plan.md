@@ -5,18 +5,19 @@ drafted: 2026-09-18
 # Plan: shadow-self-host-run
 
 Tracks #264. Risk: high, matching the accepted spec frontmatter. Gate mode is
-`artifact-high`: this plan-only PR needs independent review, green CI and operator
-merge before `ystack/impl/shadow-self-host-run` exists.
+`artifact-high`: this plan-only PR needs independent review, green CI and protected
+merge by the authorized manager under the current Roadmap delegation before
+implementation resumes on the preserved `ystack/impl/shadow-self-host-run` branch and PR #373. Merge the
+accepted plan through updated main into that branch without rewriting history.
 
 `work/shadow-self-host-run/spec.md` (blob above) is the contract and states
 requirements 1-20 in full. This plan names the files, the order, the exact commands,
 the risks and the proof. Where a step names a requirement, that requirement's own
 wording is the detail to follow; this plan does not restate it.
 
-Freshness, checked on `origin/main` at `d23a3314846f952e15dbd621bbd2214a02ec31d3`:
-the spec's `intent-blob` is `5a0f933c1209a96e975af1ce5b46db50559e539b`, and
-`git rev-parse origin/main:work/shadow-self-host-run/intent.md` returns the same
-value, so the chain is current.
+Before accepting this plan or resuming implementation, recheck the spec blob above
+and its `intent-blob`, `5a0f933c1209a96e975af1ce5b46db50559e539b`, against the current
+base. A base move requires fresh exact-head/base review.
 
 What I verified myself against real history, rather than copying from the spec:
 
@@ -45,8 +46,8 @@ files and fifteen per case, forty-five in all:
 
 | Path | What it is | Lines |
 | --- | --- | ---: |
-| `README.md` | Input tuples, dependency commits, digests, outcomes, replay recipe | 90-130 |
-| `verification-instructions.md` | Requirement 14's minimal file-digest procedure | 45-70 |
+| `README.md` | Input tuples, dependency commits, requester/delegation provenance, digests, outcomes, replay recipe | 200-320 |
+| `verification-instructions.md` | Requirement 14's minimal file-digest procedure | 80-100 |
 | `checksums.json` | Relative-path inventory and SHA-256 of every other bundled file | 1 |
 | `resolved-profile.json` | The resolver's output, shared by both runs | 1 |
 | `environment-claim.json` | The real claim for `env.local-macos-ystack-self` | 1 |
@@ -74,7 +75,7 @@ in the expanded documents, not the line count. The four assembler decision texts
 
 **New test:**
 
-- `scripts/test/shadow-self-host-evidence.test.sh` (new, mode `0755`, 310-400 lines).
+- `scripts/test/shadow-self-host-evidence.test.sh` (new, mode `0755`, 1,100-1,250 lines).
   Requirements 15, 16 and 17 together: the offline evidence check, the scope-consumer
   compatibility harness, and the maintenance-consumer conversion. One file, because all
   three read the same committed bytes and none of them runs a real reproduction.
@@ -84,11 +85,10 @@ in the expanded documents, not the line count. The four assembler decision texts
 - `ci/required-files.txt` (+47). A block headed
   `# First self-host shadow evidence` after the assembler block at lines 414-417,
   listing all forty-five evidence paths and the new test.
-- `docs/components.md` (+30-40). A `## First self-host shadow evidence` section after
-  the assembler write-up, which today runs to line 1395 before
-  `## Inactive maintenance loop` at 1397.
-- `README.md` (+2). One index row after the assembler row at line 289.
-- `RESTORE.md` (+18-22). A restore block after the assembler block at lines 223-241.
+- `docs/components.md` (+60-70). A `## First self-host shadow evidence` section after
+  the assembler write-up, before `## Inactive maintenance loop`.
+- `README.md` (+1). One index row after the assembler row at line 289.
+- `RESTORE.md` (+25-35). A restore block after the assembler block at lines 223-241.
 - `scripts/test/portable-core-schema.test.sh` (+2). Exactly one permitted change: the
   two paths `shadow/evidence/self-host-transition/v1/control-policy-set.json` and
   `shadow/evidence/self-host-transition/v1/core-package-closure.json` are added to the
@@ -119,138 +119,53 @@ wrong.
 
 ### Review size
 
-`review_size: accepted-exception` for the **implementation PR**, one concern — the
-first real self-host evidence pair and its durable verification — with an
-evidence-based range of **685-915 net lines**.
+`review_size: accepted-exception` for the implementation PR: one concern, the first
+real self-host evidence pair and its durable verification, with an evidence-based
+final range of **1,600-2,000 net lines**. This includes all forty-five evidence files,
+not just the documents prepared before capture.
 
-This is above the spec's earlier 250-450 figure, which the spec itself asked this plan
-to refine against the real interfaces. Two things grew once I read them:
+The focused test budget above covers one complete offline verification and the real
+consumer interfaces. Retain all positive integrity, identity, duty, declaration-only
+sandbox, receipt and trace checks; the three copied-evidence negative controls; both
+scope evaluations with each actual identity; both maintenance conversions and their
+cross-pair refusals. Remove mutation-only machinery that repairs downstream hashes to
+test each internal assertion separately, the synthetic malformed-dashboard unit case,
+and comments recounting review history. Those are redundant with the retained checks
+and the components' own suites. Do not replace readable code with compressed jq or
+create a new fixture framework to meet a count.
 
-- The focused test carries requirements 15, 16 **and** 17. The spec allots 100-170 for
-  it. Against the real consumers that is 310-400: `scope/v1/evaluate-scope.sh` takes
-  seven separate input documents (`scope/v1/evaluate-scope.sh:73`), and
-  `maintenance/v1/incident-to-eval.sh` needs both directions plus the cross-pairing
-  refusal, on top of the thirteen evidence checks requirement 15 lists.
-- The manifest block is 48 lines, not a handful, because the spec's design requires
-  every committed evidence file to be appended to `ci/required-files.txt` and the
-  design names forty-five of them.
-
-- The prerequisite stage run adds six committed documents, six manifest lines, the
-  README's account of the construction order and the test's recomputation of it:
-  55-80 lines above the figure this plan first carried. It is not optional work —
-  without it the duty evaluation has no acyclic source, which is what the rest of this
-  plan's "Construct the duty evaluation and the claim" section settles.
-- Retaining each case's materialization receipt adds two committed documents, two
-  manifest lines, the README's account of how they were captured and the gates that
-  bind them, and the test's recomputation: 25-30 lines above the figure this plan
-  carried before. It is not optional either — without it both cases' stage results
-  reference bytes nothing holds.
-
-The rest is close to the spec's own breakdown: 155-230 for README and verification
-instructions, 70-120 of committed evidence bytes, 50-64 for documentation, index and
-restore. Midpoint 800. If the real diff lands outside 685-915, stop and return to the
-gate rather than compressing the test or dropping evidence files.
-
-`review_size: accepted-exception` for **this plan PR**, one concern — the complete
-pre-code design for the first real self-host run — with an evidence-based range of
-**1140-1190 lines**. Requirement 2's declaration-only framing carries real cost in this
-plan: the precondition gate, the evaluator call, the marker checks, the consumers'
-vocabulary and the documentation rule each have to state the boundary between a
-declaration and enforcement, and the exact invocations — the validator's verb and the
-`PATH` the standalone calls need — are design detail a reader cannot infer. The range
-moved up from the 545-605 this plan first carried because the construction order for
-the policy set, the duty evaluation and the claim has to be written out document by
-document, with the producer and the referenced bytes named for each: an acyclic order
-is not something a reader can infer from the shipped interfaces, and getting it wrong
-is a digest cycle the operator only discovers mid-run. The written-out order is
-about 180 lines of the total. It moved up again, from 770-820, for the third
-precondition-gate entry: the shipped assembler's requester cannot pass duty
-separation, and a blocked dependency has to be stated with the checks it fails, the
-reason ids it produces, why no requester this plan could write would be honest, and
-which gate owns the fix — about 45 lines, and the alternative is a reader who cannot
-tell a blocking finding from an unexplored one. It moved up a third time, from
-865-915, for two review findings: the isolated Git prefix for source preparation,
-written out key by key with the reason each pin is there and the one the resolver
-library pins that this step cannot (about 50 lines), and the receipt retention that
-keeps the prerequisite stage result's own references resolvable (about 30). Both are
-correctness of the operator's run, not commentary. It moved up a fourth time, from
-955-1005, for two more review findings: the per-case receipt capture, which has to
-state the supported invocation, why its bytes are the driver's own and the three
-digest gates that prove it (about 85 lines), and moving dependency provisioning out of
-the run procedure into its own pre-boundary step with the authorization it rests on
-(about 50). Both are the difference between evidence that resolves and evidence that
-does not, and between a run that honours requirement 10's boundary and one that
-quietly crosses it.
+The rest of the budget covers the complete README and verification instructions,
+about 70-110 lines of canonical evidence and assembler text, the full manifest block,
+and the component, index, restore and two-line schema allowlist updates above. Canonical
+JSON may be wide; reviewers inspect its expanded content and all reference checks.
+The size allowance does not reduce requirements 15-17 or permit a missing file. If
+complete, readable work falls outside it, pause and report the measured reason for a
+fresh plan review. Keep per-round counts and growth history in the PR record.
 
 ## Order of work
 
 ### The precondition gate
 
-**No run step below may execute until all three of these are merged on `main` with their
-required proof green.** This is the single hard gate in this initiative.
+**No run step may execute until the accepted trusted-parent resolver and explicit-
+requester assembler implementations are merged on main with their required proof
+green.** Verify their accepted commits and the public interfaces before capture:
 
-1. **`resolver-trusted-parent`.** The implementation is in progress on
-   `ystack/impl/resolver-trusted-parent`. Its plan
-   (`work/resolver-trusted-parent/plan.md`) ships `resolver/v1/resolve-profile.sh` at
-   git mode `100755` and `resolver/v1/trusted-launch.c`. Until that entry exists there
-   is no supported way to produce a real resolved profile: the only launcher of
-   `resolver/v1/profile-resolve-runtime.sh` today lives in `scripts/test/`, which
-   `docs/components.md:1368-1372` states plainly. Requirement 1 forbids substituting it.
-2. **`shadow-input-assembler`.** Already merged: `shadow/v1/assemble-materialization-input.sh`
-   and `shadow/v1/materialization-input.jq` are on `main` and listed in
-   `ci/required-files.txt:414-417`. Confirm its focused proof is still green at the
-   implementation base.
-3. **`shadow-input-assembler` again, for a requester duty separation accepts.** The
-   assembler as shipped cannot produce a stage request that passes the duty evaluator,
-   so the prerequisite duty evaluation that "Construct the duty evaluation and the
-   claim" below depends on cannot be produced yet, and neither run can proceed.
-   `shadow/v1/materialization-input.jq:111-118` builds `body.requested_by` from one
-   binding and `:181` puts it in the request; that binding is
-   `materialization-input.jq:108-110`'s `forge_binding`, the resolved profile's `forge`
-   entry, chosen by the program and by nothing the caller passes. The duty evaluator
-   then refuses it twice over: `control/v1/duty-separation.jq:120-121` accepts
-   `body.requested_by.role` only when it is one of `manager`, `operator`,
-   `orchestrator` (`:55`), and `:122-124` rejects a requester whose
-   `adapter_instance_id`, `execution_boundary_id` or `principal_id` equals that of any
-   protected binding (`:6-7`, `:96`, `:102`), which a forge identity does by
-   construction because `forge` is itself one of the five protected roles (`:4`). The
-   tuple therefore evaluates to `violated` with four reasons at once —
-   `requester.role-denied` plus all three `requester.*-collision`s — and
-   `control/v1/sandbox.jq:212` turns that into `duty.violated`, ending the run at
-   `environment.not-satisfied`.
+1. `resolver-trusted-parent`, merged by #366, supplies the executable
+   `resolver/v1/resolve-profile.sh` and its trusted launch helper. Use that entry;
+   no test launcher or copied resolver may produce the profile.
+2. `shadow-input-assembler`, including #369's explicit requester amendment, supplies
+   the assembler's tenth positional argument `<requester-file>`, after the claim.
+   Nine inputs are refused as `E_USAGE`. The file's bare `actor_ref` is copied
+   verbatim to `body.requested_by`; it must pass `schema::actor_ref_ok`, carry role
+   `manager`, `operator` or `orchestrator`, and collide with no resolved binding on
+   `adapter_instance_id`, `execution_boundary_id` or `principal_id`. Every invocation
+   below uses that interface and the same approved requester file. Do not substitute
+   a forge binding, alter a producer output or write a passing stage request by hand.
 
-   **This plan does not construct a passing request itself.** The only requester the
-   checks would accept is an identity in none of the resolved profile's bindings: a
-   binding whose role is `manager`, `operator` or `orchestrator` cannot be added to the
-   profile at all, because `duty-separation.jq:109-111` emits `profile.role-denied` for
-   any binding outside the protected and dormant role sets (`:4-5`), and the profile's
-   six committed bindings (`profiles/default/v1/profile.json`) are exactly `ci` plus
-   the five protected roles. The only `orchestrator` requester identities anywhere in
-   the repository are the synthetic `instance.orchestrator` / `boundary.orchestrator` /
-   `principal.orchestrator` fixtures in `evals/v1/seed-set-duty.json` and
-   `scripts/test/control-duty-separation.test.sh`. Writing the prerequisite request by
-   hand from the assembler's other outputs with a requester of our own choosing would
-   therefore be a document the pipeline never produces, resting on an identity nothing
-   declares — the spec's out-of-scope rule forbids exactly that ("no local patch,
-   weakened claim, fabricated reference or alternate private entry may make this run
-   pass", `work/shadow-self-host-run/spec.md`), as does requirement 1's ban on
-   substituting a shipped producer.
-
-   So this is an incompatible accepted dependency, and by the same spec rule it returned
-   to its own artifact gate: **`shadow-input-assembler`**. **That amendment has now
-   landed on `main`** (spec #364, plan #365), and it settles the question the way this
-   plan assumed: the requester identity is an explicit caller input, not a projection of
-   a binding. The contract this plan now writes against is that amendment's, as
-   `work/shadow-input-assembler/plan.md` step 5.1 states it — a **tenth positional
-   argument `<requester-file>`, appended after the claim so the first nine keep their
-   positions**, with nine inputs now refused as `E_USAGE`. The file's single JSON value
-   is emitted verbatim as `body.requested_by`, and the amended
-   `shadow/v1/materialization-input.jq` refuses it unless it satisfies
-   `schema::actor_ref_ok`, carries a role in `["manager","operator","orchestrator"]`,
-   and collides on `adapter_instance_id`, `execution_boundary_id` or `principal_id`
-   with **no** binding in the resolved profile. Every assembler invocation in this plan
-   therefore takes ten inputs; "The requester identity" below defines the one file all
-   of them pass, and entries 4-8 are otherwise unaffected.
+The two historical revisions, the registered environment, operator confirmations,
+pinned runtime and dependencies, and no-network/no-credentials execution boundary
+below remain separate prerequisites. Passing this dependency gate supplies none of
+those facts or permissions.
 
 **No sandbox dependency gates these runs.** Per requirement 2 the runs use the shipped
 declaration-only evaluation exactly as shipped — `control/v1/evaluate-sandbox.sh` with
@@ -309,6 +224,14 @@ test skeleton must fail loudly, not skip, while the evidence is absent.
 
 ### Before the evidence session: provision the pinned dependencies
 
+Freeze the runtime at `8b3e3f55037de84c441cfe4ca5231c98814a7bbd` in a clean local
+checkout `$REPO`, as bound by the requester section below. Compile the helper from
+that checkout. Use it as the working directory for repo-relative commands. All
+outputs use absolute paths under caller-supplied private directories outside `$REPO`.
+`$EVIDENCE` is the capture directory; `$REQUESTER`, `$RESOLVED_PROFILE`, `$POLICY_SET`,
+`$DUTY`, `$CLAIM` and `$PRE_REQ` name their corresponding files or directory there.
+Keep capture and disposable source/scratch directories disjoint from the runtime.
+
 **This step is not part of the run procedure and produces no evidence document.** It
 happens earlier, on its own, and the session below begins only once it has finished.
 Requirement 10 puts source preparation and execution behind a no-network,
@@ -351,8 +274,9 @@ boundary.
 
 ### Prepare the disposable source (requirements 9, 10)
 
-Operator-run on Darwin, no network, no credentials. `$SRC` is a fresh path outside the
-user's repository; nothing below ever touches
+Run on the operator's Darwin machine, by the operator or the delegated local manager,
+with no network or credentials. `$SRC` is a fresh path outside the user's repository;
+nothing below writes to
 `/Users/yihanzhu/git/ystack/.git`.
 
 **Every `git` invocation in this section runs under an isolated Git configuration**, the
@@ -444,7 +368,7 @@ One resolution, shared by both runs, through the entry the `resolver-trusted-par
 spec defines:
 
 ```sh
-resolver/v1/resolve-profile.sh "$JQ" "$RESOLVE_OUT" "$REQUEST" "$MAP" > resolved-profile.json
+resolver/v1/resolve-profile.sh "$JQ" "$RESOLVE_OUT" "$REQUEST" "$MAP" > "$RESOLVED_PROFILE"
 ```
 
 `$JQ` is the pinned jq 1.6 (Darwin SHA-256
@@ -505,45 +429,56 @@ No committed tuple can be reused instead. Nothing in the repository holds a real
 are the synthetic payloads under `evals/v1/` and `scripts/test/`, whose references are
 the repeated-character placeholders the precondition gate refuses.
 
-**The requester identity.** Every assembler invocation below passes the same tenth
-input, `$REQUESTER`, and it is retained as `requester.json`. Like the policy-set copy it
-is produced by no tool and references nothing, so it precedes entry 1 and no entry
-depends on it having been built later. It is the bare `actor_ref` the amended
-`materialization-input.jq` emits verbatim as `body.requested_by`, and its values are
-**the DR-5 identity proposed on intake #262**: role `operator`, principal
-`principal.operator.yihanzhu`, adapter instance `instance.operator.local-macos`,
-execution boundary `boundary.operator.local-macos`, with `implementation_id`
-`implementation.operator.manual` and `implementation_version` `v1` completing the six
-fields `schema::actor_ref_ok` requires. **These values are bound to the operator's
-`approve DR-5` comment on #262. Until that approval exists the run does not start** —
-not the prerequisite assembly, not either case, not the repeatability pass — because an
-identity nobody declared is exactly the fabricated input the precondition gate refuses.
-The distinct `.local-macos` and `.yihanzhu` suffixes are deliberate: they keep the
-retained bytes from being mistaken for the synthetic `instance.operator` /
-`principal.operator` fixture in `evals/v1/seed-set-duty.json`.
+**The requester identity.** Every assembly passes the same tenth input,
+`$REQUESTER`, retained as `requester.json`. It is a bare six-field `actor_ref`,
+constructed before the prerequisite assembly and copied verbatim into
+`body.requested_by`. It names who requested the work, not who typed the commands.
+DR-5's [proposed defaults](https://github.com/yihanzhu/ystack/issues/262#issuecomment-5737641435)
+and the operator's [approval](https://github.com/yihanzhu/ystack/issues/262#issuecomment-5742511918)
+bind role `operator`, principal `principal.operator.yihanzhu`, adapter instance
+`instance.operator.local-macos`, execution boundary `boundary.operator.local-macos`,
+implementation id `ystack-operator-cli`, and implementation version equal to the
+ystack commit used for the run. A manager comment or silence cannot change those
+approved fields.
 
-Construct it with the same canonical emitter as every other document this run writes:
+Freeze the runtime commit before constructing the requester:
+`8b3e3f55037de84c441cfe4ca5231c98814a7bbd`. `$REPO` is a clean, isolated local
+checkout at that full OID, containing both accepted dependencies. All run commands,
+policy bytes, profile inputs and the compiled closure helper come from that exact
+committed tree. Verify its HEAD and clean state before and after capture; no runtime
+patch is allowed. The accepted plan and operator confirmations are recorded outside
+this runtime checkout and govern its use. This does not install or activate anything.
+
+The later implementation head contains the evidence; it is recorded separately in
+final proof and is never the requester's version. Making requester bytes depend on
+that future evidence commit would create a digest cycle. Keep the runtime fixed for
+the prerequisite, both cases and both repeatability passes. A runtime change requires
+reconciliation and a fresh plan acceptance before capture, including the requester
+recipe, digest and offline assertion together.
+
+Construct the approved identity with the pinned canonical emitter:
 
 ```sh
-"$JQ" -S -c -n '{role:"operator",
-  implementation_id:"implementation.operator.manual",
-  implementation_version:"v1",
+RUN_COMMIT=8b3e3f55037de84c441cfe4ca5231c98814a7bbd
+"$JQ" -S -c -n --arg run_commit "$RUN_COMMIT" '{role:"operator",
+  implementation_id:"ystack-operator-cli",
+  implementation_version:$run_commit,
   adapter_instance_id:"instance.operator.local-macos",
   principal_id:"principal.operator.yihanzhu",
-  execution_boundary_id:"boundary.operator.local-macos"}' >requester.json
+  execution_boundary_id:"boundary.operator.local-macos"}' > "$REQUESTER"
 ```
 
-The exact bytes that produces, which are what gets committed, are
+These are the exact newline-terminated canonical bytes:
 
 ```json
-{"adapter_instance_id":"instance.operator.local-macos","execution_boundary_id":"boundary.operator.local-macos","implementation_id":"implementation.operator.manual","implementation_version":"v1","principal_id":"principal.operator.yihanzhu","role":"operator"}
+{"adapter_instance_id":"instance.operator.local-macos","execution_boundary_id":"boundary.operator.local-macos","implementation_id":"ystack-operator-cli","implementation_version":"8b3e3f55037de84c441cfe4ca5231c98814a7bbd","principal_id":"principal.operator.yihanzhu","role":"operator"}
 ```
 
-newline-terminated like the other canonical documents, and the offline check is
-`shasum -a 256 shadow/evidence/self-host-transition/v1/requester.json` printing
-`7596d803e09956c24a627d29558b22a583369080ac653941816c0fbadb2d68cd`. If the approved
-DR-5 values differ from the ones above, the file, this recipe and this digest change
-together and the run does not proceed on the stale pair.
+Their SHA-256 is
+`26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386`.
+The README's requester-provenance section alone records the executor, machine,
+account, session and delegation. Add no provenance keys or authority reference to
+`requester.json`; its six-field schema and exact bytes remain unchanged by delegation.
 
 **Duty separation accepts this requester, and that is checked, not assumed.**
 `control/v1/duty-separation.jq:55` fixes `requester_roles` to
@@ -588,11 +523,11 @@ references a later entry.
    source that pins it, `scripts/core-contract.sh`, with the same extraction
    `control/v1/evaluate-duty.sh:62-69` uses. Hash the nine closure paths in the order
    `evaluate-duty.sh:122-130` lists them and feed the result to the evaluator's own
-   program. The source is the **live committed tree at the run's `main`**, which is what
-   `$REPO` is below and what the focused test's step 11 hashes; the nine member files are
+   program. The source is the **frozen runtime tree** named above, which is what `$REPO`
+   is below and what the focused test's step 11 binds; the nine member files are
    byte-identical at `d3f6d525328838b9c2de819699e53d8909ab7a3f`, at
-   `0427390224c25147650f1bd3b6e43ed6911b97a7` and at `main`, so no revision checkout is
-   performed and the `eff044bd…` digest below is the check that decides whether the
+   `0427390224c25147650f1bd3b6e43ed6911b97a7` and at the frozen runtime commit, so no
+   revision checkout is performed and the `eff044bd…` digest below is the check that decides whether the
    right bytes were read:
 
    ```sh
@@ -619,7 +554,7 @@ references a later entry.
        semantic_identity:"core.contracts.v2",
        selected_generation_id_sha256:$selected_sha,members:$members}' \
      <"$SCRATCH/core-members.tsv" >"$SCRATCH/core-closure.nl.json"
-   printf '%s' "$(cat "$SCRATCH/core-closure.nl.json")" >core-package-closure.json
+   printf '%s' "$(cat "$SCRATCH/core-closure.nl.json")" > "$EVIDENCE/core-package-closure.json"
    ```
 
    The second command is what drops the newline `jq` appends; it is the only
@@ -657,7 +592,7 @@ references a later entry.
    `"$JQ" -e '[.body.environments[] | select(.environment_id == "env.local-macos-ystack-self" and .target_repository_id == "repo.ystack")] | length == 1' shadow/v1/shadow-environments.json` —
    and hash the canonical bytes of that one entry,
    `"$JQ" -S -c '.body.environments[] | select(.environment_id == "env.local-macos-ystack-self" and .target_repository_id == "repo.ystack")' shadow/v1/shadow-environments.json`.
-   Against the registry on `main` that entry is
+   Against the registry at the frozen runtime commit that entry is
    `{"description":"Operator's local macOS checkout, ystack's own scrubbed bare source repository.","environment_id":"env.local-macos-ystack-self","evidence_scope":"self-host","proof_state":"unproven","source_root_commit":"7908b159c0a2d24ce6ccdde6ee0f501acc483e75","target_repository_id":"repo.ystack"}`,
    whose SHA-256 is
    `cc259fc1b27956e6e479e05a7f70c6cc350ad65fc6b6583252d142fed91666e8`.
@@ -763,7 +698,7 @@ references a later entry.
    PATH="$JQ_DIR:/usr/bin:/bin" control/v1/evaluate-duty.sh evaluate \
      "$POLICY_SET" "$PRE_REQ/stage-request.json" \
      "$PRE_REQ/resolved-profile-document.json" "$PRE_REQ/stage-result.json" \
-     > duty-evaluation.json
+     > "$DUTY"
    ```
 
    Four file arguments after the literal verb, in that order
@@ -784,13 +719,9 @@ references a later entry.
    around: `sandbox.jq:212` would add `duty.violated` and the run would end at
    `environment.not-satisfied`.
 
-   **Today that verdict is `violated`, and this entry is blocked.** The request entry 4
-   hands the evaluator carries the forge binding as its requester, which duty
-   separation refuses on the role and on all three identity dimensions at once. The
-   third precondition-gate entry above sets out the four reason ids, why no requester
-   this plan could write would be honest under the spec, and why the fix belongs to
-   `shadow-input-assembler`'s artifact gate rather than here. Entries 4 to 8 wait on
-   it. References entries 1, 4 and 5.
+   Use the explicit requester from the accepted assembler interface above. A
+   refusal is retained for diagnosis and returns to the relevant dependency or input
+   gate; it never permits changing a producer output. References entries 1, 4 and 5.
 7. **`environment-claim.json`** — **constructed by this run**, and `$CLAIM` is that file;
    no shipped tool emits a claim. Build it with `jq -S -c -n --slurpfile` over
    `control/v1/sandbox-policy.json`, `duty-evaluation.json` and `$RESOLVED_PROFILE`,
@@ -1110,6 +1041,11 @@ canonical document holding a finite relative-path inventory and SHA-256 for ever
 bundled file except itself. Every referenced document's raw bytes must be recoverable
 from this directory, or from an exact committed Git object the README names by id.
 
+The README must also carry the delegation statement described under "Operator steps":
+in plain words, who executed the evidence session, on whose machine and under which
+session, and — when the operator delegated it — the operator's own quoted confirmations
+of the environment registry entry and the two incident timestamps.
+
 Do not commit `$SRC`, `$CANDIDATE`, `$SCRATCH`, `$SCRATCH_D`, any binary, any
 credential, or any
 machine-specific absolute path. The replay recipe uses caller-supplied scratch paths,
@@ -1185,16 +1121,19 @@ credentials, no model and no real reproduction. It checks the committed bytes:
     descriptor and requires its nine `members[].path` entries and their digests to
     equal the live digests of those nine committed files at the pinned generation.
 12. `requester.json` hashes to
-    `7596d803e09956c24a627d29558b22a583369080ac653941816c0fbadb2d68cd`, satisfies
+    `26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386`, satisfies
     `schema::actor_ref_ok` through the committed core contract, carries role
-    `operator`, and its `adapter_instance_id`, `execution_boundary_id` and
-    `principal_id` equal none of the six `profiles/default/v1/profile.json` bindings'.
+    `operator`, implementation id `ystack-operator-cli` and implementation version
+    `8b3e3f55037de84c441cfe4ca5231c98814a7bbd`. Its `adapter_instance_id`,
+    `execution_boundary_id` and `principal_id` equal none of the six `profiles/default/v1/profile.json` bindings'.
     Every retained `input.json` — both cases' and the prerequisite's — carries
     `.stage_request.content.body.requested_by` equal to those exact bytes, so all three
     assemblies demonstrably ran under the one approved identity.
 13. Negative cases: mutate a **copy** of each of an evidence file, a digest in
     `checksums.json`, and an outcome field, and require the test to fail on each. A
-    test that passes on altered evidence proves nothing.
+    test that passes on altered evidence proves nothing. Require refusal, not an
+    exact internal error message or first-failing step. These three controls are the
+    complete mutation scope; do not build a per-assertion mutation suite.
 
 ### The consumers (requirements 16, 17)
 
@@ -1202,8 +1141,9 @@ credentials, no model and no real reproduction. It checks the committed bytes:
 inactive compatibility harness. It takes seven documents in this order — scope,
 shadow-set, dashboard, risk, kill, duty, marker (`scope/v1/evaluate-scope.sh:73`). The
 harness supplies the two real unchanged shadow records as the shadow set, with the
-actual identities, and whatever the other six slots need. The assertion is narrow: the
-evaluator's complete shape and reference checks accept these records, and any other
+actual identities. Invoke the real evaluator once for each case's identity, supplying
+both unchanged records each time and the other six required documents. The
+evaluator's complete shape and reference checks must accept these records, and any other
 missing gate evidence is reported distinctly from malformed shadow evidence. Require
 the evaluator's own vocabulary for the classification — `outcome: "not-proposable"`
 with `qualification: {state: "unavailable", reason_id:
@@ -1226,7 +1166,8 @@ maintenance/v1/incident-to-eval.sh convert <incident.json> <shadow-record.json> 
 generated skeleton to carry the converter's own
 `qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`
 (`maintenance/v1/incident-to-eval.jq:80`), require the
-provenance digests to equal the supplied documents, and require the two cross-pairings
+provenance digests for both the incident and record to equal the supplied documents
+for each case, and require the two cross-pairings
 (post incident with pre record, and the reverse) to fail. The emitted
 `eval-seed-case-stale-moved-artifacts.json` is a test output written to a temporary
 directory; `evals/v1/seed-set.json` is not touched.
@@ -1254,14 +1195,27 @@ SHAs.
 
 Everything in "Prepare the disposable source", "Resolve the real profile", "Assemble
 each run's input", "The two runs" and "Repeatability" runs natively on the operator's
-macOS machine, by the operator, against the operator's own ystack history. No agent
-session performs them and no CI job performs them. The operator hands back the
-evidence files; the coder commits them unchanged and writes the test, README and docs
-around them.
+macOS machine, under the operator's own user account, against the operator's own ystack
+history. The operator may execute the session by hand, or delegate execution to the
+manager session running on that machine — never to CI, never to a remote or cloud
+session, and never to a coder subagent. When delegated, the README's requester-
+provenance section names the executor, the operator's local machine and account,
+the manager session, and the direct delegation source. This is the only delegation
+record; `requester.json` keeps the approved six-field DR-5 identity and frozen runtime
+version above. The requester is the operator who asked for the work; the README
+truthfully names the manager who executed it. The operator or delegated manager hands
+back the evidence files; the coder commits them unchanged and writes the test, README
+and docs around them. No credential use, model call, external target execution,
+installation, activation or deployment is authorized by this delegation.
 
-The operator also confirms the environment registry entry and the incident timestamps,
-because only the person who watched the transition can say when each digest was
-actually checked.
+The operator confirms that the registry entry describes this local machine before
+source preparation or execution. The operator or delegated manager records the actual
+UTC time when each historical blob's digest is checked for this exercise. The operator
+then confirms those two observations before they become frozen incident inputs for
+assembly and reproduction. These are current observation times, never claimed dates
+of the original outage. Both the registry and timestamp confirmations must come from
+the operator in chat or on the intake issue, and the README quotes them. A manager
+observation, audit read or restored note alone supplies neither confirmation.
 
 ## Risks
 
@@ -1319,32 +1273,36 @@ never relabelled as the accepted pair.
 
 ## Proof
 
-Run on the final implementation head, with the head SHA pasted beside each command in
-the PR body.
+Bind the following proof to the final implementation head in the PR body. Run the
+focused suite once locally; use the required CI logs for full-suite coverage.
 
 1. `bash scripts/test/shadow-self-host-evidence.test.sh` — the offline evidence check,
-   both consumer harnesses, and every negative case. Paste the full output.
-2. `bash scripts/test/run-all.sh` — the whole suite, showing nothing else regressed.
-3. `bash scripts/test/shadow-slice.test.sh` and
-   `bash scripts/test/shadow-assembler.test.sh` — the two shipped slices this work
-   consumes, still green and still unmodified.
-4. The operator's run transcript for both cases: the two `reproduce.sh` command lines
+   both consumer harnesses, and the three required negative controls. Paste the full
+   output.
+2. Required CI shard logs at that same head must show the complete
+   `scripts/test/run-all.sh` suite passing, including `shadow-slice.test.sh` and
+   `shadow-assembler.test.sh`. Link the run and shard logs; omit no suite. Do not
+   repeat the full suite or dependency tests locally unless a new failure or change
+   requires it.
+3. The operator or delegated manager's run transcript for both cases: the two
+   `reproduce.sh` command lines
    with their outcome and reason ids, the two assembler command lines, the resolver
    command line with the `PATH` it ran under, the two standalone
    `evaluate-sandbox.sh` and `validate-incident.sh` command lines with theirs, the two
    per-case `materialize.sh` command lines that captured the receipts together with
    their three digest gates, the pre-session provisioning line (asset, URL, verified
    digest, date) marked as work outside requirement 10's boundary, and the
-   dependency heads (`resolver-trusted-parent` implementation commit, assembler commit
-   already on `main`).
-5. The repeatability comparison: `diff -r` over both assembler output directories and
+   frozen runtime commit (separate from the final implementation head), dependency
+   heads (`resolver-trusted-parent` and explicit-requester assembler implementation
+   commits), requester bytes and digest, and README delegation provenance.
+4. The repeatability comparison: `diff -r` over both assembler output directories and
    `shasum -a 256` over both state directories, showing byte-identical results.
-6. The source integrity comparison: the `show-ref` and `cat-file --batch-all-objects`
+5. The source integrity comparison: the `show-ref` and `cat-file --batch-all-objects`
    digests before the first run and after the last, equal.
-7. `git show <head>:shadow/evidence/self-host-transition/v1/checksums.json` alongside a
+6. `git show <head>:shadow/evidence/self-host-transition/v1/checksums.json` alongside a
    fresh `shasum -a 256` walk of the committed directory, showing the inventory is
    complete and current.
-8. Required CI green and independent non-author review on that exact final head.
+7. Required CI green and independent non-author review on that exact final head.
 
 None of this changes the registry's `proof_state`, grants write permission, or completes
 a Roadmap step beyond this bounded observation.
