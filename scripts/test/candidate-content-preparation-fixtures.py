@@ -10,10 +10,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import selectors
+import signal
 import stat
 import struct
+import subprocess
 import sys
 import time
+import types
 import zlib
 from pathlib import Path
 from typing import Any
@@ -683,9 +687,70 @@ def command_inject(args: argparse.Namespace) -> None:
     main_function = getattr(module, "main", None)
     if not callable(main_function):
         raise FixtureError("component has no main callable")
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(module.Refusal("E_INTERRUPTED", 75)))
+    signal.signal(signal.SIGHUP, lambda *_: (_ for _ in ()).throw(module.Refusal("E_INTERRUPTED", 75)))
     result = main_function(invocation)
     if calls < args.occurrence:
         raise FixtureError(f"{args.target} was called only {calls} times")
+    if result is not None:
+        raise SystemExit(result)
+
+
+def command_child_setup_cleanup(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    selector_factory = module.selectors.DefaultSelector
+    popen_factory = module.subprocess.Popen
+    children: list[subprocess.Popen[bytes]] = []
+
+    class FailingSelector:
+        def __init__(self) -> None:
+            self.actual = selector_factory()
+
+        def register(self, *_args: Any, **_kwargs: Any) -> None:
+            raise OSError(5, "fixture selector registration failure")
+
+        def close(self) -> None:
+            self.actual.close()
+
+    def capture_popen(*call_args: Any, **call_kwargs: Any) -> subprocess.Popen[bytes]:
+        child = popen_factory(*call_args, **call_kwargs)
+        children.append(child)
+        return child
+
+    context = module.Context(
+        args=types.SimpleNamespace(), repo_root=Path("/"), scratch=Path("/"),
+        copied_repo=Path("/"), sidecars=Path("/"), deps_root=Path("/"),
+        ledger=module.Ledger(), deadline=time.monotonic() + 10, boundaries={},
+    )
+    module.selectors.DefaultSelector = FailingSelector
+    module.subprocess.Popen = capture_popen
+    try:
+        try:
+            module.run_child(
+                context,
+                [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+            )
+        except module.Refusal as exc:
+            if exc.token != "E_IO":
+                raise FixtureError(f"unexpected child setup refusal: {exc.token}") from exc
+        else:
+            raise FixtureError("child setup fault was accepted")
+    finally:
+        module.selectors.DefaultSelector = selector_factory
+        module.subprocess.Popen = popen_factory
+    if len(children) != 1 or children[0].poll() is None:
+        raise FixtureError("spawned child was not reaped after setup failure")
+
+
+def command_limit_invoke(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    if args.name not in module.LIMITS or args.value < 0:
+        raise FixtureError("unknown or invalid production limit")
+    module.LIMITS[args.name] = args.value
+    invocation = strict_load(args.argv_json)
+    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
+        raise FixtureError("limit invocation must be a JSON string list")
+    result = module.main(invocation)
     if result is not None:
         raise SystemExit(result)
 
@@ -786,6 +851,17 @@ def parser() -> argparse.ArgumentParser:
     inject_parser.add_argument("--wait-seconds", type=float, default=30.0)
     inject_parser.add_argument("--argv-json", required=True, type=Path)
     inject_parser.set_defaults(run=command_inject)
+
+    cleanup_parser = commands.add_parser("child-setup-cleanup", allow_abbrev=False)
+    cleanup_parser.add_argument("--component", required=True, type=Path)
+    cleanup_parser.set_defaults(run=command_child_setup_cleanup)
+
+    limit_parser = commands.add_parser("limit-invoke", allow_abbrev=False)
+    limit_parser.add_argument("--component", required=True, type=Path)
+    limit_parser.add_argument("--name", required=True, choices=tuple(LIMITS))
+    limit_parser.add_argument("--value", required=True, type=int)
+    limit_parser.add_argument("--argv-json", required=True, type=Path)
+    limit_parser.set_defaults(run=command_limit_invoke)
     return result
 
 

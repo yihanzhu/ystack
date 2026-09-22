@@ -139,7 +139,7 @@ class Ledger:
 class HeldBoundary:
     path: Path
     descriptors: list[int]
-    identities: list[tuple[int, int, int, int, int]]
+    identities: list[tuple[int, int, int, int, int, int]]
     leaf_kind: str
 
     @property
@@ -213,9 +213,9 @@ class Context:
             boundary.close()
 
 
-def stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+def stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
     links = value.st_nlink if stat.S_ISREG(value.st_mode) else 0
-    return value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_uid, links
+    return value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_uid, links, stat.S_IMODE(value.st_mode)
 
 
 def check_deadline(deadline: float) -> None:
@@ -422,7 +422,7 @@ def physical_absolute(value: str, deadline: float | None = None) -> Path:
 
 
 def hold_boundary(path: Path, leaf_kind: str, deadline: float,
-                  trusted_system: bool = False) -> HeldBoundary:
+                  trusted_system: bool = False, private_leaf: bool = False) -> HeldBoundary:
     if leaf_kind not in ("file", "directory"):
         raise Refusal("E_USAGE", 2)
     descriptors = [os.open("/", os.O_RDONLY | os.O_DIRECTORY)]
@@ -440,6 +440,8 @@ def hold_boundary(path: Path, leaf_kind: str, deadline: float,
             value = os.fstat(fd)
             if not last or leaf_kind == "directory":
                 if not stat.S_ISDIR(value.st_mode):
+                    raise Refusal("E_IDENTITY", 2)
+                if last and private_leaf and (value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) & 0o077):
                     raise Refusal("E_IDENTITY", 2)
                 writable = stat.S_IMODE(value.st_mode) & 0o022
                 private_owned = (value.st_uid == os.geteuid() or (trusted_system and value.st_uid == 0)) and writable == 0
@@ -466,6 +468,29 @@ def hold_boundary(path: Path, leaf_kind: str, deadline: float,
         if not owned_boundary:
             raise Refusal("E_IDENTITY", 2)
         return HeldBoundary(path, descriptors, identities, leaf_kind)
+    except Refusal:
+        raise
+    except OSError as exc:
+        raise Refusal("E_IDENTITY", 2) from exc
+    finally:
+        if sys.exc_info()[0] is not None:
+            while descriptors:
+                with contextlib.suppress(OSError):
+                    os.close(descriptors.pop())
+
+
+def hold_created_directory(parent: HeldBoundary, name: str, path: Path,
+                           deadline: float) -> HeldBoundary:
+    check_deadline(deadline)
+    descriptors = [os.dup(fd) for fd in parent.descriptors]
+    try:
+        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+        value = os.fstat(child)
+        if value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) != 0o700:
+            os.close(child)
+            raise Refusal("E_IDENTITY", 2)
+        descriptors.append(child)
+        return HeldBoundary(path, descriptors, list(parent.identities) + [stat_identity(value)], "directory")
     except Refusal:
         raise
     except OSError as exc:
@@ -523,6 +548,53 @@ def terminate_child(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
+def private_root(ctx: Context, path: Path) -> tuple[int, tuple[str, ...]]:
+    for key in ("scratch_work", "output", "output_parent"):
+        boundary = ctx.boundaries.get(key)
+        if boundary is None:
+            continue
+        try:
+            relative = path.relative_to(boundary.path)
+        except ValueError:
+            continue
+        return boundary.fd, relative.parts
+    raise Refusal("E_IO")
+
+
+def open_private_directory(ctx: Context, path: Path, *, create: bool = False,
+                           parents: bool = False, exist_ok: bool = False) -> int:
+    root_fd, parts = private_root(ctx, path)
+    fd = os.dup(root_fd)
+    try:
+        for index, part in enumerate(parts):
+            if create and (parents or index == len(parts) - 1):
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    if index == len(parts) - 1 and not exist_ok:
+                        raise
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            value = os.fstat(next_fd)
+            if value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) != 0o700:
+                os.close(next_fd)
+                raise Refusal("E_IDENTITY", 2)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except Refusal:
+        os.close(fd)
+        raise
+    except OSError as exc:
+        os.close(fd)
+        raise Refusal("E_IO") from exc
+
+
+def make_private_directory(ctx: Context, path: Path, *, parents: bool = False,
+                           exist_ok: bool = False) -> None:
+    fd = open_private_directory(ctx, path, create=True, parents=parents, exist_ok=exist_ok)
+    os.close(fd)
+
+
 def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
               output_limit: int = LIMITS["invocation_diagnostic_bytes"],
               env: dict[str, str] | None = None, pass_fds: tuple[int, ...] = ()) -> bytes:
@@ -534,21 +606,22 @@ def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
                                    close_fds=True, pass_fds=pass_fds)
     except OSError as exc:
         raise Refusal("E_DEPENDENCY") from exc
-    selector = selectors.DefaultSelector()
-    assert process.stdout is not None and process.stderr is not None
-    os.set_blocking(process.stdout.fileno(), False)
-    os.set_blocking(process.stderr.fileno(), False)
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-    stdin_view = memoryview(stdin) if stdin is not None else memoryview(b"")
-    if stdin is not None:
-        assert process.stdin is not None
-        os.set_blocking(process.stdin.fileno(), False)
-        selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+    selector: selectors.BaseSelector | None = None
     out = bytearray()
     err = bytearray()
     completed = False
     try:
+        selector = selectors.DefaultSelector()
+        assert process.stdout is not None and process.stderr is not None
+        os.set_blocking(process.stdout.fileno(), False)
+        os.set_blocking(process.stderr.fileno(), False)
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        stdin_view = memoryview(stdin) if stdin is not None else memoryview(b"")
+        if stdin is not None:
+            assert process.stdin is not None
+            os.set_blocking(process.stdin.fileno(), False)
+            selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
         while selector.get_map():
             remaining = min(child_deadline, ctx.deadline) - time.monotonic()
             if remaining <= 0:
@@ -586,7 +659,12 @@ def run_child(ctx: Context, argv: list[str], *, stdin: bytes | None = None,
     except OSError as exc:
         raise Refusal("E_IO") from exc
     finally:
-        selector.close()
+        if selector is not None:
+            selector.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
         if not completed:
             terminate_child(process)
     if status != 0:
@@ -599,7 +677,7 @@ def clean_git_env(ctx: Context) -> dict[str, str]:
     tmp = ctx.scratch / "tmp"
     hooks = ctx.scratch / "hooks"
     for directory in (home, tmp, hooks):
-        directory.mkdir(mode=0o700, exist_ok=True)
+        make_private_directory(ctx, directory, exist_ok=True)
     return {
         "HOME": str(home), "TMPDIR": str(tmp), "PATH": "/usr/bin:/bin", "LC_ALL": "C",
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -628,7 +706,7 @@ def copy_dependencies(ctx: Context) -> tuple[Path, Path]:
         if before != expected:
             raise Refusal("E_DEPENDENCY")
         destination = ctx.deps_root / relative
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        make_private_directory(ctx, destination.parent, parents=True, exist_ok=True)
         total += len(data)
         if total > LIMITS["dependency_bytes"]:
             raise Refusal("E_LIMIT")
@@ -647,7 +725,7 @@ def copy_dependencies(ctx: Context) -> tuple[Path, Path]:
     if total > LIMITS["dependency_bytes"]:
         raise Refusal("E_LIMIT")
     jq_copy = ctx.deps_root / "tools" / "jq"
-    jq_copy.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    make_private_directory(ctx, jq_copy.parent, parents=True, exist_ok=True)
     ctx.ledger.charge("scratch_bytes", len(jq_data), LIMITS["scratch_bytes"])
     write_exclusive(jq_copy, jq_data, 0o500, ctx)
     jq_version = run_child(ctx, [str(jq_copy), "--version"], output_limit=128).decode("ascii", "strict").strip()
@@ -763,7 +841,7 @@ def write_temp_json(ctx: Context, jq_copy: Path, root: Path, name: str, value: A
 def run_core_validations(ctx: Context, input_value: dict[str, Any], response: dict[str, Any],
                          details: dict[str, Any]) -> None:
     validation = ctx.scratch / "validation"
-    validation.mkdir(mode=0o700)
+    make_private_directory(ctx, validation)
     selector = ctx.deps_root / "scripts/core-contract.sh"
     jq_copy = ctx.deps_root / "tools/jq"
     documents: list[Path] = []
@@ -791,7 +869,7 @@ def run_core_validations(ctx: Context, input_value: dict[str, Any], response: di
 
 def run_accounted_core(ctx: Context, selector: Path, args: list[str]) -> None:
     scratch = ctx.scratch / f"core-{time.monotonic_ns()}"
-    scratch.mkdir(mode=0o700)
+    make_private_directory(ctx, scratch)
     receipt_path = ctx.scratch / f"core-receipt-{time.monotonic_ns()}"
     receipt_reservation = 128
     ctx.ledger.charge("scratch_bytes", receipt_reservation, LIMITS["scratch_bytes"])
@@ -972,8 +1050,8 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
 
 def copy_storage(ctx: Context) -> None:
     source = Path(ctx.args.candidate_repository)
-    ctx.copied_repo.mkdir(mode=0o700, parents=True)
-    ctx.sidecars.mkdir(mode=0o700, parents=True)
+    make_private_directory(ctx, ctx.copied_repo, parents=True)
+    make_private_directory(ctx, ctx.sidecars, parents=True)
     for relative, fact in ctx.source_facts.items():
         ctx.check_deadline()
         source_path = source / relative
@@ -985,7 +1063,7 @@ def copy_storage(ctx: Context) -> None:
             destination = ctx.copied_repo / relative
         else:
             continue
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        make_private_directory(ctx, destination.parent, parents=True, exist_ok=True)
         source_fd = open_relative_file(ctx.boundaries["candidate_repository"].fd, relative)
         try:
             data = read_limited(source_path, LIMITS["repository_file_bytes"], source_fd=source_fd,
@@ -1024,7 +1102,7 @@ def copy_storage(ctx: Context) -> None:
     write_exclusive(ctx.copied_repo / "config", config, 0o400, ctx)
     write_exclusive(ctx.copied_repo / "HEAD", private_head, 0o400, ctx)
     ref = ctx.copied_repo / "refs/heads/candidate"
-    ref.parent.mkdir(mode=0o700, parents=True)
+    make_private_directory(ctx, ref.parent, parents=True)
     write_exclusive(ref, expected, 0o400, ctx)
 
 
@@ -1307,8 +1385,8 @@ def ensure_directory(root_fd: int, parts: tuple[str, ...]) -> None:
 
 def export_candidate(ctx: Context, candidate_root: Path, directory_entries: list[dict[str, Any]],
                      files: dict[str, tuple[str, str]]) -> list[dict[str, Any]]:
-    candidate_root.mkdir(mode=0o700)
-    root_fd = os.open(candidate_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    make_private_directory(ctx, candidate_root)
+    root_fd = open_private_directory(ctx, candidate_root)
     inventory = list(directory_entries)
     total = 0
     try:
@@ -1360,9 +1438,13 @@ def export_candidate(ctx: Context, candidate_root: Path, directory_entries: list
                     os.close(fd)
                 os.close(parent_fd)
         for entry in sorted(directory_entries, key=lambda item: item["path"].count("/"), reverse=True):
-            os.chmod(candidate_root / entry["path"], 0o500, follow_symlinks=False)
+            directory_fd = open_private_directory(ctx, candidate_root / entry["path"])
+            try:
+                os.fchmod(directory_fd, 0o500)
+            finally:
+                os.close(directory_fd)
         os.fsync(root_fd)
-        os.chmod(candidate_root, 0o500)
+        os.fchmod(root_fd, 0o500)
     finally:
         os.close(root_fd)
     inventory.sort(key=lambda item: item["path"].encode("utf-8"))
@@ -1422,13 +1504,19 @@ def measure_candidate(ctx: Context, root: Path, expected: list[dict[str, Any]]) 
 def write_exclusive(path: Path, data: bytes, mode: int, ctx: Context | None = None,
                     ledger_field: str | None = None) -> None:
     fd = -1
+    parent_fd = -1
     if ctx is not None:
         ctx.check_deadline()
         if ledger_field is not None:
             maximum = LIMITS["scratch_bytes"] if ledger_field == "scratch_bytes" else LIMITS["bundle_bytes"]
             ctx.ledger.charge(ledger_field, len(data), maximum)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+        target: str | Path = path
+        if ctx is not None:
+            parent_fd = open_private_directory(ctx, path.parent)
+            target = path.name
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     mode, dir_fd=parent_fd if parent_fd >= 0 else None)
         view = memoryview(data)
         while view:
             if ctx is not None:
@@ -1446,32 +1534,44 @@ def write_exclusive(path: Path, data: bytes, mode: int, ctx: Context | None = No
     finally:
         if fd >= 0:
             os.close(fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def fsync_file(path: Path, ctx: Context | None = None) -> None:
+    parent_fd = -1
     try:
         if ctx is not None:
             ctx.check_deadline()
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            parent_fd = open_private_directory(ctx, path.parent)
+        fd = os.open(path.name if parent_fd >= 0 else path,
+                     os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                     dir_fd=parent_fd if parent_fd >= 0 else None)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
     except OSError as exc:
         raise Refusal("E_IO") from exc
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def fsync_dir(path: Path, ctx: Context | None = None) -> None:
+    fd = -1
     try:
         if ctx is not None:
             ctx.check_deadline()
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            fd = open_private_directory(ctx, path)
+        else:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+        os.fsync(fd)
     except OSError as exc:
         raise Refusal("E_IO") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def publish_record(bundle: Path, record_data: bytes, ctx: Context | None = None) -> None:
@@ -1480,11 +1580,21 @@ def publish_record(bundle: Path, record_data: bytes, ctx: Context | None = None)
     if destination.exists() or temporary.exists():
         raise Refusal("E_INCOMPLETE")
     write_exclusive(temporary, record_data, 0o400, ctx, "bundle_bytes" if ctx else None)
+    bundle_fd = -1
     try:
-        os.link(temporary, destination, follow_symlinks=False)
-        os.unlink(temporary)
+        if ctx is not None:
+            bundle_fd = open_private_directory(ctx, bundle)
+            os.link(temporary.name, destination.name, src_dir_fd=bundle_fd,
+                    dst_dir_fd=bundle_fd, follow_symlinks=False)
+            os.unlink(temporary.name, dir_fd=bundle_fd)
+        else:
+            os.link(temporary, destination, follow_symlinks=False)
+            os.unlink(temporary)
     except OSError as exc:
         raise Refusal("E_IO") from exc
+    finally:
+        if bundle_fd >= 0:
+            os.close(bundle_fd)
     fsync_file(destination, ctx)
     fsync_dir(bundle, ctx)
     fsync_dir(bundle.parent, ctx)
@@ -1625,10 +1735,12 @@ def create_context(args: argparse.Namespace, deadline: float) -> Context:
     else:
         raise Refusal("E_IO")
     scratch = scratch_parent / name
+    context_boundary = hold_created_directory(args._boundaries["scratch"], name, scratch, deadline)
     context = Context(args=args, repo_root=repo_root, scratch=scratch,
                    copied_repo=scratch / "candidate.git", sidecars=scratch / "observed-sidecars",
                    deps_root=scratch / "dependencies", ledger=Ledger(),
                    deadline=deadline, boundaries=args._boundaries)
+    context.boundaries["scratch_work"] = context_boundary
     context.recheck_boundaries()
     return context
 
@@ -1637,8 +1749,10 @@ def acquire_lock(ctx: Context, path: Path, create: bool) -> int:
     flags = os.O_RDWR | os.O_NOFOLLOW
     if create:
         flags |= os.O_CREAT | os.O_EXCL
+    parent_fd = -1
     try:
-        fd = os.open(path, flags, 0o600)
+        parent_fd = open_private_directory(ctx, path.parent)
+        fd = os.open(path.name, flags, 0o600, dir_fd=parent_fd)
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.geteuid():
             raise Refusal("E_IDENTITY", 2)
@@ -1658,6 +1772,9 @@ def acquire_lock(ctx: Context, path: Path, create: bool) -> int:
         raise
     except OSError as exc:
         raise Refusal("E_IO") from exc
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def load_identity_inputs(ctx: Context) -> tuple[bytes, bytes]:
@@ -1694,9 +1811,10 @@ def prepare(ctx: Context) -> bytes:
         raise Refusal("E_EXISTS", 2) from exc
     except OSError as exc:
         raise Refusal("E_IO") from exc
-    ctx.boundaries["output"] = hold_boundary(bundle, "directory", ctx.deadline)
+    ctx.boundaries["output"] = hold_created_directory(
+        ctx.boundaries["output_parent"], bundle.name, bundle, ctx.deadline)
     boundaries_overlap([value for key, value in ctx.boundaries.items()
-                        if not key.startswith("dependency:") and key != "output_parent"])
+                        if not key.startswith("dependency:") and key not in ("output_parent", "scratch")])
     lock_fd = acquire_lock(ctx, bundle / "preparation.lock", True)
     try:
         input_data, response_data = load_identity_inputs(ctx)
@@ -1847,17 +1965,19 @@ def parse_args(argv: list[str], deadline: float) -> argparse.Namespace:
     try:
         for key, path, kind in (
             ("input", input_path, "file"), ("response", response_path, "file"),
-            ("candidate_repository", repository, "directory"),
-            ("scratch", scratch, "directory"), ("jq", jq_path, "file"),
+            ("candidate_repository", repository, "private-directory"),
+            ("scratch", scratch, "private-directory"), ("jq", jq_path, "file"),
             ("component_source", Path(__file__).resolve(), "file"),
-            ("output_parent", output.parent, "directory"),
+            ("output_parent", output.parent, "private-directory"),
         ):
-            boundaries[key] = hold_boundary(path, kind, deadline)
+            private = kind == "private-directory"
+            boundaries[key] = hold_boundary(path, "directory" if private else kind, deadline,
+                                             private_leaf=private)
         boundaries["python"] = hold_boundary(Path(sys.executable).resolve(), "file", deadline,
                                              trusted_system=True)
         boundaries["git"] = hold_boundary(Path(GIT), "file", deadline, trusted_system=True)
         if args.operation == "inspect":
-            boundaries["output"] = hold_boundary(output, "directory", deadline)
+            boundaries["output"] = hold_boundary(output, "directory", deadline, private_leaf=True)
         boundaries_overlap([value for key, value in boundaries.items() if key != "output_parent"])
         paths_overlap([input_path, response_path, repository, output, scratch, jq_path])
     except Exception:
