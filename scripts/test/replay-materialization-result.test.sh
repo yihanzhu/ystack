@@ -2240,6 +2240,140 @@ assert [row[0] for row in rows] == expected
 assert all(len(row) == 3 and row[1] and row[2] == "PASS" for row in rows)
 assert len(expected) == len(set(expected))
 PY
+
+receiver_evidence="$tmp/receiver-evidence.jsonl"
+python3 - "$tmp" "$receiver_control_inventory" "$receiver_route_manifest" \
+  "$receiver_tool_manifest" "$receiver_evidence" \
+  source "$root/scripts/test/replay-materialization-result.test.sh" \
+  loaded-wrapper "$loaded_wrapper" receiver-supervisor "$receiver_supervisor" \
+  inherit-launcher "$receiver_inherit_launcher" diagnostic-reader "$receiver_diagnostic_reader" \
+  shell-runner "$receiver_shell_runner" control-wrapper "$receiver_control_wrapper" \
+  replay "$replay" <<'PY'
+import glob
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+tmp, inventory_path, route_path, tools_path, output_path, *helper_arguments = sys.argv[1:]
+tmp = Path(tmp)
+intentional_missing = {"completion-write-failure", "completion-rename-failure"}
+limits = {"completion": 32768, "diagnostic": 32768, "shell-result": 4096}
+
+
+def read_bounded(path, limit):
+    path = Path(path)
+    data = path.read_bytes()
+    assert len(data) <= limit, (str(path), len(data), limit)
+    return data
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+evidence = []
+
+
+def emit(kind, name, **facts):
+    evidence.append({"kind": kind, "name": name, **facts})
+
+
+inventory_data = read_bounded(inventory_path, 32768)
+inventory_rows = [line.split("\t") for line in inventory_data.decode().splitlines()]
+assert len(inventory_rows) == 72
+for ordinal, row in enumerate(inventory_rows, 1):
+    assert len(row) == 3 and row[2] == "PASS"
+    emit("receiver-inventory", row[0], ordinal=ordinal, phase=row[1], result=row[2])
+emit("proof-hash", "receiver-inventory", bytes=len(inventory_data), sha256=digest(inventory_data))
+
+for kind, path, fields, limit in (
+        ("route-manifest", route_path, ("type", "path", "sha256", "mode"), 65536),
+        ("tool-manifest", tools_path, ("tool", "path", "sha256", "version"), 32768)):
+    data = read_bounded(path, limit)
+    rows = [line.split("\t", len(fields) - 1) for line in data.decode().splitlines()]
+    assert rows and all(len(row) == len(fields) for row in rows)
+    for ordinal, row in enumerate(rows, 1):
+        emit(kind, row[1] if kind == "route-manifest" else row[0], ordinal=ordinal,
+             record=dict(zip(fields, row)))
+    emit("proof-hash", kind, bytes=len(data), sha256=digest(data))
+
+assert len(helper_arguments) % 2 == 0
+for index in range(0, len(helper_arguments), 2):
+    name, path = helper_arguments[index:index + 2]
+    data = Path(path).read_bytes()
+    emit("source-hash", name, bytes=len(data), sha256=digest(data))
+
+for inventory_name, unused_phase, unused_result in inventory_rows:
+    record_case = inventory_name.removeprefix("real-") if inventory_name.startswith("real-") else inventory_name
+    if inventory_name.startswith("real-"):
+        invocation = tmp / ("supervised-" + record_case)
+    else:
+        choices = [tmp / ("control-" + inventory_name), tmp / inventory_name]
+        existing = [path for path in choices if path.is_dir()]
+        assert len(existing) == 1, (inventory_name, [str(path) for path in existing])
+        invocation = existing[0]
+
+    completion_paths = [Path(path) for path in glob.glob(str(invocation / "completion-*.json"))]
+    completions = [path for path in completion_paths if path.is_file()]
+    assert len(completions) == (0 if inventory_name in intentional_missing else 1), inventory_name
+    if completions:
+        assert completion_paths == completions
+        completion_data = read_bounded(completions[0], limits["completion"])
+        completion = json.loads(completion_data)
+        assert completion["case"] == record_case
+        emit("completion", inventory_name, state="present", bytes=len(completion_data),
+             sha256=digest(completion_data), record=completion)
+    else:
+        assert len(completion_paths) <= 1
+        emit("completion", inventory_name, state="intentionally-missing",
+             reason="injected " + inventory_name,
+             path_state="directory" if completion_paths else "absent")
+
+    shell_candidates = list(invocation.glob("completion-*.json.shell-result"))
+    shell_candidates += list(invocation.glob("shell-result.json"))
+    assert len(shell_candidates) == 1, (inventory_name, [str(path) for path in shell_candidates])
+    shell_data = read_bounded(shell_candidates[0], limits["shell-result"])
+    shell_record = json.loads(shell_data)
+    assert shell_record["case"] == record_case
+    emit("shell-result", inventory_name, bytes=len(shell_data), sha256=digest(shell_data),
+         record=shell_record)
+
+    diagnostic_candidates = list(invocation.glob("completion-*.json.diagnostic"))
+    assert len(diagnostic_candidates) <= 1, inventory_name
+    if diagnostic_candidates:
+        diagnostic_data = read_bounded(diagnostic_candidates[0], limits["diagnostic"])
+        if diagnostic_data:
+            diagnostic_record = json.loads(diagnostic_data)
+            assert diagnostic_record["case"] == record_case
+            emit("diagnostic", inventory_name, state="present", bytes=len(diagnostic_data),
+                 sha256=digest(diagnostic_data), record=diagnostic_record)
+        else:
+            emit("diagnostic", inventory_name, state="empty", bytes=0,
+                 sha256=digest(diagnostic_data))
+    else:
+        emit("diagnostic", inventory_name, state="absent")
+
+    for stream in ("stdout", "stderr"):
+        capture_path = invocation / stream
+        if inventory_name.startswith("real-"):
+            capture_path = tmp / (record_case + (".out" if stream == "stdout" else ".err"))
+        if capture_path.exists():
+            capture_data = capture_path.read_bytes()
+            emit("capture", inventory_name, stream=stream, state="present", bytes=len(capture_data),
+                 sha256=digest(capture_data))
+        else:
+            emit("capture", inventory_name, stream=stream, state="absent")
+    emit("retention", inventory_name, retained=(invocation / "retained").exists())
+
+encoded = b"".join((json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                   for item in evidence)
+assert len(encoded) <= 2 * 1024 * 1024
+Path(output_path).write_bytes(encoded)
+PY
+/bin/cat "$receiver_evidence"
+printf '{"bytes":%s,"kind":"proof-hash","name":"receiver-evidence","sha256":"%s"}\n' \
+  "$(wc -c < "$receiver_evidence" | tr -d ' ')" "$(sha_file "$receiver_evidence")"
 pass 'receiver supervision enforces the real 60-second setup watchdog'
 
 checkpoint_helper="$tmp/checkpoint1-cases.py"
@@ -4291,6 +4425,30 @@ python3 "$checkpoint_helper" "$replay" "$input" "$key" "$tmp/source.git" \
   "$no_change_expected" "$loaded_wrapper"
 checkpoint_case_count=$(wc -l < "$checkpoint_inventory" | tr -d ' ')
 [ "$checkpoint_case_count" -ge 100 ] || fail checkpoint1-case-count
+original_evidence="$tmp/original-case-evidence.jsonl"
+python3 - "$checkpoint_inventory" "$original_evidence" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source, target = map(Path, sys.argv[1:])
+data = source.read_bytes()
+rows = [line.split("\t") for line in data.decode().splitlines()]
+assert len(rows) == 654 and all(len(row) == 3 and row[2] == "PASS" for row in rows)
+records = [{"group": row[0], "kind": "original-case-inventory", "name": row[1],
+            "ordinal": ordinal, "result": row[2]}
+           for ordinal, row in enumerate(rows, 1)]
+records.append({"bytes": len(data), "kind": "proof-hash", "name": "original-case-inventory",
+                "sha256": hashlib.sha256(data).hexdigest()})
+encoded = b"".join((json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                   for item in records)
+assert len(encoded) <= 512 * 1024
+target.write_bytes(encoded)
+PY
+/bin/cat "$original_evidence"
+printf '{"bytes":%s,"kind":"proof-hash","name":"original-case-evidence","sha256":"%s"}\n' \
+  "$(wc -c < "$original_evidence" | tr -d ' ')" "$(sha_file "$original_evidence")"
 pass "P03/P04/P05 typed key, journal, parser, and preservation matrix ($checkpoint_case_count cases)"
 
 bad_stored_response="$tmp/bad-stored-response.json"
