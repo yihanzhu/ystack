@@ -1,5 +1,5 @@
 ---
-spec-blob: ce5348028204e91f1e52d7ecf32607c8e222e4ca
+spec-blob: 6adf3023ba90fda298e609497d683f8954ec05c8
 drafted: 2026-09-14
 ---
 
@@ -28,35 +28,37 @@ resumption. This plan amendment does not discard WIP or itself authorize resume.
 
 Exactly eight implementation paths; the plan itself changes only in its plan PR.
 
-| Path | Work | Estimated changed lines |
+| Path | Work | Changed lines |
 | --- | --- | ---: |
-| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 1075-1228 |
-| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 380-447 |
-| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 1367-1447 |
-| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 |
-| `docs/components.md` | Resolver launch, boundary and proof documentation | 35 |
-| `README.md` | Resolver index row | 2 |
-| `RESTORE.md` | Resolver restoration and proof | 18 |
-| `ci/required-files.txt` | Append both shipped files and focused test | 5 |
+| `resolver/v1/trusted-launch.c` | New parent, source pins, checks and supervisor | 2006 measured |
+| `resolver/v1/resolve-profile.sh` | New public entry, git mode 100755 | 463 measured |
+| `scripts/test/resolver-trusted-launch.test.sh` | Complete R10 suite, executable | 3757 measured |
+| `scripts/test/portable-core-schema.test.sh` | Add exactly the two new generation consumers | 2 measured |
+| `docs/components.md` | Resolver launch, boundary and proof documentation | 66 measured |
+| `README.md` | Resolver index row | 1 measured |
+| `RESTORE.md` | Resolver restoration and proof | 28 measured |
+| `ci/required-files.txt` | Append both shipped files and focused test | 5 measured |
 
-`review_size: accepted-exception`, **2850-3200 changed lines**, is accepted in
-the spec for this one implementation concern. The projected table total is
-2884-3184, not measured implementation. Parent/entry intervals retain the earlier
-plan estimates and the spec's later cumulative estimates. Other paths total 62.
-The paused test draft measures 1242 lines; it is incomplete and unaccepted proof.
-Its projected 1367-1447 includes 70-100 added lines for native Darwin directory/cache
-attribution and isolated compile-cache proof, 15-25 for observing all four run files
-and the run directory at 0500, and 40-80 net lines to replace the incomplete 74-line
-source sweep with the accepted exact-role and lexical checks. These additions are
-estimates of unwritten work, not measurements. The accepted band rounds the total
-outward; it does not permit dropping another discovered proof obligation.
+All eight figures are measured at implementation head
+`66342f33e1f39823ae9f8256bca1ff9328e3c05f` on
+`ystack/impl/resolver-trusted-parent`: `git diff --numstat
+origin/main...origin/ystack/impl/resolver-trusted-parent` reports 8 files,
+6325 insertions and 3 deletions, **6328 changed lines**, of which the three
+implementation files are 6226 insertions (2006 / 463 / 3757).
 
-The 702-line existing launcher supplies about 605 copied lines; existing test
-fixtures are reuse, not permission to omit cases. Choose the specified platform
-SHA tools; do not add a C digest implementation. Measure additions, deletions and
-net separately when full tests land and at final head. No compressed code, reduced
-tests or component/test split to meet the band. An unexplained overrun returns to
-the artifact gate before more code.
+`review_size: accepted-exception`, **5400-7400 changed lines**, for this one
+implementation concern. This band supersedes the one carried by the spec's
+record (blob `6adf3023ba90fda298e609497d683f8954ec05c8`) and is the only
+range this implementation is measured against. It brackets the measured
+6328 with an outward margin of roughly a sixth.
+
+The 702-line existing launcher supplies about 605 of the parent's lines; existing
+test fixtures are reuse, not permission to omit cases. Choose the specified
+platform SHA tools; do not add a C digest implementation. Measure additions,
+deletions and net separately at final head. No compressed code, reduced tests or
+component/test split to meet the band. An unexplained overrun returns to the
+artifact gate before more code; above the top of the band, stop and re-decide
+rather than continue.
 The spec's separate 8521-11529 artifact range does not apply to this plan or code.
 
 Do not change the resolver runtime, library, jq program, native helper, core files,
@@ -71,7 +73,7 @@ The new test may use existing fixture helpers and create temporary drivers.
 
 Provision pinned jq using `scripts/test/shadow-slice.test.sh:24-51`, as R10 requires.
 Reuse temporary cleanup and result-helper patterns from
-`scripts/test/portable-profile-resolution.test.sh:23-30,521-533`, its launcher source and
+`scripts/test/portable-profile-resolution.test.sh:23-34,521-531`, its launcher source and
 loader-trap source; fixture helpers serve auxiliary cases.
 The positive request names real committed `profiles/default/v1` profile/manifest
 objects with this repository mapped, as R10 requires, not a synthetic profile.
@@ -248,8 +250,29 @@ absolute physical caller-owned empty 0700 directory, no symlink component, and t
 R1 PATH_MAX reserve for `.run/tmp/` plus NAME_MAX. Use platform stat formats and
 builtin glob emptiness, not find or mktemp.
 
-Initialize all names read by traps/checkpoints before arming traps; assign run from
-validated output. Signal traps are exactly `: "${entry_signal:=NAME}"; wait_interrupted=1`.
+Initialize all six names read by traps/checkpoints before arming traps — `entry_signal`,
+`run_created`, `entry_status`, `parent_pid`, `last_forwarded` and `trap_busy`, the last two
+because the forwarding trap bodies read both; assign run from
+validated output. There are exactly two trap-form literals per signal and no third. The
+record-only form is `: "${entry_signal:=NAME}"; wait_interrupted=1`, two statements; the
+forwarding form is `: "${entry_signal:=NAME}"; wait_interrupted=1; if [ -z "$trap_busy" ];
+then trap_busy=1; case " $(jobs -l) " in *" $parent_pid Running"*)
+[ -n "$last_forwarded" ] || { kill -"$entry_signal" "$parent_pid" 2>/dev/null || :;
+last_forwarded=$entry_signal; };; esac; trap_busy=''; fi`, three statements, every one a
+builtin or a subshell around one. The `trap_busy` flag serialises nested trap bodies —
+Bash 3.2 runs a trap for a signal arriving while another trap body executes, and two
+bodies could otherwise pass the same empty `last_forwarded` and both send; a nested body
+arriving after `trap_busy=1` records only, and one arriving in the two-statement window
+before it runs to completion first and leaves `last_forwarded` set for the outer. Set
+`trap_busy` on the way into the `if` and clear it on the way out, nowhere else. The
+forwarding body sends
+`$entry_signal`, never its own `:=NAME` default: sending the default breaks
+first-signal-wins whenever a second, differently named signal arrives after the first was
+recorded but not sent. Arm the record-only form with the EXIT trap before anything creates
+the run directory, and re-arm the forwarding form on the statement immediately after
+`parent_pid=$!`; those are the only form changes outside the wait loop. Do not
+re-initialize `last_forwarded` above the wait loop; that would erase a forward a trap
+already made.
 EXIT captures status first, ignores INT/TERM/HUP second, restores/removes owned .run,
 prints entry-signal only for `[ -f /dev/fd/2 ]`, then selects the prescribed status.
 Create .run by plain mkdir, derive run_created from captured status including the
@@ -269,7 +292,36 @@ files then directory to 0500, launch parent as child under only PATH and LC_ALL.
 The wait loop follows R1 exactly: clear interruption flag, forward the first recorded
 signal at most once only if jobs lists parent Running, wait, accept uninterrupted
 status, otherwise consult jobs and either loop or use the extra-wait status fallback.
-Set last_forwarded even when forwarding is skipped, so it cannot be retried later.
+Step 2 is a record-only section and the loop's only forwarding decision is made inside it:
+while `[ -n "$entry_signal" ] && [ -z "$last_forwarded" ]`, re-arm all three traps in the
+record-only form, then under the same guard consult the job table and send
+`kill -"$entry_signal" "$parent_pid" 2>/dev/null || :` on the Running arm, then set
+`last_forwarded=$entry_signal`, then re-arm the forwarding form, then test the guard again
+and run the section once more if it still holds. Only after the section exits does the
+entry wait. Two invariants: with the forwarding form armed a trap sends exactly when
+`last_forwarded` is empty, and inside a section no trap sends — so at most one send per
+run, always the first recorded signal. The section exists because a loop racing an armed
+trap cannot be arbitrated by `last_forwarded` alone; both reproduced failures — one
+arrival sent twice, and an INT sent for a run whose recorded signal was TERM — are named
+in R1.
+There are four job-table-gated forwarding kill roles — one in each of the three trap
+bodies' forwarding form and one in this section — all sending `$entry_signal`, all on the
+same `case " $(jobs -l) "` read and nowhere else. Their source occurrences are seven, not
+four: each forwarding trap literal is written at two sites, the arming after
+`parent_pid=$!` and the re-arm at the foot of the section, plus the loop's own kill. Every
+one of the seven carries `2>/dev/null`, so a
+`kill` at a parent that vanished after the table read cannot produce a stderr write that
+blocks on a pipe whose reader has gone. The two writings of a signal's forwarding literal
+must be byte-identical; count exactly seven occurrences and exactly four roles, admitting
+no eighth occurrence and no fifth role. Set last_forwarded in the loop after the case, even when forwarding is
+skipped, so it cannot be retried later and so the section terminates when the table stops
+listing the parent; in the trap body it is set inside the Running arm, beside the kill.
+Steps 3-5, the second-wait rule and the 127 fallbacks are unchanged. Enumerate every
+`trap` command in R10's trap inventory: the `trap … EXIT` command, three pre-parent
+record-only arming commands, three forwarding re-arms after `parent_pid=$!`, the section's
+three record-only and three forwarding re-arms, and `trap '' INT TERM HUP`, the EXIT trap
+body's second statement — fourteen in all, two non-empty body literals per signal plus the
+empty one EXIT sets.
 Pass child stdout/stderr through unchanged. Do not poll pid liveness with kill -0.
 Preserve real status 7/42 in simultaneous-exit
 cases; no fixed two-wait replacement. Never remove .run before the parent is reaped.
@@ -348,9 +400,13 @@ or other command variable is permitted. Review their values separately.
 
 Treat `/dev/null` only as the exact temporary `2>/dev/null` target on R1's three
 `ulimit -S -n` ladder rungs, descriptor-close eval, both prescribed unset forms
-in every required scrub including the marker branch, and the unique signal
-forwarding kill in the job-table Running arm above wait. Check those source roles
-and positions, not only an occurrence count. Reject every other command/descriptor,
+in every required scrub including the marker branch, and the wait loop's signal
+forwarding kill in the job-table Running arm inside its record-only section together with
+the forwarding kill in each of the three trap bodies — four roles and seven source
+occurrences, since each forwarding literal is written at two sites and the loop's at one,
+and every one of the seven carries it. Admit no eighth occurrence and no fifth role.
+Check those source roles
+and positions as well as that occurrence count. Reject every other command/descriptor,
 input or append redirection, variable sink, prefix path, C pathname or execve
 argument using that target. It is neither an executable nor a general data member.
 Keep the redirect outside eval's quoted exec; persistent stderr suppression remains
@@ -454,7 +510,7 @@ statuses and output with full OIDs. A change after proof invalidates affected pr
   `git diff --check`; required CI checks and all six
   test shards green, followed by green `ci` aggregate. New tests require no workflow edit.
 - `git diff --name-only <base> HEAD` — exactly eight implementation paths above;
-  `git diff --numstat <base> HEAD` — report additions/deletions/net against 2850-3200.
+  `git diff --numstat <base> HEAD` — report additions/deletions/net against 5400-7400.
   `git ls-files --stage resolver/v1/resolve-profile.sh` — 100755; runtime stays 100644.
 - R10 pin-liveness checks compare all eighteen source pins and all three non-blob
   constants: parent generation and entry generation equal the accepted library
