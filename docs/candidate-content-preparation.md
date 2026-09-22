@@ -69,6 +69,27 @@ submodules and candidate commands do not run. Optional pack reverse indexes are
 fully observed and validated in separate scratch; Git cannot discover them in the
 object-reading copy and they never enter the bundle.
 
+The core generation is not a component setting. Preparation measures the existing
+core selector and registry, requires their one consistent selected generation, and
+then checks the fixed hashes of that generation's ingress and modules. The copied
+jq executable is checked before use and again before completion. A changed selector,
+registry, module, jq binary, input or response causes refusal.
+
+Repository and candidate walks enumerate each directory entry through held
+descriptors. Linked directories, linked files, device crossings, duplicate inodes,
+unsupported config, malformed refs and unlisted storage are refused instead of
+being skipped. File bodies and Git blobs move in bounded chunks. Their SHA-256 and
+Git object identities are computed from the bytes actually read or written.
+Destination space is charged before a write begins, including a write that later
+fails.
+
+Publication applies final modes before flushing each file. It flushes completed
+content directories from the leaves upward, writes and flushes a private temporary
+record, renames that record within the held bundle directory, and then flushes the
+bundle and its parent. The lock remains held while the final success or refusal is
+written. A published record can therefore be recovered after an outward-pipe
+failure without treating a pre-publication directory as complete.
+
 The successful response is one canonical JSON line. It identifies the record and
 manifest SHA-256 values and repeats the unavailable authority and qualification.
 Exit zero means local preparation completed. It does not mean a supervisor or

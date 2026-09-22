@@ -311,6 +311,56 @@ expect_error mixed-duplicate-option E_USAGE 2 "$python" -I "$component" prepare 
   --response "$response" --response-sha256 "$(sha_file "$response")" \
   --candidate-repository "$candidate" --output "$tmp/error-mixed-duplicate-option/output-parent/bundle" \
   --scratch "$tmp/error-mixed-duplicate-option/scratch" --jq "$jq_bin"
+expect_error hostile-unknown-option E_USAGE 2 "$python" -I "$component" prepare \
+  --hostile-$'line\nbreak' "$input" --input "$input" --input-sha256 "$(sha_file "$input")" \
+  --response "$response" --response-sha256 "$(sha_file "$response")" \
+  --candidate-repository "$candidate" --output "$tmp/error-hostile-unknown-option/output-parent/bundle" \
+  --scratch "$tmp/error-hostile-unknown-option/scratch" --jq "$jq_bin"
+expect_error missing-option E_USAGE 2 "$python" -I "$component" prepare \
+  --input "$input" --input-sha256 "$(sha_file "$input")" --response "$response" \
+  --response-sha256 "$(sha_file "$response")" --candidate-repository "$candidate" \
+  --output "$tmp/error-missing-option/output-parent/bundle" \
+  --scratch "$tmp/error-missing-option/scratch"
+expect_error extra-positional E_USAGE 2 "$python" -I "$component" prepare unexpected \
+  --input "$input" --input-sha256 "$(sha_file "$input")" --response "$response" \
+  --response-sha256 "$(sha_file "$response")" --candidate-repository "$candidate" \
+  --output "$tmp/error-extra-positional/output-parent/bundle" \
+  --scratch "$tmp/error-extra-positional/scratch" --jq "$jq_bin"
+
+for physical_case in relative repeated-separator dot-component; do
+  case "$physical_case" in
+    relative) bad_input=relative-input.json ;;
+    repeated-separator) bad_input="${input%/*}//${input##*/}" ;;
+    dot-component) bad_input="${input%/*}/./${input##*/}" ;;
+  esac
+  expect_error "physical-$physical_case" E_USAGE 2 "$python" -I "$component" prepare \
+    --input "$bad_input" --input-sha256 "$(sha_file "$input")" --response "$response" \
+    --response-sha256 "$(sha_file "$response")" --candidate-repository "$candidate" \
+    --output "$tmp/error-physical-$physical_case/output-parent/bundle" \
+    --scratch "$tmp/error-physical-$physical_case/scratch" --jq "$jq_bin"
+done
+
+expect_error malformed-input-digest E_USAGE 2 "$python" -I "$component" prepare \
+  --input "$input" --input-sha256 not-a-digest --response "$response" \
+  --response-sha256 "$(sha_file "$response")" --candidate-repository "$candidate" \
+  --output "$tmp/error-malformed-input-digest/output-parent/bundle" \
+  --scratch "$tmp/error-malformed-input-digest/scratch" --jq "$jq_bin"
+expect_error uppercase-response-digest E_USAGE 2 "$python" -I "$component" prepare \
+  --input "$input" --input-sha256 "$(sha_file "$input")" --response "$response" \
+  --response-sha256 "$(sha_file "$response" | /usr/bin/tr 'a-f' 'A-F')" \
+  --candidate-repository "$candidate" --output "$tmp/error-uppercase-response-digest/output-parent/bundle" \
+  --scratch "$tmp/error-uppercase-response-digest/scratch" --jq "$jq_bin"
+
+bad_jq="$tmp/bad-jq"
+/bin/cp "$jq_bin" "$bad_jq"
+/bin/chmod 0700 "$bad_jq"
+printf x | /bin/dd of="$bad_jq" bs=1 seek=0 conv=notrunc 2>/dev/null
+/bin/chmod 0500 "$bad_jq"
+expect_error altered-jq E_DEPENDENCY 1 "$python" -I "$component" prepare \
+  --input "$input" --input-sha256 "$(sha_file "$input")" --response "$response" \
+  --response-sha256 "$(sha_file "$response")" --candidate-repository "$candidate" \
+  --output "$tmp/error-altered-jq/output-parent/bundle" \
+  --scratch "$tmp/error-altered-jq/scratch" --jq "$bad_jq"
 
 mkdir -m 700 "$tmp/mutated"
 "$jq_bin" -S -c '
@@ -337,11 +387,79 @@ for json_case in bom trailing duplicate-member nonfinite invalid-utf8; do
     "$tmp/error-json-$json_case/scratch"
 done
 
+for relation_case in request-ref candidate-commit parent-commit attempt-number receipt-extra response-authority; do
+  "$python" -B -I "$helper" relation-case --input "$response" \
+    --output "$tmp/mutated/relation-$relation_case.json" --case "$relation_case"
+  expect_error "relation-$relation_case" E_INPUT 1 invoke_prepare prepare "$input" \
+    "$tmp/mutated/relation-$relation_case.json" "$candidate" \
+    "$tmp/error-relation-$relation_case/output-parent/bundle" \
+    "$tmp/error-relation-$relation_case/scratch"
+done
+
 storage_copy="$tmp/storage-extra.git"
 /bin/cp -R "$candidate" "$storage_copy"
 /usr/bin/touch "$storage_copy/extra"
 expect_error storage-extra E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$storage_copy" \
   "$tmp/error-storage-extra/output-parent/bundle" "$tmp/error-storage-extra/scratch"
+
+storage_link="$tmp/storage-directory-link.git"
+/bin/cp -R "$candidate" "$storage_link"
+/bin/ln -s ../info "$storage_link/objects/aa"
+expect_error storage-directory-link E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$storage_link" \
+  "$tmp/error-storage-directory-link/output-parent/bundle" "$tmp/error-storage-directory-link/scratch"
+
+storage_fifo="$tmp/storage-nonregular.git"
+/bin/cp -R "$candidate" "$storage_fifo"
+/usr/bin/mkfifo "$storage_fifo/objects/aa"
+expect_error storage-nonregular E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$storage_fifo" \
+  "$tmp/error-storage-nonregular/output-parent/bundle" "$tmp/error-storage-nonregular/scratch"
+
+bad_head="$tmp/storage-bad-head.git"
+/bin/cp -R "$candidate" "$bad_head"
+/bin/chmod 0600 "$bad_head/HEAD"
+printf 'ref: refs/heads/../bad\n' > "$bad_head/HEAD"
+/bin/chmod 0400 "$bad_head/HEAD"
+expect_error storage-bad-head E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$bad_head" \
+  "$tmp/error-storage-bad-head/output-parent/bundle" "$tmp/error-storage-bad-head/scratch"
+
+bad_config="$tmp/storage-bad-config.git"
+/bin/cp -R "$candidate" "$bad_config"
+/bin/chmod 0600 "$bad_config/config"
+/usr/bin/sed 's/repositoryformatversion = [01]/repositoryformatversion = 9/' \
+  "$candidate/config" > "$bad_config/config"
+/bin/chmod 0400 "$bad_config/config"
+expect_error storage-bad-config E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$bad_config" \
+  "$tmp/error-storage-bad-config/output-parent/bundle" "$tmp/error-storage-bad-config/scratch"
+
+storage_hardlink="$tmp/storage-hardlink.git"
+/bin/cp -R "$candidate" "$storage_hardlink"
+linked_object=$(find "$storage_hardlink/objects" -type f ! -name '*.rev' -print -quit)
+/bin/mkdir -p "$storage_hardlink/objects/aa"
+/bin/ln "$linked_object" "$storage_hardlink/objects/aa/00000000000000000000000000000000000000"
+expect_error storage-hardlink E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$storage_hardlink" \
+  "$tmp/error-storage-hardlink/output-parent/bundle" "$tmp/error-storage-hardlink/scratch"
+
+storage_file_link="$tmp/storage-file-link.git"
+/bin/cp -R "$candidate" "$storage_file_link"
+/bin/ln -s ../../HEAD "$storage_file_link/objects/aa"
+expect_error storage-file-link E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$storage_file_link" \
+  "$tmp/error-storage-file-link/output-parent/bundle" "$tmp/error-storage-file-link/scratch"
+
+unpaired_pack="$tmp/storage-unpaired-pack.git"
+/bin/cp -R "$candidate" "$unpaired_pack"
+unpaired_index=$(find "$unpaired_pack/objects/pack" -name '*.idx' -print -quit)
+[ -n "$unpaired_index" ] || fail unpaired-index-absent
+/bin/rm "$unpaired_index"
+expect_error storage-unpaired-pack E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$unpaired_pack" \
+  "$tmp/error-storage-unpaired-pack/output-parent/bundle" "$tmp/error-storage-unpaired-pack/scratch"
+
+bad_bare="$tmp/storage-not-bare.git"
+/bin/cp -R "$candidate" "$bad_bare"
+/bin/chmod 0600 "$bad_bare/config"
+/usr/bin/sed 's/bare = true/bare = false/' "$candidate/config" > "$bad_bare/config"
+/bin/chmod 0400 "$bad_bare/config"
+expect_error storage-not-bare E_STORAGE 1 invoke_prepare prepare "$input" "$response" "$bad_bare" \
+  "$tmp/error-storage-not-bare/output-parent/bundle" "$tmp/error-storage-not-bare/scratch"
 
 reverse_copy="$tmp/storage-reverse.git"
 /bin/cp -R "$candidate" "$reverse_copy"
@@ -387,6 +505,58 @@ invoke_prepare inspect "$input" "$response" "$candidate" "$restore/bundle" "$res
 /usr/bin/cmp -s "$base/prepare.out" "$restore/inspect.out" || fail restoration-envelope
 pass 'complete bundle restores under new private paths'
 
+tampered="$tmp/tampered-candidate-bundle"
+/bin/cp -R "$collision" "$tampered"
+/bin/chmod 0700 "$tampered" 0600 "$tampered/candidate/source.txt" "$tampered/manifest.json" "$tampered/record.json"
+printf 'omega\nbeta\ngamma\n' > "$tampered/candidate/source.txt"
+"$python" -B -I - "$tampered" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+manifest=json.loads((root/'manifest.json').read_bytes())
+entry=next(item for item in manifest['entries'] if item['path']=='source.txt')
+entry['sha256']=hashlib.sha256((root/'candidate/source.txt').read_bytes()).hexdigest()
+canonical=lambda value:(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
+manifest_data=canonical(manifest); (root/'manifest.json').write_bytes(manifest_data)
+record=json.loads((root/'record.json').read_bytes())
+record['manifest_sha256']=hashlib.sha256(manifest_data).hexdigest()
+(root/'record.json').write_bytes(canonical(record))
+PY
+/bin/chmod 0400 "$tampered/candidate/source.txt" "$tampered/manifest.json" "$tampered/record.json"
+expect_error candidate-content-git-identity E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
+  "$tampered" "$tmp/error-candidate-content-git-identity/scratch"
+
+for bundle_case in manifest-extra directory-extra file-mode-label blob-oid-label candidate-symlink candidate-hardlink; do
+  malformed_bundle="$tmp/bundle-$bundle_case"
+  /bin/cp -R "$collision" "$malformed_bundle"
+  /bin/chmod 0700 "$malformed_bundle"
+  "$python" -B -I - "$malformed_bundle" "$bundle_case" <<'PY'
+import hashlib,json,os,sys
+from pathlib import Path
+root,case=Path(sys.argv[1]),sys.argv[2]
+canonical=lambda value:(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
+manifest=json.loads((root/'manifest.json').read_bytes())
+if case=='manifest-extra': manifest['unexpected']=False
+elif case=='directory-extra': next(x for x in manifest['entries'] if x['kind']=='directory')['unexpected']=False
+elif case=='file-mode-label': next(x for x in manifest['entries'] if x['kind']=='file')['mode']='0500'
+elif case=='blob-oid-label':
+    item=next(x for x in manifest['entries'] if x['kind']=='file'); item['blob_oid']='0'*len(item['blob_oid'])
+elif case=='candidate-symlink':
+    path=root/'candidate/source.txt'; path.unlink(); path.symlink_to('repeat-a.txt')
+elif case=='candidate-hardlink':
+    path=root/'candidate/source.txt'; other=root/'candidate/repeat-a.txt'; path.unlink(); os.link(other,path)
+if case.startswith(('manifest','directory','file','blob')):
+    data=canonical(manifest); (root/'manifest.json').write_bytes(data)
+    record=json.loads((root/'record.json').read_bytes()); record['manifest_sha256']=hashlib.sha256(data).hexdigest()
+    (root/'record.json').write_bytes(canonical(record))
+PY
+  find "$malformed_bundle" -type f -exec /bin/chmod 0400 {} +
+  /bin/chmod 0600 "$malformed_bundle/preparation.lock"
+  find "$malformed_bundle/candidate" -type d -exec /bin/chmod 0500 {} +
+  expect_error "bundle-$bundle_case" E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
+    "$malformed_bundle" "$tmp/error-bundle-$bundle_case/scratch"
+done
+
 extra_bundle="$tmp/extra-bundle"
 /bin/cp -R "$collision" "$extra_bundle"
 /bin/chmod 0700 "$extra_bundle"
@@ -401,6 +571,13 @@ printf x >> "$corrupt_bundle/record.json"
 /bin/chmod 0400 "$corrupt_bundle/record.json"
 expect_error corrupt-record E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
   "$corrupt_bundle" "$tmp/error-corrupt-record/scratch"
+
+partial_bundle="$tmp/partial-bundle"
+/bin/cp -R "$collision" "$partial_bundle"
+/bin/chmod 0700 "$partial_bundle"
+/bin/rm "$partial_bundle/record.json"
+expect_error partial-bundle E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
+  "$partial_bundle" "$tmp/error-partial-bundle/scratch"
 
 /bin/chmod 0600 "$restore/bundle/candidate/source.txt"
 expect_error same-owner-mode-change E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
@@ -443,6 +620,8 @@ expect_error public-directory-leaf E_IDENTITY 2 "$python" -I "$component" prepar
 
 "$python" -B -I "$helper" child-setup-cleanup --component "$component"
 pass 'post-spawn selector setup failure terminates and reaps its child'
+"$python" -B -I "$helper" child-streaming --component "$component"
+pass 'child output streams in bounded chunks and deadline children are reaped'
 
 race="$tmp/output-race"
 /bin/mkdir -m 700 "$race" "$race/scratch" "$race/output-parent" "$race/sentinel"
@@ -480,8 +659,8 @@ fi
 pass 'output replacement is detected and descriptor-bound publication cannot escape'
 
 write_argv() {
-  local destination=$1 case_root=$2
-  "$python" - "$destination" "$input" "$response" "$candidate" "$case_root" "$jq_bin" <<'PY'
+  local destination=$1 case_root=$2 case_input=${3:-$input} case_candidate=${4:-$candidate}
+  "$python" - "$destination" "$case_input" "$response" "$case_candidate" "$case_root" "$jq_bin" <<'PY'
 import hashlib,json,sys
 out,inp,response,candidate,root,jq=sys.argv[1:]
 sha=lambda p:hashlib.sha256(open(p,"rb").read()).hexdigest()
@@ -503,6 +682,112 @@ wait_ready() {
   wait "$pid" 2>/dev/null || :
   fail "pause not reached: $ready"
 }
+
+mutated_input="$tmp/input-mutation"
+/bin/cp "$input" "$mutated_input"
+/bin/chmod 0600 "$mutated_input"
+input_race="$tmp/input-race"
+/bin/mkdir -m 700 "$input_race" "$input_race/scratch" "$input_race/output-parent"
+write_argv "$input_race/argv.json" "$input_race" "$mutated_input"
+"$python" -B -I "$helper" inject --component "$component" --target load_identity_inputs \
+  --mode after-pause --ready "$input_race/ready" --release "$input_race/release" \
+  --argv-json "$input_race/argv.json" > "$input_race/out" 2> "$input_race/err" &
+input_race_pid=$!
+wait_ready "$input_race/ready" "$input_race_pid"
+"$python" -B -I - "$mutated_input" <<'PY'
+import os,sys
+p=sys.argv[1]; data=bytearray(open(p,'rb').read()); data[10]^=1
+with open(p,'r+b',buffering=0) as stream: stream.write(data)
+PY
+: > "$input_race/release"
+if wait "$input_race_pid"; then fail input-mutation-accepted; else input_race_status=$?; fi
+[ "$input_race_status" -eq 2 ] && [ ! -s "$input_race/out" ] && \
+  [ "$(cat "$input_race/err")" = E_IDENTITY ] || fail input-mutation-result
+pass 'same-inode supplied-input mutation is rehashed before completion'
+
+source_race="$tmp/source-race"
+source_race_repo="$source_race/candidate.git"
+/bin/mkdir -m 700 "$source_race" "$source_race/scratch" "$source_race/output-parent"
+/bin/cp -R "$candidate" "$source_race_repo"
+write_argv "$source_race/argv.json" "$source_race" "$input" "$source_race_repo"
+"$python" -B -I "$helper" inject --component "$component" --target copy_storage \
+  --mode after-pause --ready "$source_race/ready" --release "$source_race/release" \
+  --argv-json "$source_race/argv.json" > "$source_race/out" 2> "$source_race/err" &
+source_race_pid=$!
+wait_ready "$source_race/ready" "$source_race_pid"
+source_object=$(find "$source_race_repo/objects" -type f ! -name '*.rev' -print -quit)
+/bin/chmod 0600 "$source_object"
+"$python" -B -I - "$source_object" <<'PY'
+import os,sys
+p=sys.argv[1]; data=bytearray(open(p,'rb').read()); data[-1]^=1
+st=os.stat(p)
+with open(p,'r+b',buffering=0) as stream: stream.write(data)
+os.utime(p,ns=(st.st_atime_ns,st.st_mtime_ns))
+PY
+/bin/chmod 0400 "$source_object"
+: > "$source_race/release"
+if wait "$source_race_pid"; then fail source-mutation-accepted; else source_race_status=$?; fi
+[ "$source_race_status" -eq 1 ] && [ ! -s "$source_race/out" ] && \
+  [ "$(cat "$source_race/err")" = E_STORAGE ] || fail source-mutation-result
+pass 'same-inode source mutation with restored timestamp is remeasured'
+
+for source_change in add remove; do
+  change_root="$tmp/source-$source_change-race"
+  change_repo="$change_root/candidate.git"
+  /bin/mkdir -m 700 "$change_root" "$change_root/scratch" "$change_root/output-parent"
+  /bin/cp -R "$candidate" "$change_repo"
+  write_argv "$change_root/argv.json" "$change_root" "$input" "$change_repo"
+  "$python" -B -I "$helper" inject --component "$component" --target copy_storage \
+    --mode after-pause --ready "$change_root/ready" --release "$change_root/release" \
+    --argv-json "$change_root/argv.json" > "$change_root/out" 2> "$change_root/err" &
+  change_pid=$!
+  wait_ready "$change_root/ready" "$change_pid"
+  if [ "$source_change" = add ]; then
+    /bin/mkdir -m 700 "$change_repo/objects/aa"
+    printf x > "$change_repo/objects/aa/00000000000000000000000000000000000000"
+    /bin/chmod 0400 "$change_repo/objects/aa/00000000000000000000000000000000000000"
+  else
+    removed_source=$(find "$change_repo/objects" -type f ! -name '*.rev' -print -quit)
+    /bin/rm "$removed_source"
+  fi
+  : > "$change_root/release"
+  if wait "$change_pid"; then fail "source $source_change accepted"; else change_status=$?; fi
+  [ "$change_status" -eq 1 ] && [ ! -s "$change_root/out" ] && \
+    [ "$(cat "$change_root/err")" = E_STORAGE ] || fail "source $source_change result"
+  pass "source entry $source_change during preparation is detected"
+done
+
+for fault_target in fsync_file publish_record fsync_dir; do
+  fault="$tmp/io-fault-$fault_target"
+  /bin/mkdir -m 700 "$fault" "$fault/scratch" "$fault/output-parent"
+  write_argv "$fault/argv.json" "$fault"
+  if "$python" -B -I "$helper" inject --component "$component" --target "$fault_target" \
+      --mode before-error --argv-json "$fault/argv.json" > "$fault/out" 2> "$fault/err"; then
+    fail "$fault_target fault accepted"
+  else
+    fault_status=$?
+  fi
+  [ "$fault_status" -eq 1 ] && [ ! -s "$fault/out" ] && [ "$(cat "$fault/err")" = E_IO ] || \
+    fail "$fault_target fault result"
+  pass "$fault_target failure emits no success and preserves the attempt"
+done
+
+for post_target in publish_record fsync_dir; do
+  post="$tmp/post-publication-$post_target"
+  /bin/mkdir -m 700 "$post" "$post/scratch" "$post/inspect-scratch" "$post/output-parent"
+  write_argv "$post/argv.json" "$post"
+  if "$python" -B -I "$helper" inject --component "$component" --target "$post_target" \
+      --mode after-error --argv-json "$post/argv.json" > "$post/out" 2> "$post/err"; then
+    fail "$post_target post-publication fault accepted"
+  else
+    post_status=$?
+  fi
+  [ "$post_status" -eq 1 ] && [ ! -s "$post/out" ] && [ "$(cat "$post/err")" = E_IO ] && \
+    [ -f "$post/output-parent/bundle/record.json" ] || fail "$post_target post-publication state"
+  invoke_prepare inspect "$input" "$response" "$candidate" "$post/output-parent/bundle" \
+    "$post/inspect-scratch" > "$post/recovered"
+  pass "$post_target post-publication failure preserves inspectable completion"
+done
 
 before_record="$tmp/kill-before-record"
 /bin/mkdir -m 700 "$before_record" "$before_record/scratch" "$before_record/output-parent"
@@ -530,9 +815,18 @@ after_pid=$!
 wait_ready "$after_record/ready" "$after_pid"
 [ ! -s "$after_record/out" ] && [ -f "$after_record/output-parent/bundle/record.json" ] || \
   fail kill-after-record-boundary
+/bin/mkdir -m 700 "$after_record/inspect-scratch"
+invoke_prepare inspect "$input" "$response" "$candidate" "$after_record/output-parent/bundle" \
+  "$after_record/inspect-scratch" > "$after_record/waiting-inspect" 2> "$after_record/waiting-inspect.err" &
+waiting_inspect_pid=$!
+sleep 0.5
+kill -0 "$waiting_inspect_pid" 2>/dev/null || fail pre-reply-lock-released
+[ ! -s "$after_record/waiting-inspect" ] && [ ! -s "$after_record/waiting-inspect.err" ] || \
+  fail pre-reply-inspect-emitted
 kill -KILL "$after_pid"
 if wait "$after_pid" 2>/dev/null; then fail kill-after-record-status; else after_status=$?; fi
 [ "$after_status" -eq 137 ] || fail kill-after-record-exit
+wait "$waiting_inspect_pid" || fail pre-reply-inspect-status
 invoke_prepare inspect "$input" "$response" "$candidate" "$after_record/output-parent/bundle" \
   "$after_record/scratch" > "$after_record/recovered-1"
 invoke_prepare inspect "$input" "$response" "$candidate" "$after_record/output-parent/bundle" \
@@ -612,20 +906,55 @@ limit_pair() {
   pass "$name admits its actual inclusive fixture and rejects one byte less"
 }
 
-read -r input_size response_size storage_size blob_size bundle_size < <(
-  "$python" -B -I - "$input" "$response" "$candidate" "$collision" <<'PY'
-import os,sys
+read -r input_size response_size storage_size repository_file_size reverse_size repository_entries \
+  repository_name_bytes blob_size export_size file_paths directory_count export_path_bytes bundle_size \
+  manifest_size record_size result_size head_size config_size receipt_size stage_size dependency_size < <(
+  "$python" -B -I - "$input" "$response" "$candidate" "$collision" "$jq_bin" <<'PY'
+import json,os,sys
 from pathlib import Path
-inp,response,candidate,bundle=map(Path,sys.argv[1:])
+inp,response,candidate,bundle=map(Path,sys.argv[1:5]); jq=Path(sys.argv[5])
+repo=Path.cwd(); response_value=json.loads(response.read_bytes())
 files=lambda root:[p.stat().st_size for p in root.rglob("*") if p.is_file()]
-print(inp.stat().st_size,response.stat().st_size,sum(files(candidate)),
-      max(files(bundle/"candidate")),sum(files(bundle)))
+relative=lambda root,p:p.relative_to(root).as_posix()
+storage_files=[p for p in candidate.rglob('*') if p.is_file()]
+storage_entries=[p for p in candidate.rglob('*')]
+export_files=[p for p in (bundle/'candidate').rglob('*') if p.is_file()]
+export_dirs=[p for p in (bundle/'candidate').rglob('*') if p.is_dir()]
+export_entries=export_files+export_dirs
+print(inp.stat().st_size,response.stat().st_size,sum(p.stat().st_size for p in storage_files),
+      max(p.stat().st_size for p in storage_files),
+      max(p.stat().st_size for p in storage_files if p.suffix=='.rev'),len(storage_entries),
+      sum(len(relative(candidate,p).encode()) for p in storage_entries),
+      max(p.stat().st_size for p in export_files),sum(p.stat().st_size for p in export_files),
+      len(export_files),len(export_dirs),sum(len(relative(bundle/'candidate',p).encode()) for p in export_entries),
+      sum(files(bundle)),(bundle/'manifest.json').stat().st_size,(bundle/'record.json').stat().st_size,
+      (bundle.parent.parent/'prepare.out').stat().st_size,(candidate/'HEAD').stat().st_size,
+      (candidate/'config').stat().st_size,len(response_value['payloads'][0]['data'].encode()),
+      len((json.dumps(response_value['stage_result'],ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()),
+      sum((repo/p['path']).stat().st_size for p in json.loads((bundle/'record.json').read_bytes())['producer']['core']['files'])+
+      jq.stat().st_size)
 PY
 )
 limit_pair input_bytes "$input_size" E_INPUT
 limit_pair response_bytes "$response_size" E_INPUT
 limit_pair storage_bytes "$storage_size"
+limit_pair repository_file_bytes "$repository_file_size"
+limit_pair reverse_index_bytes "$reverse_size"
+limit_pair repository_entries "$repository_entries"
+limit_pair repository_name_bytes "$repository_name_bytes"
 limit_pair blob_bytes "$blob_size"
+limit_pair export_bytes "$export_size"
+limit_pair file_paths "$file_paths"
+limit_pair directories "$directory_count"
+limit_pair export_path_bytes "$export_path_bytes"
 limit_pair bundle_bytes "$bundle_size"
+limit_pair manifest_bytes "$manifest_size"
+limit_pair record_bytes "$record_size"
+limit_pair result_bytes "$result_size"
+limit_pair head_ref_bytes "$head_size"
+limit_pair config_bytes "$config_size"
+limit_pair receipt_bytes "$receipt_size"
+limit_pair stage_result_bytes "$stage_size"
+limit_pair dependency_bytes "$dependency_size"
 
 printf '1..%s\n' "$passed"

@@ -624,6 +624,33 @@ def command_json(args: argparse.Namespace) -> None:
     corrupt_json(args.input, args.output, args.case)
 
 
+def command_relation(args: argparse.Namespace) -> None:
+    response = strict_load(args.input)
+    payload = response["payloads"][0]
+    receipt = json.loads(payload["data"])
+    if args.case == "request-ref":
+        receipt["request_ref"]["sha256"] = "0" * 64
+    elif args.case == "candidate-commit":
+        value = receipt["candidate"]["commit_id"]
+        receipt["candidate"]["commit_id"] = "0" * len(value)
+    elif args.case == "parent-commit":
+        value = receipt["candidate"]["parent_commit_id"]
+        receipt["candidate"]["parent_commit_id"] = "0" * len(value)
+    elif args.case == "attempt-number":
+        receipt["attempt"]["attempt_number"] += 1
+    elif args.case == "receipt-extra":
+        receipt["unexpected"] = False
+    elif args.case == "response-authority":
+        response["authority"] = "local"
+    else:
+        raise FixtureError("unknown relation mutation")
+    if args.case != "response-authority":
+        receipt_bytes = canonical_json(receipt)
+        payload["data"] = receipt_bytes.decode("utf-8")
+        payload["sha256"] = hashlib.sha256(receipt_bytes).hexdigest()
+    replace_bytes(args.output, canonical_json(response))
+
+
 def command_canonical(args: argparse.Namespace) -> None:
     encoded = canonical_json(strict_load(args.input))
     if args.output is None:
@@ -742,6 +769,76 @@ def command_child_setup_cleanup(args: argparse.Namespace) -> None:
         raise FixtureError("spawned child was not reaped after setup failure")
 
 
+def command_child_streaming(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    children: list[subprocess.Popen[bytes]] = []
+    popen_factory = module.subprocess.Popen
+
+    def capture_popen(*call_args: Any, **call_kwargs: Any) -> subprocess.Popen[bytes]:
+        child = popen_factory(*call_args, **call_kwargs)
+        children.append(child)
+        return child
+
+    context = module.Context(
+        args=types.SimpleNamespace(), repo_root=Path("/"), scratch=Path("/"),
+        copied_repo=Path("/"), sidecars=Path("/"), deps_root=Path("/"),
+        ledger=module.Ledger(), deadline=time.monotonic() + 10, boundaries={},
+    )
+    digest = hashlib.sha256()
+    payload_size = module.LIMITS["chunk_bytes"] * 4 + 17
+    script = (
+        "import os,sys\n"
+        f"data=b'x'*{payload_size}\n"
+        "for at in range(0,len(data),4093):\n"
+        " os.write(1,data[at:at+4093]); os.write(2,b'e')\n"
+    )
+    output = module.run_child(
+        context, [sys.executable, "-I", "-c", script], output_limit=payload_size,
+        stdout_consumer=digest.update,
+    )
+    if output or digest.hexdigest() != hashlib.sha256(b"x" * payload_size).hexdigest() or \
+            context.ledger.high_water_chunk > module.LIMITS["chunk_bytes"]:
+        raise FixtureError("streaming child output was buffered or changed")
+    diagnostic_limit = module.LIMITS["child_diagnostic_bytes"]
+    diagnostic_script = f"import os;os.write(2,b'e'*{diagnostic_limit})"
+    module.run_child(context, [sys.executable, "-I", "-c", diagnostic_script], output_limit=0)
+    overflow_script = f"import os;os.write(2,b'e'*{diagnostic_limit + 1})"
+    try:
+        module.run_child(context, [sys.executable, "-I", "-c", overflow_script], output_limit=0)
+    except module.Refusal as exc:
+        if exc.token != "E_LIMIT":
+            raise FixtureError(f"unexpected diagnostic overflow refusal: {exc.token}") from exc
+    else:
+        raise FixtureError("diagnostic overflow was accepted")
+    try:
+        module.run_child(
+            context, [sys.executable, "-I", "-c", f"import os;os.write(1,b'x'*{payload_size})"],
+            output_limit=payload_size - 1, stdout_consumer=lambda _block: None,
+        )
+    except module.Refusal as exc:
+        if exc.token != "E_LIMIT":
+            raise FixtureError(f"unexpected stdout overflow refusal: {exc.token}") from exc
+    else:
+        raise FixtureError("stdout overflow was accepted")
+    module.subprocess.Popen = capture_popen
+    old_child_seconds = module.LIMITS["child_seconds"]
+    module.LIMITS["child_seconds"] = 0.05
+    context.deadline = time.monotonic() + 2
+    try:
+        try:
+            module.run_child(context, [sys.executable, "-I", "-c", "import time;time.sleep(30)"])
+        except module.Refusal as exc:
+            if exc.token != "E_TIMEOUT":
+                raise FixtureError(f"unexpected timeout refusal: {exc.token}") from exc
+        else:
+            raise FixtureError("child deadline was accepted")
+    finally:
+        module.LIMITS["child_seconds"] = old_child_seconds
+        module.subprocess.Popen = popen_factory
+    if len(children) != 1 or children[0].poll() is None:
+        raise FixtureError("deadline child was not reaped")
+
+
 def command_limit_invoke(args: argparse.Namespace) -> None:
     module = load_component(args.component)
     if args.name not in module.LIMITS or args.value < 0:
@@ -820,6 +917,15 @@ def parser() -> argparse.ArgumentParser:
     )
     json_parser.set_defaults(run=command_json)
 
+    relation_parser = commands.add_parser("relation-case", allow_abbrev=False)
+    relation_parser.add_argument("--input", required=True, type=Path)
+    relation_parser.add_argument("--output", required=True, type=Path)
+    relation_parser.add_argument("--case", required=True, choices=(
+        "request-ref", "candidate-commit", "parent-commit", "attempt-number",
+        "receipt-extra", "response-authority",
+    ))
+    relation_parser.set_defaults(run=command_relation)
+
     canonical_parser = commands.add_parser("canonical", allow_abbrev=False)
     canonical_parser.add_argument("--input", required=True, type=Path)
     canonical_parser.add_argument("--output", type=Path)
@@ -855,6 +961,10 @@ def parser() -> argparse.ArgumentParser:
     cleanup_parser = commands.add_parser("child-setup-cleanup", allow_abbrev=False)
     cleanup_parser.add_argument("--component", required=True, type=Path)
     cleanup_parser.set_defaults(run=command_child_setup_cleanup)
+
+    streaming_parser = commands.add_parser("child-streaming", allow_abbrev=False)
+    streaming_parser.add_argument("--component", required=True, type=Path)
+    streaming_parser.set_defaults(run=command_child_streaming)
 
     limit_parser = commands.add_parser("limit-invoke", allow_abbrev=False)
     limit_parser.add_argument("--component", required=True, type=Path)
