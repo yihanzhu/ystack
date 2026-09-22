@@ -7,10 +7,12 @@ import argparse
 import base64
 import binascii
 import dataclasses
+import errno
 import hashlib
 import importlib.util
 import json
 import os
+import resource
 import selectors
 import signal
 import stat
@@ -497,6 +499,28 @@ def mutate_reverse(data: bytes, algorithm: str, case: str, rehash: bool) -> byte
     return bytes(prefix) + checksum
 
 
+def mutate_pack_index(index: Path, pack: Path, algorithm: str, case: str) -> tuple[bytes, bytes]:
+    data = bytearray(index.read_bytes())
+    original_reverse = make_reverse_index(index, pack, algorithm)
+    hash_size = hashlib.new(algorithm).digest_size
+    if len(data) < 8 + 1024 + 2 * hash_size or data[:4] != b"\xfftOc":
+        raise FixtureError("unsupported pack index fixture")
+    count = struct.unpack(">I", data[8 + 255 * 4:8 + 256 * 4])[0]
+    offsets_start = 8 + 1024 + count * hash_size + count * 4
+    if case == "framing":
+        data[:4] = b"BAD!"
+    elif case == "offset":
+        if count == 0 or offsets_start + 4 > len(data) - 2 * hash_size:
+            raise FixtureError("pack index fixture has no ordinary offset")
+        data[offsets_start:offsets_start + 4] = struct.pack(">I", pack.stat().st_size)
+    else:
+        raise FixtureError("unknown pack-index mutation")
+    data[-hash_size:] = hashlib.new(algorithm, data[:-hash_size]).digest()
+    replace_bytes(index, bytes(data))
+    reverse = original_reverse if case == "framing" else make_reverse_index(index, pack, algorithm)
+    return bytes(data), reverse
+
+
 def encode_tree(entries_path: Path, algorithm: str) -> bytes:
     value = strict_load(entries_path)
     if not isinstance(value, list):
@@ -551,8 +575,14 @@ def corrupt_json(source: Path, output: Path, case: str) -> None:
         result = b'{"fixture":"\\ud800"}\n'
     elif case == "nonfinite":
         result = b'{"fixture":NaN}\n'
+    elif case == "depth-32":
+        value = strict_load(source)
+        if not isinstance(value, dict):
+            raise FixtureError("depth-32 semantic fixture needs an object")
+        value["fixture_depth"] = nested_json(30)
+        result = canonical_json(value)
     elif case == "depth-33":
-        result = canonical_json(nested_json(33))
+        result = canonical_json(nested_json(32))
     elif case == "invalid-utf8":
         result = b'{"fixture":"\xff"}\n'
     else:
@@ -621,8 +651,81 @@ def command_reverse(args: argparse.Namespace) -> None:
     write_bytes(args.output, result)
 
 
+def command_pack_index(args: argparse.Namespace) -> None:
+    write_bytes(args.output_index, args.index.read_bytes())
+    index, reverse = mutate_pack_index(args.output_index, args.pack, args.algorithm, args.case)
+    if args.output_index.read_bytes() != index:
+        raise FixtureError("pack index replacement mismatch")
+    write_bytes(args.output_reverse, reverse)
+
+
+def replace_strings(value: Any, replacements: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return replacements.get(value, value)
+    if isinstance(value, list):
+        return [replace_strings(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {key: replace_strings(item, replacements) for key, item in value.items()}
+    return value
+
+
+def command_raw_storage(args: argparse.Namespace) -> None:
+    response = strict_load(args.response)
+    payload = response["payloads"][0]
+    old_receipt_sha = payload["sha256"]
+    receipt = json.loads(payload["data"])
+    algorithm = receipt["candidate"]["hash_algorithm"]
+    old_commit = receipt["candidate"]["commit_id"]
+    old_tree = receipt["candidate"]["tree_id"]
+    git = ["/usr/bin/git", "--no-replace-objects", "--git-dir", str(args.repository)]
+    blob = subprocess.check_output([*git, "ls-tree", "-r", old_tree]).split()[2].decode("ascii")
+    raw = lambda mode, name, oid: mode + b" " + name + b"\0" + bytes.fromhex(oid)
+    if args.case == "slash":
+        tree_body = raw(b"100644", b"bad/name", blob)
+    elif args.case == "order":
+        tree_body = raw(b"100644", b"z", blob) + raw(b"100644", b"a", blob)
+    elif args.case == "mode":
+        tree_body = raw(b"100664", b"source.txt", blob)
+    elif args.case == "prefix":
+        child = write_loose(args.repository, algorithm, "tree", raw(b"100644", b"a", blob))
+        tree_body = raw(b"40000", b"dir", child) + raw(b"100644", b"dir/a", blob)
+    else:
+        raise FixtureError("unknown raw-storage mutation")
+    new_tree = write_loose(args.repository, algorithm, "tree", tree_body)
+    commit = subprocess.check_output([*git, "cat-file", "commit", old_commit])
+    commit = commit.replace(("tree " + old_tree).encode(), ("tree " + new_tree).encode(), 1)
+    new_commit = write_loose(args.repository, algorithm, "commit", commit)
+    candidate_ref = args.repository / "refs/heads/candidate"
+    candidate_ref.chmod(0o600)
+    replace_bytes(candidate_ref, (new_commit + "\n").encode("ascii"))
+    response = replace_strings(response, {old_commit: new_commit, old_tree: new_tree})
+    payload = response["payloads"][0]
+    receipt = replace_strings(receipt, {old_commit: new_commit, old_tree: new_tree})
+    receipt_bytes = canonical_json(receipt)
+    new_receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+    response = replace_strings(response, {old_receipt_sha: new_receipt_sha})
+    payload = response["payloads"][0]
+    payload["data"] = receipt_bytes.decode("utf-8")
+    payload["sha256"] = new_receipt_sha
+    replace_bytes(args.output, canonical_json(response))
+    for path in args.repository.rglob("*"):
+        path.chmod(0o700 if path.is_dir() else 0o400)
+
+
 def command_json(args: argparse.Namespace) -> None:
     corrupt_json(args.input, args.output, args.case)
+
+
+def command_depth_probes(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    module.strict_json(canonical_json(nested_json(31)), "E_INPUT")
+    try:
+        module.strict_json(canonical_json(nested_json(32)), "E_INPUT")
+    except module.Refusal as exc:
+        if exc.token != "E_INPUT":
+            raise FixtureError(f"depth overflow returned {exc.token}") from exc
+    else:
+        raise FixtureError("depth overflow was accepted")
 
 
 def command_relation(args: argparse.Namespace) -> None:
@@ -798,6 +901,19 @@ def command_child_streaming(args: argparse.Namespace) -> None:
         ledger=module.Ledger(), deadline=time.monotonic() + 10, boundaries={},
     )
     digest = hashlib.sha256()
+    retained: list[bytearray] = []
+    retained_peak = 0
+
+    class TrackingBytearray(bytearray):
+        def __init__(self, *values: Any) -> None:
+            super().__init__(*values)
+            retained.append(self)
+
+        def extend(self, value: Any) -> None:
+            nonlocal retained_peak
+            super().extend(value)
+            retained_peak = max(retained_peak, sum(len(item) for item in retained))
+
     payload_size = module.LIMITS["chunk_bytes"] * 4 + 17
     script = (
         "import os,sys\n"
@@ -805,12 +921,18 @@ def command_child_streaming(args: argparse.Namespace) -> None:
         "for at in range(0,len(data),4093):\n"
         " os.write(1,data[at:at+4093]); os.write(2,b'e')\n"
     )
-    output = module.run_child(
-        context, [sys.executable, "-I", "-c", script], output_limit=payload_size,
-        stdout_consumer=digest.update,
-    )
+    module.bytearray = TrackingBytearray
+    try:
+        output = module.run_child(
+            context, [sys.executable, "-I", "-c", script], output_limit=payload_size,
+            stdout_consumer=digest.update,
+        )
+    finally:
+        del module.bytearray
     if output or digest.hexdigest() != hashlib.sha256(b"x" * payload_size).hexdigest() or \
-            context.ledger.high_water_chunk > module.LIMITS["chunk_bytes"]:
+            context.ledger.high_water_chunk > module.LIMITS["chunk_bytes"] or len(retained) != 2 or \
+            retained[0] or retained_peak != context.ledger.child_output_bytes or \
+            retained_peak > module.LIMITS["child_diagnostic_bytes"]:
         raise FixtureError("streaming child output was buffered or changed")
     diagnostic_limit = module.LIMITS["child_diagnostic_bytes"]
     diagnostic_script = f"import os;os.write(2,b'e'*{diagnostic_limit})"
@@ -867,6 +989,25 @@ def command_child_streaming(args: argparse.Namespace) -> None:
         module.subprocess.Popen = popen_factory
     if len(children) != 1 or children[0].poll() is None:
         raise FixtureError("deadline child was not reaped")
+    deadline_process = subprocess.Popen(
+        [sys.executable, "-B", "-I", str(Path(__file__)), "deadline-child",
+         "--component", str(args.component)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    status, output, diagnostic = supervise_process(deadline_process, 5.0)
+    if status != 0 or output or diagnostic:
+        raise FixtureError(f"operation-deadline watchdog failed: {status} {diagnostic!r}")
+    stalled = subprocess.Popen(
+        [sys.executable, "-I", "-c",
+         "import os,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+         "os.write(1,b'out');os.write(2,b'err');time.sleep(30)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        supervise_process(stalled, 0.05)
+    except FixtureError as exc:
+        if str(exc) != "fixture watchdog expired" or stalled.poll() is None:
+            raise FixtureError("independent watchdog did not kill and reap") from exc
+    else:
+        raise FixtureError("independent watchdog accepted a stalled child")
 
 
 def command_raw_probes(args: argparse.Namespace) -> None:
@@ -960,6 +1101,11 @@ def command_fault_probes(args: argparse.Namespace) -> None:
         raise FixtureError("partial read failure changed its source")
 
     partial = args.root / "partial"
+    partial_boundary = module.hold_boundary(args.root, "directory", time.monotonic() + 10,
+                                            private_leaf=True)
+    partial_context = module.Context(args=types.SimpleNamespace(), repo_root=Path("/"), scratch=args.root,
+        copied_repo=args.root, sidecars=args.root, deps_root=args.root, ledger=module.Ledger(),
+        deadline=time.monotonic() + 10, boundaries={"scratch_work": partial_boundary})
 
     def partial_write(fd: int, data: bytes) -> int:
         original_write(fd, data[:max(1, len(data) // 2)])
@@ -968,14 +1114,16 @@ def command_fault_probes(args: argparse.Namespace) -> None:
     module.os.write = partial_write
     try:
         try:
-            module.write_exclusive(partial, b"0123456789", 0o400)
+            module.write_exclusive(partial, b"0123456789", 0o400, partial_context, "scratch_bytes")
         except module.Refusal as exc:
-            if exc.token != "E_IO" or partial.stat().st_size >= 10:
+            if exc.token != "E_IO" or partial.stat().st_size >= 10 or \
+                    partial_context.ledger.scratch_bytes != 10:
                 raise FixtureError("partial write did not retain a bounded failed file") from exc
         else:
             raise FixtureError("partial write was accepted")
     finally:
         module.os.write = original_write
+        partial_boundary.close()
 
     read_fd, write_fd = os.pipe(); saved_stdout = os.dup(sys.stdout.fileno())
     try:
@@ -1047,60 +1195,223 @@ def command_closed_pipe(args: argparse.Namespace) -> None:
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert process.stdout is not None and process.stderr is not None
     process.stdout.close()
-    diagnostic = process.stderr.read()
-    result = process.wait(300)
+    result, _output, diagnostic = supervise_process(process, 10.0)
     if result != 1 or diagnostic != b"E_IO\n":
         raise FixtureError(f"closed pipe returned {result}: {diagnostic!r}")
 
 
+def supervise_process(process: subprocess.Popen[bytes], timeout: float) -> tuple[int, bytes, bytes]:
+    selector = selectors.DefaultSelector()
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    try:
+        for name in buffers:
+            stream = getattr(process, name)
+            if stream is not None and not stream.closed:
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, name)
+        deadline = time.monotonic() + timeout
+        while selector.get_map() or process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.terminate()
+                try:
+                    process.wait(1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(1)
+                raise FixtureError("fixture watchdog expired")
+            for key, _ in selector.select(min(remaining, 0.1)):
+                chunk = os.read(key.fileobj.fileno(), CHUNK)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                else:
+                    buffers[key.data].extend(chunk)
+                    if sum(len(value) for value in buffers.values()) > 1024 * 1024:
+                        raise FixtureError("fixture watchdog output overflow")
+        return process.wait(0), bytes(buffers["stdout"]), bytes(buffers["stderr"])
+    finally:
+        selector.close()
+        for name in buffers:
+            stream = getattr(process, name)
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(1)
+
+
+def command_deadline_child(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    children: list[subprocess.Popen[bytes]] = []
+    original_popen = module.subprocess.Popen
+
+    def capture(*values: Any, **keywords: Any) -> subprocess.Popen[bytes]:
+        child = original_popen(*values, **keywords)
+        children.append(child)
+        return child
+
+    context = module.Context(args=types.SimpleNamespace(), repo_root=Path("/"), scratch=Path("/"),
+        copied_repo=Path("/"), sidecars=Path("/"), deps_root=Path("/"), ledger=module.Ledger(),
+        deadline=time.monotonic() + 0.05, boundaries={})
+    module.subprocess.Popen = capture
+    try:
+        try:
+            module.run_child(context, [sys.executable, "-I", "-c", "import time;time.sleep(30)"])
+        except module.Refusal as exc:
+            if exc.token != "E_TIMEOUT":
+                raise FixtureError(f"operation deadline returned {exc.token}") from exc
+        else:
+            raise FixtureError("operation deadline was accepted")
+    finally:
+        module.subprocess.Popen = original_popen
+    if len(children) != 1 or children[0].poll() is None:
+        raise FixtureError("operation-deadline child was not reaped")
+
+
+def command_supervised_probe(args: argparse.Namespace) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-B", "-I", str(Path(__file__)), args.probe,
+         "--component", str(args.component)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    status, output, diagnostic = supervise_process(process, 20.0)
+    if status != 0 or output or diagnostic:
+        raise FixtureError(f"supervised {args.probe} failed: {status} {diagnostic!r}")
+
+
+def command_real_io(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    args.root.mkdir(mode=0o700)
+    source = args.root / "source"
+    source.write_bytes(b"preserved\n")
+    source.chmod(0o400)
+    target = args.root / "target"
+    original_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+    def refuse_at(target_path: Path, operation: Any) -> None:
+        lowered = min(original_limit[0], 64)
+        opened: list[int] = []
+        resource.setrlimit(resource.RLIMIT_NOFILE, (lowered, original_limit[1]))
+        try:
+            while True:
+                opened.append(os.open("/dev/null", os.O_RDONLY))
+        except OSError as exc:
+            if exc.errno != errno.EMFILE:
+                raise
+        try:
+            try:
+                operation()
+            except module.Refusal as exc:
+                if exc.token != "E_IO":
+                    raise FixtureError(f"real I/O refusal returned {exc.token}") from exc
+            else:
+                raise FixtureError("real I/O failure was accepted")
+        finally:
+            for fd in opened:
+                os.close(fd)
+            resource.setrlimit(resource.RLIMIT_NOFILE, original_limit)
+        if target_path.exists():
+            raise FixtureError("real I/O failure created its target")
+
+    refuse_at(args.root / "read-result", lambda: module.read_limited(source, 64))
+    refuse_at(target, lambda: module.write_exclusive(target, b"new\n", 0o400))
+    if source.read_bytes() != b"preserved\n":
+        raise FixtureError("real I/O failure changed its source")
+
+
 def command_accounting_probes(args: argparse.Namespace) -> None:
     module = load_component(args.component)
-    invocation = strict_load(args.argv_json)
-    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
-        raise FixtureError("accounting argv must be a string list")
-    original = module.copy_storage
-    observed = False
+    invocations = [strict_load(path) for path in
+                   (args.argv_json, args.inclusive_argv_json, args.overflow_argv_json)]
+    if any(not isinstance(value, list) or not all(isinstance(item, str) for item in value)
+           for value in invocations):
+        raise FixtureError("accounting argv must contain string lists")
+    original_copy = module.copy_storage
+    original_charge = module.Ledger.charge
+    peak = 0
+    charges: list[int] = []
+    copies = 0
+    copy_attempts = 0
+    contexts: list[Any] = []
+    before_copy: list[int] = []
+    refused_charges: list[tuple[bool, int, int, int]] = []
+    copy_active = False
+
+    candidate = Path(invocations[0][invocations[0].index("--candidate-repository") + 1])
+    copied_bytes = sum(
+        path.stat().st_size for path in candidate.rglob("*")
+        if path.is_file() and (path.suffix in (".pack", ".idx", ".rev") or
+                               path.relative_to(candidate).parts[0] == "objects")
+    )
+    if copied_bytes <= 8 * 1024 * 1024 + 128:
+        raise FixtureError("owned storage does not control the scratch peak")
+
+    def tracked_charge(ledger: Any, field: str, amount: int, maximum: int) -> None:
+        nonlocal peak
+        if field == "scratch_bytes" and ledger.scratch_bytes + amount > maximum:
+            refused_charges.append((copy_active, ledger.scratch_bytes, amount, maximum))
+        original_charge(ledger, field, amount, maximum)
+        if field == "scratch_bytes":
+            charges.append(amount)
+            peak = max(peak, ledger.scratch_bytes)
 
     def checked_copy(context: Any) -> None:
-        nonlocal observed
-        before = context.ledger.scratch_bytes
-        charges: list[int] = []
-        original_charge = context.ledger.charge
-
-        def tracked_charge(field: str, amount: int, maximum: int) -> None:
-            if field == "scratch_bytes":
-                charges.append(amount)
-            original_charge(field, amount, maximum)
-
-        context.ledger.charge = tracked_charge
+        nonlocal copies, copy_attempts, copy_active
+        copy_attempts += 1
+        before_charges = len(charges)
+        copy_active = True
         try:
-            original(context)
+            before_copy.append(context.ledger.scratch_bytes)
+            original_copy(context)
         finally:
-            context.ledger.charge = original_charge
+            copy_active = False
         copied = [fact for name, fact in context.source_facts.items()
                   if name.endswith((".rev", ".pack", ".idx")) or
                   name.startswith("objects/") and name not in ("objects/info", "objects/pack")]
         sidecars = [fact for name, fact in context.source_facts.items() if name.endswith(".rev")]
-        unmatched = list(charges)
+        unmatched = list(charges[before_charges:])
         for fact in copied:
             if fact.size not in unmatched:
                 raise FixtureError("copied storage lacked its scratch charge")
             unmatched.remove(fact.size)
-        if not sidecars or context.ledger.scratch_bytes - before != sum(charges):
-            raise FixtureError("copied storage was not charged exactly")
-        if list(context.copied_repo.rglob("*.rev")) or not list(context.sidecars.glob("*.rev")):
+        if not sidecars or list(context.copied_repo.rglob("*.rev")) or not list(context.sidecars.glob("*.rev")):
             raise FixtureError("sidecar crossed the private Git-reading boundary")
-        observed = True
+        contexts.append(context)
+        copies += 1
 
+    module.Ledger.charge = tracked_charge
     module.copy_storage = checked_copy
     try:
-        result = module.main(invocation)
+        baseline = module.main(invocations[0])
+        threshold = peak
+        if baseline != 0 or copies != 1 or contexts[-1].ledger.scratch_bytes != threshold or \
+                threshold <= before_copy[0] + 8 * 1024 * 1024 + 128:
+            raise FixtureError("baseline scratch measurement failed")
+        peak = 0
+        module.LIMITS["scratch_bytes"] = threshold
+        inclusive = module.main(invocations[1])
+        if inclusive != 0 or peak != threshold or copies != 2 or \
+                contexts[-1].ledger.scratch_bytes != threshold:
+            raise FixtureError("inclusive scratch boundary failed")
+        peak = 0
+        module.LIMITS["scratch_bytes"] = threshold - 1
+        overflow = module.main(invocations[2])
     finally:
-        module.copy_storage = original
-    if not observed:
-        raise FixtureError("storage accounting probe was not reached")
-    if result is not None:
-        raise SystemExit(result)
+        module.copy_storage = original_copy
+        module.Ledger.charge = original_charge
+    overflow_scratch = Path(invocations[2][invocations[2].index("--scratch") + 1])
+    overflow_output = Path(invocations[2][invocations[2].index("--output") + 1])
+    if overflow != 1 or copies != 2 or copy_attempts != 3 or \
+            not refused_charges or refused_charges[-1][0] is not True or \
+            refused_charges[-1][3] != threshold - 1 or \
+            not any(overflow_scratch.iterdir()) or \
+            (overflow_output / "record.json").exists():
+        raise FixtureError("scratch inclusive/overflow behavior is wrong")
 
 
 def command_limit_invoke(args: argparse.Namespace) -> None:
@@ -1168,6 +1479,22 @@ def parser() -> argparse.ArgumentParser:
     reverse_parser.add_argument("--rehash", action="store_true")
     reverse_parser.set_defaults(run=command_reverse)
 
+    index_parser = commands.add_parser("pack-index", allow_abbrev=False)
+    index_parser.add_argument("--algorithm", required=True, choices=("sha1", "sha256"))
+    index_parser.add_argument("--index", required=True, type=Path)
+    index_parser.add_argument("--pack", required=True, type=Path)
+    index_parser.add_argument("--output-index", required=True, type=Path)
+    index_parser.add_argument("--output-reverse", required=True, type=Path)
+    index_parser.add_argument("--case", required=True, choices=("framing", "offset"))
+    index_parser.set_defaults(run=command_pack_index)
+
+    raw_storage_parser = commands.add_parser("raw-storage", allow_abbrev=False)
+    raw_storage_parser.add_argument("--repository", required=True, type=Path)
+    raw_storage_parser.add_argument("--response", required=True, type=Path)
+    raw_storage_parser.add_argument("--output", required=True, type=Path)
+    raw_storage_parser.add_argument("--case", required=True, choices=("slash", "order", "mode", "prefix"))
+    raw_storage_parser.set_defaults(run=command_raw_storage)
+
     json_parser = commands.add_parser("json-case", allow_abbrev=False)
     json_parser.add_argument("--input", required=True, type=Path)
     json_parser.add_argument("--output", required=True, type=Path)
@@ -1176,10 +1503,14 @@ def parser() -> argparse.ArgumentParser:
         required=True,
         choices=(
             "bom", "trailing", "duplicate-member", "lone-surrogate",
-            "nonfinite", "depth-33", "invalid-utf8",
+            "nonfinite", "depth-32", "depth-33", "invalid-utf8",
         ),
     )
     json_parser.set_defaults(run=command_json)
+
+    depth_parser = commands.add_parser("depth-probes", allow_abbrev=False)
+    depth_parser.add_argument("--component", required=True, type=Path)
+    depth_parser.set_defaults(run=command_depth_probes)
 
     relation_parser = commands.add_parser("relation-case", allow_abbrev=False)
     relation_parser.add_argument("--input", required=True, type=Path)
@@ -1245,9 +1576,26 @@ def parser() -> argparse.ArgumentParser:
     pipe_parser.add_argument("--argv-json", required=True, type=Path)
     pipe_parser.set_defaults(run=command_closed_pipe)
 
+    deadline_parser = commands.add_parser("deadline-child", allow_abbrev=False)
+    deadline_parser.add_argument("--component", required=True, type=Path)
+    deadline_parser.set_defaults(run=command_deadline_child)
+
+    supervised_parser = commands.add_parser("supervised-probe", allow_abbrev=False)
+    supervised_parser.add_argument("--component", required=True, type=Path)
+    supervised_parser.add_argument("--probe", required=True,
+                                   choices=("child-setup-cleanup", "child-streaming"))
+    supervised_parser.set_defaults(run=command_supervised_probe)
+
+    io_parser = commands.add_parser("real-io", allow_abbrev=False)
+    io_parser.add_argument("--component", required=True, type=Path)
+    io_parser.add_argument("--root", required=True, type=Path)
+    io_parser.set_defaults(run=command_real_io)
+
     accounting_parser = commands.add_parser("accounting-probes", allow_abbrev=False)
     accounting_parser.add_argument("--component", required=True, type=Path)
     accounting_parser.add_argument("--argv-json", required=True, type=Path)
+    accounting_parser.add_argument("--inclusive-argv-json", required=True, type=Path)
+    accounting_parser.add_argument("--overflow-argv-json", required=True, type=Path)
     accounting_parser.set_defaults(run=command_accounting_probes)
 
     limit_parser = commands.add_parser("limit-invoke", allow_abbrev=False)

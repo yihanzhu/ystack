@@ -46,6 +46,20 @@ passed=0
 pass() { passed=$((passed + 1)); printf 'ok %s - %s\n' "$passed" "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
+wait_bounded() {
+  local pid=$1 state
+  for ((wait_count=0; wait_count<600; wait_count++)); do
+    state=$(/bin/ps -o state= -p "$pid" 2>/dev/null | /usr/bin/tr -d ' ')
+    case "$state" in ''|Z*) wait "$pid"; return ;; esac
+    sleep 0.1
+  done
+  kill -TERM "$pid" 2>/dev/null || :
+  sleep 0.2
+  kill -KILL "$pid" 2>/dev/null || :
+  wait "$pid" 2>/dev/null || :
+  return 124
+}
+
 git_clean() {
   /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
@@ -326,8 +340,13 @@ expect_error() {
   else
     actual=$?
   fi
-  [ "$actual" -eq "$exit_code" ] && [ ! -s "$case_root/out" ] && \
-  [ "$(cat "$case_root/err")" = "$expected" ] || fail "$name result"
+  if [ "$actual" -ne "$exit_code" ] || [ -s "$case_root/out" ] || \
+      [ "$(cat "$case_root/err")" != "$expected" ]; then
+    printf 'FAIL detail: exit=%s stdout-bytes=%s stderr=' "$actual" "$(wc -c < "$case_root/out")" >&2
+    /usr/bin/head -c 256 "$case_root/err" >&2
+    printf '\n' >&2
+    fail "$name result"
+  fi
   preserve_index=0
   for item in "${preserved_paths[@]}"; do
     [ -e "$item" ] || fail "$name removed preserved input"
@@ -436,6 +455,11 @@ expect_error escaped-surrogate E_INPUT 1 invoke_prepare prepare "$tmp/mutated/su
 expect_error json-depth E_INPUT 1 invoke_prepare prepare "$tmp/mutated/deep.json" \
   "$response" "$candidate" "$tmp/error-json-depth/output-parent/bundle" \
   "$tmp/error-json-depth/scratch"
+"$python" -B -I "$helper" depth-probes --component "$component"
+"$python" -B -I "$helper" json-case --input "$input" --output "$tmp/mutated/depth-32.json" --case depth-32
+expect_error json-depth-semantic E_INPUT 1 invoke_prepare prepare "$tmp/mutated/depth-32.json" \
+  "$response" "$candidate" "$tmp/error-json-depth-semantic/output-parent/bundle" \
+  "$tmp/error-json-depth-semantic/scratch"
 for json_case in bom trailing duplicate-member nonfinite invalid-utf8; do
   "$python" -B -I "$helper" json-case --input "$input" \
     --output "$tmp/mutated/$json_case.json" --case "$json_case"
@@ -741,7 +765,7 @@ for object_case in missing corrupt truncated; do
     missing) /bin/rm "$object_file" ;;
     corrupt) /bin/chmod 0600 "$object_file"; printf x > "$object_file"; /bin/chmod 0400 "$object_file" ;;
     truncated)
-      object_size=$(stat -f %z "$object_file")
+      object_size=$(/usr/bin/wc -c < "$object_file")
       /usr/bin/head -c "$((object_size - 1))" "$object_file" > "$object_file.short"
       /bin/mv "$object_file.short" "$object_file"
       /bin/chmod 0400 "$object_file"
@@ -755,6 +779,39 @@ done
 
 pass 'missing, corrupt, and truncated Git objects refuse without changing their repositories'
 
+for raw_case in slash order mode prefix; do
+  raw_repo="$tmp/raw-storage-$raw_case.git"
+  raw_response="$tmp/mutated/raw-storage-$raw_case.json"
+  /bin/cp -R "$loose_source" "$raw_repo"
+  "$python" -B -I "$helper" raw-storage --repository "$raw_repo" --response "$response" \
+    --output "$raw_response" --case "$raw_case"
+  raw_error=E_OBJECT
+  case "$raw_case" in slash|prefix) raw_error=E_PATH ;; esac
+  expect_error "raw-storage-$raw_case" "$raw_error" 1 invoke_prepare prepare "$input" "$raw_response" \
+    "$raw_repo" "$tmp/error-raw-storage-$raw_case/output-parent/bundle" \
+    "$tmp/error-raw-storage-$raw_case/scratch"
+done
+pass 'malformed raw trees reach real object reading and targeted tree refusal'
+
+for index_case in framing offset; do
+  index_repo="$tmp/pack-index-$index_case.git"
+  /bin/cp -R "$candidate" "$index_repo"
+  index_file=$(find "$index_repo/objects/pack" -name '*.idx' -print -quit)
+  pack_file=${index_file%.idx}.pack
+  reverse_file=${index_file%.idx}.rev
+  "$python" -B -I "$helper" pack-index --algorithm sha1 --index "$index_file" --pack "$pack_file" \
+    --output-index "$tmp/mutated/pack-index-$index_case.idx" \
+    --output-reverse "$tmp/mutated/pack-index-$index_case.rev" --case "$index_case"
+  /bin/chmod 0600 "$index_file" "$reverse_file"
+  /bin/cp "$tmp/mutated/pack-index-$index_case.idx" "$index_file"
+  /bin/cp "$tmp/mutated/pack-index-$index_case.rev" "$reverse_file"
+  /bin/chmod 0400 "$index_file" "$reverse_file"
+  expect_error "pack-index-$index_case" E_STORAGE 1 invoke_prepare prepare "$input" "$response" \
+    "$index_repo" "$tmp/error-pack-index-$index_case/output-parent/bundle" \
+    "$tmp/error-pack-index-$index_case/scratch"
+done
+pass 'rehashed pack-index framing and offset mutations reach storage validation'
+
 "$python" -I "$helper" limits > "$tmp/limits.json"
 "$python" - "$tmp/limits.json" <<'PY'
 import json,sys
@@ -767,6 +824,8 @@ pass 'inclusive limit ledger covers every named bound'
 pass 'raw tree framing, names, aliases, duplicate paths, and visit bound refuse'
 "$python" -B -I "$helper" fault-probes --component "$component" --root "$tmp/fault-probes"
 pass 'partial read/write, record rename, and nested directory fsync failures retain state'
+"$python" -B -I "$helper" real-io --component "$component" --root "$tmp/real-file-io"
+pass 'kernel file-open and file-create exhaustion refuse with preserved state'
 
 argv_json="$tmp/inject-argv.json"
 "$python" - "$argv_json" "$input" "$response" "$candidate" "$tmp" "$jq_bin" <<'PY'
@@ -794,9 +853,9 @@ expect_error public-directory-leaf E_IDENTITY 2 "$python" -I "$component" prepar
   --candidate-repository "$candidate" --output "$public_root/output-parent/bundle" \
   --scratch "$public_root/scratch" --jq "$jq_bin"
 
-"$python" -B -I "$helper" child-setup-cleanup --component "$component"
+"$python" -B -I "$helper" supervised-probe --component "$component" --probe child-setup-cleanup
 pass 'post-spawn selector setup failure terminates and reaps its child'
-"$python" -B -I "$helper" child-streaming --component "$component"
+"$python" -B -I "$helper" supervised-probe --component "$component" --probe child-streaming
 pass 'child output streams in bounded chunks and deadline children are reaped'
 
 race="$tmp/output-race"
@@ -823,7 +882,7 @@ done
 /bin/mv "$race/output-parent/bundle" "$race/output-parent/held-bundle"
 /bin/ln -s "$race/sentinel" "$race/output-parent/bundle"
 : > "$race/release"
-if wait "$race_pid"; then
+if wait_bounded "$race_pid"; then
   fail output-race-accepted
 else
   race_status=$?
@@ -856,7 +915,7 @@ for _ in $(seq 1 300); do [ -f "$read_race/ready" ] && break; sleep 0.1; done
   --snapshot "$read_race/held.snapshot.json"
 /usr/bin/yes x | /usr/bin/head -c 8388609 > "$read_race/replacement/input.json" || :
 /bin/ln -s "$read_race/replacement" "$read_race/bundle"; : > "$read_race/release"
-if wait "$read_race_pid"; then fail inspect-read-race-accepted; else read_race_status=$?; fi
+if wait_bounded "$read_race_pid"; then fail inspect-read-race-accepted; else read_race_status=$?; fi
 [ "$read_race_status" -eq 2 ] && [ ! -s "$read_race/out" ] && \
   [ "$(cat "$read_race/err")" = E_IDENTITY ] || fail inspect-read-race-result
 "$python" -B -I "$helper" snapshot check --path "$read_race/held-bundle" \
@@ -877,12 +936,41 @@ PY
 }
 
 accounting_root="$tmp/storage-accounting"
-/bin/mkdir -m 700 "$accounting_root" "$accounting_root/scratch" "$accounting_root/output-parent"
-write_argv "$accounting_root/argv.json" "$accounting_root"
-"$python" -B -I "$helper" accounting-probes --component "$component" \
-  --argv-json "$accounting_root/argv.json" > "$accounting_root/out"
-[ -f "$accounting_root/output-parent/bundle/record.json" ] || fail storage-accounting-publication
-pass 'copied storage including sidecars is charged and sidecars stay outside private Git storage'
+/bin/mkdir -m 700 "$accounting_root"
+"$python" -B -I - "$accounting_root/ballast" <<'PY'
+import hashlib,sys
+remaining=9*1024*1024
+with open(sys.argv[1],"wb") as stream:
+ for counter in range((remaining+31)//32):
+  block=hashlib.sha256(counter.to_bytes(8,"big")).digest()
+  chunk=block[:remaining]; stream.write(chunk); remaining-=len(chunk)
+PY
+for accounting_case in baseline inclusive overflow; do
+  accounting_case_root="$accounting_root/$accounting_case"
+  /bin/mkdir -p "$accounting_case_root/scratch" "$accounting_case_root/output-parent"
+  /bin/chmod 0700 "$accounting_root" "$accounting_case_root" \
+    "$accounting_case_root/scratch" "$accounting_case_root/output-parent"
+  accounting_candidate="$accounting_case_root/candidate.git"
+  /bin/cp -R "$candidate" "$accounting_candidate"
+  find "$accounting_candidate" -type d -exec /bin/chmod 0700 {} +
+  find "$accounting_candidate" -type f -exec /bin/chmod 0400 {} +
+  ballast_oid=$("$python" -B -I "$helper" object --repository "$accounting_candidate" \
+    --algorithm sha1 --type blob --body "$accounting_root/ballast")
+  /bin/chmod 0400 "$accounting_candidate/objects/${ballast_oid:0:2}/${ballast_oid:2}"
+  write_argv "$accounting_case_root/argv.json" "$accounting_case_root" "$input" "$accounting_candidate"
+done
+if ! "$python" -B -I "$helper" accounting-probes --component "$component" \
+    --argv-json "$accounting_root/baseline/argv.json" \
+    --inclusive-argv-json "$accounting_root/inclusive/argv.json" \
+    --overflow-argv-json "$accounting_root/overflow/argv.json" \
+    > "$accounting_root/out" 2> "$accounting_root/err"; then
+  /bin/cat "$accounting_root/out" "$accounting_root/err" >&2
+  fail storage-accounting-probe
+fi
+[ -f "$accounting_root/baseline/output-parent/bundle/record.json" ] && \
+  [ -f "$accounting_root/inclusive/output-parent/bundle/record.json" ] && \
+  [ "$(cat "$accounting_root/err")" = E_LIMIT ] || fail storage-accounting-result
+pass 'actual retained storage controls the inclusive scratch peak and peak minus one refuses during copy'
 
 wait_ready() {
   local ready=$1 pid=$2
@@ -891,8 +979,8 @@ wait_ready() {
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
   done
-  kill "$pid" 2>/dev/null || :
-  wait "$pid" 2>/dev/null || :
+  kill -TERM "$pid" 2>/dev/null || :
+  wait_bounded "$pid" 2>/dev/null || :
   fail "pause not reached: $ready"
 }
 
@@ -956,7 +1044,7 @@ for replacement_case in input repository; do
   "$python" -B -I "$helper" snapshot create --path "$replaced.held" \
     --snapshot "$replacement_root/held.snapshot.json"
   : > "$replacement_root/release"
-  if wait "$replacement_pid"; then fail "$replacement_case replacement accepted"; else replacement_status=$?; fi
+  if wait_bounded "$replacement_pid"; then fail "$replacement_case replacement accepted"; else replacement_status=$?; fi
   [ "$replacement_status" -eq 2 ] && [ ! -s "$replacement_root/out" ] && \
     [ "$(cat "$replacement_root/err")" = E_IDENTITY ] || fail "$replacement_case replacement result"
   "$python" -B -I "$helper" snapshot check --path "$replaced.held" \
@@ -981,7 +1069,7 @@ p=sys.argv[1]; data=bytearray(open(p,'rb').read()); data[10]^=1
 with open(p,'r+b',buffering=0) as stream: stream.write(data)
 PY
 : > "$input_race/release"
-if wait "$input_race_pid"; then fail input-mutation-accepted; else input_race_status=$?; fi
+if wait_bounded "$input_race_pid"; then fail input-mutation-accepted; else input_race_status=$?; fi
 [ "$input_race_status" -eq 2 ] && [ ! -s "$input_race/out" ] && \
   [ "$(cat "$input_race/err")" = E_IDENTITY ] || fail input-mutation-result
 pass 'same-inode supplied-input mutation is rehashed before completion'
@@ -1007,7 +1095,7 @@ os.utime(p,ns=(st.st_atime_ns,st.st_mtime_ns))
 PY
 /bin/chmod 0400 "$source_object"
 : > "$source_race/release"
-if wait "$source_race_pid"; then fail source-mutation-accepted; else source_race_status=$?; fi
+if wait_bounded "$source_race_pid"; then fail source-mutation-accepted; else source_race_status=$?; fi
 [ "$source_race_status" -eq 1 ] && [ ! -s "$source_race/out" ] && \
   [ "$(cat "$source_race/err")" = E_STORAGE ] || fail source-mutation-result
 pass 'same-inode source mutation with restored timestamp is remeasured'
@@ -1023,7 +1111,7 @@ sidecar_race_pid=$!; wait_ready "$sidecar_race/ready" "$sidecar_race_pid"
 sidecar_race_file=$(find "$sidecar_race_repo/objects/pack" -name '*.rev' -print -quit)
 /bin/chmod 0600 "$sidecar_race_file"; printf x >> "$sidecar_race_file"; /bin/chmod 0400 "$sidecar_race_file"
 : > "$sidecar_race/release"
-if wait "$sidecar_race_pid"; then fail sidecar-mutation-accepted; else sidecar_race_status=$?; fi
+if wait_bounded "$sidecar_race_pid"; then fail sidecar-mutation-accepted; else sidecar_race_status=$?; fi
 [ "$sidecar_race_status" -eq 1 ] && [ ! -s "$sidecar_race/out" ] && \
   [ "$(cat "$sidecar_race/err")" = E_STORAGE ] || fail sidecar-mutation-result
 pass 'source reverse-index mutation after copying is rejected on final reread'
@@ -1045,7 +1133,7 @@ for reservation_case in unchanged grown; do
     /bin/chmod 0600 "$reservation_object"; printf x >> "$reservation_object"; /bin/chmod 0400 "$reservation_object"
   fi
   : > "$reservation_root/release"
-  if wait "$reservation_pid"; then reservation_status=0; else reservation_status=$?; fi
+  if wait_bounded "$reservation_pid"; then reservation_status=0; else reservation_status=$?; fi
   if [ "$reservation_case" = unchanged ]; then
     [ "$reservation_status" -eq 0 ] && [ -s "$reservation_root/out" ] || fail reservation-control
   else
@@ -1078,7 +1166,7 @@ for source_change in add remove; do
     /bin/rm "$removed_source"
   fi
   : > "$change_root/release"
-  if wait "$change_pid"; then fail "source $source_change accepted"; else change_status=$?; fi
+  if wait_bounded "$change_pid"; then fail "source $source_change accepted"; else change_status=$?; fi
   [ "$change_status" -eq 1 ] && [ ! -s "$change_root/out" ] && \
     [ "$(cat "$change_root/err")" = E_STORAGE ] || fail "source $source_change result"
   pass "source entry $source_change during preparation is detected"
@@ -1125,7 +1213,7 @@ write_argv "$before_record/argv.json" "$before_record"
 before_pid=$!
 wait_ready "$before_record/ready" "$before_pid"
 kill -KILL "$before_pid"
-if wait "$before_pid" 2>/dev/null; then fail kill-before-record-status; else before_status=$?; fi
+if wait_bounded "$before_pid" 2>/dev/null; then fail kill-before-record-status; else before_status=$?; fi
 [ "$before_status" -eq 137 ] && [ ! -s "$before_record/out" ] && \
   [ ! -e "$before_record/output-parent/bundle/record.json" ] || fail kill-before-record-state
 expect_error killed-incomplete E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
@@ -1151,9 +1239,9 @@ kill -0 "$waiting_inspect_pid" 2>/dev/null || fail pre-reply-lock-released
 [ ! -s "$after_record/waiting-inspect" ] && [ ! -s "$after_record/waiting-inspect.err" ] || \
   fail pre-reply-inspect-emitted
 kill -KILL "$after_pid"
-if wait "$after_pid" 2>/dev/null; then fail kill-after-record-status; else after_status=$?; fi
+if wait_bounded "$after_pid" 2>/dev/null; then fail kill-after-record-status; else after_status=$?; fi
 [ "$after_status" -eq 137 ] || fail kill-after-record-exit
-wait "$waiting_inspect_pid" || fail pre-reply-inspect-status
+wait_bounded "$waiting_inspect_pid" || fail pre-reply-inspect-status
 invoke_prepare inspect "$input" "$response" "$candidate" "$after_record/output-parent/bundle" \
   "$after_record/scratch" > "$after_record/recovered-1"
 invoke_prepare inspect "$input" "$response" "$candidate" "$after_record/output-parent/bundle" \
@@ -1170,7 +1258,7 @@ write_argv "$handled/argv.json" "$handled"
 handled_pid=$!
 wait_ready "$handled/ready" "$handled_pid"
 kill -TERM "$handled_pid"
-if wait "$handled_pid"; then fail handled-signal-status; else handled_status=$?; fi
+if wait_bounded "$handled_pid"; then fail handled-signal-status; else handled_status=$?; fi
 [ "$handled_status" -eq 75 ] && [ ! -s "$handled/out" ] && \
   [ "$(cat "$handled/err")" = E_INTERRUPTED ] || fail handled-signal-result
 pass 'handled termination returns the bounded interruption refusal'
@@ -1205,8 +1293,8 @@ sleep 0.5
 kill -0 "$inspect_pid" 2>/dev/null || fail inspect-did-not-wait-for-lock
 [ ! -s "$locked/inspect.out" ] && [ ! -s "$locked/inspect.err" ] || fail inspect-emitted-while-locked
 : > "$locked/release"
-wait "$prepare_pid" || fail locked-prepare-status
-wait "$inspect_pid" || fail locked-inspect-status
+wait_bounded "$prepare_pid" || fail locked-prepare-status
+wait_bounded "$inspect_pid" || fail locked-inspect-status
 /usr/bin/cmp -s "$locked/prepare.out" "$locked/inspect.out" || fail locked-envelope
 pass 'inspect serializes behind the active preparation lock'
 
