@@ -556,28 +556,28 @@ a missing native capability is a refusal with a recorded support limitation, not
 a skipped passing test. Linux and Darwin component results remain separate from
 native VM, fixed-root verifier or qualified workflow proof.
 
-`review_size: accepted-exception`. The amended envelope is 3,100–4,600 added
+`review_size: accepted-exception`. The amended envelope is 4,400–5,200 added
 plus removed implementation lines across the same seven allowed paths. This changes
 only the size estimate; all requirements, proof and safety boundaries stay intact.
 The earlier 1,200–2,200 estimate did not leave enough room for the complete source
 observation, reverse-index, resource-limit, race and publication proof.
 
-The design forecast is 3,180–4,360 lines:
+The design forecast is 4,481–4,911 lines:
 
 | Area | Forecast |
 | --- | ---: |
-| Bounded preparation/export/inspection component | 1,500–2,000 |
-| Real fixtures and complete adversarial/process proof in the two new test files | 1,500–2,100 |
-| Documentation and restore-manifest entries | 180–260 |
-| Total | 3,180–4,360 |
+| Bounded preparation/export/inspection component | 2,431–2,651 |
+| Real fixtures and complete adversarial/process proof in the two new test files | 1,896–2,106 |
+| Documentation and restore-manifest entries | 154 |
+| Total | 4,481–4,911 |
 
 The component allocation covers descriptor admission and counters, measured dependency
 copies and validation, closed bare storage and reverse-index checks, bounded child
 I/O and raw object export, then full remeasurement, publication and inspection.
 The proof allocation covers every existing proof row with independent byte oracles,
 inclusive limits, source-mutation controls and real crash/recovery assertions.
-Shared setup is counted once; no proof is deferred to fit the range. The 4,600 ceiling
-leaves 240 lines above the upper forecast for implementation uncertainty.
+Shared setup is counted once; no proof is deferred to fit the range. The 5,200 ceiling
+leaves 289 lines above the upper forecast for implementation uncertainty.
 
 At sizing base `b873a171c550ca68f440b8c454b89ccd49304499`, the replay is 1,412
 lines, its receiver-result suite is 2,660 and the source snapshot helper is 2,732.
