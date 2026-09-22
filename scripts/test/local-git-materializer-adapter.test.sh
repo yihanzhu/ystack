@@ -285,8 +285,17 @@ run_case() {
   printf '%s\n' "$case_root"
 }
 
+assert_no_published_index() {
+  local repository=$1 name=$2 path
+  for path in index index.lock; do
+    [ ! -e "$repository/$path" ] && [ ! -L "$repository/$path" ] ||
+      fail "$name-published-$path"
+  done
+}
+
 case_root=$(run_case success)
 [ ! -s "$case_root/err" ] || fail success-stderr
+assert_no_published_index "$case_root/candidate/repository.git" success
 "${jq_cmd[@]}" -e '
   .schema_version==1 and .kind=="local_git_materialization_response" and
   .authority=="none" and .qualification=={state:"unavailable",reason_id:"adapter.unqualified"} and
@@ -317,6 +326,21 @@ git_clean --git-dir="$candidate_repo" show "$candidate_commit:source.txt" |
 "${jq_cmd[@]}" -S -c '.stage_result' "$case_root/out" > "$case_root/result.json"
 "$core" validate-stage-run "$request_file" "$resolved_file" "$case_root/result.json" || fail stage-result
 pass 'materializes deterministic bare child and validates stage result'
+
+index_sentinel="$tmp/inherited-index-sentinel"
+index_sentinel_expected="$tmp/inherited-index-sentinel.expected"
+printf '%s\n' 'caller-owned index sentinel' > "$index_sentinel"
+/bin/cp "$index_sentinel" "$index_sentinel_expected"
+GIT_INDEX_FILE="$index_sentinel" hostile_index_root=$(run_case hostile-index)
+[ ! -s "$hostile_index_root/err" ] || fail hostile-index-stderr
+assert_no_published_index "$hostile_index_root/candidate/repository.git" hostile-index
+[ -z "$(find "$hostile_index_root/scratch" -mindepth 1 -print -quit)" ] ||
+  fail hostile-index-scratch-clean
+/usr/bin/cmp -s "$index_sentinel_expected" "$index_sentinel" ||
+  fail hostile-index-sentinel-mutated
+/usr/bin/cmp -s "$case_root/out" "$hostile_index_root/out" ||
+  fail hostile-index-response
+pass 'public entry ignores inherited Git index state'
 
 repeat_root=$(run_case repeat)
 /usr/bin/cmp -s "$case_root/out" "$repeat_root/out" || fail deterministic-response
@@ -486,6 +510,9 @@ no_change_input="$tmp/no-change-input.json"
 input_with_patch "$input_file" "$empty_patch" "$no_change_input"
 no_change_root=$(run_case no-change "$no_change_input")
 [ ! -s "$no_change_root/err" ] || fail no-change-stderr
+assert_no_published_index "$no_change_root/candidate/repository.git" no-change
+[ -z "$(find "$no_change_root/scratch" -mindepth 1 -print -quit)" ] ||
+  fail no-change-scratch-clean
 "${jq_cmd[@]}" -e --arg commit "$source_commit" --arg tree "$source_tree" '
   .stage_result.body.status=="completed" and
   .stage_result.body.outcome=={family:"change",value:"no-change"} and
@@ -978,6 +1005,9 @@ sha256_root=$(run_case sha256 "$sha256_input" "$sha256_source")
 [ ! -s "$sha256_root/err" ] &&
   [ "$(git_clean --git-dir="$sha256_root/candidate/repository.git" rev-parse --show-object-format)" = sha256 ] ||
   fail sha256-materialization
+assert_no_published_index "$sha256_root/candidate/repository.git" sha256
+[ -z "$(find "$sha256_root/scratch" -mindepth 1 -print -quit)" ] ||
+  fail sha256-scratch-clean
 pass 'SHA-256 source and candidate identities remain exact'
 
 scope_contract="$tmp/scope-contract.json"
