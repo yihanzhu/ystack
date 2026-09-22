@@ -1,5 +1,5 @@
 ---
-spec-blob: 72fdbc04d18bd5e9b434087c79e8c7bac29c1605
+spec-blob: ba8d7bf7fdaffca1ab8341f103028c0aa4cec016
 drafted: 2026-09-21
 ---
 
@@ -24,15 +24,27 @@ the coordinator and small control-fixture modes. Adapt the loaded wrapper's
 and later CP4c launch paths unchanged. Add no keeper, process framework, public
 interface, product change, fixture-builder change, pin update or workflow change.
 
-Implementation `review_size: accepted-exception`, forecast **600–900 added plus
-removed lines**, allocated to readable work as follows:
+Implementation `review_size: accepted-exception`, forecast **1,450–2,100 added plus
+removed lines**, with these rounded planning allowances for complete readable work:
 
-| Work | Added or removed lines |
+| Work | Contribution to the final diff |
 | --- | ---: |
-| Direct-child coordinator, deadlines, capture and evidence | 230–330 |
-| Wrapper admission/observations and Bash ownership handoff | 90–140 |
-| Shared real-process fixtures and expanded control assertions | 240–350 |
-| Replaced early polling, kill/wait and unconditional cleanup code | 40–80 |
+| Retained direct-child ownership, capture, wrapper and case wiring outside the areas below, plus original harness lines removed | 400–550 |
+| Shared Bash lifecycle, cancellation and real shell controls | 240–330 |
+| Admission ordering and invocation identity | 90–130 |
+| Operation-boundary cleanup faults and independent rescue | 190–270 |
+| Bounded diagnostic emission, publication and its controls | 160–230 |
+| Actual phase and hold timing | 35–55 |
+| Remaining shared descendant, capture, limit and inherited-state controls | 300–430 |
+| Named inventory, outcome assertions and retention integration | 45–70 |
+
+The first row counts only retained foundation and base-file deletions; the other
+rows count added code that survives in the final file, including replacements.
+Each shared helper belongs to one row. Do not subtract an assumed overlap saving.
+Measure added plus removed lines against the accepted implementation base, not
+cumulative editing churn: replacing newly added code reduces the retained portion
+and counts its replacement once. These allowances are forecasts, not measured
+final code or per-component quotas. Reconcile them against the actual final diff.
 
 Shared fixtures exercise several outcomes in one launch. The real delayed pair
 also proves the two crash windows. These are estimates, not compression targets:
