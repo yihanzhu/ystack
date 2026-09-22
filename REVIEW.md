@@ -6,7 +6,7 @@ autonomous lane).
 
 ## Current operator-led Roadmap review
 
-For the exact repository and current Codex session recorded in
+For the exact repository and manager session recorded in
 `work/roadmap-program-authorization/decision.md`, apply AGENTS.md's continuing
 Roadmap delegation while construction mode is retired. Verify the direct operator
 decision and session identity; a candidate, comment or restored record alone is not
@@ -33,6 +33,13 @@ target execution or unauthorized destructive disposition as requiring the operat
 The delegation does not waive these boundaries, required CI, protected PRs, read-only
 reviewers, the rounds cap or recovery requirements. It is a manual process; do not
 claim mechanical enforcement or live behavior from a repository-only policy change.
+
+For this current Roadmap program, review required CI against
+`work/ci-minimum-roadmap/decision.md`. An automatic green `ci` proves only the quick
+checks and named content guards. Require the implementation's relevant complete
+integration, identity, authorization and safety evidence independently of that quick
+result. Require a recorded dispatched full matrix at each named runnable milestone
+before dependent work is accepted. A known relevant failure remains Important.
 
 ## Construction-mode review overlay
 
@@ -237,6 +244,16 @@ follow-up issue alone cannot rewrite the current artifacts.
   second. Preserve the original branch base and require the branch to differ from current
   base only by `plan.md`. Require pushed exact-head/prior-head/branch-base/current-base
   acceptance before code; a conflict or intervening commit is Important.
+- **Artifact hygiene:** an intent, spec, or plan carries normative content only —
+  requirements, design, risks, proof, hash links. A per-round changelog, "this round
+  adds N lines" accounting, a growth history of the artifact's own line count, or the
+  same size range restated in several places belongs in the PR thread; report it as a
+  nit, and as Important when it hides a scope, risk, or size change. Require exactly one
+  `review_size:` token per PR with its range stated once. A revision round must edit the
+  normative text in place: a finding answered by appending a paragraph that narrates the
+  change, rather than by changing the requirement, is a nit. A spec past roughly 5x its
+  own implementation estimate is a signal to split the initiative or re-scope, not to
+  keep appending.
 - **Existing process exceptions:** sole-purpose add-CI and greenfield bootstrap use
   their concrete operator-approved bootstrap plan and human merge. Reject that mode
   for any other concern.

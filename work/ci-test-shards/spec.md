@@ -5,27 +5,35 @@ drafted: 2026-09-09
 ---
 # Spec: ci-test-shards
 
-CI runs all 62 `scripts/test/*.test.sh` suites one after another in a single job and
-takes 80 to 90 minutes. This splits that work across six parallel runners without
-changing any of the existing suites, what the merge gate is called, or what it
-means. No suite is added; the sharding proof runs as a separate check.
+CI runs every discovered `scripts/test/*.test.sh` suite across six runners. The
+completed run [35508104260](https://github.com/yihanzhu/ystack/actions/runs/35508104260)
+took 40 minutes 37 seconds. Increase the fixed count to ten while preserving every
+suite and the meaning of the required `ci` check.
 
-**Risk is `high`.** The change touches two constitution paths —
-`.github/workflows/ci.yml` and `AGENTS.md` — which unattended agents never write
-(`AGENTS.md`, "Stage rules (autonomous lane)": the constitution paths are
-`.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md`).
-`ci.yml` is also the workflow behind the one required check the branch ruleset
-enforces. So a plan-only PR on
-`ystack/plan/ci-test-shards` goes first, an independent reviewer reads it, the
-operator merges it, and only then does `ystack/impl/ci-test-shards` open. On that
-branch the operator commits both of those files himself — the workflow and the
-`AGENTS.md` bullet of requirement 13. Agents prepare everything else: the runner,
-the proof script, the manifest line, the `RESTORE.md` docs edit of requirement 13,
-and, for the two operator-owned files, the
-proposed patch text only — saved as a unified diff under `proposals/`
-(`proposals/<slug>-<short-title>.patch`, with the rationale in the PR body) exactly
-as `proposals/README.md` describes, never the commit itself.
+**Risk is `high`.** The workflow and `AGENTS.md` are constitution paths. After G2,
+a separate plan-only PR on `ystack/plan/ci-test-shards` must be independently
+accepted and merged before implementation. The current operator-led authorization
+supplies the applicable authorship and acceptance authority; this spec grants none.
 `review_size: standard`.
+
+## Shard count and prerequisite scope
+
+The implementation changes only `.github/workflows/ci.yml` (the matrix list,
+invocation denominator and shared jq prerequisite setup), the CI sentence in
+`AGENTS.md`, and the matching sentence in `RESTORE.md`. The runner, sharding proof,
+all suites, manifest, workflow triggers, permissions, checkout pin, `checks` steps,
+aggregate gate and branch rules stay unchanged. No suite is added, removed, renamed or skipped, including on document-only
+changes. Requirements 1–9 and 12 preserve the existing runner contract; they do not
+ask for its reimplementation.
+
+Validation uses the existing sharding proof, which covers every count from 1 to 16
+and checks matrix/denominator equality, plus a fresh complete required CI run at the
+implementation head. The existing producer suites verify the jq file, digest and
+version. Their failures in run 35660956979 and success in the new complete run
+provide the prerequisite regression evidence. Inspect the diff to confirm the
+unchanged boundaries above. No new unit tests, temporary failing suite, red-test
+commits, duplicate serial run, proposal patch or initial-install sequence is
+required. The aggregate gate logic stays unchanged.
 
 ## Requirements
 
@@ -34,7 +42,7 @@ as `proposals/README.md` describes, never the commit itself.
    the environment variable `YSTACK_TEST_SHARD=<index>/<count>`. If both are given,
    the flag wins and the variable is ignored silently.
 
-2. **The argument-less run keeps today's behaviour, byte for byte.** The guarantee is
+2. **The argument-less run keeps its existing behaviour, byte for byte.** The guarantee is
    about the run with no arguments at all: no `--shard` flag, no `YSTACK_TEST_SHARD`
    set, and no `--list`. That run discovers exactly the same suites by the same rule,
    runs them in the same order, prints the same lines, ends with the same final count
@@ -42,31 +50,24 @@ as `proposals/README.md` describes, never the commit itself.
    new appears: the sharding proof in requirement 9 is not named `*.test.sh`, so the
    unchanged discovery rule never sees it.
 
-   `--list` (requirement 6) is a new mode that only happens when the flag is given.
+   `--list` (requirement 6) only happens when the flag is given.
    It lists and runs nothing, so it has no output to match against today's run, and
    it changes nothing about the argument-less run — which never lists.
 
-   Verified two ways, without diffing two 80-minute runs:
-   - run `--list` with no selector and compare it to the discovery command in
-     requirement 3, `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'`
-     piped through `LC_ALL=C sort`, written out as repo-relative paths the same way.
-     The two lists must be identical, so discovery and ordering are provably
-     untouched;
-   - from a single no-argument run, compare its `==> <path>` headers, in order, and
-     its closing `all <N> test scripts passed` line against today's — today that is
-     62 suites and `all 62 test scripts passed`. That plus the `--list` check pins
-     discovery, order and count, so a full diff of two long runs is not required.
+   The existing proof compares `--list` with independently discovered paths in
+   sorted order. The runner stays byte-identical to the accepted base, preserving
+   its execution order, output and exit codes without another serial run.
 
 3. **Deterministic assignment.** Suites are discovered exactly as today —
    `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
    `LC_ALL=C sort` — and the sharding filters that list afterwards. Suite `k`
    (0-based, in that sorted order) belongs to shard `(k mod count) + 1`: round-robin
    by index. For every `count` from 1 to 16 the shards are disjoint and their union
-   is the whole list — 62 suites today — so each suite runs exactly once per CI run.
+   is the whole discovered list, so each suite runs exactly once per CI run.
 
 4. **Index, not duration.** Assignment never reads a measured duration. The
-   durations we have are one local measurement of 56 suites and they drift with the
-   runner. An index rule is reproducible from the file names alone and needs no
+   durations drift with the runner and may inform the fixed count, but not runtime
+   assignment. An index rule is reproducible from the file names alone and needs no
    table to maintain.
 
 5. **Refusals.** A malformed selector prints exactly one line to stderr, exits `2`,
@@ -95,12 +96,12 @@ as `proposals/README.md` describes, never the commit itself.
    line, no extra header, no change to the closing count line — see requirement 2.
 
 8. **No vacuous pass.** If the selection is empty — which needs `count > N`, so it
-   cannot happen at `count <= 16` with 62 suites, but must still be handled — the
+   cannot happen at `count <= 16` when `N >= 16`, but must still be handled — the
    script prints `error: shard <i>/<n> selected no test scripts` to stderr and exits
    `1`. It never prints a passing line for zero suites. The existing "no
    `scripts/test/*.test.sh` files found" error keeps its current text and exit code.
 
-9. **Focused proof, outside the discovered suite set.** A new, executable
+9. **Focused proof, outside the discovered suite set.** The existing executable
    `scripts/test/run-all-sharding.check.sh` proves by calling `--list`:
    - the script works out the full suite list for itself, without asking the runner:
      `find "$root/scripts/test" -maxdepth 1 -type f -name '*.test.sh'` piped through
@@ -119,9 +120,7 @@ as `proposals/README.md` describes, never the commit itself.
      count in that range, not a sample of four, because the runner accepts every one
      of them — that is `--shard <index>/<count> --list` for all 136 index/count pairs,
      written as a loop over the sixteen counts rather than sixteen spelled-out cases.
-     This is the same `find` command requirement 2 names; there it is a check someone
-     runs by hand, and here it becomes part of the CI-gated proof, so requirement 2's
-     discovery-and-ordering comparison is enforced on every PR rather than done once;
+     This enforces requirement 2's discovery-and-ordering comparison on every PR;
    - the `--list` output with no shard equals `--shard 1/1 --list`;
    - each refusal in requirement 5 exits `2`, writes that exact usage line to stderr,
      prints nothing to stdout, and runs no suite;
@@ -132,239 +131,98 @@ as `proposals/README.md` describes, never the commit itself.
    requirement 3 never picks it up and the no-argument run stays byte-identical
    (requirement 2). It is run explicitly instead, by the workflow's `checks` job, as
    `bash scripts/test/run-all-sharding.check.sh`, in one step right after the
-   shellcheck step; the workflow edit is the operator's commit anyway. It runs in
-   seconds: the partition sweep is 136 `--list` invocations plus the one `find` that
+   shellcheck step. It runs without executing suites: the partition sweep is 136 `--list` invocations plus the one `find` that
    builds the raw list, and `--list` lists and runs nothing, so the whole proof never
    executes a suite. It is `shellcheck 0.11.0 -x -S style` clean — the sweep's
-   `find . -name '*.sh'` already covers it — and its path is appended at the end of
+   `find . -name '*.sh'` already covers it — and its path remains in
    `ci/required-files.txt`, which also checks that it is executable.
 
-10. **Workflow shape.** `.github/workflows/ci.yml` keeps its `on:` triggers unchanged
-    (`pull_request`, and `push` to `main`) and its `permissions` block, and gains
-    three jobs. Every job that touches a repository file begins with the very
-    checkout step the workflow uses today, copied unchanged:
+10. **Workflow shape.** `.github/workflows/ci.yml` retains its three jobs:
+    - `checks` — the existing checkout, required-files check, pinned-shellcheck,
+      sharding proof and rename gate, unchanged.
+    - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6,7,8,9,10]}}`,
+      the existing checkout, shared prerequisite setup, then
+      `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/10`.
+      Before any selected suite runs, each test job prepares executable jq 1.6 at
+      `${TMPDIR:-/tmp}/ystack-portable-core-jq16/jq-linux64`. Download the existing
+      release asset from
+      `https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64` over HTTPS
+      into a temporary file. Verify SHA-256
+      `af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44`
+      before executing or placing it at the cache path, then require `jq-1.6` from
+      its version check. A download, digest or version failure fails the job before
+      the runner starts. This one workflow step supplies the existing shared
+      prerequisite; it runs no suite, changes no system installation or PATH, and
+      relies on no earlier suite or cached runner state. The matrix list,
+      denominator and this setup step are the only workflow edits.
+    - `ci` — unchanged `needs: [checks, test]`, `if: always()`, and the step that
+      fails unless both dependency results equal `success`. Failed, cancelled or
+      skipped dependencies must still make the aggregate gate fail.
 
-        - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-    Each GitHub Actions job starts with an empty workspace, and a checkout in one job
-    does not populate another, so this step is repeated per job rather than shared:
-    - `checks` — that checkout step first, then the required-files check, the
-      pinned-shellcheck step, then one new `run:` step invoking the sharding proof of
-      requirement 9 (`bash scripts/test/run-all-sharding.check.sh`), then the rename
-      gate. All four of those read the repository, so without the checkout the very
-      first one cannot find `ci/required-files.txt` and the required check goes red.
-      The checkout and the three existing gate steps read exactly as they do today;
-      the proof step is the only addition.
-    - `test` — `strategy: {fail-fast: false, matrix: {shard: [1,2,3,4,5,6]}}`, that
-      same checkout step, then
-      `bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6`.
-      `fail-fast: false` so one red shard still lets the others report.
-    - `ci` — `needs: [checks, test]`, `if: always()`, and one step that fails unless
-      `needs.checks.result == 'success' && needs.test.result == 'success'`. This job
-      needs no checkout: it reads only `needs.*.result` and opens no repository file.
-      For a matrix job `needs.test.result` is `success` only when every shard
-      succeeded, so a failed, cancelled or skipped shard turns `ci` red.
-
-11. **The required check keeps its name and meaning.** The ruleset
-    (`post_transition_ruleset` in `config/construction-mode.json`: single
-    `required_status_check: "ci"`, `required_status_check_app_id: 15368`, strict) is
-    not touched. A green `ci` still means every gate and every suite passed. Verified
-    by reading the check name on the PR and by deliberately failing one shard and
-    confirming `ci` goes red rather than skipped. That failure runs on the
-    implementation PR itself, not on a scratch branch: `ci.yml` triggers on
-    `pull_request` and on `push` to `main` only, so a scratch branch starts no run at
-    all, and a second PR is not an option either — every PR links its intake issue and
-    two PRs must never be open for one slug and stage (`AGENTS.md:389-392`). So it is
-    two ordinary commits on the implementation branch. One adds
-    `scripts/test/zz-red.test.sh`, two lines — `#!/usr/bin/env bash`, then
-    `exit 1` — which sorts last and so lands in shard 3; the red run is recorded
-    against that head. A plain new commit then deletes the file — never an amend,
-    never a force-push — and the squash merge keeps both off `main`. The red run
-    therefore sits on a superseded head, and old proof on a new commit is stale
-    (`AGENTS.md:409-411`), so it is bound to the final head by identity: the
-    `.github/workflows/ci.yml` blob id equal between the red head and the final head,
-    the `scripts/test` tree id equal between the delete head and the final head, and
-    the diff between the red and delete heads exactly that one file. The plan carries
-    the procedure and the exact records.
+11. **The required check keeps its name and meaning.** The branch ruleset is not
+    touched. The sole required check stays `ci` from the same app (`15368`),
+    with strict up-to-date protection. A green `ci` still means every gate and every suite
+    passed. Read the final PR's check name and results. The aggregate job must be
+    byte-identical to the accepted base. Require `checks`, all ten `test` shards
+    and `ci` to succeed at the implementation head; no repeat of the initial
+    red-shard proof is required because the gate logic is unchanged.
 
 12. **Existing pins.** Three suites assert that run-all.sh still contains the exact
     discovery string in requirement 3:
     `scripts/test/portable-core-result-facts.test.sh:724`,
     `scripts/test/portable-core-stage-request.test.sh:1100`,
     `scripts/test/portable-core-result-truth.test.sh:1023`. Keeping that line
-    byte-for-byte satisfies all three and nothing has to move; if the implementer
-    reflows it, those three are updated in the same PR. No test pins the blob of
-    `run-all.sh` and none asserts the content of `ci.yml`
+    byte-for-byte satisfies all three; neither the runner nor these suites changes.
+    No test pins the blob of `run-all.sh` and none asserts the content of `ci.yml`
     (`scope-qualification.test.sh:721` and `loop-review-fix-planner.test.sh:372` use
     the path only as fixture text). `.github/workflows/ci.yml` is not in
     `ci/required-files.txt`; `scripts/test/run-all.sh` is, at line 89, and its path
     does not change.
 
-13. **Docs.** Two passages call the workflow a structure check plus shellcheck, and
-    both go stale once it is three jobs. A grep for `run-all` finds no prose
-    describing CI as one serial run; the two stale passages come from a grep for
-    `structure check` over `README.md`, `RESTORE.md`, `QUICKSTART.md`, `docs/` and
-    `AGENTS.md`.
+13. **Docs.** Change “six parallel” to “ten parallel” in the CI sentence in
+    `AGENTS.md` and the matching CI sentence in `RESTORE.md`. All surrounding
+    instructions remain unchanged.
 
-    - `RESTORE.md:416-418` — the restore checklist's **CI** bullet, which introduces
-      `.github/workflows/ci.yml` as "(structure check + shellcheck)". It is updated,
-      in one or two sentences, to name the three jobs — `checks`, six parallel `test`
-      shards, and the aggregate `ci` that stays the hard merge gate — and the
-      `--shard <index>/<count>` flag each shard passes to
-      `scripts/test/run-all.sh`. `RESTORE.md` is **not** a constitution path, so an
-      agent writes this edit directly on the implementation branch; it does not go
-      into the `proposals/` patch. `AGENTS.md` "PR rules" ("Every PR links its intake
-      issue and keeps README/docs in sync") makes it part of this PR, not a
-      follow-up. The nested sub-bullet under it — the structure check reading
-      `ci/required-files.txt` — stays accurate and is left alone: that check still
-      runs, now inside `checks`.
-    - `AGENTS.md:86` — the "Stack & commands" CI bullet, same phrasing; it gains a
-      sentence naming the three jobs and the shard flag. `AGENTS.md` is a
-      constitution path, so agents only write the proposed sentence into the
-      `proposals/` patch and the PR body; the operator commits that edit himself,
-      together with the workflow. Its pinned-shellcheck sub-bullet still holds —
-      `SHELLCHECK_VERSION` in `ci.yml` remains the single source of truth, now read
-      by the `checks` job.
+14. **Wall time.** Target: under 25 minutes, measured by the implementation PR's
+    own complete CI run. Record the duration, head and run link in its description.
+    A projection is not a measured result or a substitute for green CI.
 
-    The same grep's other two hits need no edit. `docs/transition.md:108` says
-    deleting `config/construction-mode.json` "fails CI's structure check", which is
-    still true after the split. `REVIEW.md:294` tells reviewers not to report what CI
-    already enforces, "the structure manifest, shellcheck" — also still true, and a
-    constitution path in any case. Nor does anything else move:
-    `docs/transition-kit.md` mentions `scripts/test/run-all.sh` only inside two
-    quoted JSON records (`forbidden_paths`, `required_manifest_entries`), which stay
-    accurate, and `README.md` and `QUICKSTART.md` do not describe the test step at
-    all.
+## Design and evidence
 
-14. **Wall time.** Target: under 25 minutes, measured by the PR's own CI run
-    duration, which the operator records in the implementation PR body.
+Use the existing sorted round-robin assignment with a fixed count of ten. No
+scheduler, duration table or dependency graph is added. All 66 suite durations from
+run 35508104260 were measured between timestamped suite headers and final success
+lines. Applying the existing assignment gives these busiest-shard projections:
 
-## Design
+| Shards | Suite time |
+| --- | ---: |
+| 6 | 40.41 minutes |
+| 8 | 22.02 minutes |
+| 10 | 19.51 minutes |
+| 13 | 19.07 minutes |
+| 16 | 20.26 minutes |
 
-Order of work on `ystack/impl/ci-test-shards`:
+Ten is the smallest supported count projecting below 20 minutes for that run.
+Thirteen gains only 26 seconds for three more runners; sixteen is slightly slower
+than ten with these suite names. The measured count of 66 is evidence, not a fixed
+suite inventory. Discovery remains automatic as files are added by other work.
 
-1. `scripts/test/run-all.sh` — argument parsing, `--list`, the round-robin filter,
-   the new output line, the refusal paths. Discovery and the `GIT_*` defaults stay as
-   they are; the filter sits between discovery and the run loop.
-2. `scripts/test/run-all-sharding.check.sh`, plus its line appended at the end of
-   `ci/required-files.txt`.
-3. `RESTORE.md` — the one-or-two-sentence rewrite of the **CI** bullet, per
-   requirement 13. Agent-authored and committed on the implementation branch like the
-   runner, because `RESTORE.md` is not a constitution path; it stays out of the
-   `proposals/` patch.
-4. `proposals/ci-test-shards-shard-ci.patch` — the agents' proposed text for the two
-   operator-owned files in step 5, as one unified diff. Nothing else in `scripts/` or
-   `docs/` changes.
-5. **Both operator-owned files, in the operator's own commit — the last permanent
-   file change on the branch:**
-   `.github/workflows/ci.yml` and the `AGENTS.md` bullet of requirement 13. Agents
-   write neither file — the `RESTORE.md` half of requirement 13 is theirs, in step 3;
-   the `AGENTS.md` half is not.
-   What agents produce for these two is patch text: one unified diff
-   saved as `proposals/ci-test-shards-shard-ci.patch`, covering both files, with the
-   rationale in the implementation PR body, per `proposals/README.md`. The operator
-   applies it (`git apply proposals/ci-test-shards-shard-ci.patch`) or types the
-   edits himself, and commits. In the workflow, `checks` and each of the six `test`
-   shards open with the workflow's existing checkout step
-   (`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`), because a
-   job's workspace starts empty; the aggregate `ci` job gets no checkout, since it
-   only inspects `needs.*.result`.
+Runner capacity, setup and machine variance can affect the actual wall time.
+Suite additions or renames change modulo assignment and can move the bottleneck.
+The longest measured suite, `evals-dashboard`, took 940 seconds; raising the count
+cannot beat that individual-suite floor. The existing partition proof verifies
+coverage independently of these performance estimates.
 
-Size estimate: unchanged by requirement 9's sweep over all sixteen counts, because
-that is a loop over `1..16` with an inner loop over `1..count`, not sixteen
-written-out cases — the same few lines that four counts would have taken. So: about
-70 net lines in the runner, 170 in the new proof script, 49 in the workflow (the
-three jobs, the checkout step in each job that needs one, and the one step that
-calls the proof), one manifest line, and four lines of docs — two or three for the
-`RESTORE.md` bullet plus the one `AGENTS.md` sentence — so roughly 294 net lines,
-inside the 300–400 budget, hence `review_size: standard`. The
-`proposals/` patch adds about 60 more lines, but they are the same workflow and
-`AGENTS.md` text written twice — once as patch text, once as the operator's commit —
-so they are read once, not twice.
-
-Expected wall time with six shards, over the 62 suites in sorted order. The only
-durations on record are the three in the accepted intake — `evals-dashboard` 835 s,
-`portable-adapter-contracts` 485 s, `evals-approvals` 443 s — so every other suite is
-counted at 57 s, which is what the 4769 s local run over 56 suites averages once
-those three are removed. On that basis the heaviest shard is the one holding
-`evals-dashboard` (shard 5 over today's 62 names), at about 22.5 minutes; the others
-land between 9 and 18. Add a minute or two for checkout and the shellcheck bootstrap
-and a run finishes around 24 minutes. That clears the target, but only just — which
-is why the shard count is a tunable.
+The producer suites require a shared digest-pinned jq 1.6 binary but do not download
+it. Run [35660956979](https://github.com/yihanzhu/ystack/actions/runs/35660956979)
+failed in shards 3 and 4 at that prerequisite: the ten-shard assignment no longer
+puts a downloading suite before each producer suite. Preparing the same binary in
+each test job removes that order dependency without changing suite membership,
+order or identity checks. Running an extra suite as setup, changing assignment, or
+copying download helpers across suites is outside this design.
 
 ## Out of scope
 
-- Making any individual suite faster. `evals-dashboard` alone is about 14 minutes and
-  is the real ceiling; it gets its own follow-up issue.
-- A merge queue. Any change to the branch ruleset. No change to which suites exist:
-  none is removed, renamed, skipped, or reordered in meaning, and none is added — the
-  sharding proof of requirement 9 is a `checks`-job script outside the discovered
-  suite set, by design. Duration-balanced or bin-packed scheduling.
-
-## Areas of concern
-
-- **Two files are operator-authored, not one.** `.github/workflows/ci.yml` and
-  `AGENTS.md` are both constitution paths, and requirement 13 needs an `AGENTS.md`
-  edit, so it is easy to read this initiative as "the workflow is the operator's, the
-  rest is ours" and land the docs bullet by mistake. Requirement 13 makes that
-  sharper, because its two docs edits split ownership: `RESTORE.md` is the agent's to
-  commit and `AGENTS.md` is not, so the rule is the path, not the requirement.
-  Agents write the runner, the
-  proof script, the manifest line and the `RESTORE.md` bullet; for those two files
-  they write only patch text
-  under `proposals/` plus the rationale in the PR body, and the operator commits both
-  as the last permanent file change on the implementation branch. The two throwaway
-  proof commits of requirement 11 follow it and cancel each other out, so they leave
-  nothing in the squashed commit and no agent commit changes those two files. That is
-  also why this spec is `risk: high`.
-- **The sharding proof sits outside the suite set on purpose.** The accepted intent
-  says "No change to which suites exist" and that the runner stays usable locally,
-  unchanged, with no arguments. A new `*.test.sh` file would breach both: the
-  discovery rule would pick it up and the no-argument output would gain a header and
-  a higher count. Naming it `.check.sh` and calling it from the `checks` job honours
-  the intent exactly — and does not hide the proof, because `checks` is a dependency
-  of the aggregate `ci` job, so a red proof still turns the one required check red.
-- **The aggregate `ci` job must not be skippable.** An ordinary `needs:` job is
-  *skipped* when a dependency fails, and a skipped required check leaves the gate
-  ambiguous. `if: always()` plus explicit `needs.*.result` comparisons make it run
-  and go red instead. This is the riskiest detail here, and the plan should say how
-  it is proved — deliberately failing one shard on the implementation PR itself, on a
-  commit that is deleted again before merge (requirement 11).
-- **Six is a tunable.** Changing it means editing both the matrix list and the `/6`
-  in the run line, and they must stay equal. Any count from 1 to 16 keeps the
-  partition property, so a wrong count is slow or wasteful, never incorrect.
-- **Shard membership moves when suites are added or renamed.** Round-robin over a
-  sorted list means one new file reshuffles everything after it, so the heaviest
-  shard's load drifts. Correctness is unaffected; only the estimate is.
-- **Setup runs seven times.** Seven of the eight jobs check the repository out: each
-  of the six `test` shards and `checks`. The aggregate `ci` job is the one that does
-  not, because it reads only `needs.*.result`, so the count is seven and not eight.
-  Add the shellcheck download in `checks` and that is a minute or two of duplicated
-  work per run, paid to buy back an hour. Acceptable.
-- **The margin is thin.** 24 minutes against a 25-minute target, on an estimate built
-  from one local measurement of 56 suites. If the real run lands over, the answer is
-  a higher shard count, not a change to the rule.
-
-## Answers to the intent's open questions
-
-- **How many parallel shards?** Six. On the same 62-suite estimate, four leaves a
-  28-minute shard and misses the target; eight only reaches about 21 minutes, because
-  the three slow suites dominate at any count, and it costs a third more runner
-  minutes for barely a minute of wall time.
-- **Balanced by measured duration or by index?** By index — see requirement 4.
-- **Does the slowest suite get a follow-up?** Yes, separately. `evals-dashboard` at
-  about 14 minutes is the floor no shard count can beat. Out of scope here.
-
-## Amendment
-
-Amended after the plan gate. Requirement 11 and the matching risk note asked for the
-red-shard proof "on a scratch branch"; plan review on PR #281 showed that is
-infeasible — `ci.yml` triggers on `pull_request` and `push` to `main` only, so a
-scratch branch starts no run — so both now describe the mechanism the plan proves,
-two throwaway commits on the single implementation PR bound to the final head by
-identity. The knock-on wording change: the operator's commit is the last *permanent*
-file change on the branch, not literally its last commit. Nothing else changes;
-`intent-blob` and `risk: high` are unchanged. Plan PR #281 re-pins its `spec-blob` to
-this blob once this merges. This amendment is on the deterministic stage branch
-`ystack/spec/ci-test-shards`, rebuilt by merging `main` into the merged stage head
-and adding the amendment on top, with no force-push (`AGENTS.md:389-392`).
+Individual-suite optimization or test removal, document-only skips, duration-based
+scheduling, merge queues, branch-rule changes, runner or proof changes, installation,
+activation and changes to the meaning of the required gate are outside this change.

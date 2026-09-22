@@ -1,4 +1,5 @@
 import "profile_graph" as graph;
+import "schema" as schema;
 
 # pinned from profiles/default/v1 at 4a576d9181d5e8c01c04f027432ad8b143400cee
 # Digests of the bytes as committed. Requirement 3 (yihanzhu/ystack#262) pins
@@ -108,15 +109,21 @@ def claim_id_ok:
 def forge_binding:
   [$resolved_profile[0].body.bindings[] | select(.binding.role == "forge")] | .[0];
 
-def requested_by($binding):
-  {role:$binding.binding.role,
-   implementation_id:$binding.adapter_implementation.id,
-   implementation_version:$binding.adapter_implementation.version,
-   adapter_instance_id:$binding.binding.adapter_instance_id,
-   principal_id:$binding.binding.principal_id,
-   execution_boundary_id:$binding.binding.execution_boundary_id} +
-  (if $binding.binding | has("authority_ref")
-   then {authority_ref:$binding.binding.authority_ref} else {} end);
+# Requirement 6 (amendment): the requester is the caller's own tenth-argument
+# input, copied into requested_by verbatim, and is never projected from a
+# binding. actor_ref_ok is the core's own shape predicate for requested_by;
+# the role and collision rules are this component's own, checked against
+# every binding in the resolved profile, not only the forge one.
+def requester_shape_ok:
+  ($requester[0] | type) == "object" and ($requester[0] | schema::actor_ref_ok);
+def requester_role_ok:
+  ["manager","operator","orchestrator"] | index($requester[0].role) != null;
+def requester_identity_collision:
+  [$resolved_profile[0].body.bindings[] | .binding] |
+  any(.[];
+    .adapter_instance_id == $requester[0].adapter_instance_id or
+    .execution_boundary_id == $requester[0].execution_boundary_id or
+    .principal_id == $requester[0].principal_id);
 
 def finish_condition_scope:
   {ref:{purpose:"finish-condition",
@@ -178,7 +185,7 @@ def request_body($binding):
    workflow_id:"workflow.shadow-reproduction",
    stage_id:"stage.materialize",
    task_class_id:"task.local-git-materialize",
-   requested_by:requested_by($binding),
+   requested_by:$requester[0],
    target_repository_id:$repository_id,
    target_revision:{state:"present",value:revision},
    source:{state:"present",value:{type:"git-object",value:source_tree_ref}},
@@ -212,9 +219,12 @@ def precheck:
   elif (config_pins_ok | not) then refuse("E_PROFILE")
   elif (claim_kind_ok | not) then refuse("E_SHAPE")
   elif (claim_id_ok | not) then refuse("E_SHAPE")
+  elif (requester_shape_ok | not) then refuse("E_SHAPE")
   elif (graph::profile_set_ok({content:$profile[0],sha256:$profile_sha256};
       {content:$resolved_profile[0],sha256:$resolved_profile_sha256};manifest_pairs) | not)
     then refuse("E_RELATION")
+  elif (requester_role_ok | not) then refuse("E_RELATION")
+  elif requester_identity_collision then refuse("E_RELATION")
   else ok_value(null) end;
 
 def request_document:

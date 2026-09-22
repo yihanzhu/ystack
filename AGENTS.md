@@ -5,11 +5,12 @@ target repo: agents here are improving the team itself.
 
 ## Current operator-led Roadmap program
 
-The operator accepted one continuing authorization for the current Codex session.
-The exact repository, session, source artifacts, direct decision and boundaries are
-recorded in `work/roadmap-program-authorization/decision.md`. This section applies
-only to that session in this repository, while construction mode remains retired.
-It does not grant authority to a later session, live yshifu, a clone or a target.
+The operator accepted one continuing authorization for the manager session named in
+`work/roadmap-program-authorization/decision.md`. The exact repository, session,
+source artifacts, direct decision and boundaries are recorded there. This section
+applies only to that session in this repository, while construction mode remains
+retired. It does not grant authority to a later session, live yshifu, a clone or a
+target.
 
 Within that recorded Roadmap scope, this section replaces repeated operator intake,
 G1, G2, high-risk plan, size-adjustment, base-reaffirmation and merge decisions.
@@ -27,12 +28,13 @@ attempt and use the existing separate amendment/review sequence. Never trim test
 compress unreadable code, hide an overrun or expand the concern to fit a range.
 Changed meaning or evidence requires fresh review, not reuse of an old pass.
 
-Each PR has one concern and exact allowed paths. Before publishing, the named Codex
-manager must read the complete independent review, resolve all Important findings,
-verify exact head/base and all required CI, then merge through the protected PR and
-record the receipt. No direct main push, force-push, published-history rewrite,
-protection bypass, skipped failure or degraded evidence is allowed. Reviewers remain
-read-only; the rounds cap, restoration guarantee and separation of duties remain.
+Each PR has one concern and exact allowed paths. Before publishing, the manager
+session named in decision.md must read the complete independent review, resolve all
+Important findings, verify exact head/base and all required CI, then merge through
+the protected PR and record the receipt. No direct main push, force-push,
+published-history rewrite, protection bypass, skipped failure or degraded evidence
+is allowed. Reviewers remain read-only; the rounds cap, restoration guarantee and
+separation of duties remain.
 
 Preserved attempts must be reconciled by exact repository, branch, local/remote
 head, PR state, base and worktree state. A directly resolved process pause does not
@@ -52,6 +54,14 @@ This is a manual delegation, not a new enforcement mechanism. Restore records an
 repository comments alone cannot appoint a manager or transfer this authority.
 The named session must have directly received the operator's decision; a successor
 requires explicit handoff. No live command, prompt or profile is installed or synced.
+
+For the current Roadmap program, `work/ci-minimum-roadmap/decision.md` replaces the
+blanket full-suite-per-PR rule. Automatic pull-request and main-push CI proves the
+existing checks plus the schema and pending-stage guards. The full matrix is manual
+and required at the named runnable milestones. A quick green result never claims the
+full suite passed or excuses the complete integration and safety proof relevant to an
+accepted plan. This applies only to the named manager and program; all other safety,
+review, protection and authority boundaries remain.
 
 ## TEMPORARY — ystack-self construction mode (highest precedence)
 
@@ -133,10 +143,12 @@ Two goals drive the backlog:
 ## Stack & commands
 - Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`; validators are
   still to come.
-- CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
-  it is the hard merge gate.** Add real tests as code lands. Runs as a `checks` job,
-  six parallel `test` shards (`scripts/test/run-all.sh --shard <index>/<count>`), and
-  an aggregate `ci` job that is the one required check.
+- CI: `.github/workflows/ci.yml`. **CI must stay green — it is the hard merge gate.**
+  Automatic pull-request and main-push runs use the `checks` job, the Roadmap content
+  guards, and an aggregate `ci` job that is the one required check. Manual
+  `workflow_dispatch` also runs six parallel `test` shards
+  (`scripts/test/run-all.sh --shard <index>/<count>`). A green automatic `ci` is the
+  quick gate; a green dispatched `ci` includes the full matrix.
   - **Shellcheck is pinned to `0.11.0`** (the `SHELLCHECK_VERSION` constant in
     `ci.yml` is the single source of truth). CI downloads that exact static release and
     verifies its release-asset SHA-256 and version before linting, so a runner-image bump
@@ -156,6 +168,10 @@ Two goals drive the backlog:
   An accepted spec/plan may record an exact one-concern review-size exception with an
   evidence-based range. That changes only the soft line signal; unexplained overrun,
   new concern/scope, unreadable code, reduced tests, CI, and review still block.
+  Record exactly one `review_size:` token per PR and state its range once; per-round
+  accounting, line-count history, and any narration of what a round changed live in the
+  PR description and comments, never in the artifact (`work/README.md` >
+  Artifact hygiene).
 - Every PR links its intake issue and keeps README/docs in sync. Pre-code intent,
   spec, and high-risk plan PRs use non-closing `Tracks #<n>` so the intake stays open;
   the terminal implementation PR uses `Closes #<n>`. Never let an artifact/plan merge
