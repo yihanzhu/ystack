@@ -274,6 +274,13 @@ git_dir() {
   "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
 }
 
+git_index() {
+  local directory=$1
+  shift
+  "${git_env[@]}" GIT_INDEX_FILE="$run_root/index" \
+    /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
+}
+
 source_inventory="$run_root/source-filesystem"
 source_inventory_byte_limit=8388608
 source_inventory_entry_limit=65536
@@ -540,16 +547,15 @@ git_dir "$staging_repo" index-pack --stdin --fix-thin < "$source_pack" >/dev/nul
 git_dir "$staging_repo" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||
   emit_error E_CANDIDATE_GIT
 
-index_file="$run_root/index"
-GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" read-tree "$source_tree" ||
+git_index "$staging_repo" read-tree "$source_tree" ||
   emit_error E_CANDIDATE_GIT
 if [ "$patch_bytes" -gt 0 ]; then
-  GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached --check \
+  git_index "$staging_repo" apply --cached --check \
     --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
-  GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached \
+  git_index "$staging_repo" apply --cached \
     --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
 fi
-candidate_tree=$(GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" write-tree 2>/dev/null) ||
+candidate_tree=$(git_index "$staging_repo" write-tree 2>/dev/null) ||
   emit_error E_CANDIDATE_GIT
 candidate_paths="$run_root/candidate-paths"
 scan_tree "$staging_repo" "$candidate_tree" "$candidate_paths" || emit_error E_CANDIDATE_TREE
