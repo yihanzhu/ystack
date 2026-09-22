@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -642,6 +643,18 @@ def command_relation(args: argparse.Namespace) -> None:
         receipt["unexpected"] = False
     elif args.case == "response-authority":
         response["authority"] = "local"
+    elif args.case == "profile-ref":
+        receipt["resolved_profile_ref"]["sha256"] = "0" * 64
+    elif args.case == "source-repository":
+        receipt["source"]["repository_id"] = "fixture.other"
+    elif args.case == "outcome":
+        response["stage_result"]["body"]["outcome"]["value"] = "no-change"
+    elif args.case == "fake-receipt":
+        receipt["kind"] = "candidate_materialization_receipt_fake"
+    elif args.case == "numeric-shape":
+        receipt["attempt"]["attempt_number"] = 1.0
+    elif args.case == "nested-shape":
+        receipt["candidate"] = []
     else:
         raise FixtureError("unknown relation mutation")
     if args.case != "response-authority":
@@ -810,6 +823,23 @@ def command_child_streaming(args: argparse.Namespace) -> None:
             raise FixtureError(f"unexpected diagnostic overflow refusal: {exc.token}") from exc
     else:
         raise FixtureError("diagnostic overflow was accepted")
+    aggregate_script = "import os;os.write(2,b'e'*4)"
+    for aggregate_limit, expected in ((8, None), (7, "E_LIMIT")):
+        aggregate_context = dataclasses.replace(context, ledger=module.Ledger())
+        old_invocation_limit = module.LIMITS["invocation_diagnostic_bytes"]
+        module.LIMITS["invocation_diagnostic_bytes"] = aggregate_limit
+        try:
+            module.run_child(aggregate_context, [sys.executable, "-I", "-c", aggregate_script], output_limit=0)
+            try:
+                module.run_child(aggregate_context, [sys.executable, "-I", "-c", aggregate_script], output_limit=0)
+            except module.Refusal as exc:
+                if exc.token != expected:
+                    raise FixtureError(f"unexpected aggregate diagnostic refusal: {exc.token}") from exc
+            else:
+                if expected is not None:
+                    raise FixtureError("aggregate diagnostic overflow was accepted")
+        finally:
+            module.LIMITS["invocation_diagnostic_bytes"] = old_invocation_limit
     try:
         module.run_child(
             context, [sys.executable, "-I", "-c", f"import os;os.write(1,b'x'*{payload_size})"],
@@ -837,6 +867,240 @@ def command_child_streaming(args: argparse.Namespace) -> None:
         module.subprocess.Popen = popen_factory
     if len(children) != 1 or children[0].poll() is None:
         raise FixtureError("deadline child was not reaped")
+
+
+def command_raw_probes(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    oid = lambda number: f"{number:040x}"
+    raw = lambda mode, name, number: mode + b" " + name + b"\0" + bytes.fromhex(oid(number))
+    context = module.Context(
+        args=types.SimpleNamespace(), repo_root=Path("/"), scratch=Path("/"), copied_repo=Path("/"),
+        sidecars=Path("/"), deps_root=Path("/"), ledger=module.Ledger(),
+        deadline=time.monotonic() + 10, algorithm="sha1", oid_bytes=20,
+    )
+
+    def refused(token: str, operation: Any) -> None:
+        try:
+            operation()
+        except module.Refusal as exc:
+            if exc.token != token:
+                raise FixtureError(f"raw probe returned {exc.token}, expected {token}") from exc
+        else:
+            raise FixtureError(f"raw probe accepted, expected {token}")
+
+    malformed = [
+        raw(b"100644", b"a", 1)[:-1],
+        raw(b"100644", b"b", 1) + raw(b"100644", b"a", 1),
+        raw(b"100644", b"a", 1) * 2,
+        raw(b"120000", b"a", 1), raw(b"160000", b"a", 1),
+        raw(b"100644", b"", 1), raw(b"100644", b".git", 1),
+        raw(b"100644", b"bad\\name", 1), raw(b"100644", b"bad/name", 1),
+        raw(b"100644", b"bad.", 1), raw(b"100644", b"bad\x01", 1),
+        raw(b"100644", b"\xff", 1), raw(b"100644", b"a" * 256, 1),
+    ]
+    for body in malformed:
+        refused("E_OBJECT" if body in malformed[:5] else "E_PATH",
+                lambda body=body: module.parse_tree_bytes(context, body))
+
+    bodies = {
+        oid(1): raw(b"40000", b"dir", 2) + raw(b"100644", b"dir/a", 3),
+        oid(2): raw(b"100644", b"a", 4),
+    }
+    original = module.git_object
+    module.git_object = lambda _ctx, object_id, kind, _maximum: bodies[object_id]
+    try:
+        refused("E_PATH", lambda: module.walk_tree(context, oid(1)))
+        bodies[oid(1)] = raw(b"100644", "e\u0301".encode(), 3) + raw(b"100644", "é".encode(), 4)
+        refused("E_PATH", lambda: module.walk_tree(context, oid(1)))
+        bodies[oid(1)] = raw(b"40000", b"a", 2)
+        bodies[oid(2)] = raw(b"40000", b"b", 1)
+        for name, value in (("tree_visits", 1), ("tree_entries", 0),
+                            ("tree_bytes_visited", 1), ("export_path_bytes", 0),
+                            ("directories", 0)):
+            old = module.LIMITS[name]
+            module.LIMITS[name] = value
+            refused("E_LIMIT", lambda: module.walk_tree(context, oid(1)))
+            module.LIMITS[name] = old
+        refused("E_PATH", lambda: module.walk_tree(context, oid(1)))
+        bodies[oid(2)] = b""
+        refused("E_OBJECT", lambda: module.walk_tree(context, oid(1)))
+    finally:
+        module.git_object = original
+
+
+def command_fault_probes(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    args.root.mkdir(mode=0o700)
+    original_read, original_write = module.os.read, module.os.write
+    original_rename, original_fsync = module.os.rename, module.os.fsync
+    read_source = args.root / "read"
+    read_source.write_bytes(b"0123456789")
+    read_source.chmod(0o400)
+    read_calls = 0
+
+    def failed_read(fd: int, count: int) -> bytes:
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls == 1:
+            return original_read(fd, min(count, 2))
+        raise OSError(5, "fixture read failure")
+
+    module.os.read = failed_read
+    try:
+        try:
+            module.read_limited(read_source, 10)
+        except module.Refusal as exc:
+            if exc.token != "E_IO" or read_calls != 2:
+                raise FixtureError("partial read failure returned the wrong result") from exc
+        else:
+            raise FixtureError("partial read failure was accepted")
+    finally:
+        module.os.read = original_read
+    if read_source.read_bytes() != b"0123456789":
+        raise FixtureError("partial read failure changed its source")
+
+    partial = args.root / "partial"
+
+    def partial_write(fd: int, data: bytes) -> int:
+        original_write(fd, data[:max(1, len(data) // 2)])
+        raise OSError(5, "fixture partial write")
+
+    module.os.write = partial_write
+    try:
+        try:
+            module.write_exclusive(partial, b"0123456789", 0o400)
+        except module.Refusal as exc:
+            if exc.token != "E_IO" or partial.stat().st_size >= 10:
+                raise FixtureError("partial write did not retain a bounded failed file") from exc
+        else:
+            raise FixtureError("partial write was accepted")
+    finally:
+        module.os.write = original_write
+
+    read_fd, write_fd = os.pipe(); saved_stdout = os.dup(sys.stdout.fileno())
+    try:
+        os.dup2(write_fd, sys.stdout.fileno()); os.close(write_fd)
+        module.os.write = lambda fd, data: original_write(fd, data[:2])
+        module.emit_result(b"short-write\n")
+        os.dup2(saved_stdout, sys.stdout.fileno()); os.close(saved_stdout); saved_stdout = -1
+        if os.read(read_fd, 64) != b"short-write\n":
+            raise FixtureError("short outward writes changed the envelope")
+    finally:
+        module.os.write = original_write
+        if saved_stdout >= 0:
+            os.dup2(saved_stdout, sys.stdout.fileno()); os.close(saved_stdout)
+        os.close(read_fd)
+
+    bundle = args.root / "rename"; bundle.mkdir(mode=0o700)
+    module.os.rename = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(5, "fixture rename"))
+    try:
+        try:
+            module.publish_record(bundle, b"record\n")
+        except module.Refusal as exc:
+            if exc.token != "E_IO" or not (bundle / ".record.json.preparing").is_file() or \
+                    (bundle / "record.json").exists():
+                raise FixtureError("rename failure state is wrong") from exc
+        else:
+            raise FixtureError("rename failure was accepted")
+    finally:
+        module.os.rename = original_rename
+
+    output = args.root / "nested"; output.mkdir(mode=0o700)
+    boundary = module.hold_boundary(output, "directory", time.monotonic() + 10, private_leaf=True)
+    context = module.Context(args=types.SimpleNamespace(), repo_root=Path("/"), scratch=output,
+        copied_repo=output, sidecars=output, deps_root=output, ledger=module.Ledger(),
+        deadline=time.monotonic() + 10, algorithm="sha1", oid_bytes=20, boundaries={"output": boundary})
+    oid = git_hash("sha1", "blob", b"x")
+    original_git, original_object = module.git, module.git_object
+    saw_directory = False
+
+    def fail_directory(fd: int) -> None:
+        nonlocal saw_directory
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            saw_directory = True
+            raise OSError(5, "fixture nested directory fsync")
+        original_fsync(fd)
+
+    module.git = lambda *_args, **_kwargs: b"1\n"
+    module.git_object = lambda _ctx, _oid, _kind, _maximum, sink=-1: original_write(sink, b"x") or b""
+    module.os.fsync = fail_directory
+    try:
+        try:
+            module.export_candidate(context, output / "candidate",
+                [{"path": "nested", "kind": "directory", "git_mode": "040000", "mode": "0500"}],
+                {"nested/file": ("100644", oid)})
+        except (module.Refusal, OSError) as exc:
+            if (isinstance(exc, module.Refusal) and exc.token != "E_IO") or not saw_directory:
+                raise FixtureError("nested directory fsync was not exercised") from exc
+        else:
+            raise FixtureError("nested directory fsync failure was accepted")
+    finally:
+        module.git, module.git_object, module.os.fsync = original_git, original_object, original_fsync
+        boundary.close()
+
+
+def command_closed_pipe(args: argparse.Namespace) -> None:
+    invocation = strict_load(args.argv_json)
+    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
+        raise FixtureError("closed-pipe argv must be a string list")
+    process = subprocess.Popen([sys.executable, "-I", str(args.component), *invocation],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdout is not None and process.stderr is not None
+    process.stdout.close()
+    diagnostic = process.stderr.read()
+    result = process.wait(300)
+    if result != 1 or diagnostic != b"E_IO\n":
+        raise FixtureError(f"closed pipe returned {result}: {diagnostic!r}")
+
+
+def command_accounting_probes(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    invocation = strict_load(args.argv_json)
+    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
+        raise FixtureError("accounting argv must be a string list")
+    original = module.copy_storage
+    observed = False
+
+    def checked_copy(context: Any) -> None:
+        nonlocal observed
+        before = context.ledger.scratch_bytes
+        charges: list[int] = []
+        original_charge = context.ledger.charge
+
+        def tracked_charge(field: str, amount: int, maximum: int) -> None:
+            if field == "scratch_bytes":
+                charges.append(amount)
+            original_charge(field, amount, maximum)
+
+        context.ledger.charge = tracked_charge
+        try:
+            original(context)
+        finally:
+            context.ledger.charge = original_charge
+        copied = [fact for name, fact in context.source_facts.items()
+                  if name.endswith((".rev", ".pack", ".idx")) or
+                  name.startswith("objects/") and name not in ("objects/info", "objects/pack")]
+        sidecars = [fact for name, fact in context.source_facts.items() if name.endswith(".rev")]
+        unmatched = list(charges)
+        for fact in copied:
+            if fact.size not in unmatched:
+                raise FixtureError("copied storage lacked its scratch charge")
+            unmatched.remove(fact.size)
+        if not sidecars or context.ledger.scratch_bytes - before != sum(charges):
+            raise FixtureError("copied storage was not charged exactly")
+        if list(context.copied_repo.rglob("*.rev")) or not list(context.sidecars.glob("*.rev")):
+            raise FixtureError("sidecar crossed the private Git-reading boundary")
+        observed = True
+
+    module.copy_storage = checked_copy
+    try:
+        result = module.main(invocation)
+    finally:
+        module.copy_storage = original
+    if not observed:
+        raise FixtureError("storage accounting probe was not reached")
+    if result is not None:
+        raise SystemExit(result)
 
 
 def command_limit_invoke(args: argparse.Namespace) -> None:
@@ -922,7 +1186,8 @@ def parser() -> argparse.ArgumentParser:
     relation_parser.add_argument("--output", required=True, type=Path)
     relation_parser.add_argument("--case", required=True, choices=(
         "request-ref", "candidate-commit", "parent-commit", "attempt-number",
-        "receipt-extra", "response-authority",
+        "receipt-extra", "response-authority", "profile-ref", "source-repository",
+        "outcome", "fake-receipt", "numeric-shape", "nested-shape",
     ))
     relation_parser.set_defaults(run=command_relation)
 
@@ -943,7 +1208,7 @@ def parser() -> argparse.ArgumentParser:
         choices=(
             "write_exclusive", "fsync_file", "publish_record", "fsync_dir",
             "emit_result", "read_limited", "load_identity_inputs", "copy_storage",
-            "export_candidate", "measure_candidate", "recheck_source",
+            "export_candidate", "measure_candidate", "recheck_source", "read_output_file",
         ),
     )
     inject_parser.add_argument(
@@ -965,6 +1230,25 @@ def parser() -> argparse.ArgumentParser:
     streaming_parser = commands.add_parser("child-streaming", allow_abbrev=False)
     streaming_parser.add_argument("--component", required=True, type=Path)
     streaming_parser.set_defaults(run=command_child_streaming)
+
+    raw_parser = commands.add_parser("raw-probes", allow_abbrev=False)
+    raw_parser.add_argument("--component", required=True, type=Path)
+    raw_parser.set_defaults(run=command_raw_probes)
+
+    fault_parser = commands.add_parser("fault-probes", allow_abbrev=False)
+    fault_parser.add_argument("--component", required=True, type=Path)
+    fault_parser.add_argument("--root", required=True, type=Path)
+    fault_parser.set_defaults(run=command_fault_probes)
+
+    pipe_parser = commands.add_parser("closed-pipe", allow_abbrev=False)
+    pipe_parser.add_argument("--component", required=True, type=Path)
+    pipe_parser.add_argument("--argv-json", required=True, type=Path)
+    pipe_parser.set_defaults(run=command_closed_pipe)
+
+    accounting_parser = commands.add_parser("accounting-probes", allow_abbrev=False)
+    accounting_parser.add_argument("--component", required=True, type=Path)
+    accounting_parser.add_argument("--argv-json", required=True, type=Path)
+    accounting_parser.set_defaults(run=command_accounting_probes)
 
     limit_parser = commands.add_parser("limit-invoke", allow_abbrev=False)
     limit_parser.add_argument("--component", required=True, type=Path)

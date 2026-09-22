@@ -236,28 +236,6 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def sha_file(path: Path, maximum: int | None = None, deadline: float | None = None) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    total = 0
-    try:
-        with path.open("rb", buffering=0) as stream:
-            while True:
-                if deadline is not None:
-                    check_deadline(deadline)
-                block = stream.read(LIMITS["chunk_bytes"])
-                if not block:
-                    break
-                total += len(block)
-                if maximum is not None and total > maximum:
-                    raise Refusal("E_LIMIT")
-                digest.update(block)
-    except Refusal:
-        raise
-    except OSError as exc:
-        raise Refusal("E_IO") from exc
-    return digest.hexdigest(), total
-
-
 def measure_fd(fd: int, maximum: int, deadline: float, *, object_type: str | None = None,
                hash_algorithm: str = "sha1", expected_size: int | None = None,
                sink: int = -1) -> tuple[str, int, str | None]:
@@ -799,7 +777,7 @@ def copy_dependencies(ctx: Context) -> tuple[Path, Path]:
             raise Refusal("E_LIMIT")
         ctx.ledger.charge("scratch_bytes", len(data), LIMITS["scratch_bytes"])
         write_exclusive(destination, data, 0o500 if relative.endswith(".sh") else 0o400, ctx)
-        copied, copied_size = sha_file(destination, deadline=ctx.deadline)
+        copied, copied_size = measure_private_file(ctx, destination, LIMITS["dependency_bytes"])
         after_data = read_limited(source, LIMITS["dependency_bytes"], source_fd=boundary.fd,
                                   deadline=ctx.deadline)
         after, after_size = sha256(after_data), len(after_data)
@@ -815,7 +793,7 @@ def copy_dependencies(ctx: Context) -> tuple[Path, Path]:
     make_private_directory(ctx, jq_copy.parent, parents=True, exist_ok=True)
     ctx.ledger.charge("scratch_bytes", len(jq_data), LIMITS["scratch_bytes"])
     write_exclusive(jq_copy, jq_data, 0o500, ctx)
-    copied_jq, copied_jq_size = sha_file(jq_copy, deadline=ctx.deadline)
+    copied_jq, copied_jq_size = measure_private_file(ctx, jq_copy, LIMITS["dependency_bytes"])
     jq_after = read_limited(Path(ctx.args.jq), LIMITS["dependency_bytes"],
                             source_fd=ctx.boundaries["jq"].fd, deadline=ctx.deadline)
     if copied_jq != sha256(jq_data) or copied_jq_size != len(jq_data) or jq_after != jq_data:
@@ -1057,27 +1035,29 @@ def file_fact(ctx: Context, relative: str, maximum: int) -> FileFact:
             os.close(fd)
 
 
-def allowed_storage_path(relative: str, algorithm: str) -> tuple[bool, bool]:
-    exact = {"HEAD", "config", "refs/heads/candidate"}
+def allowed_storage_path(relative: str, algorithm: str) -> tuple[str | None, bool]:
+    files = {"HEAD", "config", "refs/heads/candidate"}
     directories = {"objects", "objects/info", "objects/pack", "refs", "refs/heads", "refs/tags"}
-    if relative in exact or relative in directories:
-        return True, False
+    if relative in files:
+        return "file", False
+    if relative in directories:
+        return "directory", False
     parts = relative.split("/")
     oid_len = 40 if algorithm == "sha1" else 64
     if len(parts) == 2 and parts[0] == "objects" and len(parts[1]) == 2 and \
             all(ch in HEX64 for ch in parts[1]):
-        return True, False
+        return "directory", False
     if len(parts) == 3 and parts[0] == "objects" and len(parts[1]) == 2 and len(parts[2]) == oid_len - 2 and \
             all(ch in HEX64 for ch in parts[1] + parts[2]):
-        return True, False
+        return "file", False
     if len(parts) == 3 and parts[:2] == ["objects", "pack"]:
         name = parts[2]
         for suffix in (".pack", ".idx", ".rev"):
             if name.startswith("pack-") and name.endswith(suffix) and \
                     len(name) == 5 + oid_len + len(suffix) and \
                     all(ch in HEX64 for ch in name[5:-len(suffix)]):
-                return True, suffix == ".rev"
-    return False, False
+                return "file", suffix == ".rev"
+    return None, False
 
 
 def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str, Any]]]:
@@ -1100,8 +1080,8 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
                 for name in names:
                     ctx.check_deadline()
                     relative = f"{relative_dir}/{name}" if relative_dir else name
-                    allowed, reverse = allowed_storage_path(relative, ctx.algorithm)
-                    if not allowed:
+                    required_kind, reverse = allowed_storage_path(relative, ctx.algorithm)
+                    if required_kind is None:
                         raise Refusal("E_STORAGE")
                     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
                     if value.st_uid != os.geteuid() or value.st_dev != root_st.st_dev or \
@@ -1110,11 +1090,15 @@ def enumerate_storage(ctx: Context) -> tuple[dict[str, FileFact], list[dict[str,
                     entry_count += 1
                     name_bytes += len(relative.encode("utf-8"))
                     if stat.S_ISDIR(value.st_mode):
+                        if required_kind != "directory":
+                            raise Refusal("E_STORAGE")
                         child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
                         stack.append((child, relative))
                         observation.append({"path": relative, "type": "directory",
                                             "mode": f"{stat.S_IMODE(value.st_mode):04o}"})
                     elif stat.S_ISREG(value.st_mode):
+                        if required_kind != "file":
+                            raise Refusal("E_STORAGE")
                         maximum = LIMITS["reverse_index_bytes"] if reverse else LIMITS["repository_file_bytes"]
                         fact = file_fact(ctx, relative, maximum)
                         if (fact.dev, fact.ino) in seen_inodes:
@@ -1167,8 +1151,8 @@ def copy_storage(ctx: Context) -> None:
         try:
             destination_fd = os.open(destination.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                      0o400, dir_fd=parent_fd)
-            digest, size, _ = measure_fd(source_fd, LIMITS["repository_file_bytes"], ctx.deadline,
-                                         sink=destination_fd)
+            digest, size, _ = measure_fd(source_fd, fact.size, ctx.deadline,
+                                         expected_size=fact.size, sink=destination_fd)
             os.fchmod(destination_fd, 0o400)
             os.fsync(destination_fd)
         finally:
@@ -1195,8 +1179,7 @@ def copy_storage(ctx: Context) -> None:
     head = read_limited(source / "HEAD", LIMITS["head_ref_bytes"], source_fd=head_fd,
                         deadline=ctx.deadline)
     os.close(head_fd)
-    if not re.fullmatch(rb"ref: refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\n", head) or \
-            b".." in head or b"//" in head or b"/." in head:
+    if not re.fullmatch(rb"ref: refs/heads/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\n", head):
         raise Refusal("E_STORAGE")
     config = b"[core]\n\trepositoryformatversion = " + (b"1" if ctx.algorithm == "sha256" else b"0") + \
              b"\n\tfilemode = true\n\tbare = true\n\tlogallrefupdates = false\n"
@@ -1271,8 +1254,9 @@ def validate_reverse_index(ctx: Context, basename: str) -> None:
                 struct.unpack(">I", header[4:8])[0] not in (2, 3):
             raise Refusal("E_STORAGE")
         count = struct.unpack(">I", header[8:12])[0]
-        if count > LIMITS["reverse_index_objects"] or \
-                trailer != digest_prefix(pack_fd, ctx.algorithm, pack_size - hash_len, ctx.deadline) or \
+        if count > LIMITS["reverse_index_objects"]:
+            raise Refusal("E_LIMIT")
+        if trailer != digest_prefix(pack_fd, ctx.algorithm, pack_size - hash_len, ctx.deadline) or \
                 trailer.hex() != basename[5:]:
             raise Refusal("E_STORAGE")
         offsets, index_pack_hash = parse_pack_index_fd(ctx, index_fd, count)
@@ -1305,6 +1289,41 @@ def open_private_read(ctx: Context, path: Path) -> int:
         return os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
     finally:
         os.close(parent)
+
+
+def measure_private_file(ctx: Context, path: Path, maximum: int) -> tuple[str, int]:
+    fd = open_private_read(ctx, path)
+    try:
+        before = os.fstat(fd)
+        digest, size, _ = measure_fd(fd, maximum, ctx.deadline)
+        after = os.fstat(fd)
+        if stat_identity(before) != stat_identity(after) or before.st_size != after.st_size or \
+                before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns:
+            raise Refusal("E_DEPENDENCY")
+        return digest, size
+    finally:
+        os.close(fd)
+
+
+def read_output_file(ctx: Context, name: str, maximum: int) -> bytes:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=ctx.boundaries["output"].fd)
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1:
+            raise Refusal("E_INCOMPLETE")
+        data = read_limited(Path(ctx.args.output) / name, maximum, source_fd=fd, deadline=ctx.deadline)
+        after = os.fstat(fd)
+        if stat_identity(before) != stat_identity(after) or before.st_size != after.st_size or \
+                before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns:
+            raise Refusal("E_INCOMPLETE")
+        return data
+    except Refusal:
+        raise
+    except OSError as exc:
+        raise Refusal("E_INCOMPLETE") from exc
+    finally:
+        if 'fd' in locals():
+            os.close(fd)
 
 
 def digest_prefix(fd: int, algorithm: str, length: int, deadline: float) -> bytes:
@@ -1415,7 +1434,7 @@ def valid_component(raw: bytes) -> str:
     except UnicodeError as exc:
         raise Refusal("E_PATH") from exc
     encoded = name.encode("utf-8")
-    if not encoded or len(encoded) > 255 or name in (".", "..") or "\\" in name or \
+    if not encoded or len(encoded) > 255 or name in (".", "..") or "/" in name or "\\" in name or \
             name.casefold() == ".git" or name.endswith((".", " ")) or \
             any(ord(ch) <= 0x1f or 0x7f <= ord(ch) <= 0x9f for ch in name):
         raise Refusal("E_PATH")
@@ -1455,6 +1474,7 @@ def walk_tree(ctx: Context, root_oid: str) -> tuple[list[dict[str, Any]], dict[s
     inventory: list[dict[str, Any]] = []
     files: dict[str, tuple[str, str]] = {}
     aliases: dict[tuple[str, ...], str] = {}
+    paths: set[str] = set()
     visits = entries_count = path_bytes = tree_bytes = 0
     stack: list[tuple[str, tuple[str, ...], int]] = [(root_oid, (), 0)]
     while stack:
@@ -1466,7 +1486,9 @@ def walk_tree(ctx: Context, root_oid: str) -> tuple[list[dict[str, Any]], dict[s
         body = git_object(ctx, oid, "tree", LIMITS["tree_bytes"])
         body_entries = parse_tree_bytes(ctx, body)
         tree_bytes += len(body)
-        if tree_bytes > LIMITS["tree_bytes_visited"] or (prefix and not body_entries):
+        if tree_bytes > LIMITS["tree_bytes_visited"]:
+            raise Refusal("E_LIMIT")
+        if prefix and not body_entries:
             raise Refusal("E_OBJECT")
         children = []
         for mode, name, child in body_entries:
@@ -1477,6 +1499,9 @@ def walk_tree(ctx: Context, root_oid: str) -> tuple[list[dict[str, Any]], dict[s
             if len(parts) > 64:
                 raise Refusal("E_PATH")
             path = "/".join(parts)
+            if path in paths:
+                raise Refusal("E_PATH")
+            paths.add(path)
             encoded = path.encode("utf-8")
             if len(encoded) > 4096:
                 raise Refusal("E_PATH")
@@ -1858,8 +1883,12 @@ def completion_envelope(record_data: bytes, manifest_data: bytes) -> bytes:
 
 def emit_result(data: bytes) -> None:
     try:
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        view = memoryview(data)
+        while view:
+            count = os.write(sys.stdout.fileno(), view)
+            if count <= 0:
+                raise OSError(5, "outward write made no progress")
+            view = view[count:]
     except (BrokenPipeError, OSError) as exc:
         raise Refusal("E_IO") from exc
 
@@ -2126,8 +2155,8 @@ def inspect(ctx: Context) -> bytes:
         verify_top_level(ctx)
         measure_bundle_size(ctx, bundle, True)
         input_data, response_data = load_identity_inputs(ctx)
-        if read_limited(bundle / "input.json", LIMITS["input_bytes"], deadline=ctx.deadline) != input_data or \
-                read_limited(bundle / "response.json", LIMITS["response_bytes"], deadline=ctx.deadline) != response_data:
+        if read_output_file(ctx, "input.json", LIMITS["input_bytes"]) != input_data or \
+                read_output_file(ctx, "response.json", LIMITS["response_bytes"]) != response_data:
             raise Refusal("E_IDENTITY", 2)
         jq_copy, protocol = copy_dependencies(ctx)
         input_value, response, details = validate_documents(ctx, input_data, response_data, jq_copy, protocol)
@@ -2135,7 +2164,7 @@ def inspect(ctx: Context) -> bytes:
         ctx.source_facts, ctx.source_observation = enumerate_storage(ctx)
         copy_storage(ctx)
         receipt, directories, files = validate_relations(ctx, input_value, response, details)
-        manifest_data = read_limited(bundle / "manifest.json", LIMITS["manifest_bytes"], deadline=ctx.deadline)
+        manifest_data = read_output_file(ctx, "manifest.json", LIMITS["manifest_bytes"])
         manifest = strict_json(manifest_data, "E_INCOMPLETE")
         if canonical(manifest) != manifest_data:
             raise Refusal("E_INCOMPLETE")
@@ -2153,7 +2182,7 @@ def inspect(ctx: Context) -> bytes:
         measure_candidate(ctx, bundle / "candidate", expected_inventory)
         if manifest_for(expected_inventory) != manifest:
             raise Refusal("E_INCOMPLETE")
-        record_data = read_limited(bundle / "record.json", LIMITS["record_bytes"], deadline=ctx.deadline)
+        record_data = read_output_file(ctx, "record.json", LIMITS["record_bytes"])
         record = strict_json(record_data, "E_INCOMPLETE")
         if canonical(record) != record_data:
             raise Refusal("E_INCOMPLETE")
