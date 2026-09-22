@@ -1,0 +1,824 @@
+#!/usr/bin/env python3
+"""Private fixture and oracle support for candidate content preparation tests."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import hashlib
+import importlib.util
+import json
+import os
+import stat
+import struct
+import sys
+import time
+import zlib
+from pathlib import Path
+from typing import Any
+
+
+CHUNK = 64 * 1024
+GIT_MODES = {"100644": 0o400, "100755": 0o500}
+LIMITS = {
+    "input_bytes": 8 * 1024 * 1024,
+    "response_bytes": 1 * 1024 * 1024,
+    "receipt_bytes": 64 * 1024,
+    "stage_result_bytes": 256 * 1024,
+    "json_depth": 32,
+    "storage_bytes": 256 * 1024 * 1024,
+    "repository_file_bytes": 64 * 1024 * 1024,
+    "reverse_index_bytes": 1 * 1024 * 1024,
+    "reverse_index_objects": 65_536,
+    "storage_entries": 65_536,
+    "storage_name_bytes": 8 * 1024 * 1024,
+    "config_bytes": 1 * 1024 * 1024,
+    "head_or_ref_bytes": 4 * 1024,
+    "commit_bytes": 1 * 1024 * 1024,
+    "tree_bytes": 16 * 1024 * 1024,
+    "traversal_tree_bytes": 16 * 1024 * 1024,
+    "tree_visits": 1_024,
+    "directory_entries": 65_536,
+    "file_paths": 4_096,
+    "nonroot_directories": 1_023,
+    "exported_path_bytes": 1 * 1024 * 1024,
+    "blob_bytes": 8 * 1024 * 1024,
+    "exported_file_bytes": 64 * 1024 * 1024,
+    "manifest_bytes": 2 * 1024 * 1024,
+    "record_bytes": 16 * 1024,
+    "dependency_bytes": 32 * 1024 * 1024,
+    "scratch_bytes": 384 * 1024 * 1024,
+    "bundle_bytes": 80 * 1024 * 1024,
+    "child_diagnostic_bytes": 64 * 1024,
+    "invocation_diagnostic_bytes": 256 * 1024,
+    "result_bytes": 16 * 1024,
+    "diagnostic_bytes": 4 * 1024,
+    "operation_seconds": 300,
+    "child_seconds": 120,
+}
+
+
+class FixtureError(Exception):
+    pass
+
+
+def canonical_json(value: Any) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def strict_load(path: Path) -> Any:
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise FixtureError(f"duplicate JSON member: {key}")
+            result[key] = value
+        return result
+
+    try:
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+        value = json.loads(
+            text,
+            object_pairs_hook=pairs,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                FixtureError(f"invalid JSON number: {token}")
+            ),
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FixtureError(str(exc)) from exc
+    reject_surrogates(value)
+    return value
+
+
+def reject_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise FixtureError("JSON contains a lone surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            reject_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            reject_surrogates(key)
+            reject_surrogates(item)
+
+
+def write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("xb") as stream:
+        stream.write(data)
+
+
+def replace_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        stream.write(data)
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def git_hash(algorithm: str, kind: str, body: bytes) -> str:
+    header = f"{kind} {len(body)}\0".encode("ascii")
+    return hashlib.new(algorithm, header + body).hexdigest()
+
+
+def entry_bytes(entry: dict[str, Any]) -> bytes:
+    choices = [name for name in ("content_base64", "content_hex", "content_utf8") if name in entry]
+    if len(choices) != 1:
+        raise FixtureError("each file needs exactly one content encoding")
+    try:
+        if choices[0] == "content_base64":
+            return base64.b64decode(entry[choices[0]], validate=True)
+        if choices[0] == "content_hex":
+            return bytes.fromhex(entry[choices[0]])
+        return entry[choices[0]].encode("utf-8")
+    except (ValueError, binascii.Error, UnicodeEncodeError) as exc:
+        raise FixtureError(f"invalid content encoding for {entry.get('path')}") from exc
+
+
+def normalized_description(path: Path) -> list[tuple[str, str, bytes]]:
+    value = strict_load(path)
+    entries = value.get("entries") if isinstance(value, dict) else value
+    if not isinstance(entries, list):
+        raise FixtureError("description must be an entry list or contain entries")
+    result: list[tuple[str, str, bytes]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) - {
+            "path", "git_mode", "content_base64", "content_hex", "content_utf8"
+        }:
+            raise FixtureError("invalid oracle entry")
+        name = entry.get("path")
+        mode = entry.get("git_mode")
+        if not isinstance(name, str) or not name or name.startswith("/"):
+            raise FixtureError("oracle path must be relative")
+        components = name.split("/")
+        if any(part in ("", ".", "..") for part in components):
+            raise FixtureError(f"invalid oracle path: {name}")
+        if name in seen:
+            raise FixtureError(f"duplicate oracle path: {name}")
+        if mode not in GIT_MODES:
+            raise FixtureError(f"invalid oracle Git mode: {mode}")
+        name.encode("utf-8")
+        seen.add(name)
+        result.append((name, mode, entry_bytes(entry)))
+    result.sort(key=lambda item: item[0].encode("utf-8"))
+    return result
+
+
+def oracle(entries: list[tuple[str, str, bytes]]) -> dict[str, Any]:
+    directories: set[str] = set()
+    manifest_entries: list[dict[str, Any]] = []
+    for name, git_mode, body in entries:
+        pieces = name.split("/")
+        for end in range(1, len(pieces)):
+            directories.add("/".join(pieces[:end]))
+        manifest_entries.append(
+            {
+                "path": name,
+                "kind": "file",
+                "git_mode": git_mode,
+                "mode": f"{GIT_MODES[git_mode]:04o}",
+                "blob_oid": None,
+                "size_bytes": len(body),
+                "sha256": sha256_bytes(body),
+            }
+        )
+    for name in directories:
+        manifest_entries.append(
+            {
+                "path": name,
+                "kind": "directory",
+                "git_mode": "040000",
+                "mode": "0500",
+            }
+        )
+    manifest_entries.sort(key=lambda item: item["path"].encode("utf-8"))
+    return {
+        "schema_version": 1,
+        "kind": "candidate_content_manifest",
+        "hash_algorithm": "sha256",
+        "entries": manifest_entries,
+        "file_count": len(entries),
+        "directory_count": len(directories),
+        "total_file_bytes": sum(len(body) for _, _, body in entries),
+    }
+
+
+def add_blob_oids(
+    manifest: dict[str, Any], entries: list[tuple[str, str, bytes]], algorithm: str
+) -> None:
+    bodies = {name: body for name, _, body in entries}
+    for entry in manifest["entries"]:
+        if entry["kind"] == "file":
+            entry["blob_oid"] = git_hash(algorithm, "blob", bodies[entry["path"]])
+
+
+def build_tree(root: Path, entries: list[tuple[str, str, bytes]], root_mode: int | None) -> None:
+    if root.exists() or root.is_symlink():
+        raise FixtureError("oracle root already exists")
+    root.mkdir(mode=0o700)
+    for name, git_mode, body in entries:
+        destination = root.joinpath(*name.split("/"))
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_bytes(destination, body)
+        destination.chmod(GIT_MODES[git_mode])
+    directories = sorted(
+        (item for item in root.rglob("*") if item.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        directory.chmod(0o500)
+    if root_mode is not None:
+        root.chmod(root_mode)
+
+
+def actual_tree(root: Path) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in sorted(dirnames + filenames, key=lambda item: os.fsencode(item)):
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            info = path.lstat()
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISLNK(info.st_mode):
+                kind = "symlink"
+                digest = None
+                size = len(os.readlink(path).encode("utf-8", "surrogateescape"))
+            elif stat.S_ISDIR(info.st_mode):
+                kind = "directory"
+                digest = None
+                size = None
+            elif stat.S_ISREG(info.st_mode):
+                kind = "file"
+                digest = hash_file(path, "sha256")
+                size = info.st_size
+            else:
+                kind = "other"
+                digest = None
+                size = None
+            result.append(
+                {
+                    "path": relative,
+                    "kind": kind,
+                    "mode": f"{mode:04o}",
+                    "size_bytes": size,
+                    "sha256": digest,
+                }
+            )
+    result.sort(key=lambda item: item["path"].encode("utf-8"))
+    return result
+
+
+def expected_tree(entries: list[tuple[str, str, bytes]]) -> list[dict[str, Any]]:
+    manifest = oracle(entries)
+    result: list[dict[str, Any]] = []
+    for item in manifest["entries"]:
+        result.append(
+            {
+                "path": item["path"],
+                "kind": item["kind"],
+                "mode": item["mode"],
+                "size_bytes": item.get("size_bytes"),
+                "sha256": item.get("sha256"),
+            }
+        )
+    return result
+
+
+def check_tree_nodes(root: Path) -> None:
+    seen: set[tuple[int, int]] = set()
+    paths = [root]
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        paths.extend(current_path / name for name in dirnames + filenames)
+    for path in paths:
+        info = path.lstat()
+        identity = (info.st_dev, info.st_ino)
+        if identity in seen:
+            raise FixtureError("actual tree contains aliased inode identities")
+        seen.add(identity)
+        if stat.S_ISREG(info.st_mode):
+            if info.st_nlink != 1:
+                raise FixtureError("actual tree contains a linked file")
+        elif not stat.S_ISDIR(info.st_mode):
+            raise FixtureError("actual tree contains a non-file node")
+
+
+def hash_file(path: Path, algorithm: str) -> str:
+    digest = hashlib.new(algorithm)
+    with path.open("rb") as stream:
+        while chunk := stream.read(CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def snapshot_fact(path: Path, relative: str) -> dict[str, Any]:
+    info = path.lstat()
+    raw_relative = os.fsencode(relative)
+    try:
+        display_relative: str | None = raw_relative.decode("utf-8")
+    except UnicodeDecodeError:
+        display_relative = None
+    fact: dict[str, Any] = {
+        "path": display_relative,
+        "path_base64": base64.b64encode(raw_relative).decode("ascii"),
+        "mode": f"{stat.S_IMODE(info.st_mode):04o}",
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "nlink": info.st_nlink,
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size_bytes": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
+    }
+    if stat.S_ISREG(info.st_mode):
+        fact.update(kind="file", sha256=hash_file(path, "sha256"))
+    elif stat.S_ISDIR(info.st_mode):
+        fact.update(kind="directory")
+    elif stat.S_ISLNK(info.st_mode):
+        target = os.readlink(path)
+        fact.update(
+            kind="symlink",
+            target_base64=base64.b64encode(os.fsencode(target)).decode("ascii"),
+        )
+    elif stat.S_ISFIFO(info.st_mode):
+        fact.update(kind="fifo")
+    elif stat.S_ISSOCK(info.st_mode):
+        fact.update(kind="socket")
+    elif stat.S_ISCHR(info.st_mode):
+        fact.update(kind="character-device", rdev=info.st_rdev)
+    elif stat.S_ISBLK(info.st_mode):
+        fact.update(kind="block-device", rdev=info.st_rdev)
+    else:
+        fact.update(kind="unknown")
+    return fact
+
+
+def snapshot(root: Path) -> dict[str, Any]:
+    info = root.lstat()
+    if stat.S_ISREG(info.st_mode):
+        entries = [snapshot_fact(root, ".")]
+    elif stat.S_ISDIR(info.st_mode):
+        entries = [snapshot_fact(root, ".")]
+        for current, dirnames, filenames in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            for name in sorted(dirnames + filenames, key=lambda item: os.fsencode(item)):
+                path = current_path / name
+                entries.append(snapshot_fact(path, path.relative_to(root).as_posix()))
+        entries.sort(key=lambda item: base64.b64decode(item["path_base64"]))
+    else:
+        raise FixtureError("snapshot root must be a regular file or directory")
+    return {"schema_version": 1, "entries": entries}
+
+
+def parse_index(index_path: Path, algorithm: str) -> tuple[list[int], bytes]:
+    hash_size = hashlib.new(algorithm).digest_size
+    data = index_path.read_bytes()
+    if len(data) < 8 + 256 * 4 + 2 * hash_size or data[:4] != b"\xfftOc":
+        raise FixtureError("index is not version 2")
+    if struct.unpack(">I", data[4:8])[0] != 2:
+        raise FixtureError("index is not version 2")
+    fanout_start = 8
+    count = struct.unpack(">I", data[fanout_start + 255 * 4:fanout_start + 256 * 4])[0]
+    names_end = fanout_start + 256 * 4 + count * hash_size
+    crc_end = names_end + count * 4
+    offsets_end = crc_end + count * 4
+    if offsets_end + 2 * hash_size > len(data):
+        raise FixtureError("truncated index")
+    raw_offsets = list(struct.unpack(f">{count}I", data[crc_end:offsets_end]))
+    large_count = sum(1 for value in raw_offsets if value & 0x80000000)
+    expected = offsets_end + large_count * 8 + 2 * hash_size
+    if expected != len(data):
+        raise FixtureError("invalid index length")
+    large = (
+        struct.unpack(
+            f">{large_count}Q", data[offsets_end:offsets_end + large_count * 8]
+        )
+        if large_count
+        else ()
+    )
+    offsets: list[int] = []
+    for value in raw_offsets:
+        if value & 0x80000000:
+            position = value & 0x7FFFFFFF
+            if position >= len(large):
+                raise FixtureError("invalid large-offset position")
+            offsets.append(large[position])
+        else:
+            offsets.append(value)
+    calculated = hashlib.new(algorithm, data[:-hash_size]).digest()
+    if calculated != data[-hash_size:]:
+        raise FixtureError("invalid index checksum")
+    return offsets, data[-2 * hash_size:-hash_size]
+
+
+def make_reverse_index(index_path: Path, pack_path: Path, algorithm: str) -> bytes:
+    offsets, index_pack_checksum = parse_index(index_path, algorithm)
+    hash_size = hashlib.new(algorithm).digest_size
+    pack = pack_path.read_bytes()
+    if len(pack) < 12 + hash_size or pack[:4] != b"PACK":
+        raise FixtureError("invalid pack")
+    count = struct.unpack(">I", pack[8:12])[0]
+    if count != len(offsets):
+        raise FixtureError("pack/index count mismatch")
+    pack_checksum = hashlib.new(algorithm, pack[:-hash_size]).digest()
+    if pack_checksum != pack[-hash_size:] or pack_checksum != index_pack_checksum:
+        raise FixtureError("pack checksum mismatch")
+    positions = sorted(range(len(offsets)), key=lambda position: offsets[position])
+    hash_id = 1 if algorithm == "sha1" else 2
+    prefix = b"RIDX" + struct.pack(">II", 1, hash_id)
+    prefix += b"".join(struct.pack(">I", position) for position in positions)
+    prefix += pack_checksum
+    return prefix + hashlib.new(algorithm, prefix).digest()
+
+
+def mutate_reverse(data: bytes, algorithm: str, case: str, rehash: bool) -> bytes:
+    hash_size = hashlib.new(algorithm).digest_size
+    if len(data) < 12 + 2 * hash_size:
+        raise FixtureError("reverse index is too short")
+    prefix = bytearray(data[:-hash_size])
+    positions_end = len(prefix) - hash_size
+    if case == "signature":
+        prefix[0:4] = b"BAD!"
+    elif case == "version":
+        prefix[4:8] = struct.pack(">I", 2)
+    elif case == "hash-id":
+        prefix[8:12] = struct.pack(">I", 2 if algorithm == "sha1" else 1)
+    elif case == "duplicate-position":
+        if positions_end < 20:
+            raise FixtureError("reverse index needs two positions")
+        prefix[16:20] = prefix[12:16]
+    elif case == "swap-positions":
+        if positions_end < 20:
+            raise FixtureError("reverse index needs two positions")
+        first = bytes(prefix[12:16])
+        prefix[12:16] = prefix[16:20]
+        prefix[16:20] = first
+    elif case == "out-of-range-position":
+        count = (positions_end - 12) // 4
+        if count == 0:
+            raise FixtureError("reverse index needs one position")
+        prefix[12:16] = struct.pack(">I", count)
+    elif case == "pack-checksum":
+        prefix[-hash_size] ^= 1
+    elif case == "reverse-checksum":
+        result = bytearray(data)
+        result[-1] ^= 1
+        return bytes(result)
+    elif case == "truncate":
+        return data[:-1]
+    elif case == "trailing":
+        return data + b"X"
+    else:
+        raise FixtureError(f"unknown reverse-index mutation: {case}")
+    checksum = hashlib.new(algorithm, prefix).digest() if rehash else data[-hash_size:]
+    return bytes(prefix) + checksum
+
+
+def encode_tree(entries_path: Path, algorithm: str) -> bytes:
+    value = strict_load(entries_path)
+    if not isinstance(value, list):
+        raise FixtureError("tree entries must be a list")
+    oid_size = hashlib.new(algorithm).digest_size
+    output = bytearray()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) != {"mode", "name_base64", "oid"}:
+            raise FixtureError("invalid tree entry")
+        mode = entry["mode"]
+        if not isinstance(mode, str) or not mode or any(char not in "01234567" for char in mode):
+            raise FixtureError("invalid raw tree mode")
+        try:
+            name = base64.b64decode(entry["name_base64"], validate=True)
+            oid = bytes.fromhex(entry["oid"])
+        except (TypeError, ValueError, binascii.Error) as exc:
+            raise FixtureError("invalid raw tree entry encoding") from exc
+        if len(oid) != oid_size:
+            raise FixtureError("wrong raw tree object-id length")
+        output.extend(mode.encode("ascii") + b" " + name + b"\0" + oid)
+    return bytes(output)
+
+
+def write_loose(repo: Path, algorithm: str, kind: str, body: bytes) -> str:
+    oid = git_hash(algorithm, kind, body)
+    location = repo / "objects" / oid[:2] / oid[2:]
+    encoded = zlib.compress(f"{kind} {len(body)}\0".encode("ascii") + body)
+    if location.exists():
+        if zlib.decompress(location.read_bytes()) != zlib.decompress(encoded):
+            raise FixtureError("object collision")
+    else:
+        write_bytes(location, encoded)
+    return oid
+
+
+def nested_json(depth: int) -> Any:
+    value: Any = None
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def corrupt_json(source: Path, output: Path, case: str) -> None:
+    raw = source.read_bytes()
+    if case == "bom":
+        result = b"\xef\xbb\xbf" + raw
+    elif case == "trailing":
+        result = raw.rstrip() + b"\n{}\n"
+    elif case == "duplicate-member":
+        result = b'{"fixture_duplicate":1,"fixture_duplicate":2}\n'
+    elif case == "lone-surrogate":
+        result = b'{"fixture":"\\ud800"}\n'
+    elif case == "nonfinite":
+        result = b'{"fixture":NaN}\n'
+    elif case == "depth-33":
+        result = canonical_json(nested_json(33))
+    elif case == "invalid-utf8":
+        result = b'{"fixture":"\xff"}\n'
+    else:
+        raise FixtureError(f"unknown JSON corruption: {case}")
+    write_bytes(output, result)
+
+
+def load_component(path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location("candidate_preparation_fixture_target", path)
+    if spec is None or spec.loader is None:
+        raise FixtureError("cannot import component")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[spec.name]
+        raise
+    return module
+
+
+def command_oracle(args: argparse.Namespace) -> None:
+    entries = normalized_description(args.description)
+    manifest = oracle(entries)
+    add_blob_oids(manifest, entries, args.algorithm)
+    if args.action == "build":
+        build_tree(args.root, entries, int(args.root_mode, 8) if args.root_mode else None)
+    if args.root_mode and stat.S_IMODE(args.root.lstat().st_mode) != int(args.root_mode, 8):
+        raise FixtureError("oracle root mode mismatch")
+    check_tree_nodes(args.root)
+    actual = actual_tree(args.root)
+    expected = expected_tree(entries)
+    if actual != expected:
+        raise FixtureError("actual tree differs from independent oracle")
+    if args.manifest is not None and args.action == "build":
+        replace_bytes(args.manifest, canonical_json(manifest))
+    elif args.manifest is not None and strict_load(args.manifest) != manifest:
+        raise FixtureError("manifest differs from independent oracle")
+    print(sha256_bytes(canonical_json(manifest)))
+
+
+def command_snapshot(args: argparse.Namespace) -> None:
+    current = snapshot(args.path)
+    if args.action == "create":
+        replace_bytes(args.snapshot, canonical_json(current))
+    elif current != strict_load(args.snapshot):
+        raise FixtureError("snapshot mismatch")
+
+
+def command_object(args: argparse.Namespace) -> None:
+    oid = write_loose(args.repository, args.algorithm, args.type, args.body.read_bytes())
+    if args.oid_file is not None:
+        replace_bytes(args.oid_file, (oid + "\n").encode("ascii"))
+    print(oid)
+
+
+def command_tree(args: argparse.Namespace) -> None:
+    replace_bytes(args.output, encode_tree(args.entries, args.algorithm))
+
+
+def command_reverse(args: argparse.Namespace) -> None:
+    if args.action == "make":
+        result = make_reverse_index(args.index, args.pack, args.algorithm)
+    else:
+        result = mutate_reverse(args.input.read_bytes(), args.algorithm, args.case, args.rehash)
+    write_bytes(args.output, result)
+
+
+def command_json(args: argparse.Namespace) -> None:
+    corrupt_json(args.input, args.output, args.case)
+
+
+def command_canonical(args: argparse.Namespace) -> None:
+    encoded = canonical_json(strict_load(args.input))
+    if args.output is None:
+        sys.stdout.buffer.write(encoded)
+    else:
+        replace_bytes(args.output, encoded)
+
+
+def command_limits(args: argparse.Namespace) -> None:
+    selected = LIMITS if args.name is None else {args.name: LIMITS[args.name]}
+    rows = [
+        {"name": name, "inclusive": maximum, "overflow": maximum + 1}
+        for name, maximum in selected.items()
+    ]
+    sys.stdout.buffer.write(canonical_json({"schema_version": 1, "limits": rows}))
+
+
+def injected_error(target: str) -> OSError:
+    if target == "emit_result":
+        return BrokenPipeError(32, "fixture outward pipe failure")
+    return OSError(5, "fixture I/O failure")
+
+
+def command_inject(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    if not hasattr(module, args.target) or not callable(getattr(module, args.target)):
+        raise FixtureError(f"component has no callable {args.target}")
+    original = getattr(module, args.target)
+    calls = 0
+
+    def signal_and_wait() -> None:
+        if args.ready is None or args.release is None:
+            raise FixtureError("pause injection requires --ready and --release")
+        write_bytes(args.ready, b"ready\n")
+        deadline = time.monotonic() + args.wait_seconds
+        while not args.release.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("fixture release timeout")
+            time.sleep(0.01)
+
+    def replacement(*call_args: Any, **call_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls != args.occurrence:
+            return original(*call_args, **call_kwargs)
+        if args.mode == "before-error":
+            raise injected_error(args.target)
+        if args.mode == "before-pause":
+            signal_and_wait()
+            return original(*call_args, **call_kwargs)
+        result = original(*call_args, **call_kwargs)
+        if args.mode == "after-error":
+            raise injected_error(args.target)
+        signal_and_wait()
+        return result
+
+    setattr(module, args.target, replacement)
+    invocation = strict_load(args.argv_json)
+    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
+        raise FixtureError("injected argv must be a JSON string list")
+    main_function = getattr(module, "main", None)
+    if not callable(main_function):
+        raise FixtureError("component has no main callable")
+    result = main_function(invocation)
+    if calls < args.occurrence:
+        raise FixtureError(f"{args.target} was called only {calls} times")
+    if result is not None:
+        raise SystemExit(result)
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(allow_abbrev=False)
+    commands = result.add_subparsers(dest="command", required=True)
+
+    oracle_parser = commands.add_parser("oracle", allow_abbrev=False)
+    oracle_parser.add_argument("action", choices=("build", "check"))
+    oracle_parser.add_argument("--description", required=True, type=Path)
+    oracle_parser.add_argument("--root", required=True, type=Path)
+    oracle_parser.add_argument("--algorithm", required=True, choices=("sha1", "sha256"))
+    oracle_parser.add_argument("--manifest", type=Path)
+    oracle_parser.add_argument("--root-mode", choices=("0500", "0700"))
+    oracle_parser.set_defaults(run=command_oracle)
+
+    snapshot_parser = commands.add_parser("snapshot", allow_abbrev=False)
+    snapshot_parser.add_argument("action", choices=("create", "check"))
+    snapshot_parser.add_argument("--path", required=True, type=Path)
+    snapshot_parser.add_argument("--snapshot", required=True, type=Path)
+    snapshot_parser.set_defaults(run=command_snapshot)
+
+    object_parser = commands.add_parser("object", allow_abbrev=False)
+    object_parser.add_argument("--repository", required=True, type=Path)
+    object_parser.add_argument("--algorithm", required=True, choices=("sha1", "sha256"))
+    object_parser.add_argument("--type", required=True, choices=("blob", "tree", "commit"))
+    object_parser.add_argument("--body", required=True, type=Path)
+    object_parser.add_argument("--oid-file", type=Path)
+    object_parser.set_defaults(run=command_object)
+
+    tree_parser = commands.add_parser("tree-body", allow_abbrev=False)
+    tree_parser.add_argument("--algorithm", required=True, choices=("sha1", "sha256"))
+    tree_parser.add_argument("--entries", required=True, type=Path)
+    tree_parser.add_argument("--output", required=True, type=Path)
+    tree_parser.set_defaults(run=command_tree)
+
+    reverse_parser = commands.add_parser("reverse-index", allow_abbrev=False)
+    reverse_parser.add_argument("action", choices=("make", "mutate"))
+    reverse_parser.add_argument("--algorithm", required=True, choices=("sha1", "sha256"))
+    reverse_parser.add_argument("--output", required=True, type=Path)
+    reverse_parser.add_argument("--index", type=Path)
+    reverse_parser.add_argument("--pack", type=Path)
+    reverse_parser.add_argument("--input", type=Path)
+    reverse_parser.add_argument(
+        "--case",
+        choices=(
+            "signature", "version", "hash-id", "duplicate-position",
+            "swap-positions",
+            "out-of-range-position", "pack-checksum", "reverse-checksum",
+            "truncate", "trailing",
+        ),
+    )
+    reverse_parser.add_argument("--rehash", action="store_true")
+    reverse_parser.set_defaults(run=command_reverse)
+
+    json_parser = commands.add_parser("json-case", allow_abbrev=False)
+    json_parser.add_argument("--input", required=True, type=Path)
+    json_parser.add_argument("--output", required=True, type=Path)
+    json_parser.add_argument(
+        "--case",
+        required=True,
+        choices=(
+            "bom", "trailing", "duplicate-member", "lone-surrogate",
+            "nonfinite", "depth-33", "invalid-utf8",
+        ),
+    )
+    json_parser.set_defaults(run=command_json)
+
+    canonical_parser = commands.add_parser("canonical", allow_abbrev=False)
+    canonical_parser.add_argument("--input", required=True, type=Path)
+    canonical_parser.add_argument("--output", type=Path)
+    canonical_parser.set_defaults(run=command_canonical)
+
+    limits_parser = commands.add_parser("limits", allow_abbrev=False)
+    limits_parser.add_argument("--name", choices=tuple(LIMITS))
+    limits_parser.set_defaults(run=command_limits)
+
+    inject_parser = commands.add_parser("inject", allow_abbrev=False)
+    inject_parser.add_argument("--component", required=True, type=Path)
+    inject_parser.add_argument(
+        "--target",
+        required=True,
+        choices=(
+            "write_exclusive", "fsync_file", "publish_record", "fsync_dir",
+            "emit_result", "read_limited", "load_identity_inputs", "copy_storage",
+            "export_candidate", "measure_candidate", "recheck_source",
+        ),
+    )
+    inject_parser.add_argument(
+        "--mode",
+        required=True,
+        choices=("before-error", "after-error", "before-pause", "after-pause"),
+    )
+    inject_parser.add_argument("--occurrence", type=int, default=1)
+    inject_parser.add_argument("--ready", type=Path)
+    inject_parser.add_argument("--release", type=Path)
+    inject_parser.add_argument("--wait-seconds", type=float, default=30.0)
+    inject_parser.add_argument("--argv-json", required=True, type=Path)
+    inject_parser.set_defaults(run=command_inject)
+    return result
+
+
+def validate_reverse_args(args: argparse.Namespace) -> None:
+    if args.command != "reverse-index":
+        return
+    if args.action == "make":
+        if (
+            args.index is None
+            or args.pack is None
+            or args.input is not None
+            or args.case is not None
+            or args.rehash
+        ):
+            raise FixtureError("reverse-index make requires only --index and --pack inputs")
+    elif args.input is None or args.case is None or args.index is not None or args.pack is not None:
+        raise FixtureError("reverse-index mutate requires only --input and --case inputs")
+
+
+def main() -> int:
+    try:
+        args = parser().parse_args()
+        if getattr(args, "occurrence", 1) < 1:
+            raise FixtureError("occurrence must be positive")
+        if getattr(args, "wait_seconds", 1.0) <= 0:
+            raise FixtureError("wait-seconds must be positive")
+        validate_reverse_args(args)
+        args.run(args)
+        return 0
+    except (FixtureError, KeyError, OSError) as exc:
+        print(f"fixture-error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

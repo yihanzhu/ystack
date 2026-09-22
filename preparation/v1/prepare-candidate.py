@@ -482,7 +482,8 @@ def validate_documents(ctx: Context, input_data: bytes, response_data: bytes,
               "verified_receipt": details["verified_receipt"],
               "receipt_utf8": details["receipt_utf8"],
               "stage_result_sha256": details["stage_result_sha256"]}
-    command = [str(jq_copy), "-e", "-L", str(protocol.parent), "--arg", "command",
+    modules = ctx.deps_root / f"core/v2/generations/{SELECTED_GENERATION}/modules"
+    command = [str(jq_copy), "-e", "-L", str(modules), "--arg", "command",
                "validate-response", "-f", str(protocol)]
     if run_child(ctx, command, stdin=canonical(bundle), output_limit=64).strip() != b"true":
         raise Refusal("E_INPUT")
@@ -523,30 +524,46 @@ def run_core_validations(ctx: Context, input_value: dict[str, Any], response: di
 
 
 def run_accounted_core(ctx: Context, selector: Path, args: list[str]) -> None:
-    receipt_r, receipt_w = os.pipe()
     scratch = ctx.scratch / f"core-{time.monotonic_ns()}"
     scratch.mkdir(mode=0o700)
+    receipt_path = ctx.scratch / f"core-receipt-{time.monotonic_ns()}"
+    receipt_fd = os.open(receipt_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     reserved = 8 * 1024 * 1024
     ctx.ledger.charge("scratch_bytes", reserved, LIMITS["scratch_bytes"])
     env = clean_git_env(ctx)
+    env["PATH"] = f"{ctx.deps_root / 'tools'}:/usr/bin:/bin"
     command = [str(selector), "--accounted-validation", str(scratch), str(reserved), *args]
+    saved_fd3 = None
     try:
+        if receipt_fd != 3:
+            with contextlib.suppress(OSError):
+                saved_fd3 = os.dup(3)
+            os.dup2(receipt_fd, 3)
         completed = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE, env=env, close_fds=True,
-                                     pass_fds=(receipt_w,), preexec_fn=lambda: os.dup2(receipt_w, 3))
-        os.close(receipt_w)
+                                     pass_fds=(3,))
+        if receipt_fd != 3:
+            if saved_fd3 is None:
+                os.close(3)
+            else:
+                os.dup2(saved_fd3, 3)
+                os.close(saved_fd3)
+                saved_fd3 = None
         stdout, stderr = completed.communicate(timeout=ctx.remaining(child=True))
-        receipt = os.read(receipt_r, 128)
+        os.lseek(receipt_fd, 0, os.SEEK_SET)
+        receipt = os.read(receipt_fd, 128)
     except (OSError, subprocess.TimeoutExpired) as exc:
         with contextlib.suppress(Exception):
             completed.kill()
             completed.wait()
         raise Refusal("E_DEPENDENCY") from exc
     finally:
+        if receipt_fd != 3 and saved_fd3 is not None:
+            with contextlib.suppress(OSError):
+                os.dup2(saved_fd3, 3)
+                os.close(saved_fd3)
         with contextlib.suppress(OSError):
-            os.close(receipt_r)
-        with contextlib.suppress(OSError):
-            os.close(receipt_w)
+            os.close(receipt_fd)
     if completed.returncode != 0 or stdout or len(stderr) > LIMITS["child_diagnostic_bytes"]:
         raise Refusal("E_DEPENDENCY")
     if not receipt.startswith(b"written-bytes:") or not receipt.endswith(b"\n"):
