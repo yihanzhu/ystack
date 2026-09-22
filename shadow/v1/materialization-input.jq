@@ -1,14 +1,15 @@
 import "profile_graph" as graph;
+import "schema" as schema;
 
-# pinned from profiles/default/v1 at 4965175d0edeeec8ba746609e585b053be03e075
+# pinned from profiles/default/v1 at 4a576d9181d5e8c01c04f027432ad8b143400cee
 # Digests of the bytes as committed. Requirement 3 (yihanzhu/ystack#262) pins
 # these so a look-alike default profile is refused by bytes, not by name.
-def profile_pin: "4562888df59cd52feb6e9c9d29e2345579815695ec3af0aec833891f7f608a74";
+def profile_pin: "81da07a8390b2ec6e00413cce6fad4bd07badbd17a512295da8e5292ace53574";
 def producer_config_pin:
   "ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61";
 def manifest_pins:
   {ci:      "a5cf4b1b94e32d850e3d056024fa2d2c3977b977fb08323e99b89f8c159baff3",
-   forge:   "47c5884ca83597a09f1122467c9c0dfd3ea5b4e0256d2d52ae648167349bffe5",
+   forge:   "f2ace723bf3b604d756169f2cc12c89a02c08026984975e6bd476af4a6d6c3c8",
    producer:"ada221fd7186544a53ceb2f10e0bbe863eb0ef6ef54b407c65f58d7f21881bb3",
    publisher:"e780e0ceb0a305928d6c1fec127cfc6db0140cf2e48b3921e23e59d942419029",
    reviewer:"2f1ceaacd455e6cadc09f2762c6735eab48b91890240b6031af3db744a1175c4",
@@ -108,15 +109,21 @@ def claim_id_ok:
 def forge_binding:
   [$resolved_profile[0].body.bindings[] | select(.binding.role == "forge")] | .[0];
 
-def requested_by($binding):
-  {role:$binding.binding.role,
-   implementation_id:$binding.adapter_implementation.id,
-   implementation_version:$binding.adapter_implementation.version,
-   adapter_instance_id:$binding.binding.adapter_instance_id,
-   principal_id:$binding.binding.principal_id,
-   execution_boundary_id:$binding.binding.execution_boundary_id} +
-  (if $binding.binding | has("authority_ref")
-   then {authority_ref:$binding.binding.authority_ref} else {} end);
+# Requirement 6 (amendment): the requester is the caller's own tenth-argument
+# input, copied into requested_by verbatim, and is never projected from a
+# binding. actor_ref_ok is the core's own shape predicate for requested_by;
+# the role and collision rules are this component's own, checked against
+# every binding in the resolved profile, not only the forge one.
+def requester_shape_ok:
+  ($requester[0] | type) == "object" and ($requester[0] | schema::actor_ref_ok);
+def requester_role_ok:
+  ["manager","operator","orchestrator"] | index($requester[0].role) != null;
+def requester_identity_collision:
+  [$resolved_profile[0].body.bindings[] | .binding] |
+  any(.[];
+    .adapter_instance_id == $requester[0].adapter_instance_id or
+    .execution_boundary_id == $requester[0].execution_boundary_id or
+    .principal_id == $requester[0].principal_id);
 
 def finish_condition_scope:
   {ref:{purpose:"finish-condition",
@@ -178,7 +185,7 @@ def request_body($binding):
    workflow_id:"workflow.shadow-reproduction",
    stage_id:"stage.materialize",
    task_class_id:"task.local-git-materialize",
-   requested_by:requested_by($binding),
+   requested_by:$requester[0],
    target_repository_id:$repository_id,
    target_revision:{state:"present",value:revision},
    source:{state:"present",value:{type:"git-object",value:source_tree_ref}},
@@ -212,9 +219,12 @@ def precheck:
   elif (config_pins_ok | not) then refuse("E_PROFILE")
   elif (claim_kind_ok | not) then refuse("E_SHAPE")
   elif (claim_id_ok | not) then refuse("E_SHAPE")
+  elif (requester_shape_ok | not) then refuse("E_SHAPE")
   elif (graph::profile_set_ok({content:$profile[0],sha256:$profile_sha256};
       {content:$resolved_profile[0],sha256:$resolved_profile_sha256};manifest_pairs) | not)
     then refuse("E_RELATION")
+  elif (requester_role_ok | not) then refuse("E_RELATION")
+  elif requester_identity_collision then refuse("E_RELATION")
   else ok_value(null) end;
 
 def request_document:

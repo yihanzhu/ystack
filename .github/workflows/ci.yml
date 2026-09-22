@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -103,7 +104,17 @@ jobs:
           # Lines labeled legacy and scripts/test/ fixtures are exempt.
           bash scripts/check-rename.sh
 
+      - name: Roadmap content guards
+        run: |
+          bash scripts/test/portable-core-schema.test.sh
+          bash scripts/test/v2-pending-stage.test.sh
+
+      - name: Minimal CI gate proof
+        run: |
+          bash scripts/test/ci-minimum.check.sh
+
   test:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -114,8 +125,8 @@ jobs:
 
       - name: Test suite
         run: |
-          # Construction installs tests by filename; this fixed runner makes every
-          # scripts/test/*.test.sh file part of required CI without workflow edits.
+          # Construction installs tests by filename; a dispatched full run covers
+          # every scripts/test/*.test.sh file without workflow edits.
           bash scripts/test/run-all.sh --shard ${{ matrix.shard }}/6
 
   ci:
@@ -124,12 +135,34 @@ jobs:
     if: always()
     steps:
       - name: Gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
+          # ci-minimum-gate:start
           set -eu
-          echo "checks: ${{ needs.checks.result }}"
-          echo "test:   ${{ needs.test.result }}"
-          if [ "${{ needs.checks.result }}" != "success" ] \
-             || [ "${{ needs.test.result }}" != "success" ]; then
-            echo "ci gate FAILED"; exit 1
+          echo "event:  $EVENT_NAME"
+          echo "checks: $CHECKS_RESULT"
+          echo "test:   $TEST_RESULT"
+          if [ "$CHECKS_RESULT" != "success" ]; then
+            echo "ci gate FAILED: checks did not succeed"; exit 1
           fi
-          echo "ci gate ok"
+          case "$EVENT_NAME" in
+            pull_request|push)
+              [ "$TEST_RESULT" = "skipped" ] || {
+                echo "ci gate FAILED: automatic run did not skip full tests"; exit 1;
+              }
+              echo "ci gate ok: automatic quick checks passed"
+              ;;
+            workflow_dispatch)
+              [ "$TEST_RESULT" = "success" ] || {
+                echo "ci gate FAILED: dispatched full tests did not pass"; exit 1;
+              }
+              echo "ci gate ok: dispatched full tests passed"
+              ;;
+            *)
+              echo "ci gate FAILED: unexpected event"; exit 1
+              ;;
+          esac
+          # ci-minimum-gate:end
