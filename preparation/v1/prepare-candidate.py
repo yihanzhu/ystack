@@ -908,10 +908,13 @@ def validate_documents(ctx: Context, input_data: bytes, response_data: bytes,
               "receipt_utf8": details["receipt_utf8"],
               "stage_result_sha256": details["stage_result_sha256"]}
     modules = ctx.deps_root / f"core/v2/generations/{ctx.identities['core']['generation_id']}/modules"
-    command = [str(jq_copy), "-e", "-L", str(modules), "--arg", "command",
+    command = [str(jq_copy), "-L", str(modules), "--arg", "command",
                "validate-response", "-f", str(protocol)]
-    if run_child(ctx, command, stdin=canonical(bundle), output_limit=64).strip() != b"true":
+    validated = run_child(ctx, command, stdin=canonical(bundle), output_limit=64).strip()
+    if validated == b"false":
         raise Refusal("E_INPUT")
+    if validated != b"true":
+        raise Refusal("E_DEPENDENCY")
     run_core_validations(ctx, input_value, response, details)
     return input_value, response, details
 
