@@ -1,508 +1,263 @@
 ---
-spec-blob: d92b9a2c4111e0199544c23a74d771bc535fa7ae
-drafted: 2026-09-17
+spec-blob: 72fdbc04d18bd5e9b434087c79e8c7bac29c1605
+drafted: 2026-09-21
 ---
 
-# Plan: Supervise the receiver's two crash-test processes
+# Plan: Own the receiver's crash-test child until cleanup is complete
 
 Tracks #347. Risk: high. Gate mode: `artifact-high`.
-Review size: `accepted-exception`, 700–1,100 added plus removed implementation
-lines. G1 intent blob is `ae56dfd965dd4fb2a5b2cf726769954d2a5052cc`.
-G2 merged as `e8662e928ac6e1b296dfc93a091248639e5ad836` through PR #349;
-that is this plan's source base, not the later implementation plan-base.
+G1 intent blob: `ae56dfd965dd4fb2a5b2cf726769954d2a5052cc`.
 
-The manager must obtain independent exact-head/base plan acceptance and required
-CI, then merge this plan separately before a Sol implementation author starts.
-The author does not accept this plan. Current-session Roadmap delegation applies;
-the artifact and protected-merge gates remain manual.
+This plan changes only `work/receiver-crash-supervision/plan.md` on the preserved
+`ystack/plan/receiver-crash-supervision` branch. Independent review and the
+protected plan merge precede implementation. The manager records the accepted
+artifact tuple, current plan-base and claim under AGENTS.md. A moved base before
+first code needs fresh independent base acceptance. Preserve existing attempts;
+do not reset, rebase, replace or claim acceptance as the author.
 
-## Files that change
+## Scope and work allocation
 
-This plan PR changes only `work/receiver-crash-supervision/plan.md` on
-`ystack/plan/receiver-crash-supervision` with plan-only non-merge history.
 Implementation changes only `scripts/test/replay-materialization-result.test.sh`.
-Its source blob at G2 is `95fc93a2bed283354e67669de10d6ccc4f602b89`.
+Generate one private Python helper in its existing temporary directory, containing
+the coordinator and small control-fixture modes. Adapt the loaded wrapper's
+`pause` mode and the early `before`/`after` launch pair. Keep the other concurrent
+and later CP4c launch paths unchanged. Add no keeper, process framework, public
+interface, product change, fixture-builder change, pin update or workflow change.
 
-Generate one private Python helper in the existing suite temporary directory.
-It contains coordinator, keeper and control-fixture modes, plus shared bounded
-channel/ownership functions. Wire only the early `before`/`after` crash pair and
-its controls through it. Keep the other concurrent and later CP4c launch paths,
-all original recovery assertions and the full later matrix unchanged. Do not
-copy their process-management code or claim a suite-wide lifecycle repair.
+Implementation `review_size: accepted-exception`, forecast **600–900 added plus
+removed lines**, allocated to readable work as follows:
 
-No product, fixture builder, source/profile pin, workflow, manifest, policy or
-other test file changes. The existing suite is already discovered and restore
-listed. Keep artifacts immutable during implementation. A required extra path,
-changed design or unexplained size overrun returns through a separate amendment.
+| Work | Added or removed lines |
+| --- | ---: |
+| Direct-child coordinator, deadlines, capture and evidence | 230–330 |
+| Wrapper admission/observations and Bash ownership handoff | 90–140 |
+| Shared real-process fixtures and expanded control assertions | 240–350 |
+| Replaced early polling, kill/wait and unconditional cleanup code | 40–80 |
 
-## Order of work
+Shared fixtures exercise several outcomes in one launch. The real delayed pair
+also proves the two crash windows. These are estimates, not compression targets:
+pause for a separate amendment if complete readable work exceeds them or needs a
+new path or guarantee. The implementation author cannot amend accepted artifacts.
 
-### 1. Reconcile the gate and freeze the proof inventory
+## 1. Freeze the original proof and containment boundary
 
-After plan merge, the manager records freshly fetched main as plan-base, verifies
-intent/spec/plan blobs, risk and claim state, and starts
-`ystack/impl/receiver-crash-supervision` from that exact base. A moved default
-before code needs fresh independent plan/base acceptance under AGENTS.md.
-Preserve any existing attempt rather than reset, rebase or replace it.
+Before edits, retain the complete source and ordered named proof inventory:
+all 13 original outer assertions, all 654 later cases, and their oracle bodies.
+Keep the early pair's missing-before/stored-after recovery checks, candidate
+preservation and zero-output assertion. New controls get separate names and do
+not replace, reorder or renumber away original coverage.
 
-Before edits, save a scratch source inventory, full test bytes and the ordered
-original assertion/case inventory. Retain the early pair's recovery bodies at
-source lines 564–582 and every later case/oracle. The accepted original receiver
-proof contains 13 outer checks and 654 named matrix cases; verify their actual
-names and order from retained complete proof and source, not counts alone.
-New supervision controls have their own names and cannot replace those cases.
+Record exact source blobs and executable identities at the implementation base.
+Read the called route through `delivery/v1/replay.py`, materialize.sh,
+object-closure.c, `scripts/core-contract.sh`, the selected core ingress and its jq
+modules, materializer protocol, registry and profile resolution. Resolve the
+selected generation through existing selection; introduce no new generation pin.
+Include shell pipelines/substitutions and actual Python, Bash, Git and pinned jq.
+Verify that this fixed route inherits the group: no setsid/setpgid, new-session
+launch, enabled job control, daemon or disown. Candidate content stays data.
+System binaries are trusted fixed tools, not arbitrary-program containment.
+A changed route needs renewed review; an escape fails, never name-based killing.
 
-Retain PR #346 head `2df5d975064814a783cbe3d7763939d23389daa6`, its historical
-base `b873a171c550ca68f440b8c454b89ccd49304499`, and the clean candidate plan
-attempt at that historical base. Main has moved as external context only.
-Do not change those attempts, the merged receiver history, frozen #183 or dirty
-#271. Original run 35243355489 attempt 1 stays failed, raw shard SHA-256
-`b1eaf0f65828d19cf44b282d312507331dde846b840efadfe64666f160290261`.
+Keep historical failed runs and preserved attempts, including #346's original
+failure, frozen #183 and unresolved dirty work. Their evidence is context, not a
+pass for this repair. Do not infer the old timeout's internal location.
 
-Read the full G2 general, critical safety and final CI reports before coding.
-Their hashes are respectively
-`dfb96461122666c70209072ef7f4393b6f924b6c3af9e1ab567879f12c876bf1`,
-`34ea067f254a4869417145198f73ebf5783860f24dec30003815291b074580ee`, and
-`be87571141b65d2f18dfd3b302a577fb48cf782d65364f46d0180dc875968c4c`.
-They are design evidence, not proof of the repair.
+## 2. Implement one direct owner and irreversible signal retirement
 
-### 2. Preserve the fixed process-containment boundary
+Use one single-threaded coordinator loop. Before child launch, create private
+channels, install INT/TERM handlers that only save the first signal, explicitly
+set SIGCHLD to SIG_DFL and unblock INT/TERM with pthread_sigmask. This restores
+real child-status retention on the supported CPython; add no waitid, ctypes,
+subreaper or dependency upgrade. Use a first-failure setter and separate cleanup
+and diagnostic error lists so later faults cannot replace the original cause.
 
-Record this complete called-source route and exact blobs in the implementation
-proof. Recheck it against plan-base before execution; do not execute a real target.
+Launch the wrapper directly with `start_new_session=True`, DEVNULL stdin and
+separate stdout/stderr pipes. Retain its Popen object and publish direct ownership
+immediately on return, before any logging or other fallible action. Its admission
+read occurs before importing/executing product code and cannot create descendants.
+Verify positive PID=PGID=SID using the handle and OS getpgid/getsid; exclude the
+coordinator's own group. Record verified ownership before any admission attempt.
 
-| Source | Blob at G2 | Containment fact to retain |
-| --- | --- | --- |
-| `delivery/v1/replay.py` | `f1144a15a361ab1c989f7bc0b70579a46c288b93` | Ordinary subprocess calls inherit the group. Fresh keyed delivery captures the materializer and validates through fixed core/jq/Git calls before the pause. |
-| `adapters/local-git-materializer/v1/materialize.sh` | `ebb8e8b97be8c2f2a380849b7fefdef67bbed02a` | Clean env/Bash exec preserves group; non-job-control commands, substitutions and pipelines inherit it. Source config is allowlisted, hooks disabled and commands are offline. |
-| `adapters/local-git-materializer/v1/object-closure.c` | `00cb3c6004bf277ad5bdc46b570c5ce7e1ecbd0d` | fork/exec of fixed Git cat-file changes limits and descriptors, not session/group. |
-| `scripts/core-contract.sh` | `18748127ead49a22717723e9860210940010d84e` | Sources the selected immutable ingress; shell calls preserve group. |
-| Selected generation's `core-ingress.sh` | `973f5c3808ffbbda23471b2dbdd7b221cb4d0599` | Uses fixed jq and resolved system utilities, not a provider, daemon or session launcher. |
-
-Resolve the selected generation through the existing core/profile selection and
-`core/v2/generation-registry.json`, whose G2 blob is
-`0bc09fa56047b2e3fdecf22559f68468f0528797`; the matching profile-resolution
-source blob is `4cb098be3de6bc00406315a8944d54b17231e98c`. Verify the resolved
-ingress against the exact blob above. Do not repeat the generation ID in a new
-tracked path; its closed-path allowlist remains unchanged.
-Include its `contracts.jq` and five imported modules, materializer `protocol.jq`,
-generation registry, fixed jq/object-closure executable identities and actual
-Git/Bash/Python identities in the source inventory. These jq files validate data;
-they do not execute candidate commands. Ingress resolves head, wc, cmp, cat, rm,
-od, awk, stat, mkdir and sha256sum/shasum in the fixed environment. Include shell
-pipelines and command substitutions, not just direct subprocess sites.
-
-The source audit found no setsid/setpgid, job-control enablement, disown, daemon
-launch or new-session subprocess option on this route. System binaries are trusted
-fixed tools, not source-audited arbitrary programs. Candidate files remain data.
-Keep that limited claim and prove real nested fixture containment below. A changed
-route or escaping descendant is a stop, not permission to scan and kill by name.
-
-### 3. Build one explicit ownership implementation
-
-Use a single-threaded Python event loop in each role. Install INT/TERM handlers
-that set only the first pending signal before launch work. Explicitly set SIGCHLD
-to SIG_DFL before creating any child in both coordinator and keeper; do not rely
-on inherited state or Popen restore_signals. Check the resulting disposition.
-The fixed CPython signal setup uses sigaction without SA_NOCLDWAIT. Do not add
-ctypes layouts, waitid, subreapers, platform-only APIs or a dependency upgrade.
-After installing handlers, explicitly unblock INT/TERM in each private role with
-pthread_sigmask; inherited blocked signals must not silently disable cancellation.
-
-Popen creates children, but a private `reap_exact` function is the only consumer
-of their statuses: `os.waitpid(owned_pid, os.WNOHANG)`. Return zero means not yet
-reaped. Only a returned matching PID with WIFEXITED/WIFSIGNALED yields a status;
-decode it with waitstatus_to_exitcode and then set the retained object's returncode
-to that observed value. EINTR resumes within the same deadline. ECHILD, another
-PID, a nonterminal status or another error means unknown status and failure.
-Never accept CPython's ECHILD-to-zero fallback or fill in an expected exit code.
-
-Keep each Popen strongly referenced through its complete ownership interval.
-Do not use its poll, send_signal, kill, terminate, wait, communicate or context
-manager. send_signal implicitly polls in native Python 3.9.6; kill/terminate call
-it. Do not drop an unreaped object into __del__/_active cleanup. No other thread,
-SIGCHLD handler or generic subprocess cleanup may reap an owned child. Use raw
-os.kill/os.killpg only through the state-checked signal functions below. If a
-reap is unknown, keep the object alive until role exit; any interpreter cleanup
-then occurs after signal authority retirement and cannot provide proof.
-
-Maintain separate immutable observed IDs, mutable authority state, raw wait
-status, primary outcome and cleanup/diagnostic failures. A single first-outcome
-setter prevents later cleanup errors from replacing the trigger. Event records
-carry fixed role/case/token/sequence fields; record transitions before actions.
-Keeper INT/TERM records an interruption event, prevents a not-yet-started replay
-and waits for the coordinator's same stop/cleanup protocol; it does not perform
-an independent group kill or signal a retired replay.
-
-| Coordinator state | Permitted next action |
+| State | Permitted action |
 | --- | --- |
-| empty/launching | Create keeper; defer signal dispatch through return/handle assignment. No group authority. |
-| child-owned | Retain exact unreaped keeper; validate handshake. Failure permits one raw positive-PID kill, then retire direct authority and reap. No descendants are admitted. |
-| verified-unreleased | Verified keeper PID=PGID=SID and own-group exclusion, but zero admission bytes written. Cancellation uses exact-child-only cleanup and no group signal. May attempt one admission. |
-| group-owned | Admission possibly released; retain verified group ownership. No keeper reap or implicit poll. |
-| cleanup | At most one keeper replay-stop command; await status and complete stream capture within the first five seconds of shared cleanup. |
-| signal-attempted | Record attempt before one raw group SIGKILL; do not retry on error or interruption. |
-| retired | Clear all keeper PID/group signal authority before any keeper wait. Only exact reap and read-only observations remain. |
-| observed/diagnostic/sealed | Record actual wait and absence; publish bounded diagnostics and completion. No process signaling. |
+| No child | Await Bash permission within the admission budget; cancellation forbids launch. |
+| Gated direct child | Keep the child unreaped. Verification failure or known unreleased cancellation permits one exact positive-PID SIGKILL, retirement and authentic reap; no group signal. |
+| Verified, release attempted | Mark possible admission before the one-byte write. Retain group ownership even if the write result is uncertain. No poll or reap. |
+| Cleanup entered | Record the first cleanup deadline and one signal attempt. For possible admission, call raw os.killpg once while the leader remains unreaped. |
+| Retired | Clear all signal authority in a finally path even after signal error. Only exact wait, stream draining and read-only absence checks remain. |
+| Evidence complete or failed | Publish bounded facts and handoff; unresolved facts forbid deletion. |
 
-The keeper has replay states empty, launching, child-owned, signal-attempted,
-retired and reaped-or-unknown. Its event loop first consumes an available natural
-wait status, then handles a stop command. A reaped child returns its saved status
-without a signal. A zero wait result leaves the direct child unreaped; raw kill
-of that owned PID is safe until this sole reaper consumes status. Mark the signal
-attempt first, signal at most once and retire replay signal authority before
-continued wait/drain. No other thread can race that sequence. The coordinator
-never inherits replay-PID signal authority, including after keeper EOF. Unknown
-wait/ownership results also retire replay signal authority; they cannot justify
-another signal. Coordinator status polling never reaps a keeper before retirement.
+The final signal, not child liveness polling, ends ownership. A naturally exited
+unreaped leader still pins the group identity while descendants survive. Keep
+strong references through retirement and status collection. Never use Popen
+poll, send_signal, kill, terminate, wait, communicate or its context manager;
+native Python 3.9 send_signal/kill/terminate may poll. Do not drop the object into
+__del__/_active cleanup or install another reaper. Raw os.kill/os.killpg are used
+only through the state-checked one-shot transitions above.
 
-### 4. Implement channels, admission and deadlines
+After retirement, use only `os.waitpid(owned_pid, os.WNOHANG)` for the child.
+Zero means pending. Require the matching PID and WIFEXITED/WIFSIGNALED before
+using waitstatus_to_exitcode and assigning that authentic value to returncode.
+ECHILD, unexpected/nonterminal status and other errors remain unknown and fail;
+never insert zero or expected -9. EINTR may retry within the original deadline,
+without another signal. Keep an unresolved object referenced until role exit.
+Require both this authentic reap and observed group absence: only ESRCH from a
+read-only group probe counts. Success, EPERM, other errors and zombies do not.
+Do not claim to reap grandchildren or use saved descendant IDs for signaling.
 
-Create a private 0700 case directory with fresh unpredictable case token, shell
-cancellation/start state and bounded records. Use a Unix socketpair for coordinator
-commands/keeper events and a separate pipe for wrapper phase events. Pass only
-the necessary descriptors. Close unused ends immediately; make wrapper control
-descriptors non-inheritable before the product launches subprocesses. Standard
-input to the replay is DEVNULL; stdout/stderr are distinct pipes owned by keeper.
+Ordinary exceptions at setup, owned execution, capture and publication enter or
+continue the same cleanup state without resetting deadlines or signal authority.
+An exception after retirement cannot signal again. Collect remaining evidence
+where possible, keeping unknowns explicit. Uncatchable coordinator SIGKILL,
+host loss, arbitrary escaping programs and uninterruptible kernel work remain
+outside the guarantee; deadlines bound waits, not host scheduling or filesystem
+syscall completion.
 
-Use nonblocking os.read/os.write or socket recv/send and selectors. Queue partial
-writes, limit each frame to 4 KiB and total control bytes per case to 64 KiB in
-both directions combined. Bound the incomplete frame before appending another
-chunk. Reject unexpected fields/types, duplicate keys, wrong token/case/sequence,
-duplicate terminal events and illegal order. EOF is an observation, never a reap.
-Close overflowed protocol channels and enter cleanup; do not block trying to send
-an error to a peer that stopped reading.
+## 3. Bound admission, phases and capture
 
-The coordinator first installs handlers and records the admission/setup start,
-then waits for the shell-owned start record or cancellation before launching
-keeper. This prelaunch gate consumes the same admission/setup budgets, so it
-cannot wait indefinitely. Keeper uses start_new_session=True, sends its identity
-and cannot launch replay until one valid admit command. Coordinator verifies the
-actual direct child and OS getpgid/getsid results, positive equality and exclusion
-of its own PGID, then records verified-unreleased ownership before admission.
-Keep a separate release state: known-zero, possibly-released or released. Before
-the write syscall mark possibly-released so an unknown result cannot discard group
-ownership. A returned positive byte count marks released. EAGAIN restores known-zero
-only if cumulative bytes written remain zero and no earlier write result is unknown;
-EAGAIN after a partial write stays released. No replay is permitted until keeper
-receives a valid command.
+Use a fresh private 0700 invocation directory and token. Bash start/cancel files
+and the final completion record carry that token and case. The coordinator owns
+an admission pipe and a wrapper phase pipe; pass only the required descriptors,
+close unused ends, and make wrapper control descriptors non-inheritable before
+any descendant exec. Accept exactly one admission byte. EOF or invalid admission
+cannot execute product code.
 
-Cancellation has priority over admission whenever observed. Immediately before
-the first admission write, briefly block INT/TERM with pthread_sigmask, check
-handler flags, sigpending and shell cancellation state, and record the admission
-decision. If cancellation is present, do not write. Otherwise attempt only the
-nonblocking write and restore the prior mask in finally, without a selector wait
-inside the masked region. The first written command byte is the release boundary;
-an EAGAIN with zero bytes repeats this cancellation check before a later attempt.
-Pending cancellation while still known-zero, including after EAGAIN, cancels all
-future admission writes and clears unused group authority before exact-child-only
-keeper cleanup. Kill the still-unreaped keeper once by its owned positive PID,
-retire that authority, then require authentic reap within the same cleanup budget.
-This path has zero replay launches and zero group signals even after identity
-verification. An admission deadline while known-zero follows the same path.
-Cancellation after release may find one replay starting and must clean it; it
-never starts a second. A partial/failed write is possibly released under group-owned
-cleanup, never pre-admission. A signal becoming pending after the decision check
-belongs to that in-flight admission and is handled as soon as the mask is restored;
-do not claim atomic ordering between independent kernel/file cancellation events.
+Immediately before the one nonblocking admission write, check handler flags,
+pending INT/TERM and shell cancellation. Briefly mask INT/TERM around that check
+and attempted write, restoring the prior mask in finally without waiting while
+masked. Observed cancellation prevents the write. Mark possible admission before
+the syscall; any attempted-write failure enters conservative group cleanup,
+without retrying admission. A signal or file change after the check can race that
+single attempt; handle it after restoring the mask and never claim atomic order
+between those independent events. A successfully written byte admits at most once.
 
-Use the accepted deadlines without an environment override:
+The wrapper reports entry, materializer entry/return and actual publication
+readiness. Instrument the existing capture call without changing arguments,
+returned bytes or invocation count. Preserve the before hook ahead of writing a
+stored result and the after hook following the original verifying/stored write.
+For each real case, acknowledge a pre-publication hold, measure at least 12 seconds
+there, then reach the actual hook within setup. The same launch supplies the
+crash proof. Hold readiness until the coordinator's group kill; a fixed wrapper
+hold deadline prevents indefinite waiting. Phase records identify observations,
+not progress inside unobserved product subprocesses.
 
-| Limit | Deadline computation |
+| Budget | Absolute monotonic deadline |
 | --- | --- |
-| Admission 5 s | coordinator prelaunch start + 5 |
-| Setup 60 s | the same prelaunch start + 60; includes admission |
-| Ready hold 20 s | actual readiness time + 20 |
-| Cleanup 10 s | first cleanup entry + 10; never renewed |
-| Stop acknowledgment | min(cleanup start + 5, cleanup deadline) |
-| Diagnostic publication 5 s | first publication entry + 5 |
+| Admission 5 s; setup 60 s | Both start at coordinator prelaunch setup, including the Bash start gate; setup includes admission. |
+| Ready hold 20 s | Actual readiness time + 20. |
+| Cleanup 10 s | First cleanup entry + 10; shared by signal, wait, absence and remaining capture. |
+| Diagnostic publication 5 s | First diagnostic entry + 5. |
 
-Before every selector wait, compute the nearest remaining deadline. Poll
-cancellation and exact-child status at intervals no greater than 0.02 seconds,
-but use monotonic elapsed time for expiry rather than iteration counts. Drain a
-bounded chunk per ready descriptor so a noisy child cannot starve deadlines or
-cancellation. No blocking readline, sendall, buffered flush or wait-before-drain.
+Do not renew budgets, shorten the watchdog proof or add timeout overrides.
+The setup margin exceeds recorded successful composite intervals up to 19.376 s;
+record new real phase durations on both platforms without assigning the old hang
+to a guessed inner stage. Failed readiness is a failure, never a retry or skip.
 
-The coordinator opens separate private regular output files before keeper launch
-and passes their descriptors to keeper. Preserve the old .out/.err paths. Keeper
-drains replay stdout/stderr concurrently into these files, retains at most 64 KiB
-per stream and counts bytes actually observed. Overflow or file-write failure
-fails and requests cleanup; continue bounded draining/discard while termination
-completes. Control frames carry counts/status only, never stream payloads. After
-cleanup the coordinator reads capped files for diagnostics. Do not claim an exact
-total for bytes never read after a forced close.
+Use selectors and bounded nonblocking reads/writes, checking cancellation and the
+nearest deadline between bounded chunks. Parse fixed token/case/sequence phase
+records; reject malformed, duplicate, wrong-case and out-of-order input. Bound
+each control record to 4 KiB and total control data to 64 KiB before extending
+buffers. Channel EOF can trigger cleanup but never substitutes for wait status.
 
-Track replay wait status and each stream's capture state separately. A stream is
-complete only after a real zero-byte read establishes EOF and every preceding
-byte is accounted for in its capped file/count or an explicit overflow failure.
-Reaping replay does not imply EOF. Keeper sends a distinct capture-complete event
-only after both EOFs and successful capture writes, with final counts; a wait
-event alone cannot supply final output counts or permit zero-output acceptance.
+Drain stdout and stderr concurrently through termination. Count observed bytes,
+retain at most 64 KiB in each existing case output file, and fail on overflow.
+Capture succeeds only after both real EOFs and successful accounting of every
+preceding byte. Preserve buffered tails and account for nested stream writers.
+Forced close, read/write error and cleanup/drain expiry mark capture incomplete;
+reap or an empty partial file cannot establish zero outward stdout. Keep draining
+boundedly after a primary error where possible, without starving cancellation.
 
-### 5. Wire the actual crash boundary and final cleanup
+## 4. Complete Bash handoff and evidence before deletion
 
-Extend only the loaded wrapper's pause route. Observe wrapper entry, capture
-entry and capture return by calling the original capture function once and
-returning its unchanged bytes. Send readiness only at the original before/after
-stored-journal hook. Before means materialized candidate exists and stored result
-is not published; after means stored publication returned in verifying phase.
-An earlier phase event cannot satisfy readiness. The wrapper waits at that hook
-for the deliberate real crash; readiness carries the current case identity.
+Replace unconditional disposable-root deletion with a managed-case guard.
+Before async launch, Bash saves invocation context and marks handoff active.
+Traps record the first INT/TERM or shell failure and defer action through the
+launch-to-$! assignment. Only after saving that job handle may Bash publish start
+permission; pending cancellation publishes cancel instead. The coordinator cannot
+launch the replay before permission. Direct coordinator signal controls begin
+after handlers-ready; Bash cancellation covers the earlier handoff.
 
-The coordinator commands keeper to SIGKILL the actual replay after readiness.
-Keeper reports its authentic -9 wait result separately from capture completion.
-The coordinator accepts zero outward stdout only with both stream EOFs, the valid
-capture-complete event and final stdout count zero. It keeps the reader alive
-while awaiting those facts, then performs group cleanup and hands control back
-to the unchanged shell recovery assertions.
-The two cases still use fresh real roots, the real replay and original read/reopen
-commands. Never synthesize missing/stored output or infer status from a kill call.
+INT/TERM/EXIT paths write cancellation through private invocation state and wait
+for the same Bash job, never kill a saved PID/group. Use Bash 3.2 scalars/arrays
+and explicit status branches under set -e, not wait -n/-p or newer shell features.
+A trap-interrupted wait is retried only for that job; distinguish it from an
+actual completed wait. Ambiguous/127 status, failed cancellation write or invalid
+completion fails and retains scratch. Preserve the first shell outcome, disable
+recursive EXIT cleanup, and make any removal error visible.
 
-Begin cleanup once on deliberate crash or any failure with its fixed shared
-deadline. If responsive, keeper terminates/reaps replay or returns the saved
-status, and continues draining both pipes. Status plus complete capture must
-arrive by cleanup start + 5 seconds, leaving the remaining shared budget for
-final group cleanup/reap/absence. A retained writer cannot extend this deadline.
-On expiry, keeper failure or forced close before completion, or a missing capture
-acknowledgment, record capture incomplete and fail even if replay -9, empty partial
-files and group absence are later observed. Preserve the authentic status and
-partial diagnostics. Never kill
-the sole reader and then treat its partial counts as complete. Whether capture
-succeeds or fails, attempt the final admitted-group KILL once while keeper is
-still unreaped. Raw os.killpg avoids Popen's implicit poll. Retire group authority
-in a finally boundary before calling reap_exact on keeper, even if signaling
-fails. A group signal error is recorded and is never a license for another signal.
+Require both actual completed shell wait and a valid completion record for the
+same token/case. The record contains cleanup/capture/diagnostic results and the
+coordinator outcome; its existence alone is not proof of exit. Publish it only
+after bounded diagnostic emission and restoration of temporary output flags.
+A completion race cannot erase cancellation, repeat a launch/signal or permit
+premature deletion. If any managed case has unresolved ownership, capture,
+diagnostics or handoff, retain the suite root. Ordinary deletion is permitted
+only after every managed case is confirmed; report retention when output permits.
 
-After exact keeper reap, call `os.killpg(recorded_pgid, 0)` read-only until it raises
-ProcessLookupError with errno ESRCH or cleanup expires. A return, EPERM or any
-other error is inconclusive/failure. Do not replace this with ps counts, positive
-PID probes or zombie filtering. Record actual native results. No signal is ever
-sent after retirement, even if reuse makes an absence observation conservative.
-Confirmed keeper reap plus ESRCH establishes group cleanup; replay reap remains
-a distinct fact. No claim of directly reaping grandchildren is made.
+Emit a structured record with case, phase, elapsed times/deadline, observed IDs,
+signal attempt, raw/decoded wait or unknown, reap/absence/EOF facts, stream counts,
+primary failure and separate cleanup/diagnostic failures. Limit excerpts to 4 KiB
+per stream and the emitted record to 16 KiB. Bound sink writes with nonblocking
+I/O and the diagnostic deadline. Save and restore any changed descriptor flags
+in finally, including error paths; Bash traps must not write through that shared
+description meanwhile. Blocked/broken output, record write/rename failure and
+flag-restoration failure cannot seal success or justify deletion.
 
-### 6. Complete the Bash and diagnostic handoff
+## 5. Prove the requirements with shared real-process controls
 
-Initialize managed context, operation, first signal, interrupted-wait flag, job
-handle and retention flag before installing traps. Keep traps narrow to supervised
-context; outside it the existing suite behavior remains. Use Bash 3.2 indexed
-arrays/scalars and builtin wait only: no wait -n/-p, associative arrays or newer
-descriptor-allocation syntax.
+Expand the following groups into an ordered named inventory before coding.
+Use the actual coordinator and Bash handoff; every fixture obeys the same
+admission gate. Shared fixture modes may exercise
+several assertions per launch; separate records must still identify every outcome,
+reached boundary, launch/signal count, authentic status, EOF and scratch disposition.
+Use acknowledged boundaries, not sleeps, to choose signal/fault injection points.
 
-Set launching before `python3 helper ... &`; assign the original `$!` immediately
-before another fallible operation. During this window traps only set the pending
-signal. After assignment, write cancellation if pending; otherwise publish the
-shell-owned start record. The coordinator may not launch keeper before that record.
-This prevents an interrupted shell launch handoff from granting unseen effects.
-INT/TERM traps preserve the first signal, mark wait interruption, publish only
-fixed cancellation data in the private path when ownership is assigned, and return.
-No shell signal uses a stored PID/PGID. Cancellation-file failure sets retention
-and failure; it cannot authorize deletion or a second coordinator.
-
-Explicitly install coordinator INT/TERM handlers even when asynchronous Bash
-launch inherited SIGINT ignored. A bootstrap event after handler installation
-marks the earliest valid direct-coordinator signal-test boundary. Shell-directed
-launch tests cover the earlier window through cancellation; do not claim receipt
-of an ignored pre-bootstrap SIGINT. Set the keeper handlers explicitly too.
-
-Wrap each builtin wait in explicit status capture safe under set -e. Set the
-wait-interrupted flag false just before waiting. A trap sets it true. When true,
-repeat only wait for this same job; do not infer completion from status >128 or
-re-send cleanup actions. An uninterrupted return plus this invocation's sealed
-completion record is required. Status 127, missing/wrong seal or unknown status
-fails and retains scratch, including a completion/interruption race that cannot
-be confirmed. Never infer completion from kill -0 or a stale job number.
-
-EXIT cleanup disables recursive EXIT handling, records the original status, and
-uses the same cancellation/wait handoff if managed context remains active. It may
-remove scratch only after confirmed completion, cleanup and diagnostics. A signal
-after coordinator completion but before shell handoff still makes the shell's
-outcome nonzero and cannot delete unconfirmed evidence. Keep first INT/TERM as
-130/143 respectively; ordinary supervision failure is 1, success is 0.
-
-Coordinator writes a bounded structured outcome, with primary and secondary
-failures separated, to a private regular file and emits its bounded diagnostic
-record before atomically renaming a completion seal. The seal binds case/token,
-coordinator identity, final exit, cleanup facts, diagnostic completion and the
-record's digest. A seal is not process-exit proof; shell still waits. Conversely,
-exit alone is not proof of cleanup. Keep unknown statuses explicitly unknown.
-
-Keep emitted excerpts to 4 KiB per stream and the entire emitted record to 16 KiB;
-full retained streams remain in their capped private files. Binary excerpts use
-an explicit byte encoding within those bounds, not lossy assertions about bytes.
-Diagnostic output uses nonblocking descriptor writes within its five-second
-deadline. Save file-status flags, enable O_NONBLOCK, handle partial/EAGAIN writes
-with selectors, and restore flags on every ordinary exit before sealing. Use no
-buffered print/flush on this boundary. While flags are changed, the shell traps
-and other children must not write to that shared output description. Restoration
-failure prevents a seal and retains scratch. Filesystem syscalls and scheduling
-are not claimed to have hard elapsed bounds; no new disk durability contract.
-
-A blocked/broken output sink, failed record write/rename, malformed seal or unknown
-cleanup yields no successful handoff. Retain private scratch and emit a short fixed
-retention notice only when output remains usable. Do not print raw fixture content
-or local paths into public PR comments. Implementation proof may retain private
-files with exact hashes. Terminal success cannot precede final cancellation checks.
-
-### 7. Add controls and measure before final verification
-
-Put controls after the early pair and before the later matrix. Reuse the same
-helper functions and Bash handoff by extracting their actual definitions into
-private control shells; do not make a second lifecycle implementation. Controls
-use fixed private case descriptors, not a public switch or inherited environment.
-Boundary hooks acknowledge an actual reached operation before an outer controller
-releases it or sends a signal. The outer controller proves the real owned target
-identity before signaling it, and retires its own signal authority before reaping.
-
-Run targeted control proof as soon as the helper is coherent, with all failure
-output retained. Obtain independent checkpoint review of ownership, cancellation
-and real nested-child evidence before starting the costly final native run. This
-checkpoint does not waive the later complete source/evidence review. If code or
-proof meaning changes, rerun affected proof on the new exact head.
-
-Measure scope after helper/integration and after complete controls. Keep the
-accepted 700–1,100 changed-line forecast: helper 260–360, integration/diagnostics
-90–150, controls 300–470, replaced/deleted lines 50–120. These are allocations,
-not quotas. Prefer a shared event loop and table-driven independent cases; do not
-collapse failure assertions, combine distinct signal cases into one pass or pack
-unreadable statements to fit. Pause before an unexplained overrun; keep the exact
-head/dirty state and use separate artifact amendment rather than editing this plan.
-
-## Risks
-
-Implicit Popen reaping is the highest identity risk. The raw wait/signal boundary,
-strong references and one reaper per child prevent losing the keeper pin before
-group cleanup. ECHILD is missing evidence, including when deliberately injected;
-it cannot become zero status. Inert dispatch controls supplement actual lifecycle
-proof; they do not establish that a real process is absent.
-
-The admission command can race cancellation. Ownership is published before any
-possible release; observed pending cancellation prevents it, while a partially
-released command is conservatively admitted for cleanup. Signals record intent
-without unwinding critical operations. Signal-attempt and retirement transitions
-cannot be repeated by a trap, finally block or late error.
-
-Ordinary supported errors may leave cleanup unconfirmed; retaining scratch and
-failing is required. A group with lingering zombies is not declared absent. Test
-rescue belongs only to deliberately broken controls, never the two real cases.
-An escaped descendant, uninterruptible process, supervisor SIGKILL or failed host
-is outside the guarantee. Better diagnostics may expose a product hang; that
-returns to scope review without a product timeout patch.
-
-A bare longer wait, polling/reaping keeper for convenience, a native-version
-upgrade, global ps-and-kill cleanup, or migrating all later launch sites would
-evade or widen the accepted design. Keep the private keeper boundary. The current
-size estimate is ambitious; complete readable proof and independent review win
-over saving lines. No unresolved platform assumption may be converted into a skip.
-
-## Proof
-
-### Named control inventory
-
-Before code, save an explicit expanded inventory using these IDs. Parameterized
-rows expand to separate records. Every record includes actual reached boundary,
-launch/signal/reap counts, actual statuses or unknown, primary/secondary failures,
-timings, identity and scratch disposition. A failed subcase fails the suite.
-
-| IDs | Cases and required evidence |
+| Group | Required controls and evidence |
 | --- | --- |
-| C01-before, C01-after | Both original real crash/reopen cases; real ready, replay -9, complete capture with both EOFs and zero outward stdout, unchanged original assertions. |
-| C02-before, C02-after | Actual pre-publication acknowledgment, at least 12 measured seconds of controlled hold, then real readiness within 60 s and the same original recovery outcomes. No sleep selects the crash boundary. |
-| C03-early-exit | Fixture exits 37 with known stderr before readiness; authentic wait 37, no pass, keeper retained through cleanup. |
-| C04-watchdog | Actual 60-second setup expiry with live replay fixture and nested descendant; one launch, named timeout, replay status if observed, keeper reap and ESRCH group absence. |
-| C05-missing, C05-wrong | Missing/invalid keeper identity; zero replay launches and group signals; exact-child-only cleanup. |
-| C05-unreleased-trigger-boundary | Real verified keeper, triggers pending INT/pending TERM/shell cancellation, boundaries first pre-release check/after known zero-byte EAGAIN: six acknowledged records. Require zero admission bytes, zero replay launches, zero group signals, bounded exact-child-only cleanup and authentic keeper reap. |
-| C05-partial-admission | Acknowledged partial command write followed by cancellation; possibly released state uses retained group cleanup, never the unreleased path. Keeper launches at most once and no authority survives retirement. |
-| C06-target-signal-boundary | Cartesian product of targets Bash/coordinator, signals INT/TERM, boundaries launch handoff/setup/ready hold/cleanup-before-signal/retirement-wait/diagnostic-handoff: 24 distinct records. Direct coordinator launch means handlers-ready; Bash covers pre-assignment. |
-| C07-replay-retired | Replay exits naturally before stop request; saved actual status, no signal after its retirement. |
-| C08-keeper-eof, C08-keeper-exit | Keeper fails after admission, including a nested child; coordinator does not poll it early, unknown replay result stays unknown, group cleanup uses retained keeper ownership. |
-| C09-wrong, C09-own, C09-retired | Inert fabricated identities select refusal with zero real signals. |
-| C10-signal-error, C10-wait-eintr, C10-wait-expired, C10-wait-echild | First three exercise actual boundary plus scoped error injection; ECHILD separately for coordinator and keeper. Unknown result never fabricates zero; no repeated signal or new launch. |
-| C11-probe-alive, C11-probe-eperm, C11-probe-other | Non-ESRCH responses never count as absence; retained scratch and no post-retirement signal. Real absence remains separately proved. |
-| C12-stdout, C12-stderr, C12-frame, C12-total | Each accepted capture/control ceiling and overflow refusal; simultaneous pipe pressure cannot block cancellation or deadlines. |
-| C12-buffered-tail | Acknowledged fixture writes known small stdout/stderr tails, then holds their reads until keeper consumes the replay wait result. Release reads and prove both exact tails reach retained capture before completion, with nonzero stdout failing the zero-output oracle; no empty partial file can pass. |
-| C12-retained-writer | An acknowledged descendant holds a stream writer after replay reap. At the unchanged drain cutoff require explicit capture-incomplete failure, retained partial diagnostics, final one-shot group cleanup and real absence; replay status cannot substitute for EOF. |
-| C13-malformed, C13-duplicate, C13-wrong-case, C13-out-of-order | Strict control parsing/order failures; no forged readiness or pass. |
-| C14-output-blocked, C14-output-broken, C14-record-write, C14-seal-rename, C14-flags-restore, C14-shell-handoff | Diagnostics/hand-off failures retain scratch and fail; no indefinitely blocking output or hidden success. |
-| C15-sigchld-coordinator, C15-sigchld-keeper | Start with inherited SIGCHLD ignored; explicit reset permits an authentic nonzero direct wait, not Popen fallback zero. |
-| C15-mask-coordinator, C15-mask-keeper | Inherit blocked INT/TERM; verify explicit unblocking after handlers, with actual delivery through an acknowledged supported boundary. |
-| C16-wait-return-signal, C16-repeat-signal, C16-cancel-write, C16-errexit | Completion/interruption race, repeated INT/TERM, failed cancellation write and ordinary shell error do not bypass handoff or scratch retention. |
+| Real before/after | Two delayed real launches: measured pre-publication hold, real readiness, authentic -9, both EOFs, zero stdout and unchanged original recovery/preservation oracles. |
+| Natural exit and nested child | Leader exits 37 with exact small stdout/stderr tails while a real nested descendant remains alive. Record PID/PPID/PGID/SID, keep the leader unreaped through group kill, recover tails through EOF, observe descendant termination and ESRCH absence. No signal after retirement. Nonzero stdout must fail the zero-output oracle. |
+| Real watchdog | Child and nested descendant remain without readiness through the actual 60-second setup deadline; one launch, timeout failure, bounded cleanup and complete diagnostics. |
+| Admission and identity | Pre-release pending INT, pending TERM and shell cancellation prevent product execution. Missing/wrong identity and own-group identity refuse group signaling. Retired authority refuses all signals. Inject a failed/uncertain single-byte write at the real boundary and require conservative cleanup. Real children prove containment separately from inert identity refusal. |
+| Cancellation boundaries | INT/TERM × Bash/coordinator × launch handoff, setup, ready hold, cleanup-before-signal, retirement/wait and diagnostic handoff: 24 explicit records. Add repeated signals, actual wait/completion race, shell error, cancellation-write failure and ordinary coordinator exceptions before admission, while owned and after retirement. |
+| Cleanup errors | Scoped signal error, wait EINTR, exhausted wait, missing status/ECHILD, and alive/EPERM/other group probes. No invented status, renewed deadline, repeated signal or deletion while unconfirmed. Distinguish injected EINTR handling from proof of interrupting a kernel wait. |
+| Capture and control | Exact limit and overflow for each stream, record and total control bound; malformed, duplicate, wrong-case and out-of-order records. Buffered tails and nested writers cannot become empty complete capture. Forced closure, read/write failure and drain expiry fail even when cleanup later succeeds. |
+| Diagnostic and handoff | Real blocked and broken sinks, failed record/completion publication, flag restoration and ambiguous shell handoff. Primary evidence remains distinct; every unresolved case fails and retains scratch. |
+| Inherited state | Start the coordinator with SIGCHLD ignored and observe a real nonzero child status after reset. Inherit blocked INT/TERM and deliver both at acknowledged boundaries after explicit unblocking. |
 
-For C05, acknowledge verified-unreleased before injecting each trigger. The
-EAGAIN variant uses a scoped first-write fault at the actual admission boundary:
-return zero-byte EAGAIN without calling the underlying write, then acknowledge
-that return before injecting cancellation and allowing the next admission check.
-Record this as error injection, not native socket-backpressure proof. Masked real
-INT/TERM must be observed as pending; shell cancellation uses the real private
-path. The partial variant writes an actual prefix and acknowledges its positive
-byte count; no later EAGAIN can turn that case back into known-zero ownership.
+Use real /bin/bash control shells under set -e, including native Bash 3.2.
+Combine the natural-exit, buffered-tail and surviving-descendant assertions;
+reuse its fixture for bounded fault controls instead of building more roles.
+For deliberate cleanup failures, give every possible survivor a separately owned
+rescue gate or finite lifetime. First assert supervision failure and retention,
+then record and verify rescue separately. Rescue failure fails the suite; it
+never supplies supervisor cleanup credit or a fallback for the real crash pair.
 
-For C06 and C16, run real /bin/bash control shells under set -e; capture their
-outcome explicitly in the outer driver. Inject only after actual boundary
-acknowledgment. Post-wait boundary proof and injected EINTR handling are distinct
-from claiming a signal inside the kernel's blocked wait. Verify native Bash 3.2
-ignoring/handler behavior directly through these controls.
+## 6. Validate once at the final implementation head
 
-At acknowledged nested-fixture boundaries save PID/PPID/PGID/session membership
-for keeper, replay and descendant, using their actual owned records and read-only
-OS observations. Repeat with replay exited while descendant remains, and with
-keeper EOF/exit. At finish require authentic direct reaps and ESRCH-only group
-absence; separately observe known descendant termination without signaling saved
-numbers. Do not call a zombie absent or use process-name matching as ownership.
+Run one complete native focused suite with full logs on the final committed head:
+`/bin/bash scripts/test/replay-materialization-result.test.sh`. Require the full
+original inventory plus every new control; no partial run supplies a pass.
+Record exact source/tool identities, actual exit, UTC bounds and phase timings.
+Run pinned ShellCheck 0.11.0 as the unchanged workflow specifies, applicable
+structure/rename checks, and git diff --check/name-only/numstat against the
+recorded base. Require only the allowed implementation path and unchanged accepted
+artifact blobs. No duplicate full native run of unrelated suites is required.
 
-Deliberate cleanup failures assign independently owned rescue pipes or fixed finite
-lifetimes to every possible survivor, including keeper after group-signal failure.
-Outer control first records and asserts the supervisor's failed
-result and retained scratch, then releases rescue and observes its separate result.
-No rescue event supplies supervisor cleanup credit. A rescue failure itself fails
-the suite and remains visible. Neither real crash case has a rescue fallback.
+The current Roadmap CI decision supplies the quick gate for this plan-only PR.
+For the implementation, preserve the spec's exact-head/base Linux proof: dispatch
+the existing full workflow and require all configured full-suite shards, checks
+and aggregate ci to pass. Do not change the workflow or mistake automatic quick
+ci for full receiver proof. Keep the separate milestone obligations in
+`work/ci-minimum-roadmap/decision.md`; reuse a run only when its exact evidence
+satisfies that obligation. Repeat affected proof only after relevant changes,
+failures or unresolved concerns, without retrying a case until green.
 
-### Commands and retained evidence
-
-Only after the plan gate, run from the implementation worktree. Record full OIDs,
-UTC start/end, actual exit, platform/interpreter versions and raw output for each
-command. Keep failed and interrupted runs; do not overwrite their files.
-
-```sh
-/bin/bash --version
-/usr/bin/python3 --version
-/bin/bash scripts/test/replay-materialization-result.test.sh
-/bin/bash scripts/test/run-all.sh
-```
-
-The focused run proves all original and new cases on native Darwin/Python 3.9.6
-and Bash 3.2. The full unsharded native run must finish all 65 current suites on
-the final committed head, with no source writes while running. A later changed
-head requires affected fresh evidence; partial output is not a complete pass.
-Required Linux CI runs the original six `run-all.sh --shard N/6` invocations,
-checks and aggregate ci on that same head/base. No workflow or runner change.
-
-Also run, with BASE replaced by the recorded implementation plan-base:
-
-```sh
-git diff --check BASE HEAD
-git diff --name-only BASE HEAD
-git diff --numstat BASE HEAD
-bash scripts/check-rename.sh
-```
-
-Require exactly the one allowed implementation path and accepted artifact blobs.
-Run the unchanged workflow structure-manifest check and pinned ShellCheck 0.11.0
-over every shell file with `shellcheck -x -S style`, verifying its exact version
-and existing pinned asset digest. The plan does not authorize a replacement lint
-version, reduced file set or skipped test because a run is long.
-
-Keep a hash manifest for original source/case inventory, final diff, generated
-helper bytes, exact called-source/tool identities, raw focused/native/CI logs,
-expanded C01–C16 case records, actual phase durations, complete ownership events,
-diagnostic/retention records and original-oracle comparison. No private progress
-summary replaces full raw evidence. Preserve all original 654 matrix cases and
-13 outer assertion labels, adding controls separately without deleting coverage.
-
-Independent review performs Bugs/Security/Compliance passes on source and complete
-proof, including implicit reapers, cancellation order, native absence, rescue
-separation and shell completion. The manager reads the full verdict, resolves all
-Important findings and verifies exact head/base and every required original CI
-job before protected merge. Preserve the receipt and fresh clean tuple. A base
-move or changed meaning invalidates affected review; no direct main push, force
-push, protection bypass, activation or new external authority is included.
+Retain failed/interrupted runs and a hash manifest covering original source and
+inventories, final diff/helper bytes, called-source/tool identities, complete
+native/CI logs, expanded controls, phase/ownership/capture records, retained
+scratch evidence and original-oracle comparison. Independent review reads the
+complete raw evidence and diff in Bugs/Security/Compliance passes. The manager
+resolves Important findings, verifies exact head/base and required CI, and records
+the protected merge receipt. Preserve claims, round limits, separate roles and
+one-manager authority. No installation, activation, credentials, new network
+scope, real target execution, release or deployment is included.
