@@ -11,8 +11,9 @@ test_tmp_base=${TMPDIR:-/tmp}
 tmp=$(/usr/bin/mktemp -d "${test_tmp_base%/}/ystack-replay-result.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 suite_complete=0
+managed_retention=0
 cleanup() {
-  if [ "$suite_complete" -eq 1 ]; then
+  if [ "$suite_complete" -eq 1 ] && [ "$managed_retention" -eq 0 ]; then
     /bin/rm -rf -- "$tmp"
   else
     printf 'receiver supervision evidence retained: %s\n' "$tmp" >&2
@@ -298,11 +299,11 @@ elif mode == "supervised-pause":
         raise SystemExit("invalid supervisor admission")
     os.set_inheritable(phase_fd, False)
     phase_sequence = 0
-    def supervised_phase(name):
+    def supervised_phase(name, **facts):
         global phase_sequence
         phase_sequence += 1
         value = json.dumps({"token": token, "case": point, "sequence": phase_sequence,
-                            "phase": name}, sort_keys=True).encode() + b"\n"
+                            "phase": name, **facts}, sort_keys=True).encode() + b"\n"
         if len(value) > 4096 or os.write(phase_fd, value) != len(value):
             raise SystemExit("supervisor phase write failed")
     supervised_phase("entry")
@@ -331,19 +332,22 @@ if mode == "supervised-pause":
         stored = state.get("receiver_result", {}).get("status") == "stored"
         verifying = state.get("phase") == "verifying"
         if stored and verifying:
-            supervised_phase("pre-publication")
             prepublication_started = time.monotonic()
+            supervised_phase("pre-publication", monotonic=prepublication_started)
             while time.monotonic() - prepublication_started < 12:
                 time.sleep(0.02)
+            prepublication_finished = time.monotonic()
         if point == "before" and stored and verifying:
-            supervised_phase("ready")
+            supervised_phase("ready", monotonic=prepublication_finished,
+                             hold_seconds=prepublication_finished - prepublication_started)
             ready_deadline = time.monotonic() + 20
             while time.monotonic() < ready_deadline:
                 time.sleep(0.02)
             raise AssertionError("supervised before hold expired")
         original_journal(target, state)
         if point == "after" and stored and verifying:
-            supervised_phase("ready")
+            supervised_phase("ready", monotonic=prepublication_finished,
+                             hold_seconds=prepublication_finished - prepublication_started)
             ready_deadline = time.monotonic() + 20
             while time.monotonic() < ready_deadline:
                 time.sleep(0.02)
@@ -592,10 +596,84 @@ for key_case in duplicate trailing bom ordinal boolean fraction; do
 done
 pass 'strict key parsing rejects duplicate, trailing, BOM, extra, boolean, and fractional data'
 
+receiver_generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\([^']*\)'$/\1/p" "$root/scripts/core-contract.sh")
+[ -n "$receiver_generation" ] || fail receiver-generation-missing
+receiver_route=(
+  delivery/v1/replay.py
+  adapters/local-git-materializer/v1/materialize.sh
+  adapters/local-git-materializer/v1/protocol.jq
+  adapters/local-git-materializer/v1/object-closure.c
+  scripts/core-contract.sh
+  core/v2/generation-registry.json
+  "core/v2/generations/$receiver_generation/core-ingress.sh"
+  "core/v2/generations/$receiver_generation/contracts.jq"
+  "core/v2/generations/$receiver_generation/modules/schema.jq"
+  "core/v2/generations/$receiver_generation/modules/profile_graph.jq"
+  "core/v2/generations/$receiver_generation/modules/stage_request.jq"
+  "core/v2/generations/$receiver_generation/modules/result_facts.jq"
+  "core/v2/generations/$receiver_generation/modules/result_truth.jq"
+)
+receiver_route_manifest="$tmp/receiver-route.tsv"
+python3 - "$root" "$tmp/stored-state/execution" "$runtime/object-closure" "$jq_bin" \
+  "$receiver_generation" "$receiver_route_manifest" "${receiver_route[@]}" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+root, execution, closure, jq, generation, manifest, *relative_paths = sys.argv[1:]
+root, execution = Path(root), Path(execution)
+registry = json.loads((root / "core/v2/generation-registry.json").read_bytes())
+assert [item["generation_id"] for item in registry].count(generation) == 1
+forbidden = re.compile(
+    rb"\b(?:setsid|setpgid|start_new_session|disown|daemon)\b|"
+    rb"(?:^|[;\n])[ \t]*set[ \t]+(?:-m|-o[ \t]+monitor)\b", re.MULTILINE)
+lines = []
+for relative in relative_paths:
+    source = root / relative
+    data = source.read_bytes()
+    assert forbidden.search(data) is None, relative
+    mode = stat.S_IMODE(source.stat().st_mode)
+    lines.append(("source", relative, hashlib.sha256(data).hexdigest(), f"{mode:o}"))
+    if relative not in ("delivery/v1/replay.py",
+                         "adapters/local-git-materializer/v1/object-closure.c"):
+        snapshot = execution / relative
+        assert snapshot.read_bytes() == data, relative
+assert (execution / ".dependencies/object-closure").read_bytes() == Path(closure).read_bytes()
+assert (execution / ".dependencies/jq").read_bytes() == Path(jq).read_bytes()
+for label, path in (("object-closure", closure), ("jq-1.6", jq)):
+    value = Path(path)
+    assert value.is_file() and os.access(value, os.X_OK)
+    lines.append(("executable", label, hashlib.sha256(value.read_bytes()).hexdigest(),
+                  f"{stat.S_IMODE(value.stat().st_mode):o}"))
+Path(manifest).write_text("".join("\t".join(row) + "\n" for row in lines))
+PY
+receiver_tool_manifest="$tmp/receiver-tools.tsv"
+python_executable=$(command -v python3)
+bash_executable=$(command -v bash)
+git_executable=$(command -v git)
+{
+  printf 'python\t%s\t%s\t' "$python_executable" "$(sha_file "$python_executable")"
+  "$python_executable" --version 2>&1
+  printf 'bash\t%s\t%s\t' "$bash_executable" "$(sha_file "$bash_executable")"
+  "$bash_executable" --version | /usr/bin/sed -n '1p'
+  printf 'git\t%s\t%s\t' "$git_executable" "$(sha_file "$git_executable")"
+  "$git_executable" --version
+  printf 'jq\t%s\t%s\t' "$jq_bin" "$(sha_file "$jq_bin")"
+  "$jq_bin" --version
+} > "$receiver_tool_manifest"
+pass 'receiver containment route fixes source and executable identities without an escape primitive'
+
 
 receiver_supervisor="$tmp/receiver-supervisor.py"
 cat > "$receiver_supervisor" <<'PY'
 import errno
+import base64
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -606,7 +684,13 @@ import sys
 import time
 
 case, token, start_path, cancel_path, completion_path, stdout_path, stderr_path, wrapper, replay, point, control, *arguments = sys.argv[1:]
+diagnostic_path = str(completion_path) + ".diagnostic-fifo"
 started = time.monotonic()
+inherited_sigchld_ignored = signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN
+inherited_blocked = []
+if hasattr(signal, "pthread_sigmask"):
+    inherited_blocked = sorted(number.value for number in
+        signal.pthread_sigmask(signal.SIG_BLOCK, set()) if number in (signal.SIGINT, signal.SIGTERM))
 admission_deadline = started + 5
 setup_deadline = started + 60
 cleanup_deadline = None
@@ -615,6 +699,8 @@ pending_signal = []
 primary = None
 cleanup_errors = []
 diagnostic_errors = []
+diagnostic_emitted = False
+diagnostic_flags_restored = False
 possible_admission = False
 signal_attempt = None
 signal_attempts = 0
@@ -622,11 +708,14 @@ authority = False
 pid_authority = False
 owned_pid = owned_pgid = owned_sid = None
 raw_status = decoded_status = None
+rescue_status = None
 reaped = group_absent = False
 capture_complete = False
 phase_records = []
+wire_sequence = 0
 phase_buffer = bytearray()
 control_bytes = 0
+max_control_record = 0
 stream_data = {"stdout": bytearray(), "stderr": bytearray()}
 stream_bytes = {"stdout": 0, "stderr": 0}
 stream_eof = {"stdout": False, "stderr": False}
@@ -637,6 +726,7 @@ prepublication_elapsed = None
 process = None
 channel_selector = selectors.DefaultSelector()
 wait_eintr_injected = False
+read_failure_injected = False
 
 
 def first_failure(message):
@@ -658,6 +748,65 @@ def bounded_write(path, data, limit):
     os.replace(temporary, path)
 
 
+def emit_diagnostic(path, data):
+    global diagnostic_emitted, diagnostic_flags_restored
+    descriptor = None
+    prior_flags = None
+    try:
+        if case == "diagnostic-broken-sink":
+            broken_read, descriptor = os.pipe()
+            os.close(broken_read)
+        else:
+            descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+        prior_flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+        fcntl.fcntl(descriptor, fcntl.F_SETFL, prior_flags | os.O_NONBLOCK)
+        offset = 0
+        while offset < len(data):
+            if time.monotonic() >= diagnostic_deadline:
+                raise TimeoutError("diagnostic write deadline expired")
+            try:
+                written = os.write(descriptor, data[offset:offset + 4096])
+            except BlockingIOError:
+                time.sleep(0.01)
+                continue
+            if written <= 0:
+                raise OSError("diagnostic write made no progress")
+            offset += written
+        diagnostic_emitted = True
+    finally:
+        if descriptor is not None and prior_flags is not None:
+            if case == "diagnostic-restore-failure":
+                closed_descriptor = descriptor
+                os.close(descriptor)
+                descriptor = None
+                fcntl.fcntl(closed_descriptor, fcntl.F_SETFL, prior_flags)
+            else:
+                fcntl.fcntl(descriptor, fcntl.F_SETFL, prior_flags)
+                diagnostic_flags_restored = True
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def control_record(path, kind):
+    try:
+        value = json.loads(Path(path).read_bytes())
+    except (OSError, ValueError):
+        return None
+    expected = {"case": case, "kind": kind, "token": token}
+    return value if value == expected else None
+
+
+def cancellation_seen():
+    return bool(pending_signal or control_record(cancel_path, "cancel"))
+
+
+def consume_cancellation(where):
+    if cancellation_seen():
+        first_failure("cancelled at " + where)
+        return True
+    return False
+
+
 def boundary(name):
     bounded_write(str(completion_path) + ".state",
                   json.dumps({"boundary": name, "token": token}, sort_keys=True).encode() + b"\n",
@@ -665,19 +814,23 @@ def boundary(name):
     if point != "cancel-" + name:
         return
     deadline = time.monotonic() + 5
-    while not pending_signal and not Path(cancel_path).exists() and time.monotonic() < deadline:
+    while not cancellation_seen() and time.monotonic() < deadline:
         time.sleep(0.01)
-    if pending_signal or Path(cancel_path).exists():
+    if cancellation_seen():
         first_failure("cancelled at " + name)
     else:
         first_failure("cancellation control deadline expired at " + name)
 
 
 def read_channels(selector, timeout):
-    global control_bytes
+    global control_bytes, max_control_record, wire_sequence, read_failure_injected
+    global prepublication_at, prepublication_elapsed, ready_at, ready_elapsed
     for key, _ in selector.select(max(0, timeout)):
         name = key.data
         try:
+            if case == "capture-read-failure" and name == "stdout" and not read_failure_injected:
+                read_failure_injected = True
+                raise OSError(errno.EIO, "injected stream read error")
             chunk = os.read(key.fd, 4096)
         except BlockingIOError:
             continue
@@ -706,7 +859,8 @@ def read_channels(selector, timeout):
             while b"\n" in phase_buffer:
                 raw, _, remainder = phase_buffer.partition(b"\n")
                 phase_buffer[:] = remainder
-                if len(raw) > 4096:
+                max_control_record = max(max_control_record, len(raw) + 1)
+                if len(raw) + 1 > 4096:
                     first_failure("control record exceeds limit")
                     continue
                 try:
@@ -714,19 +868,33 @@ def read_channels(selector, timeout):
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     first_failure("malformed phase record")
                     continue
-                if point == "control-overflow":
+                wire_sequence += 1
+                if (record.get("case") != point or record.get("sequence") != wire_sequence
+                        or record.get("token") != token):
+                    first_failure("wrong control identity or sequence")
+                    continue
+                if record.get("kind") == "padding":
                     continue
                 expected = len(phase_records) + 1
-                if record != {"case": point, "phase": record.get("phase"),
-                              "sequence": expected, "token": token}:
-                    first_failure("wrong phase identity or sequence")
-                    continue
                 allowed = ["entry", "materializer-entry", "materializer-return",
                            "pre-publication", "ready"]
                 if expected > len(allowed) or record["phase"] != allowed[expected - 1]:
                     first_failure("out-of-order phase record")
                     continue
                 phase_records.append(record)
+                if record["phase"] == "pre-publication":
+                    if type(record.get("monotonic")) not in (int, float):
+                        first_failure("invalid pre-publication timing")
+                    else:
+                        prepublication_at = record["monotonic"]
+                        prepublication_elapsed = prepublication_at - started
+                elif record["phase"] == "ready":
+                    if (type(record.get("monotonic")) not in (int, float)
+                            or type(record.get("hold_seconds")) not in (int, float)):
+                        first_failure("invalid ready timing")
+                    else:
+                        ready_at = record["monotonic"]
+                        ready_elapsed = ready_at - started
         else:
             stream_bytes[name] += len(chunk)
             remaining = 64 * 1024 - len(stream_data[name])
@@ -742,7 +910,12 @@ def exact_reap():
             if case == "wait-eintr" and not wait_eintr_injected:
                 wait_eintr_injected = True
                 raise InterruptedError()
-            waited, status = os.waitpid(owned_pid, os.WNOHANG)
+            if case == "wait-echild":
+                raise ChildProcessError("injected ECHILD at exact wait boundary")
+            if case == "wait-exhausted":
+                waited, status = 0, 0
+            else:
+                waited, status = os.waitpid(owned_pid, os.WNOHANG)
         except InterruptedError:
             continue
         except ChildProcessError as error:
@@ -765,19 +938,90 @@ def exact_reap():
     cleanup_errors.append("child reap deadline expired")
 
 
+def finish_capture():
+    global capture_complete
+    while time.monotonic() < cleanup_deadline and channel_selector.get_map():
+        read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
+    if case == "capture-drain-expiry":
+        stream_eof["stdout"] = False
+    capture_complete = stream_eof["stdout"] and stream_eof["stderr"]
+    if not capture_complete:
+        cleanup_errors.append("stream capture incomplete")
+
+
+def confirm_group_absence(inject_faults):
+    global group_absent
+    while time.monotonic() < cleanup_deadline:
+        try:
+            if inject_faults and case == "probe-alive":
+                probe_result = None
+            elif inject_faults and case == "probe-eperm":
+                raise PermissionError(errno.EPERM, "injected group probe EPERM")
+            elif inject_faults and case == "probe-other":
+                raise OSError(errno.EIO, "injected group probe error")
+            else:
+                probe_result = os.killpg(owned_pgid, 0)
+            if inject_faults and case == "probe-alive" and probe_result is None:
+                cleanup_errors.append("group remains observable")
+                break
+        except ProcessLookupError as error:
+            if error.errno == errno.ESRCH:
+                group_absent = True
+                break
+            cleanup_errors.append("unexpected absence probe: " + str(error))
+            break
+        except PermissionError as error:
+            cleanup_errors.append("group absence probe denied: " + str(error))
+            break
+        except OSError as error:
+            cleanup_errors.append("group absence probe failed: " + str(error))
+            break
+        time.sleep(0.02)
+    if not group_absent:
+        cleanup_errors.append("group absence unconfirmed")
+
+
 for watched in (signal.SIGINT, signal.SIGTERM):
     signal.signal(watched, deferred_signal)
 signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 if hasattr(signal, "pthread_sigmask"):
     signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
 
-admission_read, admission_write = os.pipe()
-phase_read, phase_write = os.pipe()
-for descriptor in (admission_read, admission_write, phase_read, phase_write):
-    os.set_inheritable(descriptor, False)
-child_arguments = [sys.executable, wrapper, replay, "supervised-pause", control,
-                   point, token, str(admission_read), str(phase_write), *arguments]
+admission_read = admission_write = phase_read = phase_write = None
+
+
+class NoLaunch(Exception):
+    pass
+
+
 try:
+    boundary("launch-handoff")
+    while primary is None:
+        if pending_signal or control_record(cancel_path, "cancel"):
+            first_failure("cancelled before launch")
+            break
+        if Path(cancel_path).exists() and not control_record(cancel_path, "cancel"):
+            first_failure("invalid cancel record")
+            break
+        if control_record(start_path, "start"):
+            break
+        if Path(start_path).exists():
+            first_failure("invalid start record")
+            break
+        if time.monotonic() >= admission_deadline:
+            first_failure("admission deadline expired")
+            break
+        time.sleep(0.01)
+    if primary is not None:
+        raise NoLaunch()
+    if case == "exception-before-admission":
+        raise RuntimeError("injected exception before child launch")
+    admission_read, admission_write = os.pipe()
+    phase_read, phase_write = os.pipe()
+    for descriptor in (admission_read, admission_write, phase_read, phase_write):
+        os.set_inheritable(descriptor, False)
+    child_arguments = [sys.executable, wrapper, replay, "supervised-pause", control,
+                       point, token, str(admission_read), str(phase_write), *arguments]
     process = subprocess.Popen(child_arguments, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         pass_fds=(admission_read, phase_write), close_fds=True)
@@ -804,6 +1048,8 @@ try:
     channel_selector.register(phase_read, selectors.EVENT_READ, "phase")
     channel_selector.register(process.stdout.fileno(), selectors.EVENT_READ, "stdout")
     channel_selector.register(process.stderr.fileno(), selectors.EVENT_READ, "stderr")
+    if case == "exception-while-owned":
+        raise RuntimeError("injected exception while direct child is gated")
     if case == "admission-write-failure":
         acknowledgement = Path(control + ".admission-closed")
         acknowledgement_deadline = time.monotonic() + 2
@@ -811,21 +1057,14 @@ try:
             time.sleep(0.01)
         if not acknowledgement.exists():
             first_failure("admission close acknowledgement missing")
-    boundary("launch-handoff")
-    while primary is None and not Path(start_path).exists():
-        if pending_signal or Path(cancel_path).exists():
-            first_failure("cancelled before admission")
-            break
-        if time.monotonic() >= admission_deadline:
-            first_failure("admission deadline expired")
-            break
-        read_channels(channel_selector, 0.02)
     if primary is None:
         previous_mask = None
         try:
             if hasattr(signal, "pthread_sigmask"):
                 previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
-            if pending_signal or Path(cancel_path).exists():
+            os_pending = signal.sigpending() if hasattr(signal, "sigpending") else set()
+            if (pending_signal or control_record(cancel_path, "cancel")
+                    or signal.SIGINT in os_pending or signal.SIGTERM in os_pending):
                 first_failure("cancelled at admission")
             else:
                 possible_admission = True
@@ -841,36 +1080,36 @@ try:
     admission_write = None
     boundary("setup")
     while primary is None and ready_at is None:
-        if pending_signal or Path(cancel_path).exists():
-            first_failure("cancelled during setup")
+        if consume_cancellation("setup"):
             break
         if time.monotonic() >= setup_deadline:
             first_failure("setup deadline expired")
             break
         read_channels(channel_selector, min(0.05, setup_deadline - time.monotonic()))
-        if (prepublication_at is None and phase_records
-                and phase_records[-1]["phase"] == "pre-publication"):
-            prepublication_at = time.monotonic()
-            prepublication_elapsed = prepublication_at - started
-        if phase_records and phase_records[-1]["phase"] == "ready":
-            ready_at = time.monotonic()
-            ready_elapsed = ready_at - started
     if ready_at is not None:
         hold_deadline = ready_at + 20
         boundary("ready-hold")
+        consume_cancellation("ready-hold")
         if time.monotonic() >= hold_deadline:
             first_failure("ready hold deadline expired")
-        if case == "control-natural":
+        if point == "natural":
             natural_deadline = time.monotonic() + 2
             while (any(key.data == "phase" for key in channel_selector.get_map().values())
                    and time.monotonic() < natural_deadline):
                 read_channels(channel_selector, min(0.02, natural_deadline - time.monotonic()))
     cleanup_deadline = time.monotonic() + 10
     boundary("cleanup-before-signal")
+    consume_cancellation("cleanup-before-signal")
+    if case == "capture-forced-close":
+        stdout_descriptor = process.stdout.fileno()
+        channel_selector.unregister(stdout_descriptor)
+        process.stdout.close()
     try:
         if possible_admission and authority:
             signal_attempt = "SIGKILL"
             signal_attempts += 1
+            if case == "signal-error":
+                raise OSError(errno.EIO, "injected group signal error")
             os.killpg(owned_pgid, signal.SIGKILL)
         elif pid_authority:
             signal_attempt = "PID-SIGKILL"
@@ -884,30 +1123,29 @@ try:
         authority = False
         pid_authority = False
     boundary("retirement-wait")
+    consume_cancellation("retirement-wait")
+    if case == "exception-after-retirement":
+        raise RuntimeError("injected exception after signal retirement")
     exact_reap()
-    while time.monotonic() < cleanup_deadline and channel_selector.get_map():
-        read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
-    capture_complete = stream_eof["stdout"] and stream_eof["stderr"]
-    if not capture_complete:
-        cleanup_errors.append("stream capture incomplete")
-    while time.monotonic() < cleanup_deadline:
-        try:
-            os.killpg(owned_pgid, 0)
-        except ProcessLookupError as error:
-            if error.errno == errno.ESRCH:
-                group_absent = True
+    if case in ("wait-exhausted", "wait-echild") and not reaped:
+        rescue_deadline = time.monotonic() + 2
+        while time.monotonic() < rescue_deadline:
+            try:
+                rescue_pid, rescue_raw = os.waitpid(owned_pid, os.WNOHANG)
+            except ChildProcessError:
                 break
-            cleanup_errors.append("unexpected absence probe: " + str(error))
-            break
-        except PermissionError as error:
-            cleanup_errors.append("group absence probe denied: " + str(error))
-            break
-        except OSError as error:
-            cleanup_errors.append("group absence probe failed: " + str(error))
-            break
-        time.sleep(0.02)
-    if not group_absent:
-        cleanup_errors.append("group absence unconfirmed")
+            if rescue_pid == owned_pid:
+                rescue_status = os.waitstatus_to_exitcode(rescue_raw)
+                process.returncode = rescue_status
+                break
+            time.sleep(0.01)
+        if rescue_status is None:
+            cleanup_errors.append("independent rescue failed")
+    finish_capture()
+    confirm_group_absence(True)
+except NoLaunch:
+    capture_complete = True
+    group_absent = True
 except BaseException as error:
     first_failure(type(error).__name__ + ": " + str(error))
     if process is not None and owned_pid is not None and not reaped:
@@ -928,6 +1166,11 @@ except BaseException as error:
             authority = False
             pid_authority = False
         exact_reap()
+        finish_capture()
+        confirm_group_absence(False)
+    elif process is None:
+        capture_complete = True
+        group_absent = True
 finally:
     for descriptor_name in ("admission_read", "admission_write", "phase_read", "phase_write"):
         descriptor = globals().get(descriptor_name)
@@ -937,110 +1180,273 @@ finally:
             except OSError:
                 pass
 
-expected_status = 37 if case == "control-natural" else -signal.SIGKILL
+expected_status = 37 if point == "natural" else -signal.SIGKILL
+if cleanup_errors:
+    first_failure("cleanup failed")
 if ready_at is None:
     first_failure("publication readiness not observed")
 if point in ("before", "after") and (prepublication_at is None or ready_at - prepublication_at < 12):
     first_failure("pre-publication hold was shorter than 12 seconds")
 if decoded_status != expected_status:
     first_failure("authentic child status is unexpected")
-if case == "control-natural":
-    if bytes(stream_data["stdout"]) != b"tail-out\n" or bytes(stream_data["stderr"]) != b"tail-err\n":
+if point == "natural":
+    if (set(bytes(stream_data["stdout"]).splitlines()) != {b"tail-out", b"nested-out"}
+            or set(bytes(stream_data["stderr"]).splitlines()) != {b"tail-err", b"nested-err"}):
         first_failure("natural-exit tails were not captured")
+    if case != "control-natural":
+        first_failure("outward stdout was not empty")
 elif stream_bytes["stdout"] != 0:
     first_failure("outward stdout was not empty")
 if not reaped or not group_absent or not capture_complete:
     first_failure("cleanup evidence incomplete")
-if cleanup_errors:
-    first_failure("cleanup failed")
-injected_cleanup = {
-    "signal-error": "injected signal error", "wait-exhausted": "injected exhausted wait",
-    "wait-echild": "injected missing status", "probe-alive": "injected alive group probe",
-    "probe-eperm": "injected EPERM group probe", "probe-other": "injected other group probe",
-}
-if case in injected_cleanup:
-    cleanup_errors.append(injected_cleanup[case])
-    first_failure("cleanup failed")
-boundary("diagnostic-handoff")
 diagnostic_deadline = time.monotonic() + 5
-record = {"case": case, "token": token, "elapsed": time.monotonic() - started,
-    "prepublication_elapsed": prepublication_elapsed, "ready_elapsed": ready_elapsed,
-    "owned_pid": owned_pid, "owned_pgid": owned_pgid,
-    "owned_sid": owned_sid, "possible_admission": possible_admission,
-    "signal_attempt": signal_attempt, "signal_attempts": signal_attempts,
-    "raw_status": raw_status,
-    "decoded_status": decoded_status, "reaped": reaped, "group_absent": group_absent,
-    "capture_complete": capture_complete, "stream_bytes": stream_bytes,
-    "phase_records": phase_records, "primary_failure": primary,
-    "pending_signal": pending_signal[0] if pending_signal else None,
-    "wait_eintr_retried": wait_eintr_injected,
-    "cleanup_errors": cleanup_errors, "diagnostic_errors": diagnostic_errors}
+boundary("diagnostic-handoff")
+consume_cancellation("diagnostic-handoff")
+
+
+def evidence_record():
+    return {"case": case, "token": token, "elapsed": time.monotonic() - started,
+        "deadlines": {"admission": admission_deadline, "setup": setup_deadline,
+                      "cleanup": cleanup_deadline, "diagnostic": diagnostic_deadline},
+        "prepublication_elapsed": prepublication_elapsed, "ready_elapsed": ready_elapsed,
+        "owned_pid": owned_pid, "owned_pgid": owned_pgid, "owned_sid": owned_sid,
+        "possible_admission": possible_admission, "signal_attempt": signal_attempt,
+        "signal_attempts": signal_attempts, "raw_status": raw_status,
+        "rescue_status": rescue_status, "decoded_status": decoded_status,
+        "reaped": reaped, "group_absent": group_absent,
+        "capture_complete": capture_complete, "stream_bytes": stream_bytes,
+        "stream_eof": stream_eof,
+        "stream_excerpt_base64": {
+            name: base64.b64encode(bytes(stream_data[name][:4096])).decode()
+            for name in ("stdout", "stderr")},
+        "phase_records": phase_records, "primary_failure": primary,
+        "control_bytes": control_bytes, "max_control_record": max_control_record,
+        "pending_signal": pending_signal[0] if pending_signal else None,
+        "wait_eintr_retried": wait_eintr_injected,
+        "inherited_sigchld_ignored": inherited_sigchld_ignored,
+        "inherited_blocked": inherited_blocked,
+        "cleanup_errors": cleanup_errors, "diagnostic_errors": diagnostic_errors,
+        "diagnostic_emitted": diagnostic_emitted,
+        "diagnostic_flags_restored": diagnostic_flags_restored}
+
+
 try:
+    if case == "capture-write-failure":
+        raise OSError(errno.EIO, "injected capture publication error")
     bounded_write(stdout_path, bytes(stream_data["stdout"]), 64 * 1024)
     bounded_write(stderr_path, bytes(stream_data["stderr"]), 64 * 1024)
-    encoded_record = json.dumps(record, sort_keys=True).encode() + b"\n"
-    if time.monotonic() >= diagnostic_deadline:
-        raise TimeoutError("diagnostic deadline expired")
-    bounded_write(completion_path, encoded_record, 16 * 1024)
+    diagnostic_bytes = json.dumps(evidence_record(), sort_keys=True).encode() + b"\n"
+    if len(diagnostic_bytes) > 16 * 1024:
+        raise ValueError("diagnostic record exceeds limit")
+    emit_diagnostic(diagnostic_path, diagnostic_bytes)
 except BaseException as error:
     diagnostic_errors.append(type(error).__name__ + ": " + str(error))
-    raise
+    first_failure("diagnostic publication failed")
+record = evidence_record()
+encoded_record = json.dumps(record, sort_keys=True).encode() + b"\n"
+try:
+    if case == "completion-write-failure":
+        Path(str(completion_path) + ".next").mkdir()
+    if case == "completion-rename-failure":
+        Path(completion_path).mkdir()
+    bounded_write(completion_path, encoded_record, 16 * 1024)
+except BaseException as error:
+    diagnostic_errors.append("completion publication failed: " + type(error).__name__ + ": " + str(error))
+    raise SystemExit(1)
 raise SystemExit(0 if primary is None and not cleanup_errors and not diagnostic_errors else 1)
 PY
+
+receiver_inherit_launcher="$tmp/receiver-inherit-launcher.py"
+cat > "$receiver_inherit_launcher" <<'PY'
+import os
+import signal
+import sys
+
+mode, *command = sys.argv[1:]
+if mode == "sigchld":
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+elif mode == "blocked":
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+elif mode == "shell":
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+else:
+    raise SystemExit("unknown inherited-state mode")
+os.execvp(command[0], command)
+PY
+
+receiver_diagnostic_reader="$tmp/receiver-diagnostic-reader.py"
+cat > "$receiver_diagnostic_reader" <<'PY'
+import os
+from pathlib import Path
+import sys
+import time
+
+fifo, output, stop = sys.argv[1:]
+descriptor = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+data = bytearray()
+while True:
+    try:
+        chunk = os.read(descriptor, 4096)
+    except BlockingIOError:
+        chunk = None
+    if chunk:
+        data.extend(chunk)
+    elif chunk == b"" and data:
+        break
+    elif Path(stop).exists():
+        break
+    else:
+        time.sleep(0.01)
+os.close(descriptor)
+Path(output).write_bytes(data)
+PY
+
+receiver_shell_runner="$tmp/receiver-shell-runner.sh"
+cat > "$receiver_shell_runner" <<'SH'
+#!/bin/bash
+set -euo pipefail
+supervisor=$1 case_name=$2 token=$3 start=$4 cancel=$5 completion=$6
+stdout_path=$7 stderr_path=$8 wrapper=$9
+shift 9
+replay=$1 point=$2 control=$3 shell_state=$4 shell_result=$5 shell_pause=$6
+shift 6
+job= diagnostic_reader= pending= cancel_failed=0 wait_complete=0 coordinator_status=125 active=0
+diagnostic_reader_status=0
+
+write_control() {
+  local path=$1 kind=$2
+  printf '{"case":"%s","kind":"%s","token":"%s"}\n' \
+    "$case_name" "$kind" "$token" > "$path.next" && /bin/mv "$path.next" "$path"
+}
+write_shell_state() {
+  printf '{"boundary":"%s","case":"%s","coordinator_pid":%s,"token":"%s"}\n' \
+    "$1" "$case_name" "${job:-0}" "$token" > "$shell_state.next"
+  /bin/mv "$shell_state.next" "$shell_state"
+}
+request_cancel() {
+  if [ -z "$pending" ]; then
+    pending=$1
+    if ! write_control "$cancel" cancel; then cancel_failed=1; fi
+  fi
+}
+wait_for_job() {
+  while [ "$wait_complete" -eq 0 ]; do
+    if wait "$job"; then coordinator_status=0; else coordinator_status=$?; fi
+    if [ -n "$pending" ] && { [ "$coordinator_status" -eq 130 ] || [ "$coordinator_status" -eq 143 ]; }; then
+      continue
+    fi
+    wait_complete=1
+  done
+}
+finish_diagnostic_reader() {
+  [ -n "$diagnostic_reader" ] || return 0
+  : > "${completion}.diagnostic-stop"
+  if wait "$diagnostic_reader"; then diagnostic_reader_status=0; else diagnostic_reader_status=$?; fi
+  diagnostic_reader=
+}
+write_shell_result() {
+  printf '{"cancel_failed":%s,"case":"%s","coordinator_status":%s,"diagnostic_reader_status":%s,"pending":"%s","token":"%s","wait_complete":%s}\n' \
+    "$cancel_failed" "$case_name" "$coordinator_status" "$diagnostic_reader_status" \
+    "$pending" "$token" "$wait_complete" \
+    > "$shell_result.next"
+  /bin/mv "$shell_result.next" "$shell_result"
+}
+on_exit() {
+  local outcome=$?
+  trap - EXIT ERR INT TERM
+  if [ "$active" -eq 1 ]; then
+    request_cancel shell-exit
+    wait_for_job
+    active=0
+  fi
+  finish_diagnostic_reader
+  write_shell_result || true
+  exit "$outcome"
+}
+trap on_exit EXIT
+trap 'request_cancel INT' INT
+trap 'request_cancel TERM' TERM
+trap 'request_cancel shell-error' ERR
+
+diagnostic_fifo="${completion}.diagnostic-fifo"
+/usr/bin/mkfifo "$diagnostic_fifo"
+if [ "$point" != diagnostic-blocked-sink ] && [ "$point" != diagnostic-broken-sink ]; then
+  python3 "${supervisor%/*}/receiver-diagnostic-reader.py" "$diagnostic_fifo" \
+    "${completion}.diagnostic" "${completion}.diagnostic-stop" &
+  diagnostic_reader=$!
+fi
+coordinator=(python3 "$supervisor" "$case_name" "$token" "$start" "$cancel" "$completion"
+  "$stdout_path" "$stderr_path" "$wrapper" "$replay" "$point" "$control" "$@")
+if [ "$case_name" = inherited-sigchld ]; then
+  coordinator=(python3 "${supervisor%/*}/receiver-inherit-launcher.py" sigchld "${coordinator[@]}")
+elif [ "$case_name" = inherited-blocked ]; then
+  coordinator=(python3 "${supervisor%/*}/receiver-inherit-launcher.py" blocked "${coordinator[@]}")
+fi
+"${coordinator[@]}" &
+job=$!
+active=1
+write_shell_state launch-handoff
+if [ "$shell_pause" = launch-handoff ]; then
+  while [ -z "$pending" ]; do sleep 0.01; done
+fi
+if [ -n "$pending" ]; then
+  request_cancel "$pending"
+elif [ "$shell_pause" = invalid-start ]; then
+  printf '{}\n' > "$start"
+elif [ "$shell_pause" = invalid-cancel ]; then
+  printf '{}\n' > "$cancel"
+else
+  write_control "$start" start
+fi
+if [ "$shell_pause" = shell-error ]; then false; fi
+wait_for_job
+active=0
+finish_diagnostic_reader
+write_shell_state completion-handoff
+if [ "$shell_pause" = completion-handoff ]; then
+  pause_deadline=$((SECONDS + 5))
+  while [ -z "$pending" ] && [ "$SECONDS" -lt "$pause_deadline" ]; do sleep 0.01; done
+fi
+trap - EXIT ERR INT TERM
+write_shell_result
+[ "$cancel_failed" -eq 0 ] || exit 126
+[ -z "$pending" ] || exit 1
+exit "$coordinator_status"
+SH
+/bin/chmod 700 "$receiver_shell_runner"
 
 run_managed_receiver() {
   local case_name=$1 token=$2 start=$3 cancel=$4 completion=$5
   local stdout_path=$6 stderr_path=$7 point=$8 control=$9
   shift 9
-  local job status pending= cancel_failed=0 completed_wait=0
-  receiver_shell_signal=
-  receiver_shell_status=
-  receiver_shell_cancel_failed=0
-  managed_cancel() {
-    if [ -z "$pending" ]; then
-      pending=$1
-      if ! printf '%s %s\n' "$token" "$pending" > "$cancel"; then
-        cancel_failed=1
-      fi
-    fi
-  }
-  trap 'managed_cancel INT' INT
-  trap 'managed_cancel TERM' TERM
-  python3 "$receiver_supervisor" "$case_name" "$token" "$start" "$cancel" "$completion" \
-    "$stdout_path" "$stderr_path" "${receiver_wrapper:-$loaded_wrapper}" \
-    "${receiver_replay:-$replay}" "$point" "$control" "$@" &
-  job=$!
-  if [ -n "$pending" ]; then
-    managed_cancel "$pending"
-  elif ! printf '%s\n' "$token" > "$start"; then
-    managed_cancel start-write-failed
-  fi
-  set +e
-  while [ "$completed_wait" -eq 0 ]; do
-    wait "$job"
+  local status shell_state shell_result
+  shell_state="${completion}.shell-state"
+  shell_result="${completion}.shell-result"
+  if /bin/bash "$receiver_shell_runner" "$receiver_supervisor" "$case_name" "$token" \
+    "$start" "$cancel" "$completion" "$stdout_path" "$stderr_path" \
+    "${receiver_wrapper:-$loaded_wrapper}" "${receiver_replay:-$replay}" "$point" "$control" \
+    "$shell_state" "$shell_result" none "$@"; then
+    status=0
+  else
     status=$?
-    if kill -0 "$job" 2>/dev/null; then
-      continue
-    fi
-    completed_wait=1
-  done
-  set -e
-  trap - INT TERM
-  receiver_shell_signal=$pending
-  receiver_shell_status=$status
-  receiver_shell_cancel_failed=$cancel_failed
+  fi
   [ "$status" -ne 127 ] || return 127
-  [ "$cancel_failed" -eq 0 ] || return 126
   [ -f "$completion" ] || return 125
-  python3 - "$completion" "$token" "$case_name" <<'PY'
+  python3 - "$completion" "$shell_result" "$token" "$case_name" <<'PY'
 import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
-assert record["token"] == sys.argv[2] and record["case"] == sys.argv[3]
+shell = json.load(open(sys.argv[2], encoding="utf-8"))
+assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]
+assert shell["token"] == sys.argv[3] and shell["case"] == sys.argv[4]
+assert shell["wait_complete"] == 1 and shell["cancel_failed"] == 0
 PY
   return "$status"
 }
 
+receiver_control_inventory="$tmp/receiver-control-inventory.tsv"
+: > "$receiver_control_inventory"
 for point in before after; do
   make_roots "crash-$point"
   set_replay_args "crash-$point"
@@ -1051,11 +1457,12 @@ for point in before after; do
   start="$invocation/start-$token"
   cancel="$invocation/cancel-$token"
   completion="$invocation/completion-$token.json"
-  set +e
-  run_managed_receiver "$point" "$token" "$start" "$cancel" "$completion" \
-    "$tmp/$point.out" "$tmp/$point.err" "$point" "$tmp/$point-oracle" "${crash_args[@]}"
-  status=$?
-  set -e
+  if run_managed_receiver "$point" "$token" "$start" "$cancel" "$completion" \
+    "$tmp/$point.out" "$tmp/$point.err" "$point" "$tmp/$point-oracle" "${crash_args[@]}"; then
+    status=0
+  else
+    status=$?
+  fi
   [ "$status" -eq 0 ] || fail "$point-supervisor-status"
   [ -f "$completion" ] || fail "$point-completion-missing"
   python3 - "$completion" "$token" "$point" <<'PY'
@@ -1090,6 +1497,7 @@ PY
     "$jq_bin" -e '.status=="stored" and .stage_result.content.kind=="stage_result"' \
       "$tmp/after-read.out" >/dev/null || fail after-stored
   fi
+  printf 'real-%s\t%s\tPASS\n' "$point" "$point" >> "$receiver_control_inventory"
 done
 pass 'both synchronized process-crash windows preserve their distinct evidence state'
 
@@ -1116,12 +1524,34 @@ if admitted != b"1":
     raise SystemExit("invalid control admission")
 os.set_inheritable(phase_fd, False)
 Path(control + ".product").write_text("admitted\n")
+wire_sequence = 0
 
 
-def phase(sequence, name, **changes):
-    value = {"token": token, "case": point, "sequence": sequence, "phase": name}
+def send_record(value, target_size=None):
+    global wire_sequence
+    wire_sequence += 1
+    value.setdefault("token", token)
+    value.setdefault("case", point)
+    value.setdefault("sequence", wire_sequence)
+    if target_size is not None:
+        value["padding"] = ""
+        base = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        value["padding"] = "x" * (target_size - len(base))
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if target_size is not None:
+        assert len(encoded) == target_size, (len(encoded), target_size)
+    os.write(phase_fd, encoded)
+
+
+def phase(unused_sequence, name, **changes):
+    target_size = changes.pop("target_size", None)
+    value = {"phase": name}
+    if name in ("pre-publication", "ready"):
+        value["monotonic"] = time.monotonic()
+    if name == "ready":
+        value["hold_seconds"] = 0.0
     value.update(changes)
-    os.write(phase_fd, json.dumps(value, sort_keys=True).encode() + b"\n")
+    send_record(value, target_size)
 
 
 if point == "malformed":
@@ -1135,14 +1565,34 @@ elif point == "out-of-order":
     phase(1, "entry")
     phase(2, "materializer-return")
 elif point == "record-overflow":
-    os.write(phase_fd, b"x" * 4097)
+    send_record({"kind": "padding"}, 4097)
+elif point == "record-exact":
+    send_record({"kind": "padding"}, 4096)
+    for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return",
+                                     "pre-publication", "ready"), 1):
+        phase(sequence, name)
 elif point == "control-overflow":
-    os.write(phase_fd, b"{}\n" * (64 * 1024 // 3 + 1))
+    for size in ([4096] * 16 + [128]):
+        send_record({"kind": "padding"}, size)
+elif point == "control-exact":
+    for size in ([4096] * 15 + [2816]):
+        send_record({"kind": "padding"}, size)
+    for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return",
+                                     "pre-publication", "ready"), 1):
+        phase(sequence, name, target_size=256)
 elif point == "stream-overflow":
     for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return"), 1):
         phase(sequence, name)
     sys.stdout.buffer.write(b"x" * (64 * 1024 + 1))
     sys.stdout.buffer.flush()
+    phase(4, "pre-publication")
+    phase(5, "ready")
+elif point in ("stdout-exact", "stderr-exact"):
+    for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return"), 1):
+        phase(sequence, name)
+    stream = sys.stdout.buffer if point == "stdout-exact" else sys.stderr.buffer
+    stream.write(b"x" * (64 * 1024))
+    stream.flush()
     phase(4, "pre-publication")
     phase(5, "ready")
 elif point == "stderr-overflow":
@@ -1154,37 +1604,67 @@ elif point == "stderr-overflow":
     phase(5, "ready")
 elif point == "watchdog":
     phase(1, "entry")
+    descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(70)"],
+                                  stdin=subprocess.DEVNULL, close_fds=True)
+    Path(control + ".descendant").write_text(json.dumps({
+        "pid": descendant.pid, "ppid": os.getpid(), "pgid": os.getpgid(descendant.pid),
+        "sid": os.getsid(descendant.pid)}) + "\n")
     time.sleep(70)
 elif point == "natural":
     for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return",
                                      "pre-publication", "ready"), 1):
         phase(sequence, name)
-    descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, close_fds=True)
+    nested_ready = control + ".nested-ready"
+    descendant = subprocess.Popen([sys.executable, "-c",
+        "import pathlib,sys,time; sys.stdout.write('nested-out\\n'); "
+        "sys.stderr.write('nested-err\\n'); sys.stdout.flush(); sys.stderr.flush(); "
+        "pathlib.Path(sys.argv[1]).write_text('ready\\n'); time.sleep(30)", nested_ready],
+        stdin=subprocess.DEVNULL, close_fds=True)
     Path(control + ".descendant").write_text(json.dumps({
         "pid": descendant.pid, "ppid": os.getpid(), "pgid": os.getpgid(descendant.pid),
         "sid": os.getsid(descendant.pid)}) + "\n")
+    nested_deadline = time.monotonic() + 2
+    while not Path(nested_ready).exists() and time.monotonic() < nested_deadline:
+        time.sleep(0.01)
+    if not Path(nested_ready).exists():
+        raise RuntimeError("nested writer did not acknowledge output")
     sys.stdout.write("tail-out\n")
     sys.stderr.write("tail-err\n")
     sys.stdout.flush()
     sys.stderr.flush()
     os.close(phase_fd)
     os._exit(37)
-elif point in ("cancel-ready-hold", "cancel-cleanup-before-signal",
-               "cancel-retirement-wait", "cancel-diagnostic-handoff", "wait-eintr",
-               "signal-error", "wait-exhausted", "wait-echild", "probe-alive",
-               "probe-eperm", "probe-other"):
+elif point == "signal-error":
     for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return",
                                      "pre-publication", "ready"), 1):
         phase(sequence, name)
+    descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, close_fds=True)
+    Path(control + ".descendant").write_text(str(descendant.pid) + "\n")
+    time.sleep(0.5)
+    raise SystemExit(42)
+elif point in ("cancel-ready-hold", "cancel-cleanup-before-signal",
+               "cancel-retirement-wait", "cancel-diagnostic-handoff", "wait-eintr",
+               "wait-exhausted", "wait-echild", "probe-alive",
+               "probe-eperm", "probe-other", "capture-forced-close",
+               "capture-drain-expiry", "capture-write-failure", "diagnostic-blocked-sink",
+               "diagnostic-broken-sink", "diagnostic-restore-failure",
+               "completion-write-failure", "completion-rename-failure",
+               "inherited-sigchld", "inherited-blocked", "wait-completion-race",
+               "exception-after-retirement"):
+    for sequence, name in enumerate(("entry", "materializer-entry", "materializer-return",
+                                     "pre-publication", "ready"), 1):
+        phase(sequence, name)
+elif point == "capture-read-failure":
+    sys.stdout.write("read-fault\n")
+    sys.stdout.flush()
+    phase(1, "entry")
 else:
     phase(1, "entry")
 time.sleep(30)
 PY
 
-receiver_control_inventory="$tmp/receiver-control-inventory.tsv"
-: > "$receiver_control_inventory"
 run_receiver_control() {
   local name=$1 point=$2 expected=$3
   local invocation="$tmp/control-$name" token start cancel completion status
@@ -1195,13 +1675,26 @@ run_receiver_control() {
   completion="$invocation/completion-$token.json"
   receiver_wrapper=$receiver_control_wrapper
   receiver_replay=unused
-  set +e
-  run_managed_receiver "$name" "$token" "$start" "$cancel" "$completion" \
-    "$invocation/stdout" "$invocation/stderr" "$point" "$invocation/control"
-  status=$?
-  set -e
+  if run_managed_receiver "$name" "$token" "$start" "$cancel" "$completion" \
+    "$invocation/stdout" "$invocation/stderr" "$point" "$invocation/control"; then
+    status=0
+  else
+    status=$?
+  fi
   unset receiver_wrapper receiver_replay
   [ "$status" -eq "$expected" ] || fail "receiver-control-$name-status-$status"
+  if ! python3 - "$completion" <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+unresolved = (record["cleanup_errors"] or record["diagnostic_errors"]
+              or not record["capture_complete"] or not record["group_absent"])
+raise SystemExit(1 if unresolved else 0)
+PY
+  then
+    managed_retention=1
+    : > "$invocation/retained"
+  fi
   printf '%s\t%s\tPASS\n' "$name" "$point" >> "$receiver_control_inventory"
 }
 
@@ -1223,10 +1716,24 @@ except ProcessLookupError:
 else:
     raise AssertionError("natural-exit descendant survived")
 PY
+run_receiver_control natural-zero-oracle natural 1
+python3 - "$tmp/control-natural-zero-oracle/completion-"*'.json' <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["primary_failure"] == "outward stdout was not empty"
+assert record["decoded_status"] == 37 and record["capture_complete"]
+PY
 for control_case in malformed wrong-case duplicate out-of-order record-overflow control-overflow \
   stream-overflow stderr-overflow admission-write-failure identity-missing identity-wrong \
-  identity-own-group signal-error wait-exhausted wait-echild probe-alive probe-eperm probe-other; do
+  identity-own-group signal-error wait-exhausted wait-echild probe-alive probe-eperm probe-other \
+  stdout-exact capture-read-failure capture-forced-close capture-drain-expiry \
+  capture-write-failure \
+  diagnostic-blocked-sink diagnostic-broken-sink diagnostic-restore-failure; do
   run_receiver_control "$control_case" "$control_case" 1
+done
+for control_case in record-exact control-exact stderr-exact inherited-sigchld; do
+  run_receiver_control "$control_case" "$control_case" 0
 done
 run_receiver_control wait-eintr wait-eintr 0
 python3 - "$tmp/control-wait-eintr/completion-"*'.json' <<'PY'
@@ -1236,6 +1743,122 @@ record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["wait_eintr_retried"] and record["decoded_status"] == -9
 assert record["signal_attempts"] == 1 and not record["cleanup_errors"]
 PY
+python3 - \
+  "$tmp/control-signal-error/completion-"*'.json' \
+  "$tmp/control-wait-exhausted/completion-"*'.json' \
+  "$tmp/control-wait-echild/completion-"*'.json' <<'PY'
+import json
+import sys
+signal_error, exhausted, missing = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert signal_error["signal_attempts"] == 1 and signal_error["decoded_status"] == 42
+assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"]
+assert exhausted["decoded_status"] is None and exhausted["rescue_status"] == -9
+assert exhausted["reaped"] is False and "child reap deadline expired" in exhausted["cleanup_errors"]
+assert missing["decoded_status"] is None and missing["rescue_status"] == -9
+assert missing["reaped"] is False and missing["cleanup_errors"] == [
+    "missing child status: injected ECHILD at exact wait boundary"]
+PY
+python3 - \
+  "$tmp/control-diagnostic-blocked-sink/completion-"*'.json' \
+  "$tmp/control-diagnostic-broken-sink/completion-"*'.json' \
+  "$tmp/control-diagnostic-restore-failure/completion-"*'.json' <<'PY'
+import json
+import sys
+blocked, broken, restoration = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert blocked["primary_failure"] == "diagnostic publication failed"
+assert blocked["diagnostic_errors"][0].startswith("OSError: [Errno 6]")
+assert broken["primary_failure"] == "diagnostic publication failed"
+assert broken["diagnostic_errors"][0].startswith("BrokenPipeError: [Errno 32]")
+assert restoration["primary_failure"] == "diagnostic publication failed"
+assert restoration["diagnostic_errors"][0].startswith("OSError: [Errno 9]")
+assert not restoration["diagnostic_flags_restored"]
+PY
+python3 - "$tmp/control-inherited-sigchld/completion-"*'.json' <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["inherited_sigchld_ignored"] and record["decoded_status"] == -9
+PY
+python3 - \
+  "$tmp/control-record-exact/completion-"*'.json' \
+  "$tmp/control-control-exact/completion-"*'.json' \
+  "$tmp/control-stdout-exact/completion-"*'.json' \
+  "$tmp/control-stderr-exact/completion-"*'.json' <<'PY'
+import json
+import sys
+record_exact, control_exact, stdout_exact, stderr_exact = [
+    json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert record_exact["max_control_record"] == 4096 and not record_exact["cleanup_errors"]
+assert control_exact["control_bytes"] == 64 * 1024 and not control_exact["cleanup_errors"]
+assert stdout_exact["stream_bytes"] == {"stdout": 64 * 1024, "stderr": 0}
+assert stdout_exact["primary_failure"] == "outward stdout was not empty"
+assert stderr_exact["stream_bytes"] == {"stdout": 0, "stderr": 64 * 1024}
+assert stderr_exact["primary_failure"] is None
+PY
+python3 - "$tmp" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+def load(name):
+    return json.loads(next((root / ("control-" + name)).glob("completion-*.json")).read_text())
+
+expected_primary = {
+    "malformed": "malformed phase record",
+    "wrong-case": "wrong control identity or sequence",
+    "duplicate": "out-of-order phase record",
+    "out-of-order": "out-of-order phase record",
+    "record-overflow": "control record exceeds limit",
+    "control-overflow": "control data exceeds limit",
+    "stream-overflow": "stdout capture exceeds limit",
+    "stderr-overflow": "stderr capture exceeds limit",
+}
+for name, expected in expected_primary.items():
+    record = load(name)
+    assert record["primary_failure"] == expected, (name, record["primary_failure"])
+    assert record["signal_attempts"] == 1 and record["reaped"] and record["group_absent"]
+
+signal_error = load("signal-error")
+assert signal_error["cleanup_errors"] == ["signal failed: [Errno 5] injected group signal error"]
+assert signal_error["signal_attempts"] == 1 and signal_error["decoded_status"] == 42
+probe_fragments = {
+    "probe-alive": "group remains observable",
+    "probe-eperm": "group absence probe denied: [Errno 1] injected group probe EPERM",
+    "probe-other": "group absence probe failed: [Errno 5] injected group probe error",
+}
+for name, fragment in probe_fragments.items():
+    record = load(name)
+    assert fragment in record["cleanup_errors"] and "group absence unconfirmed" in record["cleanup_errors"]
+    assert record["signal_attempts"] == 1 and record["reaped"] and not record["group_absent"]
+
+read_failure = load("capture-read-failure")
+assert read_failure["primary_failure"].startswith("stdout read failed: [Errno 5]")
+assert not read_failure["capture_complete"] and read_failure["stream_eof"]["stderr"]
+for name in ("capture-forced-close", "capture-drain-expiry"):
+    record = load(name)
+    assert record["primary_failure"] == "cleanup failed" and not record["capture_complete"]
+    assert "stream capture incomplete" in record["cleanup_errors"]
+write_failure = load("capture-write-failure")
+assert write_failure["primary_failure"] == "diagnostic publication failed"
+assert write_failure["diagnostic_errors"] == [
+    "OSError: [Errno 5] injected capture publication error"]
+admission = load("admission-write-failure")
+assert admission["primary_failure"].startswith("admission write failed: [Errno 32]")
+assert admission["possible_admission"] and admission["signal_attempt"] == "SIGKILL"
+assert admission["signal_attempts"] == 1 and admission["decoded_status"] == -9
+assert admission["reaped"] and admission["group_absent"] and admission["capture_complete"]
+PY
+for identity_case in identity-missing identity-wrong identity-own-group; do
+  [ ! -e "$tmp/control-$identity_case/control.product" ] || fail "$identity_case-product-executed"
+  python3 - "$tmp/control-$identity_case/completion-"*'.json' <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["signal_attempt"] == "PID-SIGKILL" and record["signal_attempts"] == 1
+assert not record["possible_admission"] and record["decoded_status"] == -9
+PY
+done
 pass 'receiver supervision rejects malformed, misidentified, reordered, oversized, and overflowing evidence'
 
 wait_receiver_boundary() {
@@ -1263,38 +1886,56 @@ PY
 exercise_receiver_cancellation() {
   local target=$1 received=$2 boundary_name=$3
   local name="cancel-$target-$received-$boundary_name"
-  local invocation="$tmp/$name" token start cancel completion owner result_code point
+  local invocation="$tmp/$name" token start cancel completion shell_state shell_result
+  local shell_owner coordinator_owner result_code point shell_pause
   /bin/mkdir -m 700 "$invocation"
   token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
   start="$invocation/start-$token"
   cancel="$invocation/cancel-$token"
   completion="$invocation/completion-$token.json"
+  shell_state="$invocation/shell-state.json"
+  shell_result="$invocation/shell-result.json"
   point="cancel-$boundary_name"
-  printf '%s\n' "$token" > "$start"
-  python3 "$receiver_supervisor" "$name" "$token" "$start" "$cancel" "$completion" \
-    "$invocation/stdout" "$invocation/stderr" "$receiver_control_wrapper" unused \
-    "$point" "$invocation/control" &
-  owner=$!
-  wait_receiver_boundary "$completion.state" "$boundary_name" "$owner"
-  if [ "$target" = coordinator ]; then
-    kill -"$received" "$owner"
-  else
-    printf '%s %s\n' "$token" "$received" > "$cancel"
+  shell_pause=none
+  if [ "$target" = bash ] && [ "$boundary_name" = launch-handoff ]; then
+    shell_pause=launch-handoff
   fi
-  set +e
-  wait "$owner"
-  result_code=$?
-  set -e
+  python3 "$receiver_inherit_launcher" shell /bin/bash "$receiver_shell_runner" \
+    "$receiver_supervisor" "$name" "$token" \
+    "$start" "$cancel" "$completion" "$invocation/stdout" "$invocation/stderr" \
+    "$receiver_control_wrapper" unused "$point" "$invocation/control" \
+    "$shell_state" "$shell_result" "$shell_pause" &
+  shell_owner=$!
+  if [ "$target" = bash ] && [ "$boundary_name" = launch-handoff ]; then
+    wait_receiver_boundary "$shell_state" launch-handoff "$shell_owner"
+  else
+    wait_receiver_boundary "$completion.state" "$boundary_name" "$shell_owner"
+  fi
+  if [ "$target" = coordinator ]; then
+    coordinator_owner=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["coordinator_pid"])' "$shell_state")
+    kill -"$received" "$coordinator_owner"
+    kill -"$received" "$coordinator_owner" 2>/dev/null || true
+  else
+    kill -"$received" "$shell_owner"
+    kill -"$received" "$shell_owner" 2>/dev/null || true
+  fi
+  if wait "$shell_owner"; then result_code=0; else result_code=$?; fi
   [ "$result_code" -eq 1 ] || fail "$name-status-$result_code"
-  python3 - "$completion" "$token" "$name" "$boundary_name" <<'PY'
+  python3 - "$completion" "$shell_result" "$token" "$name" "$boundary_name" "$target" <<'PY'
 import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
-assert record["token"] == sys.argv[2] and record["case"] == sys.argv[3]
-assert record["primary_failure"] == "cancelled at " + sys.argv[4]
-assert record["signal_attempt"] in ("SIGKILL", "PID-SIGKILL") and record["signal_attempts"] == 1
-assert record["reaped"] and record["group_absent"] and record["capture_complete"]
-assert not record["cleanup_errors"]
+shell = json.load(open(sys.argv[2], encoding="utf-8"))
+assert record["token"] == sys.argv[3] and record["case"] == sys.argv[4]
+assert record["primary_failure"] == "cancelled at " + sys.argv[5]
+assert shell["wait_complete"] == 1 and shell["cancel_failed"] == 0
+if sys.argv[6] == "bash": assert shell["pending"] == sys.argv[5] or shell["pending"] in ("INT", "TERM")
+if record["owned_pid"] is None:
+    assert record["signal_attempts"] == 0 and not record["possible_admission"]
+else:
+    assert record["signal_attempt"] in ("SIGKILL", "PID-SIGKILL") and record["signal_attempts"] == 1
+    assert record["reaped"] and record["group_absent"] and record["capture_complete"]
+    assert not record["cleanup_errors"]
 PY
   if [ "$boundary_name" = launch-handoff ]; then
     [ ! -e "$invocation/control.product" ] || fail "$name-product-executed"
@@ -1311,17 +1952,185 @@ for received in INT TERM; do
     done
   done
 done
-[ "$(wc -l < "$receiver_control_inventory" | tr -d ' ')" -eq 44 ] || fail receiver-control-count
-pass 'receiver supervision records all INT/TERM Bash/coordinator cancellation boundaries'
 
-run_receiver_control watchdog watchdog 1
-python3 - "$tmp/control-watchdog/completion-"*'.json' <<'PY'
+run_shell_control() {
+  local name=$1 point=$2 shell_pause=$3
+  local invocation="$tmp/$name" token start cancel completion shell_state shell_result owner result_code
+  /bin/mkdir -m 700 "$invocation"
+  token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+  start="$invocation/start-$token"; cancel="$invocation/cancel-$token"
+  completion="$invocation/completion-$token.json"
+  shell_state="$invocation/shell-state.json"; shell_result="$invocation/shell-result.json"
+  python3 "$receiver_inherit_launcher" shell /bin/bash "$receiver_shell_runner" \
+    "$receiver_supervisor" "$name" "$token" \
+    "$start" "$cancel" "$completion" "$invocation/stdout" "$invocation/stderr" \
+    "$receiver_control_wrapper" unused "$point" "$invocation/control" \
+    "$shell_state" "$shell_result" "$shell_pause" &
+  owner=$!
+  receiver_shell_owner=$owner receiver_shell_state=$shell_state receiver_shell_result=$shell_result
+  receiver_shell_completion=$completion receiver_shell_cancel=$cancel
+}
+
+for invalid_control in start cancel; do
+  run_shell_control "invalid-$invalid_control-record" "invalid-$invalid_control-record" \
+    "invalid-$invalid_control"
+  if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "invalid-$invalid_control-record-status"
+  python3 - "$receiver_shell_completion" "$invalid_control" <<'PY'
 import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["primary_failure"] == "invalid " + sys.argv[2] + " record"
+assert record["owned_pid"] is None and record["signal_attempts"] == 0
+assert record["group_absent"] and record["capture_complete"]
+PY
+  [ ! -e "$tmp/invalid-$invalid_control-record/control.product" ] ||
+    fail "invalid-$invalid_control-record-product-executed"
+  printf 'invalid-%s-record\tprelaunch\tPASS\n' "$invalid_control" >> "$receiver_control_inventory"
+done
+
+run_shell_control inherited-blocked cancel-setup none
+wait_receiver_boundary "$receiver_shell_completion.state" setup "$receiver_shell_owner"
+inherited_owner=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["coordinator_pid"])' "$receiver_shell_state")
+kill -INT "$inherited_owner"; kill -TERM "$inherited_owner" 2>/dev/null || true
+if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+[ "$status" -eq 1 ] || fail inherited-blocked-status
+python3 - "$receiver_shell_completion" <<'PY'
+import json
+import signal
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["inherited_blocked"] == sorted([signal.SIGINT, signal.SIGTERM])
+assert record["primary_failure"] == "cancelled at setup" and record["signal_attempts"] == 1
+PY
+printf 'inherited-blocked\tsetup\tPASS\n' >> "$receiver_control_inventory"
+
+run_shell_control wait-completion-race wait-completion-race completion-handoff
+wait_receiver_boundary "$receiver_shell_state" completion-handoff "$receiver_shell_owner"
+kill -TERM "$receiver_shell_owner"
+if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+[ "$status" -eq 1 ] || fail wait-completion-race-status
+python3 - "$receiver_shell_completion" "$receiver_shell_result" <<'PY'
+import json
+import sys
+record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert record["primary_failure"] is None and record["signal_attempts"] == 1
+assert shell["pending"] == "TERM" and shell["wait_complete"] == 1
+PY
+printf 'wait-completion-race\tcompletion-handoff\tPASS\n' >> "$receiver_control_inventory"
+
+run_shell_control shell-error cancel-setup shell-error
+if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+[ "$status" -ne 0 ] || fail shell-error-status
+python3 - "$receiver_shell_completion" "$receiver_shell_result" <<'PY'
+import json
+import sys
+record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert shell["pending"] == "shell-error" and shell["wait_complete"] == 1
+assert record["primary_failure"].startswith("cancelled")
+PY
+printf 'shell-error\texit-wait\tPASS\n' >> "$receiver_control_inventory"
+
+run_shell_control cancel-write-failure cancel-setup none
+wait_receiver_boundary "$receiver_shell_completion.state" setup "$receiver_shell_owner"
+/bin/mkdir "${receiver_shell_cancel}.next"
+kill -INT "$receiver_shell_owner"
+if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+[ "$status" -eq 126 ] || fail cancel-write-failure-status
+python3 - "$receiver_shell_completion" "$receiver_shell_result" <<'PY'
+import json
+import sys
+record, shell = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert shell["cancel_failed"] == 1 and shell["wait_complete"] == 1
+assert shell["pending"] == "INT"
+assert record["primary_failure"] == "cancellation control deadline expired at setup"
+assert record["elapsed"] >= 5 and not record["cleanup_errors"]
+assert record["signal_attempts"] == 1 and record["reaped"] and record["group_absent"]
+PY
+managed_retention=1
+: > "$tmp/cancel-write-failure/retained"
+printf 'cancel-write-failure\tsetup\tPASS\n' >> "$receiver_control_inventory"
+
+for exception_case in exception-before-admission exception-while-owned exception-after-retirement; do
+  run_receiver_control "$exception_case" "$exception_case" 1
+done
+python3 - \
+  "$tmp/control-exception-before-admission/completion-"*'.json' \
+  "$tmp/control-exception-while-owned/completion-"*'.json' \
+  "$tmp/control-exception-after-retirement/completion-"*'.json' <<'PY'
+import json
+import sys
+before, owned, retired = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert before["primary_failure"] == "RuntimeError: injected exception before child launch"
+assert before["owned_pid"] is None and before["signal_attempts"] == 0
+assert before["capture_complete"] and before["group_absent"]
+assert owned["primary_failure"] == "RuntimeError: injected exception while direct child is gated"
+assert owned["signal_attempt"] == "PID-SIGKILL" and owned["signal_attempts"] == 1
+assert owned["decoded_status"] == -9 and owned["reaped"] and owned["group_absent"]
+assert owned["capture_complete"] and not owned["possible_admission"]
+assert retired["primary_failure"] == "RuntimeError: injected exception after signal retirement"
+assert retired["signal_attempt"] == "SIGKILL" and retired["signal_attempts"] == 1
+assert retired["decoded_status"] == -9 and retired["reaped"] and retired["group_absent"]
+assert retired["capture_complete"]
+PY
+for publication_case in completion-write-failure completion-rename-failure; do
+  run_shell_control "$publication_case" "$publication_case" none
+  if wait "$receiver_shell_owner"; then status=0; else status=$?; fi
+  [ "$status" -eq 1 ] || fail "$publication_case-status"
+  python3 - "$receiver_shell_completion.diagnostic" "$publication_case" <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["case"] == sys.argv[2] and record["diagnostic_errors"] == []
+assert record["signal_attempts"] == 1 and record["capture_complete"]
+PY
+  managed_retention=1
+  : > "$tmp/$publication_case/retained"
+  printf '%s\tcompletion-publication\tPASS\n' "$publication_case" >> "$receiver_control_inventory"
+done
+pass 'receiver supervision records all INT/TERM Bash/coordinator cancellation boundaries'
+
+run_receiver_control watchdog watchdog 1
+python3 - "$tmp/control-watchdog/completion-"*'.json' \
+  "$tmp/control-watchdog/control.descendant" <<'PY'
+import json
+import os
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+descendant = json.load(open(sys.argv[2], encoding="utf-8"))
 assert record["primary_failure"] == "setup deadline expired"
 assert record["elapsed"] >= 60 and record["signal_attempts"] == 1
 assert record["reaped"] and record["group_absent"] and record["capture_complete"]
+assert descendant["ppid"] == record["owned_pid"]
+assert descendant["pgid"] == record["owned_pgid"] == descendant["sid"]
+try: os.kill(descendant["pid"], 0)
+except ProcessLookupError: pass
+else: raise AssertionError("watchdog descendant survived")
+PY
+python3 - "$receiver_control_inventory" <<'PY'
+import sys
+
+rows = [line.rstrip("\n").split("\t") for line in open(sys.argv[1], encoding="utf-8")]
+generic = """malformed wrong-case duplicate out-of-order record-overflow control-overflow
+stream-overflow stderr-overflow admission-write-failure identity-missing identity-wrong
+identity-own-group signal-error wait-exhausted wait-echild probe-alive probe-eperm probe-other
+stdout-exact capture-read-failure capture-forced-close capture-drain-expiry capture-write-failure
+diagnostic-blocked-sink diagnostic-broken-sink diagnostic-restore-failure""".split()
+expected = ["real-before", "real-after", "control-natural", "natural-zero-oracle"]
+expected += generic + ["record-exact", "control-exact", "stderr-exact", "inherited-sigchld",
+                       "wait-eintr"]
+for received in ("INT", "TERM"):
+    for target in ("bash", "coordinator"):
+        for boundary in ("launch-handoff", "setup", "ready-hold", "cleanup-before-signal",
+                         "retirement-wait", "diagnostic-handoff"):
+            expected.append(f"cancel-{target}-{received}-{boundary}")
+expected += ["invalid-start-record", "invalid-cancel-record", "inherited-blocked",
+             "wait-completion-race", "shell-error", "cancel-write-failure",
+             "exception-before-admission", "exception-while-owned", "exception-after-retirement",
+             "completion-write-failure", "completion-rename-failure", "watchdog"]
+assert [row[0] for row in rows] == expected
+assert all(len(row) == 3 and row[1] and row[2] == "PASS" for row in rows)
+assert len(expected) == len(set(expected))
 PY
 pass 'receiver supervision enforces the real 60-second setup watchdog'
 
