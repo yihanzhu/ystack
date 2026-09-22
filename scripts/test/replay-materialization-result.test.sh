@@ -10,7 +10,14 @@ fixture_builder="$root/scripts/test/local-git-materializer-fixtures.sh"
 test_tmp_base=${TMPDIR:-/tmp}
 tmp=$(/usr/bin/mktemp -d "${test_tmp_base%/}/ystack-replay-result.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
-cleanup() { /bin/rm -rf -- "$tmp"; }
+suite_complete=0
+cleanup() {
+  if [ "$suite_complete" -eq 1 ]; then
+    /bin/rm -rf -- "$tmp"
+  else
+    printf 'receiver supervision evidence retained: %s\n' "$tmp" >&2
+  fi
+}
 trap cleanup EXIT
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -282,6 +289,23 @@ import time
 path, mode, control, *arguments = sys.argv[1:]
 if mode in ("pause", "lifecycle"):
     point, ready, release, *arguments = arguments
+elif mode == "supervised-pause":
+    point, token, admission_fd, phase_fd, *arguments = arguments
+    admission_fd, phase_fd = int(admission_fd), int(phase_fd)
+    admitted = os.read(admission_fd, 2)
+    os.close(admission_fd)
+    if admitted != b"1":
+        raise SystemExit("invalid supervisor admission")
+    os.set_inheritable(phase_fd, False)
+    phase_sequence = 0
+    def supervised_phase(name):
+        global phase_sequence
+        phase_sequence += 1
+        value = json.dumps({"token": token, "case": point, "sequence": phase_sequence,
+                            "phase": name}, sort_keys=True).encode() + b"\n"
+        if len(value) > 4096 or os.write(phase_fd, value) != len(value):
+            raise SystemExit("supervisor phase write failed")
+    supervised_phase("entry")
 elif mode == "read-audit":
     audit_target, audit_limit, *arguments = arguments
 elif mode == "source-root":
@@ -293,7 +317,34 @@ if mode == "driver-drift":
     module._REPLAY_DRIVER_BYTES += b"\n"
     pathlib.Path(control).write_text(hashlib.sha256(module._REPLAY_DRIVER_BYTES).hexdigest() + "\n")
 exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)
-if mode in ("count", "count-gate"):
+if mode == "supervised-pause":
+    original_capture = module.capture_materializer
+    def supervised_capture(*values):
+        supervised_phase("materializer-entry")
+        response = original_capture(*values)
+        pathlib.Path(control + ".response").write_bytes(response)
+        supervised_phase("materializer-return")
+        return response
+    module.capture_materializer = supervised_capture
+    original_journal = module.write_journal
+    def supervised_publication(target, state):
+        stored = state.get("receiver_result", {}).get("status") == "stored"
+        verifying = state.get("phase") == "verifying"
+        if point == "before" and stored and verifying:
+            supervised_phase("ready")
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                time.sleep(0.02)
+            raise AssertionError("supervised before hold expired")
+        original_journal(target, state)
+        if point == "after" and stored and verifying:
+            supervised_phase("ready")
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                time.sleep(0.02)
+            raise AssertionError("supervised after hold expired")
+    module.write_journal = supervised_publication
+elif mode in ("count", "count-gate"):
     if mode == "count-gate":
         original_lock = module.fcntl.flock
         def lock_wait(descriptor, operation):
@@ -481,7 +532,7 @@ elif mode == "driver-drift":
     pass
 else:
     raise AssertionError(("unknown wrapper mode", mode))
-if mode in ("count", "count-gate", "lifecycle"):
+if mode in ("count", "count-gate", "lifecycle", "supervised-pause"):
     original_reconcile = module.reconcile_materialization
     def counted_reconciliation(*values):
         with pathlib.Path(control).open("a") as handle:
@@ -537,30 +588,363 @@ done
 pass 'strict key parsing rejects duplicate, trailing, BOM, extra, boolean, and fractional data'
 
 
-wait_ready() {
-  local process=$1 ready=$2 count=0
-  while [ ! -f "$ready" ]; do
-    kill -0 "$process" 2>/dev/null || fail crash-process-died-early
-    count=$((count + 1))
-    [ "$count" -lt 500 ] || fail crash-process-timeout
-    sleep 0.02
-  done
-}
+receiver_supervisor="$tmp/receiver-supervisor.py"
+cat > "$receiver_supervisor" <<'PY'
+import errno
+import json
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+case, token, start_path, cancel_path, completion_path, stdout_path, stderr_path, wrapper, replay, point, control, *arguments = sys.argv[1:]
+started = time.monotonic()
+admission_deadline = started + 5
+setup_deadline = started + 60
+cleanup_deadline = None
+diagnostic_deadline = None
+pending_signal = []
+primary = None
+cleanup_errors = []
+diagnostic_errors = []
+possible_admission = False
+signal_attempt = None
+authority = False
+owned_pid = owned_pgid = owned_sid = None
+raw_status = decoded_status = None
+reaped = group_absent = False
+capture_complete = False
+phase_records = []
+phase_buffer = bytearray()
+control_bytes = 0
+stream_data = {"stdout": bytearray(), "stderr": bytearray()}
+stream_bytes = {"stdout": 0, "stderr": 0}
+stream_eof = {"stdout": False, "stderr": False}
+ready_at = None
+ready_elapsed = None
+process = None
+
+
+def first_failure(message):
+    global primary
+    if primary is None:
+        primary = message
+
+
+def deferred_signal(number, frame):
+    if not pending_signal:
+        pending_signal.append(number)
+
+
+def bounded_write(path, data, limit):
+    if len(data) > limit:
+        raise ValueError("diagnostic exceeds limit")
+    temporary = Path(str(path) + ".next")
+    temporary.write_bytes(data)
+    os.replace(temporary, path)
+
+
+def read_channels(selector, timeout):
+    global control_bytes
+    for key, _ in selector.select(max(0, timeout)):
+        name = key.data
+        try:
+            chunk = os.read(key.fd, 4096)
+        except BlockingIOError:
+            continue
+        except OSError as error:
+            first_failure(name + " read failed: " + str(error))
+            selector.unregister(key.fd)
+            continue
+        if not chunk:
+            selector.unregister(key.fd)
+            if name in stream_eof:
+                stream_eof[name] = True
+            elif phase_buffer:
+                first_failure("truncated phase record")
+            continue
+        if name == "phase":
+            control_bytes += len(chunk)
+            if control_bytes > 64 * 1024:
+                first_failure("control data exceeds limit")
+                selector.unregister(key.fd)
+                continue
+            phase_buffer.extend(chunk)
+            if len(phase_buffer) > 4096 and b"\n" not in phase_buffer:
+                first_failure("control record exceeds limit")
+                selector.unregister(key.fd)
+                continue
+            while b"\n" in phase_buffer:
+                raw, _, remainder = phase_buffer.partition(b"\n")
+                phase_buffer[:] = remainder
+                if len(raw) > 4096:
+                    first_failure("control record exceeds limit")
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    first_failure("malformed phase record")
+                    continue
+                expected = len(phase_records) + 1
+                if record != {"case": point, "phase": record.get("phase"),
+                              "sequence": expected, "token": token}:
+                    first_failure("wrong phase identity or sequence")
+                    continue
+                allowed = ["entry", "materializer-entry", "materializer-return", "ready"]
+                if expected > len(allowed) or record["phase"] != allowed[expected - 1]:
+                    first_failure("out-of-order phase record")
+                    continue
+                phase_records.append(record)
+        else:
+            stream_bytes[name] += len(chunk)
+            remaining = 64 * 1024 - len(stream_data[name])
+            stream_data[name].extend(chunk[:max(0, remaining)])
+            if stream_bytes[name] > 64 * 1024:
+                first_failure(name + " capture exceeds limit")
+
+
+def exact_reap():
+    global raw_status, decoded_status, reaped
+    while time.monotonic() < cleanup_deadline:
+        try:
+            waited, status = os.waitpid(owned_pid, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError as error:
+            cleanup_errors.append("missing child status: " + str(error))
+            return
+        except OSError as error:
+            cleanup_errors.append("wait failed: " + str(error))
+            return
+        if waited == 0:
+            read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
+            continue
+        if waited != owned_pid or not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+            cleanup_errors.append("unexpected wait status")
+            return
+        raw_status = status
+        decoded_status = os.waitstatus_to_exitcode(status)
+        process.returncode = decoded_status
+        reaped = True
+        return
+    cleanup_errors.append("child reap deadline expired")
+
+
+for watched in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(watched, deferred_signal)
+signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+if hasattr(signal, "pthread_sigmask"):
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
+
+admission_read, admission_write = os.pipe()
+phase_read, phase_write = os.pipe()
+for descriptor in (admission_read, admission_write, phase_read, phase_write):
+    os.set_inheritable(descriptor, False)
+child_arguments = [sys.executable, wrapper, replay, "supervised-pause", control,
+                   point, token, str(admission_read), str(phase_write), *arguments]
+try:
+    process = subprocess.Popen(child_arguments, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        pass_fds=(admission_read, phase_write), close_fds=True)
+    owned_pid = process.pid
+    os.close(admission_read)
+    os.close(phase_write)
+    owned_pgid = os.getpgid(owned_pid)
+    owned_sid = os.getsid(owned_pid)
+    if owned_pid <= 0 or owned_pgid != owned_pid or owned_sid != owned_pid:
+        first_failure("direct child identity mismatch")
+    elif owned_pgid == os.getpgrp():
+        first_failure("refused coordinator process group")
+    else:
+        authority = True
+    for descriptor in (phase_read, process.stdout.fileno(), process.stderr.fileno()):
+        os.set_blocking(descriptor, False)
+    channel_selector = selectors.DefaultSelector()
+    channel_selector.register(phase_read, selectors.EVENT_READ, "phase")
+    channel_selector.register(process.stdout.fileno(), selectors.EVENT_READ, "stdout")
+    channel_selector.register(process.stderr.fileno(), selectors.EVENT_READ, "stderr")
+    while primary is None and not Path(start_path).exists():
+        if pending_signal or Path(cancel_path).exists():
+            first_failure("cancelled before admission")
+            break
+        if time.monotonic() >= admission_deadline:
+            first_failure("admission deadline expired")
+            break
+        read_channels(channel_selector, 0.02)
+    if primary is None:
+        previous_mask = None
+        try:
+            if hasattr(signal, "pthread_sigmask"):
+                previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            if pending_signal or Path(cancel_path).exists():
+                first_failure("cancelled at admission")
+            else:
+                possible_admission = True
+                os.set_blocking(admission_write, False)
+                if os.write(admission_write, b"1") != 1:
+                    first_failure("short admission write")
+        except OSError as error:
+            first_failure("admission write failed: " + str(error))
+        finally:
+            if previous_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+    os.close(admission_write)
+    admission_write = None
+    while primary is None and ready_at is None:
+        if pending_signal or Path(cancel_path).exists():
+            first_failure("cancelled during setup")
+            break
+        if time.monotonic() >= setup_deadline:
+            first_failure("setup deadline expired")
+            break
+        read_channels(channel_selector, min(0.05, setup_deadline - time.monotonic()))
+        if phase_records and phase_records[-1]["phase"] == "ready":
+            ready_at = time.monotonic()
+            ready_elapsed = ready_at - started
+    if ready_at is not None:
+        hold_deadline = ready_at + 20
+        proof_at = ready_at + 12
+        while primary is None and time.monotonic() < proof_at:
+            if pending_signal or Path(cancel_path).exists():
+                first_failure("cancelled during ready hold")
+                break
+            if time.monotonic() >= hold_deadline:
+                first_failure("ready hold deadline expired")
+                break
+            read_channels(channel_selector, min(0.05, proof_at - time.monotonic()))
+    cleanup_deadline = time.monotonic() + 10
+    try:
+        if possible_admission and authority:
+            signal_attempt = "SIGKILL"
+            os.killpg(owned_pgid, signal.SIGKILL)
+        elif authority:
+            signal_attempt = "PID-SIGKILL"
+            os.kill(owned_pid, signal.SIGKILL)
+        else:
+            cleanup_errors.append("no verified signal authority")
+    except OSError as error:
+        cleanup_errors.append("signal failed: " + str(error))
+    finally:
+        authority = False
+    exact_reap()
+    while time.monotonic() < cleanup_deadline and channel_selector.get_map():
+        read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
+    capture_complete = stream_eof["stdout"] and stream_eof["stderr"]
+    if not capture_complete:
+        cleanup_errors.append("stream capture incomplete")
+    while time.monotonic() < cleanup_deadline:
+        try:
+            os.killpg(owned_pgid, 0)
+        except ProcessLookupError as error:
+            if error.errno == errno.ESRCH:
+                group_absent = True
+                break
+            cleanup_errors.append("unexpected absence probe: " + str(error))
+            break
+        except PermissionError as error:
+            cleanup_errors.append("group absence probe denied: " + str(error))
+            break
+        except OSError as error:
+            cleanup_errors.append("group absence probe failed: " + str(error))
+            break
+        time.sleep(0.02)
+    if not group_absent:
+        cleanup_errors.append("group absence unconfirmed")
+except BaseException as error:
+    first_failure(type(error).__name__ + ": " + str(error))
+    if process is not None and owned_pid is not None and not reaped:
+        if cleanup_deadline is None:
+            cleanup_deadline = time.monotonic() + 10
+        try:
+            if authority and possible_admission:
+                signal_attempt = "SIGKILL"
+                os.killpg(owned_pgid, signal.SIGKILL)
+            elif authority:
+                signal_attempt = "PID-SIGKILL"
+                os.kill(owned_pid, signal.SIGKILL)
+        except OSError as cleanup_error:
+            cleanup_errors.append("exception cleanup signal failed: " + str(cleanup_error))
+        finally:
+            authority = False
+        exact_reap()
+finally:
+    for descriptor_name in ("admission_read", "admission_write", "phase_read", "phase_write"):
+        descriptor = globals().get(descriptor_name)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+if ready_at is None:
+    first_failure("publication readiness not observed")
+if decoded_status != -signal.SIGKILL:
+    first_failure("authentic child status is not SIGKILL")
+if stream_bytes["stdout"] != 0:
+    first_failure("outward stdout was not empty")
+if not reaped or not group_absent or not capture_complete:
+    first_failure("cleanup evidence incomplete")
+if cleanup_errors:
+    first_failure("cleanup failed")
+diagnostic_deadline = time.monotonic() + 5
+record = {"case": case, "token": token, "elapsed": time.monotonic() - started,
+    "ready_elapsed": ready_elapsed, "owned_pid": owned_pid, "owned_pgid": owned_pgid,
+    "owned_sid": owned_sid, "possible_admission": possible_admission,
+    "signal_attempt": signal_attempt, "raw_status": raw_status,
+    "decoded_status": decoded_status, "reaped": reaped, "group_absent": group_absent,
+    "capture_complete": capture_complete, "stream_bytes": stream_bytes,
+    "phase_records": phase_records, "primary_failure": primary,
+    "pending_signal": pending_signal[0] if pending_signal else None,
+    "cleanup_errors": cleanup_errors, "diagnostic_errors": diagnostic_errors}
+try:
+    bounded_write(stdout_path, bytes(stream_data["stdout"]), 64 * 1024)
+    bounded_write(stderr_path, bytes(stream_data["stderr"]), 64 * 1024)
+    encoded_record = json.dumps(record, sort_keys=True).encode() + b"\n"
+    if time.monotonic() >= diagnostic_deadline:
+        raise TimeoutError("diagnostic deadline expired")
+    bounded_write(completion_path, encoded_record, 16 * 1024)
+except BaseException as error:
+    diagnostic_errors.append(type(error).__name__ + ": " + str(error))
+    raise
+raise SystemExit(0 if primary is None and not cleanup_errors and not diagnostic_errors else 1)
+PY
 
 for point in before after; do
   make_roots "crash-$point"
   set_replay_args "crash-$point"
   crash_args=("${replay_arguments[@]}")
-  ready="$tmp/$point.ready"
-  release="$tmp/$point.release"
-  python3 "$loaded_wrapper" "$replay" pause unused "$point" "$ready" "$release" "${crash_args[@]}" \
-    > "$tmp/$point.out" 2> "$tmp/$point.err" &
+  invocation="$tmp/supervised-$point"
+  /bin/mkdir -m 700 "$invocation"
+  token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+  start="$invocation/start-$token"
+  cancel="$invocation/cancel-$token"
+  completion="$invocation/completion-$token.json"
+  python3 "$receiver_supervisor" "$point" "$token" "$start" "$cancel" "$completion" \
+    "$tmp/$point.out" "$tmp/$point.err" "$loaded_wrapper" "$replay" "$point" \
+    "$tmp/$point-oracle" "${crash_args[@]}" &
   process=$!
-  wait_ready "$process" "$ready"
-  kill -KILL "$process"
+  printf '%s\n' "$token" > "$start"
   set +e
-  wait "$process" 2>/dev/null
+  wait "$process"
+  status=$?
   set -e
+  [ "$status" -eq 0 ] || fail "$point-supervisor-status"
+  [ -f "$completion" ] || fail "$point-completion-missing"
+  python3 - "$completion" "$token" "$point" <<'PY'
+import json
+import sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["token"] == sys.argv[2] and record["case"] == sys.argv[3]
+assert record["ready_elapsed"] >= 0 and record["decoded_status"] == -9
+assert record["reaped"] and record["group_absent"] and record["capture_complete"]
+assert record["stream_bytes"] == {"stderr": 0, "stdout": 0}
+assert record["signal_attempt"] == "SIGKILL" and not record["cleanup_errors"]
+assert [item["phase"] for item in record["phase_records"]] == [
+    "entry", "materializer-entry", "materializer-return", "ready"]
+PY
   [ ! -s "$tmp/$point.out" ] || fail "$point-outward-output"
   if [ "$point" = before ]; then
     candidate_before=$(git_clean --git-dir="$tmp/crash-before-candidate/repository.git" rev-parse refs/heads/candidate)
@@ -2657,4 +3041,5 @@ set -e
   [ "$(sha_file "$tmp/stored-state/run.json")" = "$corrupt_before" ] || fail corrupt-stored
 pass 'rehashed corrupt result relations fail without changing retained bytes'
 
+suite_complete=1
 printf 'replay materialization result: %s focused checks passed\n' "$passed"
