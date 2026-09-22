@@ -331,7 +331,9 @@ index_sentinel="$tmp/inherited-index-sentinel"
 index_sentinel_expected="$tmp/inherited-index-sentinel.expected"
 printf '%s\n' 'caller-owned index sentinel' > "$index_sentinel"
 /bin/cp "$index_sentinel" "$index_sentinel_expected"
-GIT_INDEX_FILE="$index_sentinel" hostile_index_root=$(run_case hostile-index)
+export GIT_INDEX_FILE="$index_sentinel"
+hostile_index_root=$(run_case hostile-index)
+unset GIT_INDEX_FILE
 [ ! -s "$hostile_index_root/err" ] || fail hostile-index-stderr
 assert_no_published_index "$hostile_index_root/candidate/repository.git" hostile-index
 [ -z "$(find "$hostile_index_root/scratch" -mindepth 1 -print -quit)" ] ||
