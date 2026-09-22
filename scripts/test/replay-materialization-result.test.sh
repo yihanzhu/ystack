@@ -298,6 +298,8 @@ elif mode == "supervised-pause":
     if admitted != b"1":
         raise SystemExit("invalid supervisor admission")
     os.set_inheritable(phase_fd, False)
+    def shared_monotonic():
+        return time.clock_gettime(time.CLOCK_MONOTONIC)
     phase_sequence = 0
     def supervised_phase(name, **facts):
         global phase_sequence
@@ -333,21 +335,26 @@ if mode == "supervised-pause":
         verifying = state.get("phase") == "verifying"
         if stored and verifying:
             prepublication_started = time.monotonic()
-            supervised_phase("pre-publication", monotonic=prepublication_started)
+            supervised_phase("pre-publication", clock="CLOCK_MONOTONIC",
+                             shared_monotonic=shared_monotonic())
             while time.monotonic() - prepublication_started < 12:
                 time.sleep(0.02)
             prepublication_finished = time.monotonic()
         if point == "before" and stored and verifying:
-            supervised_phase("ready", monotonic=prepublication_finished,
-                             hold_seconds=prepublication_finished - prepublication_started)
+            supervised_phase("ready", clock="CLOCK_MONOTONIC",
+                             shared_monotonic=shared_monotonic(),
+                             hold_seconds=prepublication_finished - prepublication_started,
+                             publication_state="pending")
             ready_deadline = time.monotonic() + 20
             while time.monotonic() < ready_deadline:
                 time.sleep(0.02)
             raise AssertionError("supervised before hold expired")
         original_journal(target, state)
         if point == "after" and stored and verifying:
-            supervised_phase("ready", monotonic=prepublication_finished,
-                             hold_seconds=prepublication_finished - prepublication_started)
+            supervised_phase("ready", clock="CLOCK_MONOTONIC",
+                             shared_monotonic=shared_monotonic(),
+                             hold_seconds=prepublication_finished - prepublication_started,
+                             publication_state="completed")
             ready_deadline = time.monotonic() + 20
             while time.monotonic() < ready_deadline:
                 time.sleep(0.02)
@@ -685,7 +692,12 @@ import time
 
 case, token, start_path, cancel_path, completion_path, stdout_path, stderr_path, wrapper, replay, point, control, *arguments = sys.argv[1:]
 diagnostic_path = str(completion_path) + ".diagnostic-fifo"
-started = time.monotonic()
+diagnostic_reader_ready = Path(str(completion_path) + ".diagnostic-reader-ready")
+def shared_monotonic():
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
+started = shared_monotonic()
 inherited_sigchld_ignored = signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN
 inherited_blocked = []
 if hasattr(signal, "pthread_sigmask"):
@@ -701,6 +713,9 @@ cleanup_errors = []
 diagnostic_errors = []
 diagnostic_emitted = False
 diagnostic_flags_restored = False
+diagnostic_sink_connected = False
+diagnostic_blocked_writes = 0
+diagnostic_prefill_bytes = 0
 possible_admission = False
 signal_attempt = None
 signal_attempts = 0
@@ -727,6 +742,7 @@ process = None
 channel_selector = selectors.DefaultSelector()
 wait_eintr_injected = False
 read_failure_injected = False
+drain_pending_observations = 0
 
 
 def first_failure(message):
@@ -750,6 +766,7 @@ def bounded_write(path, data, limit):
 
 def emit_diagnostic(path, data):
     global diagnostic_emitted, diagnostic_flags_restored
+    global diagnostic_sink_connected, diagnostic_blocked_writes, diagnostic_prefill_bytes
     descriptor = None
     prior_flags = None
     try:
@@ -757,21 +774,40 @@ def emit_diagnostic(path, data):
             broken_read, descriptor = os.pipe()
             os.close(broken_read)
         else:
+            while not diagnostic_reader_ready.exists() and shared_monotonic() < diagnostic_deadline:
+                time.sleep(0.01)
+            if not diagnostic_reader_ready.exists():
+                raise TimeoutError("diagnostic reader connection deadline expired")
             descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            diagnostic_sink_connected = True
         prior_flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
         fcntl.fcntl(descriptor, fcntl.F_SETFL, prior_flags | os.O_NONBLOCK)
+        if point == "cancel-diagnostic-publication":
+            boundary("diagnostic-publication")
+        if case == "diagnostic-blocked-sink":
+            while shared_monotonic() < diagnostic_deadline:
+                try:
+                    diagnostic_prefill_bytes += os.write(descriptor, b"x" * 4096)
+                except BlockingIOError:
+                    diagnostic_blocked_writes += 1
+                    break
+            if diagnostic_blocked_writes == 0:
+                raise TimeoutError("diagnostic sink did not reach blocked state")
         offset = 0
         while offset < len(data):
-            if time.monotonic() >= diagnostic_deadline:
+            consume_cancellation("diagnostic-publication")
+            if shared_monotonic() >= diagnostic_deadline:
                 raise TimeoutError("diagnostic write deadline expired")
             try:
                 written = os.write(descriptor, data[offset:offset + 4096])
             except BlockingIOError:
+                diagnostic_blocked_writes += 1
                 time.sleep(0.01)
                 continue
             if written <= 0:
                 raise OSError("diagnostic write made no progress")
             offset += written
+        consume_cancellation("diagnostic-publication")
         diagnostic_emitted = True
     finally:
         if descriptor is not None and prior_flags is not None:
@@ -796,8 +832,19 @@ def control_record(path, kind):
     return value if value == expected else None
 
 
+def observed_signal():
+    if pending_signal:
+        return pending_signal[0]
+    if hasattr(signal, "sigpending"):
+        pending = signal.sigpending()
+        for number in (signal.SIGINT, signal.SIGTERM):
+            if number in pending:
+                return number
+    return None
+
+
 def cancellation_seen():
-    return bool(pending_signal or control_record(cancel_path, "cancel"))
+    return bool(observed_signal() or control_record(cancel_path, "cancel"))
 
 
 def consume_cancellation(where):
@@ -813,8 +860,8 @@ def boundary(name):
                   4096)
     if point != "cancel-" + name:
         return
-    deadline = time.monotonic() + 5
-    while not cancellation_seen() and time.monotonic() < deadline:
+    deadline = shared_monotonic() + 5
+    while not cancellation_seen() and shared_monotonic() < deadline:
         time.sleep(0.01)
     if cancellation_seen():
         first_failure("cancelled at " + name)
@@ -824,10 +871,15 @@ def boundary(name):
 
 def read_channels(selector, timeout):
     global control_bytes, max_control_record, wire_sequence, read_failure_injected
+    global drain_pending_observations
     global prepublication_at, prepublication_elapsed, ready_at, ready_elapsed
     for key, _ in selector.select(max(0, timeout)):
         name = key.data
         try:
+            if case == "capture-drain-expiry" and name == "stdout" and cleanup_deadline is not None:
+                drain_pending_observations += 1
+                time.sleep(min(0.01, max(0, timeout)))
+                continue
             if case == "capture-read-failure" and name == "stdout" and not read_failure_injected:
                 read_failure_injected = True
                 raise OSError(errno.EIO, "injected stream read error")
@@ -883,17 +935,19 @@ def read_channels(selector, timeout):
                     continue
                 phase_records.append(record)
                 if record["phase"] == "pre-publication":
-                    if type(record.get("monotonic")) not in (int, float):
+                    if (record.get("clock") != "CLOCK_MONOTONIC"
+                            or type(record.get("shared_monotonic")) not in (int, float)):
                         first_failure("invalid pre-publication timing")
                     else:
-                        prepublication_at = record["monotonic"]
+                        prepublication_at = record["shared_monotonic"]
                         prepublication_elapsed = prepublication_at - started
                 elif record["phase"] == "ready":
-                    if (type(record.get("monotonic")) not in (int, float)
+                    if (record.get("clock") != "CLOCK_MONOTONIC"
+                            or type(record.get("shared_monotonic")) not in (int, float)
                             or type(record.get("hold_seconds")) not in (int, float)):
                         first_failure("invalid ready timing")
                     else:
-                        ready_at = record["monotonic"]
+                        ready_at = record["shared_monotonic"]
                         ready_elapsed = ready_at - started
         else:
             stream_bytes[name] += len(chunk)
@@ -905,7 +959,7 @@ def read_channels(selector, timeout):
 
 def exact_reap():
     global raw_status, decoded_status, reaped, wait_eintr_injected
-    while time.monotonic() < cleanup_deadline:
+    while shared_monotonic() < cleanup_deadline:
         try:
             if case == "wait-eintr" and not wait_eintr_injected:
                 wait_eintr_injected = True
@@ -925,7 +979,7 @@ def exact_reap():
             cleanup_errors.append("wait failed: " + str(error))
             return
         if waited == 0:
-            read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
+            read_channels(channel_selector, min(0.02, cleanup_deadline - shared_monotonic()))
             continue
         if waited != owned_pid or not (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
             cleanup_errors.append("unexpected wait status")
@@ -940,10 +994,8 @@ def exact_reap():
 
 def finish_capture():
     global capture_complete
-    while time.monotonic() < cleanup_deadline and channel_selector.get_map():
-        read_channels(channel_selector, min(0.02, cleanup_deadline - time.monotonic()))
-    if case == "capture-drain-expiry":
-        stream_eof["stdout"] = False
+    while shared_monotonic() < cleanup_deadline and channel_selector.get_map():
+        read_channels(channel_selector, min(0.02, cleanup_deadline - shared_monotonic()))
     capture_complete = stream_eof["stdout"] and stream_eof["stderr"]
     if not capture_complete:
         cleanup_errors.append("stream capture incomplete")
@@ -951,7 +1003,7 @@ def finish_capture():
 
 def confirm_group_absence(inject_faults):
     global group_absent
-    while time.monotonic() < cleanup_deadline:
+    while shared_monotonic() < cleanup_deadline:
         try:
             if inject_faults and case == "probe-alive":
                 probe_result = None
@@ -1008,7 +1060,7 @@ try:
         if Path(start_path).exists():
             first_failure("invalid start record")
             break
-        if time.monotonic() >= admission_deadline:
+        if shared_monotonic() >= admission_deadline:
             first_failure("admission deadline expired")
             break
         time.sleep(0.01)
@@ -1052,8 +1104,8 @@ try:
         raise RuntimeError("injected exception while direct child is gated")
     if case == "admission-write-failure":
         acknowledgement = Path(control + ".admission-closed")
-        acknowledgement_deadline = time.monotonic() + 2
-        while not acknowledgement.exists() and time.monotonic() < acknowledgement_deadline:
+        acknowledgement_deadline = shared_monotonic() + 2
+        while not acknowledgement.exists() and shared_monotonic() < acknowledgement_deadline:
             time.sleep(0.01)
         if not acknowledgement.exists():
             first_failure("admission close acknowledgement missing")
@@ -1082,22 +1134,22 @@ try:
     while primary is None and ready_at is None:
         if consume_cancellation("setup"):
             break
-        if time.monotonic() >= setup_deadline:
+        if shared_monotonic() >= setup_deadline:
             first_failure("setup deadline expired")
             break
-        read_channels(channel_selector, min(0.05, setup_deadline - time.monotonic()))
+        read_channels(channel_selector, min(0.05, setup_deadline - shared_monotonic()))
     if ready_at is not None:
         hold_deadline = ready_at + 20
         boundary("ready-hold")
         consume_cancellation("ready-hold")
-        if time.monotonic() >= hold_deadline:
+        if shared_monotonic() >= hold_deadline:
             first_failure("ready hold deadline expired")
         if point == "natural":
-            natural_deadline = time.monotonic() + 2
+            natural_deadline = shared_monotonic() + 2
             while (any(key.data == "phase" for key in channel_selector.get_map().values())
-                   and time.monotonic() < natural_deadline):
-                read_channels(channel_selector, min(0.02, natural_deadline - time.monotonic()))
-    cleanup_deadline = time.monotonic() + 10
+                   and shared_monotonic() < natural_deadline):
+                read_channels(channel_selector, min(0.02, natural_deadline - shared_monotonic()))
+    cleanup_deadline = shared_monotonic() + 10
     boundary("cleanup-before-signal")
     consume_cancellation("cleanup-before-signal")
     if case == "capture-forced-close":
@@ -1128,8 +1180,8 @@ try:
         raise RuntimeError("injected exception after signal retirement")
     exact_reap()
     if case in ("wait-exhausted", "wait-echild") and not reaped:
-        rescue_deadline = time.monotonic() + 2
-        while time.monotonic() < rescue_deadline:
+        rescue_deadline = shared_monotonic() + 2
+        while shared_monotonic() < rescue_deadline:
             try:
                 rescue_pid, rescue_raw = os.waitpid(owned_pid, os.WNOHANG)
             except ChildProcessError:
@@ -1141,8 +1193,12 @@ try:
             time.sleep(0.01)
         if rescue_status is None:
             cleanup_errors.append("independent rescue failed")
-    finish_capture()
-    confirm_group_absence(True)
+    if case == "capture-drain-expiry":
+        confirm_group_absence(True)
+        finish_capture()
+    else:
+        finish_capture()
+        confirm_group_absence(True)
 except NoLaunch:
     capture_complete = True
     group_absent = True
@@ -1150,7 +1206,7 @@ except BaseException as error:
     first_failure(type(error).__name__ + ": " + str(error))
     if process is not None and owned_pid is not None and not reaped:
         if cleanup_deadline is None:
-            cleanup_deadline = time.monotonic() + 10
+            cleanup_deadline = shared_monotonic() + 10
         try:
             if authority and possible_admission:
                 signal_attempt = "SIGKILL"
@@ -1199,13 +1255,15 @@ elif stream_bytes["stdout"] != 0:
     first_failure("outward stdout was not empty")
 if not reaped or not group_absent or not capture_complete:
     first_failure("cleanup evidence incomplete")
-diagnostic_deadline = time.monotonic() + 5
+if hasattr(signal, "pthread_sigmask"):
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+diagnostic_deadline = shared_monotonic() + 5
 boundary("diagnostic-handoff")
 consume_cancellation("diagnostic-handoff")
 
 
-def evidence_record():
-    return {"case": case, "token": token, "elapsed": time.monotonic() - started,
+def evidence_record(outcome_sealed):
+    return {"case": case, "token": token, "elapsed": shared_monotonic() - started,
         "deadlines": {"admission": admission_deadline, "setup": setup_deadline,
                       "cleanup": cleanup_deadline, "diagnostic": diagnostic_deadline},
         "prepublication_elapsed": prepublication_elapsed, "ready_elapsed": ready_elapsed,
@@ -1221,12 +1279,17 @@ def evidence_record():
             for name in ("stdout", "stderr")},
         "phase_records": phase_records, "primary_failure": primary,
         "control_bytes": control_bytes, "max_control_record": max_control_record,
-        "pending_signal": pending_signal[0] if pending_signal else None,
+        "pending_signal": observed_signal(),
+        "outcome_sealed": outcome_sealed,
         "wait_eintr_retried": wait_eintr_injected,
+        "drain_pending_observations": drain_pending_observations,
         "inherited_sigchld_ignored": inherited_sigchld_ignored,
         "inherited_blocked": inherited_blocked,
         "cleanup_errors": cleanup_errors, "diagnostic_errors": diagnostic_errors,
         "diagnostic_emitted": diagnostic_emitted,
+        "diagnostic_sink_connected": diagnostic_sink_connected,
+        "diagnostic_blocked_writes": diagnostic_blocked_writes,
+        "diagnostic_prefill_bytes": diagnostic_prefill_bytes,
         "diagnostic_flags_restored": diagnostic_flags_restored}
 
 
@@ -1234,15 +1297,18 @@ try:
     if case == "capture-write-failure":
         raise OSError(errno.EIO, "injected capture publication error")
     bounded_write(stdout_path, bytes(stream_data["stdout"]), 64 * 1024)
+    consume_cancellation("capture-publication")
     bounded_write(stderr_path, bytes(stream_data["stderr"]), 64 * 1024)
-    diagnostic_bytes = json.dumps(evidence_record(), sort_keys=True).encode() + b"\n"
+    consume_cancellation("capture-publication")
+    diagnostic_bytes = json.dumps(evidence_record(False), sort_keys=True).encode() + b"\n"
     if len(diagnostic_bytes) > 16 * 1024:
         raise ValueError("diagnostic record exceeds limit")
     emit_diagnostic(diagnostic_path, diagnostic_bytes)
 except BaseException as error:
     diagnostic_errors.append(type(error).__name__ + ": " + str(error))
     first_failure("diagnostic publication failed")
-record = evidence_record()
+consume_cancellation("completion-publication")
+record = evidence_record(True)
 encoded_record = json.dumps(record, sort_keys=True).encode() + b"\n"
 try:
     if case == "completion-write-failure":
@@ -1250,6 +1316,12 @@ try:
     if case == "completion-rename-failure":
         Path(completion_path).mkdir()
     bounded_write(completion_path, encoded_record, 16 * 1024)
+    prior_primary = primary
+    consume_cancellation("completion-publication")
+    if primary != prior_primary:
+        record = evidence_record(True)
+        encoded_record = json.dumps(record, sort_keys=True).encode() + b"\n"
+        bounded_write(completion_path, encoded_record, 16 * 1024)
 except BaseException as error:
     diagnostic_errors.append("completion publication failed: " + type(error).__name__ + ": " + str(error))
     raise SystemExit(1)
@@ -1282,9 +1354,16 @@ from pathlib import Path
 import sys
 import time
 
-fifo, output, stop = sys.argv[1:]
+fifo, output, stop, mode, ready = sys.argv[1:]
 descriptor = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+Path(ready).write_text("connected\n")
 data = bytearray()
+if mode == "blocked":
+    while not Path(stop).exists():
+        time.sleep(0.01)
+    os.close(descriptor)
+    Path(output).write_bytes(data)
+    raise SystemExit(0)
 while True:
     try:
         chunk = os.read(descriptor, 4096)
@@ -1371,9 +1450,12 @@ trap 'request_cancel shell-error' ERR
 
 diagnostic_fifo="${completion}.diagnostic-fifo"
 /usr/bin/mkfifo "$diagnostic_fifo"
-if [ "$point" != diagnostic-blocked-sink ] && [ "$point" != diagnostic-broken-sink ]; then
+if [ "$point" != diagnostic-broken-sink ]; then
+  diagnostic_reader_mode=normal
+  [ "$point" != diagnostic-blocked-sink ] || diagnostic_reader_mode=blocked
   python3 "${supervisor%/*}/receiver-diagnostic-reader.py" "$diagnostic_fifo" \
-    "${completion}.diagnostic" "${completion}.diagnostic-stop" &
+    "${completion}.diagnostic" "${completion}.diagnostic-stop" "$diagnostic_reader_mode" \
+    "${completion}.diagnostic-reader-ready" &
   diagnostic_reader=$!
 fi
 coordinator=(python3 "$supervisor" "$case_name" "$token" "$start" "$cancel" "$completion"
@@ -1470,11 +1552,15 @@ import json
 import sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 assert record["token"] == sys.argv[2] and record["case"] == sys.argv[3]
-assert record["ready_elapsed"] >= 0 and record["decoded_status"] == -9
+assert 0 <= record["prepublication_elapsed"] <= record["ready_elapsed"] <= 60
+assert record["decoded_status"] == -9
 assert record["reaped"] and record["group_absent"] and record["capture_complete"]
 assert record["stream_bytes"] == {"stderr": 0, "stdout": 0}
 assert record["signal_attempt"] == "SIGKILL" and not record["cleanup_errors"]
 assert record["ready_elapsed"] - record["prepublication_elapsed"] >= 12
+assert record["phase_records"][-1]["hold_seconds"] >= 12
+assert record["phase_records"][-1]["publication_state"] == (
+    "pending" if sys.argv[3] == "before" else "completed")
 assert [item["phase"] for item in record["phase_records"]] == [
     "entry", "materializer-entry", "materializer-return", "pre-publication", "ready"]
 PY
@@ -1547,7 +1633,8 @@ def phase(unused_sequence, name, **changes):
     target_size = changes.pop("target_size", None)
     value = {"phase": name}
     if name in ("pre-publication", "ready"):
-        value["monotonic"] = time.monotonic()
+        value["clock"] = "CLOCK_MONOTONIC"
+        value["shared_monotonic"] = time.clock_gettime(time.CLOCK_MONOTONIC)
     if name == "ready":
         value["hold_seconds"] = 0.0
     value.update(changes)
@@ -1645,7 +1732,8 @@ elif point == "signal-error":
     time.sleep(0.5)
     raise SystemExit(42)
 elif point in ("cancel-ready-hold", "cancel-cleanup-before-signal",
-               "cancel-retirement-wait", "cancel-diagnostic-handoff", "wait-eintr",
+               "cancel-retirement-wait", "cancel-diagnostic-handoff",
+               "cancel-diagnostic-publication", "wait-eintr",
                "wait-exhausted", "wait-echild", "probe-alive",
                "probe-eperm", "probe-other", "capture-forced-close",
                "capture-drain-expiry", "capture-write-failure", "diagnostic-blocked-sink",
@@ -1766,7 +1854,10 @@ import json
 import sys
 blocked, broken, restoration = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 assert blocked["primary_failure"] == "diagnostic publication failed"
-assert blocked["diagnostic_errors"][0].startswith("OSError: [Errno 6]")
+assert blocked["diagnostic_errors"] == ["TimeoutError: diagnostic write deadline expired"]
+assert blocked["diagnostic_sink_connected"] and blocked["diagnostic_prefill_bytes"] > 0
+assert blocked["diagnostic_blocked_writes"] > 1
+assert blocked["elapsed"] >= 5 and blocked["diagnostic_flags_restored"]
 assert broken["primary_failure"] == "diagnostic publication failed"
 assert broken["diagnostic_errors"][0].startswith("BrokenPipeError: [Errno 32]")
 assert restoration["primary_failure"] == "diagnostic publication failed"
@@ -1835,10 +1926,15 @@ for name, fragment in probe_fragments.items():
 read_failure = load("capture-read-failure")
 assert read_failure["primary_failure"].startswith("stdout read failed: [Errno 5]")
 assert not read_failure["capture_complete"] and read_failure["stream_eof"]["stderr"]
-for name in ("capture-forced-close", "capture-drain-expiry"):
-    record = load(name)
-    assert record["primary_failure"] == "cleanup failed" and not record["capture_complete"]
-    assert "stream capture incomplete" in record["cleanup_errors"]
+forced = load("capture-forced-close")
+assert forced["primary_failure"] == "cleanup failed" and not forced["capture_complete"]
+assert "stream capture incomplete" in forced["cleanup_errors"]
+drain = load("capture-drain-expiry")
+assert drain["primary_failure"] == "cleanup failed" and not drain["capture_complete"]
+assert drain["stream_eof"]["stdout"] is False and drain["group_absent"]
+assert drain["drain_pending_observations"] > 0
+assert drain["elapsed"] >= drain["deadlines"]["cleanup"] - drain["deadlines"]["admission"] + 5
+assert drain["cleanup_errors"] == ["stream capture incomplete"]
 write_failure = load("capture-write-failure")
 assert write_failure["primary_failure"] == "diagnostic publication failed"
 assert write_failure["diagnostic_errors"] == [
@@ -1952,6 +2048,17 @@ for received in INT TERM; do
     done
   done
 done
+exercise_receiver_cancellation coordinator TERM diagnostic-publication
+python3 - \
+  "$tmp/cancel-coordinator-TERM-diagnostic-publication/completion-"*'.json' \
+  "$tmp/cancel-coordinator-TERM-diagnostic-publication/completion-"*'.json.diagnostic' <<'PY'
+import json
+import sys
+completion, diagnostic = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
+assert completion["primary_failure"] == "cancelled at diagnostic-publication"
+assert completion["outcome_sealed"] and completion["pending_signal"] == 15
+assert diagnostic["outcome_sealed"] is False and diagnostic["primary_failure"] is None
+PY
 
 run_shell_control() {
   local name=$1 point=$2 shell_pause=$3
@@ -2124,6 +2231,7 @@ for received in ("INT", "TERM"):
         for boundary in ("launch-handoff", "setup", "ready-hold", "cleanup-before-signal",
                          "retirement-wait", "diagnostic-handoff"):
             expected.append(f"cancel-{target}-{received}-{boundary}")
+expected.append("cancel-coordinator-TERM-diagnostic-publication")
 expected += ["invalid-start-record", "invalid-cancel-record", "inherited-blocked",
              "wait-completion-race", "shell-error", "cancel-write-failure",
              "exception-before-admission", "exception-while-owned", "exception-after-retirement",
