@@ -169,7 +169,7 @@ full logs, exact source/tool identities, original and new inventories, phase and
 ownership records, capture/retention evidence and proof hashes. Independent review
 reads the complete raw evidence and diff; summaries do not replace it.
 
-Review size: `accepted-exception`, forecast 600–900 added plus removed implementation
+Review size: `accepted-exception`, forecast 1,450–2,100 added plus removed implementation
 lines in the one file. The plan must support that forecast with a readable work
 breakdown before code. It is not a compression target or permission to omit proof.
 An unexplained overrun, changed guarantee or extra path returns to amendment.
