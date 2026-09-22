@@ -507,7 +507,8 @@ pass 'complete bundle restores under new private paths'
 
 tampered="$tmp/tampered-candidate-bundle"
 /bin/cp -R "$collision" "$tampered"
-/bin/chmod 0700 "$tampered" 0600 "$tampered/candidate/source.txt" "$tampered/manifest.json" "$tampered/record.json"
+/bin/chmod 0700 "$tampered"
+/bin/chmod 0600 "$tampered/candidate/source.txt" "$tampered/manifest.json" "$tampered/record.json"
 printf 'omega\nbeta\ngamma\n' > "$tampered/candidate/source.txt"
 "$python" -B -I - "$tampered" <<'PY'
 import hashlib,json,sys
@@ -530,6 +531,12 @@ for bundle_case in manifest-extra directory-extra file-mode-label blob-oid-label
   malformed_bundle="$tmp/bundle-$bundle_case"
   /bin/cp -R "$collision" "$malformed_bundle"
   /bin/chmod 0700 "$malformed_bundle"
+  case "$bundle_case" in
+    manifest-*|directory-*|file-*|blob-*)
+      /bin/chmod 0600 "$malformed_bundle/manifest.json" "$malformed_bundle/record.json"
+      ;;
+    candidate-*) /bin/chmod 0700 "$malformed_bundle/candidate" ;;
+  esac
   "$python" -B -I - "$malformed_bundle" "$bundle_case" <<'PY'
 import hashlib,json,os,sys
 from pathlib import Path
@@ -550,9 +557,12 @@ if case.startswith(('manifest','directory','file','blob')):
     record=json.loads((root/'record.json').read_bytes()); record['manifest_sha256']=hashlib.sha256(data).hexdigest()
     (root/'record.json').write_bytes(canonical(record))
 PY
-  find "$malformed_bundle" -type f -exec /bin/chmod 0400 {} +
-  /bin/chmod 0600 "$malformed_bundle/preparation.lock"
-  find "$malformed_bundle/candidate" -type d -exec /bin/chmod 0500 {} +
+  case "$bundle_case" in
+    manifest-*|directory-*|file-*|blob-*)
+      /bin/chmod 0400 "$malformed_bundle/manifest.json" "$malformed_bundle/record.json"
+      ;;
+    candidate-*) /bin/chmod 0500 "$malformed_bundle/candidate" ;;
+  esac
   expect_error "bundle-$bundle_case" E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" "$candidate" \
     "$malformed_bundle" "$tmp/error-bundle-$bundle_case/scratch"
 done
@@ -910,7 +920,7 @@ read -r input_size response_size storage_size repository_file_size reverse_size 
   repository_name_bytes blob_size export_size file_paths directory_count export_path_bytes bundle_size \
   manifest_size record_size result_size head_size config_size receipt_size stage_size dependency_size < <(
   "$python" -B -I - "$input" "$response" "$candidate" "$collision" "$jq_bin" <<'PY'
-import json,os,sys
+import json,os,subprocess,sys
 from pathlib import Path
 inp,response,candidate,bundle=map(Path,sys.argv[1:5]); jq=Path(sys.argv[5])
 repo=Path.cwd(); response_value=json.loads(response.read_bytes())
@@ -928,8 +938,11 @@ print(inp.stat().st_size,response.stat().st_size,sum(p.stat().st_size for p in s
       max(p.stat().st_size for p in export_files),sum(p.stat().st_size for p in export_files),
       len(export_files),len(export_dirs),sum(len(relative(bundle/'candidate',p).encode()) for p in export_entries),
       sum(files(bundle)),(bundle/'manifest.json').stat().st_size,(bundle/'record.json').stat().st_size,
-      (bundle.parent.parent/'prepare.out').stat().st_size,(candidate/'HEAD').stat().st_size,
-      (candidate/'config').stat().st_size,len(response_value['payloads'][0]['data'].encode()),
+      (bundle.parent.parent/'prepare.out').stat().st_size,
+      max((candidate/'HEAD').stat().st_size,(candidate/'refs/heads/candidate').stat().st_size),
+      max((candidate/'config').stat().st_size,len(subprocess.check_output([
+          '/usr/bin/git','config','--file',str(candidate/'config'),'--no-includes','--null','--list']))),
+      len(response_value['payloads'][0]['data'].encode()),
       len((json.dumps(response_value['stage_result'],ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()),
       sum((repo/p['path']).stat().st_size for p in json.loads((bundle/'record.json').read_bytes())['producer']['core']['files'])+
       jq.stat().st_size)
@@ -951,9 +964,9 @@ limit_pair bundle_bytes "$bundle_size"
 limit_pair manifest_bytes "$manifest_size"
 limit_pair record_bytes "$record_size"
 limit_pair result_bytes "$result_size"
-limit_pair head_ref_bytes "$head_size"
-limit_pair config_bytes "$config_size"
-limit_pair receipt_bytes "$receipt_size"
+limit_pair head_ref_bytes "$head_size" E_INPUT
+limit_pair config_bytes "$config_size" E_LIMIT
+limit_pair receipt_bytes "$receipt_size" E_INPUT
 limit_pair stage_result_bytes "$stage_size"
 limit_pair dependency_bytes "$dependency_size"
 
