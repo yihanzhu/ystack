@@ -289,13 +289,15 @@ physical_dir "$source_git_dir" || emit_error E_TARGET
 # text while a failure comes back as a status this script can name.
 source_pure() (
   emit_error() { exit 1; }
-# copy-begin materialize.sh:271-332
+# copy-begin materialize.sh:271-276
 git_dir() {
   local directory=$1
   shift
   "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
 }
 
+# copy-end materialize.sh:271-276
+# copy-begin materialize.sh:284-339
 source_inventory="$run_root/source-filesystem"
 source_inventory_byte_limit=8388608
 source_inventory_entry_limit=65536
@@ -352,8 +354,8 @@ done < "$source_config"
   [ ! -d "$source_git_dir/refs/replace" ] &&
   [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
   emit_error E_SOURCE_GIT
-# copy-end materialize.sh:271-332
-# copy-begin materialize.sh:333-347
+# copy-end materialize.sh:284-339
+# copy-begin materialize.sh:340-354
 packed_refs="$source_git_dir/packed-refs"
 if [ -e "$packed_refs" ]; then
   [ -f "$packed_refs" ] && [ ! -L "$packed_refs" ] || emit_error E_SOURCE_GIT
@@ -369,8 +371,8 @@ if [ -e "$packed_refs" ]; then
     emit_error E_SOURCE_GIT
   fi
 fi
-# copy-end materialize.sh:333-347
-# copy-begin materialize.sh:348-360
+# copy-end materialize.sh:340-354
+# copy-begin materialize.sh:355-367
 if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
    /usr/bin/grep -q .; then
   emit_error E_SOURCE_HOOK
@@ -384,7 +386,7 @@ source_commit_size=$(git_dir "$source_git_dir" cat-file -s "$source_commit" 2>/d
   emit_error E_SOURCE_IDENTITY
 [ "$source_commit_type" = commit ] && [ "$source_commit_size" -le 1048576 ] ||
   emit_error E_SOURCE_LIMIT
-# copy-end materialize.sh:348-360
+# copy-end materialize.sh:355-367
   exit 0
 )
 source_pure || emit_error E_TARGET

@@ -531,9 +531,10 @@ check_span() {
     fail "span-bytes-$span"
 }
 check_span 76-81 76 81 'physical_dir() {'
-check_span 271-332 271 332 'git_dir() {'
-check_span 333-347 333 347 "packed_refs=\"\$source_git_dir/packed-refs\""
-check_span 348-360 348 360 "if find \"\$source_git_dir/hooks\" -type f ! -name '*.sample' -print -quit 2>/dev/null |"
+check_span 271-276 271 276 'git_dir() {'
+check_span 284-339 284 339 "source_inventory=\"\$run_root/source-filesystem\""
+check_span 340-354 340 354 "packed_refs=\"\$source_git_dir/packed-refs\""
+check_span 355-367 355 367 "if find \"\$source_git_dir/hooks\" -type f ! -name '*.sample' -print -quit 2>/dev/null |"
 check_span 4-13 4 13 'clean_path=/usr/bin:/bin'
 [ "$(/usr/bin/sed -n '1p' "$materializer")" = "$(/usr/bin/sed -n '1p' "$assembler")" ] || fail shebang
 extract 22-29 > "$tmp/copy-entry"
@@ -572,14 +573,16 @@ printf '%s\n' 'builtin unalias -a' 'builtin shopt -u expand_aliases' | cmp -s - 
 for span in 271-332 4-13 348-354; do
   awk -v m="$span" '$0=="# copy-begin materialize.sh:" m {f=1;next}
     $0=="# copy-end materialize.sh:" m {f=0} f' "$root/shadow/v1/reproduce.sh" > "$tmp/driver-copy"
-  if [ "$span" = 348-354 ]; then
-    sed -n '1,7p' "$tmp/copy-348-360" > "$tmp/shared-copy"
+  if [ "$span" = 271-332 ]; then
+    cat "$tmp/copy-271-276" "$tmp/copy-284-339" > "$tmp/shared-copy"
+  elif [ "$span" = 348-354 ]; then
+    sed -n '1,7p' "$tmp/copy-355-367" > "$tmp/shared-copy"
   else
     cp "$tmp/copy-$span" "$tmp/shared-copy"
   fi
   cmp -s "$tmp/driver-copy" "$tmp/shared-copy" || fail "driver-shared-$span"
 done
-pass 'six anchored copy spans and all named entry adaptations match current producers'
+pass 'seven anchored copy spans and all named entry adaptations match current producers'
 
 # Source order is proof of mechanism, not a claim to exercise a signal micro-window.
 line_of() {
