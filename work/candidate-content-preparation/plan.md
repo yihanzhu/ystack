@@ -1,5 +1,5 @@
 ---
-spec-blob: 3c464a2114e951fe01b86bb941d533a2264a3568
+spec-blob: 079be9befacd58f19203bf70c0751281668156a8
 risk: high
 drafted: 2026-09-21
 ---
@@ -36,19 +36,19 @@ Only these seven implementation paths may change:
 | `docs/components.md` | Component boundary and consumer relationship. |
 | `ci/required-files.txt` | Append the four new restore-critical paths above. |
 
-`review_size: accepted-exception`: 3,100–4,600 added plus removed implementation
+`review_size: accepted-exception`: 5,450–6,000 added plus removed implementation
 lines for this one concern. Use these allocations to check progress, not to remove
 proof or compress readable code:
 
 | Work within the allowed paths | Forecast lines |
 | --- | ---: |
-| Admission, descriptors, counters, bounded children and dependency/input checks | 500–650 |
-| Storage observations, reverse-index validation and raw object/tree export | 650–850 |
-| Bundle measurement, publication, inspect and failure handling | 350–500 |
-| Shared real-fixture driver, independent byte/mode oracles and positive exports | 450–600 |
-| Table-driven rejection, inclusive bounds, races, I/O and crash/recovery proof | 1,050–1,450 |
-| Documentation and restore-manifest entries | 180–260 |
-| Total forecast | 3,180–4,310 |
+| Admission, descriptors, counters, bounded children and dependency/input checks | 997 |
+| Storage observations, reverse-index validation and raw object/tree export | 638 |
+| Bundle measurement, publication, inspect and failure handling | 653 |
+| Shared real-fixture driver, independent byte/mode oracles and positive exports | 600–650 |
+| Table-driven rejection, inclusive bounds, races, I/O and crash/recovery proof | 2,412–2,587 |
+| Documentation and restore-manifest entries | 175 |
+| Total forecast | 5,475–5,700 |
 
 Measure the whole diff against its accepted base. Keep accounting and review-round
 history in the PR, not this artifact. Stop and preserve the exact attempt for a
