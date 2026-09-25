@@ -532,7 +532,7 @@ check_span() {
 }
 check_span 76-81 76 81 'physical_dir() {'
 check_span 271-276 271 276 'git_dir() {'
-check_span 284-339 284 339 'source_inventory="$run_root/source-filesystem"'
+check_span 284-339 284 339 "source_inventory=\"\$run_root/source-filesystem\""
 check_span 340-354 340 354 "packed_refs=\"\$source_git_dir/packed-refs\""
 check_span 355-367 355 367 "if find \"\$source_git_dir/hooks\" -type f ! -name '*.sample' -print -quit 2>/dev/null |"
 check_span 4-13 4 13 'clean_path=/usr/bin:/bin'
