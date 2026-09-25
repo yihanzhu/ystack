@@ -30,16 +30,21 @@ the current Roadmap program; it does not qualify or activate a real target.
 
 ## Constraints
 
-- Keep the repair within these eight implementation paths:
+- Keep the repair within these ten implementation paths:
   `profiles/default/v1/manifests/local-git-materializer.json`,
   `profiles/alternative/v1/manifests/local-git-materializer.json`,
   `profiles/default/v1/profile.json`, `profiles/alternative/v1/profile.json`,
   `scripts/test/default-profile-assembly.test.sh`,
   `scripts/test/alternative-profile-assembly.test.sh`,
-  `shadow/v1/materialization-input.jq`, and `docs/replay-materialization-result.md`.
+  `shadow/v1/materialization-input.jq`, `docs/replay-materialization-result.md`,
+  `shadow/v1/assemble-materialization-input.sh`, and
+  `scripts/test/shadow-assembler.test.sh`.
   The spec must limit changes to the affected identities, independent expectations
   and provenance. Other fields, bindings, grants, authority, boundaries, core
   selection and runtime behavior stay unchanged.
+- In the assembler and its test, change only source-range provenance markers and
+  matching existing byte-equality assertions and temporary-filename references.
+  Preserve the copied executable bytes, every comparison and assertion strength.
 - Use the established package-to-manifest-to-profile-to-shadow identity chain.
   Preserve the builder's checks and all test assertions. Do not hide pins,
   substitute an old source in the positive packaging test, skip a failure, add a
