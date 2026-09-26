@@ -266,10 +266,10 @@ read-only and resolves no profile.
 
 ### Restore the first self-host shadow evidence
 
-Restore `shadow/evidence/self-host-transition/v1/` (once its files are listed
-under “First self-host shadow evidence” in
-[`ci/required-files.txt`](ci/required-files.txt) — see that file's own note on
-when they are added) and `scripts/test/shadow-self-host-evidence.test.sh`,
+Restore `shadow/evidence/self-host-transition/v1/` from the paths listed under
+“First self-host shadow evidence” in
+[`ci/required-files.txt`](ci/required-files.txt), and restore
+`scripts/test/shadow-self-host-evidence.test.sh`,
 together with the shadow reproduction slice, the shadow materialization input
 assembler, the control policy set and its evaluators, the workflow-scope
 qualification evaluator, and the maintenance loop the evidence was checked
