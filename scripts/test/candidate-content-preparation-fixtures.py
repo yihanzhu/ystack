@@ -28,6 +28,7 @@ from typing import Any
 
 CHUNK = 64 * 1024
 GIT_MODES = {"100644": 0o400, "100755": 0o500}
+FIXTURE_STARTUP_CLEANUP_SECONDS = 5
 LIMITS = {
     "input_bytes": 8 * 1024 * 1024,
     "response_bytes": 1 * 1024 * 1024,
@@ -1195,9 +1196,12 @@ def command_closed_pipe(args: argparse.Namespace) -> None:
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert process.stdout is not None and process.stderr is not None
     process.stdout.close()
-    result, _output, diagnostic = supervise_process(process, 10.0)
+    result, _output, diagnostic = supervise_process(
+        process, LIMITS["operation_seconds"] + FIXTURE_STARTUP_CLEANUP_SECONDS
+    )
     if result != 1 or diagnostic != b"E_IO\n":
         raise FixtureError(f"closed pipe returned {result}: {diagnostic!r}")
+    sys.stdout.buffer.write(diagnostic)
 
 
 def supervise_process(process: subprocess.Popen[bytes], timeout: float) -> tuple[int, bytes, bytes]:

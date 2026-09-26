@@ -2179,15 +2179,15 @@ def inspect(ctx: Context) -> bytes:
                 raise Refusal("E_INCOMPLETE")
             expected_inventory.append(matching[0])
         expected_inventory.sort(key=lambda item: item["path"].encode("utf-8"))
-        measure_candidate(ctx, bundle / "candidate", expected_inventory)
-        if manifest_for(expected_inventory) != manifest:
+        measured_inventory = measure_candidate(ctx, bundle / "candidate", expected_inventory)
+        if canonical(manifest_for(measured_inventory)) != manifest_data:
             raise Refusal("E_INCOMPLETE")
         record_data = read_output_file(ctx, "record.json", LIMITS["record_bytes"])
         record = strict_json(record_data, "E_INCOMPLETE")
         if canonical(record) != record_data:
             raise Refusal("E_INCOMPLETE")
         expected_record = make_record(ctx, input_value, response, details, receipt, manifest_data)
-        if record != expected_record:
+        if canonical(expected_record) != record_data:
             raise Refusal("E_INCOMPLETE")
         recheck_source(ctx)
         verify_top_level(ctx)

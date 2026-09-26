@@ -749,6 +749,34 @@ PY
     "$malformed_bundle" "$tmp/error-bundle-$bundle_case/scratch"
 done
 
+for scalar_case in record-schema-boolean record-ownership-number manifest-schema-boolean \
+    manifest-empty-size-boolean; do
+  scalar_bundle="$tmp/scalar-$scalar_case"
+  /bin/cp -R "$collision" "$scalar_bundle"
+  /bin/chmod 0700 "$scalar_bundle"
+  /bin/chmod 0600 "$scalar_bundle/manifest.json" "$scalar_bundle/record.json"
+  "$python" -B -I - "$scalar_bundle" "$scalar_case" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+root,case=Path(sys.argv[1]),sys.argv[2]
+canonical=lambda value:(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
+manifest=json.loads((root/'manifest.json').read_bytes())
+record=json.loads((root/'record.json').read_bytes())
+if case=='record-schema-boolean': record['schema_version']=True
+elif case=='record-ownership-number': record['ownership']['immutable']=0
+elif case=='manifest-schema-boolean': manifest['schema_version']=True
+elif case=='manifest-empty-size-boolean':
+    next(x for x in manifest['entries'] if x['path']=='empty.txt')['size_bytes']=False
+if case.startswith('manifest-'):
+    data=canonical(manifest); (root/'manifest.json').write_bytes(data)
+    record['manifest_sha256']=hashlib.sha256(data).hexdigest()
+(root/'record.json').write_bytes(canonical(record))
+PY
+  /bin/chmod 0400 "$scalar_bundle/manifest.json" "$scalar_bundle/record.json"
+  expect_error "scalar-$scalar_case" E_INCOMPLETE 1 invoke_prepare inspect "$input" "$response" \
+    "$candidate" "$scalar_bundle" "$tmp/error-scalar-$scalar_case/scratch"
+done
+
 extra_bundle="$tmp/extra-bundle"
 /bin/cp -R "$collision" "$extra_bundle"
 /bin/chmod 0700 "$extra_bundle"
@@ -1026,9 +1054,15 @@ done
 pipe_root="$tmp/os-broken-pipe"
 /bin/mkdir -m 700 "$pipe_root" "$pipe_root/scratch" "$pipe_root/output-parent"
 write_argv "$pipe_root/argv.json" "$pipe_root"
-"$python" -B -I "$helper" closed-pipe --component "$component" --argv-json "$pipe_root/argv.json"
+"$python" -B -I "$helper" closed-pipe --component "$component" \
+  --argv-json "$pipe_root/argv.json" > "$pipe_root/raw-stderr"
+[ "$(cat "$pipe_root/raw-stderr")" = E_IO ] || fail os-broken-pipe-diagnostic
 [ -f "$pipe_root/output-parent/bundle/record.json" ] || fail os-broken-pipe-state
-pass 'actual closed OS reply pipe refuses after retaining a complete bundle'
+/bin/mkdir -m 700 "$pipe_root/inspect-scratch"
+invoke_prepare inspect "$input" "$response" "$candidate" "$pipe_root/output-parent/bundle" \
+  "$pipe_root/inspect-scratch" > "$pipe_root/inspect.out"
+[ -s "$pipe_root/inspect.out" ] || fail os-broken-pipe-inspect
+pass 'actual closed OS reply pipe refuses after retaining an inspectable complete bundle'
 
 deadline_root="$tmp/operation-deadline"
 /bin/mkdir -m 700 "$deadline_root" "$deadline_root/scratch" "$deadline_root/output-parent"
