@@ -1343,8 +1343,9 @@ limit_pair() {
 
 read -r input_size response_size storage_size repository_file_size reverse_size repository_entries \
   repository_name_bytes blob_size export_size file_paths directory_count export_path_bytes bundle_size \
-  manifest_size record_size result_size head_size config_size receipt_size stage_size dependency_size \
-  commit_size tree_size tree_bytes tree_visits tree_entries reverse_objects < <(
+  manifest_size record_size result_size head_size config_raw_size config_normalized_size receipt_size \
+  stage_size dependency_size commit_size tree_size tree_bytes tree_visits tree_entries \
+  reverse_objects < <(
   "$python" -B -I - "$input" "$response" "$candidate" "$collision" "$jq_bin" <<'PY'
 import json,os,subprocess,sys
 from pathlib import Path
@@ -1371,8 +1372,8 @@ print(inp.stat().st_size,response.stat().st_size,sum(p.stat().st_size for p in s
       sum(files(bundle)),(bundle/'manifest.json').stat().st_size,(bundle/'record.json').stat().st_size,
       (bundle.parent.parent/'prepare.out').stat().st_size,
       max((candidate/'HEAD').stat().st_size,(candidate/'refs/heads/candidate').stat().st_size),
-      max((candidate/'config').stat().st_size,len(subprocess.check_output([
-          '/usr/bin/git','config','--file',str(candidate/'config'),'--no-includes','--null','--list']))),
+      (candidate/'config').stat().st_size,len(subprocess.check_output([
+          '/usr/bin/git','config','--file',str(candidate/'config'),'--no-includes','--null','--list'])),
       len(response_value['payloads'][0]['data'].encode()),
       len((json.dumps(response_value['stage_result'],ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()),
       sum((repo/p['path']).stat().st_size for p in json.loads((bundle/'record.json').read_bytes())['producer']['core']['files'])+
@@ -1381,6 +1382,12 @@ print(inp.stat().st_size,response.stat().st_size,sum(p.stat().st_size for p in s
       (reverse.stat().st_size-12-2*oid_bytes)//4)
 PY
 )
+config_size=$config_raw_size
+config_error=E_INPUT
+if [ "$config_normalized_size" -gt "$config_size" ]; then
+  config_size=$config_normalized_size
+  config_error=E_LIMIT
+fi
 limit_pair input_bytes "$input_size" E_INPUT
 limit_pair response_bytes "$response_size" E_INPUT
 limit_pair storage_bytes "$storage_size"
@@ -1398,7 +1405,7 @@ limit_pair manifest_bytes "$manifest_size"
 limit_pair record_bytes "$record_size"
 limit_pair result_bytes "$result_size"
 limit_pair head_ref_bytes "$head_size" E_INPUT
-limit_pair config_bytes "$config_size" E_LIMIT
+limit_pair config_bytes "$config_size" "$config_error"
 limit_pair receipt_bytes "$receipt_size" E_INPUT
 limit_pair stage_result_bytes "$stage_size"
 limit_pair dependency_bytes "$dependency_size"
