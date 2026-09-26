@@ -14,8 +14,12 @@ python=/opt/homebrew/bin/python3
 test_tmp_base=${TMPDIR:-/tmp}
 tmp=$(/usr/bin/mktemp -d "${test_tmp_base%/}/ystack-candidate-preparation.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+download=''
 cleanup() {
   local status=$?
+  if [ -n "$download" ] && [ -f "$download" ]; then
+    /bin/rm -f -- "$download"
+  fi
   /bin/chmod -R u+rwx "$tmp" 2>/dev/null || :
   /bin/rm -rf -- "$tmp"
   exit "$status"
@@ -28,8 +32,24 @@ case "$platform" in
   Darwin:x86_64|Darwin:arm64) jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
   *) printf 'FAIL: unsupported host %s\n' "$platform" >&2; exit 1 ;;
 esac
-jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+cache="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$cache"
+jq_bin="$cache/$jq_asset"
+if [ ! -f "$jq_bin" ] || [ -L "$jq_bin" ] ||
+   [ "$(sha_file "$jq_bin")" != "$jq_sha" ]; then
+  download=$(/usr/bin/mktemp "$cache/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" \
+    -o "$download"
+  [ "$(sha_file "$download")" = "$jq_sha" ] || {
+    printf '%s\n' 'FAIL: jq 1.6 download digest mismatch' >&2
+    exit 1
+  }
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_bin"
+  download=''
+fi
 [ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] && [ "$(sha_file "$jq_bin")" = "$jq_sha" ] || {
   printf '%s\n' 'FAIL: pinned jq 1.6 is required' >&2
   exit 1
