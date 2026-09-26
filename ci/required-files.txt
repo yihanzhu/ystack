@@ -439,3 +439,13 @@ docs/delivery-ledger.md
 # then the focused test below is the thing that fails loudly on their
 # absence, with an explicit "evidence not yet captured" message.
 scripts/test/shadow-self-host-evidence.test.sh
+
+# Current Roadmap minimal CI decision and proof
+work/ci-minimum-roadmap/decision.md
+scripts/test/ci-minimum.check.sh
+
+# Inactive candidate content preparation
+preparation/v1/prepare-candidate.py
+scripts/test/candidate-content-preparation.test.sh
+scripts/test/candidate-content-preparation-fixtures.py
+docs/candidate-content-preparation.md
