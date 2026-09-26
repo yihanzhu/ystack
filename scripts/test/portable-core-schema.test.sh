@@ -948,7 +948,8 @@ printf '%s\n' \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-evidence-identity.test.sh \
   shadow/evidence/self-host-transition/v1/control-policy-set.json \
-  shadow/evidence/self-host-transition/v1/core-package-closure.json > \
+  shadow/evidence/self-host-transition/v1/core-package-closure.json \
+  shadow/evidence/self-host-transition/v1/duty-evaluation.json > \
   "$schema_v2_corrective_expected_hits"
 if cmp -s "$schema_v2_corrective_live_hits" "$schema_v2_corrective_expected_hits"; then
   schema_guard_passed=$((schema_guard_passed + 1))
