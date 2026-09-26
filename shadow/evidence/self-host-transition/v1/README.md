@@ -6,12 +6,11 @@ durable verification for them. It is inactive, read-only evidence: it
 registers, activates, or qualifies nothing, and it changes no registry
 `proof_state`.
 
-**Status of this document: skeleton.** The coder half of this initiative
-(the focused test, this layout, the consumers' wiring, and the documents that
-are produced by no tool — `requester.json`, the `control-policy-set.json`
-copy, `core-package-closure.json`) is complete. The value slots below are
-filled in by the operator once the two runs described in
-`work/shadow-self-host-run/plan.md` ("Operator steps") have produced the
+**Status of this document: skeleton.** The focused test, this layout, and the
+consumers' wiring are complete. The approved requester recipe is fixed below;
+the current `requester.json` is still a placeholder. The operator or delegated
+manager replaces it and fills the value slots below once the two runs described
+in `work/shadow-self-host-run/plan.md` ("Operator steps") have produced the
 remaining evidence documents, in the same commit that adds those documents.
 Until then, `scripts/test/shadow-self-host-evidence.test.sh` fails with an
 explicit "evidence not yet captured" message rather than silently passing.
@@ -74,8 +73,10 @@ run is a control observation, not a second reported outage.
   Digest: `TBD`.
 - `control-policy-set.json` — `control/v1/control-policy-set.json` copied byte
   for byte. Digest: `3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8`.
-- `requester.json` — the DR-5 operator identity approved on intake #262.
-  Digest: `7596d803e09956c24a627d29558b22a583369080ac653941816c0fbadb2d68cd`.
+- `requester.json` — the DR-5 operator identity approved on intake #262,
+  naming implementation `ystack-operator-cli` at frozen runtime
+  `8b3e3f55037de84c441cfe4ca5231c98814a7bbd`. Digest:
+  `26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386`.
 - `core-package-closure.json` — the core v2 `core.contracts.v2` package
   closure descriptor at the pre-transition revision's pinned generation
   (id begins `g-c83c940a`), stored with no trailing newline. Digest:
