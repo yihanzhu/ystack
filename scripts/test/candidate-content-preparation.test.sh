@@ -1375,6 +1375,54 @@ limit_pair() {
   pass "$name admits its actual inclusive fixture and rejects one byte less"
 }
 
+dependency_phase_pair() {
+  local maximum=$1 inclusive_root="$tmp/dependency-copy-inclusive" \
+    overflow_root="$tmp/dependency-copy-overflow" overflow_status
+  /bin/mkdir -m 700 "$inclusive_root" "$inclusive_root/scratch" "$inclusive_root/output-parent" \
+    "$overflow_root" "$overflow_root/scratch" "$overflow_root/output-parent"
+  write_argv "$inclusive_root/argv.json" "$inclusive_root"
+  write_argv "$overflow_root/argv.json" "$overflow_root"
+  "$python" -B -I "$helper" dependency-phase --component "$component" --value "$maximum" \
+    --argv-json "$inclusive_root/argv.json" > "$inclusive_root/out" 2> "$inclusive_root/err" || \
+    fail dependency-copy-inclusive
+  [ -s "$inclusive_root/out" ] && [ ! -s "$inclusive_root/err" ] && \
+    [ -f "$inclusive_root/output-parent/bundle/record.json" ] || fail dependency-copy-inclusive-result
+  "$python" -B -I - "$inclusive_root/out" "$inclusive_root/output-parent/bundle" \
+      "$(sha_file "$component")" "$(sha_file "$producer_python")" "$(sha_file /usr/bin/git)" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+output,bundle=map(Path,sys.argv[1:3]); component_sha,python_sha,git_sha=sys.argv[3:]
+envelope=json.loads(output.read_bytes()); record_data=(bundle/'record.json').read_bytes()
+manifest_data=(bundle/'manifest.json').read_bytes(); producer=json.loads(record_data)['producer']
+assert envelope['status']=='completed'
+assert envelope['record_sha256']==hashlib.sha256(record_data).hexdigest()
+assert envelope['manifest_sha256']==hashlib.sha256(manifest_data).hexdigest()
+assert producer['source_sha256']==component_sha
+assert producer['python']['executable_sha256']==python_sha
+assert producer['git']['executable_sha256']==git_sha
+PY
+  if "$python" -B -I "$helper" dependency-phase --component "$component" \
+      --value "$((maximum - 1))" --argv-json "$overflow_root/argv.json" \
+      > "$overflow_root/out" 2> "$overflow_root/err"; then
+    fail dependency-copy-overflow-accepted
+  else
+    overflow_status=$?
+  fi
+  [ "$overflow_status" -eq 1 ] && [ ! -s "$overflow_root/out" ] && \
+    [ "$(cat "$overflow_root/err")" = E_LIMIT ] && \
+    [ ! -e "$overflow_root/output-parent/bundle/record.json" ] || fail dependency-copy-overflow-result
+  "$python" -B -I "$helper" snapshot check --path "$input" --snapshot "$tmp/input.snapshot.json"
+  "$python" -B -I "$helper" snapshot check --path "$candidate" --snapshot "$tmp/candidate.snapshot.json"
+  "$python" -B -I "$helper" snapshot check --path "$base/source.git" --snapshot "$tmp/source.snapshot.json"
+  "$python" -B -I "$helper" snapshot check --path "$base/output-parent/bundle" \
+    --snapshot "$tmp/prior-output.snapshot.json"
+  printf '# dependency_copy inclusive_exit=0 inclusive_stdout_bytes=%s inclusive_stderr_bytes=%s overflow_exit=%s overflow_stdout_bytes=%s overflow_stderr=%s\n' \
+    "$(wc -c < "$inclusive_root/out" | /usr/bin/tr -d ' ')" \
+    "$(wc -c < "$inclusive_root/err" | /usr/bin/tr -d ' ')" "$overflow_status" \
+    "$(wc -c < "$overflow_root/out" | /usr/bin/tr -d ' ')" "$(cat "$overflow_root/err")"
+  pass 'real dependency copy admits its aggregate and rejects aggregate minus one before restored validation'
+}
+
 read -r input_size response_size storage_size repository_file_size reverse_size repository_entries \
   repository_name_bytes blob_size export_size file_paths directory_count export_path_bytes bundle_size \
   manifest_size record_size result_size head_size config_raw_size config_normalized_size receipt_size \
@@ -1416,6 +1464,24 @@ print(inp.stat().st_size,response.stat().st_size,sum(p.stat().st_size for p in s
       (reverse.stat().st_size-12-2*oid_bytes)//4)
 PY
 )
+dependency_aggregate=$dependency_size
+producer_python=$("$python" -I -c 'import sys;print(sys.executable)')
+component_size=$(wc -c < "$component" | /usr/bin/tr -d ' ')
+python_size=$(wc -c < "$producer_python" | /usr/bin/tr -d ' ')
+git_size=$(wc -c < /usr/bin/git | /usr/bin/tr -d ' ')
+dependency_error=E_LIMIT
+for producer_size in "$component_size" "$python_size" "$git_size"; do
+  if [ "$producer_size" -gt "$dependency_size" ]; then
+    dependency_size=$producer_size
+    dependency_error=E_INPUT
+  fi
+done
+printf '# dependency_bytes aggregate=%s component=%s python=%s git=%s maximum=%s overflow=%s interpreter=%s\n' \
+  "$dependency_aggregate" "$component_size" "$python_size" "$git_size" "$dependency_size" \
+  "$dependency_error" "$producer_python"
+printf '# dependency_identity python_sha256=%s python_version=%s git_sha256=%s git_version=%s\n' \
+  "$(sha_file "$producer_python")" "$("$python" -I -c 'import sys;print(sys.version.splitlines()[0])')" \
+  "$(sha_file /usr/bin/git)" "$(/usr/bin/git --version)"
 config_size=$config_raw_size
 config_error=E_INPUT
 if [ "$config_normalized_size" -gt "$config_size" ]; then
@@ -1442,7 +1508,13 @@ limit_pair head_ref_bytes "$head_size" E_INPUT
 limit_pair config_bytes "$config_size" "$config_error"
 limit_pair receipt_bytes "$receipt_size" E_INPUT
 limit_pair stage_result_bytes "$stage_size"
-limit_pair dependency_bytes "$dependency_size"
+dependency_phase_pair "$dependency_aggregate"
+limit_pair dependency_bytes "$dependency_size" "$dependency_error"
+printf '# dependency_whole inclusive_exit=0 inclusive_stdout_bytes=%s inclusive_stderr_bytes=%s overflow_exit=%s overflow_stdout_bytes=%s overflow_stderr=%s\n' \
+  "$(wc -c < "$tmp/limit-dependency_bytes/out" | /usr/bin/tr -d ' ')" \
+  "$(wc -c < "$tmp/limit-dependency_bytes/err" | /usr/bin/tr -d ' ')" "$limit_status" \
+  "$(wc -c < "$tmp/limit-dependency_bytes-overflow/out" | /usr/bin/tr -d ' ')" \
+  "$(cat "$tmp/limit-dependency_bytes-overflow/err")"
 limit_pair commit_bytes "$commit_size"
 limit_pair tree_bytes "$tree_size"
 limit_pair tree_bytes_visited "$tree_bytes"

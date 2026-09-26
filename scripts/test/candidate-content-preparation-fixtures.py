@@ -1431,6 +1431,38 @@ def command_limit_invoke(args: argparse.Namespace) -> None:
         raise SystemExit(result)
 
 
+def command_dependency_phase(args: argparse.Namespace) -> None:
+    module = load_component(args.component)
+    if args.value < 0:
+        raise FixtureError("invalid dependency phase limit")
+    invocation = strict_load(args.argv_json)
+    if not isinstance(invocation, list) or not all(isinstance(item, str) for item in invocation):
+        raise FixtureError("dependency phase invocation must be a string list")
+    original_copy = module.copy_dependencies
+    original_limit = module.LIMITS["dependency_bytes"]
+    calls = 0
+
+    def bounded_copy(context: Any) -> tuple[Path, Path]:
+        nonlocal calls
+        calls += 1
+        module.LIMITS["dependency_bytes"] = args.value
+        try:
+            return original_copy(context)
+        finally:
+            module.LIMITS["dependency_bytes"] = original_limit
+
+    module.copy_dependencies = bounded_copy
+    try:
+        result = module.main(invocation)
+    finally:
+        module.copy_dependencies = original_copy
+        restored = module.LIMITS["dependency_bytes"] == original_limit
+        module.LIMITS["dependency_bytes"] = original_limit
+    if calls != 1 or not restored:
+        raise FixtureError("dependency phase boundary was not restored")
+    raise SystemExit(result)
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(allow_abbrev=False)
     commands = result.add_subparsers(dest="command", required=True)
@@ -1608,6 +1640,12 @@ def parser() -> argparse.ArgumentParser:
     limit_parser.add_argument("--value", required=True, type=int)
     limit_parser.add_argument("--argv-json", required=True, type=Path)
     limit_parser.set_defaults(run=command_limit_invoke)
+
+    dependency_parser = commands.add_parser("dependency-phase", allow_abbrev=False)
+    dependency_parser.add_argument("--component", required=True, type=Path)
+    dependency_parser.add_argument("--value", required=True, type=int)
+    dependency_parser.add_argument("--argv-json", required=True, type=Path)
+    dependency_parser.set_defaults(run=command_dependency_phase)
     return result
 
 
