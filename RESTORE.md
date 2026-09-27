@@ -178,6 +178,15 @@ after the operating-mode transition. It reads `config/construction-mode.json`
 read-only and only ever compares it. Restoring these files grants no authority and
 performs no model, credential, network, provider, publish, forge, or target
 
+Restore the step 8 bounded-write decision's
+[intent](work/step8-bounded-write-readiness/intent.md),
+[spec](work/step8-bounded-write-readiness/spec.md) and
+[plan](work/step8-bounded-write-readiness/plan.md) from the same commit, using
+the decision-record block in [the manifest](ci/required-files.txt). Read the
+spec for the first workflow, the evidence required before any write and the
+ordered child concerns. Restoring these records enables no scope, commits no
+kill-switch register and grants no write, credential or publisher.
+
 ### Restore the inactive target packaging
 
 Restore the four paths listed under “Inactive target packaging” in
