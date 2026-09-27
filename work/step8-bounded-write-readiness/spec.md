@@ -137,8 +137,8 @@ recorded coverage rule. Each execution environment qualifies separately.
    resolved profile compared with their listed members masked. Any other difference,
    or any per-attempt ref that fails its bindings, returns to the shadow gate.
 5. A change in the coverage identity returns to the shadow gate. A change confined
-   to the per-attempt fields of R3.4 is the normal per-revision rebinding that coverage exists
-   for, and needs no new qualification.
+   to the per-attempt fields of R3.4 is the normal per-revision rebinding that
+   coverage exists for, and needs no new qualification.
 6. Anything else invalidates the qualification and returns to a named gate:
 
 | Change | Returns to |
@@ -150,8 +150,8 @@ recorded coverage rule. Each execution environment qualifies separately.
 | Evidence older than 30 days | Shadow gate |
 | Risk tier, task class, allowed paths or target | A new scope: its own G2 and its own enablement pull request |
 
-7. `model_request` stays in the coverage identity as recorded configuration even though the
-   workflow invokes no model. A change to it still invalidates.
+7. `model_request` stays in the coverage identity as recorded configuration, even
+   though the workflow invokes no model. A change to it still invalidates.
 
 ### R4. The enablement record
 
