@@ -327,7 +327,14 @@ result stops the run (requirement 7).
 17. Append every evidence file to `ci/required-files.txt`. Add a component
     documentation entry, a README index row and a RESTORE block, as #373 did.
     Restoring preserves evidence; it runs nothing and registers, activates or
-    qualifies nothing.
+    qualifies nothing. The retained `control-policy-set.json`,
+    `core-package-closure.json` and `duty-evaluation.json` carry the corrective core
+    generation id, which `scripts/test/portable-core-schema.test.sh` allows only on
+    listed paths. So the evidence PR adds exactly three lines to
+    `schema_v2_corrective_expected_hits`, the new bundle's paths for those three
+    files, placed in the list's existing sorted order (before the self-host lines),
+    and changes nothing else in that test; the exact sorted comparison stays. This
+    is the same change the self-host plan (#374) recorded.
 
 18. Completion means both real outcomes, repeatability, and the offline and consumer
     proof are committed together, reviewed and operator-merged. Final proof names the
@@ -349,7 +356,7 @@ stop condition fires.
 
 The evidence PR is one concern: the first external-target evidence pair and its
 shared offline verification. Its parts are the 45 retained files, the generalised
-test, the manifest lines and the docs entry. The harness change is made first on the
+test, the manifest lines, the three schema-test allowlist lines and the docs entry. The harness change is made first on the
 self-host bundle alone (same pass lines before and after), then the new bundle's
 table is added.
 
