@@ -34,6 +34,13 @@ The delegation does not waive these boundaries, required CI, protected PRs, read
 reviewers, the rounds cap or recovery requirements. It is a manual process; do not
 claim mechanical enforcement or live behavior from a repository-only policy change.
 
+For this current Roadmap program, review required CI against
+`work/ci-minimum-roadmap/decision.md`. An automatic green `ci` proves only the quick
+checks and named content guards. Require the implementation's relevant complete
+integration, identity, authorization and safety evidence independently of that quick
+result. Require a recorded dispatched full matrix at each named runnable milestone
+before dependent work is accepted. A known relevant failure remains Important.
+
 ## Construction-mode review overlay
 
 For an exact PR whose reviewed base contains an active, matching

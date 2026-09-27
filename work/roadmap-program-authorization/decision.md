@@ -134,3 +134,37 @@ Claude Code harness derives from the session id. That is identity evidence, not
 authority. This file still cannot appoint a manager, and the named session cannot
 authorize a later session by itself; a further successor needs another explicit
 operator handoff recorded here.
+
+## Manager succession — 2026-09-21
+
+The operator directly told Codex session `01a09ae7-9bd4-77f3-8c15-966143bebff4`:
+“继续我们的roadmap，从claude那边接手，我们要完成整个roadmap”.
+The manager verified that session through `CODEX_THREAD_ID`.
+
+The Claude manager authority granted to Claude Code desktop session
+`dd83267a-8ae2-4699-9afa-a8ca0bf3421c` ends with this direct handback.
+The original bounded Codex delegation in this record is reinstated only for Codex
+session `01a09ae7-9bd4-77f3-8c15-966143bebff4`, in this repository and within the
+accepted Roadmap scope. The preceding 2026-09-18 succession section remains
+historical: its stated Codex end applied until this 2026-09-21 handback.
+
+This direct handback, not this restored record, supplies the successor authority.
+No other session, clone, live yshifu, target, or future manager is authorized by it.
+The original artifact chain, exact hashes, risk and scope checks, stage order,
+separate author and read-only reviewer roles, one-manager rule, claims, recovery,
+restoration, exact head/base evidence, required CI, Important-finding resolution,
+and rounds cap remain required. These are manual working rules; this record does
+not claim mechanically enforced separation.
+
+Use the current AGENTS.md GPT routing: `gpt-6-astra`/high for coordination,
+architecture, diagnosis and independent review; `gpt-6-astra`/xhigh for critical
+safety or architecture decisions; `gpt-5.6-sol`/medium for implementation;
+`gpt-5.6-terra`/medium for small isolated edits; and `gpt-5.6-luna`/low for
+extraction and structured summaries.
+
+It does not permit goal, acceptance, safety, authority, credential, network, or
+write-scope expansion; installation, activation, release, deployment, production
+action, destructive disposition, or first real target execution. The dummy target
+remains read-only. Frozen #183 and unresolved dirty attempts remain excluded.
+
+Prepared against base `8b3e3f55037de84c441cfe4ca5231c98814a7bbd`.

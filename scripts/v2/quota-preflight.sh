@@ -63,7 +63,7 @@ for wf in $lane; do
   # A workflow that doesn't exist yet (pre-Stack-B) counts as zero. Any OTHER
   # failure — outage, rate limit — must fail loudly: converting errors to zero
   # would make the brake fail open during a cascade (Codex review of #131).
-  if n="$(gh run list --workflow "$wf" --created ">=${cutoff}" --limit "$fetch_limit" \
+  if n="$(gh run list --workflow "$wf" --all --created ">=${cutoff}" --limit "$fetch_limit" \
         --json databaseId --jq 'length' 2>"$errf")"; then
     case "$n" in
       ''|*[!0-9]*)

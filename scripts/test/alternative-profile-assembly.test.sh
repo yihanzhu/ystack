@@ -14,7 +14,7 @@ producer_config="$root/profiles/alternative/v1/producer-config.json"
 roadmap="$root/ROADMAP.md"
 roadmap_sha='1466262c8994d637a02cc3503c35e3254ecce28479f9847589cb112e42b00107'
 package_commit='a637451d4b3fbef6b516a9c08f68c0dde46a7059'
-materializer_package_commit='8fc0675eb4e34acbebe9c8ab0310e64328a6114e'
+materializer_package_commit='fc1fc01ff9963f5b8ccab5b26d4d572b9c1a0203'
 producer_package_commit='d31d6adb01268957228363aa74a92956e6b5db98'
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 pass=0

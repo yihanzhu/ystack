@@ -21,9 +21,11 @@ fi
 # Sanity call: `gh run list --limit 1 --json databaseId`
 # Count call:  `gh run list --workflow <file> ... --jq length`
 wf=""
+all=0
 prev=""
 for a in "$@"; do
   if [ "$prev" = "--workflow" ]; then wf="$a"; fi
+  if [ "$a" = "--all" ]; then all=1; fi
   prev="$a"
 done
 if [ -z "$wf" ]; then
@@ -34,6 +36,14 @@ case ",${GH_STUB_FORBID:-}," in
   *",${wf},"*)
     echo "FORBIDDEN: queried ${wf}" >&2
     exit 9
+    ;;
+esac
+case ",${GH_STUB_DISABLED:-}," in
+  *",${wf},"*)
+    if [ "$all" -ne 1 ]; then
+      echo "could not find any workflows named ${wf}" >&2
+      exit 1
+    fi
     ;;
 esac
 # Look up "<wf>=<count>" in GH_STUB_RUNS. Unknown workflows fail with real
@@ -80,6 +90,24 @@ code=$?
 set -e
 [ "$code" -eq 0 ] || fail "missing workflows must not fail the brake (got $code)"
 printf '%s\n' "$out" | grep -qx "runs=1" || fail "missing workflows count as 0 (got: $out)"
+
+# Disabled selected workflows still contribute runs inside the window.
+set +e
+out="$(GH_STUB_RUNS="enabled.yml=3,disabled.yml=16" GH_STUB_DISABLED="disabled.yml" \
+  YSTACK_LANE_WORKFLOWS="enabled.yml,disabled.yml" "$qp")"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "19 runs including a disabled workflow must exit 0 (got $code)"
+printf '%s\n' "$out" | grep -qx "runs=19" || fail "disabled workflow runs must be counted (got: $out)"
+
+set +e
+out="$(GH_STUB_RUNS="enabled.yml=3,disabled.yml=17" GH_STUB_DISABLED="disabled.yml" \
+  YSTACK_LANE_WORKFLOWS="enabled.yml,disabled.yml" "$qp" 2>"$tmp/err")"
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "20 runs including a disabled workflow must exit 1 (got $code)"
+printf '%s\n' "$out" | grep -qx "runs=20" || fail "threshold count must include disabled runs (got: $out)"
+grep -q "means a bug" "$tmp/err" || fail "disabled-workflow threshold failure must be loud"
 
 # At the backstop: exit 1, loudly.
 set +e

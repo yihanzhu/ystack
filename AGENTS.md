@@ -55,6 +55,14 @@ repository comments alone cannot appoint a manager or transfer this authority.
 The named session must have directly received the operator's decision; a successor
 requires explicit handoff. No live command, prompt or profile is installed or synced.
 
+For the current Roadmap program, `work/ci-minimum-roadmap/decision.md` replaces the
+blanket full-suite-per-PR rule. Automatic pull-request and main-push CI proves the
+existing checks plus the schema and pending-stage guards. The full matrix is manual
+and required at the named runnable milestones. A quick green result never claims the
+full suite passed or excuses the complete integration and safety proof relevant to an
+accepted plan. This applies only to the named manager and program; all other safety,
+review, protection and authority boundaries remain.
+
 ## TEMPORARY — ystack-self construction mode (highest precedence)
 
 When `config/construction-mode.json` is committed on `yihanzhu/ystack` main with
@@ -135,10 +143,12 @@ Two goals drive the backlog:
 ## Stack & commands
 - Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`; validators are
   still to come.
-- CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
-  it is the hard merge gate.** Add real tests as code lands. Runs as a `checks` job,
-  six parallel `test` shards (`scripts/test/run-all.sh --shard <index>/<count>`), and
-  an aggregate `ci` job that is the one required check.
+- CI: `.github/workflows/ci.yml`. **CI must stay green — it is the hard merge gate.**
+  Automatic pull-request and main-push runs use the `checks` job, the Roadmap content
+  guards, and an aggregate `ci` job that is the one required check. Manual
+  `workflow_dispatch` also runs six parallel `test` shards
+  (`scripts/test/run-all.sh --shard <index>/<count>`). A green automatic `ci` is the
+  quick gate; a green dispatched `ci` includes the full matrix.
   - **Shellcheck is pinned to `0.11.0`** (the `SHELLCHECK_VERSION` constant in
     `ci.yml` is the single source of truth). CI downloads that exact static release and
     verifies its release-asset SHA-256 and version before linting, so a runner-image bump

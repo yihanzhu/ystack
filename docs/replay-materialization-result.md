@@ -129,24 +129,25 @@ to original-result evidence.
 
 Restoration also needs the published commits named by the package and profile
 bindings. The materializer source commit is
-`8fc0675eb4e34acbebe9c8ab0310e64328a6114e`; its
+`fc1fc01ff9963f5b8ccab5b26d4d572b9c1a0203`; its
 `adapters/local-git-materializer/v1` path is tree
-`07dc1fa6a1084be8a316384634d521b618991897`, mode `040000`. Profile commit
-`4a576d9181d5e8c01c04f027432ad8b143400cee` contains the four bound documents:
+`5c3607a765cc5d95372a0146be08832ecf554bfc`, mode `040000`. Profile checkpoint
+`e58b71019f48af2b6b3d28becd87ffb69f484399` contains the four bound documents:
 
 | Document | SHA-256 of canonical jq 1.6 bytes with one final newline |
 | --- | --- |
-| Default profile | `81da07a8390b2ec6e00413cce6fad4bd07badbd17a512295da8e5292ace53574` |
-| Alternative profile | `a2f3e69aa2d93afabfa852b6313de69fd44a0ee0d60a6c6ab693d0d3e8f91567` |
-| Both local Git materializer manifests | `f2ace723bf3b604d756169f2cc12c89a02c08026984975e6bd476af4a6d6c3c8` |
+| Default profile | `6adb2763148916b89ffca1b9665226b759f9a3827b257a25373489c1e9a9f1a7` |
+| Alternative profile | `b6112269728e6c3e0ed7d575a9a0437ca1a5b05d6b2d62d4b07f00aff35f6b5c` |
+| Default local Git materializer manifest | `5be4fb77659dcd68905e5353847ffabaa3210a9af9a5cba9c06340d5a03bced7` |
+| Alternative local Git materializer manifest | `5be4fb77659dcd68905e5353847ffabaa3210a9af9a5cba9c06340d5a03bced7` |
 
 Keep both commits reachable on the existing published
-`ystack/impl/replay-materialization-result` branch after any squash merge. Do not
+`ystack/impl/materializer-package-rebinding` branch after any squash merge. Do not
 delete or rewrite that history while these bindings reference it. A squash commit,
 a local object, or a temporarily dangling server object does not retain the original
 containing commits. Omitting a CLI deletion option does not prevent server deletion.
 The manager must obtain the separate approval and verify the retention procedure
-recorded in [the accepted plan](../work/replay-materialization-result/plan.md)
+recorded in [the accepted plan](../work/materializer-package-rebinding/plan.md)
 before merging; this source record is not a completed merge or retention receipt.
 
 Before relying on these bindings, fetch each exact containing commit into its own

@@ -580,6 +580,28 @@ qualified, selected, installed, or activated. It reads no credential, contacts n
 provider or real target during construction, and cannot push, publish, merge, or
 grant authority.
 
+## Inactive candidate content preparation
+
+`preparation/v1/prepare-candidate.py` accepts one exact approved materializer input,
+its actual response, and the resulting owned bare candidate repository. It reruns
+the real response and portable-core validators from measured private copies, admits
+the closed repository layout, recomputes raw Git object identities, and exports the
+whole candidate tree without checkout, attributes, filters, hooks or candidate code.
+
+The output bundle contains exact input and response bytes, a raw candidate content
+root, a complete measured manifest, a completion record and a permanent lock. Files
+preserve Git's executable distinction as local 0400 or 0500 modes. The component
+remeasures the source and output before publication. `inspect` can recover a fully
+published bundle after a lost reply, but cannot finish or repair an interrupted one.
+
+This boundary prepares bytes only. Its owned local files remain mutable by the same
+account, and its record is neither an authenticated receipt nor sandbox evidence.
+The later supervisor still owns provenance, transfer remeasurement, descriptor
+closure, read-only isolation and the fixed verifier invocation and resource limits.
+The component is inactive and uses no network, credential, real target, model,
+publisher, installation, activation, release or deployment path. See
+[the operating and restoration guide](candidate-content-preparation.md).
+
 ## Inactive Claude Code producer normalizer payload
 
 `adapters/claude-code-producer/v1/normalize.jq` validates one untrusted producer
