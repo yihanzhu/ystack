@@ -327,13 +327,32 @@ directly as bounded, dependency-ordered implementation units.
    reconciliation boundaries are proven.
 10. **Target packaging** — install profiles and adapters into a fresh target
     without copying personal configuration.
-11. **Deploy and rollback** — environment tiers, named production gate, rehearsed
-    rollback, and delivery evidence.
-12. **Maintenance loop** — deterministic control bands and scans create new
-    intents; service owners triage; shipped incidents become evals.
+
+Steps 8 and 10 are the next product steps, in that order; step 9 follows step
+8. The sequence after step 7 is 8, then 9, then 10.
+
+- **Dropped — 11. Deploy and rollback** (operator decision, reversible) —
+  environment tiers, named production gate, rehearsed rollback, and delivery
+  evidence. It is dropped because it builds deployment for environment tiers and
+  a production gate that no step 8–10 workflow needs. This removes a safety
+  property: no named production gate and no rehearsed rollback exist, so no
+  workflow may deploy, invoke rollback, or take a production action, and that
+  authority stays with the operator. The north star's rehearsed-rollback or
+  production-signal done-signal is unreachable while step 11 is dropped.
+- **Deferred — 12. Maintenance loop** — deterministic control bands and scans
+  create new intents; service owners triage; shipped incidents become evals.
+  It resumes only after step 10 installs ystack into a target that produces
+  control-band, scan, or production signals, and after a rehearsed rollback
+  exists for any action the loop may invoke, which requires restoring step 11
+  or an equivalent operator-approved gate first.
 
 ## Current disposition
 
+- Step 7 is complete: #264, PR #373, merge commit `a73bd8c`. Its sandbox
+  evaluation is declaration-only and claims no execution boundary; placeholder
+  digests follow decision request DR-4. A real sandbox boundary is the
+  prerequisite for step 8. Follow-ups #327, #314, #329, #307, #304, #280, #301,
+  and #412 keep their existing disposition.
 - PR #146 is a draft experiment and must not merge. It records useful failure
   modes from a GitHub/Claude-specific implementation.
 - The old Phase 2 event names are not product requirements. A supported event is
