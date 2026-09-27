@@ -16,7 +16,7 @@ Change only `scripts/test/control-credential-policy.test.sh`. Its base blob is
 private generated worker/coordinator and failure formatter. Use the existing Bash
 and inline Perl conventions; add no dependency, public helper or restore file.
 
-Use `review_size: accepted-exception`, with an implementation estimate of 1360–1480 net lines
+Use `review_size: accepted-exception`, with an implementation estimate of 1640–1810 net lines
 for recording, coherent record and writer validation, bounded export and complete
 recovery/disclosure controls. Measure cumulative additions minus deletions in the
 sole allowed implementation file against accepted implementation base
@@ -87,10 +87,22 @@ by its normalized record; helper wait and the child-wait report follow. Each sig
 handler's return/outer-signal pair belongs before its interrupted wait observation.
 The expected interrupted statuses remain 143 and the ordinary result remains zero.
 The single-request case has the corresponding one-interruption sequence, with
-129/130/143 for its selected HUP/INT/TERM signal. Validate
-failure prefixes against those operation-specific sites without inventing missing
-records. Do not require worker ack 0 before request 1, or infer worker read order
-from coordinator writes.
+129/130/143 for its selected HUP/INT/TERM signal. Validate failure prefixes against
+those operation-specific sites without inventing missing records. After complete
+direct waits, a failed acknowledgment ends the read loop immediately. Accept failed
+ordinal 0 with ordinal 1 absent, or successful ordinal 0 then failed ordinal 1.
+A raw `empty` token with status zero maps to empty; nonzero status maps to unobserved
+with raw `empty` or `delivered`. Other raw text still rejects the whole file.
+Each attempted raw/normalized pair must agree; no acknowledgment follows a failed
+one. Then require the recorded coordinator wait and exactly one final worker-failure:
+raw helper wait status zero leads to `wait-proof-evidence`; nonzero leads to
+`coordinator`. The reason follows status, not the completion flag. Neither branch
+adds the later child-wait report, descendant records or success. A confirmed outer
+worker wait can qualify this worker evidence while helper completion stays
+unconfirmed. A first-ack failure preserves its observed outcome and unobserved
+second slot; a second-ack failure preserves both observed outcomes. Unknown
+helper-owned data remains withheld. Do not require worker ack 0 before
+request 1, or infer worker read order from coordinator writes.
 Map raw request/acknowledgment input to those enums before writing new records.
 Do not add reads to recover missing acknowledgments. Both ordinals appear in the
 summary even if the second was never reached. Never copy arbitrary token text.
@@ -210,15 +222,25 @@ general shell-error regex or sanitizer can qualify content.
   terminating/termination without helper. These are fixed branches, not permission
   to accept arbitrary subsequences or any token from other tests.
 
-  In the owned-group termination suffix, require TERM then CONT for the same
-  validated owned group; KILL may follow the first exhausted polling phase. Validate
-  the initial probe and each loop's at-most-100 further probes, plus the optional
-  post-KILL initial/loop and final post-reap probe: at most 203, in their actual
-  lifecycle positions. Logical group reap precedes paired physical-wait/wait-result
-  records for that PID. Each interrupted pair may precede another pair; the last
-  pair must be uninterrupted before retired-unconfirmed. Pair statuses must agree;
-  do not impose a guessed two-wait cap instead of the existing whole-file bound.
-  No extra probe, signal or wait is added by validation.
+  Consume the complete child sequence with one record cursor through these fixed
+  producer states; independent presence/count predicates do not prove the sequence.
+  After a permitted prefix, require TERM then CONT for the bound owned group. The
+  first polling phase has its initial probe plus at most 100 further owned-live
+  probes. Absence ends that phase immediately. Only 101 non-absent observations
+  permit and require KILL, followed by a second phase with the same bound and
+  stop-at-absence rule. An exhausted second phase may finish non-absent. Require
+  lifecycle wait-in-progress, one logical group reap, then adjacent physical-wait /
+  wait-result pairs for that PID with matching statuses. Each nonfinal pair must
+  be interrupted; the final pair must be uninterrupted. Next require lifecycle
+  retired-unconfirmed and exactly one final probe in that lifecycle. The entire
+  sequence has at most 203 probes, but the total cap cannot replace phase checks.
+  Any error probe permanently forbids a retired/success claim, even if a later
+  probe is absent. Retired also requires non-127 final reap and final absence.
+  Then consume exactly one terminal-table suffix through EOF. Reject omitted,
+  duplicated or reordered transitions and legacy-only mutation, inspection,
+  preservation, gate-file-error or injected child-signal records. The whole-file
+  bound limits repeated wait pairs; do not invent a two-wait cap. This parser
+  remains private validation of recorded bytes, with no added process operation.
 
   After that coherent suffix, accept only these terminal alternatives. All require
   exactly one final exit-state record, matching the observed lifecycle, operation
@@ -235,16 +257,39 @@ general shell-error regex or sanitizer can qualify content.
   eligible worker records, a distinct bound control-child identity and its ordinary
   non-127 direct wait. The successful row requires child status zero; the failure
   rows require a matching nonzero child status. These prove the child record writer
-  ended; they do not prove
-  the fixture writer ended. Each stream independently retains its content grammar.
-  An unexplained prefix, absent/mismatched exit-state, contradictory final probe,
-  local reap without the required role binding, or rejected unsafe identity remains
-  withheld. An earlier absent probe cannot override later alive/error evidence.
-  Empty pre-observer output may qualify only for a case-bound completed startup,
-  gate or natural-signal path proved by the existing worker wait; it establishes no
-  fixture completion. Never infer terminal validity merely from worker completion.
-  Keep all dependent output withheld when its source proof is unavailable, and keep
-  the existing G2 stop if required evidence cannot safely be retained.
+  ended; they do not prove the fixture writer ended. Each stream independently
+  retains its content grammar. An unexplained prefix, absent/mismatched exit-state,
+  contradictory final probe, local reap without the required role binding, or
+  rejected unsafe identity remains withheld. Earlier absence cannot override later
+  alive/error evidence.
+
+  Byte-empty child events have a separate closed eligibility table below. Every row
+  requires its exact existing case/operation/signal/identity/expected tuple, valid
+  identity mode, expected worker status 64, a distinct bound child identity, eligible
+  worker records, the confirmed outer-worker wait, and exactly one uninterrupted
+  direct-child wait at ordinal -1 with the listed status. If a child-wait report is
+  present, it must agree; require the operation's actual remaining worker sequence.
+  No owned/descendant evidence or nonempty child prefix may qualify through this
+  table. It proves only the child writer ended; fixture streams and descendant
+  confirmation remain withheld/unconfirmed.
+
+  | Case | Operation | Signal | Child wait |
+  | --- | --- | --- | ---: |
+  | gate-abort-write-failure | abort-write-failure | none | 91 |
+  | gate-expiry | gate-expiry | none | 91 |
+  | gate-write-before-bytes | release-write-empty | HUP | 91 |
+  | gate-write-prefix | release-write-prefix | none | 91 |
+  | timing-gate-read-failure | gate-read-failure | none | 91 |
+  | wait-natural-INT | natural-INT | INT | 130 |
+  | wait-INT-before-retirement | signal-after-wait | INT | 130 |
+
+  The gate rows exit before the event observer; the INT rows replace the shell with
+  the signal-terminating process. Do not infer byte-empty HUP/TERM eligibility by
+  analogy: those branches retain the EXIT observer. Unsupported empty tuples and
+  unproved startup failures remain withheld, not evidence of fixture completion.
+  Never infer terminal validity merely from worker completion. Keep all dependent
+  output withheld when source proof is unavailable, and keep the existing G2 stop
+  if any necessary evidence cannot safely be retained.
 - Identity files accept only the exact two-positive-decimal/space/LF grammar.
   Bind roles separately: the outer captured job and checked group bind the worker;
   its unique captured coordinator record binds the helper; its unique launched job
@@ -332,7 +377,14 @@ requires exactly the fixed ordered ID list, one nonnested frame per ID, correct
 bounds/counts/contiguous line numbers/even-length lowercase hex, complete end records
 and one final complete marker. It must reject missing, reordered, duplicate, unknown,
 malformed, nested, truncated and trailing frames/lines; no silent skipping. Recognize
-only one complete grammar-validated summary line before inventory framing. Its
+only one complete grammar-validated summary line before inventory framing. Preserve
+an immutable complete inventory from the successful all-14 byte comparison and its
+known synthetic digest. Before every decoder-negative row, prove that exact baseline
+still decodes successfully. Copy it for one named isolated mutation; require the
+intended occurrence/change count, changed copy digest and unchanged baseline digest
+before asserting refusal. Structural rows name their exact frame insertion, deletion
+or swap; field rows change only that field. Never reuse mutable output from a prior
+rejection as the baseline. The summary's
 case/operation/signal/expected tuple must match the finite ledger; last/failing use
 only the finite coordinator phases. Validate the excerpt as the exact permitted
 escaping of the eligible decoded child source's first 256 bytes, or withheld; an
@@ -357,15 +409,47 @@ coordinator ordinal/name/state/status/exit/last/pending/write-error; worker lite
 role, request/raw-ack/normalized-ack, wait, handler/signal, observation, publication,
 terminal and failure fields; child operation/lifecycle/outcome/role/paired-wait,
 probe/kill/exit fields; identity, diagnostic prefix/excerpts and every summary field.
-For each shape, cover its actual permitted alternatives, numeric boundaries, unknown
-printable values and secret-like substitutions, duplicates/order contradictions,
-and every source dependency's eligible and rejected states. Reject impossible
-alternatives rather than adding them to make a positive control pass. Include the
-actual two-request trace, each terminal table row, later alive/error after absence,
-coherent role aliases and missing-helper identity. Retain nonempty diagnostic and
-escaped-excerpt positives, all 14 byte comparisons and the concrete helper wait
-143:1:unconfirmed, 127:0:unconfirmed and natural 143:0:confirmed assertions. Replace
-old controls only when an explicit row proves their entire obligation; do not omit
+Use an executable row ledger inside this private test. Each stable row ID names
+its producer record/field, named valid baseline, target source, exact mutation and
+change count, and expected rejected/dependent items or summary states. Run every
+row and check the executed IDs/count against that finite ledger; a prose category
+list is not proof. Each accepted variable field needs its own permitted-value and
+isolated refusal rows, including separate status, ordinal and interruption fields,
+handler incoming/return statuses and paired physical-wait/wait-result statuses.
+For fixed alternatives cover each permitted value and unknown-token refusal;
+for numeric fields cover applicable minimum/maximum, overflow and noncanonical
+forms. A syntactically valid value with impossible producer semantics must refuse,
+not become a positive baseline.
+
+Before a row mutates anything, require its baseline's relevant item to be eligible
+and its expected classification to hold. Save the known synthetic target digest and
+all-source manifest. Mutate the existing field at its actual position, require the
+exact intended occurrence count, changed target digest and byte-identical other
+sources. Verify the baseline remains unchanged. A coherent positive boundary
+baseline may adjust linked fields together; its negative row then changes only the
+named obligation. A role-alias or order row may name a finite multi-reference
+change, but must prove exactly those changes. Do not append a field after exit-state
+or combine unrelated contradictions: an earlier rejection must not mask the field
+under test. Digests here belong only to known synthetic control fixtures; never
+hash or emit rejected real evidence.
+
+Use named baselines for all-14 recovery, two-request success, first/second failed
+acknowledgment, interrupted child reap, two-phase polling boundary, each terminal
+variant, each empty-child row, identity terminal, publication and nonempty diagnostic.
+A failure baseline may correctly withhold dependent fixtures; verify its eligible
+source and exact dependent state rather than falsely requiring inventory-complete.
+For the 203-probe positive, use 101 alive first-phase probes, KILL, 100 alive
+second-phase probes then absence, and final post-reap absence. Pair it with isolated
+204-total, per-phase overflow, after-absence, premature/missing-KILL, sticky-error,
+missing-lifecycle and legacy-event refusals. Include each failed-ack branch and an
+impossible continuation after first failure; pair every empty-child row with wrong
+case/status and unconfirmed-writer refusals. Keep coherent role aliases, missing
+helper identity and every dependency's eligible/rejected states.
+
+Retain nonempty diagnostic and escaped-excerpt positives, all 14 byte comparisons,
+zero-payload/withheld/incomplete assertions, raw/hex/prefix/hash marker checks, and
+concrete helper waits 143:1:unconfirmed, 127:0:unconfirmed and natural 143:0:confirmed.
+Replace old controls only when a row proves their entire obligation; do not omit
 fields because another example uses the same regex. Include a valid suffix/prefix
 around an invalid field and otherwise valid content from unconfirmed writers. Verify that
 withheld child sources invalidate their worker-written diagnostic, and withheld
