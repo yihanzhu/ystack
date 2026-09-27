@@ -1068,6 +1068,13 @@ Each gate evaluation's id must be the one its evaluator derives (the stage resul
 
 The catalog metadata each dashboard family carries (grader kinds, trial policy, seed status, seed sources) must be metadata a valid eval catalog can hold; a family called seeded with no seed source is malformed.
 
+The [accepted step 8 bounded-write readiness decision](../work/step8-bounded-write-readiness/spec.md)
+names the first bounded-write workflow and the evidence that must exist before
+any write scope can be proposed. It ships no runtime. No write scope is
+proposable today, this evaluator still refuses an enabled or push-allowed
+scope, and each of the decision's twelve ordered child concerns needs its own
+gates before anything can write.
+
 ## Inactive target packaging
 
 `packaging/v1/` is the roadmap item 10 pair: `build-release.sh` writes a versioned
