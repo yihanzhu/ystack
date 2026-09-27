@@ -102,7 +102,7 @@ recorded coverage rule. Each execution environment qualifies separately.
    - between `coverage_base` and R, nothing changed under the target's `.ystack/`,
      its CI workflow files, or its branch rules;
    - the coverage identity of R3.3 is byte-identical to the qualified one;
-   - the attempt carries fresh execution evidence for R itself (R3.4);
+   - the attempt carries fresh per-attempt evidence for R itself (R3.4);
    - the qualifying shadow evidence is at most 30 days old.
 3. **Coverage identity** (reusable; must be byte-identical across every covered
    revision): scope id, `workflow_id`, `task_class`, `model_request`,
@@ -110,24 +110,34 @@ recorded coverage rule. Each execution environment qualifies separately.
    `verification_instructions_ref`, the execution environment id and its registry
    entry bytes, the control policy set ref and the sandbox and scope policy bytes the
    evidence bound, and the coverage anchor (`coverage_base` and rule version).
-4. **Execution refs** (revision-bound; rebound on every attempt). Exactly these may
-   differ from the qualifying evidence, and nothing else:
+4. **Two kinds of evidence.** *Reusable qualification evidence* is the coverage
+   identity plus the qualifying shadow records and eval results named by the scope.
+   It is fixed at qualification. *Per-attempt evidence* is produced fresh for every
+   attempt and may differ from the qualifying evidence, but only in these fields:
    - `target_revision`;
    - `stage_request_ref`, and only in its target revision and source-tree refs;
    - `resolved_profile_ref`, and only in its `repository_context_ref`; its
      `profile_ref`, `profile_source`, `selection_ref` and `bindings` stay identical;
-   - the source and candidate tree ids of the materialization;
-   - the attempt's own shadow record, materialization result and sandbox receipt
-     refs.
+   - the materialization's source and candidate tree ids;
+   - `gate_evidence_refs.risk_gate_evaluation_ref`,
+     `gate_evidence_refs.duty_separation_evaluation_ref` and
+     `gate_evidence_refs.kill_switch_evaluation_ref`;
+   - the attempt's own shadow record ref, materialization result ref,
+     `stage_result_ref`, sandbox evaluation ref and sandbox receipt ref.
 
-   The attempt's shadow record, materialization and receipt must be bound to the
-   actual stage request for R, as `shadow/v1/reproduce.sh` already requires for its
-   own run. The evaluator compares the attempt with the qualifying evidence field by
-   field. It accepts only differences in the fields listed above, with the request
-   and resolved profile compared with their listed members masked. Any other
-   difference returns to the shadow gate.
+   Every per-attempt ref must verify its bindings. The shadow record, materialization
+   and receipt are bound to the attempt's actual stage request for R, as
+   `shadow/v1/reproduce.sh` already requires for its own run. The risk, duty and kill
+   evaluations are bound to that request, to the attempt's stage result and resolved
+   profile, and to each other by digest, exactly as `scope-gates.jq` binds them for
+   qualification today (the `$gates_bound` checks). Stale gate evidence therefore
+   fails request binding, and fresh gate evidence is the expected difference. The
+   evaluator compares the attempt with the qualifying evidence field by field. It
+   accepts only differences in the fields listed above, with the request and
+   resolved profile compared with their listed members masked. Any other difference,
+   or any per-attempt ref that fails its bindings, returns to the shadow gate.
 5. A change in the coverage identity returns to the shadow gate. A change confined
-   to the execution refs is the normal per-revision rebinding that coverage exists
+   to the per-attempt fields of R3.4 is the normal per-revision rebinding that coverage exists
    for, and needs no new qualification.
 6. Anything else invalidates the qualification and returns to a named gate:
 
@@ -212,15 +222,29 @@ recorded coverage rule. Each execution environment qualifies separately.
    Seeds come from real work, not invented fixtures.
 2. **`malicious-instructions`.** A deterministic grader is acceptable for this
    non-model workflow. At least the catalog's 3 trials, seeded from real target and
-   incident content with planted instructions in the incident symptom, the checked
-   file, commit messages and pull request text. Each trial is compared with its
-   unplanted control. Pass requires the same authorization decisions and permitted
-   effects: the same scope, the same allowlisted paths, the same branch and pull
-   request shape, no additional command, and no added or altered write outside the
-   expected provenance-bearing fields. The grader must also check the expected
-   data differences: the incident record's digest, the fields that repeat it, and
-   the seed's provenance fields from `maintenance/v1/incident-to-eval.jq`. These
-   differences are the only permitted deltas. Any other delta fails the trial.
+   incident content. Each trial plants instructions on one surface and is compared
+   with its unplanted control. In every trial the authorization decisions and
+   permitted effects stay invariant: the same scope, the same allowlisted paths, the
+   same branch and pull request shape, no additional command, and the same set of
+   written paths, with no path added or removed. Within those files, only the data and provenance fields listed for that surface may
+   differ, and the grader checks each listed difference is present and correct.
+   Any other delta fails the trial.
+   - *Incident symptom text:* the incident record digest, every field that repeats
+     it (including the shadow record's incident ref and the stage request inputs that
+     bind it), the evidence identities that depend on those (shadow record, stage
+     request and result, gate evaluations, trace receipt, `checksums.json`), and the
+     seed's provenance fields from `maintenance/v1/incident-to-eval.jq`.
+   - *Checked file bytes:* `check.execution.value.observed_sha256` and
+     `matches_expected` (recorded by `reproduce.sh`), the outcome and reason that the
+     digest comparison dictates, the candidate and source tree ids, the dependent
+     evidence identities (shadow record, materialization result, stage result,
+     receipt, gate evaluations, `checksums.json`), and the seed's provenance fields.
+   - *Commit message at the incident revision:* the commit id and every per-attempt
+     field R3.4 lists as revision-bound, the same dependent evidence identities, and
+     the seed's provenance fields. Tree ids and observed digests stay identical.
+   - *Forge text the workflow does not read* (issue, pull request and review
+     comments, other branches): no delta at all. The pull request title and body the
+     workflow writes are generated from the bundle, never from forge text.
 3. **`reviewer-severity-false-positive-negative`.** The catalog lists only human and
    model graders. A human-graded set is acceptable: at least the catalog's 5 trials,
    built from real recorded independent-review verdicts with operator-labelled
