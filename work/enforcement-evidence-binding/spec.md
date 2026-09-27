@@ -171,9 +171,11 @@ All citations are to origin/main at `272ec0f`.
    1-8 digests with no placeholder; `mechanisms` with the six R6 rows, each a sorted
    unique array of 1-8 `id_ok` values. Observers are fixed by the R6 table, not by
    the set.
-3. It ships with `environments: []`. With the shipped set, every receipt is refused
-   with `receipt.identity-unaccepted`, so no fixture or forgery can pass the
-   shipped check. Adding an entry is concern 4's reviewed change, together with
+3. It ships with `environments: []`. With the shipped set no receipt can be
+   `valid`: an input with an exclusive R7.4 reason gets that reason alone, and
+   every other receipt is refused with at least `receipt.environment-unlisted` and
+   `receipt.identity-unaccepted`, so no fixture or forgery can pass the shipped
+   check. Adding an entry is concern 4's reviewed change, together with
    that environment's native qualification.
 4. **Not yet available.** No slot of a `satisfied` or `violated` receipt may be
    `unobserved`. `unobserved` is allowed only in a `failed` receipt, where the
@@ -252,14 +254,14 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
 | `receipt.kind-unsupported` | Any other kind, schema version or `contract_version` |
 | `receipt.malformed` | Receipt or expectation fails its R3/R4 shape |
 | `receipt.placeholder-identity` | Any identity or `*_sha256` is all-ones or all-zeros |
-| `receipt.origin-mismatch` | `producer_role` is not `host-supervisor`, or `store_id` differs from the expectation |
+| `receipt.origin-mismatch` | `store_id` differs from the expectation (any `producer_role` other than `host-supervisor` is malformed) |
 | `receipt.replayed` | `attempt_id`, `attempt_number` or `launch_request_sha256` differs from the expectation |
 | `receipt.subject-mismatch` | Any `subject` field differs from the expectation |
 | `receipt.control-mismatch` | Any `control` field differs from the expectation, the fixed policy, decision or policy-set bytes, the decision's evaluator refs, or the evaluation input's digest |
 | `receipt.evaluation-not-satisfied` | The evaluation input is not a `satisfied` `sandbox_policy_evaluation` whose policy set, policy and decision refs equal the receipt's |
 | `receipt.environment-unlisted` | `environment_id` is absent from the registry or the accepted set, or `environment_entry_sha256` or `target_repository_id` differs from the registry entry |
 | `receipt.stale` | `accepted_set_sha256` differs from the current accepted set's digest |
-| `receipt.identity-unaccepted` | An observed identity or a `mechanism_id` is not in the environment's accepted entry |
+| `receipt.identity-unaccepted` | The environment has no accepted entry, or an observed non-placeholder identity or a `mechanism_id` is not in it |
 | `receipt.limit-mismatch` | A `bound` or `observer` differs from R6 |
 | `receipt.outcome-inconsistent` | The recorded `outcome` differs from the R8 derivation |
 
@@ -317,24 +319,37 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
    intent, spec and plan), and `work/enforcement-evidence-binding/plan.md`.
 2. `scripts/test/sandbox-receipt.test.sh` provisions pinned jq as
    `scripts/test/shadow-slice.test.sh:24-51` does and builds every fixture inline
-   from synthetic digests. It proves:
+   from synthetic digests. Receipt fixtures name the registry's
+   `env.local-macos-fixture` entry and its canonical entry digest; the test-only
+   accepted set lists that environment. Every expected result obeys R7.4
+   precedence: a fixture with an exclusive reason expects that reason alone. It
+   proves:
    - one positive control each for `satisfied`, `violated` and `failed`, with a
      test-only accepted set;
-   - each of the 14 R7.4 reasons alone, each paired with the positive control that
-     differs only in the mutated field;
-   - each R8 derivation rule, including each of the six `failure.*` reasons set
-     alone on an otherwise-satisfied receipt (it must yield `failed`), each
-     `lifecycle` consistency rule, and a receipt whose
-     recorded verdict disagrees with its rows;
-   - each of the six R6 rows refusing `satisfied` for `partial`, `unavailable`,
-     `none`, `unknown`, `reached` and an observed value above the bound;
+   - each of the 14 R7.4 reasons as the only reason, each from a fixture that
+     differs from a positive control only in the mutated field;
+   - each R8 derivation rule: each of the six `failure.*` reasons set alone on an
+     otherwise-satisfied receipt yields `valid` with `enforcement_verdict:
+     "failed"` and that reason; a receipt whose recorded `outcome` disagrees with
+     its fields yields `receipt.outcome-inconsistent` alone;
+   - each R3.8 `lifecycle` consistency rule and each R3.7 row rule (`observed` null
+     with complete observation, `observed` at or above `bound` with `reached:
+     false`) broken alone yields `receipt.malformed` alone;
+   - for each of the six R6 rows, with a correctly derived outcome: `partial` and
+     `unavailable` give `failed` with `failure.observation-unavailable`; `none` and
+     `unknown` give `failed` with `failure.enforcement-unavailable`; `reached` gives
+     `violated` with that row's `limit.*` reason; none of them is ever
+     `satisfied`;
    - replay: a valid receipt checked against a second expectation that differs only
      in nonce-bearing `launch_request_sha256`, then only in `attempt_id`;
    - a byte-identical copy of a valid receipt yields the same check (integrity), and
      the output still says `origin_check: "not-performed"`;
-   - the shipped driver against the shipped files refuses every fixture receipt with
-     `receipt.identity-unaccepted`, and a temporary repository copy with the
-     test-only set accepts the positive controls end to end;
+   - the shipped driver against the shipped files: each positive control and each
+     otherwise-valid fixture is refused with exactly `receipt.environment-unlisted`,
+     `receipt.identity-unaccepted` and `receipt.stale` (its `accepted_set_sha256`
+     names the test-only set); each exclusive-reason fixture still gets its reason
+     alone; and a temporary repository copy with the test-only set accepts the
+     positive controls end to end;
    - driver error paths: wrong argument count, non-canonical, BOM, oversize, deep
      and multi-root inputs, symlinked input, and an input changed during evaluation;
    - repeat runs give byte-identical output.
