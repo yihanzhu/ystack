@@ -1363,12 +1363,14 @@ text in a regular, non-symlink file inside a fixed size. Validating a record
 creates no issue, no change request, and no deploy authority.
 
 `shadow/v1/shadow-environments.json` is the committed list of execution
-environments a shadow run may use. It lists two entries today:
-`env.local-macos-fixture` (`fixtures-only`, `unproven`) and
-`env.local-macos-ystack-self` (`self-host`, `unproven`). Each entry binds one
-target repository id and one source repository, named by that repository's own
-root commit. Adding an environment is a reviewed change to that file; no run
-may add one.
+environments a shadow run may use. It lists three entries today:
+`env.local-macos-fixture` (`fixtures-only`, `unproven`),
+`env.local-macos-ystack-self` (`self-host`, `unproven`) and
+`env.local-macos-dummy-target` (`external-target`, `unproven`), which binds the
+external dummy target `repo.ystack-dummy-target` by its root commit. Each entry
+binds one target repository id and one source repository, named by that
+repository's own root commit. Adding an environment is a reviewed change to
+that file; no run may add one.
 
 `shadow/v1/reproduce.sh` is the driver. It takes one incident record, one
 execution-environment claim, the control policy set and duty evaluation that
