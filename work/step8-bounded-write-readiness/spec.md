@@ -182,7 +182,7 @@ recorded coverage rule. Each execution environment qualifies separately.
    a commit that once enabled the scope stays in history after the operator disables
    or replaces it. Child concern 6 adds `scope.enablement-stale` to
    `scope-policy.json` `reason_ids`. The authentic operator merge of the introducing
-   pull request is checked from forge records; how is fixed by child concern 11.
+   pull request is checked from forge records; how is fixed by child concern 12.
 5. Until that pull request merges, `workflow-scope.jq:185-188` keeps refusing an
    enabled or push-allowed scope and qualification stays `unavailable`.
 
@@ -206,15 +206,26 @@ recorded coverage rule. Each execution environment qualifies separately.
    `kill_switch_register`, committed on the ystack default branch, so every change
    is operator-merged. Body: `revision` (strictly increasing), `authority_epoch`,
    and `entries` for the `global`, `repository` and `workflow` scopes of
-   `control/v1/kill-switch-policy.json`, each `cleared` or `stop`. The shipped
-   per-attempt `kill_switch_state` (`control/v1/kill-switch.jq`) becomes a
-   deterministic projection of the register for one attempt: it binds the register's
-   SHA-256 and revision and adds the `stage` and `attempt` entries.
+   `control/v1/kill-switch-policy.json`, each `cleared` or `stop`, plus
+   `write_entries`: one per workflow scope, `cleared` or `stop`. A write needs both
+   the matching `entries` cleared and the scope's own write entry `cleared`; an
+   absent write entry means `stop`. Observation (shadow runs and gate evaluations)
+   reads only `entries`. The shipped per-attempt `kill_switch_state`
+   (`control/v1/kill-switch.jq`) becomes a deterministic projection of the register
+   for one attempt: it binds the register's SHA-256 and revision and adds the
+   `stage` and `attempt` entries.
 5. **How a workflow checks it.** At attempt start, immediately before the publisher
    write, and in the post-write check. Each reads the register from the default
    branch tip at that moment, never a cached copy. A missing, unreadable, malformed,
    rolled-back or ambiguous register counts as `stop` (fail closed, matching the
-   policy's `fail_mode: closed`). A `stop` at any matching scope refuses the write.
+   policy's `fail_mode: closed`). A `stop` at any matching scope, or a write entry
+   that is absent or `stop`, refuses the write.
+6. **Bootstrap before use.** The register is committed by child concern 7, before
+   any gate evaluation reads it (concern 9). Its first state has `entries` cleared
+   for observation and no write entry for any scope, so nothing can write. Writes
+   stay disabled until concern 12; concern 12 only flips the one scope's write
+   entry to `cleared`, in the same operator-merged pull request as the enablement
+   record.
 
 ### R6. Evals
 
@@ -283,13 +294,14 @@ drafting may run in parallel where no dependency is listed.
 | 4 | VM launcher and supervisor | 2, 3 | Installation and native qualification on the operator's machine |
 | 5 | Shadow-consumer integration: real receipt in the driver; R2 write-shadow record | 1, 2, 3, 4 | First real write-shadow run |
 | 6 | Scope-gate hardening: R7, R2.5, R3 | 2, 5 | None beyond review |
-| 7 | Durable telemetry (subsumes #307) | — | None beyond review |
-| 8 | Real gate evidence: risk, duty and kill evaluations bound to the scope's own `stage_request_ref`; kill projection of R5.4 | 5 | None beyond review |
-| 9 | Eval seeding: R6 | 5, 8 | Model graders; any grader or trial-policy change |
-| 10 | Real short-lived publisher and post-write check (#304) | 6, 7, 8 | Credential, identity, network scope, first real write |
-| 11 | Enablement pull request: `config/scope-enablement.json`, `config/kill-switch.json`, `allowed_live_writes` | 1-10 closed | Activation; operator merge of `config/**` |
+| 7 | Kill-switch register bootstrap: commit `config/kill-switch.json` (R5.4, R5.6), operator as owner, observation cleared, no write entry | 4, 6 | The operator commits the register; operator merge of `config/**` |
+| 8 | Durable telemetry (subsumes #307) | — | None beyond review |
+| 9 | Real gate evidence: risk, duty and kill evaluations bound to the scope's own `stage_request_ref`; kill projection of R5.4 | 5, 7 | None beyond review |
+| 10 | Eval seeding: R6 | 5, 9 | Model graders; any grader or trial-policy change |
+| 11 | Real short-lived publisher and post-write check (#304) | 6, 8, 9 | Credential, identity, network scope, first real write |
+| 12 | Enablement pull request: `config/scope-enablement.json`, the scope's write entry in `config/kill-switch.json`, `allowed_live_writes` | 1-11 closed | Activation; operator merge of `config/**` |
 
-Concerns 2, 3, 7 and the deterministic part of 9 may be drafted now. Concern 11
+Concerns 2, 3, 8 and the deterministic part of 10 may be drafted now. Concern 12
 strictly follows every other concern and step 7's close.
 
 ### R9. Exclusions
@@ -327,12 +339,12 @@ below from "today" to "required".
 | A write scope has shadow evidence | Withheld write-shadow record (R2) | Only `no-change` records exist | 5, 6 |
 | Qualification covers later revisions safely | R3 coverage rule | Exact revision only | 6 |
 | A real execution boundary held | Authentic sandbox receipt; native environment qualification | Declaration only, `unproven` | 2, 3, 4, 6 |
-| Gate outputs belong to this scope | Real risk, duty and kill evaluations for its `stage_request_ref` | Harness-built only | 8 |
-| Attempts are durable and auditable | Sealed traces outside scratch | Scratch-bound | 7 |
-| Regression suite is complete | Nine families seeded and passing | Seven seeded, two declared | 9 |
-| Only the fixed write happens | Short-lived publisher, target ruleset, post-write check | Dormant publisher only | 10 |
-| The operator can stop everything | `config/kill-switch.json`, fail-closed reads | Policy and evaluator, no state | 8, 11 |
-| Only the operator turns a scope on | `config/scope-enablement.json`, operator-merged | No record, no consumer | 6, 11 |
+| Gate outputs belong to this scope | Real risk, duty and kill evaluations for its `stage_request_ref` | Harness-built only | 9 |
+| Attempts are durable and auditable | Sealed traces outside scratch | Scratch-bound | 8 |
+| Regression suite is complete | Nine families seeded and passing | Seven seeded, two declared | 10 |
+| Only the fixed write happens | Short-lived publisher, target ruleset, post-write check | Dormant publisher only | 11 |
+| The operator can stop everything | `config/kill-switch.json`, fail-closed reads | Policy and evaluator, no state | 7, 9, 12 |
+| Only the operator turns a scope on | `config/scope-enablement.json`, operator-merged | No record, no consumer | 6, 12 |
 
 ## Out of scope
 
@@ -349,24 +361,27 @@ Everything R9 lists. Also any change to step 7's scope, to the program order
   real gate evidence and does not list step 7 as a concern. This record puts step 7
   first as the prerequisite already in flight, and puts gate evidence and eval
   seeding before the publisher, so every non-credential concern lands before the
-  one that needs a reserved credential. Operator review of this order is requested,
+  one that needs a reserved credential. It also adds concern 7, the kill-switch
+  register bootstrap, which the intent does not list, so gate evidence has a
+  register to read before enablement. Operator review of this order is requested,
   not assumed.
 - **Kill-switch shape.** The shipped `kill_switch_state` carries one `attempt_id`,
   so it cannot itself be a committed, shared document. R5.4 adds a register and a
-  projection; the evaluator change is child concern 8's, and until then the
-  register is not read by anything.
+  projection; concern 7 commits the register and the evaluator change is concern
+  9's. Until concern 9 lands, the register is not read by anything. A write needs
+  a separate write entry, so observation can be cleared while writes stay off.
 - **Stopping is slow through a pull request.** A committed register needs a merge to
   change. The operator can also stop at once by revoking the publisher identity;
-  child concern 10 must make that path work and fail closed.
+  child concern 11 must make that path work and fail closed.
 - **Operator-merge authentication.** A file on the default branch does not prove who
-  merged it. Child concern 11 must bind the introducing pull request's merger to the
+  merged it. Child concern 12 must bind the introducing pull request's merger to the
   operator from forge records, or stop.
 - **Non-model identity.** `qualified_identity` requires `model_request` even for a
   workflow that invokes no model. R3.7 keeps it as recorded configuration; zero
   producer invocations is proven separately (R1.3).
 - **External first target.** The first write goes to another repository, so the
   publisher needs a credential there. That is reserved and is asked only at child
-  concern 10.
+  concern 11.
 
 Intent open questions, answered:
 
@@ -376,9 +391,9 @@ Intent open questions, answered:
   proven by repeat and offline test without a live write.
 - *Revision coverage:* R3, with its invalidation table.
 - *Kill-switch location and reading:* `config/kill-switch.json`, read fresh at three
-  points; missing or unreadable means stop (R5.4-5).
+  points; missing or unreadable means stop (R5.4-6).
 - *Seeding the two declared families:* R6.2-3. Trial counts are the catalog's
   minimums; pass floors are stated; further thresholds are carried forward to child
-  concern 9 with operator acceptance.
-- *Parallel versus strict:* R8. Concerns 2, 3, 7 and deterministic seeding may start
-  now; concern 11 strictly follows all others and step 7's close.
+  concern 10 with operator acceptance.
+- *Parallel versus strict:* R8. Concerns 2, 3, 8 and deterministic seeding may start
+  now; concern 12 strictly follows all others and step 7's close.
