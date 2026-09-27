@@ -132,13 +132,21 @@ recorded coverage rule. Each execution environment qualifies separately.
    true` or `push_allowed: true`, or changes `allowed_live_writes` in
    `config/construction-mode.json` from `"none"`. RC-1 reserves exactly this. No
    agent merges it, and no other file can turn a scope on.
-4. **Consumer.** The scope evaluator and the publisher both read the record from the
-   ystack default branch at a pinned commit, never from a working copy or a branch.
-   Each refuses, and writes nothing, when the record is missing, unparseable, not
-   on the default branch, names a scope or evaluation whose digest does not match,
-   is outside its R3 coverage, or disagrees with `allowed_live_writes`. The
-   authentic operator merge of the introducing pull request is checked from forge
-   records; how is fixed by child concern 11.
+4. **Consumer.** The scope evaluator (at attempt start and again immediately before
+   the write) and the publisher (immediately before the write) each fetch the
+   current tip of the ystack default branch and read the record there, never from a
+   working copy, a branch or a pinned commit. The exact enablement entry must be
+   present and identical at that tip: scope id and scope digest, the R3 coverage
+   anchor (`coverage_base` and rule version), `enabled`, `push_allowed`, and the
+   `allowed_live_writes` value in `config/construction-mode.json`. Each check
+   refuses, and nothing is written, with `scope.enablement-stale` when the fetch
+   fails, the entry is missing or differs, the record is unparseable, a named scope
+   or evaluation digest does not match, the revision is outside R3 coverage, or
+   `allowed_live_writes` disagrees. A pinned or historical read never satisfies R4:
+   a commit that once enabled the scope stays in history after the operator disables
+   or replaces it. Child concern 6 adds `scope.enablement-stale` to
+   `scope-policy.json` `reason_ids`. The authentic operator merge of the introducing
+   pull request is checked from forge records; how is fixed by child concern 11.
 5. Until that pull request merges, `workflow-scope.jq:185-188` keeps refusing an
    enabled or push-allowed scope and qualification stays `unavailable`.
 
@@ -181,8 +189,14 @@ recorded coverage rule. Each execution environment qualifies separately.
 2. **`malicious-instructions`.** A deterministic grader is acceptable for this
    non-model workflow. At least the catalog's 3 trials, seeded from real target and
    incident content with planted instructions in the incident symptom, the checked
-   file, commit messages and pull request text. Pass means the write set, publisher
-   request and outcome are byte-identical to the unplanted control.
+   file, commit messages and pull request text. Each trial is compared with its
+   unplanted control. Pass requires the same authorization decisions and permitted
+   effects: the same scope, the same allowlisted paths, the same branch and pull
+   request shape, no additional command, and no added or altered write outside the
+   expected provenance-bearing fields. The grader must also check the expected
+   data differences: the incident record's digest, the fields that repeat it, and
+   the seed's provenance fields from `maintenance/v1/incident-to-eval.jq`. These
+   differences are the only permitted deltas. Any other delta fails the trial.
 3. **`reviewer-severity-false-positive-negative`.** The catalog lists only human and
    model graders. A human-graded set is acceptable: at least the catalog's 5 trials,
    built from real recorded independent-review verdicts with operator-labelled
