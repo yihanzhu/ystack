@@ -65,10 +65,15 @@ All citations are to origin/main at `272ec0f`.
    - Each attempt has exactly one receipt at `<store>/<attempt_id>/receipt.json`,
      created exclusively, fsynced, then mode `0440`, link count 1. A second write
      for the same attempt id fails and the supervisor records a failure instead.
-   - The consumer opens the file relative to a directory descriptor for the store
-     without following symlinks; requires a regular file and parent directories
-     with the owner, group, mode and link count above; copies at most 1,048,576 bytes; re-checks the same metadata
-     after the read; and then runs the R7 check on the copied bytes.
+   - The consumer opens the store root, then `<attempt_id>`, then `receipt.json`,
+     each relative to the previous directory descriptor with `O_NOFOLLOW`, so no
+     path component may be a symlink. Each directory must be a directory owned by
+     the supervisor principal, with the consumer group, mode `0750` and no ACL
+     entries; directory link counts are not checked. `receipt.json` must be a
+     regular file with that owner and group, mode `0440`, no ACL entries and link
+     count exactly 1. The consumer copies at most 1,048,576 bytes, re-checks the
+     same file and directory metadata after the read, and then runs the R7 check
+     on the copied bytes.
    - The consumer records an origin section `{state, store_id, method,
      observation_sha256}` in the record it attaches the receipt to, with `method:
      "controlled-storage.v1"` and `state: "authenticated"` only when every rule
@@ -326,8 +331,14 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
    proves:
    - one positive control each for `satisfied`, `violated` and `failed`, with a
      test-only accepted set;
-   - each of the 14 R7.4 reasons as the only reason, each from a fixture that
-     differs from a positive control only in the mutated field;
+   - each of the 14 R7.4 reasons as the only reason. A fixture starts from a
+     positive control and mutates one field; any digest that binds the mutated
+     bytes (for example `sandbox_evaluation_sha256` after changing the
+     evaluation's verdict) is then recomputed in both receipt and expectation, so
+     the other checks still pass on real digests. No check is relaxed for
+     fixtures, and a companion case without the recomputation expects the
+     combined reason set (for that example, `receipt.control-mismatch` and
+     `receipt.evaluation-not-satisfied`);
    - each R8 derivation rule: each of the six `failure.*` reasons set alone on an
      otherwise-satisfied receipt yields `valid` with `enforcement_verdict:
      "failed"` and that reason; a receipt whose recorded `outcome` disagrees with
@@ -371,19 +382,11 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
 
 ## Design
 
-The receipt is one supervisor-owned document with three kinds of content: what ran
-(ten byte identities), what it ran against (control, subject, attempt), and what the
-trusted observers saw (six accounting rows, teardown). The consumer's expectation is
-written first and holds the nonce-bearing launch request digest, so replay across
-attempts or environments fails a field comparison, and the store's one-receipt-per-attempt
-rule makes a second receipt for the same attempt impossible to write.
-
-The check is deliberately pure. It proves shape, binding, acceptance and internal
-consistency, and it cannot prove origin, so its output says so in a fixed field.
-Origin is proved once, at the host, by reading the store under R2.3; concern 5
-records that in the shadow record and concern 6 requires both. The shipped empty
-accepted set keeps the check fail-closed until concern 4 adds a reviewed,
-qualified environment.
+The receipt records what ran (ten byte identities), what it ran against (control,
+subject, attempt) and what trusted observers saw (six rows, lifecycle, teardown).
+The check proves shape, binding, acceptance and consistency, never origin; origin
+is proved once at the host under R2.3, recorded by concern 5 and required by
+concern 6. The shipped empty accepted set keeps the check fail-closed.
 
 ## Out of scope
 
@@ -394,20 +397,14 @@ change to the ceiling, the demonstration policy, the registry or step 7.
 
 ## Areas of concern
 
-- **Origin is only as strong as the host.** R2.5 states the residual and routes the
-  one question to concern 4's existing reserved decision. Review should confirm no
-  wording presents a digest match or a valid check as origin proof.
-- **Content-level forgery.** A caller who controls both the expectation and the
-  receipt can make them match; R7.5 is why `valid` alone never counts.
-- **Scratch bound.** The policy has no scratch value. R5.2 makes it a per-environment
-  accepted value fixed with concern 4's review, not a new policy limit.
-- **Mechanism honesty.** R6 marks rate limits, polls and overshoot as `enforcement:
-  "none"`, matching the blockers the sandbox decision records at
-  `work/real-sandbox-boundary/spec.md:126-132`.
-- **Supervisor split.** R3.6 splits "supervisor" and "guest kernel/configuration"
-  into two slots each; merging them later would be a contract version change.
+- **Origin and forgery.** Origin is only as strong as the host (R2.5). A caller who
+  controls both expectation and receipt can make them match; R7.5 is why `valid`
+  alone never counts.
+- **Scratch bound.** The policy has none; R5.2 makes it a reviewed per-environment
+  value, not a new policy limit.
+- **Mechanism honesty.** Rate limits, polls and overshoot are `enforcement: "none"`
+  (R6), matching `work/real-sandbox-boundary/spec.md:126-132`.
 
-Intent open questions, answered: origin without a credential (R2, residual in R2.5);
-replay binding (R3.3, R4, R7.4 `receipt.replayed`, R2.3 one receipt per attempt);
-placement and telling kinds apart (R1); accounting per limit (R6); "not yet available"
+Intent open questions, answered: origin without a credential (R2); replay (R3.3,
+R4, R2.3); placement and kinds (R1); accounting (R6); "not yet available"
 (R5.3-R5.4); native qualification (R5.5).
