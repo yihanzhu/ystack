@@ -115,7 +115,8 @@ recorded coverage rule. Each execution environment qualifies separately.
    It is fixed at qualification. *Per-attempt evidence* is produced fresh for every
    attempt and may differ from the qualifying evidence, but only in these fields:
    - `target_revision`;
-   - `stage_request_ref`, and only in its target revision and source-tree refs;
+   - `stage_request_ref`, and only in its target revision, source-tree refs,
+     `repository_context_ref` and `resolved_profile_ref`;
    - `resolved_profile_ref`, and only in its `repository_context_ref`; its
      `profile_ref`, `profile_source`, `selection_ref` and `bindings` stay identical;
    - the materialization's source and candidate tree ids;
@@ -127,7 +128,11 @@ recorded coverage rule. Each execution environment qualifies separately.
 
    Every per-attempt ref must verify its bindings. The shadow record, materialization
    and receipt are bound to the attempt's actual stage request for R, as
-   `shadow/v1/reproduce.sh` already requires for its own run. The risk, duty and kill
+   `shadow/v1/reproduce.sh` already requires for its own run. The request's
+   `repository_context_ref` and `resolved_profile_ref` must equal the fresh resolved
+   profile's context ref and digest, as the core `stage_request_resolved_relation_ok`
+   and `stage_request_resolved_ref_ok` checks require; a request that merely differs
+   is refused. The risk, duty and kill
    evaluations are bound to that request, to the attempt's stage result and resolved
    profile, and to each other by digest, exactly as `scope-gates.jq` binds them for
    qualification today (the `$gates_bound` checks). Stale gate evidence therefore
@@ -226,23 +231,32 @@ recorded coverage rule. Each execution environment qualifies separately.
    with its unplanted control. In every trial the authorization decisions and
    permitted effects stay invariant: the same scope, the same allowlisted paths, the
    same branch and pull request shape, no additional command, and the same set of
-   written paths, with no path added or removed. Within those files, only the data
-   and provenance fields listed for that surface may differ, and the grader checks
-   each listed difference is present and correct.
-   Any other delta fails the trial.
-   - *Incident symptom text:* the incident record digest, every field that repeats
-     it (including the shadow record's incident ref and the stage request inputs that
-     bind it), the evidence identities that depend on those (shadow record, stage
-     request and result, gate evaluations, trace receipt, `checksums.json`), and the
-     seed's provenance fields from `maintenance/v1/incident-to-eval.jq`.
+   written paths, with no path added or removed. Only the data, provenance and
+   derived fields listed for that surface may differ. The grader recomputes each
+   listed difference from its cause and checks it is present and correct. Any other
+   delta fails the trial. On the first three surfaces the committed bundle and seed
+   bytes change, so the write candidate tree differs from the control's; the grader
+   checks that tree is exactly the control's paths with the recomputed bytes.
+   - *Incident symptom text:* the incident record digest; every field that repeats
+     it (the shadow record's incident ref, the stage request inputs that bind it);
+     the dependent evidence identities (shadow record, stage request and result,
+     gate evaluations, trace receipt, `checksums.json`); the seed's provenance
+     fields from `maintenance/v1/incident-to-eval.jq` and so the seed digest; and the
+     committed bundle and seed bytes and the write candidate tree. The source tree,
+     observed digest, outcome and seed expectation stay identical.
    - *Checked file bytes:* `check.execution.value.observed_sha256` and
-     `matches_expected` (recorded by `reproduce.sh`), the outcome and reason that the
-     digest comparison dictates, the candidate and source tree ids, the dependent
-     evidence identities (shadow record, materialization result, stage result,
-     receipt, gate evaluations, `checksums.json`), and the seed's provenance fields.
+     `matches_expected` (recorded by `reproduce.sh`); the outcome and reason that the
+     digest comparison dictates; the seed's `case.expectation.status` that
+     `incident-to-eval.jq` derives from that outcome (for example `completed` to
+     `stale`); the source tree ids; the dependent evidence identities (shadow
+     record, materialization result, stage result, receipt, gate evaluations,
+     `checksums.json`); the seed's provenance fields and digest; and the committed
+     bytes and the write candidate tree.
    - *Commit message at the incident revision:* the commit id and every per-attempt
-     field R3.4 lists as revision-bound, the same dependent evidence identities, and
-     the seed's provenance fields. Tree ids and observed digests stay identical.
+     field R3.4 lists as revision-bound; the seed's recorded revision fields,
+     provenance fields and digest; the same dependent evidence identities; and the
+     committed bytes and the write candidate tree. The target source tree ids and
+     the observed digest stay identical, and so do the outcome and seed expectation.
    - *Forge text the workflow does not read* (issue, pull request and review
      comments, other branches): no delta at all. The pull request title and body the
      workflow writes are generated from the bundle, never from forge text.
