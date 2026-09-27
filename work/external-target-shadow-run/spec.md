@@ -36,7 +36,8 @@ result stops the run (requirement 7).
   `target_revision`), the scope gates and the maintenance consumer.
 - `repo.ystack` legitimately stays in the documents that describe the control
   plane, not the target: the pinned default profile's package, config, prompt and
-  manifest references, and the selection scope. The assembler pins the default
+  manifest references, the qualified identity's `prompt_refs` (copied from the
+  producer binding), and the selection scope. Requirement 15 lists both sets exactly. The assembler pins the default
   profile by bytes and by `profiles/default/v1/...` paths; those paths are in
   ystack, where the packages live. A mixed identity — packages in `repo.ystack`,
   target revision elsewhere — is what this run must record. Fixture tests
@@ -245,11 +246,43 @@ result stops the run (requirement 7).
       locations, network deny, no-change materialization, trace seal and result
       reference, the retained sandbox evaluation and its marker, and requirement
       10's placeholder division, all as the self-host spec's requirement 15;
-    - portability: every `target_repository_id`, `target_revision`,
-      `git_revision_ref`, materialization revision and source-tree revision names
-      `repo.ystack-dummy-target`; `repo.ystack` appears only inside the profile,
-      manifests and resolved bindings and in the selection scope; the resolved
-      profile's repository context names the target tree;
+    - portability, as two exact lists over every retained document (`[]` means
+      every element). Each **target-facing** field must equal
+      `repo.ystack-dummy-target`:
+      - the registry entry's `target_repository_id` (requirement 1);
+      - each incident's `body.target_repository_id` and
+        `body.git_revision_ref.repository_id`;
+      - each stage request (`prerequisite/stage-request.json` and the
+        `stage_request.content` embedded in every `input.json`):
+        `body.target_repository_id`, `body.target_revision.value`, `body.base.value`,
+        `body.source.value.value.revision`, the source-tree input's
+        `body.inputs[].value.value.value.revision`, and
+        `body.repository_context_ref.subject_ref.value.value.revision`;
+      - the resolved profile's (and prerequisite copy's)
+        `body.repository_context_ref.subject_ref.value.value.revision`;
+      - each materialization receipt's `source.repository_id`;
+      - each qualified identity's `body.target_revision`, and the same field in the
+        shadow record's embedded `body.qualified_identity`;
+      - each shadow record's `body.target_repository_id`,
+        `body.git_revision_ref.repository_id` and
+        `body.materialization.value.source.repository_id`.
+      Each **control-plane** occurrence must equal `repo.ystack`, because it names a
+      ystack object the unchanged default profile selects:
+      - in the resolved profile (and prerequisite copy): `body.profile_source`,
+        `body.selection_ref` subject, and in `body.bindings[]` the `binding`'s
+        `package_ref`, `config_ref` and `prompt_ref` revisions and the
+        `manifest_source`, `package_source`, `config_source` and `prompt_source`
+        source revisions;
+      - in every `input.json`: the embedded `profile`, `resolved_profile` and
+        `manifests[]` documents' refs of those same kinds, and the embedded stage
+        request's `body.selection_ref` subject;
+      - each qualified identity's `body.prompt_refs[].revision.repository_id`, and
+        the same field in the shadow record's embedded `body.qualified_identity`
+        (inherited from the producer binding, requirement 11);
+      - each materialization result's
+        `body.execution.actual_binding.package_ref.revision.repository_id`.
+      Any `repository_id` or `target_repository_id` in the bundle that is on
+      neither list fails, as does either list naming the wrong repository;
     - the requester is exactly requirement 8's six fields with its pinned digest;
     - the step-8 scope evaluator (inactive compatibility harness, scope for
       `repo.ystack-dummy-target` requiring `env.local-macos-dummy-target`) and
