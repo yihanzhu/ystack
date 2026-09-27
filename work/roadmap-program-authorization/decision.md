@@ -284,3 +284,55 @@ operator. This record is evidence of the operator's decision, not a source of
 authority.
 
 Prepared against base `c70334efe7708c8ebd59dff9c4342b18d1958f50`.
+
+## Roadmap completion authorization RC-1 — 2026-09-27
+
+- Date: 2026-09-27.
+- Operator: yihanzhu, deciding directly in the manager session's chat. Asked whether
+  the remaining roadmap could be finished with fewer per-item approvals, the operator
+  accepted the manager's proposal and replied: “可以，approve RC-1”.
+- Manager session: Claude Code desktop session `dd83267a-8ae2-4699-9afa-a8ca0bf3421c`,
+  the manager named in the 2026-09-27 succession above.
+- Durable decision record: https://github.com/yihanzhu/ystack/issues/275 (comment
+  `5858293672`, “RC-1 — roadmap completion authorization”).
+
+Covered by RC-1 (the manager decides without a per-item request), for Roadmap steps
+7-10 only:
+
+- intake acceptance for initiatives that implement steps 7-10 (recorded as
+  user-directed, with the digests and this decision as `acceptance_source`);
+- decision requests whose subject is read-only or declaration-only (further read-only
+  target reproductions, DR-4-style evaluator boundaries, frozen-input selections,
+  registry entries with `proof_state: unproven`, requester identities within the DR-5
+  shape);
+- plan-base reaffirmations, review_size records and amendments, artifact hygiene
+  changes;
+- record-only PRs (decision records, succession appendices, docs) even when they touch
+  a constitution path, merged under OD-1's conditions (newest independent review clean
+  at exact head/base, required CI green).
+
+Still reserved for the operator (each gets its own decision request):
+
+1. the first activation of any write scope — the step-8 enablement PR that changes
+   `config/**` (`allowed_live_writes`) or any scope record with `enabled: true` /
+   `push_allowed: true`;
+2. any use of credentials, network beyond CI, a real (non-dormant) publisher identity,
+   or installation of ystack into a target (step 8 publisher; step 10 packaging into a
+   target);
+3. code or policy changes to `ROADMAP.md`, `AGENTS.md`, `REVIEW.md`, `NORTH_STAR.md`,
+   `.github/**`, `config/**`, `scripts/merge-pr.sh`, `scripts/codex-review.sh`,
+   `scripts/test/run-all.sh`, `scripts/lib/*.sh`;
+4. restoring step 11, resuming step 12, or any other change of scope, goal, acceptance
+   standard, safety property or authority.
+
+Everything else in this program authorization, OD-1 and the 2026-09-27 succession
+stays unchanged: one manager, one concern and exact paths per PR, substantive
+independent review with no unresolved Important finding, fresh exact head/base
+evidence, all required CI green before merge, the rounds cap, and the tiering
+(frontier models author and diagnose, `YSTACK_CODER_MODEL=sonnet` codes, the
+operator's Codex model reviews). ROADMAP.md stays byte-identical, and the
+post-self-host-milestone sequencing above is unchanged.
+
+This record is evidence of the operator's decision, not a source of authority.
+
+Prepared against base `32836eff287fb94a4b73b1c543b2c68bb217029c`.
