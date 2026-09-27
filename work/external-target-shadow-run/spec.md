@@ -356,9 +356,9 @@ stop condition fires.
 
 The evidence PR is one concern: the first external-target evidence pair and its
 shared offline verification. Its parts are the 45 retained files, the generalised
-test, the manifest lines, the three schema-test allowlist lines and the docs entry. The harness change is made first on the
-self-host bundle alone (same pass lines before and after), then the new bundle's
-table is added.
+test, the manifest lines, three schema-test allowlist lines and the docs entry. The
+harness change is made first on the self-host bundle alone (same pass lines before
+and after), then the new bundle's table is added.
 
 ## Out of scope
 
