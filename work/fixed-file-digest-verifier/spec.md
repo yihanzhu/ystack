@@ -98,9 +98,12 @@ All citations are to origin/main at `272ec0f`.
 
 ### R4. Path rules
 
-The verifier accepts exactly the paths `shadow/v1/incident-record.jq:30-38`
-(`repo_path_ok`) accepts, as pinned jq 1.6 evaluates it. Enumerated from that
-predicate:
+Over valid UTF-8, the verifier accepts exactly the paths
+`shadow/v1/incident-record.jq:30-38` (`repo_path_ok`) accepts, as pinned jq 1.6
+evaluates it. Invalid UTF-8 is outside that equivalence: jq 1.6 replaces invalid
+bytes with U+FFFD before the predicate runs, so a raw `0xff` would pass there,
+while the verifier rejects any invalid UTF-8 as `instruction.malformed` (R3.3)
+before R4 applies. Enumerated from the predicate:
 
 1. 1 to 4,096 bytes of valid UTF-8.
 2. No control character: U+0000-U+001F and U+007F-U+009F. This is the set pinned
@@ -111,7 +114,7 @@ predicate:
    `.git` after ASCII-only lowercasing; none ending in `.` or U+0020.
 
 A differential test (R8.2) holds the verifier and the jq predicate to identical
-accept and reject results over one shared corpus.
+accept and reject results over one shared corpus of valid UTF-8 paths only.
 
 ### R5. Reading the candidate file
 
@@ -201,14 +204,17 @@ accept and reject results over one shared corpus.
      the FIPS 180-4 vectors for the empty string, `abc`, the 448-bit message and one
      million `a` bytes;
    - sizes 1,048,576 (accepted) and 1,048,577 (`file.oversize`);
-   - the R4 differential corpus, including every rule of R4.1-R4.4, the listed
-     accepted non-control characters, `.GIT`, and invalid UTF-8, run through both
-     the verifier and `repo_path_ok` under pinned jq 1.6;
+   - the R4 differential corpus of valid UTF-8 paths, including every rule of
+     R4.1-R4.4, the listed accepted non-control characters and `.GIT`, run through
+     both the verifier and `repo_path_ok` under pinned jq 1.6;
    - `file.missing`, a directory, a FIFO (the run finishes with no writer), a Unix
      socket, and intermediate and final symlinks (including one pointing at
      `/dev/null`, which is `file.symlink`);
    - every R3.3 instruction refusal, including CRLF framing, a BOM, uppercase hex,
-     a fourth line, one trailing byte, 4,208 and 4,209 bytes, and fd 0 as a pipe;
+     a fourth line, one trailing byte, 4,208 and 4,209 bytes, fd 0 as a pipe, and
+     each invalid UTF-8 class in the path (a lone `0xff`, an overlong form, a
+     surrogate, a code point above U+10FFFF, a truncated sequence), each yielding
+     `instruction.malformed` from the verifier alone, not the differential test;
    - `file.read-error` with a mode `0000` file;
    - output collision (existing result left byte-identical, exit 73) and an
      unwritable evidence directory (exit 73, `E_OUTPUT`);
