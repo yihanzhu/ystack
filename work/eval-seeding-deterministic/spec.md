@@ -265,20 +265,47 @@ closure file changes the evaluator document, so old results are never read as ne
    new source, for these two families, each in its own seed PR. Grader kinds, trial
    policies, evidence kinds and requirement text stay. After both PRs the dashboard's
    `families_seeded` is 9 (`evals.jq:927`).
-2. **Allowed paths.** PR 1: `evals/v1/evals.jq`, `evals/v1/evals-driver.sh`,
-   `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`, the two named tests and
+2. **Existing tests that must change.** Found by grepping `scripts/test`,
+   `maintenance`, `shadow` and `scope` for the evaluator field names
+   (`adapter_closure`, `control_closure`, `orchestrator_closure`,
+   `eval_framework_evaluator`), the seeded and declared counts and statuses, the
+   source vocabulary and the pinned program, catalog and driver digests:
+   - PR 1 adds evaluator fields (R3.2), so the hand-built evaluator fixtures in
+     `scripts/test/shadow-self-host-evidence.test.sh:913-942` (and its fixture digest
+     list at `:979-981`) and `scripts/test/scope-qualification.test.sh:250-275` gain
+     `shadow_closure` and `record_closure`.
+   - PR 2 and PR 3 each change the shipped seeded and declared counts, asserted in
+     `scripts/test/evals-framework.test.sh:83-84` (and its pass message at `:90`) and
+     `scripts/test/evals-dashboard.test.sh:71`: 8 and 1 after the first seed PR, 9
+     and 0 after the second.
+   The other hits need no change and are not allowed paths: the closure checks at
+   `evals-adapters.test.sh:114`, `evals-approvals.test.sh:98`,
+   `evals-boundaries.test.sh:97`, `evals-duty.test.sh:97`, `evals-events.test.sh:97`
+   and `evals-plans.test.sh:94` cover closures PR 1 leaves as they are; their
+   per-family catalog checks name seeded families only; the dashboard fixtures in
+   `scope-qualification.test.sh:302-327`, `shadow-self-host-evidence.test.sh:949-973`
+   and `maintenance-loop.test.sh:62-75` are hand-built with fixed values, not read
+   from the shipped catalog; and the misfiled and model-only cases in
+   `evals-framework.test.sh:158-213` use a core-stage-run seed, which the new relay
+   branch (R8.4) does not touch. A changed file found anywhere else stops the PR and
+   returns to the plan.
+3. **Allowed paths.** PR 1: `evals/v1/evals.jq`, `evals/v1/evals-driver.sh`,
+   `evals/v1/evals-launcher.sh`, `scope/v1/scope-gates.jq`,
+   `scripts/test/evals-dashboard.test.sh`, `scripts/test/scope-qualification.test.sh`,
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
-   and never commits as seeds), `docs/components.md`, `RESTORE.md`. PR 2 and PR 3 each:
-   `evals/v1/eval-catalog.json`, their seed set and seed directory, the two pinned
-   digests in the driver and launcher, their new test, `docs/components.md`,
-   `RESTORE.md`, `ci/required-files.txt`. `framework.jq`, `run.sh`, `config/**` and
-   every other file stay byte-identical.
-3. **Proof.** All tests run offline with no model, credential, provider or target.
+   and never commits as seeds), `scripts/test/shadow-self-host-evidence.test.sh`,
+   `docs/components.md`, `RESTORE.md`. PR 2 and PR 3 each: `evals/v1/eval-catalog.json`,
+   their seed set and seed directory, the two pinned digests in the driver and
+   launcher, their new test, `scripts/test/evals-framework.test.sh`,
+   `scripts/test/evals-dashboard.test.sh`, `docs/components.md`, `RESTORE.md`,
+   `ci/required-files.txt`. `framework.jq`, `run.sh`, `config/**` and every other file
+   stay byte-identical.
+4. **Proof.** All tests run offline with no model, credential, provider or target.
    `scripts/test/run-all.sh` finds new tests by name (`:66-69`), so each PR records a
-   green dispatched `ci` on its exact head. Every existing `evals-*.test.sh`,
-   `maintenance-loop.test.sh`, `shadow-self-host-evidence.test.sh` and
-   `scope-qualification.test.sh` check passes unchanged.
-4. **Reserved for the operator:** model graders for both families; any grader-kind,
+   green dispatched `ci` on its exact head. In the existing tests of R9.2, only the
+   named fixtures and counts change: no assertion is deleted or weakened, and each
+   keeps the behaviour it checked. Every other existing test passes unchanged.
+5. **Reserved for the operator:** model graders for both families; any grader-kind,
    trial-policy or threshold change; every reviewer label, grade status and the label
    approval; any false-positive or agreement threshold; recording the four malicious
    trials if concern 5's authorization does not cover them. Seeding changes no scope,
