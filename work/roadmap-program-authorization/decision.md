@@ -233,22 +233,30 @@ recorded here.
 
 Prepared against base `89f840fb5d1ea3683c2950e0d6712fec976632b3`.
 
-## Program decision — post-step-7 sequencing (2026-09-27)
+## Program decision — post-self-host-milestone sequencing (2026-09-27)
 
-Step 7 of the Roadmap rollout sequence, the shadow vertical slice, is complete: the
-first self-host shadow reproduction (intake #264) merged as PR #373 at `a73bd8c`. It
-ran under decision request DR-4's declaration-only sandbox evaluation and claims no
-execution boundary. The real sandbox boundary is the prerequisite for step 8, not a
-step-7 result.
+The self-host milestone of step 7 of the Roadmap rollout sequence, the shadow
+vertical slice, is complete: the first self-host shadow reproduction (intake #264)
+merged as PR #373 at `a73bd8c`. It ran under decision request DR-4's
+declaration-only sandbox evaluation and claims no execution boundary. The real
+sandbox boundary is the prerequisite for step 8, not a step-7 result.
+
+Step 7 itself is not complete. ROADMAP.md requires it to run on real self-host and
+external-target changes, and the #373 run explicitly excluded external-target proof
+from its scope. Step 7's external-target shadow run or runs, on the dummy external
+target `yihanzhu/ystack-dummy-target` named in `docs/transition-kit.md`, remain
+outstanding and are the program's next work. This record makes no change to that
+external-target requirement; changing it would be an operator scope decision.
 
 - Operator: yihanzhu, deciding directly in the manager session's chat.
 - 2026-09-18: “同意，先把 step 7 跑通再改 roadmap”. The shape agreed then: steps 8
   (bounded autonomous writes) and 10 (target packaging) are the product; step 9 (safe
   review-fix loop) follows step 8; step 11 (deploy and rollback) is dropped; step 12
   (maintenance loop) is deferred.
-- 2026-09-27, once step 7 had merged: “可以按照你推荐的”.
+- 2026-09-27, once the self-host run had merged: “可以按照你推荐的”.
 
-That sequence now applies as the program's working order: 8, then 9, then 10.
+That sequence now applies as the program's working order once step 7 closes: 8,
+then 9, then 10.
 
 ROADMAP.md stays byte-identical. Its digest is bound in the shipped profiles,
 `config/construction-mode.json`, the tests and the merged self-host evidence, and
