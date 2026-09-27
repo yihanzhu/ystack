@@ -7,11 +7,10 @@ drafted: 2026-09-27
 # Spec: enforcement-evidence binding for the real sandbox receipt
 
 Tracks #436. Step-8 child concern 2 (`work/step8-bounded-write-readiness/spec.md:292`),
-first child of the sandbox decision (`work/real-sandbox-boundary/spec.md:155-157`).
-It defines one receipt kind, the documents a consumer checks it against, one pure
-consumer check, and the host-side origin rule that later concerns implement. Nothing
-here produces a real receipt, runs a sandbox, or changes what any shipped gate accepts.
-All citations are to origin/main at `272ec0f`.
+first child of the sandbox decision (`work/real-sandbox-boundary/spec.md:155-157`):
+one receipt kind, its companion documents, one pure consumer check and the host-side
+origin rule. Nothing produces a receipt or changes any shipped gate. Citations are to
+origin/main at `272ec0f`.
 
 ## Requirements
 
@@ -375,36 +374,27 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
 
 ### R11. Order and review size
 
-1. This concern has no dependency (`work/step8-bounded-write-readiness/spec.md:292`).
-   Concern 3 (#437) consumes the R3 kind; concerns 4, 5 and 6 consume R2, R5 and R7.
-   Nothing here depends on a sibling's unmerged content.
+1. No dependency (`work/step8-bounded-write-readiness/spec.md:292`). Concern 3 (#437)
+   consumes R3; concerns 4, 5 and 6 consume R2, R5 and R7.
 2. `review_size: standard` for this spec and for the implementation.
 
 ## Design
 
-The receipt records what ran (ten byte identities), what it ran against (control,
-subject, attempt) and what trusted observers saw (six rows, lifecycle, teardown).
 The check proves shape, binding, acceptance and consistency, never origin; origin
-is proved once at the host under R2.3, recorded by concern 5 and required by
-concern 6. The shipped empty accepted set keeps the check fail-closed.
+is proved once at the host (R2.3), recorded by concern 5 and required by concern 6.
 
 ## Out of scope
 
-The verifier (#437); the launcher, supervisor, store and native qualification
-(concern 4); wiring the receipt and origin section into the shadow driver (concern 5);
-the `scope-gates.jq` change and `scope.sandbox-receipt-missing` (concern 6); any
-change to the ceiling, the demonstration policy, the registry or step 7.
+The verifier (#437); launcher, supervisor, store and native qualification (concern 4);
+shadow-driver wiring (concern 5); the `scope-gates.jq` change and
+`scope.sandbox-receipt-missing` (concern 6); the ceiling, demo policy, registry, step 7.
 
 ## Areas of concern
 
-- **Origin and forgery.** Origin is only as strong as the host (R2.5). A caller who
-  controls both expectation and receipt can make them match; R7.5 is why `valid`
-  alone never counts.
-- **Scratch bound.** The policy has none; R5.2 makes it a reviewed per-environment
-  value, not a new policy limit.
-- **Mechanism honesty.** Rate limits, polls and overshoot are `enforcement: "none"`
-  (R6), matching `work/real-sandbox-boundary/spec.md:126-132`.
+- **Origin and forgery.** Origin is only as strong as the host (R2.5); a caller
+  controlling expectation and receipt can match them, so `valid` alone never counts.
+- **Limits.** The scratch bound is a reviewed per-environment value (R5.2), not a
+  policy limit; rate limits, polls and overshoot are `enforcement: "none"` (R6).
 
-Intent open questions, answered: origin without a credential (R2); replay (R3.3,
-R4, R2.3); placement and kinds (R1); accounting (R6); "not yet available"
-(R5.3-R5.4); native qualification (R5.5).
+Intent questions: origin (R2); replay (R3.3, R4, R2.3); placement (R1); accounting
+(R6); "not yet available" (R5.3-R5.4); native qualification (R5.5).
