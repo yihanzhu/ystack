@@ -16,7 +16,7 @@ Change only `scripts/test/control-credential-policy.test.sh`. Its base blob is
 private generated worker/coordinator and failure formatter. Use the existing Bash
 and inline Perl conventions; add no dependency, public helper or restore file.
 
-Use `review_size: accepted-exception`, with an implementation estimate of 1130–1240 net lines
+Use `review_size: accepted-exception`, with an implementation estimate of 1360–1480 net lines
 for recording, coherent record and writer validation, bounded export and complete
 recovery/disclosure controls. Measure cumulative additions minus deletions in the
 sole allowed implementation file against accepted implementation base
@@ -80,6 +80,17 @@ Record request writes and acknowledgment reads at the existing `boundary`,
 `control_wait_before_wait` and `proof_wait_validate` sites, with ordinal, original
 status and a fixed outcome (expected token, empty, unexpected or unobserved).
 Keep coordinator acknowledgment writes distinct from worker acknowledgment reads.
+For `wait-reentry-second`, the worker records request 0, interrupted direct wait 0,
+request 1, interrupted direct wait 1, then ordinary direct wait 1. Only afterward
+it reads acknowledgment 0 and acknowledgment 1, each raw record immediately followed
+by its normalized record; helper wait and the child-wait report follow. Each signal
+handler's return/outer-signal pair belongs before its interrupted wait observation.
+The expected interrupted statuses remain 143 and the ordinary result remains zero.
+The single-request case has the corresponding one-interruption sequence, with
+129/130/143 for its selected HUP/INT/TERM signal. Validate
+failure prefixes against those operation-specific sites without inventing missing
+records. Do not require worker ack 0 before request 1, or infer worker read order
+from coordinator writes.
 Map raw request/acknowledgment input to those enums before writing new records.
 Do not add reads to recover missing acknowledgments. Both ordinals appear in the
 summary even if the second was never reached. Never copy arbitrary token text.
@@ -189,6 +200,51 @@ general shell-error regex or sanitizer can qualify content.
   completion claims. Conflicting duplicates cannot be resolved by first/last match.
   Check cross-record implications only where both observations exist; a delivered
   write does not manufacture a successful read or fill absent evidence.
+- Child source validity and fixture-writer completion are separate predicates.
+  Derive the child grammar from the unchanged `proof-*` branch, not legacy injected
+  cases selected by other child names. The normal path is entry, launching/launch,
+  owned-live/owned, none, observing/observer, observing outcome, stopped or
+  missed-window outcome, none, helper, terminating/termination. A launch-release
+  failure can enter helper/termination immediately after ownership; an observer
+  failure can enter it before its outcome. EXIT cleanup of owned-live records
+  terminating/termination without helper. These are fixed branches, not permission
+  to accept arbitrary subsequences or any token from other tests.
+
+  In the owned-group termination suffix, require TERM then CONT for the same
+  validated owned group; KILL may follow the first exhausted polling phase. Validate
+  the initial probe and each loop's at-most-100 further probes, plus the optional
+  post-KILL initial/loop and final post-reap probe: at most 203, in their actual
+  lifecycle positions. Logical group reap precedes paired physical-wait/wait-result
+  records for that PID. Each interrupted pair may precede another pair; the last
+  pair must be uninterrupted before retired-unconfirmed. Pair statuses must agree;
+  do not impose a guessed two-wait cap instead of the existing whole-file bound.
+  No extra probe, signal or wait is added by validation.
+
+  After that coherent suffix, accept only these terminal alternatives. All require
+  exactly one final exit-state record, matching the observed lifecycle, operation
+  and local-reap flag; nothing may follow it. The table concerns source validity,
+  not proof that descendants stopped.
+
+  | Terminal child variant | Required suffix and consequence |
+  | --- | --- |
+  | Successful proof | Non-127 final reap, final probe absent in retired-unconfirmed, lifecycle retired, operation none, lifecycle empty, reconciled, completed, exit-state empty none 0. Only this full path can establish fixture completion. |
+  | Group cleanup unconfirmed | Final reap and final probe, no lifecycle retired, then exit-state retired-unconfirmed none 0 after the helper's operation none, or retired-unconfirmed terminating 0 after EXIT cleanup. Status 127 or a final alive/error probe is failure evidence, never fixture completion. |
+  | Group retired before failed completion | Successful retirement suffix through lifecycle retired, then exit-state retired none 0 after helper return, or retired terminating 0 after EXIT cleanup; no reconciliation/completed claim. Fixture completion remains unconfirmed. |
+
+  Every terminal failure still requires the outer worker's confirmed sole wait,
+  eligible worker records, a distinct bound control-child identity and its ordinary
+  non-127 direct wait. The successful row requires child status zero; the failure
+  rows require a matching nonzero child status. These prove the child record writer
+  ended; they do not prove
+  the fixture writer ended. Each stream independently retains its content grammar.
+  An unexplained prefix, absent/mismatched exit-state, contradictory final probe,
+  local reap without the required role binding, or rejected unsafe identity remains
+  withheld. An earlier absent probe cannot override later alive/error evidence.
+  Empty pre-observer output may qualify only for a case-bound completed startup,
+  gate or natural-signal path proved by the existing worker wait; it establishes no
+  fixture completion. Never infer terminal validity merely from worker completion.
+  Keep all dependent output withheld when its source proof is unavailable, and keep
+  the existing G2 stop if required evidence cannot safely be retained.
 - Identity files accept only the exact two-positive-decimal/space/LF grammar.
   Bind roles separately: the outer captured job and checked group bind the worker;
   its unique captured coordinator record binds the helper; its unique launched job
@@ -197,6 +253,9 @@ general shell-error regex or sanitizer can qualify content.
   event to its proper role, including launch observers, outer signals, direct waits,
   owned group signals, physical/logical reaps and descendant-absence records. Require
   the producer's PID/PGID relationships, not mere membership in a bag of numbers.
+  Worker, helper, control child and owned descendant must be pairwise distinct when
+  present. A helper-associated wait or exit requires the unique captured coordinator
+  PID; plausible statuses cannot replace that missing role.
 - Copy all regex captures and numeric arguments into lexical values before another
   match or validator call can overwrite them. Every status field in every record,
   summary argument and diagnostic uses the same canonical decimal 0–255 check.
@@ -273,7 +332,11 @@ requires exactly the fixed ordered ID list, one nonnested frame per ID, correct
 bounds/counts/contiguous line numbers/even-length lowercase hex, complete end records
 and one final complete marker. It must reject missing, reordered, duplicate, unknown,
 malformed, nested, truncated and trailing frames/lines; no silent skipping. Recognize
-only one complete grammar-validated summary line before inventory framing. Exercise
+only one complete grammar-validated summary line before inventory framing. Its
+case/operation/signal/expected tuple must match the finite ledger; last/failing use
+only the finite coordinator phases. Validate the excerpt as the exact permitted
+escaping of the eligible decoded child source's first 256 bytes, or withheld; an
+arbitrary printable string is not a valid excerpt. Exercise
 failed output writes without disclosing source bytes or claiming complete transport.
 Keep the 4096-byte stderr and eligible escaped-excerpt/bound assertions. Do not
 remove failed-case or unresolved scratch to demonstrate recovery.
@@ -289,8 +352,22 @@ For each rejected item, assert zero payload lines and no begin-complete frame, p
 its fixed withheld marker and the final incomplete marker; marker absence alone is
 insufficient. Use a finite table covering every variable field of each accepted
 record shape, all stream IDs, raw acknowledgments, diagnostic fields/excerpts and
-ineligible writer/dependency combinations. Include a valid suffix/prefix around an
-invalid field and otherwise valid content from unconfirmed writers. Verify that
+ineligible writer/dependency combinations. Make coverage explicit by record shape:
+coordinator ordinal/name/state/status/exit/last/pending/write-error; worker literal,
+role, request/raw-ack/normalized-ack, wait, handler/signal, observation, publication,
+terminal and failure fields; child operation/lifecycle/outcome/role/paired-wait,
+probe/kill/exit fields; identity, diagnostic prefix/excerpts and every summary field.
+For each shape, cover its actual permitted alternatives, numeric boundaries, unknown
+printable values and secret-like substitutions, duplicates/order contradictions,
+and every source dependency's eligible and rejected states. Reject impossible
+alternatives rather than adding them to make a positive control pass. Include the
+actual two-request trace, each terminal table row, later alive/error after absence,
+coherent role aliases and missing-helper identity. Retain nonempty diagnostic and
+escaped-excerpt positives, all 14 byte comparisons and the concrete helper wait
+143:1:unconfirmed, 127:0:unconfirmed and natural 143:0:confirmed assertions. Replace
+old controls only when an explicit row proves their entire obligation; do not omit
+fields because another example uses the same regex. Include a valid suffix/prefix
+around an invalid field and otherwise valid content from unconfirmed writers. Verify that
 withheld child sources invalidate their worker-written diagnostic, and withheld
 helper sources invalidate every helper-derived summary field. No new signal
 injection, retry or test framework is authorized.
