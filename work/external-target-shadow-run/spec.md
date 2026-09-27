@@ -412,7 +412,12 @@ instructions, 45-60 canonical document and inventory lines, 45-50 manifest lines
 40-70 docs lines, and 550-850 lines for the harness generalisation plus the new
 bundle's table and portability and corruption checks, instead of a 1,200-line
 copy. Canonical JSON is wide, so review reads the expanded documents too. The
-registry PR and this spec PR are within the soft budget and need no record. The
-waiver covers the line signal only; CI, independent review and operator merge stay
-required. An unexplained overrun returns to the plan gate.
+registry PR is within the soft budget and needs no record. The waiver covers the
+line signal only; CI, independent review and operator merge stay required. An
+unexplained overrun returns to the plan gate.
 
+`review_size` for this spec PR:
+`review_size: accepted-exception` — 410-430 lines, measured, one concern (the
+external-target run's normative spec). The overrun is requirement 15's exhaustive
+portability path lists. The waiver covers the soft line signal only; independent
+review and operator merge (G2) stay required.
