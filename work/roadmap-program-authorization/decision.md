@@ -232,3 +232,47 @@ later session by itself; a further successor needs another explicit operator han
 recorded here.
 
 Prepared against base `89f840fb5d1ea3683c2950e0d6712fec976632b3`.
+
+## Program decision — post-step-7 sequencing (2026-09-27)
+
+Step 7 of the Roadmap rollout sequence, the shadow vertical slice, is complete: the
+first self-host shadow reproduction (intake #264) merged as PR #373 at `a73bd8c`. It
+ran under decision request DR-4's declaration-only sandbox evaluation and claims no
+execution boundary. The real sandbox boundary is the prerequisite for step 8, not a
+step-7 result.
+
+- Operator: yihanzhu, deciding directly in the manager session's chat.
+- 2026-09-18: “同意，先把 step 7 跑通再改 roadmap”. The shape agreed then: steps 8
+  (bounded autonomous writes) and 10 (target packaging) are the product; step 9 (safe
+  review-fix loop) follows step 8; step 11 (deploy and rollback) is dropped; step 12
+  (maintenance loop) is deferred.
+- 2026-09-27, once step 7 had merged: “可以按照你推荐的”.
+
+That sequence now applies as the program's working order: 8, then 9, then 10.
+
+ROADMAP.md stays byte-identical. Its digest is bound in the shipped profiles,
+`config/construction-mode.json`, the tests and the merged self-host evidence, and
+this record requires it unchanged, so the roadmap's own text of steps 11 and 12 is
+not edited. This record is where the drop and the deferral live. Draft PR #424, which
+would have edited ROADMAP.md, is held and closed in favour of this record.
+
+The drop of step 11 — environment tiers, a named production gate, rehearsed rollback
+and delivery evidence — is an operator decision and is reversible. While it stands, no
+workflow may deploy, invoke rollback or take a production action; that authority stays
+with the operator, as the reserved decisions above already say. While it stands, the
+north star's done-signal cannot be reached through a rehearsed rollback.
+
+Step 12 resumes only when both hold: step 10 has installed ystack into a target that
+emits control-band, scan or production signals, and a rehearsed rollback exists for
+every action the loop may invoke. The second condition means restoring step 11, or an
+equivalent gate, first.
+
+Everything else in this program authorization stays unchanged: the reserved operator
+decisions, the one-manager invariant, one concern and exact paths per PR, independent
+review, fresh head/base evidence, required CI, the rounds cap, and the exclusion of
+frozen #183 and unresolved dirty attempts. Restoring step 11, resuming step 12 early,
+or any other change to scope, goal, acceptance, safety or authority returns to the
+operator. This record is evidence of the operator's decision, not a source of
+authority.
+
+Prepared against base `c70334efe7708c8ebd59dff9c4342b18d1958f50`.
