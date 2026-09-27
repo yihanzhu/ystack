@@ -101,22 +101,46 @@ recorded coverage rule. Each execution environment qualifies separately.
      commits merged from this scope's own publisher pull requests;
    - between `coverage_base` and R, nothing changed under the target's `.ystack/`,
      its CI workflow files, or its branch rules;
-   - every field of `qualified_identity` other than `target_revision` is
-     byte-identical, and so are the environment registry entry and the sandbox,
-     scope and control policy bytes the evidence bound;
+   - the coverage identity of R3.3 is byte-identical to the qualified one;
+   - the attempt carries fresh execution evidence for R itself (R3.4);
    - the qualifying shadow evidence is at most 30 days old.
-3. Anything else invalidates the qualification and returns to a named gate:
+3. **Coverage identity** (reusable; must be byte-identical across every covered
+   revision): scope id, `workflow_id`, `task_class`, `model_request`,
+   `adapter_config_refs`, `prompt_refs`, `skill_refs`,
+   `verification_instructions_ref`, the execution environment id and its registry
+   entry bytes, the control policy set ref and the sandbox and scope policy bytes the
+   evidence bound, and the coverage anchor (`coverage_base` and rule version).
+4. **Execution refs** (revision-bound; rebound on every attempt). Exactly these may
+   differ from the qualifying evidence, and nothing else:
+   - `target_revision`;
+   - `stage_request_ref`, and only in its target revision and source-tree refs;
+   - `resolved_profile_ref`, and only in its `repository_context_ref`; its
+     `profile_ref`, `profile_source`, `selection_ref` and `bindings` stay identical;
+   - the source and candidate tree ids of the materialization;
+   - the attempt's own shadow record, materialization result and sandbox receipt
+     refs.
+
+   The attempt's shadow record, materialization and receipt must be bound to the
+   actual stage request for R, as `shadow/v1/reproduce.sh` already requires for its
+   own run. The evaluator compares the attempt with the qualifying evidence field by
+   field. It accepts only differences in the fields listed above, with the request
+   and resolved profile compared with their listed members masked. Any other
+   difference returns to the shadow gate.
+5. A change in the coverage identity returns to the shadow gate. A change confined
+   to the execution refs is the normal per-revision rebinding that coverage exists
+   for, and needs no new qualification.
+6. Anything else invalidates the qualification and returns to a named gate:
 
 | Change | Returns to |
 | --- | --- |
-| Profile, adapter config, model request, prompt, skill, verification instructions or stage request | Shadow gate: new shadow evidence for this scope |
+| Any coverage-identity field: profile selection or bindings, adapter config, model request, prompt, skill or verification instructions | Shadow gate: new shadow evidence for this scope |
 | Scope policy, control policy, sandbox policy or eval catalog | Eval gate, then the shadow gate |
 | Execution environment, runtime, image or verifier bytes | That environment's own qualification, then the shadow gate |
 | History rewrite, non-descendant R, or a foreign change under the covered paths | Shadow gate |
 | Evidence older than 30 days | Shadow gate |
 | Risk tier, task class, allowed paths or target | A new scope: its own G2 and its own enablement pull request |
 
-4. `model_request` stays in the identity as recorded configuration even though the
+7. `model_request` stays in the coverage identity as recorded configuration even though the
    workflow invokes no model. A change to it still invalidates.
 
 ### R4. The enablement record
@@ -315,7 +339,7 @@ Everything R9 lists. Also any change to step 7's scope, to the program order
   merged it. Child concern 11 must bind the introducing pull request's merger to the
   operator from forge records, or stop.
 - **Non-model identity.** `qualified_identity` requires `model_request` even for a
-  workflow that invokes no model. R3.4 keeps it as recorded configuration; zero
+  workflow that invokes no model. R3.7 keeps it as recorded configuration; zero
   producer invocations is proven separately (R1.3).
 - **External first target.** The first write goes to another repository, so the
   publisher needs a credential there. That is reserved and is asked only at child
