@@ -369,6 +369,11 @@ scope/v1/scope-gates.jq
 scope/v1/evaluate-scope.sh
 scripts/test/scope-qualification.test.sh
 
+# Step 8 bounded-write readiness decision records
+work/step8-bounded-write-readiness/intent.md
+work/step8-bounded-write-readiness/spec.md
+work/step8-bounded-write-readiness/plan.md
+
 # Inactive target packaging
 packaging/v1/build-release.sh
 packaging/v1/install.sh
