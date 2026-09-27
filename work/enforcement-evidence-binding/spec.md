@@ -92,8 +92,8 @@ All citations are to origin/main at `272ec0f`.
 
 1. **Envelope.** `kind: "sandbox_enforcement_receipt"`, `id` matching `id_ok`
    (`control/v1/sandbox.jq:4-5`). `body` has exactly the keys `attempt`,
-   `contract_version`, `control`, `identities`, `limits`, `origin`, `outcome`,
-   `payload`, `subject`, `teardown`, `timing`. `contract_version` is exactly `"v1"`.
+   `contract_version`, `control`, `identities`, `lifecycle`, `limits`, `origin`,
+   `outcome`, `payload`, `subject`, `teardown`, `timing`. `contract_version` is exactly `"v1"`.
    Bytes are canonical `jq -S -c` text with one trailing newline, at most 1,048,576
    bytes, depth at most 32 and at most 4,096 members, as
    `control/v1/evaluate-sandbox.sh:91-117` bounds control inputs.
@@ -132,6 +132,14 @@ All citations are to origin/main at `272ec0f`.
    `reached: true`; a row breaking either rule is malformed.
 8. **`teardown`:** `state` one of `confirmed`, `failed`, `unconfirmed`, plus booleans
    `tree_terminated` and `storage_destroyed`. `confirmed` requires both true.
+   **`lifecycle`:** the supervisor's own observations of the attempt, exactly three
+   fields: `admission` one of `admitted`, `refused`; `runtime` one of `completed`,
+   `error` (the runtime or guest reported an error or the guest stopped outside the
+   verifier's own exit); `control_deadline` one of `met`, `exceeded` (any supervisor
+   control step, from admission through receipt write, overran its own bounded
+   deadline). `payload.exit_state: "not-started"` requires `admission: "refused"`
+   or `runtime: "error"`, and `admission: "refused"` requires `not-started`; a
+   receipt breaking either rule is malformed.
 9. **`payload`** (untrusted verifier output, bound by digest only): `stdout_sha256`,
    `stderr_sha256`, `evidence_manifest_sha256`, `exit_state` one of `exited`,
    `signaled`, `not-started`, and `exit_code` (integer 0-255 when `exited`, else
@@ -217,8 +225,15 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
 2. **Driver discipline,** as `control/v1/evaluate-sandbox.sh` does: pinned jq 1.6 by
    the digests at `:50-57`; physical regular files only; bounded snapshots; canonical
    inputs; unchanged re-check of every input and fixed file after evaluation; no
-   network, credential, model call, subprocess other than the pinned jq, or write
-   outside its own `mktemp` scratch. Usage, runtime, limit, parse and canonical
+   network, credential, model call, or write outside its own `mktemp` scratch. It
+   runs no program except the pinned jq snapshot and this closed allowlist of host
+   utilities, the ones `control/v1/evaluate-sandbox.sh` invokes for the same
+   purposes (lines from that file): `/usr/bin/printf` (10, 12), `/usr/bin/uname` (50), `/usr/bin/shasum` and
+   `/usr/bin/awk` (56, 83), `/usr/bin/mktemp` (59), `/bin/chmod` (62, 81),
+   `/bin/rm` (63), `/bin/dd` (70, 77), `/usr/bin/wc` and `/usr/bin/tr` (72, 79),
+   `/bin/mkdir` (84), `/usr/bin/od` (93), `/usr/bin/cmp` (100, 118) and `/bin/cat`
+   (218), each by absolute path. `/usr/bin/env` and a nested `/bin/bash`
+   (`:183-184`) are excluded because the check runs no nested validator. Usage, runtime, limit, parse and canonical
    failures exit 1 with one error code on stderr and no output. Everything else
    exits 0 with one canonical `sandbox_receipt_check` document on stdout.
 3. **Output body,** exactly: `activation_state: "inactive"`, `authority_effect:
@@ -259,24 +274,24 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
 
 ### R8. Outcomes
 
-1. **`satisfied`** iff every identity is `observed`; every row has `observation:
-   "complete"`, `enforcement: "hard"`, `reached: false` and `observed` at most
-   `bound`; and teardown is `confirmed`. `reason_ids: ["enforcement.satisfied"]`.
-2. **`violated`** iff every identity is `observed`, teardown is `confirmed`, every
-   row has complete observation and hard enforcement, and at least one row has
-   `reached: true`. `reason_ids` are, for exactly those rows,
-   `limit.cpu-time-reached`, `limit.wall-time-reached`, `limit.memory-reached`,
-   `limit.output-reached`, `limit.process-count-reached` or `limit.scratch-reached`.
-   Hitting the wall bound is `violated`, not `failed`.
-3. **`failed`** otherwise. `reason_ids` are those that apply from this closed list:
-   `failure.launch-refused` (the supervisor refused before exec, `exit_state:
-   "not-started"`); `failure.runtime` (runtime or guest error); `failure.supervisor-timeout`
-   (a supervisor control step exceeded its own bounded deadline);
-   `failure.teardown` (teardown not `confirmed`); `failure.observation-unavailable`
-   (an identity `unobserved`, or a row `partial` or `unavailable`);
-   `failure.enforcement-unavailable` (a row `none` or `unknown`). At least one
-   applies whenever R8.1 and R8.2 do not.
-4. A failure never becomes satisfaction, and a failed receipt is still retained.
+1. **Failure set,** computed first from recorded fields only, closed:
+   `failure.launch-refused` iff `lifecycle.admission` is `refused`;
+   `failure.runtime` iff `lifecycle.runtime` is `error`;
+   `failure.supervisor-timeout` iff `lifecycle.control_deadline` is `exceeded`;
+   `failure.teardown` iff teardown is not `confirmed`;
+   `failure.observation-unavailable` iff an identity is `unobserved` or a row is
+   `partial` or `unavailable`; `failure.enforcement-unavailable` iff a row has
+   enforcement `none` or `unknown`.
+2. **`failed`** iff the failure set is non-empty; `reason_ids` is exactly that set.
+   Every failure overrides both other verdicts, whatever the rows show.
+3. **`violated`** iff the failure set is empty and at least one row has `reached:
+   true`. `reason_ids` are, for exactly those rows, `limit.cpu-time-reached`,
+   `limit.wall-time-reached`, `limit.memory-reached`, `limit.output-reached`,
+   `limit.process-count-reached` or `limit.scratch-reached`. Hitting the wall bound
+   is `violated`, not `failed`.
+4. **`satisfied`** iff the failure set is empty and no row is reached (so every
+   observed value is below its bound). `reason_ids: ["enforcement.satisfied"]`.
+5. A failure never becomes satisfaction, and a failed receipt is still retained.
 
 ### R9. Inactivity and exclusions
 
@@ -307,7 +322,9 @@ reached never reads as satisfied. The contract names no runtime or mechanism.
      test-only accepted set;
    - each of the 14 R7.4 reasons alone, each paired with the positive control that
      differs only in the mutated field;
-   - each R8 derivation rule, including every `failure.*` reason and a receipt whose
+   - each R8 derivation rule, including each of the six `failure.*` reasons set
+     alone on an otherwise-satisfied receipt (it must yield `failed`), each
+     `lifecycle` consistency rule, and a receipt whose
      recorded verdict disagrees with its rows;
    - each of the six R6 rows refusing `satisfied` for `partial`, `unavailable`,
      `none`, `unknown`, `reached` and an observed value above the bound;
