@@ -16,7 +16,7 @@ Change only `scripts/test/control-credential-policy.test.sh`. Its base blob is
 private generated worker/coordinator and failure formatter. Use the existing Bash
 and inline Perl conventions; add no dependency, public helper or restore file.
 
-Use `review_size: accepted-exception`, with an implementation estimate of 1020–1120 net lines
+Use `review_size: accepted-exception`, with an implementation estimate of 1130–1240 net lines
 for recording, coherent record and writer validation, bounded export and complete
 recovery/disclosure controls. Measure cumulative additions minus deletions in the
 sole allowed implementation file against accepted implementation base
