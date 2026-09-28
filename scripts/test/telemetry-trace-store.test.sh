@@ -477,6 +477,26 @@ elif point == "emit":
     def wrapped(data):
         kill_now()
     module.emit = wrapped
+elif point == "corrupt_output_write":
+    # Corrupts only the third call to write_all in a `read` invocation --
+    # the two snapshot writes into the private validator directory (the
+    # jq binary and the re-validated ledger bytes) are calls one and two,
+    # so they stay intact and the validator re-run still succeeds; the
+    # OUTPUT write itself (inside write_verified, left completely
+    # unmodified here) is call three. This proves write_verified's own
+    # read-back-and-compare -- not a stand-in for it -- actually catches a
+    # same-length wrong write, rather than trusting write_all's size-only
+    # check.
+    original_write_all = module.write_all
+    state = {"n": 0}
+    def wrapped(descriptor, data, code):
+        state["n"] += 1
+        if state["n"] == 3:
+            corrupted = bytes((byte + 1) % 256 for byte in data)
+            assert len(corrupted) == len(data) and corrupted != data
+            return original_write_all(descriptor, corrupted, code)
+        return original_write_all(descriptor, data, code)
+    module.write_all = wrapped
 elif point == "hold_lock":
     import time as _time
     original = module.acquire_lock
@@ -1270,11 +1290,63 @@ def test_boundaries(tmp):
     write_ledger(inside_path, ledger)
     tip = tip_of(store, "boundary.append")
 
+    # The ledger argument must genuinely be inside whichever path is passed
+    # as SCRATCH_ROOT in each of these cases: if it were left under the
+    # separate `scratch` directory instead (as an earlier version of this
+    # test did), the unrelated "LEDGER outside SCRATCH_ROOT" check would
+    # itself produce E_BOUNDARY regardless of whether the SCRATCH_ROOT/
+    # STORE_ROOT overlap check exists at all, so the case would prove
+    # nothing about that check specifically.
+    overlap_equal_ledger = os.path.join(store, "overlap-equal-ledger.json")
+    write_ledger(overlap_equal_ledger, ledger)
     before = snapshot_tree(store)
-    code, out, err = do("append", store, "boundary.append", tip, store, JQ, session_id, attempt_id, inside_path)
+    code, out, err = do("append", store, "boundary.append", tip, store, JQ, session_id, attempt_id,
+                         overlap_equal_ledger)
     record(g, "SCRATCH_ROOT equal to the store root is E_BOUNDARY", code == 1 and err == b"E_BOUNDARY\n")
     record(g, "store tree unchanged after SCRATCH_ROOT==STORE_ROOT E_BOUNDARY",
            snapshot_tree(store) == before)
+    os.unlink(overlap_equal_ledger)
+
+    # Both containment directions, each in its own disposable store/scratch
+    # pair so the mutation never touches `store` (used by later cases in
+    # this function): STORE_ROOT nested inside SCRATCH_ROOT, and
+    # SCRATCH_ROOT nested inside STORE_ROOT. Equality (above) does not
+    # exercise either nesting direction on its own.
+    outer_scratch = scratch_root(tmp, "boundary-outer-scratch")
+    nested_store = os.path.join(outer_scratch, "nested-store")
+    os.makedirs(nested_store, mode=0o700)
+    initialize(nested_store, "boundary.nested-store")
+    nested_store_ledger = os.path.join(outer_scratch, "nested-store-ledger.json")
+    write_ledger(nested_store_ledger, ledger)
+    nested_store_tip = tip_of(nested_store, "boundary.nested-store")
+    before = snapshot_tree(nested_store)
+    code, out, err = do("append", nested_store, "boundary.nested-store", nested_store_tip,
+                         outer_scratch, JQ, session_id, attempt_id, nested_store_ledger)
+    record(g, "STORE_ROOT nested inside SCRATCH_ROOT is E_BOUNDARY", code == 1 and err == b"E_BOUNDARY\n")
+    record(g, "store tree unchanged after STORE_ROOT-inside-SCRATCH_ROOT E_BOUNDARY",
+           snapshot_tree(nested_store) == before)
+
+    outer_store = store_root(tmp, "boundary-outer-store")
+    initialize(outer_store, "boundary.outer-store")
+    # Capture the tip (a `list` call, which scans the whole store root)
+    # before creating the nested scratch directory: once that directory
+    # exists directly under the store root, any further `list`/`append`
+    # call would find it during its own chain-load scan and refuse
+    # E_CORRUPT (an unexpected entry), never reaching the R3.2 boundary
+    # check this case means to exercise, since R3.2 fires only for
+    # `append` and only before that scan -- an unrelated `list` call made
+    # afterward has no such early-exit.
+    outer_store_tip = tip_of(outer_store, "boundary.outer-store")
+    nested_scratch = os.path.join(outer_store, "nested-scratch")
+    os.makedirs(nested_scratch, mode=0o700)
+    nested_scratch_ledger = os.path.join(nested_scratch, "ledger.json")
+    write_ledger(nested_scratch_ledger, ledger)
+    before = snapshot_tree(outer_store)
+    code, out, err = do("append", outer_store, "boundary.outer-store", outer_store_tip,
+                         nested_scratch, JQ, session_id, attempt_id, nested_scratch_ledger)
+    record(g, "SCRATCH_ROOT nested inside STORE_ROOT is E_BOUNDARY", code == 1 and err == b"E_BOUNDARY\n")
+    record(g, "store tree unchanged after SCRATCH_ROOT-inside-STORE_ROOT E_BOUNDARY",
+           snapshot_tree(outer_store) == before)
 
     outside_ledger = os.path.join(tmp, "boundary-outside-ledger.json")
     write_ledger(outside_ledger, ledger)
@@ -1290,6 +1362,22 @@ def test_boundaries(tmp):
                          os.path.join(tmp, "out-doesnotmatter.json"))
     record(g, "an unreadable STORAGE_RECEIPT is E_RUNTIME", code == 1 and err == b"E_RUNTIME\n")
     record(g, "store tree unchanged after E_RUNTIME (unreadable receipt)",
+           snapshot_tree(store) == before)
+
+    # Choice 8 distinguishes an oversized STORAGE_RECEIPT (E_USAGE) from an
+    # unreadable one (E_RUNTIME, above): a receipt that exists, is a
+    # regular file, and is simply larger than the 8,192-byte cap must not
+    # be folded into the same "unreadable" refusal.
+    oversized_receipt_path = os.path.join(tmp, "oversized-receipt.json")
+    with open(oversized_receipt_path, "wb") as handle:
+        handle.write(b"{" + b" " * 8192 + b"}")
+    os.chmod(oversized_receipt_path, 0o600)
+    before = snapshot_tree(store)
+    code, out, err = do("read", store, JQ, oversized_receipt_path,
+                         os.path.join(tmp, "oversized-receipt-out.json"))
+    record(g, "an oversized STORAGE_RECEIPT (over 8,192 bytes) is E_USAGE, not E_RUNTIME",
+           code == 1 and err == b"E_USAGE\n")
+    record(g, "store tree unchanged after the oversized-receipt E_USAGE",
            snapshot_tree(store) == before)
 
     initialize2 = append(store, "boundary.append", tip, scratch, inside_path, session_id, attempt_id)
@@ -1327,6 +1415,23 @@ def test_boundaries(tmp):
     good_output = os.path.join(tmp, "boundary-good-output.json")
     code, out, err = do("read", store, JQ, receipt_path, good_output)
     record(g, "a valid OUTPUT still succeeds after the E_OUTPUT cases", code == 0)
+
+    # R7.3 requires OUTPUT's size AND digest checked through the open
+    # descriptor before success, not size alone: a same-length write that
+    # silently produced the wrong bytes must still be refused (no
+    # successful receipt document on stdout), never accepted. OUTPUT is a
+    # caller-owned path outside the store; unlike the store's own objects,
+    # nothing in R7 promises to erase a caller's already-created file on
+    # this refusal, so this checks the CLI's outcome and the store's own
+    # tree, not whether OUTPUT itself still exists.
+    corrupt_write_output = os.path.join(tmp, "boundary-corrupt-write-output.json")
+    before = snapshot_tree(store)
+    code, corrupt_out, err = run_wrapped(tmp, "corrupt_output_write",
+                                          ["read", store, JQ, receipt_path, corrupt_write_output])
+    record(g, "a same-length wrong write to OUTPUT is refused, not accepted as success",
+           code == 1 and err == b"E_RUNTIME\n" and corrupt_out == b"")
+    record(g, "store tree unchanged after the corrupted-write refusal",
+           snapshot_tree(store) == before)
 
     # E_IDENTITY: a STORE_ID argument that does not match the store's own
     # store.json id. Checked on both a read-only verb (list) and a
@@ -1448,11 +1553,21 @@ raise SystemExit(module.main(sys.argv))
 
         aliased_store = os.path.join(os.path.dirname(ci_store), os.path.basename(ci_store).upper())
         assert os.path.samefile(ci_store, aliased_store)
+        # The ledger must be genuinely inside the SCRATCH_ROOT spelling
+        # under test (aliased_store), not merely inside ci_scratch, or the
+        # unrelated "LEDGER outside SCRATCH_ROOT" check would produce the
+        # same E_BOUNDARY regardless of the overlap check.
+        aliased_ledger = os.path.join(aliased_store, "aliased-overlap-ledger.json")
+        write_ledger(aliased_ledger, ci_ledger)
+        before = snapshot_tree(ci_store)
         code, out, err = do("append", ci_store, "boundary.ci", ci_tip, aliased_store, JQ,
-                             session_id, attempt_id, ci_inside_path)
+                             session_id, attempt_id, aliased_ledger)
         record(g, "a differently-cased SCRATCH_ROOT spelling that aliases the store root is "
                   "still E_BOUNDARY (case-insensitive filesystem)",
                code == 1 and err == b"E_BOUNDARY\n")
+        record(g, "store tree unchanged after the differently-cased SCRATCH_ROOT E_BOUNDARY",
+               snapshot_tree(ci_store) == before)
+        os.unlink(os.path.join(ci_store, "aliased-overlap-ledger.json"))
 
         code, ci_receipt, err = append(ci_store, "boundary.ci", ci_tip, ci_scratch, ci_inside_path,
                                         session_id, attempt_id)
@@ -1487,11 +1602,20 @@ raise SystemExit(module.main(sys.argv))
     record(g, "a tripled-leading-slash OUTPUT spelling of an in-store path is still E_OUTPUT",
            code == 1 and err == b"E_OUTPUT\n")
 
+    # As with the equal/nested cases above, the ledger must be genuinely
+    # inside the SCRATCH_ROOT spelling under test (doubled_store), not
+    # merely inside the separate `scratch` directory.
+    doubled_scratch_ledger = os.path.join(doubled_store, "doubled-overlap-ledger.json")
+    write_ledger(doubled_scratch_ledger, ledger)
+    before = snapshot_tree(store)
     code, out, err = do("append", store, "boundary.append", tip, doubled_store, JQ,
-                         session_id, attempt_id, inside_path)
+                         session_id, attempt_id, doubled_scratch_ledger)
     record(g, "a doubled-leading-slash SCRATCH_ROOT spelling that aliases the store root "
               "is still E_BOUNDARY",
            code == 1 and err == b"E_BOUNDARY\n")
+    record(g, "store tree unchanged after the doubled-leading-slash SCRATCH_ROOT E_BOUNDARY",
+           snapshot_tree(store) == before)
+    os.unlink(os.path.join(store, "doubled-overlap-ledger.json"))
 
     outside_ledger_doubled = "/" + outside_ledger
     assert os.path.samefile(outside_ledger, outside_ledger_doubled)
