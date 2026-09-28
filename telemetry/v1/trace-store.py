@@ -1166,7 +1166,74 @@ def do_initialize(store, store_id):
 
 
 def do_append(store, store_id, expected_tip, scratch_root, jq_bin, session_id, attempt_id, ledger):
-    raise Refusal("E_RUNTIME")  # not yet built at this commit
+    private_dir = private_directory()
+    try:
+        ledger_bytes, ledger_sha, jq_path, jq_sha = snapshot_inputs(ledger, jq_bin, private_dir)
+        validator_path = os.path.join(source_root(), "telemetry/v1/validate-trace-ledger.sh")
+        program_path = os.path.join(source_root(), "telemetry/v1/trace-ledger.jq")
+        validator_sha_before = digest(read_source_file(validator_path, 1 << 20, "E_RUNTIME"))
+        program_sha_before = digest(read_source_file(program_path, 1 << 20, "E_RUNTIME"))
+        snapshot_path = os.path.join(private_dir, "ledger.json")
+        stdout_bytes = run_validator(validator_path, session_id, attempt_id, snapshot_path,
+                                      private_dir, os.path.join(private_dir, "bin"))
+        validator_sha_after = digest(read_source_file(validator_path, 1 << 20, "E_RUNTIME"))
+        program_sha_after = digest(read_source_file(program_path, 1 << 20, "E_RUNTIME"))
+        require(validator_sha_before == validator_sha_after, "E_RUNTIME")
+        require(program_sha_before == program_sha_after, "E_RUNTIME")
+        validation_doc = parse(stdout_bytes, VALIDATOR_STDOUT_MAX, "E_RUNTIME")
+        fields(validation_doc, {"schema_version", "kind", "id", "body"}, "E_RUNTIME")
+        require(validation_doc["schema_version"] == 1 and
+                validation_doc["kind"] == "telemetry_trace_ledger_validation", "E_RUNTIME")
+        vbody = validation_doc["body"]
+        require(type(vbody) is dict, "E_RUNTIME")
+        require(vbody.get("session_id") == session_id, "E_RUNTIME")
+        require(vbody.get("attempt_id") == attempt_id, "E_RUNTIME")
+        ledger_ref = vbody.get("ledger_ref")
+        require(type(ledger_ref) is dict, "E_RUNTIME")
+        require(ledger_ref.get("sha256") == ledger_sha, "E_RUNTIME")
+        replay_key = vbody.get("replay_key")
+        require(type(replay_key) is dict, "E_RUNTIME")
+        fields(replay_key, {"session_id", "attempt_id", "final_digest"}, "E_RUNTIME")
+        require(replay_key["session_id"] == session_id and
+                replay_key["attempt_id"] == attempt_id, "E_RUNTIME")
+        sha256_field(replay_key["final_digest"], "E_RUNTIME")
+        event_count = vbody.get("event_count")
+        integer(event_count, 0, 256, "E_RUNTIME")
+        record_key = record_key_of(replay_key)
+        validator_doc = validator_document(validator_sha_after, program_sha_after, jq_sha)
+    finally:
+        remove_private_directory(private_dir)
+
+    store.acquire("append")
+    published = load_chain(store)
+    require(published, "E_INCOMPLETE")
+    require(store.store_id == store_id, "E_IDENTITY")
+
+    key = (session_id, attempt_id, replay_key["final_digest"])
+    existing = store.replay_index.get(key)
+    if existing is not None:
+        if existing["ledger_bytes"] == ledger_bytes:
+            store_root_commit = store.root_commit
+            receipt = storage_receipt_document(
+                store.store_id, store_root_commit, existing["commit_id"], existing["record_key"],
+                existing["replay_key"], digest(existing["record_bytes"]), existing["ledger_ref"],
+                existing["validation_sha256"], existing["validator"])
+            return receipt
+        raise Refusal("E_CONFLICT")
+
+    require(expected_tip == store.tip, "E_STALE")
+    require(not os.path.lexists(store.path("repository.git/refs/heads/records.lock")), "E_LOCKED")
+    store.reserve()
+
+    record_doc = record_document(store.store_id, record_key, replay_key, event_count, ledger_ref,
+                                  len(ledger_bytes), digest(stdout_bytes), validator_doc,
+                                  source_package_sha256())
+    commit, record_data = store.publish(store.store_json_oid, record_doc, stdout_bytes,
+                                         ledger_bytes, store.tip)
+    receipt = storage_receipt_document(store.store_id, store.root_commit, commit, record_key,
+                                        replay_key, digest(record_data), ledger_ref,
+                                        digest(stdout_bytes), validator_doc)
+    return receipt
 
 
 def do_read(store, jq_bin, receipt_path, output_path):
