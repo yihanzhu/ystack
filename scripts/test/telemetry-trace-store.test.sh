@@ -222,6 +222,7 @@ def run_all(tmp):
     test_isolation(tmp)
     test_canonical_static(tmp)
     test_git_interop(tmp)
+    test_deadline(tmp)
 
 
 # ---------------------------------------------------------------------------
@@ -1654,6 +1655,74 @@ def test_git_interop(tmp):
 
     record(g, "the original store tree is unchanged by the git-interoperability checks",
            snapshot_tree(store) == before)
+
+
+def test_deadline(tmp):
+    g = "P13"
+    store = store_root(tmp, "deadline-store")
+    scratch = scratch_root(tmp, "deadline-scratch")
+    initialize(store, "deadline.store")
+    session_id = "incident.deadline"
+    attempt_id = "attempt.shadow-reproduce"
+    ledger = make_ledger("fixture.deadline", session_id, attempt_id)
+    path = os.path.join(scratch, "ledger.json")
+    write_ledger(path, ledger)
+    tip = tip_of(store, "deadline.store")
+
+    # A disposable copy of the tree whose validator never exits, standing
+    # in for a hung/slow validator child. R5.2's 60-second deadline (here
+    # lowered so the test itself stays fast) must still fire and escalate
+    # TERM then KILL, and must do so through the kernel's own interval
+    # timer rather than a clock read: poison os.times() in the wrapper (the
+    # function the previous implementation used, and the one a wall-clock
+    # jump would have affected) so that if the deadline ever consulted it
+    # again, the call would raise instead of silently misbehaving.
+    hanging_tree = os.path.join(tmp, "deadline-hanging-tree")
+    shutil.copytree(REPO, hanging_tree, ignore=shutil.ignore_patterns(".git", "node_modules"))
+    hanging_validator = os.path.join(hanging_tree, "telemetry/v1/validate-trace-ledger.sh")
+    with open(hanging_validator, "w") as handle:
+        handle.write("#!/bin/bash\nsleep 100\n")
+    os.chmod(hanging_validator, 0o755)
+    hanging_product = os.path.join(hanging_tree, "telemetry/v1/trace-store.py")
+
+    wrapper = wrapper_path(tmp, "wrapper-deadline.py")
+    write_wrapper(wrapper, '''
+import importlib.util, os, sys
+
+def poisoned_times():
+    raise AssertionError(
+        "os.times() must never be called: the validator deadline is a "
+        "kernel interval timer (SIGALRM), not a clock read, and must be "
+        "immune to a wall-clock jump")
+
+os.times = poisoned_times
+product_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("tracestore", product_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.VALIDATOR_TIMEOUT = 2
+module.VALIDATOR_TERM_GRACE = 1
+sys.argv = [product_path] + sys.argv[2:]
+raise SystemExit(module.main(sys.argv))
+''')
+
+    before = snapshot_tree(store)
+    start = time.monotonic()
+    proc = subprocess.run(
+        [PYTHON, "-I", "-S", "-B", wrapper, hanging_product,
+         "append", store, "deadline.store", tip, scratch, JQ, session_id, attempt_id, path],
+        env=dict(ENV), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=60)
+    elapsed = time.monotonic() - start
+    record(g, "a validator that never exits is refused E_RUNTIME, not left to hang",
+           proc.returncode == 1 and proc.stderr == b"E_RUNTIME\n")
+    record(g, "the os.times() poison pill was never triggered (stderr is the clean "
+              "E_RUNTIME line, not a traceback): the deadline never reads any clock",
+           b"AssertionError" not in proc.stderr and b"Traceback" not in proc.stderr)
+    record(g, "the deadline actually fired at roughly the lowered timeout+grace, not "
+              "the validator's full 100-second sleep, proving the kernel timer works",
+           elapsed < 30)
+    record(g, "store tree unchanged after the deadline refusal", snapshot_tree(store) == before)
 
 
 if __name__ == "__main__":
