@@ -213,14 +213,23 @@ def ancestry(path):
 
 
 def physical(path, code):
-    require(type(path) is str and path.startswith("/") and os.path.normpath(path) == path, code)
+    require(type(path) is str and path.startswith("/"), code)
+    # POSIX (and this filesystem) treats a run of leading slashes as a single
+    # root slash, but posixpath.normpath's own historical special case keeps
+    # exactly two leading slashes unchanged, so "//x" and "/x" both pass an
+    # normpath-idempotency check while aliasing the same file. Collapse any
+    # leading run of slashes to exactly one before every other check, so two
+    # spellings of the same root can never compare unequal in a boundary
+    # check (overlap, in-store, scratch/ledger placement).
+    collapsed = "/" + path.lstrip("/") if path != "/" else path
+    require(os.path.normpath(collapsed) == collapsed, code)
     try:
-        for component in ancestry(path):
+        for component in ancestry(collapsed):
             state = os.lstat(component)
             require(not is_lnk(state.st_mode), code)
     except OSError:
         raise Refusal(code) from None
-    return path
+    return collapsed
 
 
 def overlaps(first, second):
@@ -658,7 +667,8 @@ def emit(data):
 
 def store_document(store_id):
     return {"schema_version": 1, "kind": "telemetry_trace_store", "id": store_id,
-            "body": {"layout_version": 1,
+            "body": {"activation_state": "inactive", "authority_effect": "none",
+                      "layout_version": 1,
                       "records_max": RECORDS_MAX,
                       "ledger_bytes_max": LEDGER_BYTES_MAX,
                       "validator_stdout_max": VALIDATOR_STDOUT_MAX,
@@ -677,7 +687,8 @@ def store_document(store_id):
                       "reserve_bytes": RESERVE_BYTES}}
 
 
-STORE_BODY_FIELDS = {"layout_version", "records_max", "ledger_bytes_max", "validator_stdout_max",
+STORE_BODY_FIELDS = {"activation_state", "authority_effect",
+                      "layout_version", "records_max", "ledger_bytes_max", "validator_stdout_max",
                       "validator_stderr_max", "record_document_max", "store_document_max",
                       "tree_content_max", "commit_content_max", "object_files_max",
                       "filesystem_entries_max", "regular_bytes_max", "inflated_bytes_max",
@@ -818,13 +829,15 @@ def validate_receipt_document(doc, code):
 def read_document(receipt_sha256, ledger_ref, validation_sha256, tip, record_key):
     return {"schema_version": 1, "kind": "telemetry_trace_store_read",
             "id": "trace-record." + record_key,
-            "body": {"storage_receipt_sha256": receipt_sha256, "ledger_ref": ledger_ref,
+            "body": {"activation_state": "inactive", "authority_effect": "none",
+                      "storage_receipt_sha256": receipt_sha256, "ledger_ref": ledger_ref,
                       "validation_sha256": validation_sha256, "tip": tip}}
 
 
 def listing_document(store_id, root_commit, tip, entries):
     return {"schema_version": 1, "kind": "telemetry_trace_store_listing", "id": store_id,
-            "body": {"store": {"id": store_id, "root_commit": root_commit}, "tip": tip,
+            "body": {"activation_state": "inactive", "authority_effect": "none",
+                      "store": {"id": store_id, "root_commit": root_commit}, "tip": tip,
                       "record_count": len(entries), "records": entries}}
 
 
@@ -982,11 +995,19 @@ class Store:
         seen = set()
         current = self.tip
         while current is not None:
+            # A generous loop bound only to guarantee termination on a
+            # cyclic or absurdly long chain; the authoritative R9 records
+            # limit is enforced below, once, for every verb that reaches
+            # this shared loader (append's own admission check in reserve()
+            # is a second, independent enforcement at write time — this one
+            # covers read, list and identical replay on an already-over-limit
+            # store, which never call reserve()).
             require(current not in seen and len(commits) < RECORDS_MAX + 2, "E_CORRUPT")
             seen.add(current)
             tree, parent = parse_commit(self.load_object(current, "commit", COMMIT_CONTENT_MAX))
             commits.append((current, tree, parent))
             current = parent
+        require(len(commits) - 1 <= RECORDS_MAX, "E_CORRUPT")
         self.root_commit = commits[-1][0]
         require(commits[-1][2] is None, "E_CORRUPT")
         records = []
