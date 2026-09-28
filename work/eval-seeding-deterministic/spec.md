@@ -235,6 +235,20 @@ always goes in the closure.
    the selection through a decision request on #439 (`needs-human` with a request
    id), answered by the operator's own `approve <id>` comment. No agent writes that
    comment. Any label change makes a new digest and a new request.
+   **Approval record.** The approval is anchored in a shipped file the caller of
+   `run-evals.sh` cannot supply: `evals/v1/seeds/reviewer-severity/approval.json`,
+   canonical, kind `eval_label_approval`, id `evals.reviewer-severity.approval.v1`,
+   body exactly: `family_id`, `labels_sha256`, `selected_comment_ids` (sorted),
+   `decision_request_id`, `request_comment_id`, `approval_comment_id`,
+   `approval_comment_url`, `approver` (`yihanzhu`) and `approved_at`. The seed author
+   writes it only after the operator's `approve <id>` comment exists, copying those
+   values from the forge; the PR 2 reviewer checks each against the forge (approver
+   is the comment author, body exactly `approve <id>`, posted after the request).
+   Its SHA-256 is pinned in `evals-driver.sh` and `evals-launcher.sh` beside the
+   catalog digest, the launcher copies it into the runtime from the shipped tree,
+   and it is listed in `ci/required-files.txt`. The author who transcribes labels
+   is not the one who approves them, and the relay trusts only the pinned record,
+   keeping approval with the operator (`AGENTS.md:468-469`).
 3. **Pass rule** (`spec.md:258-263`): a trial fails when it has one or more missed
    Important findings, and the family passes only when every trial passes (M2). The
    rule is applied by the operator in `grade_status`.
@@ -276,9 +290,11 @@ always goes in the closure.
    The record evaluator does not open `evidence_ref` or compare grades with labels, so
    before using any status the relay checks the transcription and refuses with
    `E_RELATION` on any mismatch:
-   - the `labels.json` pair's SHA-256 equals `approved_labels_sha256`, a field of the
-     seed set holding the digest the operator approved (R7.2);
-   - every grade's `evidence_ref.sha256` equals that digest;
+   - the runtime copy of `approval.json` matches its pinned digest, and the seed
+     set's `labels.json` pair's SHA-256 equals its `labels_sha256` (R7.2). No
+     approval digest is read from the seed set;
+   - the bundle's trials are exactly `selected_comment_ids`;
+   - every grade's `evidence_ref.sha256` equals `labels_sha256`;
    - every grade's `status` equals the matching trial's `grade_status` in
      `labels.json`, matched by comment id through the trial's attempt id;
    - every trial's `output_ref.sha256` equals that label entry's verdict SHA-256,
@@ -297,9 +313,11 @@ always goes in the closure.
    passed. It requires failure when one grade is changed to `failed`, when a trial is
    dropped below the minimum, and when a trial id is duplicated. It requires
    `E_RELATION` when a grade says `passed` but its label says `failed` (and the
-   reverse), when a grade's evidence digest or `approved_labels_sha256` differs from
-   the approved digest, when a trial's output digest differs from its labelled verdict
-   digest, and when a label entry has no trial.
+   reverse), when a grade's evidence digest differs from `labels_sha256`, when a
+   trial's output digest differs from its labelled verdict digest, and when a label
+   entry has no trial. It also requires refusal of a caller-supplied seed set in
+   which labels, grades, bundle and every embedded hash are replaced together to say
+   `passed`, and of a runtime `approval.json` that differs from its pinned digest.
 
 ### R9. Catalog, files and reserved decisions
 
@@ -337,8 +355,9 @@ always goes in the closure.
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
    and never commits as seeds), `scripts/test/shadow-self-host-evidence.test.sh`,
    `docs/components.md`, `RESTORE.md`. PR 2 and PR 3 each: `evals/v1/eval-catalog.json`,
-   their seed set and seed directory, the two pinned digests in the driver and
-   launcher, their new test, `scripts/test/evals-framework.test.sh`,
+   their seed set and seed directory, the two pinned catalog digests in the driver and
+   launcher (PR 2 also the pinned `approval.json` digest and its launcher copy step),
+   their new test, `scripts/test/evals-framework.test.sh`,
    `scripts/test/evals-dashboard.test.sh`, `docs/components.md`, `RESTORE.md`,
    `ci/required-files.txt`. `framework.jq`, `run.sh`, `config/**` and every other file
    stay byte-identical.
