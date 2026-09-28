@@ -1554,6 +1554,77 @@ with:
 bash scripts/test/shadow-self-host-evidence.test.sh
 ```
 
+## First external-target shadow evidence
+
+`shadow/evidence/external-dummy-target/v1/` holds the first pair of real,
+genuine shadow runs against an external repository's history (issue #426,
+`work/external-target-shadow-run/`): one file-digest check (`src/greet.sh`)
+evaluated at the post-change revision `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`
+of `yihanzhu/ystack-dummy-target` (outcome `reproduced`) and again at its
+single parent `413a2f02a46ababa987039be65089e95c1916765` (outcome
+`no-change`, a control observation rather than a second reported incident).
+Both runs used the same shipped, unmodified `shadow/v1/reproduce.sh` driver,
+`shadow/v1/assemble-materialization-input.sh` assembler,
+`adapters/local-git-materializer/v1` materializer, and
+`control/v1/evaluate-sandbox.sh` evaluator that #373 exercised against
+ystack's own history — through their supported public interfaces, unchanged,
+against a repository that shares nothing with ystack.
+
+This is the portability half of Roadmap step 7's evidence, not a new
+capability. No component was special-cased, patched, or edited for this
+target: every target relation in the shipped pieces takes the repository id
+from its input and compares it. The environment registry entry
+`env.local-macos-dummy-target` (`shadow/v1/shadow-environments.json`) binds
+`repo.ystack-dummy-target` by its root commit and stays
+`proof_state: unproven`; this task does not change that. As in the self-host
+evidence, the retained `sandbox-evaluation.json` documents carry the shipped
+`enforcement_proof: "declaration-only"`, `authority_effect: "none"` and
+`qualification_effect: "none"` markers, and any `satisfied` verdict among
+them carries only `sandbox.declaration-satisfied`. The retained policy and
+claim bytes keep the shipped verifier tool digest of 64 ones that
+`control/v1/sandbox-policy.json` pins — the shipped demonstration value,
+never a real tool identity (`work/real-sandbox-boundary/spec.md`
+requirement 5). A real execution boundary remains a separate, step-8
+prerequisite; nothing here substitutes for it.
+
+**Portability result.** Target-facing fields (each incident, the stage
+requests, both resolved-profile documents' `repository_context_ref`, the
+materialization receipts, the qualified identities, and the shadow records)
+all name `repo.ystack-dummy-target`. Control-plane fields keep naming
+`repo.ystack`, because they point at the unchanged ystack default profile,
+its six manifests, the producer prompt and this slug's plan — a mixed
+identity that fixture tests had exercised but no real run had, until now.
+
+Both cases' unchanged shadow records were also fed, read-only, through the
+shipped `scope/v1/evaluate-scope.sh` (a clearly marked inactive
+compatibility harness) and the shipped `maintenance/v1/incident-to-eval.sh`,
+with a scope for `repo.ystack-dummy-target` requiring
+`env.local-macos-dummy-target`. The scope evaluator accepts both records
+under its complete shape and reference checks and reports, in its own
+vocabulary, `outcome: "not-proposable"` with
+`qualification: {state: "unavailable", reason_id: "scope.enablement-requires-operator-pr"}`
+and no live authority. The maintenance converter maps each incident and its
+matching record to the `stale-moved-artifacts` family — `{accepted, stale}`
+for the post case, `{accepted, completed}` for the pre case — with
+`qualification: {state: "unavailable", reason_id: "maintenance.no-adapter-exists"}`,
+and refuses either cross-pairing of an incident with the other case's
+record. No live eval seed case was added or changed by this task.
+
+See `shadow/evidence/external-dummy-target/v1/README.md` for the two input
+tuples, the frozen runtime and dependency digests, the portability result in
+full, the operator's confirmations, the replay recipe, and the before/after
+source-integrity comparison, and
+`shadow/evidence/external-dummy-target/v1/verification-instructions.md` for
+the minimal, tool-free procedure to check the one file-digest condition by
+hand. Run the focused offline proof, shared with the self-host bundle in one
+table-driven harness, which reads only the committed evidence bytes and
+performs no external-target reproduction, credential use, or model call,
+with:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
 ## Inactive maintenance loop
 
 `maintenance/v1/` is the maintenance half of the loop the Roadmap's twelfth item

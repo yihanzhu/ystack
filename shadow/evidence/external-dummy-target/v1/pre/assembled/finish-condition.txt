@@ -1,0 +1,1 @@
+This attempt is finished once the assembler has produced and committed the materialization input to the caller's output directory.
