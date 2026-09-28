@@ -562,23 +562,33 @@ def run_validator(validator_path, session_id, attempt_id, snapshot_path, private
     open_fds = {out_fd: out_chunks, err_fd: err_chunks}
     caps = {out_fd: VALIDATOR_STDOUT_MAX, err_fd: VALIDATOR_STDERR_MAX}
     overflow = {out_fd: False, err_fd: False}
-    deadline = _clock() + VALIDATOR_TIMEOUT
     terminated = False
     killed = False
+    # The deadline is a kernel interval timer (SIGALRM via signal.alarm),
+    # not two clock reads compared against each other: an itimer's
+    # remaining countdown runs on the kernel's own monotonic accounting and
+    # is unaffected by a wall-clock step during the wait (forward or
+    # backward, e.g. NTP or a manual clock change), unlike a computed
+    # "now + N" deadline re-checked against a later clock read. R2.5 does
+    # not permit importing `time` for a monotonic clock; `signal` (already
+    # imported) gives a clock-independent deadline directly.
+    alarm_count = [0]
+
+    def on_alarm(_signum, _frame):
+        alarm_count[0] += 1
+
+    previous_handler = signal.signal(signal.SIGALRM, on_alarm)
+    signal.alarm(VALIDATOR_TIMEOUT)
     try:
         while open_fds:
-            remaining = deadline - _clock()
-            if remaining <= 0:
-                if not terminated:
-                    _kill_group(child.pid, signal.SIGTERM)
-                    terminated = True
-                    deadline = _clock() + VALIDATOR_TERM_GRACE
-                    continue
-                if not killed:
-                    _kill_group(child.pid, signal.SIGKILL)
-                    killed = True
-                remaining = 5
-            ready, _, _ = select.select(list(open_fds), [], [], min(remaining, 1))
+            if alarm_count[0] >= 1 and not terminated:
+                _kill_group(child.pid, signal.SIGTERM)
+                terminated = True
+                signal.alarm(VALIDATOR_TERM_GRACE)
+            if alarm_count[0] >= 2 and terminated and not killed:
+                _kill_group(child.pid, signal.SIGKILL)
+                killed = True
+            ready, _, _ = select.select(list(open_fds), [], [], 1)
             for fd in ready:
                 block = os.read(fd, 65536)
                 if not block:
@@ -602,6 +612,8 @@ def run_validator(validator_path, session_id, attempt_id, snapshot_path, private
             pass
         raise Refusal("E_RUNTIME") from None
     finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
         try:
             child.stdout.close()
         except OSError:
@@ -628,13 +640,6 @@ def run_validator(validator_path, session_id, attempt_id, snapshot_path, private
     require(line in ("E_USAGE", "E_RUNTIME", "E_LIMIT", "E_PARSE", "E_CANONICAL",
                       "E_SHAPE", "E_RELATION"), "E_RUNTIME")
     raise Refusal("E_INVALID:" + line)
-
-
-def _clock():
-    # R2.5 restricts imports to a fixed module list that excludes `time`;
-    # os.times().elapsed is a monotonically increasing seconds counter
-    # available without an extra import.
-    return os.times().elapsed
 
 
 def _kill_group(pid, sig):
