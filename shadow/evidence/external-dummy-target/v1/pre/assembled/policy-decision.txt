@@ -1,0 +1,1 @@
+This request is routine dependency assembly for a read-only shadow reproduction: it grants no write capability and it denies network access.
