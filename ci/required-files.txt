@@ -222,6 +222,7 @@ work/real-sandbox-boundary/spec.md
 work/real-sandbox-boundary/plan.md
 
 # Inactive sandbox receipt check
+enforcement/v1/accepted-identities.json
 enforcement/v1/sandbox-receipt.jq
 scripts/test/sandbox-receipt.test.sh
 work/enforcement-evidence-binding/intent.md

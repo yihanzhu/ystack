@@ -236,16 +236,165 @@ def derive_outcome:
 def is_outcome_inconsistent:
   .outcome != (. | derive_outcome);
 
-# The program interface fixed in PR 1: the five fixed documents and
-# `entry_digests` are accepted here but not yet read (PR 2 binds them).
+# PR 2: shape checks of the five fixed documents and entry_digests. A mismatch
+# here is a repository/caller integrity failure, not a refusal, so it is a jq
+# `error` (the driver maps it to E_RELATION), never a `reason_id`.
+def num_ok: type == "number" and floor == . and . >= 0;
+
+def get($doc; $path):
+  reduce $path[] as $k ($doc; if (type == "object") then (.[$k] // null) else null end);
+
+def fixed_policy_shape_ok:
+  ($policy[0]) as $p |
+  ($p | exact(["body","id","kind","schema_version"])) and $p.kind == "sandbox_policy" and
+  $p.schema_version == 1 and ($p.id | id_ok) and ($p.body.limits | type == "object") and
+  ($p.body.limits.cpu_time_ms | num_ok) and ($p.body.limits.wall_time_ms | num_ok) and
+  ($p.body.limits.memory_bytes | num_ok) and ($p.body.limits.output_bytes | num_ok) and
+  ($p.body.limits.process_count | num_ok);
+
+def fixed_decision_shape_ok:
+  ($decision[0]) as $d |
+  ($d | exact(["body","id","kind","schema_version"])) and $d.kind == "sandbox_decision" and
+  $d.schema_version == 1 and ($d.id | id_ok) and
+  ($d.body.evaluator.driver_ref.sha256 | sha256_ok) and
+  ($d.body.evaluator.program_ref.sha256 | sha256_ok);
+
+def fixed_policy_set_shape_ok:
+  ($policy_set[0]) as $s |
+  ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
+  $s.schema_version == 1 and ($s.id | id_ok);
+
+def registry_entry_shape_ok:
+  type == "object" and (.environment_id | id_ok) and (.target_repository_id | id_ok);
+
+def fixed_registry_shape_ok:
+  ($registry[0]) as $g |
+  ($g | exact(["body","id","kind","schema_version"])) and
+  $g.kind == "shadow_environment_registry" and $g.schema_version == 1 and
+  ($g.body.environments | type == "array" and all(.[];registry_entry_shape_ok));
+
+def digest_list_ok:
+  type == "array" and length >= 1 and length <= 8 and all(.[];sha256_ok) and
+  all(.[]; . != all_ones_sha and . != all_zeros_sha) and . == (sort | unique);
+
+def id_list_ok:
+  type == "array" and length >= 1 and length <= 8 and all(.[];id_ok) and
+  . == (sort | unique);
+
+def accepted_entry_shape_ok:
+  exact(["environment_id","identities","mechanisms","scratch_bytes"]) and
+  (.environment_id | id_ok) and (.scratch_bytes | type == "number" and floor == . and . > 0) and
+  (.identities | exact(identity_slots) and
+    ([identity_slots[] as $slot | .[$slot]] | all(.[];digest_list_ok))) and
+  (.mechanisms | exact(limit_rows) and
+    ([limit_rows[] as $row | .[$row]] | all(.[];id_list_ok)));
+
+def fixed_accepted_shape_ok:
+  ($accepted[0]) as $a |
+  ($a | exact(["body","id","kind","schema_version"])) and
+  $a.kind == "sandbox_accepted_identity_set" and $a.schema_version == 1 and
+  $a.id == "sandbox.accepted-identities.v1" and
+  ($a.body | exact(["activation_state","environments","set_version"])) and
+  $a.body.activation_state == "inactive" and $a.body.set_version == "v1" and
+  ($a.body.environments | type == "array" and all(.[];accepted_entry_shape_ok));
+
+def entry_digest_item_ok:
+  exact(["environment_id","sha256"]) and (.environment_id | id_ok) and (.sha256 | sha256_ok);
+
+def fixed_entry_digests_shape_ok:
+  ($entry_digests[0] | type == "array" and all(.[];entry_digest_item_ok));
+
+def entry_digests_match_registry:
+  ($registry[0].body.environments | map(.environment_id)) as $reg_ids |
+  ($entry_digests[0] | map(.environment_id)) as $ed_ids |
+  $reg_ids == $ed_ids;
+
+def fixed_files_ok:
+  fixed_policy_shape_ok and fixed_decision_shape_ok and fixed_policy_set_shape_ok and
+  fixed_registry_shape_ok and fixed_accepted_shape_ok and fixed_entry_digests_shape_ok and
+  entry_digests_match_registry;
+
+# PR 2: lookups against the fixed registry, accepted set and entry digests
+# (all read only after `fixed_files_ok`, so their shapes are already sound).
+def registry_entry_for($env_id):
+  $registry[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+
+def entry_digest_for($env_id):
+  $entry_digests[0] | map(select(.environment_id == $env_id)) | .[0].sha256;
+
+def accepted_entry_for($env_id):
+  $accepted[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+
+def row_observer($row):
+  {cpu_time_ms:"guest-supervisor",wall_time_ms:"host-supervisor",memory_bytes:"guest-supervisor",
+   output_bytes:"guest-supervisor",process_count:"guest-supervisor",
+   scratch_bytes:"guest-supervisor"}[$row];
+
+# PR 2: the nine remaining R7.4 reasons.
+def is_origin_mismatch:
+  $receipt[0].body.origin.store_id != $expectation[0].body.store_id;
+
+def is_replayed:
+  $receipt[0].body.attempt != $expectation[0].body.attempt;
+
+def is_subject_mismatch:
+  $receipt[0].body.subject != $expectation[0].body.subject;
+
+def is_control_mismatch:
+  ($receipt[0].body.control) as $c | ($expectation[0].body.control) as $ec |
+  ($c != $ec) or ($c.policy_sha256 != $policy_sha) or ($c.decision_sha256 != $decision_sha) or
+  ($c.policy_set_sha256 != $policy_set_sha) or
+  ($c.evaluator_driver_sha256 != $decision[0].body.evaluator.driver_ref.sha256) or
+  ($c.evaluator_program_sha256 != $decision[0].body.evaluator.program_ref.sha256) or
+  ($c.sandbox_evaluation_sha256 != $evaluation_sha);
+
+# The evaluation is a caller input, not a fixed file: a bad shape here refuses
+# rather than errors.
+def is_evaluation_not_satisfied:
+  ($receipt[0].body.control) as $c |
+  ((get($evaluation[0];["kind"]) == "sandbox_policy_evaluation") and
+   (get($evaluation[0];["schema_version"]) == 1) and
+   (get($evaluation[0];["body","verdict"]) == "satisfied") and
+   (get($evaluation[0];["body","policy_set","sha256"]) == $c.policy_set_sha256) and
+   (get($evaluation[0];["body","policy_ref","sha256"]) == $c.policy_sha256) and
+   (get($evaluation[0];["body","decision_ref","sha256"]) == $c.decision_sha256)) | not;
+
+def is_environment_unlisted:
+  ($receipt[0].body.subject) as $s |
+  (registry_entry_for($s.environment_id) == null) or
+  (accepted_entry_for($s.environment_id) == null) or
+  ($s.environment_entry_sha256 != entry_digest_for($s.environment_id)) or
+  ($s.target_repository_id != (registry_entry_for($s.environment_id).target_repository_id // null));
+
+def is_stale:
+  $receipt[0].body.origin.accepted_set_sha256 != $accepted_set_sha;
+
+def is_identity_unaccepted:
+  ($receipt[0].body) as $b |
+  (accepted_entry_for($b.subject.environment_id)) as $ae |
+  ($ae == null) or
+  ([identity_slots[] as $slot | ($b.identities[$slot]) as $i |
+     select($i.state == "observed" and $i.sha256 != all_ones_sha and $i.sha256 != all_zeros_sha) |
+     select(($ae.identities[$slot] | index($i.sha256)) == null)] | length > 0) or
+  ([limit_rows[] as $row | ($b.limits[$row].mechanism_id) as $m |
+     select(($ae.mechanisms[$row] | index($m)) == null)] | length > 0);
+
+def is_limit_mismatch:
+  ($receipt[0].body) as $b |
+  (accepted_entry_for($b.subject.environment_id)) as $ae |
+  ([limit_rows[] as $row | ($b.limits[$row]) as $row_val |
+     (if $row == "scratch_bytes" then
+        ($ae.scratch_bytes) as $bound |
+        (if $bound == null then false else $row_val.bound != $bound end)
+      else $row_val.bound != $policy[0].body.limits[$row] end) or
+     ($row_val.observer != row_observer($row))
+   ] | any);
+
+# The program interface fixed in PR 1, extended in PR 2 to read the five
+# fixed documents and `entry_digests`.
 ($receipt[0]) as $r |
 ($expectation[0]) as $e |
-($policy[0]) as $fixed_policy |
-($decision[0]) as $fixed_decision |
-($policy_set[0]) as $fixed_policy_set |
-($registry[0]) as $fixed_registry |
-($accepted[0]) as $fixed_accepted |
-($entry_digests[0]) as $fixed_entry_digests |
+(if fixed_files_ok then true else error("fixed-file-relation") end) as $fixed_ok |
 (if ($r | is_declaration_only) then ["receipt.declaration-only"]
  elif ($r | is_kind_unsupported) then ["receipt.kind-unsupported"]
  elif (($r | receipt_shape_ok) and ($e | expectation_shape_ok) | not)
@@ -253,6 +402,15 @@ def is_outcome_inconsistent:
  else
    (((if ($r | has_placeholder_identity) or ($e | has_placeholder_identity)
       then ["receipt.placeholder-identity"] else [] end) +
+     (if is_origin_mismatch then ["receipt.origin-mismatch"] else [] end) +
+     (if is_replayed then ["receipt.replayed"] else [] end) +
+     (if is_subject_mismatch then ["receipt.subject-mismatch"] else [] end) +
+     (if is_control_mismatch then ["receipt.control-mismatch"] else [] end) +
+     (if is_evaluation_not_satisfied then ["receipt.evaluation-not-satisfied"] else [] end) +
+     (if is_environment_unlisted then ["receipt.environment-unlisted"] else [] end) +
+     (if is_stale then ["receipt.stale"] else [] end) +
+     (if is_identity_unaccepted then ["receipt.identity-unaccepted"] else [] end) +
+     (if is_limit_mismatch then ["receipt.limit-mismatch"] else [] end) +
      (if ($r.body | is_outcome_inconsistent) then ["receipt.outcome-inconsistent"]
       else [] end)) | sort | unique)
  end) as $reasons |

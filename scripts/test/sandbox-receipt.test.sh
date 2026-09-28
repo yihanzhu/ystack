@@ -348,6 +348,120 @@ run_case outcome-inconsistent \
      '.body.outcome={verdict:"failed",reason_ids:["failure.runtime"]}')" \
   "$expectation" "$evaluation" "$accepted" refused none '["receipt.outcome-inconsistent"]'
 
+# PR 2: each of the nine remaining R7.4 reasons alone, mutating a positive
+# control (limit-mismatch is shown twice, by observer and by bound).
+run_case origin-mismatch \
+  "$(mutate "$receipt_satisfied" origin-mismatch '.body.origin.store_id="store.other"')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.origin-mismatch"]'
+run_case replayed-attempt-number \
+  "$(mutate "$receipt_satisfied" replayed-attempt-number '.body.attempt.attempt_number=2')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+run_case subject-mismatch \
+  "$(mutate "$receipt_satisfied" subject-mismatch \
+     ".body.subject.incident_sha256=\"$(syn incident.other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.subject-mismatch"]'
+control_mismatch_receipt=$(mutate "$receipt_satisfied" control-mismatch-r \
+  ".body.control.evaluator_driver_sha256=\"$(syn evaluator-driver.other)\"")
+control_mismatch_expectation=$(mutate "$expectation" control-mismatch-e \
+  ".body.control.evaluator_driver_sha256=\"$(syn evaluator-driver.other)\"")
+run_case control-mismatch "$control_mismatch_receipt" "$control_mismatch_expectation" \
+  "$evaluation" "$accepted" refused none '["receipt.control-mismatch"]'
+eval_violated=$(mutate "$evaluation" eval-violated '.body.verdict="violated"')
+recomputed=$(recompute "$eval_violated" "$receipt_satisfied" "$expectation" eval-violated-ok)
+recomputed_receipt=${recomputed%%$'\n'*}
+recomputed_expectation=${recomputed#*$'\n'}
+run_case evaluation-not-satisfied "$recomputed_receipt" "$recomputed_expectation" "$eval_violated" \
+  "$accepted" refused none '["receipt.evaluation-not-satisfied"]'
+env_mismatch_receipt=$(mutate "$receipt_satisfied" env-mismatch-r \
+  '.body.subject.target_repository_id="repo.other"')
+env_mismatch_expectation=$(mutate "$expectation" env-mismatch-e \
+  '.body.subject.target_repository_id="repo.other"')
+run_case environment-unlisted "$env_mismatch_receipt" "$env_mismatch_expectation" "$evaluation" \
+  "$accepted" refused none '["receipt.environment-unlisted"]'
+run_case stale \
+  "$(mutate "$receipt_satisfied" stale \
+     ".body.origin.accepted_set_sha256=\"$(syn accepted-set.other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.stale"]'
+run_case identity-unaccepted \
+  "$(mutate "$receipt_satisfied" identity-unaccepted \
+     ".body.identities.toolchain.sha256=\"$(syn identity.toolchain-other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.identity-unaccepted"]'
+run_case limit-mismatch-observer \
+  "$(mutate "$receipt_satisfied" limit-mismatch-observer \
+     '.body.limits.wall_time_ms.observer="guest-supervisor"')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.limit-mismatch"]'
+run_case limit-mismatch-bound \
+  "$(mutate "$receipt_satisfied" limit-mismatch-bound '.body.limits.memory_bytes.bound=999999999')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.limit-mismatch"]'
+
+# The companion case: the evaluation verdict changed without `recompute` gives
+# exactly receipt.control-mismatch and receipt.evaluation-not-satisfied.
+run_case control-and-evaluation-mismatch "$receipt_satisfied" "$expectation" "$eval_violated" \
+  "$accepted" refused none '["receipt.control-mismatch","receipt.evaluation-not-satisfied"]'
+
+# Replay: the satisfied control against a second expectation differing only
+# in the nonce-bearing launch_request_sha256, then only in attempt_id.
+run_case replayed-launch-request \
+  "$receipt_satisfied" \
+  "$(mutate "$expectation" replayed-launch-request \
+     ".body.attempt.launch_request_sha256=\"$(syn launch-request.other)\"")" \
+  "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+run_case replayed-attempt-id \
+  "$receipt_satisfied" \
+  "$(mutate "$expectation" replayed-attempt-id '.body.attempt.attempt_id="attempt.other"')" \
+  "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+
+# Integrity: a byte-identical copy of the satisfied control gives the same
+# check, and the output still says origin_check: "not-performed".
+receipt_copy="$tmp/receipt-satisfied-copy.json"
+cp "$receipt_satisfied" "$receipt_copy"
+run_case satisfied-copy "$receipt_copy" "$expectation" "$evaluation" "$accepted" \
+  valid satisfied '["receipt.valid"]'
+
+# The row matrix: for each R6 row, `partial`/`unavailable` give `failed` with
+# failure.observation-unavailable; `none`/`unknown` give `failed` with
+# failure.enforcement-unavailable; `reached` gives `violated` with that row's
+# limit.* reason. None of these is ever `satisfied`.
+row_limit_reason() {
+  case "$1" in
+    cpu_time_ms) printf 'limit.cpu-time-reached' ;;
+    wall_time_ms) printf 'limit.wall-time-reached' ;;
+    memory_bytes) printf 'limit.memory-reached' ;;
+    output_bytes) printf 'limit.output-reached' ;;
+    process_count) printf 'limit.process-count-reached' ;;
+    scratch_bytes) printf 'limit.scratch-reached' ;;
+  esac
+}
+for rb in "cpu_time_ms:30000" "wall_time_ms:60000" "memory_bytes:536870912" \
+  "output_bytes:10485760" "process_count:32" "scratch_bytes:$scratch_bound"; do
+  row=${rb%%:*}
+  bound=${rb#*:}
+  reason=$(row_limit_reason "$row")
+  # Each filter is resolved to a plain variable first: nesting an escaped
+  # `\"..\"` object literal directly inside a "$(...)" that is itself inside
+  # a double-quoted argument gets its backslashes stripped by the outer
+  # quotes before the inner command is parsed, corrupting the JSON. A prior
+  # plain assignment avoids that extra quoting layer.
+  partial_filter=".body.limits.$row.observation=\"partial\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.observation-unavailable\"]}"
+  run_case "row-$row-partial" "$(mutate "$receipt_satisfied" "row-$row-partial" "$partial_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  unavailable_filter=".body.limits.$row.observation=\"unavailable\"|.body.limits.$row.observed=null|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.observation-unavailable\"]}"
+  run_case "row-$row-unavailable" \
+    "$(mutate "$receipt_satisfied" "row-$row-unavailable" "$unavailable_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  none_filter=".body.limits.$row.enforcement=\"none\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.enforcement-unavailable\"]}"
+  run_case "row-$row-enforcement-none" \
+    "$(mutate "$receipt_satisfied" "row-$row-enforcement-none" "$none_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  unknown_filter=".body.limits.$row.enforcement=\"unknown\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.enforcement-unavailable\"]}"
+  run_case "row-$row-enforcement-unknown" \
+    "$(mutate "$receipt_satisfied" "row-$row-enforcement-unknown" "$unknown_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  reached_filter=".body.limits.$row.observed=$bound|.body.limits.$row.reached=true|.body.outcome={verdict:\"violated\",reason_ids:[\"$reason\"]}"
+  run_case "row-$row-reached" "$(mutate "$receipt_satisfied" "row-$row-reached" "$reached_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid violated '["receipt.valid"]'
+done
+
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"
