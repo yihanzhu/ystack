@@ -570,6 +570,24 @@ done
 mutate_case 1 decision-unrelated-policy '.body.policy_ref.sha256=("f"*64)'
 mutate_case 2 policy-set-missing-sandbox-section 'del(.body.sections[-1])'
 mutate_case 2 policy-set-sandbox-section-mismatch '.body.sections[-1].policy_ref.sha256=("f"*64)'
+mutate_case 1 decision-policy-ref-wrong-content-id '.body.policy_ref.content_id="other"'
+mutate_case 1 decision-policy-ref-wrong-media-type '.body.policy_ref.media_type="text/plain"'
+
+# The schema combinator's array-element and exact-key-set coverage: a
+# wrong-typed argv element, a wrong-typed resource_ids element, and an
+# unexpected extra key, all inside one policy tool entry.
+mutate_case 0 policy-tool-argv-null-element '.body.tools[0].argv=[null]'
+mutate_case 0 policy-tool-resource-id-wrong-type '.body.tools[0].resource_ids=[42]'
+mutate_case 0 policy-tool-extra-key '.body.tools[0].extra="x"'
+
+# Generic: every scalar leaf path of every fixed file, set to null alone
+# (paths enumerated from the real file at test time, not hardcoded).
+for idx in 0 1 2 3 4; do
+  while IFS= read -r leaf_path; do
+    leaf_name="doc$idx-leaf-$(printf '%s' "$leaf_path" | shasum -a256 | cut -c1-10)"
+    mutate_case "$idx" "$leaf_name" "setpath($leaf_path;null)"
+  done < <("$jq_bin" -c 'paths(scalars)' "${doc_paths[$idx]}")
+done
 
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
