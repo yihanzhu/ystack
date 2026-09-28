@@ -1,20 +1,97 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
-# Requirements 15, 16 and 17 of work/shadow-self-host-run/spec.md, together in
-# one file because all three read the same committed evidence bytes and none
-# of them performs a real self-host reproduction, obtains credentials or
-# invokes a model. Runs offline, in CI, on Linux.
+# Requirements 15, 16 and 17 of work/shadow-self-host-run/spec.md, and
+# requirements 15-17 of work/external-target-shadow-run/spec.md, together in
+# one file because all of them read the same kind of committed evidence
+# bytes and none of them performs a real reproduction, obtains credentials or
+# invokes a model. Runs offline, in CI, on Linux, over a table of bundles
+# (see "load_bundle" below).
 set -euo pipefail
 export LC_ALL=C
 umask 077
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
-evdir="$root/shadow/evidence/self-host-transition/v1"
 
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
-pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
+pass() {
+  passes=$((passes + 1))
+  bundle_passes=$((${bundle_passes:-0} + 1))
+  /usr/bin/printf 'ok %s - %s%s\n' "$passes" "$b_prefix" "$1"
+}
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+
+# ---------------------------------------------------------------------------
+# load_bundle <name>: sets the plain b_* variables every check below reads,
+# in one case arm per bundle (work/external-target-shadow-run/plan.md, "The
+# shared harness"). No associative arrays, so this stays Bash-3.2-compatible
+# and runs on the operator's Mac as well as in CI.
+# ---------------------------------------------------------------------------
+b_prefix=''
+load_bundle() {
+  local name=$1
+  case "$name" in
+    self-host)
+      b_rel=shadow/evidence/self-host-transition/v1
+      b_plan=work/shadow-self-host-run/plan.md
+      b_prefix=''
+      b_summary='shadow self-host evidence'
+      b_target_repo=repo.ystack
+      b_control_repo=repo.ystack
+      b_env_id=env.local-macos-ystack-self
+      b_root_commit=7908b159c0a2d24ce6ccdde6ee0f501acc483e75
+      b_incident_prefix=incident.ystack-transition
+      b_identity_prefix=identity.ystack-transition
+      b_check_path=config/construction-mode.json
+      b_expected_sha=b913cf629566dd532ca507a591cdec5cccb2611b12c63949daca6eb33cd15a93
+      b_post_observed_sha=5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda
+      b_pre_rev=d3f6d525328838b9c2de819699e53d8909ab7a3f
+      b_post_rev=0427390224c25147650f1bd3b6e43ed6911b97a7
+      b_producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
+      b_closure_sha=eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963
+      b_closure_nl_sha=06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1
+      b_requester_sha=26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386
+      b_run_commit=8b3e3f55037de84c441cfe4ca5231c98814a7bbd
+      b_registry_sha=721e19bb0328cb33563114023ab130f28cfa66fbd34a11dbe034ceb4eff62fb8
+      b_registry_entry_sha=cc259fc1b27956e6e479e05a7f70c6cc350ad65fc6b6583252d142fed91666e8
+      b_checksums_id=shadow.self-host-transition.v1.checksums
+      b_scope_slug=self-host-transition
+      b_harness=self-host-harness
+      b_allowed_paths='["docs/guides/setup.md","docs/notes-?.md"]'
+      ;;
+    external-dummy-target)
+      b_rel=shadow/evidence/external-dummy-target/v1
+      b_plan=work/external-target-shadow-run/plan.md
+      b_prefix='external-dummy-target: '
+      b_summary='shadow external-dummy-target evidence'
+      b_target_repo=repo.ystack-dummy-target
+      b_control_repo=repo.ystack
+      b_env_id=env.local-macos-dummy-target
+      b_root_commit=c1cacf5a1dbcc5030d66ecd300bf0b115c792e99
+      b_incident_prefix=incident.dummy-target-greet
+      b_identity_prefix=identity.dummy-target-greet
+      b_check_path=src/greet.sh
+      b_expected_sha=c5ddea8224ad2048d616968f37be42d3f59bcacf385464ca8ef559031274a41c
+      b_post_observed_sha=9a3eecedc5f314cbc921ac8768b7651c3324afa355d42c90686ee8efb803dd90
+      b_pre_rev=413a2f02a46ababa987039be65089e95c1916765
+      b_post_rev=e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e
+      b_producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
+      b_closure_sha=eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963
+      b_closure_nl_sha=06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1
+      b_requester_sha=a7d930d5a2f7b84452489fc29a6b3fa857af717f5e0f39f4c2165c0e994a8f3f
+      b_run_commit=2ced5b37d1c0b405f281d980761f619c584d353e
+      b_registry_sha=37c9776205decf8aa37404ca1ddff941d13401f8b515a6e03e0e3f8e4102dd12
+      b_registry_entry_sha=2cad2eb4ed2381bcfa528fb3bf9d7314650cb5e5411b7f08f02825c1254c141a
+      b_checksums_id=shadow.external-dummy-target.v1.checksums
+      b_scope_slug=external-dummy-target
+      b_harness=external-dummy-target-harness
+      b_allowed_paths='["src/greet.sh","test/greet.test.sh"]'
+      ;;
+    *)
+      fail "unknown bundle $name" ;;
+  esac
+  evdir="$root/$b_rel"
+}
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-shadow-self-host-evidence.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
@@ -89,27 +166,305 @@ done
 [ "${#all_relative_files[@]}" -eq 45 ] || fail 'evidence manifest must name 45 files'
 
 # ---------------------------------------------------------------------------
-# The precondition this whole suite depends on: the operator's evidence
+# ---------------------------------------------------------------------------
+# Requirement 15's portability lists, exact rather than templated: the
+# evidence bundles are frozen committed bytes, so every concrete
+# (file, indexed-path) pair a repository_id/target_repository_id key can
+# occur at is enumerable once and for all, not merely its wildcard shape.
+# These 46 target-facing and 186 control-plane pairs (232 in all) were
+# generated by a one-off jq walk ("paths", every value type, every canonical
+# *.json file except the bundle-root checksums.json) over the real,
+# committed external-dummy-target bundle, then classified target/control by
+# which repository id each concrete path actually names there. The
+# self-host bundle has the identical (file, path) structure -- both bundles
+# share the same default profile, the same six manifests, the same
+# per-role binding shape, and the same five-input stage request -- so one
+# literal table serves both bundle arms; only b_target_repo/b_control_repo
+# differ at runtime. Regenerating this table (after an accepted, reviewed
+# pipeline change) means re-running that same jq walk over the newly
+# committed bundle and re-pasting its output here.
+# ---------------------------------------------------------------------------
+cat >"$tmp/target-table.tsv" <<'TARGETPATHS'
+post/assembled/input.json	resolved_profile.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+post/assembled/input.json	stage_request.content.body.base.value.repository_id
+post/assembled/input.json	stage_request.content.body.inputs.3.value.value.value.revision.repository_id
+post/assembled/input.json	stage_request.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+post/assembled/input.json	stage_request.content.body.source.value.value.revision.repository_id
+post/assembled/input.json	stage_request.content.body.target_repository_id
+post/assembled/input.json	stage_request.content.body.target_revision.value.repository_id
+post/incident.json	body.git_revision_ref.repository_id
+post/incident.json	body.target_repository_id
+post/materialization-receipt.json	source.repository_id
+post/qualified-identity.json	body.target_revision.repository_id
+post/state/shadow-record.json	body.git_revision_ref.repository_id
+post/state/shadow-record.json	body.materialization.value.source.repository_id
+post/state/shadow-record.json	body.qualified_identity.target_revision.repository_id
+post/state/shadow-record.json	body.target_repository_id
+pre/assembled/input.json	resolved_profile.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+pre/assembled/input.json	stage_request.content.body.base.value.repository_id
+pre/assembled/input.json	stage_request.content.body.inputs.3.value.value.value.revision.repository_id
+pre/assembled/input.json	stage_request.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+pre/assembled/input.json	stage_request.content.body.source.value.value.revision.repository_id
+pre/assembled/input.json	stage_request.content.body.target_repository_id
+pre/assembled/input.json	stage_request.content.body.target_revision.value.repository_id
+pre/incident.json	body.git_revision_ref.repository_id
+pre/incident.json	body.target_repository_id
+pre/materialization-receipt.json	source.repository_id
+pre/qualified-identity.json	body.target_revision.repository_id
+pre/state/shadow-record.json	body.git_revision_ref.repository_id
+pre/state/shadow-record.json	body.materialization.value.source.repository_id
+pre/state/shadow-record.json	body.qualified_identity.target_revision.repository_id
+pre/state/shadow-record.json	body.target_repository_id
+prerequisite/input.json	resolved_profile.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+prerequisite/input.json	stage_request.content.body.base.value.repository_id
+prerequisite/input.json	stage_request.content.body.inputs.3.value.value.value.revision.repository_id
+prerequisite/input.json	stage_request.content.body.repository_context_ref.subject_ref.value.value.revision.repository_id
+prerequisite/input.json	stage_request.content.body.source.value.value.revision.repository_id
+prerequisite/input.json	stage_request.content.body.target_repository_id
+prerequisite/input.json	stage_request.content.body.target_revision.value.repository_id
+prerequisite/materialization-receipt.json	source.repository_id
+prerequisite/resolved-profile-document.json	body.repository_context_ref.subject_ref.value.value.revision.repository_id
+prerequisite/stage-request.json	body.base.value.repository_id
+prerequisite/stage-request.json	body.inputs.3.value.value.value.revision.repository_id
+prerequisite/stage-request.json	body.repository_context_ref.subject_ref.value.value.revision.repository_id
+prerequisite/stage-request.json	body.source.value.value.revision.repository_id
+prerequisite/stage-request.json	body.target_repository_id
+prerequisite/stage-request.json	body.target_revision.value.repository_id
+resolved-profile.json	body.repository_context_ref.subject_ref.value.value.revision.repository_id
+TARGETPATHS
+cat >"$tmp/control-table.tsv" <<'CONTROLPATHS'
+post/assembled/input.json	manifests.0.content.body.package_ref.revision.repository_id
+post/assembled/input.json	manifests.1.content.body.package_ref.revision.repository_id
+post/assembled/input.json	manifests.2.content.body.package_ref.revision.repository_id
+post/assembled/input.json	manifests.3.content.body.package_ref.revision.repository_id
+post/assembled/input.json	manifests.4.content.body.package_ref.revision.repository_id
+post/assembled/input.json	manifests.5.content.body.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.0.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.1.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.2.config_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.2.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.2.prompt_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.3.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.4.package_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.4.prompt_ref.revision.repository_id
+post/assembled/input.json	profile.content.body.bindings.5.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.0.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.0.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.0.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.1.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.1.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.1.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.binding.config_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.binding.prompt_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.config_source.value.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.2.prompt_source.value.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.3.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.3.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.3.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.4.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.4.binding.prompt_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.4.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.4.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.4.prompt_source.value.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.5.binding.package_ref.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.5.manifest_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.bindings.5.package_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.profile_source.source.revision.repository_id
+post/assembled/input.json	resolved_profile.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+post/assembled/input.json	stage_request.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+post/qualified-identity.json	body.prompt_refs.0.revision.repository_id
+post/state/materialization-result.json	body.execution.actual_binding.package_ref.revision.repository_id
+post/state/shadow-record.json	body.qualified_identity.prompt_refs.0.revision.repository_id
+pre/assembled/input.json	manifests.0.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	manifests.1.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	manifests.2.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	manifests.3.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	manifests.4.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	manifests.5.content.body.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.0.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.1.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.2.config_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.2.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.2.prompt_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.3.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.4.package_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.4.prompt_ref.revision.repository_id
+pre/assembled/input.json	profile.content.body.bindings.5.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.0.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.0.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.0.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.1.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.1.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.1.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.binding.config_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.binding.prompt_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.config_source.value.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.2.prompt_source.value.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.3.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.3.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.3.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.4.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.4.binding.prompt_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.4.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.4.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.4.prompt_source.value.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.5.binding.package_ref.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.5.manifest_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.bindings.5.package_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.profile_source.source.revision.repository_id
+pre/assembled/input.json	resolved_profile.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+pre/assembled/input.json	stage_request.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+pre/qualified-identity.json	body.prompt_refs.0.revision.repository_id
+pre/state/materialization-result.json	body.execution.actual_binding.package_ref.revision.repository_id
+pre/state/shadow-record.json	body.qualified_identity.prompt_refs.0.revision.repository_id
+prerequisite/input.json	manifests.0.content.body.package_ref.revision.repository_id
+prerequisite/input.json	manifests.1.content.body.package_ref.revision.repository_id
+prerequisite/input.json	manifests.2.content.body.package_ref.revision.repository_id
+prerequisite/input.json	manifests.3.content.body.package_ref.revision.repository_id
+prerequisite/input.json	manifests.4.content.body.package_ref.revision.repository_id
+prerequisite/input.json	manifests.5.content.body.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.0.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.1.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.2.config_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.2.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.2.prompt_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.3.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.4.package_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.4.prompt_ref.revision.repository_id
+prerequisite/input.json	profile.content.body.bindings.5.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.0.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.0.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.0.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.1.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.1.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.1.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.binding.config_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.binding.prompt_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.config_source.value.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.2.prompt_source.value.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.3.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.3.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.3.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.4.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.4.binding.prompt_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.4.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.4.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.4.prompt_source.value.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.5.binding.package_ref.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.5.manifest_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.bindings.5.package_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.profile_source.source.revision.repository_id
+prerequisite/input.json	resolved_profile.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+prerequisite/input.json	stage_request.content.body.selection_ref.subject_ref.value.value.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.0.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.0.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.0.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.1.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.1.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.1.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.binding.config_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.binding.prompt_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.config_source.value.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.2.prompt_source.value.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.3.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.3.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.3.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.4.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.4.binding.prompt_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.4.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.4.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.4.prompt_source.value.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.5.binding.package_ref.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.5.manifest_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.bindings.5.package_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.profile_source.source.revision.repository_id
+prerequisite/resolved-profile-document.json	body.selection_ref.subject_ref.value.value.revision.repository_id
+prerequisite/stage-request.json	body.selection_ref.subject_ref.value.value.revision.repository_id
+prerequisite/stage-result.json	body.execution.actual_binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.0.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.0.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.0.package_source.source.revision.repository_id
+resolved-profile.json	body.bindings.1.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.1.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.1.package_source.source.revision.repository_id
+resolved-profile.json	body.bindings.2.binding.config_ref.revision.repository_id
+resolved-profile.json	body.bindings.2.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.2.binding.prompt_ref.revision.repository_id
+resolved-profile.json	body.bindings.2.config_source.value.source.revision.repository_id
+resolved-profile.json	body.bindings.2.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.2.package_source.source.revision.repository_id
+resolved-profile.json	body.bindings.2.prompt_source.value.source.revision.repository_id
+resolved-profile.json	body.bindings.3.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.3.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.3.package_source.source.revision.repository_id
+resolved-profile.json	body.bindings.4.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.4.binding.prompt_ref.revision.repository_id
+resolved-profile.json	body.bindings.4.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.4.package_source.source.revision.repository_id
+resolved-profile.json	body.bindings.4.prompt_source.value.source.revision.repository_id
+resolved-profile.json	body.bindings.5.binding.package_ref.revision.repository_id
+resolved-profile.json	body.bindings.5.manifest_source.source.revision.repository_id
+resolved-profile.json	body.bindings.5.package_source.source.revision.repository_id
+resolved-profile.json	body.profile_source.source.revision.repository_id
+resolved-profile.json	body.selection_ref.subject_ref.value.value.revision.repository_id
+CONTROLPATHS
+[ "$(/usr/bin/wc -l < "$tmp/target-table.tsv" | /usr/bin/tr -d ' ')" -eq 46 ] &&
+  [ "$(/usr/bin/wc -l < "$tmp/control-table.tsv" | /usr/bin/tr -d ' ')" -eq 186 ] ||
+  fail 'requirement 15 exact path tables must have exactly 46 target-facing and 186 control-plane entries'
+/usr/bin/comm -12 \
+  <(LC_ALL=C sort "$tmp/target-table.tsv") <(LC_ALL=C sort "$tmp/control-table.tsv") \
+  | /usr/bin/grep -q . && fail 'requirement 15 target/control path tables must not overlap'
+"$jq_bin" -R -s 'split("\n") | map(select(length>0)) | map(split("\t")) |
+  map({file:.[0],path:.[1]})' "$tmp/target-table.tsv" >"$tmp/target-table.json"
+"$jq_bin" -R -s 'split("\n") | map(select(length>0)) | map(split("\t")) |
+  map({file:.[0],path:.[1]})' "$tmp/control-table.tsv" >"$tmp/control-table.json"
+# "paths" (not "paths(scalars)"), and no "[]" index normalisation: the found
+# set is exact concrete (file, path, value) triples, directly comparable by
+# set equality against the exact tables above. A null, false or container
+# value under a repository_id/target_repository_id key is still enumerated;
+# a missing or extra concrete index then shows up as a plain set
+# difference, with no separate per-element or array-length logic needed.
+/usr/bin/printf '%s\n' \
+  '[paths as $p' \
+  ' | select(($p | length) > 0 and ($p[-1]=="repository_id" or $p[-1]=="target_repository_id"))' \
+  ' | {file:$f, path: ($p | map(tostring) | join(".")), value: getpath($p)}]' >"$tmp/repo-id-walk.jq"
+
+# ---------------------------------------------------------------------------
+# The precondition this whole suite depends on, per bundle: the evidence
 # session has not run yet until every one of the 45 files above exists. That
 # is expected on this branch before the operator hands the evidence back, and
 # this check must fail loudly and explicitly about it rather than skip or
 # silently pass, and rather than let a later check crash confusingly on an
 # absent file.
 # ---------------------------------------------------------------------------
-missing=()
-for relative in "${all_relative_files[@]}"; do
-  [ -f "$evdir/$relative" ] || missing+=("$relative")
-done
-if [ "${#missing[@]}" -gt 0 ]; then
-  /usr/bin/printf 'evidence not yet captured: %s\n' \
-    "shadow/evidence/self-host-transition/v1/ is missing ${#missing[@]} of ${#all_relative_files[@]} required files" >&2
-  for relative in "${missing[@]}"; do
-    /usr/bin/printf 'evidence not yet captured: missing %s\n' \
-      "shadow/evidence/self-host-transition/v1/$relative" >&2
+require_bundle_present() {
+  local missing=()
+  for relative in "${all_relative_files[@]}"; do
+    [ -f "$evdir/$relative" ] || missing+=("$relative")
   done
-  /usr/bin/printf 'evidence not yet captured: this suite performs no self-host reproduction and cannot supply these bytes itself; see work/shadow-self-host-run/plan.md, "Operator steps".\n' >&2
-  exit 1
-fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    /usr/bin/printf 'evidence not yet captured: %s\n' \
+      "$b_rel/ is missing ${#missing[@]} of ${#all_relative_files[@]} required files" >&2
+    for relative in "${missing[@]}"; do
+      /usr/bin/printf 'evidence not yet captured: missing %s\n' \
+        "$b_rel/$relative" >&2
+    done
+    /usr/bin/printf 'evidence not yet captured: this suite performs no reproduction and cannot supply these bytes itself; see %s, "Operator steps".\n' "$b_plan" >&2
+    exit 1
+  fi
+}
 
 # ===========================================================================
 # From here on, all 45 files are present. checks() runs requirement 15's
@@ -312,11 +667,10 @@ check_evidence() {
 # Shape and mutual consistency do not establish identity provenance.
 # Derive model/config/prompt/skill identities from the retained producer binding.
   step='identity-provenance'
-  local producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
   for case_name in pre post; do
     local identity="$dir/$case_name/qualified-identity.json"
     "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile profile "$dir/resolved-profile.json" \
-      --arg pin "$producer_config_pin" '
+      --arg pin "$b_producer_config_pin" '
       ([$profile[0].body.bindings[] | select(.binding.role == "producer")]) as $producers |
       ($producers | length) == 1 and
       $producers[0] as $producer |
@@ -334,42 +688,42 @@ check_evidence() {
 # Require the accepted incident's exact path and pre/post raw-byte digests;
 # self-consistency alone does not identify the accepted historical observations.
   step='outcomes'
-  local expected_sha=b913cf629566dd532ca507a591cdec5cccb2611b12c63949daca6eb33cd15a93
-  local post_observed_sha=5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda
+  local expected_sha=$b_expected_sha
+  local post_observed_sha=$b_post_observed_sha
   local pre_observed_sha=$expected_sha
   for case_name in pre post; do
-    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg exp "$expected_sha" '
+    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg exp "$expected_sha" --arg path "$b_check_path" '
       $i[0].body.failing_check ==
-        {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp}
+        {kind:"file-digest",path:$path,expected_sha256:$exp}
     ' >/dev/null 2>&1 ||
-      { /usr/bin/printf '%s: %s: %s incident.json does not name the exact failing check (config/construction-mode.json, expected b913cf62...)\n' "$label" "$step" "$case_name" >&2; return 1; }
+      { /usr/bin/printf '%s: %s: %s incident.json does not name the exact failing check (%s, expected %s...)\n' "$label" "$step" "$case_name" "$b_check_path" "${expected_sha:0:8}" >&2; return 1; }
   done
   "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" \
-    --arg exp "$expected_sha" --arg obs "$post_observed_sha" '
+    --arg exp "$expected_sha" --arg obs "$post_observed_sha" --arg path "$b_check_path" '
     $r[0].body.check.failing_check ==
-      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+      {kind:"file-digest",path:$path,expected_sha256:$exp} and
     $r[0].body.check.execution.value.observed_sha256 == $obs and
     $r[0].body.check.execution.value.matches_expected == false
   ' >/dev/null 2>&1 ||
-    { /usr/bin/printf '%s: %s: post shadow record does not assert the exact failing-check object (config/construction-mode.json, expected b913cf62..., observed 5b3e0baf...)\n' "$label" "$step" >&2; return 1; }
+    { /usr/bin/printf '%s: %s: post shadow record does not assert the exact failing-check object (%s, expected %s..., observed %s...)\n' "$label" "$step" "$b_check_path" "${expected_sha:0:8}" "${post_observed_sha:0:8}" >&2; return 1; }
   "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" \
-    --arg exp "$expected_sha" --arg obs "$pre_observed_sha" '
+    --arg exp "$expected_sha" --arg obs "$pre_observed_sha" --arg path "$b_check_path" '
     $r[0].body.check.failing_check ==
-      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+      {kind:"file-digest",path:$path,expected_sha256:$exp} and
     $r[0].body.check.execution.value.observed_sha256 == $obs and
     $r[0].body.check.execution.value.matches_expected == true
   ' >/dev/null 2>&1 ||
-    { /usr/bin/printf '%s: %s: pre shadow record does not assert the exact failing-check object (config/construction-mode.json, expected and observed both b913cf62...)\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" '
+    { /usr/bin/printf '%s: %s: pre shadow record does not assert the exact failing-check object (%s, expected and observed both %s...)\n' "$label" "$step" "$b_check_path" "${expected_sha:0:8}" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" --arg rev "$b_post_rev" '
     $r[0].body.outcome == "reproduced" and
     $r[0].body.reason_id == "check.failed-at-revision" and
-    $r[0].body.git_revision_ref.commit_id == "0427390224c25147650f1bd3b6e43ed6911b97a7"
+    $r[0].body.git_revision_ref.commit_id == $rev
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: post outcome wrong\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" '
+  "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" --arg rev "$b_pre_rev" '
     $r[0].body.outcome == "no-change" and
     $r[0].body.reason_id == "check.passed-at-revision" and
-    $r[0].body.git_revision_ref.commit_id == "d3f6d525328838b9c2de819699e53d8909ab7a3f"
+    $r[0].body.git_revision_ref.commit_id == $rev
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: pre outcome wrong\n' "$label" "$step" >&2; return 1; }
   for case_name in pre post; do
@@ -570,7 +924,7 @@ check_evidence() {
     ($claim[0].body.tools | all(.sha256 == $ones))
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: claim must retain the shipped all-ones verifier digest\n' "$label" "$step" >&2; return 1; }
-  /usr/bin/grep -Fq "$all_ones" "$root/shadow/evidence/self-host-transition/v1/README.md" 2>/dev/null ||
+  /usr/bin/grep -Fq "$all_ones" "$root/$b_rel/README.md" 2>/dev/null ||
     /usr/bin/grep -Fq "$all_ones" "$dir/README.md" 2>/dev/null ||
     { /usr/bin/printf '%s: %s: README must label the shipped demonstration value\n' "$label" "$step" >&2; return 1; }
   # Ban affirmative overclaims ("this is sandbox-enforced / qualified /
@@ -602,8 +956,8 @@ check_evidence() {
       exit 1
     ' "$f"
   }
-  for f in "$root/shadow/evidence/self-host-transition/v1/README.md" \
-    "$root/shadow/evidence/self-host-transition/v1/verification-instructions.md" \
+  for f in "$root/$b_rel/README.md" \
+    "$root/$b_rel/verification-instructions.md" \
     "$root/RESTORE.md" "$root/docs/components.md"; do
     if overclaim_found "$f"; then
       /usr/bin/printf '%s: %s: %s overclaims sandbox enforcement or qualification\n' \
@@ -738,11 +1092,11 @@ check_evidence() {
   # offline and its members recompute.
   step='core-package-closure'
   local closure_sha; closure_sha=$(sha_file "$dir/core-package-closure.json")
-  [ "$closure_sha" = eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963 ] ||
+  [ "$closure_sha" = "$b_closure_sha" ] ||
     { /usr/bin/printf '%s: %s: digest mismatch\n' "$label" "$step" >&2; return 1; }
   local nl_sha
   nl_sha=$( { cat "$dir/core-package-closure.json"; printf '\n'; } | sha_file /dev/stdin)
-  [ "$nl_sha" = 06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1 ] ||
+  [ "$nl_sha" = "$b_closure_nl_sha" ] ||
     { /usr/bin/printf '%s: %s: newline-terminated digest does not match the known-different value\n' "$label" "$step" >&2; return 1; }
   local members_count
   members_count=$("$jq_bin" -e '.members | length' "$dir/core-package-closure.json" 2>/dev/null) &&
@@ -767,7 +1121,7 @@ check_evidence() {
   # distinctness, and that every retained assembly used it verbatim.
   step='requester-identity'
   local requester_sha; requester_sha=$(sha_file "$dir/requester.json")
-  [ "$requester_sha" = 26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386 ] ||
+  [ "$requester_sha" = "$b_requester_sha" ] ||
     { /usr/bin/printf '%s: %s: digest mismatch\n' "$label" "$step" >&2; return 1; }
   local sel_full sel_dir
   sel_full=$(/usr/bin/sed -n \
@@ -777,10 +1131,10 @@ check_evidence() {
   "$jq_bin" -L "$sel_dir" -e -n --slurpfile r "$dir/requester.json" \
     'import "schema" as schema; $r[0] | schema::actor_ref_ok' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: requester fails schema::actor_ref_ok\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/requester.json" '
+  "$jq_bin" -e -n --slurpfile r "$dir/requester.json" --arg rc "$b_run_commit" '
     $r[0].role == "operator" and
     $r[0].implementation_id == "ystack-operator-cli" and
-    $r[0].implementation_version == "8b3e3f55037de84c441cfe4ca5231c98814a7bbd"
+    $r[0].implementation_version == $rc
   ' \
     >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: requester role or implementation identity mismatch\n' "$label" "$step" >&2; return 1; }
@@ -799,8 +1153,152 @@ check_evidence() {
       { /usr/bin/printf '%s: %s: %s does not carry the approved requester\n' "$label" "$step" "$input" >&2; return 1; }
   done
 
+  # --- check: bundle-ids. Incident, identity, claim, prerequisite
+  # declaration and checksums ids all name this bundle's own environment and
+  # incident/identity prefixes, and each record's id equals its incident's.
+  step='bundle-ids'
+  for case_name in pre post; do
+    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg id "$b_incident_prefix.$case_name" '
+      $i[0].id == $id
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s incident id mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
+    "$jq_bin" -e -n --slurpfile q "$dir/$case_name/qualified-identity.json" --arg id "$b_identity_prefix.$case_name" '
+      $q[0].id == $id
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s qualified-identity id mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
+    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --slurpfile r "$dir/$case_name/state/shadow-record.json" \
+      --arg env_id "$b_env_id" '
+      $r[0].id == $i[0].id and $r[0].body.environment.environment_id == $env_id
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s shadow record id/environment_id mismatch\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
+  "$jq_bin" -e -n --slurpfile c "$dir/environment-claim.json" --arg env_id "$b_env_id" \
+    '$c[0].id == $env_id' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: environment-claim id mismatch\n' "$label" "$step" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile d "$dir/prerequisite/environment-declaration.json" --arg env_id "$b_env_id" \
+    '$d[0].id == $env_id' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite environment-declaration id mismatch\n' "$label" "$step" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile c "$dir/checksums.json" --arg id "$b_checksums_id" \
+    '$c[0].id == $id' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: checksums.json id mismatch\n' "$label" "$step" >&2; return 1; }
+
+  # --- check: registry-binding. Exactly one live registry entry names this
+  # bundle's environment and target, and the bundle's own registry
+  # references equal the pinned digests (never the live file's digest, so
+  # this stays true after a later registry edit).
+  step='registry-binding'
+  "$jq_bin" -e -n --slurpfile reg "$root/shadow/v1/shadow-environments.json" \
+    --arg env_id "$b_env_id" --arg target_repo "$b_target_repo" --arg root_commit "$b_root_commit" '
+    ([$reg[0].body.environments[] | select(.environment_id == $env_id)]) as $m |
+    ($m | length) == 1 and
+    $m[0].target_repository_id == $target_repo and
+    $m[0].source_root_commit == $root_commit
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: live registry does not name exactly one entry for %s\n' "$label" "$step" "$b_env_id" >&2; return 1; }
+  for case_name in pre post; do
+    "$jq_bin" -e -n --slurpfile r "$dir/$case_name/state/shadow-record.json" --arg sha "$b_registry_sha" '
+      $r[0].body.environment.registry_ref.sha256 == $sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s registry_ref does not equal the pinned registry digest\n' "$label" "$step" "$case_name" >&2; return 1; }
+  done
+  for rp in "$dir/resolved-profile.json" "$dir/prerequisite/resolved-profile-document.json"; do
+    "$jq_bin" -e -n --slurpfile p "$rp" --arg sha "$b_registry_sha" '
+      $p[0].body.repository_context_ref.decision_record_ref.sha256 == $sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s repository_context_ref does not equal the pinned registry digest\n' "$label" "$step" "$rp" >&2; return 1; }
+  done
+  for ip in "$dir/prerequisite/input.json" "$dir/pre/assembled/input.json" "$dir/post/assembled/input.json"; do
+    "$jq_bin" -e -n --slurpfile i "$ip" --arg sha "$b_registry_sha" '
+      $i[0].resolved_profile.content.body.repository_context_ref.decision_record_ref.sha256 == $sha
+    ' >/dev/null 2>&1 ||
+      { /usr/bin/printf '%s: %s: %s embedded resolved_profile repository_context_ref does not equal the pinned registry digest\n' "$label" "$step" "$ip" >&2; return 1; }
+  done
+  "$jq_bin" -e -n --slurpfile d "$dir/prerequisite/environment-declaration.json" --arg sha "$b_registry_entry_sha" '
+    $d[0].body.registry_entry_sha256 == $sha
+  ' >/dev/null 2>&1 ||
+    { /usr/bin/printf '%s: %s: prerequisite environment-declaration registry_entry_sha256 mismatch\n' "$label" "$step" >&2; return 1; }
+
+  # --- check: repository-ids (portability, requirement 15). Every
+  # repository_id/target_repository_id occurrence in the 18 files that carry
+  # one must be on exactly one of the two fixed path tables built above, and
+  # every occurrence's value must equal this bundle's b_target_repo or
+  # b_control_repo depending on which table lists it. The predicate is
+  # exactly two directions, spec R15 satisfied by exact equality against the
+  # frozen capture: (1) the found set of concrete (file, path) pairs equals
+  # the expected set exactly (no unlisted pair, no missing pair -- this one
+  # direction is what an earlier per-template, wildcard-normalised design
+  # needed a growing pile of special cases to approximate: a deleted parent
+  # object, a deleted single array element, an emptied array, a null value,
+  # a nested same-named file and an extra file all just remove or add a
+  # concrete pair, so all of them fall out of set equality with nothing
+  # further to special-case); (2) every found value is the repository id its
+  # table says it must be. For the self-host bundle both repository ids are
+  # the same, so direction 2 is vacuous there and only direction 1 does any
+  # work, exactly as the spec notes.
+  step='repository-ids'
+  : >"$tmp/repo-id-found.jsonl"
+  # Scan every retained regular file except the bundle-root checksums.json
+  # (path exactly "checksums.json", not any basename match: a nested file
+  # that merely shares that basename, e.g. "post/checksums.json", is an
+  # ordinary retained file and must still be scanned), whatever its
+  # extension. A file that does not parse as one canonical JSON value is
+  # skipped, not failed here: check 2 (canonical-json) already rejects a
+  # malformed *.json file earlier in this same function, so by the time this
+  # step runs a parse failure means the file is legitimately non-JSON
+  # (README.md, verification-instructions.md, the assembler's *.txt
+  # outputs) or a symlink/oversized file check 1's find -type f (and its own
+  # digest match) has already ruled on. Scanning by content rather than by
+  # ".json" name closes the same hole for a JSON document saved under any
+  # other extension.
+  local rf found_json_count=0
+  while IFS= read -r rf; do
+    "$jq_bin" -c --arg f "$rf" -f "$tmp/repo-id-walk.jq" "$dir/$rf" >"$tmp/repo-id-one.json" 2>/dev/null || continue
+    found_json_count=$((found_json_count + 1))
+    "$jq_bin" -c '.[]' "$tmp/repo-id-one.json" >>"$tmp/repo-id-found.jsonl"
+  done < <(cd "$dir" && /usr/bin/find . -type f ! -path './checksums.json' |
+    /usr/bin/sed 's|^\./||' | LC_ALL=C sort)
+  [ "$found_json_count" -ge 18 ] ||
+    { /usr/bin/printf '%s: %s: only %s retained JSON-parseable files found (expected at least 18)\n' \
+      "$label" "$step" "$found_json_count" >&2; return 1; }
+  "$jq_bin" -n -e \
+    --slurpfile found <(cat "$tmp/repo-id-found.jsonl" 2>/dev/null; :) \
+    --slurpfile target "$tmp/target-table.json" --slurpfile control "$tmp/control-table.json" \
+    --arg target_repo "$b_target_repo" --arg control_repo "$b_control_repo" '
+    def keyed: .file + "\u0001" + .path;
+    ($target[0]) as $target_list |
+    ($control[0]) as $control_list |
+    (($target_list + $control_list) | map(keyed) | sort) as $expected_keys |
+    ($found | map(keyed) | sort) as $found_keys |
+    # Direction 1: exact set equality, both directions at once.
+    ($expected_keys == $found_keys) as $set_equal |
+    # Direction 2: every found value is the repository id its own table
+    # names (redundant with direction 1 whenever $set_equal already holds,
+    # since the tables are what direction 1 compared against, but kept
+    # explicit and independently checked so a future change that made
+    # direction 1 keys-only without values could not silently drop this).
+    ($target_list | map(keyed)) as $target_keys |
+    ($control_list | map(keyed)) as $control_keys |
+    ($found | all(. as $f |
+      (($target_keys | index($f | keyed)) != null and $f.value == $target_repo) or
+      (($control_keys | index($f | keyed)) != null and $f.value == $control_repo)
+    )) as $values_ok |
+    $set_equal and $values_ok
+  ' >"$tmp/repo-id-verdict.err" 2>&1 ||
+    { /usr/bin/printf '%s: %s: portability path table mismatch (%s)\n' "$label" "$step" "$(cat "$tmp/repo-id-verdict.err")" >&2; return 1; }
+
   return 0
 }
+
+# ===========================================================================
+# run_bundle_checks: everything from here to the end of the file runs once
+# per bundle, over the b_* fields load_bundle set. This is what lets one
+# harness prove the same checks for both the self-host and (from the second
+# bundle onward) any other evidence bundle, byte-identical in structure.
+# ===========================================================================
+run_bundle_checks() {
+  local mutant_dir scope_dir pre_record post_record pre_record_sha post_record_sha
+  local pre_id post_id post_identity pre_identity converter post_out pre_out
+  local cross_1 cross_2
 
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
 pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), the prerequisite input binding to its retained request/profile extracts, each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, sandbox evaluation recomputing byte-identical through the shipped evaluator over the retained policy-set/duty/claim, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
@@ -810,7 +1308,7 @@ pass 'the committed evidence passes checksums.json inventory, canonical JSON, in
 # time, must fail check_evidence. A test that passes on altered evidence
 # proves nothing.
 # ---------------------------------------------------------------------------
-mutant_dir="$tmp/mutant"
+mutant_dir="$tmp/mutant-$b_scope_slug"
 
 # Give each negative case a fresh, unmutated copy of the evidence tree: a
 # reused directory that already exists makes "cp -R $evdir $mutant_dir" nest
@@ -824,6 +1322,24 @@ fresh_mutant_copy() {
   /bin/chmod -R u+w "$mutant_dir"
   check_evidence "$mutant_dir" 'mutant-baseline' >/dev/null 2>&1 ||
     fail 'a freshly copied, unmutated evidence tree must pass before it is mutated'
+}
+
+# refresh_checksums <dir>: rebuild checksums.json in the retained schema (44
+# entries, LC_ALL=C sort path order, canonical jq -S -c), so a mutation that
+# changes bytes but is not itself meant to be caught by the checksum-mismatch
+# check (b) still reaches the check the case targets.
+refresh_checksums() {
+  local d=$1 rel sha
+  : >"$tmp/refresh-files.jsonl"
+  while IFS= read -r rel; do
+    sha=$(sha_file "$d/$rel")
+    "$jq_bin" -c -n --arg path "$rel" --arg sha256 "$sha" '{path:$path,sha256:$sha256}' \
+      >>"$tmp/refresh-files.jsonl"
+  done < <(/usr/bin/find "$d" -type f ! -path "$d/checksums.json" | /usr/bin/sed "s|^$d/||" | LC_ALL=C sort)
+  "$jq_bin" -S -c -s --arg id "$b_checksums_id" \
+    '{body:{files:.},id:$id,kind:"shadow_evidence_checksum_manifest",schema_version:1}' \
+    "$tmp/refresh-files.jsonl" >"$d/checksums.json.new"
+  /bin/mv "$d/checksums.json.new" "$d/checksums.json"
 }
 
 # (a) a single evidence file's bytes change.
@@ -858,12 +1374,173 @@ if check_evidence "$mutant_dir" 'mutant-outcome' 2>"$tmp/case-c.err"; then
 fi
 pass 'a mutated outcome field is refused'
 
+# (d) one file removed.
+fresh_mutant_copy
+/bin/rm -f -- "$mutant_dir/post/materialization-receipt.json"
+if check_evidence "$mutant_dir" 'mutant-missing' 2>"$tmp/case-d.err"; then
+  fail 'a missing evidence file must be refused'
+fi
+pass 'a missing evidence file is refused'
+
+# (e) one changed byte, in each of the 45 files in turn (the 44 inventoried
+# and checksums.json itself), restored after each; one pass line per bundle.
+fresh_mutant_copy
+for rel in "${all_relative_files[@]}"; do
+  f="$mutant_dir/$rel"
+  cp "$f" "$tmp/case-e.orig"
+  case "$rel" in
+    *.json) /usr/bin/printf ' ' >>"$f" ;;
+    *) /usr/bin/printf '#' >>"$f" ;;
+  esac
+  if check_evidence "$mutant_dir" 'mutant-byte' 2>"$tmp/case-e.err"; then
+    /bin/cp "$tmp/case-e.orig" "$f"
+    fail "a single changed byte in $rel must be refused"
+  fi
+  /bin/cp "$tmp/case-e.orig" "$f"
+done
+check_evidence "$mutant_dir" 'mutant-byte-restored' >/dev/null 2>&1 ||
+  fail 'the evidence tree must pass again once every single-byte mutation is restored'
+pass 'a single changed byte in any of the 45 files is refused, restored after each'
+
+# (f) a JSON document re-serialized (still valid JSON, no longer the
+# producer's exact canonical bytes), checksums refreshed.
+fresh_mutant_copy
+"$jq_bin" '.' "$mutant_dir/pre/qualified-identity.json" >"$mutant_dir/pre/qualified-identity.json.new"
+/bin/mv "$mutant_dir/pre/qualified-identity.json.new" "$mutant_dir/pre/qualified-identity.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-reserialized' 2>"$tmp/case-f.err"; then
+  fail 're-serialized (non-canonical) JSON must be refused even with checksums.json refreshed'
+fi
+pass 're-serialized (non-canonical) JSON is refused even with checksums.json refreshed'
+
+# (g) the pre and post shadow records swapped, checksums refreshed.
+fresh_mutant_copy
+cp "$mutant_dir/pre/state/shadow-record.json" "$tmp/case-g.pre"
+cp "$mutant_dir/post/state/shadow-record.json" "$tmp/case-g.post"
+cp "$tmp/case-g.post" "$mutant_dir/pre/state/shadow-record.json"
+cp "$tmp/case-g.pre" "$mutant_dir/post/state/shadow-record.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-swapped' 2>"$tmp/case-g.err"; then
+  fail 'swapped pre/post shadow records must be refused even with checksums.json refreshed'
+fi
+pass 'swapped pre/post shadow records are refused even with checksums.json refreshed'
+
+# (h), (i): only meaningful where this bundle's target and control repos
+# differ; the self-host bundle names repo.ystack in both roles, so a value
+# swap there would be indistinguishable from the correct bytes.
+if [ "$b_target_repo" != "$b_control_repo" ]; then
+  # (h) a qualified identity's target_revision renamed to the control repo.
+  fresh_mutant_copy
+  "$jq_bin" -S -c --arg r "$b_control_repo" '.body.target_revision.repository_id = $r' \
+    "$mutant_dir/post/qualified-identity.json" >"$mutant_dir/post/qualified-identity.json.new"
+  /bin/mv "$mutant_dir/post/qualified-identity.json.new" "$mutant_dir/post/qualified-identity.json"
+  refresh_checksums "$mutant_dir"
+  if check_evidence "$mutant_dir" 'mutant-target-repo' 2>"$tmp/case-h.err"; then
+    fail 'a qualified identity naming the control-plane repository as its target must be refused'
+  fi
+  pass 'a qualified identity naming the control-plane repository as its target is refused even with checksums.json refreshed'
+
+  # (i) an incident's target repository ids renamed to the control repo.
+  fresh_mutant_copy
+  "$jq_bin" -S -c --arg r "$b_control_repo" \
+    '.body.target_repository_id = $r | .body.git_revision_ref.repository_id = $r' \
+    "$mutant_dir/post/incident.json" >"$mutant_dir/post/incident.json.new"
+  /bin/mv "$mutant_dir/post/incident.json.new" "$mutant_dir/post/incident.json"
+  refresh_checksums "$mutant_dir"
+  if check_evidence "$mutant_dir" 'mutant-incident-repo' 2>"$tmp/case-i.err"; then
+    fail 'an incident naming the control-plane repository as its target must be refused'
+  fi
+  pass 'an incident naming the control-plane repository as its target is refused even with checksums.json refreshed'
+fi
+
+# (j) an extra canonical JSON file carrying a repository id outside the
+# fixed table, with a matching checksum entry, must still be caught: the
+# repository-ids scan walks every retained *.json file, not only the ones
+# the table already names.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:"repo.other"}' >"$mutant_dir/extra.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-extra-file' 2>"$tmp/case-j.err"; then
+  fail 'an extra JSON file carrying an unlisted repository id must be refused'
+fi
+pass 'an extra JSON file carrying a repository id outside the fixed table is refused even with a matching checksum entry'
+
+# (k) an extra canonical JSON file carrying a non-string (null) value under
+# repository_id: "paths(scalars)" silently drops null/false/container
+# values, so this must be caught by "paths" over every value type.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:null}' >"$mutant_dir/extra-null.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-extra-null-value' 2>"$tmp/case-k.err"; then
+  fail 'an extra JSON file carrying a null repository_id must be refused'
+fi
+pass 'an extra JSON file carrying a null-valued repository_id is refused even with a matching checksum entry'
+
+# (l) a nested file that shares checksums.json's basename at a non-root
+# depth, carrying an unlisted repository id, must still be scanned: only
+# the bundle-root checksums.json is the inventory manifest itself.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:"repo.other"}' >"$mutant_dir/post/checksums.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-nested-checksums-name' 2>"$tmp/case-l.err"; then
+  fail 'a nested file named checksums.json carrying an unlisted repository id must be refused'
+fi
+pass 'a nested file sharing the checksums.json basename is still scanned and its unlisted repository id is refused'
+
+# (m) the repository_id field is deleted from exactly one element of a
+# multi-element array (here, one of six profile manifests), leaving the
+# other elements intact: the exact table names
+# "manifests.0.content.body.package_ref.revision.repository_id" as its own
+# distinct concrete pair, separate from manifests.1 through manifests.5, so
+# removing just that one concrete pair (while the other five manifest
+# entries' own distinct pairs stay present) is a set difference, caught
+# directly by exact equality.
+fresh_mutant_copy
+"$jq_bin" -S -c 'del(.manifests[0].content.body.package_ref.revision.repository_id)' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-missing-array-element-field' 2>"$tmp/case-m.err"; then
+  fail 'a repository id missing from one array element among several must be refused'
+fi
+pass 'a repository id missing from one element of a multi-element array is refused even though other elements still supply it'
+
+# (n) the whole manifests array is emptied: all six manifest-related
+# concrete pairs vanish from the found set at once, a set difference of six
+# rather than one, still caught by the same exact-equality check as (m).
+fresh_mutant_copy
+"$jq_bin" -S -c '.manifests = []' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-emptied-array' 2>"$tmp/case-n.err"; then
+  fail 'an emptied array (zero remaining concrete pairs for six expected ones) must be refused'
+fi
+pass 'an emptied array is refused: the expected concrete pairs it used to supply are simply missing from the found set'
+
+# (o) a mandatory parent object is deleted outright (not merely its
+# repository_id leaf): the same concrete pair still disappears from the
+# found set, so this is not a new failure mode for the predicate, only a
+# different way of producing the same missing-pair set difference (m) and
+# (n) already prove is caught, without a special "does the parent object
+# still exist" case anywhere in the check itself.
+fresh_mutant_copy
+"$jq_bin" -S -c 'del(.manifests[0].content.body.package_ref.revision)' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-deleted-parent-object' 2>"$tmp/case-o.err"; then
+  fail 'deleting the field mandatory parent object outright must be refused'
+fi
+pass 'deleting a repository-id fields mandatory parent object outright is refused, exactly like deleting the leaf'
+
 /bin/rm -rf -- "$mutant_dir"
 
 # INACTIVE COMPATIBILITY HARNESS: real scope evaluator and unchanged shadow records.
 # Other inputs are inert fixtures; compatibility supplies no qualification
 # and grants no live authority.
-scope_dir="$tmp/scope-harness"
+scope_dir="$tmp/scope-harness-$b_scope_slug"
+/bin/rm -rf -- "$scope_dir"
 /bin/mkdir -m 700 "$scope_dir"
 evaluator="$root/scope/v1/evaluate-scope.sh"
 repo_marker="$root/config/construction-mode.json"
@@ -871,8 +1548,9 @@ repo_marker="$root/config/construction-mode.json"
 pre_record="$evdir/pre/state/shadow-record.json"
 post_record="$evdir/post/state/shadow-record.json"
 "$jq_bin" -S -c -n --slurpfile pre "$pre_record" --slurpfile post "$post_record" \
+  --arg id "scope.evidence.$b_scope_slug.v1" \
   '{schema_version:1,kind:"shadow_evidence_set",
-    id:"scope.evidence.self-host-transition.v1",
+    id:$id,
     body:{records:[$pre[0],$post[0]]}}' >"$scope_dir/shadow-set.json"
 pre_record_sha=$("$jq_bin" -S -c '.body.records[0]' "$scope_dir/shadow-set.json" | sha_file /dev/stdin)
 post_record_sha=$("$jq_bin" -S -c '.body.records[1]' "$scope_dir/shadow-set.json" | sha_file /dev/stdin)
@@ -889,8 +1567,11 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
 # A dashboard that fails this shape check is malformed, and a malformed input
 # makes the evaluator refuse with "scope.malformed" regardless of the real
 # gates below — which would prove nothing about scope compatibility. Every
-# digest here is 64 hex characters, checked directly below.
-"$jq_bin" -S -c -n '
+# digest here is 64 hex characters, checked directly below. It is one shared
+# fixture, built once and reused by every bundle: nothing in it is
+# bundle-specific.
+if [ ! -f "$tmp/dashboard.json" ]; then
+"$jq_bin" -S -c -n --arg run_id "evals.run.self-host-harness" '
   def absent($reason): {state:"absent",reason_id:$reason};
   def closure($path;$sha): [{path:$path,sha256:$sha}];
   def family($id;$status;$total;$failed;$inconclusive):
@@ -941,7 +1622,7 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
              shell_ref:{content_id:"bash-runtime",media_type:"application/x-executable",
                sha256:("b" * 64)}}}}},
      observed_at:"2026-09-05T00:00:00Z",
-     inputs:[{run_id:"evals.run.self-host-harness",seed_source:"core.stage-run.v2",
+     inputs:[{run_id:$run_id,seed_source:"core.stage-run.v2",
        result_sha256:("c" * 64),observed_at:"2026-09-05T00:00:00Z",
        seed_set_ref:{schema_version:1,kind:"eval_seed_set",id:"evals.seed-set.harness",
          sha256:("d" * 64)},
@@ -971,7 +1652,7 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
        family("repeated-cancelled-missed-events";"declared";0;0;0),
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;1;0)]}}' \
-  >"$scope_dir/dashboard.json"
+  >"$tmp/dashboard.json"
 "$jq_bin" -e '
   [.body.core_contract.package_ref.sha256, .body.catalog_ref.sha256,
    .body.evaluator.sha256, .body.evaluator.content.body.core_contract.package_ref.sha256,
@@ -988,29 +1669,31 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
    .body.evaluator.content.body.runtime.shell_ref.sha256,
    (.body.inputs[].result_sha256), (.body.inputs[].seed_set_ref.sha256)] |
   all(test("\\A[0-9a-f]{64}\\z"))
-' "$scope_dir/dashboard.json" >/dev/null 2>&1 ||
+' "$tmp/dashboard.json" >/dev/null 2>&1 ||
   fail 'scope harness: dashboard fixture digest is not exactly 64 hex characters'
-"$jq_bin" -e '(.body.families | length) == 9' "$scope_dir/dashboard.json" >/dev/null 2>&1 ||
+"$jq_bin" -e '(.body.families | length) == 9' "$tmp/dashboard.json" >/dev/null 2>&1 ||
   fail 'scope harness: dashboard fixture must declare all nine gate families'
+fi
 
-harness_policy_set='{"id":"control.policy-set.self-host-harness","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}'
+harness_policy_set=$("$jq_bin" -c -n --arg id "control.policy-set.$b_harness" \
+  '{id:$id,sha256:("e" * 64)}')
 harness_core_contract='{
   "generation_id":"g-0bef6d994accaf957358a8f9c833c0ce64bb71fe2bc934b9569277bbe19b8d29",
   "package_ref":{"content_id":"core-contract-package.v2",
     "media_type":"application/vnd.ystack.core-contract+json","sha256":"3333333333333333333333333333333333333333333333333333333333333333"},
   "semantic_identity":"core.contracts.v2"}'
-harness_policy_ref='{"content_id":"control.policy.self-host-harness",
-  "media_type":"application/vnd.ystack.control-policy+json","sha256":"4444444444444444444444444444444444444444444444444444444444444444"}'
-harness_decision_ref='{"content_id":"control.decision.self-host-harness",
-  "media_type":"application/vnd.ystack.control-decision+json","sha256":"5555555555555555555555555555555555555555555555555555555555555555"}'
+harness_policy_ref=$("$jq_bin" -c -n --arg id "control.policy.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.control-policy+json",sha256:("4" * 64)}')
+harness_decision_ref=$("$jq_bin" -c -n --arg id "control.decision.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.control-decision+json",sha256:("5" * 64)}')
 harness_duty_decision_ref='{"content_id":"control.decision.duty-separation",
   "media_type":"application/vnd.ystack.control-decision+json","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}'
-harness_claim_ref='{"content_id":"risk.decision-claim.self-host-harness",
-  "media_type":"application/vnd.ystack.risk-gate-decision-claim+json","sha256":"7777777777777777777777777777777777777777777777777777777777777777"}'
-harness_kill_state_ref='{"schema_version":1,"kind":"kill_switch_state",
-  "id":"kill.state.self-host-harness","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}'
+harness_claim_ref=$("$jq_bin" -c -n --arg id "risk.decision-claim.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.risk-gate-decision-claim+json",sha256:("7" * 64)}')
+harness_kill_state_ref=$("$jq_bin" -c -n --arg id "kill.state.$b_harness" \
+  '{schema_version:1,kind:"kill_switch_state",id:$id,sha256:("8" * 64)}')
 
-"$jq_bin" -S -c . "$repo_marker" >"$scope_dir/marker.json"
+[ -f "$tmp/marker.json" ] || "$jq_bin" -S -c . "$repo_marker" >"$tmp/marker.json"
 
 gate_ref() {
   "$jq_bin" -S -c -n --arg sha "$(sha_file "$1")" --arg id "$("$jq_bin" -r '.id' "$1")" \
@@ -1033,18 +1716,19 @@ for scope_case in pre post; do
   # as malformed regardless of the rest of this fixture. Only result_ref is
   # free to name an inert placeholder: nothing here compares it against the
   # identity.
-  harness_stage=$("$jq_bin" -c -n --argjson identity "$case_identity" '{
+  harness_stage=$("$jq_bin" -c -n --argjson identity "$case_identity" \
+    --arg result_id "stage.$b_harness.result" '{
     request_ref:$identity.stage_request_ref,
     resolved_profile_ref:$identity.resolved_profile_ref,
-    result_ref:{id:"stage.self-host-harness.result",kind:"stage_result",
+    result_ref:{id:$result_id,kind:"stage_result",
       schema_version:2,
       sha256:"2222222222222222222222222222222222222222222222222222222222222222"}}')
 
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
     --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
-    --argjson decision_ref "$harness_duty_decision_ref" '
+    --argjson decision_ref "$harness_duty_decision_ref" --arg result_id "stage.$b_harness.result" '
     {schema_version:1,kind:"duty_separation_evaluation",
-     id:"stage.self-host-harness.result",
+     id:$result_id,
      body:{activation_state:"inactive",core_contract:$core_contract,
        decision_ref:$decision_ref,evaluation_mode:"observation-only",
        policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
@@ -1055,12 +1739,12 @@ for scope_case in pre post; do
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
     --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
     --argjson decision_ref "$harness_decision_ref" --argjson claim_ref "$harness_claim_ref" \
-    --arg duty_sha "$harness_duty_sha" '
-    {schema_version:1,kind:"risk_gate_evaluation",id:"stage.self-host-harness.result",
+    --arg duty_sha "$harness_duty_sha" --arg result_id "stage.$b_harness.result" '
+    {schema_version:1,kind:"risk_gate_evaluation",id:$result_id,
      body:{activation_state:"inactive",authority_effect:"none",
        classification:{declared_tier:"routine",minimum_tier:"routine"},
        core_contract:$core_contract,decision_claim_ref:$claim_ref,decision_ref:$decision_ref,
-       duty_evaluation_ref:{content_id:"stage.self-host-harness.result",
+       duty_evaluation_ref:{content_id:$result_id,
          media_type:"application/vnd.ystack.duty-separation-evaluation+json",sha256:$duty_sha},
        policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
        evaluation_mode:"observation-only",reference_semantics:"identity-only",
@@ -1069,15 +1753,16 @@ for scope_case in pre post; do
 
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --arg duty_sha "$harness_duty_sha" \
     --argjson policy_ref "$harness_policy_ref" --argjson decision_ref "$harness_decision_ref" \
-    --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" '
-    {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.self-host-harness",
+    --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" \
+    --arg result_id "stage.$b_harness.result" --arg kill_id "kill-attempt.$b_harness" '
+    {schema_version:1,kind:"kill_switch_evaluation",id:$kill_id,
      body:{activation_state:"inactive",authority_effect:"none",
        decision_ref:$decision_ref,duty_decision_ref:$duty_decision_ref,
        duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
-         id:"stage.self-host-harness.result",sha256:$duty_sha},
+         id:$result_id,sha256:$duty_sha},
        policy_ref:$policy_ref,policy_set:$policy_set,state_ref:$state_ref,
        attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
-         id:"kill-attempt.self-host-harness",sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
+         id:$kill_id,sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
        evaluation_mode:"observation-only",reference_semantics:"identity-only",
        verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$scope_dir/kill-$scope_case.json"
 
@@ -1088,18 +1773,21 @@ for scope_case in pre post; do
   "$jq_bin" -S -c -n --arg pre_id "$pre_id" --arg pre_sha "$pre_record_sha" \
     --arg post_id "$post_id" --arg post_sha "$post_record_sha" \
     --argjson identity "$case_identity" \
-    --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" '
-    {schema_version:1,kind:"workflow_scope",id:"scope.self-host-transition.v1",
+    --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" \
+    --arg scope_id "scope.$b_scope_slug.v1" --arg target_repo "$b_target_repo" \
+    --arg workflow_id "workflow.$b_scope_slug" --arg task_class "task.$b_scope_slug" \
+    --arg env_id "$b_env_id" --argjson allowed_paths "$b_allowed_paths" '
+    {schema_version:1,kind:"workflow_scope",id:$scope_id,
      body:{activation_state:"inactive",authority:"none",enabled:false,
        push_allowed:false,scope_version:"v1",
-       target_repository_id:"repo.ystack",
-       workflow_id:"workflow.self-host-transition",
-       task_class:"task.self-host-transition",
+       target_repository_id:$target_repo,
+       workflow_id:$workflow_id,
+       task_class:$task_class,
        risk_tier:"routine",
-       allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
+       allowed_paths:$allowed_paths,
        required_proof_kinds:["deterministic","independent-review"],
        required_eval_families:["stale-moved-artifacts"],
-       required_shadow_environments:["env.local-macos-ystack-self"],
+       required_shadow_environments:[$env_id],
        shadow_evidence_refs:([
          {schema_version:1,kind:"shadow_reproduction_record",id:$pre_id,sha256:$pre_sha},
          {schema_version:1,kind:"shadow_reproduction_record",id:$post_id,sha256:$post_sha}] |
@@ -1116,9 +1804,9 @@ for scope_case in pre post; do
        max_attempts:2}}' >"$scope_dir/scope-$scope_case.json"
 
   if ! PATH="$run_path" "$evaluator" evaluate \
-      "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$scope_dir/dashboard.json" \
+      "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$tmp/dashboard.json" \
       "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
-      "$scope_dir/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
+      "$tmp/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
     fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope-$scope_case.err"))"
   fi
 # A seeded failing eval keeps inputs well-formed while yielding scope.eval-failing.
@@ -1149,8 +1837,8 @@ convert_ok() {
   /bin/mkdir -m 700 "$out"
   PATH="$run_path" "$converter" convert "$incident" "$shadow" "$out"
 }
-post_out="$tmp/maint-post"
-pre_out="$tmp/maint-pre"
+post_out="$tmp/maint-post-$b_scope_slug"
+pre_out="$tmp/maint-pre-$b_scope_slug"
 convert_ok "$evdir/post/incident.json" "$post_record" "$post_out" \
   >"$post_out.skeleton.json" 2>"$post_out.err" ||
   fail "maintenance conversion of the post case refused: $(cat "$post_out.err")"
@@ -1183,12 +1871,12 @@ convert_ok "$evdir/pre/incident.json" "$pre_record" "$pre_out" \
   fail 'pre maintenance skeleton provenance.shadow_record_ref mismatch'
 pass 'the pre incident and its unchanged shadow record convert to the stale-moved-artifacts family with {accepted, completed}'
 
-cross_1="$tmp/maint-cross-1"
+cross_1="$tmp/maint-cross-1-$b_scope_slug"
 if convert_ok "$evdir/post/incident.json" "$pre_record" "$cross_1" \
     >"$cross_1.out" 2>"$cross_1.err"; then
   fail 'cross-pairing the post incident with the pre shadow record must be refused'
 fi
-cross_2="$tmp/maint-cross-2"
+cross_2="$tmp/maint-cross-2-$b_scope_slug"
 if convert_ok "$evdir/pre/incident.json" "$post_record" "$cross_2" \
     >"$cross_2.out" 2>"$cross_2.err"; then
   fail 'cross-pairing the pre incident with the post shadow record must be refused'
@@ -1196,5 +1884,17 @@ fi
 pass 'cross-pairing either incident with the other case shadow record is refused'
 [ ! -f "$root/evals/v1/seed-set.json.new" ] || fail 'evals/v1/seed-set.json must never be touched'
 pass 'no live eval seed set was modified'
+}
 
-/usr/bin/printf 'shadow self-host evidence: %s focused checks passed\n' "$passes"
+# ===========================================================================
+# Driver: run every table entry. Commit 1 carries the self-host bundle only;
+# a later bundle is added to this list, never a sibling copy of this file.
+# ===========================================================================
+bundles=(self-host external-dummy-target)
+for bundle_name in "${bundles[@]}"; do
+  load_bundle "$bundle_name"
+  require_bundle_present
+  bundle_passes=0
+  run_bundle_checks
+  /usr/bin/printf '%s: %s focused checks passed\n' "$b_summary" "$bundle_passes"
+done

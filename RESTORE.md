@@ -302,6 +302,38 @@ self-host reproduction, obtains no credential, calls no model, registers or
 qualifies no environment, and changes the registry's `proof_state` not at
 all: `env.local-macos-ystack-self` stays `unproven`.
 
+### Restore the first external-target shadow evidence
+
+Restore `shadow/evidence/external-dummy-target/v1/` from the paths listed
+under "First external-target shadow evidence" in
+[`ci/required-files.txt`](ci/required-files.txt), and restore
+`scripts/test/shadow-self-host-evidence.test.sh`, together with the shadow
+reproduction slice, the shadow materialization input assembler, the control
+policy set and its evaluators, the workflow-scope qualification evaluator,
+and the maintenance loop the evidence was checked against, then run:
+
+```sh
+bash scripts/test/shadow-self-host-evidence.test.sh
+```
+
+The proof reads the committed evidence bytes only, for both bundles: the
+inventory in each bundle's `checksums.json`, canonical JSON, incident
+validation, identity and reference equality, the two required outcomes, the
+empty patch payload and network-deny stage request, the materialization
+result and its receipt, the trace seal, the retained declaration-only
+sandbox evaluation and its all-ones demonstration verifier digest, the core
+package closure, the approved requester identity, the bundle's own record
+and registry ids, and the portability result — every `repository_id` and
+`target_repository_id` in the bundle on one of two fixed lists, naming
+`repo.ystack-dummy-target` or `repo.ystack` — plus negative cases that
+mutate a copy of the evidence and require the check to fail. It then
+exercises the shipped scope evaluator as a clearly marked inactive
+compatibility harness and the shipped maintenance converter, both
+read-only. Restoring these records performs no external-target
+reproduction, obtains no credential, calls no model, registers or qualifies
+no environment, and changes the registry's `proof_state` not at all:
+`env.local-macos-dummy-target` stays `unproven`.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in

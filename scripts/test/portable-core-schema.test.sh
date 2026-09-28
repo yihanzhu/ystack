@@ -947,6 +947,9 @@ printf '%s\n' \
   scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-evidence-identity.test.sh \
+  shadow/evidence/external-dummy-target/v1/control-policy-set.json \
+  shadow/evidence/external-dummy-target/v1/core-package-closure.json \
+  shadow/evidence/external-dummy-target/v1/duty-evaluation.json \
   shadow/evidence/self-host-transition/v1/control-policy-set.json \
   shadow/evidence/self-host-transition/v1/core-package-closure.json \
   shadow/evidence/self-host-transition/v1/duty-evaluation.json > \
