@@ -1237,7 +1237,78 @@ def do_append(store, store_id, expected_tip, scratch_root, jq_bin, session_id, a
 
 
 def do_read(store, jq_bin, receipt_path, output_path):
-    raise Refusal("E_RUNTIME")  # not yet built at this commit
+    receipt_bytes = read_source_file(receipt_path, 8192, "E_RUNTIME")
+    receipt_doc = parse(receipt_bytes, 8192, "E_USAGE")
+    receipt_body = validate_receipt_document(receipt_doc, "E_USAGE")
+
+    output_parent = os.path.dirname(output_path)
+    output_parent_physical = physical(output_parent, "E_OUTPUT")
+    try:
+        output_state = os.lstat(output_parent_physical)
+    except OSError:
+        raise Refusal("E_OUTPUT") from None
+    require(is_dir(output_state.st_mode), "E_OUTPUT")
+    output_final = os.path.join(output_parent_physical, os.path.basename(output_path))
+    require(os.path.basename(output_path) != "", "E_OUTPUT")
+    require(not os.path.lexists(output_final), "E_OUTPUT")
+    require(not overlaps(output_final, store.root), "E_OUTPUT")
+
+    store.acquire("read")
+    published = load_chain(store)
+    require(published, "E_INCOMPLETE")
+    require(store.store_id == receipt_body["store"]["id"], "E_IDENTITY")
+    require(store.root_commit == receipt_body["store"]["root_commit"], "E_IDENTITY")
+
+    commit_id = receipt_body["commit_id"]
+    matching = [record for record in store.records if record["commit_id"] == commit_id]
+    require(len(matching) <= 1, "E_CORRUPT")
+    require(len(matching) == 1, "E_NOT_FOUND")
+    record = matching[0]
+    require(record["record_key"] == receipt_body["record_key"], "E_IDENTITY")
+    rebuilt = storage_receipt_document(store.store_id, store.root_commit, commit_id,
+                                        record["record_key"], record["replay_key"],
+                                        digest(record["record_bytes"]), record["ledger_ref"],
+                                        record["validation_sha256"], record["validator"])
+    require(canonical(rebuilt) == canonical(receipt_doc), "E_IDENTITY")
+
+    tip = store.tip
+    ledger_bytes = record["ledger_bytes"]
+    validation_bytes = record["validation_bytes"]
+    validator_entry = record["validator"]
+    store.release()
+
+    private_dir = private_directory()
+    try:
+        validator_path = os.path.join(source_root(), "telemetry/v1/validate-trace-ledger.sh")
+        program_path = os.path.join(source_root(), "telemetry/v1/trace-ledger.jq")
+        validator_sha = digest(read_source_file(validator_path, 1 << 20, "E_VALIDATOR"))
+        program_sha = digest(read_source_file(program_path, 1 << 20, "E_VALIDATOR"))
+        require(validator_sha == validator_entry["validator_sha256"], "E_VALIDATOR")
+        require(program_sha == validator_entry["program_sha256"], "E_VALIDATOR")
+        require(validator_entry["jq_sha256"] in JQ_DIGESTS, "E_VALIDATOR")
+        jq_bytes = read_source_file(jq_bin, JQ_BIN_MAX, "E_RUNTIME")
+        jq_sha = digest(jq_bytes)
+        require(jq_sha in JQ_DIGESTS, "E_VALIDATOR")
+        bin_dir = os.path.join(private_dir, "bin")
+        os.mkdir(bin_dir, 0o700)
+        write_closed(os.path.join(bin_dir, "jq"), jq_bytes, 0o500, "E_RUNTIME")
+        snapshot_path = os.path.join(private_dir, "read-ledger.json")
+        write_closed(snapshot_path, ledger_bytes, 0o400, "E_RUNTIME")
+        stdout_bytes = run_validator(validator_path, record["replay_key"]["session_id"],
+                                      record["replay_key"]["attempt_id"], snapshot_path,
+                                      private_dir, bin_dir)
+        require(stdout_bytes == validation_bytes, "E_RUNTIME")
+    finally:
+        remove_private_directory(private_dir)
+
+    descriptor = create_exclusive(output_final, 0o400)
+    try:
+        write_all(descriptor, ledger_bytes, "E_RUNTIME")
+    finally:
+        close_fd(descriptor)
+
+    return read_document(digest(receipt_bytes), record["ledger_ref"],
+                          record["validation_sha256"], tip, record["record_key"])
 
 
 def do_list(store, store_id):
