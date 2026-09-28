@@ -327,12 +327,19 @@ def read_file(path, cap, code):
         close_fd(descriptor)
 
 
-def read_source_file(path, cap, code):
+def read_source_file(path, cap, code, oversize_code=None):
     """Read a regular file we do not own or control the mode of (LEDGER,
     JQ_BIN, STORAGE_RECEIPT, the validator/program scripts, our own running
     source). No-follow, regular-file-only, size-capped; no uid or mode
     invariant is imposed since these files are not ours to enforce shape on.
+
+    `oversize_code`, when given, is the refusal for a file over `cap`
+    specifically (choice 8 distinguishes STORAGE_RECEIPT's "oversize" from
+    "unreadable": E_USAGE against E_RUNTIME); it defaults to `code`, which
+    keeps every other caller's single-code behavior unchanged.
     """
+    if oversize_code is None:
+        oversize_code = code
     try:
         before = os.lstat(path)
         require(is_reg(before.st_mode), code)
@@ -343,14 +350,15 @@ def read_source_file(path, cap, code):
         after = os.fstat(descriptor)
         require(is_reg(after.st_mode), code)
         require((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino), code)
-        require(after.st_size <= cap, code)
+        require(after.st_size <= cap, oversize_code)
         data = bytearray()
         while len(data) <= cap:
             block = os.read(descriptor, min(65536, cap + 1 - len(data)))
             if not block:
                 break
             data.extend(block)
-        require(len(data) <= cap and len(data) == after.st_size, code)
+        require(len(data) <= cap, oversize_code)
+        require(len(data) == after.st_size, code)
         return bytes(data)
     finally:
         close_fd(descriptor)
@@ -375,12 +383,44 @@ def create_exclusive(path, mode):
                     os.O_NOFOLLOW | os.O_CLOEXEC, mode)
 
 
+def create_exclusive_readback(path, mode):
+    # Opened O_RDWR (not O_WRONLY) so the exact bytes can be read back
+    # through this same descriptor after writing, for R7.3's "checks size
+    # and digest through the open descriptor" requirement. A file newly
+    # created in this same call is not re-checked against its own mode
+    # bits for the access requested here (the mode argument only fixes
+    # the file's permissions for later opens by path), so O_RDWR with
+    # mode 0400 still succeeds for the creating descriptor.
+    return os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                    os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+
+
 def write_closed(path, data, mode, code):
     descriptor = create_exclusive(path, mode)
     try:
         write_all(descriptor, data, code)
     finally:
         close_fd(descriptor)
+
+
+def write_verified(descriptor, data, code):
+    """Write `data` to `descriptor`, then read every byte back through
+    that same descriptor and require it to equal `data` exactly (size and
+    digest both checked through the open descriptor, per R7.3), before any
+    caller can treat the write as successful. A same-length write that
+    silently wrote different bytes -- which write_all's own fstat-based
+    size check cannot detect, since size alone does not prove content --
+    is caught here.
+    """
+    write_all(descriptor, data, code)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    readback = bytearray()
+    while len(readback) <= len(data):
+        block = os.read(descriptor, min(65536, len(data) + 1 - len(readback)))
+        if not block:
+            break
+        readback.extend(block)
+    require(len(readback) == len(data) and bytes(readback) == data, code)
 
 
 def private_directory():
@@ -1337,7 +1377,7 @@ def do_append(store, store_id, expected_tip, scratch_root, jq_bin, session_id, a
 
 
 def do_read(store, jq_bin, receipt_path, output_path):
-    receipt_bytes = read_source_file(receipt_path, 8192, "E_RUNTIME")
+    receipt_bytes = read_source_file(receipt_path, 8192, "E_RUNTIME", oversize_code="E_USAGE")
     receipt_doc = parse(receipt_bytes, 8192, "E_USAGE")
     receipt_body = validate_receipt_document(receipt_doc, "E_USAGE")
 
@@ -1416,9 +1456,9 @@ def do_read(store, jq_bin, receipt_path, output_path):
     finally:
         remove_private_directory(private_dir)
 
-    descriptor = create_exclusive(output_final, 0o400)
+    descriptor = create_exclusive_readback(output_final, 0o400)
     try:
-        write_all(descriptor, ledger_bytes, "E_RUNTIME")
+        write_verified(descriptor, ledger_bytes, "E_RUNTIME")
     finally:
         close_fd(descriptor)
 
