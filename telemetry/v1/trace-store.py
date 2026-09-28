@@ -232,8 +232,50 @@ def physical(path, code):
     return collapsed
 
 
-def overlaps(first, second):
-    return first == second or first.startswith(second + "/") or second.startswith(first + "/")
+def identity_overlaps(first, second, code):
+    """True if `first` and `second` are the same directory, or one is an
+    ancestor of the other, decided by filesystem identity (device, inode)
+    rather than string comparison. A case-insensitive filesystem folds
+    distinctly-spelled paths onto the same entry, so a plain string prefix
+    check can be bypassed by an alternate-case spelling that still passes
+    `physical()` (which only rejects a symlink component and a
+    non-idempotent normpath, neither of which case variation trips).
+
+    This compares `first`'s own identity against every ancestor of
+    `second` (and vice versa) — never the full cross product of both
+    ancestor lists, which would also match on an unrelated shared ancestor
+    far above both paths (e.g. two arbitrary directories under the same
+    /tmp are not "overlapping" merely because they share /tmp itself).
+    """
+    try:
+        first_identity = _dev_ino(first)
+        second_identity = _dev_ino(second)
+        second_ancestors = [_dev_ino(component) for component in ancestry(second)]
+        first_ancestors = [_dev_ino(component) for component in ancestry(first)]
+    except OSError:
+        raise Refusal(code) from None
+    return first_identity in second_ancestors or second_identity in first_ancestors
+
+
+def _dev_ino(path):
+    state = os.lstat(path)
+    return state.st_dev, state.st_ino
+
+
+def identity_contains(root, path, code):
+    """True if `path` is `root` itself or lies inside it (one direction
+    only), decided by filesystem identity: `root`'s own identity is looked
+    up once, then compared against every ancestor of `path` (`path`
+    included). Used where the relation is inherently one-directional
+    (a candidate OUTPUT or LEDGER path can never itself contain a root
+    directory), unlike `identity_overlaps`'s symmetric equal-or-either-way
+    check.
+    """
+    try:
+        root_identity = _dev_ino(root)
+        return any(_dev_ino(component) == root_identity for component in ancestry(path))
+    except OSError:
+        raise Refusal(code) from None
 
 
 def fatal_close():
@@ -858,7 +900,7 @@ def source_package_sha256():
 class Store:
     def __init__(self, root):
         self.root = physical(root, "E_BOUNDARY")
-        require(not overlaps(self.root, source_root()), "E_BOUNDARY")
+        require(not identity_overlaps(self.root, source_root(), "E_BOUNDARY"), "E_BOUNDARY")
         parent = os.path.dirname(self.root)
         for ancestor in ancestry(parent):
             require(not os.path.lexists(os.path.join(ancestor, ".git")), "E_BOUNDARY")
@@ -1146,9 +1188,10 @@ class Store:
 
 def check_append_boundary(store, scratch_root, ledger):
     scratch = physical(scratch_root, "E_BOUNDARY")
-    require(not overlaps(store.root, scratch), "E_BOUNDARY")
+    require(not identity_overlaps(store.root, scratch, "E_BOUNDARY"), "E_BOUNDARY")
     ledger_path = physical(ledger, "E_BOUNDARY")
-    require(ledger_path.startswith(scratch + "/"), "E_BOUNDARY")
+    require(ledger_path != scratch and identity_contains(scratch, ledger_path, "E_BOUNDARY"),
+            "E_BOUNDARY")
     state = os.lstat(ledger_path)
     require(is_reg(state.st_mode), "E_BOUNDARY")
 
@@ -1272,7 +1315,12 @@ def do_read(store, jq_bin, receipt_path, output_path):
     output_final = os.path.join(output_parent_physical, os.path.basename(output_path))
     require(os.path.basename(output_path) != "", "E_OUTPUT")
     require(not os.path.lexists(output_final), "E_OUTPUT")
-    require(not overlaps(output_final, store.root), "E_OUTPUT")
+    # OUTPUT itself does not exist yet (just checked above), so its
+    # identity is decided through its parent directory, which does exist
+    # and was already lstat'd above: a file directly inside the store is
+    # exactly a file whose parent is the store root or one of its
+    # descendants.
+    require(not identity_contains(store.root, output_parent_physical, "E_OUTPUT"), "E_OUTPUT")
 
     store.acquire("read")
     published = load_chain(store)
@@ -1318,6 +1366,16 @@ def do_read(store, jq_bin, receipt_path, output_path):
         stdout_bytes = run_validator(validator_path, record["replay_key"]["session_id"],
                                       record["replay_key"]["attempt_id"], snapshot_path,
                                       private_dir, bin_dir)
+        # Recheck both source digests after the validator has actually run
+        # (mirroring do_append's before/after check): without this, a
+        # change to either file made between the pre-run digest check and
+        # the validator's own opens could run a different revision and
+        # still be exported, as long as its stdout happened to match the
+        # stored validation.json bytes.
+        validator_sha_after = digest(read_source_file(validator_path, 1 << 20, "E_VALIDATOR"))
+        program_sha_after = digest(read_source_file(program_path, 1 << 20, "E_VALIDATOR"))
+        require(validator_sha_after == validator_sha, "E_VALIDATOR")
+        require(program_sha_after == program_sha, "E_VALIDATOR")
         require(stdout_bytes == validation_bytes, "E_RUNTIME")
     finally:
         remove_private_directory(private_dir)
