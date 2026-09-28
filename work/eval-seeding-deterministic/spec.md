@@ -156,6 +156,8 @@ needed. The catalog's policies stay as they are. The contract:
    `evals/v1/run-evals.sh` offline and requires four passes. It also requires failure
    for a trial copy with one broken invariant, one changed recorded byte, and a planted
    text on two surfaces at once.
+   It also requires the four passes to hold unchanged when the shipped catalog differs
+   from the archived one (R5).
 
 ### R5. The pinned replay closure
 
@@ -172,6 +174,19 @@ least the merged versions of `shadow/v1/reproduce.sh`, `shadow/v1/incident-recor
 concerns 5, 6 and 9 add for the write-shadow record, enablement check and gate
 evidence. The plan enumerates the final list from those merged files. A changed
 closure file changes the evaluator document, so old results are never read as new.
+
+**Archived inputs, not closure files.** A file the replay reads that this concern's
+own PRs change is never in the closure. By grep of `shadow/v1`, `scope/v1`,
+`control/v1`, `maintenance/v1` and `adapters/local-git-materializer` for `evals/v1`,
+the only such reader is `maintenance/v1/incident-to-eval.sh`, which reads
+`evals/v1/eval-catalog.json` and `evals/v1/seed-set.json` from its own repository root
+(`:76-79`) and embeds the catalog digest in the skeleton it writes (`:126-137`). So each
+trial directory archives the exact catalog and `seed-set.json` bytes it was recorded
+with, as named inputs, and the replay places those bytes at the two paths inside its
+private runtime copy; `incident-to-eval.sh` is unchanged. A later catalog change
+(the other seed PR) therefore changes no closure digest, no `evals.jq` pin and no
+recorded skeleton byte. The plan repeats this grep over the files concerns 5, 6 and 9
+add; any of them that reads a file PR 2 or PR 3 changes is archived the same way.
 
 ### R6. `reviewer-severity-false-positive-negative`: which verdicts qualify
 
@@ -235,10 +250,12 @@ closure file changes the evaluator document, so old results are never read as ne
      `framework.jq:56-60`), `trial_count` N, and exactly one grader: `grader_kind:
      "human"`, `grader_id: "grader.operator"`, both refs naming
      `evals/v1/seeds/reviewer-severity/rubric.md`;
-   - N completed trials, output ref = the verdict file, times = the comment creation
-     time, attempt id `review.<comment-id>`;
-   - N human grades, status from `labels.json`, evidence ref = `labels.json`, graded at
-     the operator's approval time.
+   - N completed trials, output ref = the verdict file (its SHA-256 equal to that
+     trial's `labels.json` verdict digest), times = the comment creation time,
+     attempt id `review.<comment-id>`;
+   - N human grades, status equal to that trial's `grade_status` in `labels.json`,
+     evidence ref = `labels.json` with its approved SHA-256, graded at the operator's
+     approval time.
 2. `run.sh evaluate` on it must report `passed`. `framework.jq` is unchanged; it
    already accepts `human` graders (`:21-28`) and folds trial grades (`:196-217`).
 3. **Relay.** `evals/v1/seed-set-reviews.json` (source
@@ -248,16 +265,33 @@ closure file changes the evaluator document, so old results are never read as ne
    pinned record evaluator (`record_closure`: `evals/v1/framework.jq`,
    `evals/v1/run.sh` and the schema module they load), requires the bundle's trials to
    match the cases one to one and M5, and records each trial's reported status.
+   The record evaluator does not open `evidence_ref` or compare grades with labels, so
+   before using any status the relay checks the transcription and refuses with
+   `E_RELATION` on any mismatch:
+   - the `labels.json` pair's SHA-256 equals `approved_labels_sha256`, a field of the
+     seed set holding the digest the operator approved (R7.2);
+   - every grade's `evidence_ref.sha256` equals that digest;
+   - every grade's `status` equals the matching trial's `grade_status` in
+     `labels.json`, matched by comment id through the trial's attempt id;
+   - every trial's `output_ref.sha256` equals that label entry's verdict SHA-256,
+     which equals the committed verdict file's SHA-256;
+   - every label entry has exactly one trial, and every trial one label entry.
+   This only checks that the bundle copies the operator's labels exactly; it decides
+   no grade.
 4. **Copy, not grade.** For this source only, `grade` copies that status: `passed` to
    passed (`evals.expectation-met`), `failed` to failed (`evals.human-grade-failed`),
    anything else to inconclusive (`evals.human-grade-inconclusive`). The case's
    `grader_kind` is `human`. The existing branch that makes other human- or
    model-only families `inconclusive` (`evals.jq:614-615`) stays. No deterministic
-   grader kind is added, and no code compares a verdict with a label.
+   grader kind is added, and no code judges a verdict against a label.
 5. **Test.** `scripts/test/evals-reviews.test.sh` also runs the bundle through
    `run.sh evaluate` and the seed set through `run-evals.sh`, and requires every case
    passed. It requires failure when one grade is changed to `failed`, when a trial is
-   dropped below the minimum, and when a trial id is duplicated.
+   dropped below the minimum, and when a trial id is duplicated. It requires
+   `E_RELATION` when a grade says `passed` but its label says `failed` (and the
+   reverse), when a grade's evidence digest or `approved_labels_sha256` differs from
+   the approved digest, when a trial's output digest differs from its labelled verdict
+   digest, and when a label entry has no trial.
 
 ### R9. Catalog, files and reserved decisions
 
