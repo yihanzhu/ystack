@@ -1121,6 +1121,88 @@ def test_boundaries(tmp):
     record(g, "reading with a validator script that differs by one byte is E_VALIDATOR",
            proc.returncode == 1 and proc.stderr == b"E_VALIDATOR\n")
 
+    # Mutating the validator script between the pre-run digest check and
+    # its own execution (a TOCTOU window) must still be refused: run from a
+    # disposable copy of the tree so the mutation never touches the real
+    # repository, with `read`'s own run_validator step patched to mutate
+    # that copy's validator script immediately before actually running it.
+    toctou_tree = os.path.join(tmp, "boundary-toctou-tree")
+    shutil.copytree(REPO, toctou_tree, ignore=shutil.ignore_patterns(".git", "node_modules"))
+    toctou_product = os.path.join(toctou_tree, "telemetry/v1/trace-store.py")
+    toctou_validator = os.path.join(toctou_tree, "telemetry/v1/validate-trace-ledger.sh")
+    toctou_wrapper = wrapper_path(tmp, "wrapper-toctou-validator.py")
+    write_wrapper(toctou_wrapper, '''
+import importlib.util, sys
+product_path, validator_path = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("tracestore", product_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original_run_validator = module.run_validator
+def mutated_run_validator(*args, **kwargs):
+    with open(validator_path, "ab") as handle:
+        handle.write(b"\\n")
+    return original_run_validator(*args, **kwargs)
+module.run_validator = mutated_run_validator
+sys.argv = [product_path] + sys.argv[3:]
+raise SystemExit(module.main(sys.argv))
+''')
+    toctou_out = os.path.join(tmp, "boundary-toctou-out.json")
+    proc = subprocess.run([PYTHON, "-I", "-S", "-B", toctou_wrapper, toctou_product, toctou_validator,
+                            "read", store, JQ, receipt_path, toctou_out],
+                           env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    record(g, "mutating the validator script between the pre-run digest check and its "
+              "own execution is still refused E_VALIDATOR, never silently accepted",
+           proc.returncode == 1 and proc.stderr == b"E_VALIDATOR\n")
+    record(g, "the mid-run mutation case leaves no OUTPUT file behind",
+           not os.path.exists(toctou_out))
+
+    # A case-insensitive filesystem folds a differently-cased spelling of a
+    # path onto the same directory entry; identity_overlaps/identity_contains
+    # must catch this the same way they catch the leading-slash spellings
+    # above, since a plain string comparison cannot. Probe for case
+    # insensitivity and skip (with a stated reason) rather than fail outright
+    # on a case-sensitive test filesystem (typical on Linux CI).
+    probe_dir = os.path.join(tmp, "case-probe-dir")
+    os.makedirs(probe_dir, mode=0o700)
+    probe_upper = os.path.join(tmp, "CASE-PROBE-DIR")
+    try:
+        case_insensitive_fs = os.path.samefile(probe_dir, probe_upper)
+    except OSError:
+        case_insensitive_fs = False
+    if not case_insensitive_fs:
+        record(g, "differently-cased-path aliasing case skipped: this test filesystem is "
+                  "case-sensitive (the leading-slash-spelling cases above already exercise "
+                  "identity_overlaps/identity_contains on any filesystem)", True)
+    else:
+        ci_store = store_root(tmp, "boundary-caseinsensitive-store")
+        ci_scratch = scratch_root(tmp, "boundary-caseinsensitive-scratch")
+        initialize(ci_store, "boundary.ci")
+        ci_ledger = make_ledger("fixture.boundary.ci", session_id, attempt_id,
+                                 trace_id="trace.boundary.ci")
+        ci_inside_path = os.path.join(ci_scratch, "ledger.json")
+        write_ledger(ci_inside_path, ci_ledger)
+        ci_tip = tip_of(ci_store, "boundary.ci")
+
+        aliased_store = os.path.join(os.path.dirname(ci_store), os.path.basename(ci_store).upper())
+        assert os.path.samefile(ci_store, aliased_store)
+        code, out, err = do("append", ci_store, "boundary.ci", ci_tip, aliased_store, JQ,
+                             session_id, attempt_id, ci_inside_path)
+        record(g, "a differently-cased SCRATCH_ROOT spelling that aliases the store root is "
+                  "still E_BOUNDARY (case-insensitive filesystem)",
+               code == 1 and err == b"E_BOUNDARY\n")
+
+        code, ci_receipt, err = append(ci_store, "boundary.ci", ci_tip, ci_scratch, ci_inside_path,
+                                        session_id, attempt_id)
+        record(g, "seed a record in the case-insensitive-alias store", code == 0)
+        ci_receipt_path = os.path.join(tmp, "boundary-ci-receipt.json")
+        pathlib.Path(ci_receipt_path).write_bytes(ci_receipt)
+        aliased_leak = os.path.join(os.path.dirname(ci_store), os.path.basename(ci_store).upper(),
+                                     "leak.json")
+        code, out, err = do("read", ci_store, JQ, ci_receipt_path, aliased_leak)
+        record(g, "a differently-cased OUTPUT spelling of an in-store path is still E_OUTPUT "
+                  "(case-insensitive filesystem)",
+               code == 1 and err == b"E_OUTPUT\n")
+
     # A leading run of slashes ("//x" or "///x") aliases the same file as a
     # single leading slash on this filesystem, but posixpath.normpath's own
     # historical special case leaves exactly two leading slashes unchanged,
