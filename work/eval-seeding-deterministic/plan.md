@@ -231,11 +231,26 @@ dashboard shape change.
 
 - `mkdir` (`:134-146`) adds `shadow/v1`, `scope/v1`, `maintenance/v1`, `telemetry/v1`,
   `adapters/local-git-materializer/v1`, `config` and `evals/v1` under the runtime.
-- One list variable per new closure (`path digest` lines, R9.4(a) literals) drives
-  three loops: `snapshot_expected` from `$repo/<path>`, inserted after the adapter
-  loop (`:221-230`) and before `:231`; the evaluator builder (`:267-339`), which
-  gains `shadow_closure` and `record_closure` arrays; and the final check block
-  (`:418-475`). Order matters: every existing tamper fixture (for example
+- One list variable per new closure (`path digest` lines, R9.4(a) literals) holds
+  the full list. The evaluator builder (`:267-339`) emits it whole as
+  `shadow_closure` and `record_closure`, and the final check block (`:418-475`)
+  re-checks every entry. Staging is different, because `snapshot_file` opens its
+  target with `O_EXCL` (`:28`) and a second copy of a staged path would fail on an
+  unchanged tree. Paths the existing loops already stage are only digest-checked in
+  place and reused: from `shadow_closure`, the nine core entries (staged at
+  `:162-184`) and all fourteen `control_closure` files (staged at `:201-219`:
+  `evaluate-sandbox.sh`, `sandbox.jq`, `sandbox-policy.json`, `sandbox-decision.json`,
+  `evaluate-risk-gates.sh`, `risk-gates.jq`, `risk-gates-policy.json`,
+  `risk-gates-decision.json`, `evaluate-duty.sh`, `duty-separation.jq`,
+  `duty-separation-policy.json`, `duty-separation-decision.json`, `policy-set.jq`,
+  `validate.sh`); from `record_closure`, `modules/schema.jq` (staged at `:171-181`).
+  A digest that differs is `E_STALE`. Only the rest are copied with
+  `snapshot_expected` from `$repo/<path>`: the 24 other `shadow_closure` paths
+  (the seven `shadow/v1`, three materializer, two telemetry, four kill-switch, four
+  `scope/v1`, three `maintenance/v1` files and `config/construction-mode.json`) and
+  `evals/v1/framework.jq` and `evals/v1/run.sh`. The copy loop sits after the
+  adapter loop (`:221-230`) and before `:231`. The plan update redoes this overlap
+  split for the sibling files. Order matters: every existing tamper fixture (for example
   `evals-adapters.test.sh:217-236`, `evals-framework.test.sh:346-367`) edits a file
   staged at or before `:230`, so its own file is still what reaches `E_STALE`.
 - Seed files: after `snapshot_input` (`:239-264`), for each staged seed set whose
@@ -299,9 +314,18 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-reviews.json`,
 1. **Capture (R6).** List every issue comment on `yihanzhu/ystack` pull requests by
    `yihanzhu` whose body passes R6.1 (header `codex-review.sh:563`, one each of the
    three marker lines `:565-567`; `:500` never qualifies), whose reviewed head is a
-   commit of that closed or merged PR, and whose `reviewer:` model string is absent
-   from the reviewed head's `Co-Authored-By` trailers. Record the full qualifying id
-   list in the README. Propose 6-8 trials (within R6.3's 5-16), at least two with
+   commit of that closed or merged PR, and whose authorship is proven independent
+   (R6.1, last bullet; `AGENTS.md:468-469`). Proof needs recorded authoring-model
+   evidence: every non-merge commit of the PR up to the reviewed head carries at
+   least one recognized `Co-Authored-By: <model> <noreply@…>` trailer. Each model
+   identity, lowercased and with version and context suffixes removed (for example
+   `claude opus 5.5 (1m context)` becomes `claude`), must differ from the reviewer's
+   normalized `reviewer:` identity (for example `gpt-5.5` becomes `gpt`). A missing
+   or unrecognized trailer, a commit with no model trailer (a human commit included)
+   or a matching identity excludes the candidate. The author never infers
+   independence. The README records, per candidate, the commit list, trailers and
+   normalized identities, plus every exclusion and its reason. Record the full
+   qualifying id list in the README. Propose 6-8 trials (within R6.3's 5-16), at least two with
    findings and one without, later rounds first. Commit each body's exact API bytes
    as `verdicts/<comment-id>.md`; the README records URL, creation time and SHA-256.
    Capture is an authoring step with `gh api`; no shipped path uses the network.
@@ -454,7 +478,12 @@ gates (R9.6).
   operator-graded seed and its test. 150-450 of them are verbatim verdict bytes, which
   cannot leave the PR whose test checks their digests.
 - PR 3: `review_size: standard`, about 300-400 net added lines.
-- This plan-only PR: `review_size: standard`.
+- This plan-only PR: `review_size: accepted-exception`, 540-580 lines in this one
+  file (529 measured at the first head), one concern: this plan. The overrun is the
+  sibling map (S1-S10), the closure enumeration with its overlap split, and the three
+  per-PR pin chains, which the exact-path completeness of R1.3, R5 and R9.4 needs.
+  Precedents: #448, this slug's spec (432 lines, accepted exception), and #445
+  (400 lines, at the soft budget).
 
 Each range waives only the soft line signal, never scope, tests, CI, review or human
 merge.
