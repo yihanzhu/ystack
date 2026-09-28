@@ -534,6 +534,25 @@ expect_fixed_file_error accepted-body-wrong-type \
 expect_fixed_file_error accepted-body-missing-key \
   "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_missing_key"
 
+# One wrong-type field and one nested shape break per fixed file, at that
+# file's index in `args` (policy/decision/policy_set/registry/accepted).
+mutate_case() {
+  local idx=$1 name=$2 filter=$3
+  local args=("$policy" "$decision" "$policy_set" "$registry" "$accepted")
+  args[idx]=$(mutate "${args[idx]}" "$name" "$filter")
+  expect_fixed_file_error "$name" "${args[@]}"
+}
+mutate_case 0 policy-tools-wrong-type '.body.tools="not-an-array"'
+mutate_case 0 policy-tools-nested-shape '.body.tools=[{}]'
+mutate_case 1 decision-policy-ref-wrong-type '.body.policy_ref=1'
+mutate_case 1 decision-policy-ref-nested-shape '.body.policy_ref.sha256="not-a-sha"'
+mutate_case 2 policy-set-sections-wrong-type '.body.sections="x"'
+mutate_case 2 policy-set-sections-nested-shape '.body.sections[0].policy_ref.sha256=1'
+mutate_case 3 registry-environments-wrong-type '.body.environments="x"'
+mutate_case 3 registry-environments-nested-shape '.body.environments[0].target_repository_id=1'
+mutate_case 4 accepted-environments-wrong-type '.body.environments="x"'
+mutate_case 4 accepted-environments-nested-shape '.body.environments[0].scratch_bytes="x"'
+
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"

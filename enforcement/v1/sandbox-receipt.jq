@@ -252,6 +252,17 @@ def get($doc; $path):
 # enumerated, not inferred from what happens to be used).
 def body_ok($fields): (.body | exact($fields));
 
+# Shared nested shapes: a `{content_id,media_type,sha256}` content reference
+# and one policy `tool` entry, so a null/wrong-typed nested value fails here.
+def content_ref_ok:
+  exact(["content_id","media_type","sha256"]) and (.content_id | id_ok) and
+  (.media_type | type == "string") and (.sha256 | sha256_ok);
+
+def tool_shape_ok:
+  type == "object" and (.tool_id | id_ok) and (.sha256 | sha256_ok) and
+  (.executable | type == "string") and (.argv | type == "array") and
+  (.network | type == "boolean") and (.resource_ids | type == "array");
+
 def fixed_policy_shape_ok:
   ($policy[0]) as $p |
   ($p | exact(["body","id","kind","schema_version"])) and $p.kind == "sandbox_policy" and
@@ -262,7 +273,8 @@ def fixed_policy_shape_ok:
   ($p.body.limits | type == "object") and
   ($p.body.limits.cpu_time_ms | num_ok) and ($p.body.limits.wall_time_ms | num_ok) and
   ($p.body.limits.memory_bytes | num_ok) and ($p.body.limits.output_bytes | num_ok) and
-  ($p.body.limits.process_count | num_ok);
+  ($p.body.limits.process_count | num_ok) and
+  ($p.body.tools | type == "array" and all(.[];tool_shape_ok));
 
 def fixed_decision_shape_ok:
   ($decision[0]) as $d |
@@ -270,15 +282,21 @@ def fixed_decision_shape_ok:
   $d.schema_version == 1 and ($d.id | id_ok) and
   ($d | body_ok(["activation_state","decision","evaluator","fail_mode","policy_ref",
     "semantics"])) and
+  ($d.body.policy_ref | content_ref_ok) and
   ($d.body.evaluator.driver_ref.sha256 | sha256_ok) and
   ($d.body.evaluator.program_ref.sha256 | sha256_ok);
+
+def section_shape_ok:
+  exact(["section_id","policy_ref","decision_ref"]) and (.section_id | id_ok) and
+  (.policy_ref | content_ref_ok) and (.decision_ref | content_ref_ok);
 
 def fixed_policy_set_shape_ok:
   ($policy_set[0]) as $s |
   ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
   $s.schema_version == 1 and ($s.id | id_ok) and
   ($s | body_ok(["activation_state","core_contract","fail_mode","policy_version",
-    "sections"]));
+    "sections"])) and
+  ($s.body.sections | type == "array" and all(.[];section_shape_ok));
 
 def registry_entry_shape_ok:
   type == "object" and (.environment_id | id_ok) and (.target_repository_id | id_ok);
