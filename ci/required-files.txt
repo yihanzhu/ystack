@@ -221,6 +221,13 @@ work/real-sandbox-boundary/intent.md
 work/real-sandbox-boundary/spec.md
 work/real-sandbox-boundary/plan.md
 
+# Inactive sandbox receipt check
+enforcement/v1/sandbox-receipt.jq
+scripts/test/sandbox-receipt.test.sh
+work/enforcement-evidence-binding/intent.md
+work/enforcement-evidence-binding/spec.md
+work/enforcement-evidence-binding/plan.md
+
 # Inactive credential policy and evaluator
 control/v1/credential-policy.json
 control/v1/credential-policy-decision.json
