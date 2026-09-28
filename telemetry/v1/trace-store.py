@@ -1137,7 +1137,32 @@ def _load_chain_impl(store):
 
 
 def do_initialize(store, store_id):
-    raise Refusal("E_RUNTIME")  # not yet built at this commit
+    store.acquire("initialize")
+    if not store.fresh:
+        # store.lock pre-existed: either a stale unpublished attempt (K7,
+        # permanently E_INCOMPLETE) or a store that already exists here
+        # (E_BOUNDARY). Either way this call never builds anything.
+        published = load_chain(store)
+        raise Refusal("E_BOUNDARY" if published else "E_INCOMPLETE")
+    doc = store_document(store_id)
+    store.reservation_start = (0, 0, 0, 0)
+    store.initialize_layout()
+    encoded = canonical(doc)
+    require(len(encoded) <= STORE_DOC_MAX, "E_RUNTIME")
+    store_oid = store.write_object("blob", encoded)
+    tree = store.write_object("tree", tree_bytes({"store.json": store_oid}, ROOT_NAMES))
+    commit = store.write_object("commit", commit_bytes(tree, None))
+    lock_path = store.path("repository.git/refs/heads/records.lock")
+    require(not os.path.lexists(lock_path), "E_LOCKED")
+    store.charge(entries=1, regular=41)
+    descriptor = create_ref_lock(lock_path)
+    try:
+        require(store.current_ref(absent=True) is None, "E_STALE")
+        write_ref_lock(descriptor, commit)
+    finally:
+        close_fd(descriptor)
+    install_ref_lock(lock_path, store.path("repository.git/refs/heads/records"))
+    return listing_document(store_id, commit, commit, [])
 
 
 def do_append(store, store_id, expected_tip, scratch_root, jq_bin, session_id, attempt_id, ledger):
@@ -1149,8 +1174,32 @@ def do_read(store, jq_bin, receipt_path, output_path):
 
 
 def do_list(store, store_id):
-    raise Refusal("E_RUNTIME")  # not yet built at this commit
+    store.acquire("list")
+    published = load_chain(store)
+    require(published, "E_INCOMPLETE")
+    require(store.store_id == store_id, "E_IDENTITY")
+    entries = []
+    for record in store.records:
+        entries.append({
+            "record_key": record["record_key"],
+            "replay_key": record["replay_key"],
+            "event_count": record["event_count"],
+            "commit_id": record["commit_id"],
+            "record_sha256": digest(record["record_bytes"]),
+            "ledger_ref": {"sha256": record["ledger_ref"]["sha256"]},
+        })
+    entries.sort(key=lambda entry: (entry["replay_key"]["session_id"],
+                                     entry["replay_key"]["attempt_id"],
+                                     entry["replay_key"]["final_digest"]))
+    require(len(entries) <= RECORDS_MAX, "E_CORRUPT")
+    doc = listing_document(store.store_id, store.root_commit, store.tip, entries)
+    require(len(canonical(doc)) <= LISTING_BYTES_MAX, "E_CORRUPT")
+    return doc
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main(argv):
     store = None
