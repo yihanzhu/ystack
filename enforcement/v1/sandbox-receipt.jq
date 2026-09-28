@@ -258,10 +258,42 @@ def content_ref_ok:
   exact(["content_id","media_type","sha256"]) and (.content_id | id_ok) and
   (.media_type | type == "string") and (.sha256 | sha256_ok);
 
+def str_ok: type == "string";
+def bool_ok: type == "boolean";
+
 def tool_shape_ok:
   type == "object" and (.tool_id | id_ok) and (.sha256 | sha256_ok) and
-  (.executable | type == "string") and (.argv | type == "array") and
-  (.network | type == "boolean") and (.resource_ids | type == "array");
+  (.executable | str_ok) and (.argv | type == "array") and
+  (.network | bool_ok) and (.resource_ids | type == "array");
+
+# Every remaining nested shape of the five fixed documents, typed key by key
+# from the real committed files: strings, booleans, 64-hex, ids, and
+# arrays-of-shape. A field this program never itself reads is still part of
+# the shape its presence in `body_ok` claims, so it is typed here too.
+def variable_shape_ok: exact(["name","value"]) and (.name | str_ok) and (.value | str_ok);
+def root_shape_ok:
+  exact(["access","path","purpose"]) and (.access | str_ok) and (.path | str_ok) and
+  (.purpose | id_ok);
+def resource_shape_ok:
+  exact(["access","id","kind","path"]) and (.access | str_ok) and (.id | id_ok) and
+  (.kind | str_ok) and (.path | str_ok);
+def policy_environment_ok:
+  exact(["mode","variables"]) and (.mode | str_ok) and
+  (.variables | type == "array" and all(.[];variable_shape_ok));
+def policy_filesystem_ok:
+  exact(["read_roots","write_roots"]) and
+  (.read_roots | type == "array" and all(.[];root_shape_ok)) and
+  (.write_roots | type == "array" and all(.[];root_shape_ok));
+def policy_isolation_ok:
+  exact(["candidate_only","disposable","host_access"]) and
+  (.candidate_only | bool_ok) and (.disposable | bool_ok) and (.host_access | bool_ok);
+def policy_network_ok:
+  exact(["endpoints","mode"]) and (.endpoints | type == "array" and all(.[];str_ok)) and
+  (.mode | str_ok);
+def policy_sensitive_material_ok:
+  exact(["credential_refs","exposure","secret_refs"]) and
+  (.credential_refs | type == "array" and all(.[];id_ok)) and (.exposure | str_ok) and
+  (.secret_refs | type == "array" and all(.[];id_ok));
 
 def fixed_policy_shape_ok:
   ($policy[0]) as $p |
@@ -270,11 +302,29 @@ def fixed_policy_shape_ok:
   ($p | body_ok(["activation_state","environment","evaluation_mode","fail_mode",
     "filesystem","isolation","limits","network","policy_version","reference_semantics",
     "required_role","resources","sensitive_material","tools"])) and
+  ($p.body.activation_state | str_ok) and ($p.body.environment | policy_environment_ok) and
+  ($p.body.evaluation_mode | str_ok) and ($p.body.fail_mode | str_ok) and
+  ($p.body.filesystem | policy_filesystem_ok) and ($p.body.isolation | policy_isolation_ok) and
   ($p.body.limits | type == "object") and
   ($p.body.limits.cpu_time_ms | num_ok) and ($p.body.limits.wall_time_ms | num_ok) and
   ($p.body.limits.memory_bytes | num_ok) and ($p.body.limits.output_bytes | num_ok) and
   ($p.body.limits.process_count | num_ok) and
+  ($p.body.network | policy_network_ok) and ($p.body.policy_version | str_ok) and
+  ($p.body.reference_semantics | str_ok) and ($p.body.required_role | str_ok) and
+  ($p.body.resources | type == "array" and all(.[];resource_shape_ok)) and
+  ($p.body.sensitive_material | policy_sensitive_material_ok) and
   ($p.body.tools | type == "array" and all(.[];tool_shape_ok));
+
+def evaluator_pair_ok:
+  exact(["driver_ref","program_ref"]) and (.driver_ref | content_ref_ok) and
+  (.program_ref | content_ref_ok);
+def semantics_shape_ok:
+  exact(["authority_effect","enforcement_proof","input_contract","output_kind",
+    "output_schema_version","qualification_effect","reference_semantics","verdicts"]) and
+  (.authority_effect | str_ok) and (.enforcement_proof | str_ok) and
+  (.input_contract | str_ok) and (.output_kind | str_ok) and
+  (.output_schema_version | type == "number") and (.qualification_effect | str_ok) and
+  (.reference_semantics | str_ok) and (.verdicts | type == "array" and all(.[];str_ok));
 
 def fixed_decision_shape_ok:
   ($decision[0]) as $d |
@@ -282,13 +332,19 @@ def fixed_decision_shape_ok:
   $d.schema_version == 1 and ($d.id | id_ok) and
   ($d | body_ok(["activation_state","decision","evaluator","fail_mode","policy_ref",
     "semantics"])) and
-  ($d.body.policy_ref | content_ref_ok) and
-  ($d.body.evaluator.driver_ref.sha256 | sha256_ok) and
-  ($d.body.evaluator.program_ref.sha256 | sha256_ok);
+  ($d.body.activation_state | str_ok) and ($d.body.decision | str_ok) and
+  ($d.body.fail_mode | str_ok) and ($d.body.policy_ref | content_ref_ok) and
+  ($d.body.evaluator | exact(["driver_ref","policy_set_validator","program_ref"]) and
+    (.driver_ref | content_ref_ok) and (.program_ref | content_ref_ok) and
+    (.policy_set_validator | evaluator_pair_ok)) and
+  ($d.body.semantics | semantics_shape_ok);
 
 def section_shape_ok:
   exact(["section_id","policy_ref","decision_ref"]) and (.section_id | id_ok) and
   (.policy_ref | content_ref_ok) and (.decision_ref | content_ref_ok);
+def core_contract_shape_ok:
+  exact(["generation_id","package_ref","semantic_identity"]) and
+  (.generation_id | str_ok) and (.package_ref | content_ref_ok) and (.semantic_identity | str_ok);
 
 def fixed_policy_set_shape_ok:
   ($policy_set[0]) as $s |
@@ -296,16 +352,22 @@ def fixed_policy_set_shape_ok:
   $s.schema_version == 1 and ($s.id | id_ok) and
   ($s | body_ok(["activation_state","core_contract","fail_mode","policy_version",
     "sections"])) and
+  ($s.body.activation_state | str_ok) and ($s.body.fail_mode | str_ok) and
+  ($s.body.policy_version | str_ok) and ($s.body.core_contract | core_contract_shape_ok) and
   ($s.body.sections | type == "array" and all(.[];section_shape_ok));
 
 def registry_entry_shape_ok:
-  type == "object" and (.environment_id | id_ok) and (.target_repository_id | id_ok);
+  exact(["description","environment_id","evidence_scope","proof_state","source_root_commit",
+    "target_repository_id"]) and (.environment_id | id_ok) and (.target_repository_id | id_ok) and
+  (.description | str_ok) and (.evidence_scope | str_ok) and (.proof_state | str_ok) and
+  (.source_root_commit | str_ok);
 
 def fixed_registry_shape_ok:
   ($registry[0]) as $g |
   ($g | exact(["body","id","kind","schema_version"])) and
-  $g.kind == "shadow_environment_registry" and $g.schema_version == 1 and
+  $g.kind == "shadow_environment_registry" and $g.schema_version == 1 and ($g.id | id_ok) and
   ($g | body_ok(["activation_state","environments","registry_version"])) and
+  ($g.body.activation_state | str_ok) and ($g.body.registry_version | str_ok) and
   ($g.body.environments | type == "array" and all(.[];registry_entry_shape_ok));
 
 def digest_list_ok:
@@ -344,10 +406,22 @@ def entry_digests_match_registry:
   ($entry_digests[0] | map(.environment_id)) as $ed_ids |
   $reg_ids == $ed_ids;
 
+# Cross-document: the decision must reference the same policy bytes we were
+# given, and the policy set's own "sandbox" section must reference the same
+# policy and decision bytes too, or the five fixed files do not agree with
+# each other about which sandbox policy is in force.
+def sandbox_section:
+  $policy_set[0].body.sections | map(select(.section_id == "sandbox")) | .[0];
+
+def cross_document_ok:
+  ($decision[0].body.policy_ref.sha256 == $policy_sha) and
+  (sandbox_section != null) and (sandbox_section.policy_ref.sha256 == $policy_sha) and
+  (sandbox_section.decision_ref.sha256 == $decision_sha);
+
 def fixed_files_ok:
   fixed_policy_shape_ok and fixed_decision_shape_ok and fixed_policy_set_shape_ok and
   fixed_registry_shape_ok and fixed_accepted_shape_ok and fixed_entry_digests_shape_ok and
-  entry_digests_match_registry;
+  entry_digests_match_registry and cross_document_ok;
 
 # PR 2: lookups against the fixed registry, accepted set and entry digests
 # (all read only after `fixed_files_ok`, so their shapes are already sound).

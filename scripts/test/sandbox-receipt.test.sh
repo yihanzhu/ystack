@@ -552,6 +552,24 @@ mutate_case 3 registry-environments-wrong-type '.body.environments="x"'
 mutate_case 3 registry-environments-nested-shape '.body.environments[0].target_repository_id=1'
 mutate_case 4 accepted-environments-wrong-type '.body.environments="x"'
 mutate_case 4 accepted-environments-nested-shape '.body.environments[0].scratch_bytes="x"'
+mutate_case 3 registry-id-wrong-type '.id=1'
+
+# Generic: every top-level body key of every fixed file, set to null alone,
+# one real committed key set per document (this also exercises the network
+# and semantics fields named above).
+doc_paths=("$policy" "$decision" "$policy_set" "$registry" "$accepted")
+for idx in 0 1 2 3 4; do
+  for key in $("$jq_bin" -r '.body|keys[]' "${doc_paths[$idx]}"); do
+    mutate_case "$idx" "doc$idx-body-$key-null" ".body.$key=null"
+  done
+done
+
+# Cross-document: the decision must reference the supplied policy bytes, and
+# the policy set's own "sandbox" section must reference the supplied policy
+# and decision bytes too.
+mutate_case 1 decision-unrelated-policy '.body.policy_ref.sha256=("f"*64)'
+mutate_case 2 policy-set-missing-sandbox-section 'del(.body.sections[-1])'
+mutate_case 2 policy-set-sandbox-section-mismatch '.body.sections[-1].policy_ref.sha256=("f"*64)'
 
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
