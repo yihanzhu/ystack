@@ -1199,14 +1199,20 @@ check_evidence() {
     ($found) as $found |
     (($found | map(keyed)) - $target_keys - $control_keys) as $unlisted |
     ($found | group_by(keyed) | map({(.[0] | keyed): length}) | add // {}) as $found_counts |
-    # Coverage for non-wildcard templates only: exactly one occurrence.
-    # Wildcard templates were already checked per concrete array element,
-    # against the parent-object existence of each element, by the
-    # repo-id-coverage.jq pass above (spec R15: "[] means every element",
-    # applied where the field is structurally owed, not to every array
-    # index regardless of shape).
-    (($target_list + $control_list) | map(select(.path | contains(".[].") | not)) |
-      all(. as $t | ($found_counts[$t | keyed] // 0) == 1)) as $coverage_ok |
+    # Coverage: a non-wildcard template must be found exactly once. A
+    # wildcard template is checked two ways, neither of which subsumes the
+    # other: at least one concrete occurrence must exist here (an emptied
+    # array yields zero violations from the per-element structural pass
+    # below, since "for every element" is vacuously true over no elements,
+    # so that pass alone would not catch the whole array being wiped), and
+    # every element whose own parent object still exists must carry the id
+    # (checked per concrete array element by the repo-id-coverage.jq pass
+    # above; spec R15: "[] means every element", applied where the field is
+    # structurally owed, not to every array index regardless of shape).
+    (($target_list + $control_list) | all(. as $t |
+      ($found_counts[$t | keyed] // 0) as $fc |
+      if ($t.path | contains(".[].")) then $fc >= 1 else $fc == 1 end
+    )) as $coverage_ok |
     ($unlisted | length) == 0 and
     ($found | all(. as $f |
       (($target_keys | index($f | keyed)) != null and $f.value == $target_repo) or
@@ -1431,6 +1437,19 @@ if check_evidence "$mutant_dir" 'mutant-missing-array-element-field' 2>"$tmp/cas
   fail 'a repository id missing from one array element among several must be refused'
 fi
 pass 'a repository id missing from one element of a multi-element array is refused even though other elements still supply it'
+
+# (n) the whole manifests array is emptied: the per-element structural pass
+# is vacuously satisfied over zero elements, so it alone would not catch
+# this. The at-least-one-occurrence side of the coverage check must.
+fresh_mutant_copy
+"$jq_bin" -S -c '.manifests = []' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-emptied-array' 2>"$tmp/case-n.err"; then
+  fail 'a wildcard template with zero remaining occurrences (an emptied array) must be refused'
+fi
+pass 'an emptied wildcard array is refused even though the per-element structural pass alone would see no violation'
 
 /bin/rm -rf -- "$mutant_dir"
 
