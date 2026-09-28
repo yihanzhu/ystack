@@ -92,9 +92,8 @@ needed. The catalog's policies stay as they are. The contract:
    coverage bound (`:240`) and M3. `scope-qualification.test.sh` checks the copied
    lists equal the `evals.jq` lists.
 4. `evals/v1/evals-driver.sh` gains one replay per source in its dispatch
-   (`:659-676`). The driver and `evals/v1/evals-launcher.sh` update their pinned
-   program, catalog and driver digests (`evals-driver.sh:75`, `:80`;
-   `evals-launcher.sh:148-150`) and snapshot the two new closures.
+   (`:659-676`). The driver and `evals/v1/evals-launcher.sh` snapshot the two new
+   closures and update the pins R9.4 lists for PR 1.
 
 ### R4. `malicious-instructions`: four trials, graded deterministically
 
@@ -355,18 +354,42 @@ always goes in the closure.
    `scripts/test/evals-framework.test.sh` (new shapes, with fixtures the test builds
    and never commits as seeds), `scripts/test/shadow-self-host-evidence.test.sh`,
    `docs/components.md`, `RESTORE.md`. PR 2 and PR 3 each: `evals/v1/eval-catalog.json`,
-   their seed set and seed directory, the two pinned catalog digests in the driver and
-   launcher (PR 2 also the pinned `approval.json` digest and its launcher copy step),
-   their new test, `scripts/test/evals-framework.test.sh`,
-   `scripts/test/evals-dashboard.test.sh`, `docs/components.md`, `RESTORE.md`,
-   `ci/required-files.txt`. `framework.jq`, `run.sh`, `config/**` and every other file
-   stay byte-identical.
-4. **Proof.** All tests run offline with no model, credential, provider or target.
+   their seed set and seed directory, `evals/v1/evals-driver.sh` and
+   `evals/v1/evals-launcher.sh` for the pins of R9.4 only, their new test,
+   `scripts/test/evals-framework.test.sh`, `scripts/test/evals-dashboard.test.sh`,
+   `docs/components.md`, `RESTORE.md`, `ci/required-files.txt`. `framework.jq`,
+   `run.sh`, `config/**` and every other file stay byte-identical.
+4. **Pin chain.** Found by grepping the repository for the SHA-256 of every file in
+   `evals/v1/` and of `scope/v1/scope-gates.jq`. Each PR updates, in this order, every
+   literal its own changes move, and no other:
+   - **PR 1.** (a) Each changed or newly pinned closure file's digest (R5 closure,
+     `record_closure`, including `scope-gates.jq`), written wherever closure digests
+     live today: the `expected_*_closure` lists in `evals.jq` (for example `:89`),
+     the `verify_hash` lines in `evals-driver.sh` (for example `:132`) and the
+     `snapshot_expected` lists and evaluator-builder lists in `evals-launcher.sh`
+     (for example `:214`, `:323`, `:455`). (b) Then the `evals.jq` digest, at
+     `evals-driver.sh:75` and `evals-launcher.sh:148`. (c) Then the driver digest, at
+     `evals-launcher.sh:150`.
+   - **PR 2.** (a) The catalog digest, at `evals-driver.sh:80`, `:164` and
+     `evals-launcher.sh:149`. (b) The new `approval.json` digest, one literal in each
+     of `evals-driver.sh` and `evals-launcher.sh`, plus the launcher copy step.
+     (c) Then the driver digest at `evals-launcher.sh:150`. The runtime-copy loop in
+     `scripts/test/evals-framework.test.sh:358-360` gains `approval.json` so its tamper
+     check still reaches `E_STALE`.
+   - **PR 3.** (a) The catalog digest at the same three literals. (b) Then the driver
+     digest at `evals-launcher.sh:150`.
+   Not moved, so not allowed: the `framework.jq` pin at `run.sh:54` (unchanged file),
+   seed-set digests (computed at run time, never pinned), the launcher's own digest
+   and `run-evals.sh` (pinned nowhere), and the tool digest pins in
+   `evals-framework.test.sh:190`, `:225`, `:294` (`scripts/core-contract.sh`,
+   unchanged). No other test pins any of these digests. A digest literal found
+   anywhere else that a PR's change moves stops that PR and returns to the plan.
+5. **Proof.** All tests run offline with no model, credential, provider or target.
    `scripts/test/run-all.sh` finds new tests by name (`:66-69`), so each PR records a
    green dispatched `ci` on its exact head. In the existing tests of R9.2, only the
    named fixtures and counts change: no assertion is deleted or weakened, and each
    keeps the behaviour it checked. Every other existing test passes unchanged.
-5. **Reserved for the operator:** model graders for both families; any grader-kind,
+6. **Reserved for the operator:** model graders for both families; any grader-kind,
    trial-policy or threshold change; every reviewer label, grade status and the label
    approval; any false-positive or agreement threshold; recording the four malicious
    trials if concern 5's authorization does not cover them. Seeding changes no scope,
@@ -390,7 +413,10 @@ in CI; wiring the record report into anything but the relay; enablement.
   plan-only PR precedes code.
 - **Size.** PR 1 touches the evaluator program, driver, launcher and scope gate; the
   plan states an evidence-based one-concern `review_size` range or splits it. This
-  spec PR is `review_size: standard`.
+  spec PR is `review_size: accepted-exception`: one concern, this one file, 420-450
+  added lines. The overrun is the closed lists (edits, tests, archive split and pin
+  chain) that exact-path completeness needs; splitting them would scatter one
+  contract. It waives only the soft line signal.
 - **Unmerged siblings.** Invariant field paths and part of the closure come from
   concerns 5, 6 and 9. R1.3 makes the plan stop on any gap.
 - **The forge-text trial is structural.** No component in the closure accepts forge
