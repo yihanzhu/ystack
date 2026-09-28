@@ -175,18 +175,26 @@ concerns 5, 6 and 9 add for the write-shadow record, enablement check and gate
 evidence. The plan enumerates the final list from those merged files. A changed
 closure file changes the evaluator document, so old results are never read as new.
 
-**Archived inputs, not closure files.** A file the replay reads that this concern's
-own PRs change is never in the closure. By grep of `shadow/v1`, `scope/v1`,
-`control/v1`, `maintenance/v1` and `adapters/local-git-materializer` for `evals/v1`,
-the only such reader is `maintenance/v1/incident-to-eval.sh`, which reads
-`evals/v1/eval-catalog.json` and `evals/v1/seed-set.json` from its own repository root
-(`:76-79`) and embeds the catalog digest in the skeleton it writes (`:126-137`). So each
-trial directory archives the exact catalog and `seed-set.json` bytes it was recorded
-with, as named inputs, and the replay places those bytes at the two paths inside its
-private runtime copy; `incident-to-eval.sh` is unchanged. A later catalog change
-(the other seed PR) therefore changes no closure digest, no `evals.jq` pin and no
-recorded skeleton byte. The plan repeats this grep over the files concerns 5, 6 and 9
-add; any of them that reads a file PR 2 or PR 3 changes is archived the same way.
+**Two disjoint lists.** Every file the replay reads is in exactly one of them:
+- *Pinned closure* (above): every executable replay component and every policy or
+  program file it reads, including `scope/v1/scope-gates.jq`, which PR 1 changes
+  (R3.3). The malicious trials are recorded after PR 1 lands, so they bind its
+  version; any later change to a closure file changes the evaluator document and
+  needs the trials re-recorded through their own gate.
+- *Archived data inputs*: exactly `evals/v1/eval-catalog.json` and
+  `evals/v1/seed-set.json`. By grep of `shadow/v1`, `scope/v1`, `control/v1`,
+  `maintenance/v1` and `adapters/local-git-materializer` for `evals/v1`, their only
+  reader is `maintenance/v1/incident-to-eval.sh` (`:76-79`), which embeds the catalog
+  digest in the skeleton it writes (`:126-137`). They are data, not code, and the
+  catalog changes in PR 2 and PR 3. Each trial directory stores the exact bytes it
+  was recorded with, and the replay places them at those two paths in its private
+  runtime copy; `incident-to-eval.sh` is unchanged. So the other seed PR's catalog
+  change moves no closure digest, `evals.jq` pin or recorded skeleton byte.
+
+The plan lists both sets, checks they are disjoint and together cover every file the
+replay opens, and repeats the grep over the files concerns 5, 6 and 9 add. A new data
+file found there is archived the same way only if it holds no code; an executable file
+always goes in the closure.
 
 ### R6. `reviewer-severity-false-positive-negative`: which verdicts qualify
 
