@@ -344,25 +344,30 @@ keeps its own intake and gates; none is implemented here.
 
 PR 1: `review_size: accepted-exception`, 600-700 net lines, one concern: the full R3
 receipt shape (12 body fields, 10 identity slots, 6 R6 limit rows) and the 24
-required PR-1 test cases listed above, none of which may be cut. PRs 2-4:
+required PR-1 test cases listed above, none of which may be cut. PR 2:
+`review_size: accepted-exception`, 400-520 net lines, one concern: exhaustive
+fixed-file schema and relation validation, meaning every field and shape of the five
+fixed control documents and the references between them. PRs 3-4:
 `review_size: standard`. Estimated net lines:
 
 | PR | Estimate | Main content |
 | --- | ---: | --- |
 | 1 | 600-700 | program core 260-300, test scaffolding and 24 cases 330-390, manifest 7 |
-| 2 | 300-400 | program bindings 100-140, accepted set 1, tests 190-250 |
+| 2 | 400-520 | program bindings and fixed-file validation, accepted set 1, tests |
 | 3 | 330-400 | driver 200-230, tests 130-170 |
 | 4 | 35-50 | two docs paragraphs, one restore paragraph |
 
 Evidence: PR 1 as built in #455 measured 641 (277 program, 357 test, 7 manifest);
 `scripts/test/control-sandbox-policy.test.sh` is 476 lines for 46 cases, and
-`control/v1/sandbox.jq` 276. PR 2 reuses PR 1's fixture builders, but PR 1's program
-ran about 20% over its estimate and PR 2's tests add 13 single cases plus the
-30-case row matrix, so its range rises within the standard budget. PR 3's driver follows
+`control/v1/sandbox.jq` 276. PR 2 as built in #457 reached 400 with findings
+open after three review rounds, each requiring exhaustive field and shape validation
+of the five fixed documents and cross-document reference checks; `control/v1/sandbox.jq`
+(276) and `scripts/test/control-sandbox-policy.test.sh` (476) are the precedent for
+that validation's size. PR 3's driver follows
 `control/v1/evaluate-sandbox.sh` (220 lines) step for step and keeps its estimate.
-A PR recorded as standard that would pass 400 lines, or PR 1 outside its range,
-stops and returns to this plan gate; it is never split ad hoc or given an
-unrecorded exception.
+A PR recorded as standard that would pass 400 lines, or PR 1 or PR 2 outside its
+recorded range, stops and returns to this plan gate; it is never split ad hoc or
+given an unrecorded exception.
 
 ## Risks
 
