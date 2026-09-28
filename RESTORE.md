@@ -791,7 +791,7 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
-Restore the three paths in the manifest's inactive telemetry trace-record validator block,
+Restore the first three paths in the manifest's inactive telemetry trace-record validator block,
 then run:
 
 ```sh
@@ -804,8 +804,22 @@ tail, deterministic bounded receipts, and fail-closed handling of duplicates,
 replay, reorder, truncation, tampering, time reversal, malformed input, symlinks,
 and unverified runtimes. It does not collect or write telemetry, grant authority or
 qualification, run a tool or adapter, use a credential or network, activate a
-profile, publish, deploy, or touch a target. Durable append, retention, access,
-and recovery behavior is later work.
+profile, publish, deploy, or touch a target. The validator itself stores nothing.
+
+Restore the last two paths of the same manifest block,
+`telemetry/v1/trace-store.py` and `scripts/test/telemetry-trace-store.test.sh`,
+together with the validator paths above, then run:
+
+```sh
+bash scripts/test/telemetry-trace-store.test.sh
+```
+
+This proves byte-exact read-back after the source scratch is deleted, identical and
+conflicting replay, stale and concurrent writers, every crash state around the ref
+update, unchanged state after invalid input, corrupt stored data, capacity refusal
+and the store and environment boundaries, on disposable local stores. It restores no
+store contents, creates no store location, wires no caller, uses no credential or
+network beyond the digest-checked jq 1.6 download, and activates nothing.
 
 Restore the three paths in the manifest's inactive hermetic eval-record evaluator block,
 then run:

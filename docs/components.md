@@ -516,9 +516,43 @@ telemetry/v1/validate-trace-ledger.sh validate SESSION_ID ATTEMPT_ID LEDGER.json
 The chain detects an unrehashed change; it is not a signature or an authority
 grant. The package stays inactive and repo-only. It does not collect telemetry,
 run a tool or adapter, read a credential, use a network, write a ledger, activate
-a profile, qualify a workflow, publish, deploy, or touch a target. A later unit
-must provide durable append, retention, access, and recovery behavior before it
-can claim a telemetry ledger runtime.
+a profile, qualify a workflow, publish, deploy, or touch a target. The
+[inactive telemetry trace store](#inactive-telemetry-trace-store) adds bounded
+durable append and read-back for sealed bundles; no shipped component calls it, and
+live collection, retention policy and caller wiring remain later work.
+
+## Inactive telemetry trace store
+
+`telemetry/v1/trace-store.py` keeps complete sealed trace bundles, byte for byte, in
+a local store outside the scratch that made them. It runs only under the identified
+interpreter and empty environment of the [delivery ledger](delivery-ledger.md), with
+`-I -S -B` and no `TMPDIR`:
+
+```text
+initialize STORE_ROOT STORE_ID
+append STORE_ROOT STORE_ID EXPECTED_TIP SCRATCH_ROOT JQ_BIN SESSION_ID ATTEMPT_ID LEDGER
+read STORE_ROOT JQ_BIN STORAGE_RECEIPT OUTPUT
+list STORE_ROOT STORE_ID
+```
+
+Append runs the unchanged validator above on a private snapshot and never reads a
+caller's receipt. A record keeps the exact bundle, the validator's exact receipt and
+the validator, program and jq digests, keyed by the receipt's session, attempt and
+final-digest replay key. One session and attempt may hold several records, told apart
+only by final digest; none is newest. Publication is one expected-tip
+compare-and-swap of a single ref in a bare SHA-1 repository the program writes
+itself, without running Git. An identical replay returns the same storage receipt and
+adds nothing. Read writes the exact bytes to a new 0400 file only after re-checking
+the storage receipt and re-running the same validator revision.
+
+A store holds at most 1,024 records of up to 1 MiB each and 256 MiB of files. A full
+store refuses; there is no eviction, pruning, garbage collection, repair or history
+rewrite, and a stale ref lock or partial initialization waits for the operator. The
+proof covers process-crash recovery for this contract only, not producer
+authenticity, power loss, same-UID or administrator rollback, or a session service.
+The store is inactive, grants no authority, qualifies no fact, uses no network or
+credential and ships no default location. No shipped component calls it; a later
+publisher binds to it by storage receipt in its own gate.
 
 ## Inactive hermetic eval-record evaluator
 
