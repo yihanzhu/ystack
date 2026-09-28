@@ -203,7 +203,10 @@ dashboard shape change.
 - `replay_malicious_cases`: per case, a fresh `$work/malicious-$i/repo` built from
   the runtime's closure files, the two archived files at
   `evals/v1/eval-catalog.json` and `evals/v1/seed-set.json`, and the trial inputs,
-  each checked against the manifest (`E_RELATION` observation). The object-closure
+  each placed by the staging rule above (a driver copy of the helper using `/bin/cp`
+  and `sha256_path`, since the driver has no `snapshot_file`). A mismatch is an
+  `E_RELATION` observation. Each trial and each dashboard pair gets its own fresh
+  directory, and object-closure builds and the relay's jq staging go only into it. The object-closure
   helper is compiled there from the pinned source with
   `/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2`
   (`candidate-content-preparation.test.sh:61`). Surface check: the planted text (the
@@ -236,27 +239,37 @@ dashboard shape change.
   `shadow_closure` and `record_closure`, and the final check block (`:418-475`)
   re-checks every entry. Staging is different, because `snapshot_file` opens its
   target with `O_EXCL` (`:28`) and a second copy of a staged path would fail on an
-  unchanged tree. Paths the existing loops already stage are only digest-checked in
-  place and reused: from `shadow_closure`, the nine core entries (staged at
+  unchanged tree.
+- **Staging rule, used for every file this plan stages.** One helper,
+  `stage_expected DIGEST SOURCE TARGET MODE TOKEN`. If TARGET already exists, it must
+  be a regular file, not a symlink, with SHA-256 DIGEST; it is then reused, not
+  copied. Anything else emits TOKEN. If TARGET is absent, parent directories are
+  created 0700 and `snapshot_expected` copies it; a failure emits TOKEN. No new
+  staging step calls `snapshot_expected` directly. The existing loops
+  (`:151-230`) stay as they are and run first.
+- Closure staging (TOKEN `E_STALE`). Paths the existing loops already stage are
+  reused this way: from `shadow_closure`, the nine core entries (staged at
   `:162-184`) and all fourteen `control_closure` files (staged at `:201-219`:
   `evaluate-sandbox.sh`, `sandbox.jq`, `sandbox-policy.json`, `sandbox-decision.json`,
   `evaluate-risk-gates.sh`, `risk-gates.jq`, `risk-gates-policy.json`,
   `risk-gates-decision.json`, `evaluate-duty.sh`, `duty-separation.jq`,
   `duty-separation-policy.json`, `duty-separation-decision.json`, `policy-set.jq`,
   `validate.sh`); from `record_closure`, `modules/schema.jq` (staged at `:171-181`).
-  A digest that differs is `E_STALE`. Only the rest are copied with
-  `snapshot_expected` from `$repo/<path>`: the 24 other `shadow_closure` paths
+  Only the rest are copied from `$repo/<path>`: the 24 other `shadow_closure` paths
   (the seven `shadow/v1`, three materializer, two telemetry, four kill-switch, four
   `scope/v1`, three `maintenance/v1` files and `config/construction-mode.json`) and
   `evals/v1/framework.jq` and `evals/v1/run.sh`. The copy loop sits after the
   adapter loop (`:221-230`) and before `:231`. The plan update redoes this overlap
-  split for the sibling files. Order matters: every existing tamper fixture (for example
-  `evals-adapters.test.sh:217-236`, `evals-framework.test.sh:346-367`) edits a file
+  split for the sibling files. Order matters: every existing tamper fixture (for
+  example `evals-adapters.test.sh:217-236`, `evals-framework.test.sh:346-367`) edits a file
   staged at or before `:230`, so its own file is still what reaches `E_STALE`.
-- Seed files: after `snapshot_input` (`:239-264`), for each staged seed set whose
-  source is one of the two new ones, stage every `shared.files` entry to
-  `$runtime/<path>` with `snapshot_expected`, creating parent directories 0700 (digest
-  mismatch `E_RELATION`, a path outside its allowed prefix `E_SHAPE`).
+- Seed files (TOKEN `E_RELATION`): after `snapshot_input` (`:239-264`), for each
+  staged seed set whose source is one of the two new ones, in run and dashboard mode
+  alike (dashboard mode replays every pair, `evals-driver.sh:217-226`), stage every
+  `shared.files` entry to `$runtime/<path>` with `stage_expected`. A path outside its
+  allowed prefix is `E_SHAPE` before any staging. Disjoint seed sets that share a file
+  (for example `planted-text.txt` or a control input) reuse the first copy when the
+  digests agree. A shared path named with two digests is `E_RELATION`.
 - Reviews approval anchor: `review_approval_sha=none` beside `:150`. PR 2 replaces
   `none` with the digest and adds the copy step (R9.4 PR 2(b)).
 - R9.4(b) `program_sha` at `:148`, then (c) `driver_sha` at `:150`, both last.
@@ -272,6 +285,8 @@ dashboard shape change.
   and trace; `validate-run-result` refuses `human` under any other source and
   anything but `human` under reviews; the real run's evaluator has both closures
   equal to their shipped lists. Its tamper fixture (`:346-367`) is unchanged.
+- The closure reuse is exercised by every existing eval suite: each run stages the
+  23 overlapping paths twice, so copying instead of reusing would fail all of them.
 - `evals-dashboard.test.sh`: M4, after `:158`: `seed-set.json` with its result plus
   the no-newline copy with its earlier result (`:121-123`) is `E_SHAPE`; the seven-set
   dashboard (`:62-90`) is unchanged.
@@ -351,9 +366,9 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-reviews.json`,
    `seed_status: "seeded"`, `seed_sources: ["reviews.independent-verdicts.v1"]`
    (R9.1). (a) catalog digest at `evals-driver.sh:80`, `:164`,
    `evals-launcher.sh:149`; (b) `approval.json` digest replacing `none` in both files,
-   plus the launcher copy step (`snapshot_expected` to
-   `$runtime/evals/v1/seeds/reviewer-severity/approval.json`, beside the catalog at
-   `:160`); (c) `driver_sha` at `evals-launcher.sh:150`. `evals-framework.test.sh`'s
+   plus the launcher copy step (`stage_expected` with TOKEN `E_STALE` to
+   `$runtime/evals/v1/seeds/reviewer-severity/approval.json`, after the closure
+   staging); (c) `driver_sha` at `evals-launcher.sh:150`. `evals-framework.test.sh`'s
    copy loop (`:358-360`) gains `seeds/reviewer-severity/approval.json` with its
    directory.
 6. **Test** `scripts/test/evals-reviews.test.sh`, in the `evals-duty.test.sh` style:
@@ -401,7 +416,13 @@ Allowed paths: `evals/v1/eval-catalog.json`, `evals/v1/seed-set-malicious.json`,
 6. **Test** `scripts/test/evals-malicious.test.sh`: four passes through
    `run-evals.sh`; failure for a copy with one invariant changed, one recorded byte
    changed, and the planted text on two surfaces; the archived catalog digest differs
-   from the shipped one and the four passes hold (R4.9). It computes the generation id
+   from the shipped one and the four passes hold (R4.9). A staging regression: two
+   disjoint seed sets built in `$tmp` from the shipped one (cases 1-2 and 3-4, ids
+   `evals.seed.malicious-instructions.part-a` and `.part-b`) share
+   `planted-text.txt` and the control inputs. Each runs, and one dashboard over both
+   pairs succeeds with the malicious family at four cases passed and two runs. The
+   same pair with one shared entry's digest changed in `part-b` is `E_RELATION`. It
+   computes the generation id
    from the launcher, as `evals-framework.test.sh:156` does, and embeds none.
 7. **Counts and docs**: below.
 
