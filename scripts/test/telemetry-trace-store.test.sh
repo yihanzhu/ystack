@@ -60,9 +60,11 @@ import os
 import pathlib
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
+import zlib
 
 PRODUCT, PYTHON, GIT, JQ, REPO = sys.argv[1:6]
 GROUPS = {}
@@ -351,16 +353,20 @@ def test_writers(tmp):
     modified_path = os.path.join(scratch, "modified.json")
     write_ledger(modified_path, modified)
     tip2 = tip_of(store, "writers.store")
+    before = snapshot_tree(store)
     code, out, err = append(store, "writers.store", tip2, scratch, modified_path, session_id, attempt_id)
     record(g, "same replay key, different bytes is E_CONFLICT", code == 1 and err == b"E_CONFLICT\n")
+    record(g, "store tree unchanged after E_CONFLICT", snapshot_tree(store) == before)
 
     other = make_ledger("fixture.writers.two", "incident.writers.two", attempt_id)
     other_path = os.path.join(scratch, "two.json")
     write_ledger(other_path, other)
     stale_tip = tip
+    before = snapshot_tree(store)
     code, out, err = append(store, "writers.store", stale_tip, scratch, other_path,
                              "incident.writers.two", attempt_id)
     record(g, "EXPECTED_TIP behind the real tip is E_STALE", code == 1 and err == b"E_STALE\n")
+    record(g, "store tree unchanged after E_STALE", snapshot_tree(store) == before)
 
     busy_tip = tip_of(store, "writers.store")
     lock_path = os.path.join(store, "store.lock")
@@ -368,10 +374,12 @@ def test_writers(tmp):
     import fcntl
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:
+        before = snapshot_tree(store)
         code, out, err = run(["append", store, "writers.store", busy_tip, scratch, JQ,
                                "incident.writers.two", attempt_id, other_path], timeout=15)
         record(g, "a second writer refused while the store lock is held is E_BUSY",
                code == 1 and err == b"E_BUSY\n")
+        record(g, "store tree unchanged after E_BUSY", snapshot_tree(store) == before)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -492,17 +500,32 @@ def run_wrapped(tmp, point, args, env=None, extra=(), timeout=30):
 
 
 def snapshot_tree(root):
+    """A byte-level snapshot of every entry under `root`, including the
+    root itself and every directory (kind and mode), not only regular
+    files: a corruption case that adds/removes/changes the mode of a
+    directory, or replaces a directory with a symlink, must be visible to
+    an unchanged-tree comparison exactly as a changed file would be. Does
+    not follow symlinked directories (records the link target instead of
+    descending into it), so it can never escape the tree or loop forever.
+    """
     result = {}
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in filenames:
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, root)
-            state = os.lstat(full)
-            if os.path.islink(full):
-                result[rel] = ("link", os.readlink(full))
-            else:
-                result[rel] = ("file", state.st_mode & 0o777, state.st_size,
-                                digest(pathlib.Path(full).read_bytes()))
+
+    def visit(rel):
+        full = os.path.join(root, rel) if rel else root
+        state = os.lstat(full)
+        key = rel if rel else "."
+        if stat.S_ISLNK(state.st_mode):
+            result[key] = ("link", os.readlink(full))
+            return
+        if stat.S_ISDIR(state.st_mode):
+            result[key] = ("dir", state.st_mode & 0o777)
+            for name in sorted(os.listdir(full)):
+                visit(os.path.join(rel, name) if rel else name)
+            return
+        result[key] = ("file", state.st_mode & 0o777, state.st_size,
+                        digest(pathlib.Path(full).read_bytes()))
+
+    visit("")
     return result
 
 
@@ -627,9 +650,12 @@ def test_crash_states(tmp):
     for verb_args in (("initialize", [k7_store, "crash.k7"]),
                        ("list", [k7_store, "crash.k7"])):
         verb, args = verb_args
+        before = snapshot_tree(k7_store)
         code, out, err = run([verb] + args)
         record(g, "K7: %s is permanently E_INCOMPLETE" % verb,
                code == 1 and err == b"E_INCOMPLETE\n")
+        record(g, "K7: %s leaves the partial store tree byte-identical" % verb,
+               snapshot_tree(k7_store) == before)
 
 
 def test_invalid_input(tmp):
@@ -645,50 +671,61 @@ def test_invalid_input(tmp):
     path = os.path.join(scratch, "relation.json")
     write_ledger(path, ledger)
     tip = tip_of(store, "invalid.store")
+
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, path, "incident.wrong", attempt_id)
     record(g, "wrong session_id is E_INVALID:E_RELATION",
            code == 1 and err == b"E_INVALID:E_RELATION\n")
+    record(g, "store tree unchanged after wrong session_id", snapshot_tree(store) == before)
+
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, path, session_id, "attempt.wrong")
     record(g, "wrong attempt_id is E_INVALID:E_RELATION",
            code == 1 and err == b"E_INVALID:E_RELATION\n")
+    record(g, "store tree unchanged after wrong attempt_id", snapshot_tree(store) == before)
 
     # E_SHAPE: malformed ledger (missing a required field).
     bad_shape = json.loads(canonical(ledger))
     del bad_shape["body"]["trace_ids"]
     bad_shape_path = os.path.join(scratch, "shape.json")
     write_ledger(bad_shape_path, bad_shape)
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, bad_shape_path, session_id, attempt_id)
     record(g, "malformed ledger document is E_INVALID:E_SHAPE",
            code == 1 and err == b"E_INVALID:E_SHAPE\n")
+    record(g, "store tree unchanged after a malformed ledger document", snapshot_tree(store) == before)
 
     # E_PARSE: not valid JSON at all.
     parse_path = os.path.join(scratch, "parse.json")
     with open(parse_path, "wb") as handle:
         handle.write(b"not json\n")
     os.chmod(parse_path, 0o600)
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, parse_path, session_id, attempt_id)
     record(g, "non-JSON ledger is E_INVALID:E_PARSE", code == 1 and err == b"E_INVALID:E_PARSE\n")
+    record(g, "store tree unchanged after a non-JSON ledger", snapshot_tree(store) == before)
 
     # E_CANONICAL: valid JSON but not in jq -S -c form (extra whitespace).
     canonical_path = os.path.join(scratch, "canonical.json")
     with open(canonical_path, "wb") as handle:
         handle.write(canonical(ledger).replace(b'"body"', b'"body" '))
     os.chmod(canonical_path, 0o600)
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, canonical_path, session_id, attempt_id)
     record(g, "non-canonical ledger bytes are E_INVALID:E_CANONICAL",
            code == 1 and err == b"E_INVALID:E_CANONICAL\n")
+    record(g, "store tree unchanged after non-canonical ledger bytes", snapshot_tree(store) == before)
 
     # E_RELATION: event digests broken (tamper with a fact after computing digest).
     tampered = json.loads(canonical(ledger))
     tampered["body"]["events"][0]["sequence"] = 5
     tampered_path = os.path.join(scratch, "tampered.json")
     write_ledger(tampered_path, tampered)
+    before = snapshot_tree(store)
     code, out, err = append(store, "invalid.store", tip, scratch, tampered_path, session_id, attempt_id)
     record(g, "a tampered event breaks its own digest chain: E_INVALID:<code>",
            code == 1 and err.startswith(b"E_INVALID:"))
-
-    record(g, "store tree unchanged after every invalid-input refusal",
-           tip_of(store, "invalid.store") == tip)
+    record(g, "store tree unchanged after a tampered event", snapshot_tree(store) == before)
 
 
 def flip_object_byte(store):
@@ -730,6 +767,7 @@ def test_corruption(tmp):
     def expect_corrupt(label, mutate):
         store, scratch, store_id, receipt_path = fresh_store(label)
         mutate(store)
+        baseline = snapshot_tree(store)
         for verb in ("append", "read", "list"):
             if verb == "append":
                 ledger = make_ledger("fixture.corrupt.%s.new" % label, "incident.new", "attempt.shadow-reproduce")
@@ -738,11 +776,13 @@ def test_corruption(tmp):
                 code, out, err = run(["append", store, store_id, "0" * 40, scratch, JQ,
                                        "incident.new", "attempt.shadow-reproduce", path])
             elif verb == "read":
-                out_path = os.path.join(tmp, "corrupt-%s-out.json" % label)
+                out_path = os.path.join(tmp, "corrupt-%s-%s-out.json" % (label, verb))
                 code, out, err = run(["read", store, JQ, receipt_path, out_path])
             else:
                 code, out, err = run(["list", store, store_id])
             record(g, "%s: %s refuses E_CORRUPT" % (label, verb), code == 1 and err == b"E_CORRUPT\n")
+            record(g, "%s: %s leaves the (already corrupt) store tree byte-identical" % (label, verb),
+                   snapshot_tree(store) == baseline)
 
     expect_corrupt("changed-object-byte", lambda store: flip_object_byte(store))
 
@@ -853,6 +893,114 @@ def test_corruption(tmp):
         raise AssertionError("no non-root commit found")
 
     expect_corrupt("second-parent", add_second_parent)
+
+    def rehash_tip_event_count(store, new_event_count):
+        # A "rehashed" corruption: replace record.json with a new, valid
+        # git object (correct SHA-1 name for its own new content) that
+        # claims a different event_count, then rebuild the tree and the
+        # tip commit around it (same fixed author/committer/message, same
+        # parent) so the whole chain stays self-consistent at the git
+        # level. record.json's own digest/size cross-checks against
+        # ledger.json and validation.json still pass unchanged; only the
+        # event_count itself has been rehashed to lie. Unlike
+        # flip_object_byte (which breaks the object's own SHA-1 name),
+        # this specifically exercises the cross-check against the
+        # validation document's actual content.
+        objects_root = os.path.join(store, "repository.git/objects")
+        ref_path = os.path.join(store, "repository.git/refs/heads/records")
+        tip = pathlib.Path(ref_path).read_text().strip()
+        names = ["ledger.json", "record.json", "store.json", "validation.json"]
+
+        def obj_path(oid):
+            return os.path.join(objects_root, oid[:2], oid[2:])
+
+        def read_object(oid):
+            raw = zlib.decompress(pathlib.Path(obj_path(oid)).read_bytes())
+            header, _, content = raw.partition(b"\0")
+            return header.split(b" ")[0].decode(), content
+
+        def write_object(kind, content):
+            raw = kind.encode("ascii") + b" " + str(len(content)).encode("ascii") + b"\0" + content
+            oid = hashlib.sha1(raw).hexdigest()
+            path = obj_path(oid)
+            if not os.path.exists(path):
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                with open(path, "wb") as handle:
+                    handle.write(zlib.compress(raw))
+                os.chmod(path, 0o600)
+            return oid
+
+        commit_kind, commit_content = read_object(tip)
+        assert commit_kind == "commit"
+        lines = commit_content.split(b"\n")
+        tree_oid = lines[0][5:].decode()
+        parent_oid = None
+        for line in lines[1:]:
+            if line.startswith(b"parent "):
+                parent_oid = line[7:].decode()
+        tree_kind, tree_content = read_object(tree_oid)
+        assert tree_kind == "tree"
+        members = {}
+        offset = 0
+        for name in names:
+            prefix = b"100644 " + name.encode("ascii") + b"\0"
+            assert tree_content[offset:offset + len(prefix)] == prefix
+            offset += len(prefix)
+            members[name] = tree_content[offset:offset + 20].hex()
+            offset += 20
+        record_kind, record_content = read_object(members["record.json"])
+        assert record_kind == "blob"
+        record_doc = json.loads(record_content)
+        record_doc["body"]["event_count"] = new_event_count
+        new_record_oid = write_object("blob", canonical(record_doc))
+        new_members = dict(members)
+        new_members["record.json"] = new_record_oid
+        new_tree_content = b"".join(b"100644 " + name.encode("ascii") + b"\0" +
+                                     bytes.fromhex(new_members[name]) for name in names)
+        new_tree_oid = write_object("tree", new_tree_content)
+        author = b"ystack trace store <trace-store@invalid> 946684800 +0000"
+        message = b"ystack trace store\n"
+        new_commit_content = b"tree " + new_tree_oid.encode("ascii") + b"\n"
+        if parent_oid is not None:
+            new_commit_content += b"parent " + parent_oid.encode("ascii") + b"\n"
+        new_commit_content += b"author " + author + b"\ncommitter " + author + b"\n\n" + message
+        new_commit_oid = write_object("commit", new_commit_content)
+        with open(ref_path, "wb") as handle:
+            handle.write((new_commit_oid + "\n").encode("ascii"))
+        os.chmod(ref_path, 0o600)
+
+    expect_corrupt("rehashed-event-count", lambda store: rehash_tip_event_count(store, 2))
+
+    def add_unreachable_oversized_tree(store):
+        # A syntactically valid, correctly-named "tree" object, never
+        # referenced by any reachable commit, whose content exceeds
+        # TREE_CONTENT_MAX (1024 bytes). inventory() decodes every loose
+        # object regardless of reachability; only load_object (called for
+        # reachable objects only) previously enforced the per-kind cap.
+        content = (b"100644 x\0" + bytes(20)) * 200
+        assert len(content) > 1024
+        raw = b"tree " + str(len(content)).encode("ascii") + b"\0" + content
+        oid = hashlib.sha1(raw).hexdigest()
+        path = os.path.join(store, "repository.git/objects", oid[:2], oid[2:])
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(zlib.compress(raw))
+        os.chmod(path, 0o600)
+
+    expect_corrupt("unreachable-oversized-tree", add_unreachable_oversized_tree)
+
+    def add_unreachable_oversized_commit(store):
+        content = b"tree " + ("0" * 40).encode("ascii") + b"\n" + b"x" * 1200
+        assert len(content) > 1024
+        raw = b"commit " + str(len(content)).encode("ascii") + b"\0" + content
+        oid = hashlib.sha1(raw).hexdigest()
+        path = os.path.join(store, "repository.git/objects", oid[:2], oid[2:])
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(zlib.compress(raw))
+        os.chmod(path, 0o600)
+
+    expect_corrupt("unreachable-oversized-commit", add_unreachable_oversized_commit)
 
 
 def test_capacity(tmp):
@@ -1064,45 +1212,96 @@ def test_boundaries(tmp):
     write_ledger(inside_path, ledger)
     tip = tip_of(store, "boundary.append")
 
+    before = snapshot_tree(store)
     code, out, err = do("append", store, "boundary.append", tip, store, JQ, session_id, attempt_id, inside_path)
     record(g, "SCRATCH_ROOT equal to the store root is E_BOUNDARY", code == 1 and err == b"E_BOUNDARY\n")
+    record(g, "store tree unchanged after SCRATCH_ROOT==STORE_ROOT E_BOUNDARY",
+           snapshot_tree(store) == before)
 
     outside_ledger = os.path.join(tmp, "boundary-outside-ledger.json")
     write_ledger(outside_ledger, ledger)
+    before = snapshot_tree(store)
     code, out, err = do("append", store, "boundary.append", tip, scratch, JQ, session_id, attempt_id,
                          outside_ledger)
     record(g, "LEDGER outside SCRATCH_ROOT is E_BOUNDARY", code == 1 and err == b"E_BOUNDARY\n")
+    record(g, "store tree unchanged after LEDGER-outside-SCRATCH_ROOT E_BOUNDARY",
+           snapshot_tree(store) == before)
 
+    before = snapshot_tree(store)
     code, out, err = do("read", store, JQ, os.path.join(tmp, "no-such-receipt.json"),
                          os.path.join(tmp, "out-doesnotmatter.json"))
     record(g, "an unreadable STORAGE_RECEIPT is E_RUNTIME", code == 1 and err == b"E_RUNTIME\n")
+    record(g, "store tree unchanged after E_RUNTIME (unreadable receipt)",
+           snapshot_tree(store) == before)
 
     initialize2 = append(store, "boundary.append", tip, scratch, inside_path, session_id, attempt_id)
     receipt_path = os.path.join(tmp, "boundary-receipt.json")
     pathlib.Path(receipt_path).write_bytes(initialize2[1])
+
+    before = snapshot_tree(store)
     in_store_output = os.path.join(store, "leak.json")
     code, out, err = do("read", store, JQ, receipt_path, in_store_output)
     record(g, "OUTPUT inside the store is E_OUTPUT", code == 1 and err == b"E_OUTPUT\n")
+    record(g, "store tree unchanged after in-store E_OUTPUT", snapshot_tree(store) == before)
 
+    before = snapshot_tree(store)
     parentless_output = os.path.join(tmp, "does-not-exist-dir", "out.json")
     code, out, err = do("read", store, JQ, receipt_path, parentless_output)
     record(g, "OUTPUT with a missing parent directory is E_OUTPUT", code == 1 and err == b"E_OUTPUT\n")
+    record(g, "store tree unchanged after parentless E_OUTPUT", snapshot_tree(store) == before)
 
     existing_output = os.path.join(tmp, "boundary-existing-output.json")
     with open(existing_output, "wb") as handle:
         handle.write(b"x")
+    before = snapshot_tree(store)
     code, out, err = do("read", store, JQ, receipt_path, existing_output)
     record(g, "an existing OUTPUT is E_OUTPUT", code == 1 and err == b"E_OUTPUT\n")
+    record(g, "store tree unchanged after existing-OUTPUT E_OUTPUT", snapshot_tree(store) == before)
 
     symlink_target = os.path.join(tmp, "boundary-symlink-target.json")
     symlink_output = os.path.join(tmp, "boundary-symlink-output.json")
     os.symlink(symlink_target, symlink_output)
+    before = snapshot_tree(store)
     code, out, err = do("read", store, JQ, receipt_path, symlink_output)
     record(g, "a symlinked OUTPUT is E_OUTPUT", code == 1 and err == b"E_OUTPUT\n")
+    record(g, "store tree unchanged after symlinked-OUTPUT E_OUTPUT", snapshot_tree(store) == before)
 
     good_output = os.path.join(tmp, "boundary-good-output.json")
     code, out, err = do("read", store, JQ, receipt_path, good_output)
     record(g, "a valid OUTPUT still succeeds after the E_OUTPUT cases", code == 0)
+
+    # E_IDENTITY: a STORE_ID argument that does not match the store's own
+    # store.json id. Checked on both a read-only verb (list) and a
+    # write-attempting verb (append), neither of which should write.
+    before = snapshot_tree(store)
+    code, out, err = do("list", store, "boundary.append.wrong")
+    record(g, "a STORE_ID argument mismatching the store's own id is E_IDENTITY (list)",
+           code == 1 and err == b"E_IDENTITY\n")
+    record(g, "store tree unchanged after E_IDENTITY (list)", snapshot_tree(store) == before)
+
+    before = snapshot_tree(store)
+    code, out, err = do("append", store, "boundary.append.wrong", tip, scratch, JQ, session_id,
+                         attempt_id, inside_path)
+    record(g, "a STORE_ID argument mismatching the store's own id is E_IDENTITY (append)",
+           code == 1 and err == b"E_IDENTITY\n")
+    record(g, "store tree unchanged after E_IDENTITY (append)", snapshot_tree(store) == before)
+
+    # E_NOT_FOUND: a structurally valid, internally self-consistent receipt
+    # (correct store id/root_commit, a record_key that matches its own
+    # replay_key) whose commit_id simply is not on the chain.
+    receipt_doc = json.loads(pathlib.Path(receipt_path).read_bytes())
+    missing_doc = json.loads(canonical(receipt_doc))
+    missing_doc["body"]["commit_id"] = "f" * 40
+    missing_receipt_path = os.path.join(tmp, "boundary-missing-receipt.json")
+    with open(missing_receipt_path, "wb") as handle:
+        handle.write(canonical(missing_doc))
+    before = snapshot_tree(store)
+    not_found_output = os.path.join(tmp, "boundary-not-found-out.json")
+    code, out, err = do("read", store, JQ, missing_receipt_path, not_found_output)
+    record(g, "a well-formed receipt whose commit_id is not on the chain is E_NOT_FOUND",
+           code == 1 and err == b"E_NOT_FOUND\n")
+    record(g, "store tree unchanged after E_NOT_FOUND", snapshot_tree(store) == before)
+    record(g, "no OUTPUT file is created for E_NOT_FOUND", not os.path.exists(not_found_output))
 
     tampered_source = os.path.join(tmp, "boundary-validator-tree")
     shutil.copytree(REPO, tampered_source,
@@ -1115,11 +1314,14 @@ def test_boundaries(tmp):
     # This call still uses the real product/validator; a genuine E_VALIDATOR
     # case requires reading a record with the tampered tree's copy of the
     # product, which is exercised below.
+    before = snapshot_tree(store)
     proc = subprocess.run([PYTHON, "-I", "-S", "-B", tampered_product, "read", store, JQ,
                             receipt_path, os.path.join(tmp, "tampered-out2.json")],
                            env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     record(g, "reading with a validator script that differs by one byte is E_VALIDATOR",
            proc.returncode == 1 and proc.stderr == b"E_VALIDATOR\n")
+    record(g, "the real store's tree is unchanged by the tampered-validator-tree E_VALIDATOR case",
+           snapshot_tree(store) == before)
 
     # Mutating the validator script between the pre-run digest check and
     # its own execution (a TOCTOU window) must still be refused: run from a
@@ -1147,6 +1349,7 @@ sys.argv = [product_path] + sys.argv[3:]
 raise SystemExit(module.main(sys.argv))
 ''')
     toctou_out = os.path.join(tmp, "boundary-toctou-out.json")
+    before = snapshot_tree(store)
     proc = subprocess.run([PYTHON, "-I", "-S", "-B", toctou_wrapper, toctou_product, toctou_validator,
                             "read", store, JQ, receipt_path, toctou_out],
                            env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1155,6 +1358,8 @@ raise SystemExit(module.main(sys.argv))
            proc.returncode == 1 and proc.stderr == b"E_VALIDATOR\n")
     record(g, "the mid-run mutation case leaves no OUTPUT file behind",
            not os.path.exists(toctou_out))
+    record(g, "the real store's tree is unchanged by the mid-run-mutation E_VALIDATOR case",
+           snapshot_tree(store) == before)
 
     # A case-insensitive filesystem folds a differently-cased spelling of a
     # path onto the same directory entry; identity_overlaps/identity_contains
@@ -1314,29 +1519,46 @@ def test_isolation(tmp):
     record(g, "no credential/hook/filter marker exists after the hostile-HOME append either",
            not os.path.exists(marker))
 
+    # A live DYLD_* variable in a spawned process's actual OS-level
+    # environment is intercepted by Darwin's dynamic linker before our
+    # interpreter ever starts: dyld aborts the child (SIGABRT) if the named
+    # library is missing, surfacing as a macOS crash-report dialog on every
+    # test run, not merely a clean non-zero exit. To assert the program's
+    # own forbidden-prefix check handles DYLD_* exactly like the other five
+    # prefixes, without ever letting dyld see the variable, run it through
+    # an indirection: launch the wrapper process itself (with the
+    # restricted interpreter flags, but a clean environment, so dyld never
+    # intercepts anything at launch), and only once it is already running,
+    # inject the forbidden variable into that process's own in-memory
+    # os.environ (a plain dict update — it does not re-invoke dyld) before
+    # calling the product's main() in-process. Works identically, and for
+    # the same reason, on Linux, where DYLD_* is not special at all.
+    env_injection_wrapper = wrapper_path(tmp, "wrapper-env-injection.py")
+    write_wrapper(env_injection_wrapper, '''
+import importlib.util, os, sys
+product_path, var, value = sys.argv[1], sys.argv[2], sys.argv[3]
+os.environ[var] = value
+spec = importlib.util.spec_from_file_location("tracestore", product_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+sys.argv = [product_path] + sys.argv[4:]
+raise SystemExit(module.main(sys.argv))
+''')
+
+    def run_with_injected_env(var, value, args, timeout=30):
+        proc = subprocess.run([PYTHON, "-I", "-S", "-B", env_injection_wrapper, PRODUCT, var, value] +
+                               list(args), env=dict(ENV), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return proc.returncode, proc.stdout, proc.stderr
+
     for var, value in (("GIT_DIR", "/tmp/x"), ("GIT_CONFIG_NOSYSTEM", "1"),
                         ("XDG_CONFIG_HOME", "/tmp/x"), ("PYTHONPATH", "/tmp/x"),
                         ("LD_PRELOAD", "/tmp/x.so"), ("DYLD_INSERT_LIBRARIES", "/tmp/x.dylib")):
-        bad_env = dict(ENV)
-        bad_env[var] = value
-        if var == "DYLD_INSERT_LIBRARIES" and os.uname().sysname == "Darwin":
-            # On Darwin, dyld itself intercepts DYLD_INSERT_LIBRARIES before
-            # our interpreter starts (aborting if the named library is
-            # missing, or silently stripping the variable for a protected
-            # binary): the program never gets a chance to see it. The
-            # program's own forbidden-prefix check (exercised by the other
-            # five variables above, and native on Linux CI) is what R2.2
-            # actually asks the program to do; this case is a platform
-            # front door, not a gap in the check.
-            code, out, err = run(["list", store, "isolation.store"], env=bad_env)
-            record(g, "DYLD_INSERT_LIBRARIES never reaches the program on Darwin "
-                      "(dyld itself refuses first); the program's own check is proven "
-                      "by the five other forbidden prefixes and by Linux CI",
-                   code != 0)
-            continue
-        code, out, err = run(["list", store, "isolation.store"], env=bad_env)
+        before = snapshot_tree(store)
+        code, out, err = run_with_injected_env(var, value, ["list", store, "isolation.store"])
         record(g, "forbidden variable %s present at start is E_USAGE" % var,
                code == 1 and err == b"E_USAGE\n")
+        record(g, "store tree unchanged after E_USAGE (%s)" % var, snapshot_tree(store) == before)
 
 
 def test_canonical_static(tmp):
