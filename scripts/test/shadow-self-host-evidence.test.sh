@@ -1,20 +1,69 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
-# Requirements 15, 16 and 17 of work/shadow-self-host-run/spec.md, together in
-# one file because all three read the same committed evidence bytes and none
-# of them performs a real self-host reproduction, obtains credentials or
-# invokes a model. Runs offline, in CI, on Linux.
+# Requirements 15, 16 and 17 of work/shadow-self-host-run/spec.md, and
+# requirements 15-17 of work/external-target-shadow-run/spec.md, together in
+# one file because all of them read the same kind of committed evidence
+# bytes and none of them performs a real reproduction, obtains credentials or
+# invokes a model. Runs offline, in CI, on Linux, over a table of bundles
+# (see "load_bundle" below).
 set -euo pipefail
 export LC_ALL=C
 umask 077
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
-evdir="$root/shadow/evidence/self-host-transition/v1"
 
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
-pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
+pass() {
+  passes=$((passes + 1))
+  bundle_passes=$((${bundle_passes:-0} + 1))
+  /usr/bin/printf 'ok %s - %s%s\n' "$passes" "$b_prefix" "$1"
+}
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+
+# ---------------------------------------------------------------------------
+# load_bundle <name>: sets the plain b_* variables every check below reads,
+# in one case arm per bundle (work/external-target-shadow-run/plan.md, "The
+# shared harness"). No associative arrays, so this stays Bash-3.2-compatible
+# and runs on the operator's Mac as well as in CI.
+# ---------------------------------------------------------------------------
+b_prefix=''
+load_bundle() {
+  local name=$1
+  case "$name" in
+    self-host)
+      b_rel=shadow/evidence/self-host-transition/v1
+      b_plan=work/shadow-self-host-run/plan.md
+      b_prefix=''
+      b_summary='shadow self-host evidence'
+      b_target_repo=repo.ystack
+      b_control_repo=repo.ystack
+      b_env_id=env.local-macos-ystack-self
+      b_root_commit=7908b159c0a2d24ce6ccdde6ee0f501acc483e75
+      b_incident_prefix=incident.ystack-transition
+      b_identity_prefix=identity.ystack-transition
+      b_check_path=config/construction-mode.json
+      b_expected_sha=b913cf629566dd532ca507a591cdec5cccb2611b12c63949daca6eb33cd15a93
+      b_post_observed_sha=5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda
+      b_pre_rev=d3f6d525328838b9c2de819699e53d8909ab7a3f
+      b_post_rev=0427390224c25147650f1bd3b6e43ed6911b97a7
+      b_producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
+      b_closure_sha=eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963
+      b_closure_nl_sha=06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1
+      b_requester_sha=26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386
+      b_run_commit=8b3e3f55037de84c441cfe4ca5231c98814a7bbd
+      b_registry_sha=721e19bb0328cb33563114023ab130f28cfa66fbd34a11dbe034ceb4eff62fb8
+      b_registry_entry_sha=cc259fc1b27956e6e479e05a7f70c6cc350ad65fc6b6583252d142fed91666e8
+      b_checksums_id=shadow.self-host-transition.v1.checksums
+      b_scope_slug=self-host-transition
+      b_harness=self-host-harness
+      b_allowed_paths='["docs/guides/setup.md","docs/notes-?.md"]'
+      ;;
+    *)
+      fail "unknown bundle $name" ;;
+  esac
+  evdir="$root/$b_rel"
+}
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-shadow-self-host-evidence.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
@@ -89,27 +138,29 @@ done
 [ "${#all_relative_files[@]}" -eq 45 ] || fail 'evidence manifest must name 45 files'
 
 # ---------------------------------------------------------------------------
-# The precondition this whole suite depends on: the operator's evidence
+# The precondition this whole suite depends on, per bundle: the evidence
 # session has not run yet until every one of the 45 files above exists. That
 # is expected on this branch before the operator hands the evidence back, and
 # this check must fail loudly and explicitly about it rather than skip or
 # silently pass, and rather than let a later check crash confusingly on an
 # absent file.
 # ---------------------------------------------------------------------------
-missing=()
-for relative in "${all_relative_files[@]}"; do
-  [ -f "$evdir/$relative" ] || missing+=("$relative")
-done
-if [ "${#missing[@]}" -gt 0 ]; then
-  /usr/bin/printf 'evidence not yet captured: %s\n' \
-    "shadow/evidence/self-host-transition/v1/ is missing ${#missing[@]} of ${#all_relative_files[@]} required files" >&2
-  for relative in "${missing[@]}"; do
-    /usr/bin/printf 'evidence not yet captured: missing %s\n' \
-      "shadow/evidence/self-host-transition/v1/$relative" >&2
+require_bundle_present() {
+  local missing=()
+  for relative in "${all_relative_files[@]}"; do
+    [ -f "$evdir/$relative" ] || missing+=("$relative")
   done
-  /usr/bin/printf 'evidence not yet captured: this suite performs no self-host reproduction and cannot supply these bytes itself; see work/shadow-self-host-run/plan.md, "Operator steps".\n' >&2
-  exit 1
-fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    /usr/bin/printf 'evidence not yet captured: %s\n' \
+      "$b_rel/ is missing ${#missing[@]} of ${#all_relative_files[@]} required files" >&2
+    for relative in "${missing[@]}"; do
+      /usr/bin/printf 'evidence not yet captured: missing %s\n' \
+        "$b_rel/$relative" >&2
+    done
+    /usr/bin/printf 'evidence not yet captured: this suite performs no reproduction and cannot supply these bytes itself; see %s, "Operator steps".\n' "$b_plan" >&2
+    exit 1
+  fi
+}
 
 # ===========================================================================
 # From here on, all 45 files are present. checks() runs requirement 15's
@@ -312,11 +363,10 @@ check_evidence() {
 # Shape and mutual consistency do not establish identity provenance.
 # Derive model/config/prompt/skill identities from the retained producer binding.
   step='identity-provenance'
-  local producer_config_pin=ea076206d7f721aa4796c2a0830e95b3c7006703addc717240447c64ad589b61
   for case_name in pre post; do
     local identity="$dir/$case_name/qualified-identity.json"
     "$jq_bin" -e -n --slurpfile identity "$identity" --slurpfile profile "$dir/resolved-profile.json" \
-      --arg pin "$producer_config_pin" '
+      --arg pin "$b_producer_config_pin" '
       ([$profile[0].body.bindings[] | select(.binding.role == "producer")]) as $producers |
       ($producers | length) == 1 and
       $producers[0] as $producer |
@@ -334,42 +384,42 @@ check_evidence() {
 # Require the accepted incident's exact path and pre/post raw-byte digests;
 # self-consistency alone does not identify the accepted historical observations.
   step='outcomes'
-  local expected_sha=b913cf629566dd532ca507a591cdec5cccb2611b12c63949daca6eb33cd15a93
-  local post_observed_sha=5b3e0bafe63f84134e1b4aa2659e954bbbbd0bcc87d20716b03cd1b9d15a0fda
+  local expected_sha=$b_expected_sha
+  local post_observed_sha=$b_post_observed_sha
   local pre_observed_sha=$expected_sha
   for case_name in pre post; do
-    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg exp "$expected_sha" '
+    "$jq_bin" -e -n --slurpfile i "$dir/$case_name/incident.json" --arg exp "$expected_sha" --arg path "$b_check_path" '
       $i[0].body.failing_check ==
-        {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp}
+        {kind:"file-digest",path:$path,expected_sha256:$exp}
     ' >/dev/null 2>&1 ||
-      { /usr/bin/printf '%s: %s: %s incident.json does not name the exact failing check (config/construction-mode.json, expected b913cf62...)\n' "$label" "$step" "$case_name" >&2; return 1; }
+      { /usr/bin/printf '%s: %s: %s incident.json does not name the exact failing check (%s, expected %s...)\n' "$label" "$step" "$case_name" "$b_check_path" "${expected_sha:0:8}" >&2; return 1; }
   done
   "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" \
-    --arg exp "$expected_sha" --arg obs "$post_observed_sha" '
+    --arg exp "$expected_sha" --arg obs "$post_observed_sha" --arg path "$b_check_path" '
     $r[0].body.check.failing_check ==
-      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+      {kind:"file-digest",path:$path,expected_sha256:$exp} and
     $r[0].body.check.execution.value.observed_sha256 == $obs and
     $r[0].body.check.execution.value.matches_expected == false
   ' >/dev/null 2>&1 ||
-    { /usr/bin/printf '%s: %s: post shadow record does not assert the exact failing-check object (config/construction-mode.json, expected b913cf62..., observed 5b3e0baf...)\n' "$label" "$step" >&2; return 1; }
+    { /usr/bin/printf '%s: %s: post shadow record does not assert the exact failing-check object (%s, expected %s..., observed %s...)\n' "$label" "$step" "$b_check_path" "${expected_sha:0:8}" "${post_observed_sha:0:8}" >&2; return 1; }
   "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" \
-    --arg exp "$expected_sha" --arg obs "$pre_observed_sha" '
+    --arg exp "$expected_sha" --arg obs "$pre_observed_sha" --arg path "$b_check_path" '
     $r[0].body.check.failing_check ==
-      {kind:"file-digest",path:"config/construction-mode.json",expected_sha256:$exp} and
+      {kind:"file-digest",path:$path,expected_sha256:$exp} and
     $r[0].body.check.execution.value.observed_sha256 == $obs and
     $r[0].body.check.execution.value.matches_expected == true
   ' >/dev/null 2>&1 ||
-    { /usr/bin/printf '%s: %s: pre shadow record does not assert the exact failing-check object (config/construction-mode.json, expected and observed both b913cf62...)\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" '
+    { /usr/bin/printf '%s: %s: pre shadow record does not assert the exact failing-check object (%s, expected and observed both %s...)\n' "$label" "$step" "$b_check_path" "${expected_sha:0:8}" >&2; return 1; }
+  "$jq_bin" -e -n --slurpfile r "$dir/post/state/shadow-record.json" --arg rev "$b_post_rev" '
     $r[0].body.outcome == "reproduced" and
     $r[0].body.reason_id == "check.failed-at-revision" and
-    $r[0].body.git_revision_ref.commit_id == "0427390224c25147650f1bd3b6e43ed6911b97a7"
+    $r[0].body.git_revision_ref.commit_id == $rev
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: post outcome wrong\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" '
+  "$jq_bin" -e -n --slurpfile r "$dir/pre/state/shadow-record.json" --arg rev "$b_pre_rev" '
     $r[0].body.outcome == "no-change" and
     $r[0].body.reason_id == "check.passed-at-revision" and
-    $r[0].body.git_revision_ref.commit_id == "d3f6d525328838b9c2de819699e53d8909ab7a3f"
+    $r[0].body.git_revision_ref.commit_id == $rev
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: pre outcome wrong\n' "$label" "$step" >&2; return 1; }
   for case_name in pre post; do
@@ -570,7 +620,7 @@ check_evidence() {
     ($claim[0].body.tools | all(.sha256 == $ones))
   ' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: claim must retain the shipped all-ones verifier digest\n' "$label" "$step" >&2; return 1; }
-  /usr/bin/grep -Fq "$all_ones" "$root/shadow/evidence/self-host-transition/v1/README.md" 2>/dev/null ||
+  /usr/bin/grep -Fq "$all_ones" "$root/$b_rel/README.md" 2>/dev/null ||
     /usr/bin/grep -Fq "$all_ones" "$dir/README.md" 2>/dev/null ||
     { /usr/bin/printf '%s: %s: README must label the shipped demonstration value\n' "$label" "$step" >&2; return 1; }
   # Ban affirmative overclaims ("this is sandbox-enforced / qualified /
@@ -602,8 +652,8 @@ check_evidence() {
       exit 1
     ' "$f"
   }
-  for f in "$root/shadow/evidence/self-host-transition/v1/README.md" \
-    "$root/shadow/evidence/self-host-transition/v1/verification-instructions.md" \
+  for f in "$root/$b_rel/README.md" \
+    "$root/$b_rel/verification-instructions.md" \
     "$root/RESTORE.md" "$root/docs/components.md"; do
     if overclaim_found "$f"; then
       /usr/bin/printf '%s: %s: %s overclaims sandbox enforcement or qualification\n' \
@@ -738,11 +788,11 @@ check_evidence() {
   # offline and its members recompute.
   step='core-package-closure'
   local closure_sha; closure_sha=$(sha_file "$dir/core-package-closure.json")
-  [ "$closure_sha" = eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963 ] ||
+  [ "$closure_sha" = "$b_closure_sha" ] ||
     { /usr/bin/printf '%s: %s: digest mismatch\n' "$label" "$step" >&2; return 1; }
   local nl_sha
   nl_sha=$( { cat "$dir/core-package-closure.json"; printf '\n'; } | sha_file /dev/stdin)
-  [ "$nl_sha" = 06dbd5ec60040dd0d913ca011fd296d7cce78d604bb887a3be0656698f535cf1 ] ||
+  [ "$nl_sha" = "$b_closure_nl_sha" ] ||
     { /usr/bin/printf '%s: %s: newline-terminated digest does not match the known-different value\n' "$label" "$step" >&2; return 1; }
   local members_count
   members_count=$("$jq_bin" -e '.members | length' "$dir/core-package-closure.json" 2>/dev/null) &&
@@ -767,7 +817,7 @@ check_evidence() {
   # distinctness, and that every retained assembly used it verbatim.
   step='requester-identity'
   local requester_sha; requester_sha=$(sha_file "$dir/requester.json")
-  [ "$requester_sha" = 26206e640e708c7e7b8c47b0c7d780dcbc9b8b9e5ffc05296f39d1108774c386 ] ||
+  [ "$requester_sha" = "$b_requester_sha" ] ||
     { /usr/bin/printf '%s: %s: digest mismatch\n' "$label" "$step" >&2; return 1; }
   local sel_full sel_dir
   sel_full=$(/usr/bin/sed -n \
@@ -777,10 +827,10 @@ check_evidence() {
   "$jq_bin" -L "$sel_dir" -e -n --slurpfile r "$dir/requester.json" \
     'import "schema" as schema; $r[0] | schema::actor_ref_ok' >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: requester fails schema::actor_ref_ok\n' "$label" "$step" >&2; return 1; }
-  "$jq_bin" -e -n --slurpfile r "$dir/requester.json" '
+  "$jq_bin" -e -n --slurpfile r "$dir/requester.json" --arg rc "$b_run_commit" '
     $r[0].role == "operator" and
     $r[0].implementation_id == "ystack-operator-cli" and
-    $r[0].implementation_version == "8b3e3f55037de84c441cfe4ca5231c98814a7bbd"
+    $r[0].implementation_version == $rc
   ' \
     >/dev/null 2>&1 ||
     { /usr/bin/printf '%s: %s: requester role or implementation identity mismatch\n' "$label" "$step" >&2; return 1; }
@@ -802,6 +852,17 @@ check_evidence() {
   return 0
 }
 
+# ===========================================================================
+# run_bundle_checks: everything from here to the end of the file runs once
+# per bundle, over the b_* fields load_bundle set. This is what lets one
+# harness prove the same checks for both the self-host and (from the second
+# bundle onward) any other evidence bundle, byte-identical in structure.
+# ===========================================================================
+run_bundle_checks() {
+  local mutant_dir scope_dir pre_record post_record pre_record_sha post_record_sha
+  local pre_id post_id post_identity pre_identity converter post_out pre_out
+  local cross_1 cross_2
+
 check_evidence "$evdir" 'evidence' || fail 'the committed evidence fails one or more offline checks'
 pass 'the committed evidence passes checksums.json inventory, canonical JSON, incident validation, identity/reference equality (both assembler refs recomputed from retained bytes, including the embedded stage_request.sha256/resolved_profile.sha256 fields), the prerequisite input binding to its retained request/profile extracts, each record binding its own retained identity, identity provenance against the resolved profile producer binding and pinned producer config, both outcomes, empty-patch/network-deny, materialization, trace seal, sandbox evaluation matching the recorded, sandbox evaluation recomputing byte-identical through the shipped evaluator over the retained policy-set/duty/claim, satisfied verdict, claim binding, declaration-only marker with reference recomputation (including each assembled requests own environment_ref.fingerprint_sha256 against the retained declaration/claim it names), core package closure, and the approved requester'
 
@@ -810,7 +871,7 @@ pass 'the committed evidence passes checksums.json inventory, canonical JSON, in
 # time, must fail check_evidence. A test that passes on altered evidence
 # proves nothing.
 # ---------------------------------------------------------------------------
-mutant_dir="$tmp/mutant"
+mutant_dir="$tmp/mutant-$b_scope_slug"
 
 # Give each negative case a fresh, unmutated copy of the evidence tree: a
 # reused directory that already exists makes "cp -R $evdir $mutant_dir" nest
@@ -863,7 +924,8 @@ pass 'a mutated outcome field is refused'
 # INACTIVE COMPATIBILITY HARNESS: real scope evaluator and unchanged shadow records.
 # Other inputs are inert fixtures; compatibility supplies no qualification
 # and grants no live authority.
-scope_dir="$tmp/scope-harness"
+scope_dir="$tmp/scope-harness-$b_scope_slug"
+/bin/rm -rf -- "$scope_dir"
 /bin/mkdir -m 700 "$scope_dir"
 evaluator="$root/scope/v1/evaluate-scope.sh"
 repo_marker="$root/config/construction-mode.json"
@@ -871,8 +933,9 @@ repo_marker="$root/config/construction-mode.json"
 pre_record="$evdir/pre/state/shadow-record.json"
 post_record="$evdir/post/state/shadow-record.json"
 "$jq_bin" -S -c -n --slurpfile pre "$pre_record" --slurpfile post "$post_record" \
+  --arg id "scope.evidence.$b_scope_slug.v1" \
   '{schema_version:1,kind:"shadow_evidence_set",
-    id:"scope.evidence.self-host-transition.v1",
+    id:$id,
     body:{records:[$pre[0],$post[0]]}}' >"$scope_dir/shadow-set.json"
 pre_record_sha=$("$jq_bin" -S -c '.body.records[0]' "$scope_dir/shadow-set.json" | sha_file /dev/stdin)
 post_record_sha=$("$jq_bin" -S -c '.body.records[1]' "$scope_dir/shadow-set.json" | sha_file /dev/stdin)
@@ -889,8 +952,11 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
 # A dashboard that fails this shape check is malformed, and a malformed input
 # makes the evaluator refuse with "scope.malformed" regardless of the real
 # gates below — which would prove nothing about scope compatibility. Every
-# digest here is 64 hex characters, checked directly below.
-"$jq_bin" -S -c -n '
+# digest here is 64 hex characters, checked directly below. It is one shared
+# fixture, built once and reused by every bundle: nothing in it is
+# bundle-specific.
+if [ ! -f "$tmp/dashboard.json" ]; then
+"$jq_bin" -S -c -n --arg run_id "evals.run.self-host-harness" '
   def absent($reason): {state:"absent",reason_id:$reason};
   def closure($path;$sha): [{path:$path,sha256:$sha}];
   def family($id;$status;$total;$failed;$inconclusive):
@@ -941,7 +1007,7 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
              shell_ref:{content_id:"bash-runtime",media_type:"application/x-executable",
                sha256:("b" * 64)}}}}},
      observed_at:"2026-09-05T00:00:00Z",
-     inputs:[{run_id:"evals.run.self-host-harness",seed_source:"core.stage-run.v2",
+     inputs:[{run_id:$run_id,seed_source:"core.stage-run.v2",
        result_sha256:("c" * 64),observed_at:"2026-09-05T00:00:00Z",
        seed_set_ref:{schema_version:1,kind:"eval_seed_set",id:"evals.seed-set.harness",
          sha256:("d" * 64)},
@@ -971,7 +1037,7 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
        family("repeated-cancelled-missed-events";"declared";0;0;0),
        family("reviewer-severity-false-positive-negative";"declared";0;0;0),
        family("stale-moved-artifacts";"seeded";7;1;0)]}}' \
-  >"$scope_dir/dashboard.json"
+  >"$tmp/dashboard.json"
 "$jq_bin" -e '
   [.body.core_contract.package_ref.sha256, .body.catalog_ref.sha256,
    .body.evaluator.sha256, .body.evaluator.content.body.core_contract.package_ref.sha256,
@@ -988,29 +1054,31 @@ pre_identity=$("$jq_bin" -c '.body' "$evdir/pre/qualified-identity.json")
    .body.evaluator.content.body.runtime.shell_ref.sha256,
    (.body.inputs[].result_sha256), (.body.inputs[].seed_set_ref.sha256)] |
   all(test("\\A[0-9a-f]{64}\\z"))
-' "$scope_dir/dashboard.json" >/dev/null 2>&1 ||
+' "$tmp/dashboard.json" >/dev/null 2>&1 ||
   fail 'scope harness: dashboard fixture digest is not exactly 64 hex characters'
-"$jq_bin" -e '(.body.families | length) == 9' "$scope_dir/dashboard.json" >/dev/null 2>&1 ||
+"$jq_bin" -e '(.body.families | length) == 9' "$tmp/dashboard.json" >/dev/null 2>&1 ||
   fail 'scope harness: dashboard fixture must declare all nine gate families'
+fi
 
-harness_policy_set='{"id":"control.policy-set.self-host-harness","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}'
+harness_policy_set=$("$jq_bin" -c -n --arg id "control.policy-set.$b_harness" \
+  '{id:$id,sha256:("e" * 64)}')
 harness_core_contract='{
   "generation_id":"g-0bef6d994accaf957358a8f9c833c0ce64bb71fe2bc934b9569277bbe19b8d29",
   "package_ref":{"content_id":"core-contract-package.v2",
     "media_type":"application/vnd.ystack.core-contract+json","sha256":"3333333333333333333333333333333333333333333333333333333333333333"},
   "semantic_identity":"core.contracts.v2"}'
-harness_policy_ref='{"content_id":"control.policy.self-host-harness",
-  "media_type":"application/vnd.ystack.control-policy+json","sha256":"4444444444444444444444444444444444444444444444444444444444444444"}'
-harness_decision_ref='{"content_id":"control.decision.self-host-harness",
-  "media_type":"application/vnd.ystack.control-decision+json","sha256":"5555555555555555555555555555555555555555555555555555555555555555"}'
+harness_policy_ref=$("$jq_bin" -c -n --arg id "control.policy.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.control-policy+json",sha256:("4" * 64)}')
+harness_decision_ref=$("$jq_bin" -c -n --arg id "control.decision.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.control-decision+json",sha256:("5" * 64)}')
 harness_duty_decision_ref='{"content_id":"control.decision.duty-separation",
   "media_type":"application/vnd.ystack.control-decision+json","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}'
-harness_claim_ref='{"content_id":"risk.decision-claim.self-host-harness",
-  "media_type":"application/vnd.ystack.risk-gate-decision-claim+json","sha256":"7777777777777777777777777777777777777777777777777777777777777777"}'
-harness_kill_state_ref='{"schema_version":1,"kind":"kill_switch_state",
-  "id":"kill.state.self-host-harness","sha256":"8888888888888888888888888888888888888888888888888888888888888888"}'
+harness_claim_ref=$("$jq_bin" -c -n --arg id "risk.decision-claim.$b_harness" \
+  '{content_id:$id,media_type:"application/vnd.ystack.risk-gate-decision-claim+json",sha256:("7" * 64)}')
+harness_kill_state_ref=$("$jq_bin" -c -n --arg id "kill.state.$b_harness" \
+  '{schema_version:1,kind:"kill_switch_state",id:$id,sha256:("8" * 64)}')
 
-"$jq_bin" -S -c . "$repo_marker" >"$scope_dir/marker.json"
+[ -f "$tmp/marker.json" ] || "$jq_bin" -S -c . "$repo_marker" >"$tmp/marker.json"
 
 gate_ref() {
   "$jq_bin" -S -c -n --arg sha "$(sha_file "$1")" --arg id "$("$jq_bin" -r '.id' "$1")" \
@@ -1033,18 +1101,19 @@ for scope_case in pre post; do
   # as malformed regardless of the rest of this fixture. Only result_ref is
   # free to name an inert placeholder: nothing here compares it against the
   # identity.
-  harness_stage=$("$jq_bin" -c -n --argjson identity "$case_identity" '{
+  harness_stage=$("$jq_bin" -c -n --argjson identity "$case_identity" \
+    --arg result_id "stage.$b_harness.result" '{
     request_ref:$identity.stage_request_ref,
     resolved_profile_ref:$identity.resolved_profile_ref,
-    result_ref:{id:"stage.self-host-harness.result",kind:"stage_result",
+    result_ref:{id:$result_id,kind:"stage_result",
       schema_version:2,
       sha256:"2222222222222222222222222222222222222222222222222222222222222222"}}')
 
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
     --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
-    --argjson decision_ref "$harness_duty_decision_ref" '
+    --argjson decision_ref "$harness_duty_decision_ref" --arg result_id "stage.$b_harness.result" '
     {schema_version:1,kind:"duty_separation_evaluation",
-     id:"stage.self-host-harness.result",
+     id:$result_id,
      body:{activation_state:"inactive",core_contract:$core_contract,
        decision_ref:$decision_ref,evaluation_mode:"observation-only",
        policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
@@ -1055,12 +1124,12 @@ for scope_case in pre post; do
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --argjson stage "$harness_stage" \
     --argjson core_contract "$harness_core_contract" --argjson policy_ref "$harness_policy_ref" \
     --argjson decision_ref "$harness_decision_ref" --argjson claim_ref "$harness_claim_ref" \
-    --arg duty_sha "$harness_duty_sha" '
-    {schema_version:1,kind:"risk_gate_evaluation",id:"stage.self-host-harness.result",
+    --arg duty_sha "$harness_duty_sha" --arg result_id "stage.$b_harness.result" '
+    {schema_version:1,kind:"risk_gate_evaluation",id:$result_id,
      body:{activation_state:"inactive",authority_effect:"none",
        classification:{declared_tier:"routine",minimum_tier:"routine"},
        core_contract:$core_contract,decision_claim_ref:$claim_ref,decision_ref:$decision_ref,
-       duty_evaluation_ref:{content_id:"stage.self-host-harness.result",
+       duty_evaluation_ref:{content_id:$result_id,
          media_type:"application/vnd.ystack.duty-separation-evaluation+json",sha256:$duty_sha},
        policy_ref:$policy_ref,policy_set:$policy_set,stage:$stage,
        evaluation_mode:"observation-only",reference_semantics:"identity-only",
@@ -1069,15 +1138,16 @@ for scope_case in pre post; do
 
   "$jq_bin" -S -c -n --argjson policy_set "$harness_policy_set" --arg duty_sha "$harness_duty_sha" \
     --argjson policy_ref "$harness_policy_ref" --argjson decision_ref "$harness_decision_ref" \
-    --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" '
-    {schema_version:1,kind:"kill_switch_evaluation",id:"kill-attempt.self-host-harness",
+    --argjson duty_decision_ref "$harness_duty_decision_ref" --argjson state_ref "$harness_kill_state_ref" \
+    --arg result_id "stage.$b_harness.result" --arg kill_id "kill-attempt.$b_harness" '
+    {schema_version:1,kind:"kill_switch_evaluation",id:$kill_id,
      body:{activation_state:"inactive",authority_effect:"none",
        decision_ref:$decision_ref,duty_decision_ref:$duty_decision_ref,
        duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
-         id:"stage.self-host-harness.result",sha256:$duty_sha},
+         id:$result_id,sha256:$duty_sha},
        policy_ref:$policy_ref,policy_set:$policy_set,state_ref:$state_ref,
        attempt_ref:{schema_version:1,kind:"kill_switch_attempt",
-         id:"kill-attempt.self-host-harness",sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
+         id:$kill_id,sha256:"9999999999999999999999999999999999999999999999999999999999999999"},
        evaluation_mode:"observation-only",reference_semantics:"identity-only",
        verdict:"satisfied",reason_ids:["kill.cleared-current"]}}' >"$scope_dir/kill-$scope_case.json"
 
@@ -1088,18 +1158,21 @@ for scope_case in pre post; do
   "$jq_bin" -S -c -n --arg pre_id "$pre_id" --arg pre_sha "$pre_record_sha" \
     --arg post_id "$post_id" --arg post_sha "$post_record_sha" \
     --argjson identity "$case_identity" \
-    --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" '
-    {schema_version:1,kind:"workflow_scope",id:"scope.self-host-transition.v1",
+    --argjson risk_ref "$risk_ref" --argjson kill_ref "$kill_ref" --argjson duty_ref "$duty_ref" \
+    --arg scope_id "scope.$b_scope_slug.v1" --arg target_repo "$b_target_repo" \
+    --arg workflow_id "workflow.$b_scope_slug" --arg task_class "task.$b_scope_slug" \
+    --arg env_id "$b_env_id" --argjson allowed_paths "$b_allowed_paths" '
+    {schema_version:1,kind:"workflow_scope",id:$scope_id,
      body:{activation_state:"inactive",authority:"none",enabled:false,
        push_allowed:false,scope_version:"v1",
-       target_repository_id:"repo.ystack",
-       workflow_id:"workflow.self-host-transition",
-       task_class:"task.self-host-transition",
+       target_repository_id:$target_repo,
+       workflow_id:$workflow_id,
+       task_class:$task_class,
        risk_tier:"routine",
-       allowed_paths:["docs/guides/setup.md","docs/notes-?.md"],
+       allowed_paths:$allowed_paths,
        required_proof_kinds:["deterministic","independent-review"],
        required_eval_families:["stale-moved-artifacts"],
-       required_shadow_environments:["env.local-macos-ystack-self"],
+       required_shadow_environments:[$env_id],
        shadow_evidence_refs:([
          {schema_version:1,kind:"shadow_reproduction_record",id:$pre_id,sha256:$pre_sha},
          {schema_version:1,kind:"shadow_reproduction_record",id:$post_id,sha256:$post_sha}] |
@@ -1116,9 +1189,9 @@ for scope_case in pre post; do
        max_attempts:2}}' >"$scope_dir/scope-$scope_case.json"
 
   if ! PATH="$run_path" "$evaluator" evaluate \
-      "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$scope_dir/dashboard.json" \
+      "$scope_dir/scope-$scope_case.json" "$scope_dir/shadow-set.json" "$tmp/dashboard.json" \
       "$scope_dir/risk-$scope_case.json" "$scope_dir/kill-$scope_case.json" "$scope_dir/duty-$scope_case.json" \
-      "$scope_dir/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
+      "$tmp/marker.json" >"$scope_dir/evaluation-$scope_case.json" 2>"$tmp/scope-$scope_case.err"; then
     fail "scope harness ($scope_case): evaluate-scope.sh refused the two real shadow records ($(cat "$tmp/scope-$scope_case.err"))"
   fi
 # A seeded failing eval keeps inputs well-formed while yielding scope.eval-failing.
@@ -1149,8 +1222,8 @@ convert_ok() {
   /bin/mkdir -m 700 "$out"
   PATH="$run_path" "$converter" convert "$incident" "$shadow" "$out"
 }
-post_out="$tmp/maint-post"
-pre_out="$tmp/maint-pre"
+post_out="$tmp/maint-post-$b_scope_slug"
+pre_out="$tmp/maint-pre-$b_scope_slug"
 convert_ok "$evdir/post/incident.json" "$post_record" "$post_out" \
   >"$post_out.skeleton.json" 2>"$post_out.err" ||
   fail "maintenance conversion of the post case refused: $(cat "$post_out.err")"
@@ -1183,12 +1256,12 @@ convert_ok "$evdir/pre/incident.json" "$pre_record" "$pre_out" \
   fail 'pre maintenance skeleton provenance.shadow_record_ref mismatch'
 pass 'the pre incident and its unchanged shadow record convert to the stale-moved-artifacts family with {accepted, completed}'
 
-cross_1="$tmp/maint-cross-1"
+cross_1="$tmp/maint-cross-1-$b_scope_slug"
 if convert_ok "$evdir/post/incident.json" "$pre_record" "$cross_1" \
     >"$cross_1.out" 2>"$cross_1.err"; then
   fail 'cross-pairing the post incident with the pre shadow record must be refused'
 fi
-cross_2="$tmp/maint-cross-2"
+cross_2="$tmp/maint-cross-2-$b_scope_slug"
 if convert_ok "$evdir/pre/incident.json" "$post_record" "$cross_2" \
     >"$cross_2.out" 2>"$cross_2.err"; then
   fail 'cross-pairing the pre incident with the post shadow record must be refused'
@@ -1196,5 +1269,17 @@ fi
 pass 'cross-pairing either incident with the other case shadow record is refused'
 [ ! -f "$root/evals/v1/seed-set.json.new" ] || fail 'evals/v1/seed-set.json must never be touched'
 pass 'no live eval seed set was modified'
+}
 
-/usr/bin/printf 'shadow self-host evidence: %s focused checks passed\n' "$passes"
+# ===========================================================================
+# Driver: run every table entry. Commit 1 carries the self-host bundle only;
+# a later bundle is added to this list, never a sibling copy of this file.
+# ===========================================================================
+bundles=(self-host)
+for bundle_name in "${bundles[@]}"; do
+  load_bundle "$bundle_name"
+  require_bundle_present
+  bundle_passes=0
+  run_bundle_checks
+  /usr/bin/printf '%s: %s focused checks passed\n' "$b_summary" "$bundle_passes"
+done
