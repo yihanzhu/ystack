@@ -417,15 +417,25 @@ if point == "run_validator":
         kill_now()
         return result
     module.run_validator = wrapped
-elif point == "create_object_temporary":
-    original = module.create_object_temporary
-    state = {"n": 0}
+elif point == "create_object_temporary_partial":
+    # A genuine interrupted write: create the temporary file directly
+    # (bypassing module.write_all, which writes its argument as one
+    # complete, uninterruptible call) and kill after only part of the
+    # compressed bytes have actually reached the file, before the rest of
+    # the write, the close, or the rename ever happen.
+    partial_size_path = arguments[0]
+    arguments = arguments[1:]
     def wrapped(directory, compressed):
-        state["n"] += 1
-        result = original(directory, compressed)
-        if state["n"] == 1:
-            kill_now()
-        return result
+        temporary = os.path.join(directory, "tmp_obj_" + os.urandom(12).hex())
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                              os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        partial = compressed[:max(1, len(compressed) // 2)]
+        assert 0 < len(partial) < len(compressed), "fixture too small to truncate meaningfully"
+        written = os.write(descriptor, partial)
+        os.fsync(descriptor)
+        with open(partial_size_path, "w") as h:
+            h.write(str(written))
+        kill_now()
     module.create_object_temporary = wrapped
 elif point == "install_object":
     original = module.install_object
@@ -479,10 +489,17 @@ elif point == "hold_lock":
         _time.sleep(30)
     module.acquire_lock = wrapped
 elif point == "initialize_kill":
-    original = module.install_ref_lock
-    def wrapped(temp, final):
+    # K7 is stated as "during initialize's write_ref_lock, before its ref
+    # is published": kill on entry, before any byte of the lock file is
+    # written and long before install_ref_lock's rename, matching K4's
+    # "zero bytes" variant but for the initialize path. Patching
+    # install_ref_lock instead (as an earlier version of this wrapper did)
+    # would kill only after write_ref_lock had already fully completed and
+    # the descriptor had already been closed -- after the stated point, not
+    # during it.
+    def wrapped(descriptor, commit_id):
         kill_now()
-    module.install_ref_lock = wrapped
+    module.write_ref_lock = wrapped
 
 sys.argv = [path] + arguments
 raise SystemExit(module.main(sys.argv))
@@ -551,20 +568,60 @@ def test_crash_states(tmp):
     code, out, err = append(store, "crash.store", tip, scratch, path_k1, session_id, attempt_id)
     record(g, "K1: a fresh append after the kill still succeeds", code == 0)
 
-    # K2: killed while writing an object temporary.
+    # K2: killed while writing an object temporary (a genuine interrupted
+    # write -- only part of the compressed bytes ever reach the file,
+    # never the whole object, and neither the close nor the rename runs).
     ledger_k2 = make_ledger("fixture.k2", session_id, attempt_id, trace_id="trace.k2")
     path_k2 = os.path.join(scratch, "k2.json")
-    write_ledger(path_k2, ledger_k2)
+    path_k2_bytes = write_ledger(path_k2, ledger_k2)
     tip = tip_of(store, "crash.store")
-    code, out, err = run_wrapped(tmp, "create_object_temporary",
-                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k2])
-    record(g, "K2: killed while writing an object temporary refuses", code != 0)
+    partial_size_path = os.path.join(tmp, "k2-partial-size.txt")
+    if os.path.exists(partial_size_path):
+        os.unlink(partial_size_path)
+    code, out, err = run_wrapped(tmp, "create_object_temporary_partial",
+                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k2],
+                                  extra=(partial_size_path,))
+    record(g, "K2: killed mid-write of an object temporary refuses", code != 0)
     tip_after = tip_of(store, "crash.store")
     record(g, "K2: the tip is unchanged", tip_after == tip)
-    residue = [p for p in snapshot_tree(store) if "tmp_obj_" in p]
-    record(g, "K2: a bounded temporary file remains as residue", len(residue) >= 1)
+    before_retry = snapshot_tree(store)
+    residue = [(p, entry) for p, entry in before_retry.items() if "tmp_obj_" in p]
+    record(g, "K2: exactly one bounded temporary file remains as residue", len(residue) == 1)
+    record(g, "K2: the partial-write marker was actually reached (the wrapper wrote "
+              "how many bytes before killing itself)", os.path.exists(partial_size_path))
+    written = int(pathlib.Path(partial_size_path).read_text())
+    residue_path, residue_entry = residue[0]
+    residue_size = residue_entry[2]  # ("file", mode, size, digest)
+    record(g, "K2: the residue's actual on-disk size matches exactly what the wrapper "
+              "wrote before killing itself", residue_entry[0] == "file" and residue_size == written)
+
+    # Independently compute the exact size a genuinely complete ledger.json
+    # blob object would be, reproducing the product's own encode_object
+    # format (kind + " " + length + NUL + content, then zlib-compressed) --
+    # not by comparing against whichever object the retry happens to
+    # install, since the tree/commit/record/validation objects in the same
+    # batch have no reliable size relationship to the ledger blob and could
+    # coincidentally be larger even when the residue is NOT truncated.
+    ledger_raw = b"blob " + str(len(path_k2_bytes)).encode("ascii") + b"\0" + path_k2_bytes
+    complete_blob_size = len(zlib.compress(ledger_raw))
+    record(g, "K2: the killed attempt's residue is strictly smaller than a genuinely "
+              "complete ledger.json blob object of the same content -- proving the kill "
+              "landed mid-write (a real truncation), not after a complete-but-unpublished "
+              "write", residue_size < complete_blob_size)
+
     code, out, err = append(store, "crash.store", tip, scratch, path_k2, session_id, attempt_id)
     record(g, "K2: a retry against the same tip proceeds", code == 0)
+    after_retry = snapshot_tree(store)
+    new_objects = [entry for path, entry in after_retry.items()
+                   if path not in before_retry and "objects" in path and "tmp_obj_" not in path
+                   and entry[0] == "file"]
+    record(g, "K2: the retry installs at least one new, genuinely complete object",
+           len(new_objects) >= 1)
+    record(g, "K2: the retry installs the exact complete ledger.json blob computed above",
+           any(entry[2] == complete_blob_size for entry in new_objects))
+    record(g, "K2: the truncated residue from the killed attempt is still present, "
+              "byte-identical, after the successful retry (no cleanup, per R8.5)",
+           residue_path in after_retry and after_retry[residue_path] == residue_entry)
 
     # K3: killed after some complete objects, before the ref lock.
     ledger_k3 = make_ledger("fixture.k3", session_id, attempt_id, trace_id="trace.k3")
