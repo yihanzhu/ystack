@@ -263,11 +263,14 @@ comment names the R8.4 unproven items, which no case fakes.
   the test build. It is also placed as `.body.failing_check.path` of an otherwise-valid
   `shadow_incident_record`, then run through the unchanged
   `jq -r --arg operation shape --arg record_sha <64 zeros> -f shadow/v1/incident-record.jq`
-  (empty output accepts; `E_SHAPE` rejects). Verifier accept means any outcome other
-  than `instruction.path-rejected` or `instruction.malformed`. The results must agree
-  entry for entry. The corpus covers every R4.1-R4.4 rule at and past its bound (4,096
-  and 4,097 bytes including a multibyte case; 64 and 65 components), `.GIT`, `.Git`
-  and `.GİT` (accepted), ` a`, `a b`, `x.git`, `.gitignore`, U+0001, U+001F, U+007F,
+  (empty output accepts; `E_SHAPE` rejects). The verifier accepts a path only when it
+  reaches candidate-file processing (`match`, `mismatch` or any `file.*` reason); every
+  `instruction.*` reason is a rejection. Rejections this way include 4,097 bytes
+  (`oversize`), LF (`trailing`), and CR, NUL and a trailing U+0020 (`malformed`); a
+  leading U+0020 and the 4,096-byte path are accepted. The results must agree entry
+  for entry. The corpus covers every R4.1-R4.4 rule at and past its bound (4,096
+  and 4,097 bytes including a multibyte case; 64 and 65 components), `.GIT` and `.Git`
+  (rejected), `.GİT` (accepted), ` a`, `a b`, `x.git`, `.gitignore`, U+0001, U+001F, U+007F,
   U+0080, U+0085, U+009F, tab, LF, CR, NUL, and the accepted U+00A0, U+00AD, U+200B,
   U+2028, U+FEFF, U+E000, U+FFFF, U+1F600 and U+10FFFF.
 - **R5, R6.** Match and mismatch; empty, all-256-byte, CRLF, no-final-newline and
