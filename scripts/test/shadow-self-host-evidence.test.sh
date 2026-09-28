@@ -324,6 +324,47 @@ CONTROLPATHS
   ' | select(($p | length) > 0 and ($p[-1]=="repository_id" or $p[-1]=="target_repository_id"))' \
   ' | {file:$f, path: ($p | map(if type=="number" then "[]" else tostring end) | join(".")),' \
   '    value: getpath($p)}]' >"$tmp/repo-id-walk.jq"
+# The normalized table collapses every array index to "[]", so "at least
+# one occurrence of the normalized path" is not enough to require the field
+# at every element that structurally carries it (spec R15: "[] means every
+# element"): removing it from one element of a six-element manifests array
+# still leaves the other five supplying the same normalized path. But some
+# wildcard arrays are heterogeneous by role or kind (a profile's bindings,
+# a stage request's inputs), so not every element's parent object even
+# exists for a given template -- only some binding roles carry a prompt_ref,
+# only one input kind carries a nested revision. The right invariant is not
+# "the field occurs once per array element" but "wherever the field's own
+# immediate parent object exists, the field itself must be present with the
+# right value": a parent object missing only its repository_id leaf, while
+# every sibling field of that same object survives untouched, is exactly
+# the corruption this must catch; a parent object absent entirely (a
+# reviewer binding with no prompt_ref at all) is a different, legitimate
+# shape this check does not own. This program takes one already-loaded
+# document and the subset of the two path tables naming this file, tagged
+# with the repository id each expects, and reports one violation object per
+# wildcard template whose existing parent object does not carry the
+# expected key/value; an empty result means the file is clean.
+/usr/bin/printf '%s\n' \
+  '. as $doc' \
+  '| ($templates[0] | map(select(.file == $f))) as $mine' \
+  '| [$mine[] | . as $t' \
+  '   | ($t.path | split(".[].")) as $parts' \
+  '   | if ($parts | length) != 2 then empty else' \
+  '       ($parts[0] | split(".")) as $prefix_keys' \
+  '       | ($parts[1] | split(".")) as $suffix_keys' \
+  '       | ($suffix_keys[0:-1]) as $parent_suffix' \
+  '       | ($suffix_keys[-1]) as $final_key' \
+  '       | ($doc | getpath($prefix_keys)) as $arr' \
+  '       | if ($arr | type) != "array" then' \
+  '           {file:$f, path:$t.path, reason:"array-missing-or-wrong-type"}' \
+  '         else' \
+  '           range(0; $arr | length) as $i' \
+  '           | ($arr[$i] | getpath($parent_suffix)) as $node' \
+  '           | if ($node | type) == "object" and (($node[$final_key] // null) != $t.expected) then' \
+  '               {file:$f, path:$t.path, index:$i, reason:"missing-or-wrong-value"}' \
+  '             else empty end' \
+  '         end' \
+  '     end]' >"$tmp/repo-id-coverage.jq"
 
 # ---------------------------------------------------------------------------
 # The precondition this whole suite depends on, per bundle: the evidence
@@ -1124,31 +1165,54 @@ check_evidence() {
   # digest match) has already ruled on. Scanning by content rather than by
   # ".json" name closes the same hole for a JSON document saved under any
   # other extension.
+  "$jq_bin" -S -c -n --slurpfile target "$tmp/target-table.json" --slurpfile control "$tmp/control-table.json" \
+    --arg target_repo "$b_target_repo" --arg control_repo "$b_control_repo" '
+    ($target[0] | map(. + {expected:$target_repo})) +
+    ($control[0] | map(. + {expected:$control_repo}))
+  ' >"$tmp/all-templates.json"
+  : >"$tmp/repo-id-coverage-violations.jsonl"
   local rf found_json_count=0
   while IFS= read -r rf; do
     "$jq_bin" -c --arg f "$rf" -f "$tmp/repo-id-walk.jq" "$dir/$rf" >"$tmp/repo-id-one.json" 2>/dev/null || continue
     found_json_count=$((found_json_count + 1))
     "$jq_bin" -c '.[]' "$tmp/repo-id-one.json" >>"$tmp/repo-id-found.jsonl"
+    "$jq_bin" -c --arg f "$rf" --slurpfile templates "$tmp/all-templates.json" \
+      -f "$tmp/repo-id-coverage.jq" "$dir/$rf" 2>/dev/null |
+      "$jq_bin" -c '.[]' >>"$tmp/repo-id-coverage-violations.jsonl"
   done < <(cd "$dir" && /usr/bin/find . -type f ! -path './checksums.json' |
     /usr/bin/sed 's|^\./||' | LC_ALL=C sort)
   [ "$found_json_count" -ge 18 ] ||
     { /usr/bin/printf '%s: %s: only %s retained JSON-parseable files found (expected at least 18)\n' \
       "$label" "$step" "$found_json_count" >&2; return 1; }
+  [ -s "$tmp/repo-id-coverage-violations.jsonl" ] &&
+    { /usr/bin/printf '%s: %s: a wildcard template field is missing or wrong where its parent object still exists (%s)\n' \
+      "$label" "$step" "$(cat "$tmp/repo-id-coverage-violations.jsonl")" >&2; return 1; }
   "$jq_bin" -n -e \
     --slurpfile found <(cat "$tmp/repo-id-found.jsonl" 2>/dev/null; :) \
     --slurpfile target "$tmp/target-table.json" --slurpfile control "$tmp/control-table.json" \
     --arg target_repo "$b_target_repo" --arg control_repo "$b_control_repo" '
     def keyed: .file + "\u0001" + .path;
-    ($target[0] | map(keyed)) as $target_keys |
-    ($control[0] | map(keyed)) as $control_keys |
+    ($target[0]) as $target_list |
+    ($control[0]) as $control_list |
+    ($target_list | map(keyed)) as $target_keys |
+    ($control_list | map(keyed)) as $control_keys |
     ($found) as $found |
     (($found | map(keyed)) - $target_keys - $control_keys) as $unlisted |
+    ($found | group_by(keyed) | map({(.[0] | keyed): length}) | add // {}) as $found_counts |
+    # Coverage for non-wildcard templates only: exactly one occurrence.
+    # Wildcard templates were already checked per concrete array element,
+    # against the parent-object existence of each element, by the
+    # repo-id-coverage.jq pass above (spec R15: "[] means every element",
+    # applied where the field is structurally owed, not to every array
+    # index regardless of shape).
+    (($target_list + $control_list) | map(select(.path | contains(".[].") | not)) |
+      all(. as $t | ($found_counts[$t | keyed] // 0) == 1)) as $coverage_ok |
     ($unlisted | length) == 0 and
     ($found | all(. as $f |
       (($target_keys | index($f | keyed)) != null and $f.value == $target_repo) or
       (($control_keys | index($f | keyed)) != null and $f.value == $control_repo)
     )) and
-    (($target_keys + $control_keys) | all(. as $k | ($found | map(keyed) | index($k)) != null))
+    $coverage_ok
   ' >"$tmp/repo-id-verdict.err" 2>&1 ||
     { /usr/bin/printf '%s: %s: portability path table mismatch (%s)\n' "$label" "$step" "$(cat "$tmp/repo-id-verdict.err")" >&2; return 1; }
 
@@ -1352,6 +1416,21 @@ if check_evidence "$mutant_dir" 'mutant-nested-checksums-name' 2>"$tmp/case-l.er
   fail 'a nested file named checksums.json carrying an unlisted repository id must be refused'
 fi
 pass 'a nested file sharing the checksums.json basename is still scanned and its unlisted repository id is refused'
+
+# (m) the repository_id field is deleted from exactly one element of a
+# multi-element array (here, one of six profile manifests), leaving the
+# other elements intact: the normalized "[]" template still occurs, so
+# coverage must be checked per concrete element (structural array length),
+# not merely ">= 1", or this passes unnoticed.
+fresh_mutant_copy
+"$jq_bin" -S -c 'del(.manifests[0].content.body.package_ref.revision.repository_id)' \
+  "$mutant_dir/pre/assembled/input.json" >"$mutant_dir/pre/assembled/input.json.new"
+/bin/mv "$mutant_dir/pre/assembled/input.json.new" "$mutant_dir/pre/assembled/input.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-missing-array-element-field' 2>"$tmp/case-m.err"; then
+  fail 'a repository id missing from one array element among several must be refused'
+fi
+pass 'a repository id missing from one element of a multi-element array is refused even though other elements still supply it'
 
 /bin/rm -rf -- "$mutant_dir"
 
