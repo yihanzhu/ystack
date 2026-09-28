@@ -212,6 +212,8 @@ def run_all(tmp):
     test_same_attempt(tmp)
     test_replay(tmp)
     test_writers(tmp)
+    test_crash_states(tmp)
+    test_capacity(tmp)
 
 
 def test_recovery(tmp):
@@ -368,6 +370,326 @@ def test_writers(tmp):
     code, out, err = append(store, "writers.store", busy_tip, scratch, other_path,
                              "incident.writers.two", attempt_id)
     record(g, "the same writer succeeds once the lock is released", code == 0)
+
+
+def wrapper_path(tmp, name):
+    return os.path.join(tmp, name)
+
+
+def write_wrapper(path, body):
+    with open(path, "w") as handle:
+        handle.write(body)
+
+
+KILL_WRAPPER_TEMPLATE = '''
+import importlib.util, os, pathlib, signal, sys
+path, point, arguments = sys.argv[1], sys.argv[2], sys.argv[3:]
+spec = importlib.util.spec_from_file_location("tracestore", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+def kill_now():
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+if point == "run_validator":
+    original = module.run_validator
+    def wrapped(*a, **kw):
+        result = original(*a, **kw)
+        kill_now()
+        return result
+    module.run_validator = wrapped
+elif point == "create_object_temporary":
+    original = module.create_object_temporary
+    state = {"n": 0}
+    def wrapped(directory, compressed):
+        state["n"] += 1
+        result = original(directory, compressed)
+        if state["n"] == 1:
+            kill_now()
+        return result
+    module.create_object_temporary = wrapped
+elif point == "install_object":
+    original = module.install_object
+    state = {"n": 0}
+    def wrapped(temp, final):
+        result = original(temp, final)
+        state["n"] += 1
+        if state["n"] == 2:
+            kill_now()
+        return result
+    module.install_object = wrapped
+elif point == "write_ref_lock_zero":
+    def wrapped(descriptor, commit_id):
+        kill_now()
+    module.write_ref_lock = wrapped
+elif point == "write_ref_lock_partial":
+    original_write_all = module.write_all
+    def wrapped(descriptor, commit_id):
+        data = (commit_id + "\\n").encode("ascii")
+        os.write(descriptor, data[:20])
+        kill_now()
+    module.write_ref_lock = wrapped
+elif point == "write_ref_lock_full":
+    def wrapped(descriptor, commit_id):
+        data = (commit_id + "\\n").encode("ascii")
+        n = 0
+        while n < len(data):
+            n += os.write(descriptor, data[n:])
+        kill_now()
+    module.write_ref_lock = wrapped
+elif point == "install_ref_lock":
+    original = module.install_ref_lock
+    def wrapped(temp, final):
+        result = original(temp, final)
+        kill_now()
+        return result
+    module.install_ref_lock = wrapped
+elif point == "emit":
+    def wrapped(data):
+        kill_now()
+    module.emit = wrapped
+elif point == "hold_lock":
+    import time as _time
+    original = module.acquire_lock
+    marker = arguments[0]
+    arguments = arguments[1:]
+    def wrapped(descriptor):
+        original(descriptor)
+        with open(marker, "w") as h:
+            h.write("locked\\n")
+        _time.sleep(30)
+    module.acquire_lock = wrapped
+elif point == "initialize_kill":
+    original = module.install_ref_lock
+    def wrapped(temp, final):
+        kill_now()
+    module.install_ref_lock = wrapped
+
+sys.argv = [path] + arguments
+raise SystemExit(module.main(sys.argv))
+'''
+
+
+def run_wrapped(tmp, point, args, env=None, extra=(), timeout=30):
+    wrapper = wrapper_path(tmp, "wrapper-%s.py" % point.replace("/", "_"))
+    if not os.path.exists(wrapper):
+        write_wrapper(wrapper, KILL_WRAPPER_TEMPLATE)
+    full_env = dict(env if env is not None else ENV)
+    proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT, point] + list(extra) + list(args),
+                           env=full_env, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def snapshot_tree(root):
+    result = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root)
+            state = os.lstat(full)
+            if os.path.islink(full):
+                result[rel] = ("link", os.readlink(full))
+            else:
+                result[rel] = ("file", state.st_mode & 0o777, state.st_size,
+                                digest(pathlib.Path(full).read_bytes()))
+    return result
+
+
+def test_crash_states(tmp):
+    g = "P5"
+    store = store_root(tmp, "crash-store")
+    scratch = scratch_root(tmp, "crash-scratch")
+    initialize(store, "crash.store")
+    session_id = "incident.crash"
+    attempt_id = "attempt.shadow-reproduce"
+
+    # K1: killed inside run_validator, before any store write.
+    ledger_k1 = make_ledger("fixture.k1", session_id, attempt_id)
+    path_k1 = os.path.join(scratch, "k1.json")
+    write_ledger(path_k1, ledger_k1)
+    tip = tip_of(store, "crash.store")
+    before = snapshot_tree(store)
+    code, out, err = run_wrapped(tmp, "run_validator",
+                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k1])
+    record(g, "K1: killed inside run_validator leaves the store untouched",
+           code != 0 and snapshot_tree(store) == before)
+    code, out, err = append(store, "crash.store", tip, scratch, path_k1, session_id, attempt_id)
+    record(g, "K1: a fresh append after the kill still succeeds", code == 0)
+
+    # K2: killed while writing an object temporary.
+    ledger_k2 = make_ledger("fixture.k2", session_id, attempt_id, trace_id="trace.k2")
+    path_k2 = os.path.join(scratch, "k2.json")
+    write_ledger(path_k2, ledger_k2)
+    tip = tip_of(store, "crash.store")
+    code, out, err = run_wrapped(tmp, "create_object_temporary",
+                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k2])
+    record(g, "K2: killed while writing an object temporary refuses", code != 0)
+    tip_after = tip_of(store, "crash.store")
+    record(g, "K2: the tip is unchanged", tip_after == tip)
+    residue = [p for p in snapshot_tree(store) if "tmp_obj_" in p]
+    record(g, "K2: a bounded temporary file remains as residue", len(residue) >= 1)
+    code, out, err = append(store, "crash.store", tip, scratch, path_k2, session_id, attempt_id)
+    record(g, "K2: a retry against the same tip proceeds", code == 0)
+
+    # K3: killed after some complete objects, before the ref lock.
+    ledger_k3 = make_ledger("fixture.k3", session_id, attempt_id, trace_id="trace.k3")
+    path_k3 = os.path.join(scratch, "k3.json")
+    write_ledger(path_k3, ledger_k3)
+    tip = tip_of(store, "crash.store")
+    code, out, err = run_wrapped(tmp, "install_object",
+                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k3])
+    record(g, "K3: killed after some complete objects, before the ref lock, refuses", code != 0)
+    tip_after = tip_of(store, "crash.store")
+    record(g, "K3: the tip is unchanged", tip_after == tip)
+    code, out, err = append(store, "crash.store", tip, scratch, path_k3, session_id, attempt_id)
+    record(g, "K3: a retry reuses the unreachable objects and succeeds", code == 0)
+
+    # K4: killed in write_ref_lock, at 0, ~20 and all 41 bytes.
+    for variant, label in (("write_ref_lock_zero", "zero"), ("write_ref_lock_partial", "partial"),
+                            ("write_ref_lock_full", "all-41")):
+        ledger_k4 = make_ledger("fixture.k4.%s" % label, session_id, attempt_id,
+                                 trace_id="trace.k4.%s" % label)
+        path_k4 = os.path.join(scratch, "k4-%s.json" % label)
+        write_ledger(path_k4, ledger_k4)
+        tip = tip_of(store, "crash.store")
+        code, out, err = run_wrapped(tmp, variant,
+                                      ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k4])
+        record(g, "K4 (%s bytes): killed writing the ref lock refuses" % label, code != 0)
+        tip_after = tip_of(store, "crash.store")
+        record(g, "K4 (%s bytes): the old tip stays valid" % label, tip_after == tip)
+        record(g, "K4 (%s bytes): the ref lock file remains" % label,
+               os.path.lexists(os.path.join(store, "repository.git/refs/heads/records.lock")))
+        code, out, err = listing(store, "crash.store")
+        record(g, "K4 (%s bytes): list still works" % label, code == 0)
+        code, out, err = append(store, "crash.store", tip, scratch, path_k4, session_id, attempt_id)
+        record(g, "K4 (%s bytes): a new append is E_LOCKED" % label,
+               code == 1 and err == b"E_LOCKED\n")
+        os.unlink(os.path.join(store, "repository.git/refs/heads/records.lock"))
+        code, out, err = append(store, "crash.store", tip, scratch, path_k4, session_id, attempt_id)
+        record(g, "K4 (%s bytes): append succeeds once the operator clears the lock" % label, code == 0)
+
+    # K5: killed after the rename, before stdout.
+    ledger_k5 = make_ledger("fixture.k5", session_id, attempt_id, trace_id="trace.k5")
+    path_k5 = os.path.join(scratch, "k5.json")
+    write_ledger(path_k5, ledger_k5)
+    tip = tip_of(store, "crash.store")
+    code, out, err = run_wrapped(tmp, "install_ref_lock",
+                                  ["append", store, "crash.store", tip, scratch, JQ, session_id, attempt_id, path_k5])
+    record(g, "K5: killed after the rename, before stdout, refuses at the CLI level", code != 0)
+    tip_after = tip_of(store, "crash.store")
+    record(g, "K5: the record was actually committed", tip_after != tip)
+    code, receipt_a, err = append(store, "crash.store", tip_after, scratch, path_k5, session_id, attempt_id)
+    record(g, "K5: identical replay after the lost reply succeeds", code == 0)
+
+    # K6: killed while holding flock.
+    marker = os.path.join(tmp, "k6-marker")
+    if os.path.exists(marker):
+        os.unlink(marker)
+    ledger_k6 = make_ledger("fixture.k6", session_id, attempt_id, trace_id="trace.k6")
+    path_k6 = os.path.join(scratch, "k6.json")
+    write_ledger(path_k6, ledger_k6)
+    tip = tip_of(store, "crash.store")
+    wrapper = wrapper_path(tmp, "wrapper-hold_lock.py")
+    write_wrapper(wrapper, KILL_WRAPPER_TEMPLATE)
+    proc = subprocess.Popen(
+        [PYTHON, "-I", "-S", "-B", wrapper, PRODUCT, "hold_lock", marker,
+         "list", store, "crash.store"],
+        env=dict(ENV), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    deadline = time.monotonic() + 10
+    while not os.path.exists(marker):
+        if time.monotonic() > deadline:
+            proc.kill()
+            raise AssertionError("K6: child never reached the lock-held marker")
+        time.sleep(0.05)
+    proc.kill()
+    proc.wait(timeout=10)
+    record(g, "K6: process killed while holding flock", True)
+    record(g, "K6: store.lock file still present after the kernel releases the lock",
+           os.path.lexists(os.path.join(store, "store.lock")))
+    code, out, err = listing(store, "crash.store")
+    record(g, "K6: a new call succeeds (the kernel released the flock)", code == 0)
+
+    # K7: killed during initialize's write_ref_lock, before its ref is published.
+    k7_store = store_root(tmp, "crash-k7-store")
+    code, out, err = run_wrapped(tmp, "initialize_kill", ["initialize", k7_store, "crash.k7"])
+    record(g, "K7: killed during initialize before publication refuses", code != 0)
+    for verb_args in (("initialize", [k7_store, "crash.k7"]),
+                       ("list", [k7_store, "crash.k7"])):
+        verb, args = verb_args
+        code, out, err = run([verb] + args)
+        record(g, "K7: %s is permanently E_INCOMPLETE" % verb,
+               code == 1 and err == b"E_INCOMPLETE\n")
+
+
+def test_capacity(tmp):
+    g = "P8"
+    wrapper = wrapper_path(tmp, "wrapper-capacity.py")
+    write_wrapper(wrapper, '''
+import importlib.util, sys
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("tracestore", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.RECORDS_MAX = 2
+sys.argv = [path] + sys.argv[2:]
+raise SystemExit(module.main(sys.argv))
+''')
+
+    def run_low(args, timeout=30):
+        proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT] + list(args),
+                               env=dict(ENV), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    store = store_root(tmp, "capacity-store")
+    scratch = scratch_root(tmp, "capacity-scratch")
+    code, out, err = run_low(["initialize", store, "capacity.store"])
+    record(g, "initialize under a lowered RECORDS_MAX", code == 0)
+    session_id = "incident.capacity"
+    attempt_id = "attempt.shadow-reproduce"
+    for i in range(2):
+        ledger = make_ledger("fixture.capacity.%d" % i, session_id, attempt_id, trace_id="trace.cap.%d" % i)
+        path = os.path.join(scratch, "cap-%d.json" % i)
+        write_ledger(path, ledger)
+        proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT, "list", store, "capacity.store"],
+                               env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        tip = json.loads(proc.stdout.decode("ascii"))["body"]["tip"]
+        code, out, err = run_low(["append", store, "capacity.store", tip, scratch, JQ,
+                                   session_id, attempt_id, path])
+        record(g, "fill record %d up to the lowered cap" % i, code == 0)
+
+    proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT, "list", store, "capacity.store"],
+                           env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    tip = json.loads(proc.stdout.decode("ascii"))["body"]["tip"]
+    overflow = make_ledger("fixture.capacity.overflow", session_id, attempt_id, trace_id="trace.cap.of")
+    overflow_path = os.path.join(scratch, "overflow.json")
+    write_ledger(overflow_path, overflow)
+    before = snapshot_tree(store)
+    code, out, err = run_low(["append", store, "capacity.store", tip, scratch, JQ,
+                               session_id, attempt_id, overflow_path])
+    record(g, "an append beyond the lowered RECORDS_MAX is E_CAPACITY",
+           code == 1 and err == b"E_CAPACITY\n")
+    record(g, "a capacity refusal writes nothing", snapshot_tree(store) == before)
+
+    code, out, err = run_low(["list", store, "capacity.store"])
+    record(g, "list still works at full (lowered) capacity", code == 0)
+    out_path = os.path.join(tmp, "capacity-read.json")
+    ledger0 = make_ledger("fixture.capacity.0", session_id, attempt_id, trace_id="trace.cap.0")
+    proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT, "list", store, "capacity.store"],
+                           env=dict(ENV), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    entry = json.loads(proc.stdout.decode("ascii"))["body"]["records"][0]
+    code, out, err = run_low(["append", store, "capacity.store", tip, scratch, JQ,
+                               session_id, attempt_id, os.path.join(scratch, "cap-0.json")])
+    record(g, "identical replay still works at full (lowered) capacity", code == 0)
+
+    code, out, err = initialize(store_root(tmp, "capacity-normal-store"), "capacity.normal")
+    doc = json.loads(out.decode("ascii"))
+    code2, out2, err2 = do("list", tmp + "/capacity-normal-store", "capacity.normal")
+    listed = json.loads(out2.decode("ascii"))
+    record(g, "a store initialized by the shipped constants lists correctly", code2 == 0)
 
 
 if __name__ == "__main__":
