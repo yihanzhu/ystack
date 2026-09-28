@@ -244,10 +244,22 @@ def num_ok: type == "number" and floor == . and . >= 0;
 def get($doc; $path):
   reduce $path[] as $k ($doc; if (type == "object") then (.[$k] // null) else null end);
 
+# Every fixed document's own body must have exactly its required top-level
+# keys before any field of it is read: a document whose body is `null`, the
+# wrong type, or missing a required key is never merely "unread", it fails
+# the shape check outright (a body a program never inspects is still a
+# document a corrupted repository could hand it, so its presence must be
+# enumerated, not inferred from what happens to be used).
+def body_ok($fields): (.body | exact($fields));
+
 def fixed_policy_shape_ok:
   ($policy[0]) as $p |
   ($p | exact(["body","id","kind","schema_version"])) and $p.kind == "sandbox_policy" and
-  $p.schema_version == 1 and ($p.id | id_ok) and ($p.body.limits | type == "object") and
+  $p.schema_version == 1 and ($p.id | id_ok) and
+  ($p | body_ok(["activation_state","environment","evaluation_mode","fail_mode",
+    "filesystem","isolation","limits","network","policy_version","reference_semantics",
+    "required_role","resources","sensitive_material","tools"])) and
+  ($p.body.limits | type == "object") and
   ($p.body.limits.cpu_time_ms | num_ok) and ($p.body.limits.wall_time_ms | num_ok) and
   ($p.body.limits.memory_bytes | num_ok) and ($p.body.limits.output_bytes | num_ok) and
   ($p.body.limits.process_count | num_ok);
@@ -256,13 +268,17 @@ def fixed_decision_shape_ok:
   ($decision[0]) as $d |
   ($d | exact(["body","id","kind","schema_version"])) and $d.kind == "sandbox_decision" and
   $d.schema_version == 1 and ($d.id | id_ok) and
+  ($d | body_ok(["activation_state","decision","evaluator","fail_mode","policy_ref",
+    "semantics"])) and
   ($d.body.evaluator.driver_ref.sha256 | sha256_ok) and
   ($d.body.evaluator.program_ref.sha256 | sha256_ok);
 
 def fixed_policy_set_shape_ok:
   ($policy_set[0]) as $s |
   ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
-  $s.schema_version == 1 and ($s.id | id_ok);
+  $s.schema_version == 1 and ($s.id | id_ok) and
+  ($s | body_ok(["activation_state","core_contract","fail_mode","policy_version",
+    "sections"]));
 
 def registry_entry_shape_ok:
   type == "object" and (.environment_id | id_ok) and (.target_repository_id | id_ok);
@@ -271,6 +287,7 @@ def fixed_registry_shape_ok:
   ($registry[0]) as $g |
   ($g | exact(["body","id","kind","schema_version"])) and
   $g.kind == "shadow_environment_registry" and $g.schema_version == 1 and
+  ($g | body_ok(["activation_state","environments","registry_version"])) and
   ($g.body.environments | type == "array" and all(.[];registry_entry_shape_ok));
 
 def digest_list_ok:
@@ -294,7 +311,7 @@ def fixed_accepted_shape_ok:
   ($a | exact(["body","id","kind","schema_version"])) and
   $a.kind == "sandbox_accepted_identity_set" and $a.schema_version == 1 and
   $a.id == "sandbox.accepted-identities.v1" and
-  ($a.body | exact(["activation_state","environments","set_version"])) and
+  ($a | body_ok(["activation_state","environments","set_version"])) and
   $a.body.activation_state == "inactive" and $a.body.set_version == "v1" and
   ($a.body.environments | type == "array" and all(.[];accepted_entry_shape_ok));
 

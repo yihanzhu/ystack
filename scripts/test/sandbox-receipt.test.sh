@@ -239,21 +239,33 @@ recompute() {
   printf '%s\n%s\n' "$tmp/$name-receipt.json" "$tmp/$name-expectation.json"
 }
 
-run_program() {
-  local receipt=$1 expectation_in=$2 evaluation_in=$3 accepted_in=$4 out=$5
+# The general form, letting a caller substitute any of the five fixed files
+# (the malformed-fixed-file cases need this; every other case uses the real
+# ones via the `run_program` wrapper below).
+run_program_full() {
+  local receipt=$1 expectation_in=$2 evaluation_in=$3 policy_in=$4 decision_in=$5 \
+    policy_set_in=$6 registry_in=$7 accepted_in=$8 out=$9
   local entry_digests_file="$tmp/entry-digests-run.json"
   build_entry_digests "$entry_digests_file"
   "$jq_bin" -nSc -f "$program" \
     --slurpfile receipt "$receipt" --slurpfile expectation "$expectation_in" \
-    --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy" \
-    --slurpfile decision "$decision" --slurpfile policy_set "$policy_set" \
-    --slurpfile registry "$registry" --slurpfile accepted "$accepted_in" \
+    --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy_in" \
+    --slurpfile decision "$decision_in" --slurpfile policy_set "$policy_set_in" \
+    --slurpfile registry "$registry_in" --slurpfile accepted "$accepted_in" \
     --slurpfile entry_digests "$entry_digests_file" \
     --arg receipt_sha "$(sha256_path "$receipt")" \
     --arg expectation_sha "$(sha256_path "$expectation_in")" \
-    --arg evaluation_sha "$(sha256_path "$evaluation_in")" --arg policy_sha "$policy_sha" \
-    --arg decision_sha "$decision_sha" --arg policy_set_sha "$policy_set_sha" \
+    --arg evaluation_sha "$(sha256_path "$evaluation_in")" \
+    --arg policy_sha "$(sha256_path "$policy_in")" \
+    --arg decision_sha "$(sha256_path "$decision_in")" \
+    --arg policy_set_sha "$(sha256_path "$policy_set_in")" \
     --arg accepted_set_sha "$(sha256_path "$accepted_in")" >"$out"
+}
+
+run_program() {
+  local receipt=$1 expectation_in=$2 evaluation_in=$3 accepted_in=$4 out=$5
+  run_program_full "$receipt" "$expectation_in" "$evaluation_in" "$policy" "$decision" \
+    "$policy_set" "$registry" "$accepted_in" "$out"
 }
 
 # Runs the program and compares the output body exactly, plus the envelope.
@@ -461,6 +473,66 @@ for rb in "cpu_time_ms:30000" "wall_time_ms:60000" "memory_bytes:536870912" \
   run_case "row-$row-reached" "$(mutate "$receipt_satisfied" "row-$row-reached" "$reached_filter")" \
     "$expectation" "$evaluation" "$accepted" valid violated '["receipt.valid"]'
 done
+
+# Malformed-fixed-file regression: a fixed document whose own body is `null`,
+# the wrong type, or missing a required key is a jq `error` (mapped to
+# E_RELATION by PR 3's driver), never an ordinary refusal. One case per fixed
+# file per variant, with the other four fixed files left real and good.
+expect_fixed_file_error() {
+  local name=$1 policy_in=$2 decision_in=$3 policy_set_in=$4 registry_in=$5 accepted_in=$6
+  local out="$tmp/$name.out" status=0
+  run_program_full "$receipt_satisfied" "$expectation" "$evaluation" "$policy_in" \
+    "$decision_in" "$policy_set_in" "$registry_in" "$accepted_in" "$out" \
+    2>"$tmp/$name.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$out" ] && [ -s "$tmp/$name.err" ] || fail "$name"
+  pass "$name"
+}
+bad_policy_null=$(mutate "$policy" bad-policy-null '.body=null')
+bad_policy_wrong_type=$(mutate "$policy" bad-policy-wrong-type '.body="not-an-object"')
+bad_policy_missing_key=$(mutate "$policy" bad-policy-missing-key 'del(.body.tools)')
+bad_decision_null=$(mutate "$decision" bad-decision-null '.body=null')
+bad_decision_wrong_type=$(mutate "$decision" bad-decision-wrong-type '.body=[]')
+bad_decision_missing_key=$(mutate "$decision" bad-decision-missing-key 'del(.body.fail_mode)')
+bad_policy_set_null=$(mutate "$policy_set" bad-policy-set-null '.body=null')
+bad_policy_set_wrong_type=$(mutate "$policy_set" bad-policy-set-wrong-type '.body=1')
+bad_policy_set_missing_key=$(mutate "$policy_set" bad-policy-set-missing-key 'del(.body.fail_mode)')
+bad_registry_null=$(mutate "$registry" bad-registry-null '.body=null')
+bad_registry_wrong_type=$(mutate "$registry" bad-registry-wrong-type '.body="x"')
+bad_registry_missing_key=$(mutate "$registry" bad-registry-missing-key 'del(.body.registry_version)')
+bad_accepted_null=$(mutate "$accepted" bad-accepted-null '.body=null')
+bad_accepted_wrong_type=$(mutate "$accepted" bad-accepted-wrong-type '.body=[]')
+bad_accepted_missing_key=$(mutate "$accepted" bad-accepted-missing-key 'del(.body.set_version)')
+
+expect_fixed_file_error policy-body-null \
+  "$bad_policy_null" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-body-wrong-type \
+  "$bad_policy_wrong_type" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-body-missing-key \
+  "$bad_policy_missing_key" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-null \
+  "$policy" "$bad_decision_null" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-wrong-type \
+  "$policy" "$bad_decision_wrong_type" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-missing-key \
+  "$policy" "$bad_decision_missing_key" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-null \
+  "$policy" "$decision" "$bad_policy_set_null" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-wrong-type \
+  "$policy" "$decision" "$bad_policy_set_wrong_type" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-missing-key \
+  "$policy" "$decision" "$bad_policy_set_missing_key" "$registry" "$accepted"
+expect_fixed_file_error registry-body-null \
+  "$policy" "$decision" "$policy_set" "$bad_registry_null" "$accepted"
+expect_fixed_file_error registry-body-wrong-type \
+  "$policy" "$decision" "$policy_set" "$bad_registry_wrong_type" "$accepted"
+expect_fixed_file_error registry-body-missing-key \
+  "$policy" "$decision" "$policy_set" "$bad_registry_missing_key" "$accepted"
+expect_fixed_file_error accepted-body-null \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_null"
+expect_fixed_file_error accepted-body-wrong-type \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_wrong_type"
+expect_fixed_file_error accepted-body-missing-key \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_missing_key"
 
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
