@@ -1107,12 +1107,22 @@ check_evidence() {
   # the same, so this only tests coverage there, exactly as the spec notes.
   step='repository-ids'
   : >"$tmp/repo-id-found.jsonl"
-  for rf in "${repo_id_files[@]}"; do
-    [ -f "$dir/$rf" ] || { /usr/bin/printf '%s: %s: %s missing\n' "$label" "$step" "$rf" >&2; return 1; }
+  # Scan every retained *.json file except checksums.json, not only the 18
+  # files the fixed tables above name: an added canonical file carrying an
+  # unlisted repository_id/target_repository_id, with a matching checksum
+  # entry, must still be caught here rather than passing inventory
+  # unexamined.
+  local rf found_json_count=0
+  while IFS= read -r rf; do
+    found_json_count=$((found_json_count + 1))
     "$jq_bin" -c --arg f "$rf" -f "$tmp/repo-id-walk.jq" "$dir/$rf" >"$tmp/repo-id-one.json" 2>/dev/null ||
       { /usr/bin/printf '%s: %s: %s unreadable\n' "$label" "$step" "$rf" >&2; return 1; }
     "$jq_bin" -c '.[]' "$tmp/repo-id-one.json" >>"$tmp/repo-id-found.jsonl"
-  done
+  done < <(cd "$dir" && /usr/bin/find . -name '*.json' -type f ! -name checksums.json |
+    /usr/bin/sed 's|^\./||' | LC_ALL=C sort)
+  [ "$found_json_count" -ge 18 ] ||
+    { /usr/bin/printf '%s: %s: only %s retained *.json files found (expected at least 18)\n' \
+      "$label" "$step" "$found_json_count" >&2; return 1; }
   "$jq_bin" -n -e \
     --slurpfile found <(cat "$tmp/repo-id-found.jsonl" 2>/dev/null; :) \
     --slurpfile target "$tmp/target-table.json" --slurpfile control "$tmp/control-table.json" \
@@ -1297,6 +1307,18 @@ if [ "$b_target_repo" != "$b_control_repo" ]; then
   fi
   pass 'an incident naming the control-plane repository as its target is refused even with checksums.json refreshed'
 fi
+
+# (j) an extra canonical JSON file carrying a repository id outside the
+# fixed table, with a matching checksum entry, must still be caught: the
+# repository-ids scan walks every retained *.json file, not only the ones
+# the table already names.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:"repo.other"}' >"$mutant_dir/extra.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-extra-file' 2>"$tmp/case-j.err"; then
+  fail 'an extra JSON file carrying an unlisted repository id must be refused'
+fi
+pass 'an extra JSON file carrying a repository id outside the fixed table is refused even with a matching checksum entry'
 
 /bin/rm -rf -- "$mutant_dir"
 
