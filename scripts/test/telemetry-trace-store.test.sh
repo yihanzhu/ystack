@@ -922,6 +922,100 @@ raise SystemExit(module.main(sys.argv))
     listed = json.loads(out2.decode("ascii"))
     record(g, "a store initialized by the shipped constants lists correctly", code2 == 0)
 
+    # Independent exhaustion of each remaining R9 counter (and, since the
+    # admission reserve is what reserve()/charge() actually compare against,
+    # its reserve headroom too): object files, filesystem entries, regular
+    # bytes and inflated bytes, each lowered on its own with every other
+    # constant left at the shipped default. Rather than hand-computing the
+    # exact byte/entry counts the private layout produces (an implementation
+    # detail this test should not need to know), each case fills by real
+    # appends until E_CAPACITY appears, then proves the tree is unchanged by
+    # that refusal and that read/list/identical-replay still work at the
+    # resulting (real) capacity.
+    for label, patch, max_attempts in (
+        ("object-files", "module.OBJECT_FILES_MAX = 13", 8),
+        ("filesystem-entries", "module.FS_ENTRIES_MAX = 50", 8),
+        ("regular-bytes", "module.REGULAR_BYTES_MAX = 3146400", 8),
+        ("inflated-bytes", "module.INFLATED_BYTES_MAX = 3150000", 8),
+    ):
+        resource_capacity_case(tmp, label, patch, max_attempts)
+
+
+def resource_capacity_case(tmp, label, patch, max_attempts):
+    g = "P8"
+    wrapper = wrapper_path(tmp, "wrapper-capacity-%s.py" % label)
+    write_wrapper(wrapper, '''
+import importlib.util, sys
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("tracestore", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+%s
+sys.argv = [path] + sys.argv[2:]
+raise SystemExit(module.main(sys.argv))
+''' % patch)
+
+    def run_low(args, timeout=30):
+        proc = subprocess.run([PYTHON, "-I", "-S", "-B", wrapper, PRODUCT] + list(args),
+                               env=dict(ENV), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def low_tip(store, store_id):
+        code, out, err = run_low(["list", store, store_id])
+        assert code == 0, (label, "list", code, out, err)
+        return json.loads(out.decode("ascii"))["body"]["tip"]
+
+    store = store_root(tmp, "capacity-%s-store" % label)
+    scratch = scratch_root(tmp, "capacity-%s-scratch" % label)
+    store_id = "capacity.%s" % label
+    session_id = "incident.capacity.%s" % label
+    attempt_id = "attempt.shadow-reproduce"
+
+    code, out, err = run_low(["initialize", store, store_id])
+    record(g, "%s: initialize under the lowered constant" % label, code == 0)
+
+    stored_paths = []
+    exhausted = False
+    for i in range(max_attempts):
+        ledger = make_ledger("fixture.capacity.%s.%d" % (label, i), session_id, attempt_id,
+                              trace_id="trace.cap.%s.%d" % (label, i))
+        path = os.path.join(scratch, "cap-%d.json" % i)
+        write_ledger(path, ledger)
+        tip = low_tip(store, store_id)
+        before = snapshot_tree(store)
+        code, out, err = run_low(["append", store, store_id, tip, scratch, JQ,
+                                   session_id, attempt_id, path])
+        if code != 0:
+            record(g, "%s: exhaustion refuses E_CAPACITY" % label, err == b"E_CAPACITY\n")
+            record(g, "%s: a capacity refusal writes nothing" % label,
+                   snapshot_tree(store) == before)
+            exhausted = True
+            break
+        stored_paths.append(path)
+    if not exhausted:
+        raise AssertionError("%s: never reached E_CAPACITY within %d attempts "
+                              "(lowered constant too generous)" % (label, max_attempts))
+    record(g, "%s: at least one record was stored before exhaustion" % label,
+           len(stored_paths) >= 1)
+
+    code, listing_bytes, err = run_low(["list", store, store_id])
+    record(g, "%s: list still works at capacity" % label, code == 0)
+    listed = json.loads(listing_bytes.decode("ascii"))
+    record(g, "%s: list still reports the stored records" % label,
+           listed["body"]["record_count"] == len(stored_paths))
+
+    tip = low_tip(store, store_id)
+    code, receipt_bytes, err = run_low(["append", store, store_id, tip, scratch, JQ,
+                                         session_id, attempt_id, stored_paths[0]])
+    record(g, "%s: identical replay still works at capacity" % label, code == 0)
+
+    receipt_path = os.path.join(tmp, "capacity-%s-receipt.json" % label)
+    pathlib.Path(receipt_path).write_bytes(receipt_bytes)
+    out_path = os.path.join(tmp, "capacity-%s-out.json" % label)
+    code, read_bytes, err = run_low(["read", store, JQ, receipt_path, out_path])
+    record(g, "%s: read still works at capacity" % label, code == 0)
+
 
 def test_boundaries(tmp):
     g = "P9"
@@ -1027,6 +1121,47 @@ def test_boundaries(tmp):
     record(g, "reading with a validator script that differs by one byte is E_VALIDATOR",
            proc.returncode == 1 and proc.stderr == b"E_VALIDATOR\n")
 
+    # A leading run of slashes ("//x" or "///x") aliases the same file as a
+    # single leading slash on this filesystem, but posixpath.normpath's own
+    # historical special case leaves exactly two leading slashes unchanged,
+    # so a naive normpath-idempotency check alone would treat "//store" and
+    # "/store" as different, unrelated strings. Every boundary/overlap check
+    # (in-store OUTPUT, SCRATCH_ROOT/STORE_ROOT overlap, source-tree
+    # overlap) must still catch the aliased spelling.
+    assert store.startswith("/") and not store.startswith("//")
+    doubled_store = "/" + store  # e.g. "/private/tmp/.../boundary-append-store" -> "//private/..."
+    assert os.path.samefile(store, doubled_store)
+
+    doubled_output = os.path.join(doubled_store, "leak-doubled.json")
+    code, out, err = do("read", store, JQ, receipt_path, doubled_output)
+    record(g, "a doubled-leading-slash OUTPUT spelling of an in-store path is still E_OUTPUT",
+           code == 1 and err == b"E_OUTPUT\n")
+
+    triple_output = "/" + doubled_output  # three leading slashes
+    code, out, err = do("read", store, JQ, receipt_path, triple_output)
+    record(g, "a tripled-leading-slash OUTPUT spelling of an in-store path is still E_OUTPUT",
+           code == 1 and err == b"E_OUTPUT\n")
+
+    code, out, err = do("append", store, "boundary.append", tip, doubled_store, JQ,
+                         session_id, attempt_id, inside_path)
+    record(g, "a doubled-leading-slash SCRATCH_ROOT spelling that aliases the store root "
+              "is still E_BOUNDARY",
+           code == 1 and err == b"E_BOUNDARY\n")
+
+    outside_ledger_doubled = "/" + outside_ledger
+    assert os.path.samefile(outside_ledger, outside_ledger_doubled)
+    code, out, err = do("append", store, "boundary.append", tip, scratch, JQ, session_id, attempt_id,
+                         outside_ledger_doubled)
+    record(g, "a doubled-leading-slash LEDGER spelling outside SCRATCH_ROOT is still E_BOUNDARY",
+           code == 1 and err == b"E_BOUNDARY\n")
+
+    doubled_root_store = "/" + os.path.join(REPO, "telemetry")
+    assert os.path.samefile(os.path.join(REPO, "telemetry"), doubled_root_store)
+    code, out, err = do("initialize", doubled_root_store, "boundary.src.doubled")
+    record(g, "a doubled-leading-slash STORE_ROOT spelling of a path inside the source tree "
+              "is still E_BOUNDARY",
+           code == 1 and err == b"E_BOUNDARY\n")
+
 
 def test_isolation(tmp):
     g = "P10"
@@ -1056,23 +1191,45 @@ def test_isolation(tmp):
         os.chmod(hook_path, 0o755)
 
     env = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "HOME": hostile_home}
-    code, out, err = append(store, "isolation.store", tip, scratch, path, session_id, attempt_id, env=None)
+    code, clean_receipt, err = append(store, "isolation.store", tip, scratch, path, session_id, attempt_id,
+                                       env=None)
     record(g, "baseline (clean HOME) append succeeds", code == 0)
-    tip_clean = tip_of(store, "isolation.store")
+    clean_doc = json.loads(clean_receipt.decode("ascii"))
 
+    # R2.2 does not name HOME among the forbidden prefixes (only GIT_*,
+    # XDG_*, PYTHON*, LD_* and DYLD_*), so a caller-supplied HOME is not by
+    # itself refused; run a real append with this hostile HOME (holding a
+    # global .gitconfig with hooksPath, a clean filter and a credential
+    # helper, each configured to touch `marker`) and prove the store never
+    # triggers any of it, since it never runs Git.
     store2 = store_root(tmp, "isolation-store-hostile")
     scratch2 = scratch_root(tmp, "isolation-scratch-hostile")
-    initialize(store2, "isolation.store2")
+    code, out, err = initialize(store2, "isolation.store2")
+    record(g, "hostile-HOME comparison store initializes", code == 0)
     path2 = os.path.join(scratch2, "ledger.json")
     write_ledger(path2, ledger)
     tip2 = tip_of(store2, "isolation.store2")
-    # HOME is fixed by the invocation contract (R2.2) to /dev/null; the
-    # program itself never reads $HOME from a caller-supplied override, so
-    # this exercises the forbidden-prefix checks instead: a hostile
-    # environment can only ever present as one of the forbidden variables.
-    record(g, "the program's own environment is fixed by its invocation contract, "
-              "not read from a caller HOME override", True)
-    record(g, "no credential/hook/filter marker exists after any append",
+    code, hostile_receipt, err = append(store2, "isolation.store2", tip2, scratch2, path2,
+                                         session_id, attempt_id, env=env)
+    record(g, "append under a hostile HOME (hooksPath, filter, credential helper) succeeds",
+           code == 0)
+    hostile_doc = json.loads(hostile_receipt.decode("ascii"))
+    record(g, "hostile-HOME record_key equals the clean-HOME record_key for the same bundle",
+           hostile_doc["body"]["record_key"] == clean_doc["body"]["record_key"])
+    record(g, "hostile-HOME ledger_ref equals the clean-HOME ledger_ref",
+           hostile_doc["body"]["ledger_ref"] == clean_doc["body"]["ledger_ref"])
+    record(g, "hostile-HOME validation_sha256 equals the clean-HOME validation_sha256",
+           hostile_doc["body"]["validation_sha256"] == clean_doc["body"]["validation_sha256"])
+    hostile_receipt_path = os.path.join(tmp, "isolation-hostile-receipt.json")
+    pathlib.Path(hostile_receipt_path).write_bytes(hostile_receipt)
+    hostile_out_path = os.path.join(tmp, "isolation-hostile-out.json")
+    code, out, err = read(store2, hostile_receipt_path, hostile_out_path)
+    record(g, "reading the hostile-HOME record succeeds", code == 0)
+    record(g, "the hostile-HOME read-back equals the original ledger bytes",
+           pathlib.Path(hostile_out_path).read_bytes() == canonical(ledger))
+    record(g, "no credential/hook/filter marker exists after the clean-HOME append",
+           not os.path.exists(marker))
+    record(g, "no credential/hook/filter marker exists after the hostile-HOME append either",
            not os.path.exists(marker))
 
     for var, value in (("GIT_DIR", "/tmp/x"), ("GIT_CONFIG_NOSYSTEM", "1"),
