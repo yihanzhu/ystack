@@ -315,9 +315,13 @@ CONTROLPATHS
   map({file:.[0],path:.[1]})' "$tmp/target-table.tsv" >"$tmp/target-table.json"
 "$jq_bin" -R -s 'split("\n") | map(select(length>0)) | map(split("\t")) |
   map({file:.[0],path:.[1]})' "$tmp/control-table.tsv" >"$tmp/control-table.json"
+# paths (not paths(scalars)) so a null, false, or container value under a
+# repository_id/target_repository_id key is still enumerated: scalars alone
+# silently drops exactly the falsy values a corrupted document would use to
+# hide from this scan.
 /usr/bin/printf '%s\n' \
-  '[paths(scalars) as $p' \
-  ' | select($p[-1]=="repository_id" or $p[-1]=="target_repository_id")' \
+  '[paths as $p' \
+  ' | select(($p | length) > 0 and ($p[-1]=="repository_id" or $p[-1]=="target_repository_id"))' \
   ' | {file:$f, path: ($p | map(if type=="number" then "[]" else tostring end) | join(".")),' \
   '    value: getpath($p)}]' >"$tmp/repo-id-walk.jq"
 
@@ -1107,21 +1111,28 @@ check_evidence() {
   # the same, so this only tests coverage there, exactly as the spec notes.
   step='repository-ids'
   : >"$tmp/repo-id-found.jsonl"
-  # Scan every retained *.json file except checksums.json, not only the 18
-  # files the fixed tables above name: an added canonical file carrying an
-  # unlisted repository_id/target_repository_id, with a matching checksum
-  # entry, must still be caught here rather than passing inventory
-  # unexamined.
+  # Scan every retained regular file except the bundle-root checksums.json
+  # (path exactly "checksums.json", not any basename match: a nested file
+  # that merely shares that basename, e.g. "post/checksums.json", is an
+  # ordinary retained file and must still be scanned), whatever its
+  # extension. A file that does not parse as one canonical JSON value is
+  # skipped, not failed here: check 2 (canonical-json) already rejects a
+  # malformed *.json file earlier in this same function, so by the time this
+  # step runs a parse failure means the file is legitimately non-JSON
+  # (README.md, verification-instructions.md, the assembler's *.txt
+  # outputs) or a symlink/oversized file check 1's find -type f (and its own
+  # digest match) has already ruled on. Scanning by content rather than by
+  # ".json" name closes the same hole for a JSON document saved under any
+  # other extension.
   local rf found_json_count=0
   while IFS= read -r rf; do
+    "$jq_bin" -c --arg f "$rf" -f "$tmp/repo-id-walk.jq" "$dir/$rf" >"$tmp/repo-id-one.json" 2>/dev/null || continue
     found_json_count=$((found_json_count + 1))
-    "$jq_bin" -c --arg f "$rf" -f "$tmp/repo-id-walk.jq" "$dir/$rf" >"$tmp/repo-id-one.json" 2>/dev/null ||
-      { /usr/bin/printf '%s: %s: %s unreadable\n' "$label" "$step" "$rf" >&2; return 1; }
     "$jq_bin" -c '.[]' "$tmp/repo-id-one.json" >>"$tmp/repo-id-found.jsonl"
-  done < <(cd "$dir" && /usr/bin/find . -name '*.json' -type f ! -name checksums.json |
+  done < <(cd "$dir" && /usr/bin/find . -type f ! -path './checksums.json' |
     /usr/bin/sed 's|^\./||' | LC_ALL=C sort)
   [ "$found_json_count" -ge 18 ] ||
-    { /usr/bin/printf '%s: %s: only %s retained *.json files found (expected at least 18)\n' \
+    { /usr/bin/printf '%s: %s: only %s retained JSON-parseable files found (expected at least 18)\n' \
       "$label" "$step" "$found_json_count" >&2; return 1; }
   "$jq_bin" -n -e \
     --slurpfile found <(cat "$tmp/repo-id-found.jsonl" 2>/dev/null; :) \
@@ -1190,7 +1201,7 @@ refresh_checksums() {
     sha=$(sha_file "$d/$rel")
     "$jq_bin" -c -n --arg path "$rel" --arg sha256 "$sha" '{path:$path,sha256:$sha256}' \
       >>"$tmp/refresh-files.jsonl"
-  done < <(/usr/bin/find "$d" -type f ! -name checksums.json | /usr/bin/sed "s|^$d/||" | LC_ALL=C sort)
+  done < <(/usr/bin/find "$d" -type f ! -path "$d/checksums.json" | /usr/bin/sed "s|^$d/||" | LC_ALL=C sort)
   "$jq_bin" -S -c -s --arg id "$b_checksums_id" \
     '{body:{files:.},id:$id,kind:"shadow_evidence_checksum_manifest",schema_version:1}' \
     "$tmp/refresh-files.jsonl" >"$d/checksums.json.new"
@@ -1319,6 +1330,28 @@ if check_evidence "$mutant_dir" 'mutant-extra-file' 2>"$tmp/case-j.err"; then
   fail 'an extra JSON file carrying an unlisted repository id must be refused'
 fi
 pass 'an extra JSON file carrying a repository id outside the fixed table is refused even with a matching checksum entry'
+
+# (k) an extra canonical JSON file carrying a non-string (null) value under
+# repository_id: "paths(scalars)" silently drops null/false/container
+# values, so this must be caught by "paths" over every value type.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:null}' >"$mutant_dir/extra-null.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-extra-null-value' 2>"$tmp/case-k.err"; then
+  fail 'an extra JSON file carrying a null repository_id must be refused'
+fi
+pass 'an extra JSON file carrying a null-valued repository_id is refused even with a matching checksum entry'
+
+# (l) a nested file that shares checksums.json's basename at a non-root
+# depth, carrying an unlisted repository id, must still be scanned: only
+# the bundle-root checksums.json is the inventory manifest itself.
+fresh_mutant_copy
+"$jq_bin" -S -c -n '{repository_id:"repo.other"}' >"$mutant_dir/post/checksums.json"
+refresh_checksums "$mutant_dir"
+if check_evidence "$mutant_dir" 'mutant-nested-checksums-name' 2>"$tmp/case-l.err"; then
+  fail 'a nested file named checksums.json carrying an unlisted repository id must be refused'
+fi
+pass 'a nested file sharing the checksums.json basename is still scanned and its unlisted repository id is refused'
 
 /bin/rm -rf -- "$mutant_dir"
 
