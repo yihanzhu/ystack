@@ -374,18 +374,15 @@ always goes in the closure.
 
 ## Design
 
-Both families flow into the same dashboard and scope gate as the seven seeded ones.
-Malicious trials are four ordinary deterministic cases whose replay reruns the real
-write pipeline. Reviewer trials are graded where human grades already live, the record
-evaluator; run-evals only relays each trial's reported status, so the dashboard and
-scope gate see nine families without a new grader kind or dashboard shape. The scope
-gate's new minimum check is what makes a `multi` result the combination of its trials.
+Malicious trials are four deterministic cases whose replay reruns the real write
+pipeline. Reviewer trials are graded where human grades already live, the record
+evaluator; run-evals only relays each checked status. The scope gate's minimum check
+makes a `multi` result the combination of its trials.
 
 ## Out of scope
 
-Model graders; calibrating deterministic against human grades; seeding other
-families; scopes other than the first write scope; any live target or forge run in
-CI; wiring the record report into anything but the relay; enablement.
+Model graders; calibration; other families or scopes; any live target or forge run
+in CI; wiring the record report into anything but the relay; enablement.
 
 ## Areas of concern
 
@@ -402,9 +399,8 @@ CI; wiring the record report into anything but the relay; enablement.
 - **Ground truth is thin.** Many recorded verdicts have no findings. The selection rule
   forces some with findings, but a small set cannot measure recall well; that is why
   the rates are recorded and not gated.
-- **Scope-gate copy drift.** R3.3's equality check keeps the copied lists in sync.
+- **Scope-gate copy drift.** R3.3's equality check keeps the copies in sync.
 
-Intent open questions, answered: new sources and whether that is a framework change,
-R3; how `multi` trials count and combine, R2; three versus four trials, R4.1; the
-reviewer set through the record evaluator as a human grade, R8; which verdicts qualify
-and how Important findings are found, R6 and R7.1-R7.2; further thresholds, R7.5.
+Intent open questions, answered: sources R3; `multi` R2; three or four trials R4.1;
+record evaluator path R8; qualifying verdicts and Important findings R6, R7; further
+thresholds R7.5.
