@@ -821,6 +821,24 @@ def validate_record_document(doc, store_id, ledger_bytes, validation_bytes, code
     require(body["validation_sha256"] == digest(validation_bytes), code)
     validate_validator_document(body["validator"], code)
     sha256_field(body["store_package_sha256"], code)
+    # A digest match only proves record.json names the validation.json
+    # blob actually present in the tree; it does not, by itself, prove
+    # record.json's own claimed event_count, replay_key and ledger_ref
+    # agree with what that blob actually says. A record rehashed to claim
+    # a different event_count (or a replay key or ledger reference the
+    # validator never produced) while its ledger and validation blobs stay
+    # byte-for-byte unchanged would otherwise pass every check above.
+    # Parse the validation document itself and cross-check the three
+    # fields it is the authority on.
+    validation_doc = parse(validation_bytes, VALIDATOR_STDOUT_MAX, code)
+    fields(validation_doc, {"schema_version", "kind", "id", "body"}, code)
+    require(validation_doc["schema_version"] == 1 and
+            validation_doc["kind"] == "telemetry_trace_ledger_validation", code)
+    vbody = validation_doc["body"]
+    require(type(vbody) is dict, code)
+    require(vbody.get("event_count") == body["event_count"], code)
+    require(vbody.get("replay_key") == body["replay_key"], code)
+    require(vbody.get("ledger_ref") == body["ledger_ref"], code)
     return body
 
 
@@ -998,6 +1016,19 @@ class Store:
                 require(re.fullmatch(r"[0-9a-f]{38}", parts[3]) is not None, "E_CORRUPT")
                 object_id = parts[2] + parts[3]
                 kind, content, raw_size = decode_object(path, object_id)
+                # decode_object only bounds content by the largest object
+                # any kind may ever hold (a ledger.json blob); a tree or
+                # commit's own fixed cap is otherwise checked only via
+                # load_object, which is called solely for objects actually
+                # reachable from the walked chain. R9's limits apply to
+                # every object regardless of reachability ("A store found
+                # over any limit, or with an over-limit object, is
+                # E_CORRUPT"), so an unreachable over-limit tree or commit
+                # must be caught here too.
+                if kind == "tree":
+                    require(len(content) <= TREE_CONTENT_MAX, "E_CORRUPT")
+                elif kind == "commit":
+                    require(len(content) <= COMMIT_CONTENT_MAX, "E_CORRUPT")
                 self.totals[3] += raw_size
                 self.objects[object_id] = (kind, content)
             self.check_totals()
