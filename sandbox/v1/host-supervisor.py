@@ -514,7 +514,60 @@ def check_accepted_set(fd):
     environments = body["environments"]
     require(isinstance(environments, list) and all(accepted_entry_shape_ok(env) for env in environments),
             "E_CONFIG")
-    return sha256_hex(raw)
+    return sha256_hex(raw), environments
+
+
+def entry_for(environments, environment_id):
+    for entry in environments:
+        if entry.get("environment_id") == environment_id:
+            return entry
+    return None
+
+
+def registry_entry_shape_ok(entry):
+    if not (isinstance(entry, dict) and set(entry) == {
+            "description", "environment_id", "evidence_scope", "proof_state",
+            "source_root_commit", "target_repository_id"}):
+        return False
+    return (id_ok(entry["environment_id"]) and id_ok(entry["target_repository_id"])
+            and isinstance(entry["description"], str) and isinstance(entry["evidence_scope"], str)
+            and isinstance(entry["proof_state"], str) and isinstance(entry["source_root_commit"], str)
+            and len(entry["source_root_commit"]) == 40
+            and all(c in "0123456789abcdef" for c in entry["source_root_commit"]))
+
+
+def read_all(fd):
+    """Reads the whole already-open, already-validated fd from its start
+    (never a fresh open() of the path string)."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(fd, 1048576)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def load_registry(fd):
+    """Reads, bounds, canonical- and shape-checks the installed registry
+    (R10.1 already trusts its ACL/ownership) and returns body["environments"]."""
+    raw = read_all(fd)
+    bounded_json_nesting(raw)
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        refuse("E_CONFIG")
+    require(canonical(doc) == raw, "E_CONFIG")
+    require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
+    require(doc.get("kind") == "shadow_environment_registry" and is_int(doc.get("schema_version"))
+            and doc.get("schema_version") == 1, "E_CONFIG")
+    body = doc.get("body")
+    require(isinstance(body, dict) and set(body) == {"activation_state", "environments", "registry_version"},
+            "E_CONFIG")
+    environments = body["environments"]
+    require(isinstance(environments, list) and all(registry_entry_shape_ok(e) for e in environments), "E_CONFIG")
+    return environments
 
 
 # --- store root (enforcement-evidence-binding spec.md R2.3) ---------------
@@ -546,6 +599,42 @@ def check_store_root(store_root, principal_uid, consumer_gid):
         os.close(fd)
         refuse("E_STORE")
     return fd
+
+
+# --- R2.4: the closed kernel build-config `=y` set (identity_paths'
+# guest_kernel_config installed bytes are that config's own text; its
+# digest is also the slot's R2.3 measurement -- see measure_identities). --
+KERNEL_REQUIRED_OPTIONS = (
+    "CONFIG_PCI", "CONFIG_PCI_HOST_GENERIC", "CONFIG_VIRTIO", "CONFIG_VIRTIO_PCI",
+    "CONFIG_VIRTIO_BLK", "CONFIG_BLK_DEV_INITRD", "CONFIG_DEVTMPFS", "CONFIG_PROC_FS",
+    "CONFIG_SYSFS", "CONFIG_TMPFS", "CONFIG_CGROUPS", "CONFIG_MEMCG",
+    "CONFIG_CGROUP_PIDS", "CONFIG_CGROUP_SCHED", "CONFIG_FAIR_GROUP_SCHED",
+    "CONFIG_CFS_BANDWIDTH", "CONFIG_PID_NS", "CONFIG_NET_NS", "CONFIG_SECCOMP",
+    "CONFIG_SECCOMP_FILTER", "CONFIG_SECURITY_LANDLOCK", "CONFIG_FANOTIFY",
+    "CONFIG_FANOTIFY_ACCESS_PERMISSIONS",
+)
+KERNEL_HZ_OPTIONS = ("CONFIG_HZ_250", "CONFIG_HZ_300", "CONFIG_HZ_1000")
+
+
+def kernel_config_values(text):
+    """{option: value} for every "CONFIG_FOO=value" line; an absent or
+    commented-out ("# CONFIG_FOO is not set") option is simply missing."""
+    values = {}
+    for line in text.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line.startswith("CONFIG_") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        values[name.strip()] = value.strip()
+    return values
+
+
+def kernel_config_ok(text):
+    values = kernel_config_values(text)
+    if any(values.get(opt) != "y" for opt in KERNEL_REQUIRED_OPTIONS):
+        return False
+    hz_on = [opt for opt in KERNEL_HZ_OPTIONS if values.get(opt) == "y"]
+    return len(hz_on) == 1
 
 
 # --- R3.1 request shape (phase A: shape only, no cross-referencing) -------
@@ -659,6 +748,245 @@ def parse_request(raw):
     return doc, body
 
 
+# --- R4.2 phase B: every admission reason, from the frozen package and
+# the installed/registry/accepted-set content already read through
+# validated fds (never a fresh open() of any path). ------------------------
+CANDIDATE_EXPORT_BYTES = 64 * 1024 * 1024  # preparation/v1/prepare-candidate.py:54
+INCIDENT_BODY_KEYS = {"deploy_authority", "failing_check", "git_revision_ref", "observed_at",
+                       "observed_symptom", "reporter_actor_ref", "target_repository_id"}
+
+
+def parse_record(raw):
+    """record.json (candidate_content_preparation): flat, no body/id/kind
+    envelope (preparation/v1/prepare-candidate.py's make_record). None if
+    it doesn't even parse as an object."""
+    bounded_json_nesting(raw)
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def parse_manifest(raw):
+    """manifest.json (candidate_content_manifest): flat; None unless it is
+    canonical (R4.2's "manifest not canonical")."""
+    bounded_json_nesting(raw)
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(doc, dict) or canonical(doc) != raw:
+        return None
+    return doc
+
+
+def parse_incident(raw):
+    """incident.json (shadow_incident_record): returns body only if
+    canonical, with exactly shadow/v1/incident-record.jq:54-59's top-level
+    keys -- R4.2 checks only the binding fields, not the full shadow schema."""
+    bounded_json_nesting(raw)
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(doc, dict) or canonical(doc) != raw:
+        return None
+    if doc.get("kind") != "shadow_incident_record" or not is_int(doc.get("schema_version")) \
+            or doc.get("schema_version") != 1:
+        return None
+    body = doc.get("body")
+    return body if isinstance(body, dict) and set(body) == INCIDENT_BODY_KEYS else None
+
+
+def evaluation_satisfied(raw, control):
+    """Mirrors sandbox-receipt.jq's is_evaluation_not_satisfied, against
+    the receipt's own (request-echoed) control block."""
+    bounded_json_nesting(raw)
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(doc, dict) or doc.get("kind") != "sandbox_policy_evaluation" \
+            or not is_int(doc.get("schema_version")) or doc.get("schema_version") != 1:
+        return False
+    body = doc.get("body")
+    if not isinstance(body, dict) or body.get("verdict") != "satisfied":
+        return False
+
+    def ref_sha(key):
+        ref = body.get(key)
+        return ref.get("sha256") if isinstance(ref, dict) else None
+
+    return (ref_sha("policy_set") == control["policy_set_sha256"]
+            and ref_sha("policy_ref") == control["policy_sha256"]
+            and ref_sha("decision_ref") == control["decision_sha256"])
+
+
+def candidate_reasons(manifest, candidates):
+    """launch.candidate-mismatch / launch.candidate-oversize: the manifest's
+    file entries (in order) against the package's candidate/<n> records --
+    R3.3's n-th file entry is record candidate/<n>."""
+    reasons = set()
+    if sum(len(c) for c in candidates) > CANDIDATE_EXPORT_BYTES:
+        reasons.add("launch.candidate-oversize")
+    entries = manifest.get("entries") if isinstance(manifest, dict) else None
+    file_entries = ([e for e in entries if isinstance(e, dict) and e.get("kind") == "file"]
+                     if isinstance(entries, list) else None)
+    if file_entries is None or len(file_entries) != len(candidates):
+        reasons.add("launch.candidate-mismatch")
+        return reasons
+    for entry, content in zip(file_entries, candidates):
+        if entry.get("size_bytes") != len(content) or entry.get("sha256") != sha256_hex(content):
+            reasons.add("launch.candidate-mismatch")
+            break
+    return reasons
+
+
+def subject_mismatch(record, incident_raw, incident_body, subject):
+    """launch.subject-mismatch: record source/candidate fields, and the
+    incident's own digest, target_repository_id and git_revision_ref."""
+    if record is None or record.get("source") != subject["source"]:
+        return True
+    candidate = record.get("candidate")
+    if not isinstance(candidate, dict) or candidate.get("commit_id") != subject["candidate"]["commit_id"] \
+            or candidate.get("tree_id") != subject["candidate"]["tree_id"]:
+        return True
+    if sha256_hex(incident_raw) != subject["incident_sha256"] or incident_body is None:
+        return True
+    if incident_body["target_repository_id"] != subject["target_repository_id"]:
+        return True
+    expected_ref = {"repository_id": subject["source"]["repository_id"],
+                     "hash_algorithm": subject["source"]["hash_algorithm"],
+                     "commit_id": subject["source"]["commit_id"]}
+    return incident_body["git_revision_ref"] != expected_ref
+
+
+def record_manifest_reasons(record_raw, record, manifest_raw, manifest, subject):
+    reasons = set()
+    if sha256_hex(record_raw) != subject["candidate"]["preparation_record_sha256"]:
+        reasons.add("launch.record-mismatch")
+    manifest_sha = sha256_hex(manifest_raw)
+    record_manifest_sha = record.get("manifest_sha256") if record is not None else None
+    if manifest is None or manifest_sha != record_manifest_sha \
+            or manifest_sha != subject["candidate"]["manifest_sha256"]:
+        reasons.add("launch.manifest-mismatch")
+    return reasons
+
+
+def control_mismatch(control, installed_digests, evaluation_raw):
+    return (control["policy_sha256"] != installed_digests["control_policy"]
+            or control["decision_sha256"] != installed_digests["control_decision"]
+            or control["policy_set_sha256"] != installed_digests["control_policy_set"]
+            or control["evaluator_driver_sha256"] != installed_digests["evaluator_driver"]
+            or control["evaluator_program_sha256"] != installed_digests["evaluator_program"]
+            or control["sandbox_evaluation_sha256"] != sha256_hex(evaluation_raw))
+
+
+def environment_unlisted(config, registry_environments, accepted_environments, subject):
+    if subject["environment_id"] != config["environment_id"]:
+        return True
+    registry_entry = entry_for(registry_environments, subject["environment_id"])
+    if registry_entry is None or entry_for(accepted_environments, subject["environment_id"]) is None:
+        return True
+    if sha256_hex(canonical(registry_entry)) != subject["environment_entry_sha256"]:
+        return True
+    return registry_entry["target_repository_id"] != subject["target_repository_id"]
+
+
+def measure_identities(identity_fds, instruction_raw):
+    """R2.3: every slot's measured digest is the SHA-256 of its installed
+    bytes, read through the fd secure_walk already validated (never a
+    fresh open()); verification_instructions comes from the package's own
+    instruction record. ("observed", digest) normally; ("unobserved", None)
+    only if the installed bytes could not be read at all (launch.identity-
+    missing) -- an observed-but-unaccepted digest is still "observed"."""
+    # Test-only: a real read failure on an already-R10.1-validated fd (same
+    # fd the walk just opened, no re-open by path) has no natural trigger
+    # short of a genuine I/O fault, so a named slot can be forced
+    # "unreadable" here without touching any file's real permissions.
+    forced_unreadable = os.environ.get("YSTACK_TEST_IDENTITY_UNREADABLE")
+    result = {}
+    for slot, fd in identity_fds.items():
+        try:
+            if slot == forced_unreadable:
+                raise OSError("test-only forced unreadable")
+            result[slot] = ("observed", sha256_hex(read_all(fd)))
+        except OSError:
+            result[slot] = ("unobserved", None)
+    result["verification_instructions"] = ("observed", sha256_hex(instruction_raw))
+    return result
+
+
+def phase_b_reasons(config, request_body, package, identity_fds, installed_digests,
+                     registry_environments, accepted_environments):
+    """Every R4.2 reason, sorted and unique, plus the measured identities
+    dict for the receipt. Collects every applicable reason (not just the
+    first), matching the receipt's own sorted-unique reason_ids."""
+    subject, control = request_body["subject"], request_body["control"]
+    reasons = set()
+    if environment_unlisted(config, registry_environments, accepted_environments, subject):
+        reasons.add("launch.environment-unlisted")
+    if control_mismatch(control, installed_digests, package["evaluation.json"]):
+        reasons.add("launch.control-mismatch")
+    if not evaluation_satisfied(package["evaluation.json"], control):
+        reasons.add("launch.evaluation-not-satisfied")
+    record = parse_record(package["record.json"])
+    manifest = parse_manifest(package["manifest.json"])
+    incident_body = parse_incident(package["incident.json"])
+    reasons |= record_manifest_reasons(package["record.json"], record,
+                                        package["manifest.json"], manifest, subject)
+    if subject_mismatch(record, package["incident.json"], incident_body, subject):
+        reasons.add("launch.subject-mismatch")
+    reasons |= candidate_reasons(manifest, package["candidate"])
+    instruction_raw = package["instruction"]
+    if sha256_hex(instruction_raw) != request_body["instruction_sha256"]:
+        reasons.add("launch.instruction-mismatch")
+    measured = measure_identities(identity_fds, instruction_raw)
+    if any(state == "unobserved" for state, _ in measured.values()):
+        reasons.add("launch.identity-missing")
+    if not kernel_config_ok(read_all(identity_fds["guest_kernel_config"])):
+        reasons.add("launch.kernel-config")
+    accepted_entry = entry_for(accepted_environments, subject["environment_id"])
+    if accepted_entry is not None:
+        accepted_identities = accepted_entry["identities"]
+        if any(state == "observed" and digest not in accepted_identities[slot]
+               for slot, (state, digest) in measured.items() if slot != "verification_instructions"):
+            reasons.add("launch.identity-unaccepted")
+        if measured["verification_instructions"][1] not in accepted_identities["verification_instructions"]:
+            reasons.add("launch.instruction-unaccepted")
+    return sorted(reasons), measured
+
+
+# --- R5.1 freeze by copy: package bytes copied into supervisor-owned files
+# under work_root, exclusively, before anything else touches them again. --
+def freeze_by_copy(config, attempt_id, uid, gid, package):
+    work_fd = os.open(config["work_root"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        attempt_work_fd = mkdir_excl(work_fd, attempt_id, uid, gid)
+        try:
+            frozen_fd = mkdir_excl(attempt_work_fd, "frozen", uid, gid)
+            try:
+                for name in ("record.json", "manifest.json", "instruction"):
+                    write_excl(frozen_fd, name, package[name], uid, gid)
+                candidate_fd = mkdir_excl(frozen_fd, "candidate", uid, gid)
+                try:
+                    for i, content in enumerate(package["candidate"]):
+                        write_excl(candidate_fd, "%05d" % i, content, uid, gid)
+                    os.fsync(candidate_fd)
+                finally:
+                    os.close(candidate_fd)
+                os.fsync(frozen_fd)
+            finally:
+                os.close(frozen_fd)
+            os.fsync(attempt_work_fd)
+        finally:
+            os.close(attempt_work_fd)
+        os.fsync(work_fd)
+    finally:
+        os.close(work_fd)
+
+
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,
 # then the final mode; directories 0750, files 0440. --------------------
 def mkdir_excl(parent_fd, name, uid, gid):
@@ -687,14 +1015,22 @@ def write_excl(parent_fd, name, data, uid, gid):
         os.close(fd)
 
 
-def write_store(store_fd, uid, gid, attempt_id, receipt_bytes, payload):
-    """Writes through store_fd, held open since check_store_root and
-    rechecked here, so a store_root replaced after admission cannot redirect."""
+def create_attempt_dir(store_fd, uid, gid, attempt_id):
+    """R4.2: 'the attempt directory is created exclusively, then every
+    check below runs' -- so phase B's checks run only once this attempt id
+    is exclusively claimed. Rechecks store_fd's own state first (held open
+    since check_store_root; a store_root replaced after admission cannot
+    redirect this)."""
     require(store_root_state_ok(store_fd, uid, gid), "E_STORE")
     try:
-        attempt_fd = mkdir_excl(store_fd, attempt_id, uid, gid)
+        return mkdir_excl(store_fd, attempt_id, uid, gid)
     except FileExistsError:
         refuse("E_ATTEMPT_EXISTS")
+
+
+def write_attempt_result(store_fd, attempt_fd, uid, gid, receipt_bytes, payload):
+    """Writes payload/ and receipt.json into the already-claimed attempt_fd,
+    then fsyncs up to the store root."""
     try:
         payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
         try:
@@ -762,11 +1098,23 @@ def derive_outcome(body):
     return {"verdict": "satisfied", "reason_ids": ["enforcement.satisfied"]}
 
 
-def build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
-                        launch_request_sha256, admitted_at, evidence_manifest_sha256):
+def identities_for_receipt(measured):
+    """R4.2: an observed slot (even an unaccepted digest -- the receipt
+    "records the digest of the bytes actually supplied") is {state,sha256};
+    only an unreadable slot is unobserved, with launch.identity-missing."""
+    result = {}
+    for slot in IDENTITY_SLOTS:
+        state, digest = measured[slot]
+        if state == "observed":
+            result[slot] = {"state": "observed", "sha256": digest}
+        else:
+            result[slot] = {"state": "unobserved", "reason_id": "launch.identity-missing"}
+    return result
+
+
+def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
+                   admitted_at, evidence_manifest_sha256, identities, admission, runtime):
     now = time.time()
-    identities = {slot: {"state": "unobserved", "reason_id": "launch.identity-missing"}
-                  for slot in IDENTITY_SLOTS}
     limits = {}
     for name, bound, observer in LIMIT_ROWS:
         limits[name] = {"bound": bound, "observed": None, "resolution": 1,
@@ -781,7 +1129,7 @@ def build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
         "contract_version": "v1",
         "control": dict(request_body["control"]),
         "identities": identities,
-        "lifecycle": {"admission": "admitted", "runtime": "error", "control_deadline": "met"},
+        "lifecycle": {"admission": admission, "runtime": runtime, "control_deadline": "met"},
         "limits": limits,
         "origin": {"producer_role": "host-supervisor", "store_id": config["store_id"],
                    "accepted_set_sha256": accepted_set_sha256},
@@ -848,17 +1196,26 @@ def run_launch(argv):
             refuse("E_CONFIG")
     for fd in fixed_fds.values():
         os.close(fd)
-    config_named = (list(config["identity_paths"].values()) + list(config["installed_files"].values())
-                    + [config["runtime"]["vfkit"], config["runtime"]["driver"]])
-    accepted_set_path = config["installed_files"]["accepted_set"]
-    accepted_set_fd = None
-    for path in config_named:
-        fd = secure_walk(path, principal_uid, check_mode=True)
-        if path == accepted_set_path and accepted_set_fd is None:
-            accepted_set_fd = fd
-        else:
-            os.close(fd)
-    accepted_set_sha256 = check_accepted_set(accepted_set_fd)
+    # Every identity_paths and control-related installed_files fd is kept
+    # open (R2.3/R4.2 read their content below, through these same fds --
+    # never a fresh open() of the path string); runtime.vfkit/driver are
+    # ACL/owner-mode-checked only, closed immediately, same as before.
+    identity_fds = {slot: secure_walk(path, principal_uid, check_mode=True)
+                     for slot, path in config["identity_paths"].items()}
+    installed_fds = {name: secure_walk(path, principal_uid, check_mode=True)
+                      for name, path in config["installed_files"].items()}
+    for path in (config["runtime"]["vfkit"], config["runtime"]["driver"]):
+        os.close(secure_walk(path, principal_uid, check_mode=True))
+    accepted_set_sha256, accepted_environments = check_accepted_set(installed_fds.pop("accepted_set"))
+    registry_environments = load_registry(installed_fds.pop("registry"))
+    installed_digests = {}
+    for name in ("control_policy", "control_decision", "control_policy_set",
+                 "evaluator_driver", "evaluator_program"):
+        fd = installed_fds.pop(name)
+        installed_digests[name] = sha256_hex(read_all(fd))
+        os.close(fd)
+    for fd in installed_fds.values():
+        os.close(fd)
     store_fd = check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
     if os.environ.get("YSTACK_TEST_SWAP_STORE_ANCESTOR"):
         test_hook_swap_store_ancestor(config["store_root"])
@@ -881,25 +1238,47 @@ def run_launch(argv):
         refuse("E_NONCE_REUSED")
 
     # fstatat on store_fd, not a path string; any OSError means "not found".
+    attempt_id = request_body["attempt"]["attempt_id"]
     try:
-        os.stat(request_body["attempt"]["attempt_id"], dir_fd=store_fd, follow_symlinks=False)
+        os.stat(attempt_id, dir_fd=store_fd, follow_symlinks=False)
     except OSError:
         pass
     else:
         refuse("E_ATTEMPT_EXISTS")
 
+    # R4.2: the attempt directory is created exclusively, then every phase B
+    # check runs.
+    attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
     admitted_at = time.time()
+    reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
+                                            installed_digests, registry_environments,
+                                            accepted_environments)
+    for fd in identity_fds.values():
+        os.close(fd)
+    identities = identities_for_receipt(measured)
     # R8.3: built once, reused for both the receipt digest and the write.
     evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
                                           "kind": "sandbox_evidence_manifest", "schema_version": 1})
     evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
-    receipt_bytes = build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                        launch_request_sha256, admitted_at, evidence_manifest_sha256)
     payload = [("stdout", b""), ("stderr", b""),
                ("evidence-manifest.json", evidence_manifest_bytes)]
+    if reason_ids:
+        # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
+        # ran, so nothing errored), payload/refusal.json alongside it.
+        receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
+                                       launch_request_sha256, admitted_at, evidence_manifest_sha256,
+                                       identities, "refused", "completed")
+        payload.append(("refusal.json", canonical({"reason_ids": reason_ids})))
+    else:
+        # R5.1: freeze by copy before anything else -- still PR 3's own
+        # R9.4 stub past this point (no runtime exists before PR 5).
+        freeze_by_copy(config, attempt_id, principal_uid, config["consumer_gid"], package)
+        receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
+                                       launch_request_sha256, admitted_at, evidence_manifest_sha256,
+                                       identities, "admitted", "error")
     try:
-        write_store(store_fd, principal_uid, config["consumer_gid"],
-                    request_body["attempt"]["attempt_id"], receipt_bytes, payload)
+        write_attempt_result(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
+                              receipt_bytes, payload)
     except Refusal:
         raise
     except OSError:

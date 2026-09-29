@@ -19,13 +19,6 @@ passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha_file() { /usr/bin/shasum -a 256 -- "$1" | /usr/bin/awk '{print $1}'; }
 
-# The real, shipped control/v1 fixed-file digests (content-addressed, so
-# stable across platforms) — must match build_pkg.py's own copies and
-# enforcement/v1/sandbox-receipt.jq's policy_pin/decision_pin/policy_set_pin.
-real_policy_sha=$(sha_file "$root/control/v1/sandbox-policy.json")
-real_decision_sha=$(sha_file "$root/control/v1/sandbox-decision.json")
-real_policy_set_sha=$(sha_file "$root/control/v1/control-policy-set.json")
-
 # --- pinned jq 1.6, as scripts/test/shadow-slice.test.sh:24-51 -------------
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -123,6 +116,21 @@ def canon(v):
     return (json.dumps(v, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                         allow_nan=False).encode("utf-8") + b"\n")
 
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+ENV_ID = "env.local-macos-fixture"
+TARGET_REPO = "target.fixture"
+KERNEL_REQUIRED_OPTIONS = (
+    "CONFIG_PCI", "CONFIG_PCI_HOST_GENERIC", "CONFIG_VIRTIO", "CONFIG_VIRTIO_PCI",
+    "CONFIG_VIRTIO_BLK", "CONFIG_BLK_DEV_INITRD", "CONFIG_DEVTMPFS", "CONFIG_PROC_FS",
+    "CONFIG_SYSFS", "CONFIG_TMPFS", "CONFIG_CGROUPS", "CONFIG_MEMCG",
+    "CONFIG_CGROUP_PIDS", "CONFIG_CGROUP_SCHED", "CONFIG_FAIR_GROUP_SCHED",
+    "CONFIG_CFS_BANDWIDTH", "CONFIG_PID_NS", "CONFIG_NET_NS", "CONFIG_SECCOMP",
+    "CONFIG_SECCOMP_FILTER", "CONFIG_SECURITY_LANDLOCK", "CONFIG_FANOTIFY",
+    "CONFIG_FANOTIFY_ACCESS_PERMISSIONS",
+)
+
 def main():
     base, src, work_root, placeholder = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
     shutil.rmtree(base, ignore_errors=True)
@@ -137,9 +145,11 @@ def main():
     identities_dir = os.path.join(base, "identities")
     os.makedirs(identities_dir, mode=0o755)
     identity_paths = {}
+    kernel_config_text = ("\n".join(o + "=y" for o in KERNEL_REQUIRED_OPTIONS) + "\nCONFIG_HZ_250=y\n")
     for k in identity_keys:
         p = os.path.join(identities_dir, k)
-        open(p, "wb").write(b"synthetic-" + k.encode())
+        content = kernel_config_text.encode() if k == "guest_kernel_config" else b"synthetic-" + k.encode()
+        open(p, "wb").write(content)
         os.chmod(p, 0o444)
         identity_paths[k] = p
 
@@ -150,13 +160,24 @@ def main():
     installed_files = {}
     for k in installed_keys:
         p = os.path.join(installed_dir, k)
-        open(p, "wb").write(b"synthetic-" + k.encode())
+        if k != "registry":
+            open(p, "wb").write(b"synthetic-" + k.encode())
         installed_files[k] = p
 
-    digest = "1" * 64 if placeholder else "1234567890abcdef" * 4  # "1"*64 is ALL_ONES
+    registry_entry = {"description": "fixture", "environment_id": ENV_ID, "evidence_scope": "fixtures-only",
+                       "proof_state": "unproven", "source_root_commit": "a" * 40,
+                       "target_repository_id": TARGET_REPO}
+    registry_doc = {"body": {"activation_state": "inactive", "environments": [registry_entry],
+                              "registry_version": "v1"},
+                     "id": "shadow.environments.v1", "kind": "shadow_environment_registry", "schema_version": 1}
+    open(installed_files["registry"], "wb").write(canon(registry_doc))
+
+    measured = {k: sha(open(identity_paths[k], "rb").read()) for k in identity_keys}
+    measured["verification_instructions"] = sha(b"instr")
+    digest = "1" * 64 if placeholder else None  # "1"*64 is ALL_ONES
     accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
-        {"environment_id": "env.local-macos-fixture", "scratch_bytes": 16777216,
-         "identities": {k: [digest] for k in identity_keys + ["verification_instructions"]},
+        {"environment_id": ENV_ID, "scratch_bytes": 16777216,
+         "identities": {k: [digest or measured[k]] for k in identity_keys + ["verification_instructions"]},
          "mechanisms": {r: ["mechanism.fixture"] for r in
                         ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
                          "scratch_bytes", "wall_time_ms"]}}]},
@@ -191,7 +212,10 @@ def main():
     os.chmod(config_path, 0o444)
     print(json.dumps({"install_dir": install_dir, "store_root": store_root,
                        "config_path": config_path, "accepted_set": installed_files["accepted_set"],
-                       "driver_path": driver_path}))
+                       "driver_path": driver_path, "registry_path": installed_files["registry"],
+                       "guest_kernel_config_path": identity_paths["guest_kernel_config"],
+                       "toolchain_path": identity_paths["toolchain"],
+                       "work_root": work_root, "installed_files": installed_files}))
 
 if __name__ == "__main__":
     main()
@@ -213,15 +237,16 @@ def deep_set(d, path, value):
 
 _DELETE = object()
 
+ENV_ID = "env.local-macos-fixture"
+TARGET_REPO = "target.fixture"
+
 def main():
     supervisor_src, out_path = sys.argv[1], sys.argv[2]
     patch = json.load(sys.stdin)
     spec = importlib.util.spec_from_file_location("hs", supervisor_src)
     hs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hs)
-    # A non-placeholder filler (all-zero/all-one both read as
-    # receipt.placeholder-identity by the shipped checker's has_placeholder_identity).
-    filler = "c" * 64
+    sha = hs.sha256_hex
     # The real, shipped control/v1 fixed-file digests (content-addressed, so
     # stable across platforms): matches enforcement/v1/sandbox-receipt.jq's
     # own policy_pin/decision_pin/policy_set_pin and the decision's own
@@ -233,20 +258,92 @@ def main():
     real_policy_set_sha = "3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8"
     real_driver_sha = "8c4b50e6ce324bbf8c3b14972356b153a40ab26c0dbcf54687e37d1133e8a3bb"
     real_program_sha = "83b08ff4817157bbda76aa3c85142cb9f297a0dc8cdb760f7c8eeebf6bbc0ef3"
-    control = {"decision_sha256": real_decision_sha, "evaluator_driver_sha256": real_driver_sha,
-               "evaluator_program_sha256": real_program_sha, "policy_sha256": real_policy_sha,
-               "policy_set_sha256": real_policy_set_sha,
-               "sandbox_evaluation_sha256": patch.get("evaluation_sha256", filler)}
-    subject = {"environment_id": "env.local-macos-fixture", "environment_entry_sha256": filler,
-               "target_repository_id": "target.fixture",
-               "source": {"repository_id": "target.fixture", "hash_algorithm": "sha1",
-                          "commit_id": "a" * 40, "tree_id": "a" * 40},
-               "candidate": {"preparation_record_sha256": filler, "manifest_sha256": filler,
-                             "commit_id": "a" * 40, "tree_id": "a" * 40},
-               "incident_sha256": filler}
+
+    registry_entry = {"description": "fixture", "environment_id": ENV_ID, "evidence_scope": "fixtures-only",
+                       "proof_state": "unproven", "source_root_commit": "a" * 40,
+                       "target_repository_id": TARGET_REPO}
+
+    record_source = {"repository_id": TARGET_REPO, "hash_algorithm": "sha1",
+                      "commit_id": "a" * 40, "tree_id": "b" * 40}
+    record_candidate = {"hash_algorithm": "sha1", "commit_id": "c" * 40, "tree_id": "d" * 40,
+                        "parent_commit_id": "e" * 40, "outcome": "no-change"}
+    candidate_name = patch.get("candidate_name", "README.md")
+    candidate_content = patch.get("candidate_content", "hello").encode()
+    manifest_entries = [{"path": candidate_name, "kind": "file", "git_mode": "100644", "mode": "0400",
+                          "blob_oid": "f" * 40, "size_bytes": len(candidate_content),
+                          "sha256": sha(candidate_content)}]
+    manifest_doc = {"schema_version": 1, "kind": "candidate_content_manifest", "hash_algorithm": "sha256",
+                     "entries": manifest_entries, "file_count": 1, "directory_count": 0,
+                     "total_file_bytes": len(candidate_content)}
+    for path, value in patch.get("manifest_set", {}).items():
+        deep_set(manifest_doc, path, value)
+    manifest_bytes = hs.canonical(manifest_doc)
+
+    record_doc = {"schema_version": 1, "kind": "candidate_content_preparation", "status": "completed",
+                  "authority": "none", "qualification": "unavailable", "input_sha256": "0" * 64,
+                  "response_sha256": "0" * 64, "stage_result_sha256": "0" * 64, "receipt_sha256": "0" * 64,
+                  "request_ref": "r", "resolved_profile_ref": "p",
+                  "attempt": {"attempt_id": patch.get("attempt_id", "attempt.fixture-0001"),
+                              "attempt_number": patch.get("attempt_number", 1)},
+                  "source": dict(record_source), "candidate": dict(record_candidate),
+                  "manifest_sha256": sha(manifest_bytes), "storage_observation_sha256": "0" * 64,
+                  "producer": {"role": "fixture"},
+                  "ownership": {"state": "local-preparation-complete", "immutable": False,
+                                "authenticated_receipt": False, "supervisor_handoff": "required"}}
+    for path, value in patch.get("record_set", {}).items():
+        deep_set(record_doc, path, value)
+    record_bytes = hs.canonical(record_doc)
+
+    incident_body = {"deploy_authority": "none",
+                      "failing_check": {"check_id": "check.fixture", "kind": "named-check"},
+                      "git_revision_ref": {"repository_id": TARGET_REPO, "hash_algorithm": "sha1",
+                                           "commit_id": "a" * 40},
+                      "observed_at": "2026-01-01T00:00:00Z", "observed_symptom": "s",
+                      "reporter_actor_ref": "reporter.fixture", "target_repository_id": TARGET_REPO}
+    for path, value in patch.get("incident_set", {}).items():
+        deep_set(incident_body, path, value)
+    incident_doc = {"body": incident_body, "id": "shadow.incident.fixture",
+                     "kind": "shadow_incident_record", "schema_version": 1}
+    incident_bytes = hs.canonical(incident_doc)
+
+    # The general baseline's "installed" control files (build_tree.py) are
+    # arbitrary synthetic bytes; host-side control-mismatch is checked
+    # against them, so the default control digests here match THAT, not
+    # the real shipped files -- only the shipped-checker cross-check test
+    # (control_real=true) copies the real files over the installed ones
+    # first and needs the real digests here to match.
+    if patch.get("control_real"):
+        policy_sha, decision_sha, policy_set_sha = real_policy_sha, real_decision_sha, real_policy_set_sha
+        driver_sha, program_sha = real_driver_sha, real_program_sha
+    else:
+        policy_sha, decision_sha, policy_set_sha = (sha(b"synthetic-control_policy"),
+            sha(b"synthetic-control_decision"), sha(b"synthetic-control_policy_set"))
+        driver_sha, program_sha = sha(b"synthetic-evaluator_driver"), sha(b"synthetic-evaluator_program")
+
+    evaluation_doc = {"id": "sandbox.evaluation.fixture", "kind": "sandbox_policy_evaluation",
+                       "schema_version": 1,
+                       "body": {"verdict": "satisfied", "policy_ref": {"sha256": policy_sha},
+                                 "decision_ref": {"sha256": decision_sha},
+                                 "policy_set": {"sha256": policy_set_sha}}}
+    for path, value in patch.get("evaluation_set", {}).items():
+        deep_set(evaluation_doc, path, value)
+    evaluation_bytes = hs.canonical(evaluation_doc)
+
+    instruction_bytes = patch.get("instruction", "instr").encode()
+
+    control = {"decision_sha256": decision_sha, "evaluator_driver_sha256": driver_sha,
+               "evaluator_program_sha256": program_sha, "policy_sha256": policy_sha,
+               "policy_set_sha256": policy_set_sha,
+               "sandbox_evaluation_sha256": sha(evaluation_bytes)}
+    subject = {"environment_id": ENV_ID, "environment_entry_sha256": sha(hs.canonical(registry_entry)),
+               "target_repository_id": TARGET_REPO, "source": dict(record_source),
+               "candidate": {"preparation_record_sha256": sha(record_bytes),
+                             "manifest_sha256": sha(manifest_bytes),
+                             "commit_id": record_candidate["commit_id"], "tree_id": record_candidate["tree_id"]},
+               "incident_sha256": sha(incident_bytes)}
     body = {"attempt": {"attempt_id": patch.get("attempt_id", "attempt.fixture-0001"),
                         "attempt_number": patch.get("attempt_number", 1)},
-            "control": control, "instruction_sha256": filler,
+            "control": control, "instruction_sha256": sha(instruction_bytes),
             "nonce": patch.get("nonce", "ab" * 32),
             "store_id": patch.get("store_id", "store.fixture.v1"), "subject": subject}
     for path, value in patch.get("set", {}).items():
@@ -263,10 +360,15 @@ def main():
     else:
         request_bytes = hs.canonical(request_doc)
     mode = patch.get("frame", "ok")
-    incident_bytes = b"i" * patch["incident_bytes"] if "incident_bytes" in patch else b"{}\n"
-    records = [(b"request.json", request_bytes), (b"evaluation.json", b"{}\n"),
-               (b"incident.json", incident_bytes), (b"record.json", b"{}\n"),
-               (b"manifest.json", b"{}\n"), (b"instruction", b"instr")]
+    if "incident_bytes" in patch:
+        incident_bytes = b"i" * patch["incident_bytes"]
+    candidates = patch.get("candidates", [candidate_content.decode("latin1")])
+    candidate_records = [(("candidate/%05d" % i).encode(), c.encode("latin1") if isinstance(c, str) else c)
+                          for i, c in enumerate(candidates)]
+    records = ([(b"request.json", request_bytes), (b"evaluation.json", evaluation_bytes),
+                (b"incident.json", incident_bytes), (b"record.json", record_bytes),
+                (b"manifest.json", manifest_bytes), (b"instruction", instruction_bytes)]
+               + candidate_records)
     if mode == "ok":
         data = hs.frame_write(records)
     elif mode == "missing_record":
@@ -291,6 +393,8 @@ def main():
         exp_doc = {"body": exp_body, "id": "sandbox.expectation.fixture",
                    "kind": "sandbox_receipt_expectation", "schema_version": 1}
         open(patch["expectation_out"], "wb").write(hs.canonical(exp_doc))
+    if "evaluation_out" in patch:
+        open(patch["evaluation_out"], "wb").write(evaluation_bytes)
 
 if __name__ == "__main__":
     main()
@@ -305,6 +409,14 @@ build_tree() { # build_tree <placeholder: 0|1>  -> prints paths as JSON, sets gl
   # shellcheck disable=SC2034 # part of build_tree's documented fixture-path globals
   accepted_set=$(printf '%s' "$info" | "$jq_bin" -r .accepted_set)
   driver_path=$(printf '%s' "$info" | "$jq_bin" -r .driver_path)
+  registry_path=$(printf '%s' "$info" | "$jq_bin" -r .registry_path)
+  guest_kernel_config_path=$(printf '%s' "$info" | "$jq_bin" -r .guest_kernel_config_path)
+  toolchain_path=$(printf '%s' "$info" | "$jq_bin" -r .toolchain_path)
+  installed_control_policy=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy)
+  installed_control_decision=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_decision)
+  installed_control_policy_set=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy_set)
+  installed_evaluator_driver=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.evaluator_driver)
+  installed_evaluator_program=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.evaluator_program)
   /bin/rm -rf -- "${work_root:?}"/*
 }
 build_pkg() { # build_pkg <out-file> <json-patch>
@@ -345,6 +457,17 @@ expect_admitted() { # expect_admitted <desc> <pkg-file> -> leaves receipt path i
   [ "$status" -eq 0 ] || fail "$desc: expected exit 0, got $status ($(cat "$base/err"))"
   [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
   [ ! -s "$base/err" ] || fail "$desc: stderr must be empty"
+}
+expect_phase_b_refused() { # expect_phase_b_refused <desc> <attempt_id> <pkg-file> <expected-reasons-json>
+  local desc=$1 attempt_id=$2 pkgfile=$3 expected=$4 status=0 admission reasons
+  run_launch "$pkgfile" || status=$?
+  [ "$status" -eq 0 ] || fail "$desc: expected exit 0 (a refusal receipt, not a phase A error), got $status ($(cat "$base/err"))"
+  [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
+  [ ! -s "$base/err" ] || fail "$desc: stderr must be empty"
+  admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
+  [ "$admission" = refused ] || fail "$desc: expected lifecycle.admission refused, got $admission"
+  reasons=$("$jq_bin" -c -S '.reason_ids' "$store_root/$attempt_id/payload/refusal.json")
+  [ "$reasons" = "$expected" ] || fail "$desc: expected reason_ids $expected, got $reasons"
 }
 canonical_ok() { # canonical_ok <desc> <json-file>
   local desc=$1 file=$2
@@ -616,23 +739,22 @@ pass 'the stub receipt for an admitted attempt records lifecycle.admission admit
 # own shape (R3/R10.3), even though it is refused against the shipped
 # (empty) accepted set, matching R10.2's documented behavior exactly.
 # =============================================================================
-# Built first (and fed back into the request's control.sandbox_evaluation_sha256
-# below) so the receipt's control block matches this file's own digest, the
-# real shipped control/v1 fixed-file digests, and a "satisfied" evaluation
-# shape: everything the shipped checker's is_control_mismatch/
-# is_evaluation_not_satisfied require, so the cross-check below is refused
-# for exactly the three shipped-empty-accepted-set reasons, nothing else.
-"$python" -c "
-import json
-h = {'id': 'sandbox.evaluation.fixture', 'kind': 'sandbox_policy_evaluation', 'schema_version': 1,
-     'body': {'verdict': 'satisfied',
-       'policy_ref': {'sha256': '$real_policy_sha'},
-       'decision_ref': {'sha256': '$real_decision_sha'},
-       'policy_set': {'sha256': '$real_policy_set_sha'}}}
-open('$base/evaluation.json', 'w').write(json.dumps(h, sort_keys=True, separators=(',', ':')) + chr(10))
-"
-evaluation_sha256=$(sha_file "$base/evaluation.json")
-build_pkg "$base/pkg-check.json" '{"attempt_id":"attempt.fixture-check","nonce":"3333333333333333333333333333333333333333333333333333333333333333","evaluation_sha256":"'"$evaluation_sha256"'","expectation_out":"'"$base/expectation.json"'"}'
+# The installed control files are copied to the real shipped bytes (so
+# host-side control-mismatch also passes) and control_real=true makes
+# build_pkg use the same real digests -- everything the shipped checker's
+# is_control_mismatch/is_evaluation_not_satisfied require, so the
+# cross-check below is refused for exactly the three shipped-empty-
+# accepted-set reasons, nothing else.
+/bin/chmod 644 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
+  "$installed_evaluator_driver" "$installed_evaluator_program"
+/bin/cp "$root/control/v1/sandbox-policy.json" "$installed_control_policy"
+/bin/cp "$root/control/v1/sandbox-decision.json" "$installed_control_decision"
+/bin/cp "$root/control/v1/control-policy-set.json" "$installed_control_policy_set"
+/bin/cp "$root/control/v1/evaluate-sandbox.sh" "$installed_evaluator_driver"
+/bin/cp "$root/control/v1/sandbox.jq" "$installed_evaluator_program"
+/bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
+  "$installed_evaluator_driver" "$installed_evaluator_program"
+build_pkg "$base/pkg-check.json" '{"attempt_id":"attempt.fixture-check","nonce":"3333333333333333333333333333333333333333333333333333333333333333","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
 expect_admitted 'the attempt used for the shipped-checker cross-check' "$base/pkg-check.json"
 check_out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$root/enforcement/v1/check-sandbox-receipt.sh" check \
   "$store_root/attempt.fixture-check/receipt.json" "$base/expectation.json" "$base/evaluation.json"))
@@ -641,6 +763,192 @@ reasons=$("$jq_bin" -c -S '.body.reason_ids' <<<"$check_out")
 [ "$reasons" = '["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]' ] ||
   fail "shipped checker: expected the three shipped-empty-set reasons, got $reasons"
 pass 'the shipped check-sandbox-receipt.sh accepts the receipt and expectation shape and refuses it only with the three shipped-empty-accepted-set reasons (receipt.environment-unlisted, receipt.identity-unaccepted, receipt.stale), never receipt.malformed'
+
+# =============================================================================
+# R4.2 phase B: every one of the twelve subject and six control leaf fields
+# mutated alone, artifacts intact, refused with its own reason and never
+# admitted (R15.1). Each case gets its own attempt id/nonce so none of them
+# need a tree rebuild in between; a hex value is always built by length so
+# none is miscounted.
+# =============================================================================
+build_tree 0
+hex64() { python3 -c "print('9' * 64)"; }
+hex40() { python3 -c "print('9' * 40)"; }
+n=0
+phase_b_case() { # phase_b_case <desc> <patch-json-without-braces> <expected-reasons-json>
+  n=$((n + 1))
+  local desc=$1 extra=$2 expected=$3 attempt_id="attempt.fixture-pb-$n" nonce
+  nonce=$(printf '%064d' "$n")
+  build_pkg "$base/pkg-pb.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$nonce"'",'"$extra"'}'
+  expect_phase_b_refused "$desc" "$attempt_id" "$base/pkg-pb.json" "$expected"
+}
+MISMATCH='["launch.subject-mismatch"]'
+phase_b_case 'subject.environment_id' '"set":{"subject.environment_id":"env.other-fixture"}' \
+  '["launch.environment-unlisted"]'
+phase_b_case 'subject.environment_entry_sha256' '"set":{"subject.environment_entry_sha256":"'"$(hex64)"'"}' \
+  '["launch.environment-unlisted"]'
+# Also trips subject-mismatch: the incident's own target_repository_id
+# (unchanged) is cross-checked against this same subject field (R4.2).
+phase_b_case 'subject.target_repository_id' '"set":{"subject.target_repository_id":"target.other"}' \
+  '["launch.environment-unlisted","launch.subject-mismatch"]'
+phase_b_case 'subject.source.repository_id' '"set":{"subject.source.repository_id":"target.other"}' "$MISMATCH"
+# hash_algorithm is a closed sha1/sha256 pair: changing it alone would break
+# phase A's own oid_ok length check, so commit_id/tree_id are re-shaped to
+# stay phase-A valid -- record.json still says sha1, so this still reaches
+# phase B as one field's mutation, not a shape change.
+# parse_request validates candidate.commit_id/tree_id against this SAME
+# hash_algorithm too, so they are re-shaped to 64 hex chars right alongside
+# source's, purely to stay phase-A valid (record.json still says sha1, so
+# subject-mismatch is still what phase B gives).
+phase_b_case 'subject.source.hash_algorithm' \
+  '"set":{"subject.source.hash_algorithm":"sha256","subject.source.commit_id":"'"$(hex64)"'","subject.source.tree_id":"'"$(hex64)"'","subject.candidate.commit_id":"'"$(hex64)"'","subject.candidate.tree_id":"'"$(hex64)"'"}' \
+  "$MISMATCH"
+phase_b_case 'subject.source.commit_id' '"set":{"subject.source.commit_id":"'"$(hex40)"'"}' "$MISMATCH"
+phase_b_case 'subject.source.tree_id' '"set":{"subject.source.tree_id":"'"$(hex40)"'"}' "$MISMATCH"
+phase_b_case 'subject.candidate.preparation_record_sha256' \
+  '"set":{"subject.candidate.preparation_record_sha256":"'"$(hex64)"'"}' '["launch.record-mismatch"]'
+phase_b_case 'subject.candidate.manifest_sha256' \
+  '"set":{"subject.candidate.manifest_sha256":"'"$(hex64)"'"}' '["launch.manifest-mismatch"]'
+phase_b_case 'subject.candidate.commit_id' '"set":{"subject.candidate.commit_id":"'"$(hex40)"'"}' "$MISMATCH"
+phase_b_case 'subject.candidate.tree_id' '"set":{"subject.candidate.tree_id":"'"$(hex40)"'"}' "$MISMATCH"
+phase_b_case 'subject.incident_sha256' '"set":{"subject.incident_sha256":"'"$(hex64)"'"}' "$MISMATCH"
+for field in evaluator_driver_sha256 evaluator_program_sha256 sandbox_evaluation_sha256; do
+  phase_b_case "control.$field" '"set":{"control.'"$field"'":"'"$(hex64)"'"}' '["launch.control-mismatch"]'
+done
+# decision/policy/policy_set also feed evaluation_satisfied's own check
+# (against this same, now-tampered, request-echoed control block).
+for field in decision_sha256 policy_sha256 policy_set_sha256; do
+  phase_b_case "control.$field" '"set":{"control.'"$field"'":"'"$(hex64)"'"}' \
+    '["launch.control-mismatch","launch.evaluation-not-satisfied"]'
+done
+pass 'each of the twelve subject and six control leaf fields, mutated alone in the request with every artifact intact, refuses with its own R4.2 reason and is never admitted'
+
+# The installed registry itself missing the environment entry entirely
+# (not just a subject-side field mismatch) is the same launch.environment-
+# unlisted reason.
+/bin/chmod 644 "$registry_path"
+"$jq_bin" -c '.body.environments = []' "$registry_path" > "$base/bad-registry.json"
+/bin/cp "$base/bad-registry.json" "$registry_path"
+/bin/chmod 444 "$registry_path"
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-noregentry","nonce":"'"$(printf '%064d' 89)"'"}'
+expect_phase_b_refused 'the installed registry has no entry at all for the environment' attempt.fixture-pb-noregentry \
+  "$base/pkg-pb.json" '["launch.environment-unlisted"]'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+pass 'an installed registry with no entry at all for the environment is refused launch.environment-unlisted the same as a subject-side mismatch'
+
+# =============================================================================
+# Every remaining phase B reason, alone: evaluation, candidate transport and
+# size, instruction binding, identity and kernel-config.
+# =============================================================================
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-eval","nonce":"'"$(printf '%064d' 90)"'","evaluation_set":{"body.verdict":"unsatisfied"}}'
+expect_phase_b_refused 'evaluation not satisfied' attempt.fixture-pb-eval "$base/pkg-pb.json" '["launch.evaluation-not-satisfied"]'
+
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-cand","nonce":"'"$(printf '%064d' 91)"'","candidates":["not-hello"]}'
+expect_phase_b_refused 'candidate bytes differ from the manifest entry' attempt.fixture-pb-cand "$base/pkg-pb.json" \
+  '["launch.candidate-mismatch"]'
+
+oversize_content=$(python3 -c "print('x' * (64 * 1024 * 1024 + 1))")
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-oversize","nonce":"'"$(printf '%064d' 92)"'","candidates":["'"$oversize_content"'"]}'
+expect_phase_b_refused 'candidate bytes above the 64 MiB preparation export limit' attempt.fixture-pb-oversize \
+  "$base/pkg-pb.json" '["launch.candidate-mismatch","launch.candidate-oversize"]'
+unset oversize_content
+
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-instrmis","nonce":"'"$(printf '%064d' 93)"'","set":{"instruction_sha256":"'"$(hex64)"'"}}'
+expect_phase_b_refused 'instruction_sha256 alone differs from the supplied instruction bytes' attempt.fixture-pb-instrmis \
+  "$base/pkg-pb.json" '["launch.instruction-mismatch"]'
+
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-instrunacc","nonce":"'"$(printf '%064d' 94)"'","instruction":"unaccepted-instr"}'
+expect_phase_b_refused 'the request and the supplied instruction bytes agree, but that digest is not accepted' \
+  attempt.fixture-pb-instrunacc "$base/pkg-pb.json" '["launch.instruction-unaccepted"]'
+
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-instrok","nonce":"'"$(printf '%064d' 95)"'"}'
+expect_admitted 'instruction binding positive control: an accepted instruction, both digests intact' "$base/pkg-pb.json"
+
+# A real read failure on an already-R10.1-validated, held-open fd has no
+# natural trigger short of a genuine I/O fault (chmod down to unreadable
+# would instead fail the R10.1 walk itself, E_INSTALL_ACL, before phase B
+# ever runs) -- simulated via the test-only YSTACK_TEST_IDENTITY_UNREADABLE
+# hook instead.
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-idmiss","nonce":"'"$(printf '%064d' 96)"'"}'
+status=0
+YSTACK_TEST_IDENTITY_UNREADABLE=guest_init run_launch "$base/pkg-pb.json" || status=$?
+[ "$status" -eq 0 ] || fail "identity-missing: expected exit 0, got $status ($(cat "$base/err"))"
+[ ! -s "$base/out" ] || fail 'identity-missing: stdout must be empty'
+[ ! -s "$base/err" ] || fail 'identity-missing: stderr must be empty'
+admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/attempt.fixture-pb-idmiss/receipt.json")
+[ "$admission" = refused ] || fail "identity-missing: expected lifecycle.admission refused, got $admission"
+reasons=$("$jq_bin" -c -S '.reason_ids' "$store_root/attempt.fixture-pb-idmiss/payload/refusal.json")
+[ "$reasons" = '["launch.identity-missing"]' ] || fail "identity-missing: expected launch.identity-missing alone, got $reasons"
+pass 'an installed identity that cannot be read (the test-only YSTACK_TEST_IDENTITY_UNREADABLE hook) is refused launch.identity-missing alone'
+
+/bin/chmod 644 "$toolchain_path"
+/usr/bin/printf 'different-toolchain' > "$toolchain_path"
+/bin/chmod 444 "$toolchain_path"
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-idunacc","nonce":"'"$(printf '%064d' 97)"'"}'
+expect_phase_b_refused 'a readable identity whose measured digest is not in the accepted list' attempt.fixture-pb-idunacc \
+  "$base/pkg-pb.json" '["launch.identity-unaccepted"]'
+pass 'every remaining R4.2 phase B reason (evaluation not satisfied, candidate content and size, instruction binding both ways, an unreadable identity and an unaccepted identity) is refused alone with its own reason, paired against an accepted instruction/identity control'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# =============================================================================
+# R2.3 candidate transport: the three R15.1 tricky paths admit cleanly (the
+# manifest's own "path" field never affects the byte-for-byte content check).
+# =============================================================================
+build_tree 0
+name_63x63=$(python3 -c "print('/'.join(['d' * 63] * 63) + '/' + 'f' * 64)")
+i=0
+for name in "README.md" "$(python3 -c 'print("é" * 40)')" "$name_63x63"; do
+  i=$((i + 1))
+  build_pkg "$base/pkg-path.json" '{"attempt_id":"attempt.fixture-path-'"$i"'","nonce":"'"$(printf '%064d' $((100 + i)))"'","candidate_name":"'"$name"'"}'
+  expect_admitted "candidate transport: a manifest path of ${#name} bytes" "$base/pkg-path.json"
+done
+pass 'a candidate transported under README.md, a non-ASCII UTF-8 manifest path and a 4,096-byte 64-component path all admit cleanly: the manifest path never affects the byte-for-byte content check'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# =============================================================================
+# R2.4: the closed kernel `=y` set refuses each option absent, and the whole
+# set with the last one downgraded to `=m` (kernel-config, paired control).
+# =============================================================================
+kernel_required_options=(
+  CONFIG_PCI CONFIG_PCI_HOST_GENERIC CONFIG_VIRTIO CONFIG_VIRTIO_PCI
+  CONFIG_VIRTIO_BLK CONFIG_BLK_DEV_INITRD CONFIG_DEVTMPFS CONFIG_PROC_FS
+  CONFIG_SYSFS CONFIG_TMPFS CONFIG_CGROUPS CONFIG_MEMCG
+  CONFIG_CGROUP_PIDS CONFIG_CGROUP_SCHED CONFIG_FAIR_GROUP_SCHED
+  CONFIG_CFS_BANDWIDTH CONFIG_PID_NS CONFIG_NET_NS CONFIG_SECCOMP
+  CONFIG_SECCOMP_FILTER CONFIG_SECURITY_LANDLOCK CONFIG_FANOTIFY
+  CONFIG_FANOTIFY_ACCESS_PERMISSIONS
+)
+build_pkg "$base/pkg-ok.json" '{}'
+expect_admitted 'kernel-config control: the full =y set admits' "$base/pkg-ok.json"
+
+/bin/chmod 644 "$guest_kernel_config_path"
+/usr/bin/printf 'CONFIG_HZ_250=y\n' > "$guest_kernel_config_path"
+/bin/chmod 444 "$guest_kernel_config_path"
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-absent","nonce":"'"$(printf '%064d' 110)"'"}'
+expect_phase_b_refused 'every required kernel option absent' attempt.fixture-kcfg-absent "$base/pkg-pb.json" \
+  '["launch.identity-unaccepted","launch.kernel-config"]'
+
+/bin/chmod 644 "$guest_kernel_config_path"
+: > "$guest_kernel_config_path"
+last=$((${#kernel_required_options[@]} - 1))
+for idx in "${!kernel_required_options[@]}"; do
+  if [ "$idx" -eq "$last" ]; then
+    printf '%s=m\n' "${kernel_required_options[$idx]}" >> "$guest_kernel_config_path"
+  else
+    printf '%s=y\n' "${kernel_required_options[$idx]}" >> "$guest_kernel_config_path"
+  fi
+done
+printf 'CONFIG_HZ_250=y\n' >> "$guest_kernel_config_path"
+/bin/chmod 444 "$guest_kernel_config_path"
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-m","nonce":"'"$(printf '%064d' 111)"'"}'
+expect_phase_b_refused 'the last required kernel option =m instead of =y' attempt.fixture-kcfg-m "$base/pkg-pb.json" \
+  '["launch.identity-unaccepted","launch.kernel-config"]'
+pass 'the R2.4 closed =y set refuses launch.kernel-config both when every option is absent and when the set is otherwise complete but the last option is =m, paired against the full =y control'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
 
 # R2.3/store-write descriptor pinning: renaming store_root aside and
 # symlinking a replacement in between admission and the write must not
