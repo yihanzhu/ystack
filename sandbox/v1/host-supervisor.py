@@ -153,8 +153,9 @@ def parse_package(data):
 
 # --- macOS ACL (R10.1, R10.2): acl_get_fd_np(ACL_TYPE_EXTENDED) via ctypes -
 ACL_TYPE_EXTENDED = 0x100
-ACL_FIRST_ENTRY, ACL_NEXT_ENTRY = 0, 1
+ACL_FIRST_ENTRY, ACL_NEXT_ENTRY = 0, -1  # <sys/acl.h>; NEXT is -1, not 1
 ACL_EXTENDED_ALLOW = 1
+MAX_DARWIN_ACL_ENTRIES = 128
 ID_TYPE_UID = 0
 # WRITE_DATA|APPEND_DATA|DELETE|DELETE_CHILD|WRITE_ATTRIBUTES|WRITE_EXTATTRIBUTES|
 # WRITE_SECURITY|CHANGE_OWNER (bits 2,4,5,6,8,10,12,13); read/execute bits excluded.
@@ -223,6 +224,8 @@ def darwin_acl_entries(fd):
                 if lib.acl_get_perm_np(permset, bit):
                     bits |= bit
             entries.append((tag.value, id_type, id_value, bits))
+            if len(entries) > MAX_DARWIN_ACL_ENTRIES:
+                raise OSError(0, "too many ACL entries")
             rc = lib.acl_get_entry(acl, ACL_NEXT_ENTRY, ctypes.byref(entry))
     finally:
         lib.acl_free(acl)
@@ -544,6 +547,39 @@ def check_store_root(store_root, principal_uid, consumer_gid):
 
 
 # --- R3.1 request shape (phase A: shape only, no cross-referencing) -------
+REQUEST_JSON_DEPTH = 32  # matches prepare-candidate.py's own LIMITS["json_depth"]
+
+
+def bounded_json_nesting(data):
+    """A pre-parse, non-recursive brace/bracket scan (mirrors
+    preparation/v1/prepare-candidate.py's own bounded_json_nesting): caps
+    nesting before json.loads ever recurses, so a request.json with
+    thousands of nested arrays refuses E_PACKAGE instead of a
+    RecursionError traceback and exit 1."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in data:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):
+            depth += 1
+            if depth > REQUEST_JSON_DEPTH:
+                refuse("E_PACKAGE")
+        elif byte in (0x7D, 0x5D):
+            depth -= 1
+    if in_string or depth != 0:
+        refuse("E_PACKAGE")
+
+
 CONTROL_KEYS = {"decision_sha256", "evaluator_driver_sha256", "evaluator_program_sha256",
                 "policy_sha256", "policy_set_sha256", "sandbox_evaluation_sha256"}
 SOURCE_KEYS = {"repository_id", "hash_algorithm", "commit_id", "tree_id"}
@@ -575,9 +611,12 @@ def id_ok(value):
 
 
 def parse_request(raw):
+    bounded_json_nesting(raw)
     try:
         doc = json.loads(raw)
     except ValueError:
+        refuse("E_PACKAGE")
+    except RecursionError:
         refuse("E_PACKAGE")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_PACKAGE")
     require(doc.get("kind") == "sandbox_launch_request" and doc.get("schema_version") == 1, "E_PACKAGE")
@@ -812,7 +851,7 @@ def run_launch(argv):
     for fd in fixed_fds.values():
         os.close(fd)
     config_named = (list(config["identity_paths"].values()) + list(config["installed_files"].values())
-                    + [config["runtime"]["vfkit"]])
+                    + [config["runtime"]["vfkit"], config["runtime"]["driver"]])
     accepted_set_path = config["installed_files"]["accepted_set"]
     accepted_set_fd = None
     for path in config_named:

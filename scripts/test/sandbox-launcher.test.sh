@@ -190,7 +190,8 @@ def main():
     open(config_path, "wb").write(canon(config_doc))
     os.chmod(config_path, 0o444)
     print(json.dumps({"install_dir": install_dir, "store_root": store_root,
-                       "config_path": config_path, "accepted_set": installed_files["accepted_set"]}))
+                       "config_path": config_path, "accepted_set": installed_files["accepted_set"],
+                       "driver_path": driver_path}))
 
 if __name__ == "__main__":
     main()
@@ -254,8 +255,13 @@ def main():
         deep_set(body, path, _DELETE)
     request_doc = {"body": body, "id": "sandbox.launch-request.fixture",
                    "kind": "sandbox_launch_request", "schema_version": 1}
-    request_bytes = (json.dumps(patch["raw_request"], ensure_ascii=False).encode()
-                     if "raw_request" in patch else hs.canonical(request_doc))
+    if "raw_request_depth" in patch:
+        n = patch["raw_request_depth"]  # built flat, so json.dumps never has to recurse either
+        request_bytes = b"[" * n + b"1" + b"]" * n
+    elif "raw_request" in patch:
+        request_bytes = json.dumps(patch["raw_request"], ensure_ascii=False).encode()
+    else:
+        request_bytes = hs.canonical(request_doc)
     mode = patch.get("frame", "ok")
     incident_bytes = b"i" * patch["incident_bytes"] if "incident_bytes" in patch else b"{}\n"
     records = [(b"request.json", request_bytes), (b"evaluation.json", b"{}\n"),
@@ -298,6 +304,7 @@ build_tree() { # build_tree <placeholder: 0|1>  -> prints paths as JSON, sets gl
   config_path=$(printf '%s' "$info" | "$jq_bin" -r .config_path)
   # shellcheck disable=SC2034 # part of build_tree's documented fixture-path globals
   accepted_set=$(printf '%s' "$info" | "$jq_bin" -r .accepted_set)
+  driver_path=$(printf '%s' "$info" | "$jq_bin" -r .driver_path)
   /bin/rm -rf -- "${work_root:?}"/*
 }
 build_pkg() { # build_pkg <out-file> <json-patch>
@@ -391,6 +398,36 @@ for target_desc_pair in "$config_path:the trusted config file" "$base/root/insta
   pass "$desc carrying one ACL entry is refused E_INSTALL_ACL before stdin is read, paired against the same tree without it"
 done
 
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  # Multi-entry ACL regression for the P1 fix: Darwin's ACL_NEXT_ENTRY is
+  # -1, not 1 -- with the wrong constant the entry iterator never advances
+  # past the first entry, so a second entry is silently never inspected.
+  build_tree 0
+  build_pkg "$base/pkg-ok.json" '{}'
+  /bin/chmod +a "$(id -un) deny append" "$config_path"
+  /bin/chmod +a "everyone deny write" "$config_path"
+  expect_admitted 'two deny-only ACL entries on the trusted config file' "$base/pkg-ok.json"
+  /bin/chmod -N "$config_path"
+  build_tree 0
+  build_pkg "$base/pkg-ok.json" '{}'
+  /bin/chmod +a "$(id -un) deny append" "$config_path"
+  /bin/chmod +a "everyone allow write" "$config_path"
+  expect_refused 'E_INSTALL_ACL: two entries, the second an everyone-allow-write grant' E_INSTALL_ACL "$base/pkg-ok.json"
+  /bin/chmod -N "$config_path"
+  build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
+  pass 'a multi-entry ACL is walked in full: two deny-only entries admit, two entries including an everyone-allow-write grant refuse E_INSTALL_ACL -- proving the ACL_NEXT_ENTRY fix actually advances past the first entry'
+fi
+
+# runtime.driver, like vfkit, is a config-listed file (R10.1) and must be
+# walked: a world-writable driver, outside the install tree, is refused.
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+/bin/chmod 666 "$driver_path"
+expect_refused 'E_CONFIG: runtime.driver itself is world-writable' E_CONFIG "$base/pkg-ok.json"
+/bin/chmod 555 "$driver_path"
+expect_admitted 'control: runtime.driver restored to non-writable' "$base/pkg-ok.json"
+pass 'runtime.driver, alongside runtime.vfkit, is included in the R10.1 config-named walk: a world-writable driver is refused E_CONFIG, paired against the same tree without it'
+
 # A group/other-writable ancestor (no ACL entry, just a bad mode) is
 # refused too, not only caught by luck when some other path crosses it.
 build_tree 0
@@ -483,6 +520,10 @@ expect_refused 'E_PACKAGE: subject.candidate.commit_id is 41 hex chars, not the 
 build_pkg "$base/pkg-bad.json" '{"set":{"attempt.attempt_number":true}}'
 expect_refused 'E_PACKAGE: attempt_number is a bool, not an int (Python bool is an int subclass)' E_PACKAGE "$base/pkg-bad.json"
 pass 'every frame and request-shape deviation (including a null or wrong-length source/candidate commit_id or tree_id, and a boolean attempt_number) is refused E_PACKAGE, paired against the accepted control'
+
+build_pkg "$base/pkg-bad.json" '{"raw_request_depth":2000}'
+expect_refused 'E_PACKAGE: request.json nested 2,000 levels deep is bounded, not a RecursionError traceback' E_PACKAGE "$base/pkg-bad.json"
+pass 'a request.json with far more nesting than the 32-level cap is refused E_PACKAGE (the pre-parse bounded_json_nesting scan), never a RecursionError exiting 1'
 
 build_pkg "$base/pkg-incident.json" '{"incident_bytes":262144}'
 expect_admitted 'an incident.json record at exactly the 262,144-byte cap' "$base/pkg-incident.json"
