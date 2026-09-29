@@ -738,6 +738,20 @@ for the accepted blockers and later implementation dependencies. Restoring
 these records and the declaration evaluator does not restore a qualified
 launcher; real execution remains blocked.
 
+Restore the seven paths in the manifest's inactive sandbox receipt check block,
+then run:
+
+```sh
+bash scripts/test/sandbox-receipt.test.sh
+```
+
+This checks kind separation, receipt and expectation shape, placeholder digests,
+attempt, subject and control binding, the accepted identity set, accounting
+rows, outcome derivation, driver input limits and postflight mutation detection.
+The check is inactive and never authenticates origin. Restoring it installs no
+supervisor or receipt store, selects no runtime or credential, and makes no
+receipt count as enforcement.
+
 Restore the five paths in the manifest's inactive credential-policy block, then
 run:
 
