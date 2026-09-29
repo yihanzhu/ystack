@@ -258,21 +258,18 @@ Citations are to origin/main at `e73b76a`.
 | `scratch_bytes` | `mechanism.scratch.tmpfs-no-free.v1` | tmpfs `size=` the R12.2 value, `nr_inodes=4096`; no remove, truncate, hole punch, `O_TMPFILE` or `MADV_REMOVE` (R6.2-R6.3) | Used blocks times block size after tree termination; block size |
 
 2. **CPU and wall are `enforcement: "none"` in every receipt.** Both bounds need the
-   tree to stop by a known instant, and the only host-side stop, `HardStop`, has no
-   known completion bound: the stop is *confirmed* at host time `T_c` when the runtime
-   reports the VM stopped and the supervisor has reaped vfkit with `waitpid`, but
-   nothing bounds `T_c` after `HardStop` is issued. An attempt that stopped early shows
-   only that it stayed under the limits, not that the mechanism prevents overrun
-   (`work/enforcement-evidence-binding/spec.md:215-221`). Both rows still record the
-   configured mechanism, the observed values and `reached`. **Consequence:** under the
-   R8 derivation (`:288-292`), `failure.enforcement-unavailable` makes every admitted
-   receipt from this component `failed`; none can be `satisfied` or `violated`. That is
-   acceptable for an inactive component. The only path to `hard` is for `vml-qualify`
-   (R13.4) to measure and record a `HardStop` completion bound, and then a G2 amendment
-   of this spec to adopt it. Given such a bound `B`, CPU would be at most 0.45 (50,000 +
-   `B`) + 45 + 9 ceil((50,000 + `B`)/100) ms, from the 45% quota with one quota of
-   carry-in and at most 9 ms overrun per 100 ms period (bandwidth slice plus a tick at
-   `CONFIG_HZ` 250 or more), and wall would be at most 50,000 + `B` ms. Memory: the tree
+   tree stopped by a known instant, and nothing bounds when `HardStop` completes (the
+   stop is *confirmed* when the runtime reports it and vfkit is reaped with
+   `waitpid`). An early stop shows only that one attempt stayed under the limits
+   (`work/enforcement-evidence-binding/spec.md:215-221`). The rows still record
+   mechanism, values and `reached`. **Consequence:** by R8 (`:288-292`),
+   `failure.enforcement-unavailable` makes every admitted receipt `failed`, never
+   `satisfied` or `violated`, which is acceptable for an inactive component. This spec
+   gives these rows no route to `hard`. That needs a future concern that either (i)
+   specifies a structural deadline-to-termination bound (for example a guest-side hard
+   power-off below the verifier's privilege plus a host bound on runtime teardown), or
+   (ii) asks the operator to accept an empirical standard (`AGENTS.md:46-49`). A
+   measured stop latency is an observation, not a bound. Memory: the tree
    cannot hold more memory than the guest has. Output and scratch: the size limit
    refuses allocation beyond it, and with every free and overwrite path denied, final
    usage equals peak usage and the streams' final sizes equal the bytes written, so the
@@ -357,13 +354,12 @@ Citations are to origin/main at `e73b76a`.
    confirmation, which is when it sends `SIGKILL` at 58,000 ms (R9.1). It does not wait
    again. That receipt then records `teardown` `{state: "unconfirmed", tree_terminated:
    false}` with `storage_destroyed` as found, `lifecycle.runtime: "error"`, the wall row
-   `unavailable`, the CPU and wall rows `enforcement: "none"`, and, since no guest report
-   exists, `exit_state: "not-started"` with `exit_code: null` and empty payload streams.
-   The receipt contract permits `not-started` only with `runtime: "error"`
-   (`work/enforcement-evidence-binding/spec.md:143-146`), and here it means that no
-   verifier exit was observed. The receipt contract has no distinct "exit unobserved"
-   value, and adding one would be an `enforcement/v1` change (a return-to-G2
-   dependency); every such receipt is `failed` anyway.
+   `unavailable`, and, since no guest report exists, `exit_state: "not-started"` with
+   `exit_code: null` and empty payload streams. For an admitted attempt the contract
+   permits `not-started` only with `runtime: "error"`
+   (`work/enforcement-evidence-binding/spec.md:143-146`); here it means no verifier exit
+   was observed. A distinct "exit unobserved" value would be an `enforcement/v1` change
+   (a return-to-G2 dependency); every such receipt is `failed` anyway.
 
 ### R10. Configuration, store and receipt
 
@@ -449,7 +445,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    the candidate (at most 64 MiB), tools and output (10 MiB), and a multiple of both
    4 KiB and 16 KiB pages keeps the bound exact.
 3. The only `shadow/v1/**` changes are that append (with `proof_state: "unproven"`) and,
-   after R13.4 and the R7.2 amendment only, that entry's `proof_state` changed to
+   after a qualified R13.4 result only, that entry's `proof_state` changed to
    `"native-qualified"`. The only `enforcement/v1/**` change is, at that same point,
    appending that environment's
    entry to `accepted-identities.json` under
@@ -462,8 +458,8 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    Requests are posted only when their package is reviewed and merged, in the order
    R13.2a, R13.2b, R13.3, R13.4. Nothing enables before all four are approved. Plan
    steps 1-4 (R14.4) are inactive and CI-tested with the fake runtime. Step 5 waits for
-   R13.2a, step 6 for R13.2b, step 7 for R13.3, step 8 for R13.4, and step 9 also for
-   the G2 amendment of R7.2.
+   R13.2a, step 6 for R13.2b, step 7 for R13.3, step 8 for R13.4, and step 9 for a
+   qualified result from step 8 (R13.4).
 2. Intent decision 1 is split into two requests, because the install request must
    quote measurements that only an acquisition can produce.
    - **a. `vml-acquire`:** the vfkit tag and asset, the kernel package (distribution,
@@ -490,18 +486,23 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 4. **`vml-qualify`** (intent decision 2): the R12.1 entry bytes; the proposed
    accepted-set entry bytes (ten slots, six mechanism ids, `scratch_bytes`); the probe
    list with expected receipt outcomes: the real verifier on match, mismatch and one
-   changed-byte refusal, the `HardStop` completion latency over repeated forced stops
-   (R7.2), and `probe` modes for candidate reads under the dropped identity, candidate
-   and tools writes, evidence read, list, reopen, truncate, link and rename, scratch
-   free paths, scratch fill, output overflow, each socket family, host and sibling
-   sentinels, environment and descriptors, fork and thread bombs, a 32-thread CPU spin,
-   memory exhaustion, sleep, signalling the supervisor, namespace and cgroup escape, and
-   forged report text on stdout and evidence; the candidate source (the scrubbed
-   dummy-target copy at its step-7 commit); synthetic sentinel locations; the separate
-   qualification install directory and accepted set, removed afterwards; supervisor
-   resource measurements. Approval authorizes only that run and its qualification
-   record. The R12.3 changes land in one reviewed PR only after a G2 amendment adopts a
-   measured `HardStop` bound, since before that no receipt can be `satisfied` (R7.2).
+   changed-byte refusal, the forced-stop latency over repeated `HardStop`s (recorded
+   information only, not a bound, R7.2), and `probe` modes for candidate reads under the
+   dropped identity, candidate and tools writes, evidence read, list, reopen, truncate,
+   link and rename, scratch free paths, scratch fill, output overflow, each socket
+   family, host and sibling sentinels, environment and descriptors, fork and thread
+   bombs, a 32-thread CPU spin, memory exhaustion, sleep, signalling the supervisor,
+   namespace and cgroup escape, and forged report text on stdout and evidence; the
+   candidate source (the scrubbed dummy-target copy at its step-7 commit); synthetic
+   sentinel locations; the separate qualification install directory and accepted set,
+   removed afterwards; supervisor resource measurements. Approval authorizes only that
+   run and its qualification record. R12.3 waits only on a qualified result, which needs
+   every boundary row enforced (`work/real-sandbox-boundary/spec.md:63-66`). CPU and
+   wall stay `none`, so here the run proves the other rows but cannot qualify: R12.3
+   does not land and the entry stays `unproven`. Step-8 R7.1 needs a `satisfied` receipt
+   and qualification (`work/step8-bounded-write-readiness/spec.md:275-279`), so concerns
+   5 and 6 may be built inactive, but no write scope is proposable until an R7.2 future
+   concern lands.
 
 ### R14. Inactivity and files
 
@@ -509,7 +510,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    request names it: acquisition, quarantine measurement and builds after `vml-acquire`;
    installation after `vml-install`; the account, sudo rule and store after
    `vml-trust-root`; VM boots, probes and the qualification record after `vml-qualify`;
-   the R12.3 PR after the R7.2 amendment as well. No credential, model call, target
+   the R12.3 PR only after a qualified result (R13.4). No credential, model call, target
    execution beyond R13.4, activation or write is ever authorized here. Production use
    stays blocked until every gate has passed. Until then it refuses by construction: no
    host configuration exists, and the shipped accepted set is empty.
@@ -582,11 +583,9 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      `none` in every case;
    - success, violation, refusal, guest deadline, host `HardStop`, cancellation, runtime
      error, damaged or absent export, and storage removal failure (an unexpected entry);
-   - a delayed stop: a fake runtime that ignores `HardStop` and never reports stopped
-     yields the R9.5 finalization at the 58,000 ms abandonment (never a confirmed
-     stop), CPU and wall `enforcement: "none"`, and `failed`; a self-stopped control
-     confirms its stop but still records both `none`. These cases run in real time,
-     concurrently;
+   - a delayed stop: a fake runtime that ignores `HardStop` yields the R9.5
+     finalization at 58,000 ms, never a confirmed stop; a self-stopped control confirms
+     its stop. Both are `failed`. These cases run in real time, concurrently;
    - store modes, owner, group, link counts and exclusivity after every case;
    - against the merged check in a temporary repository copy with the test-only set,
      the expectation built from the request as the consumer builds it and the package
@@ -672,7 +671,7 @@ Package on stdin, freeze by copy, measure every byte, admit or refuse with a rec
 boot a one-vCPU guest with two disks, run the verifier inside namespaces, Landlock and
 seccomp, count on monotone filesystems, export one frame, stop, remove only the
 attempt's files, write payload and receipt. Guest-side limits are structural, not
-polled; CPU and wall stay `none` until a stop-completion bound is measured (R7.2).
+polled; CPU and wall stay `none`, with promotion left to a future concern (R7.2).
 
 ## Out of scope
 
@@ -689,11 +688,11 @@ orchestrator or candidate-code runner; any self-host or write-shadow run.
 - **Narrowed rights.** Scratch is readable and writable but cannot free space, and
   evidence files can be opened once. Both are stricter than the declaration, never
   weaker, and exist so the R6 peak and "counted as written" values are exact.
-- **No `satisfied` receipt yet** until G2 adopts a measured `HardStop` bound (R7.2); a
-  weaker standard returns to the operator (`work/real-sandbox-boundary/spec.md:118-124`).
+- **No `satisfied` receipt and no qualification** from this concern: CPU and wall stay
+  `none` (R7.2), so step 8 stays blocked (R13.4). Any weaker standard returns to the
+  operator (`work/real-sandbox-boundary/spec.md:118-124`).
 - **Trusted host.** Origin rests on the supervisor account and administrator (R13.3).
 
-Intent open questions, answered: pinning (R2); mechanisms and `none` rows (R7, R11);
-read-only candidate (R5); guest-to-host channel (R8); placement, language, supervisor
-identity (R1, R2.3); first environment, `scratch_bytes` (R12); fixture stores and what
-stays unproven (R15); operator requests and order (R13).
+Intent questions answered: pinning (R2); mechanisms, `none` rows (R7, R11); candidate
+(R5); channel (R8); placement, language, identity (R1, R2.3); first environment and
+`scratch_bytes` (R12); fixture stores, unproven parts (R15); operator requests (R13).
