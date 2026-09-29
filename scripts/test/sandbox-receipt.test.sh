@@ -589,6 +589,13 @@ for idx in 0 1 2 3 4; do
   done < <("$jq_bin" -c 'paths(scalars)' "${doc_paths[$idx]}")
 done
 
+# Same-type invalid literals/enums/sets, not just wrong container types.
+mutate_case 0 policy-fail-mode-invalid '.body.fail_mode="not-a-valid-mode"'
+mutate_case 2 policy-set-sections-missing-id 'del(.body.sections[0])'
+mutate_case 2 policy-set-sections-duplicate-id '.body.sections[0].section_id=.body.sections[1].section_id'
+mutate_case 2 policy-set-package-ref-media-type-invalid '.body.core_contract.package_ref.media_type="text/plain"'
+mutate_case 0 policy-resource-access-invalid '.body.resources[0].access="read-execute"'
+
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"

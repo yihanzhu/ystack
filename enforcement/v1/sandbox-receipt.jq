@@ -252,8 +252,7 @@ def get($doc; $path):
 # which predicate happened to be hand-written for that field.
 def body_ok($fields): (.body | exact($fields));
 
-def str_ok: type == "string";
-def bool_ok: type == "boolean";
+def str_ok: type == "string"; def bool_ok: type == "boolean";
 
 def leaf_ok($kind):
   if $kind == "string" then str_ok
@@ -264,29 +263,45 @@ def leaf_ok($kind):
   elif $kind == "id" then id_ok
   else false end;
 
+def literal($v): {"$kind":"literal",value:$v};
+def enum($vs): {"$kind":"enum",values:$vs}; def media($v): literal($v);
+def exact_set($key;$ids): {"$kind":"exact_set",key:$key,ids:$ids};
+
+def constraint_ok($c):
+  if $c["$kind"] == "literal" then . == $c.value
+  elif $c["$kind"] == "enum" then (. as $v | ($c.values | index($v))) != null
+  else false end;
+
 def shape($s):
-  if ($s | type) == "object" then
+  if ($s | type) == "object" and ($s | has("$kind")) then constraint_ok($s)
+  elif ($s | type) == "object" then
     type == "object" and (keys | sort) == ($s | keys | sort) and
     (. as $doc | $s | to_entries | all(.[]; .key as $k | .value as $sub | ($doc[$k] | shape($sub))))
   elif ($s | type) == "array" then
-    type == "array" and (. as $arr | ($s[0]) as $elem | $arr | all(.[];shape($elem)))
+    ($s[0]) as $elem | ($s[1]) as $constraint |
+    type == "array" and (. as $arr | $arr | all(.[];shape($elem))) and
+    (if $constraint == null then true
+     else ([.[] | .[$constraint.key]]) as $vals |
+       (($vals | sort) == ($constraint.ids | sort)) and (($vals|length) == ($vals|unique|length))
+     end)
   else leaf_ok($s) end;
 
-def content_ref_schema: {content_id:"id",media_type:"string",sha256:"hex64"};
-def ref_pair_schema: {driver_ref:content_ref_schema,program_ref:content_ref_schema};
+def content_ref_schema($media): {content_id:"id",media_type:media($media),sha256:"hex64"};
+def access_enum: enum(["read-only","read-write","write-only"]);
 
 def policy_body_schema:
-  {activation_state:"string",
-   environment:{mode:"string",variables:[{name:"string",value:"string"}]},
-   evaluation_mode:"string",fail_mode:"string",
-   filesystem:{read_roots:[{access:"string",path:"string",purpose:"id"}],
-     write_roots:[{access:"string",path:"string",purpose:"id"}]},
+  {activation_state:literal("inactive"),
+   environment:{mode:literal("clear-then-allowlist"),variables:[{name:"string",value:"string"}]},
+   evaluation_mode:literal("observation-only"),fail_mode:literal("closed"),
+   filesystem:{read_roots:[{access:access_enum,path:"string",purpose:"id"}],
+     write_roots:[{access:access_enum,path:"string",purpose:"id"}]},
    isolation:{candidate_only:"bool",disposable:"bool",host_access:"bool"},
-   limits:{cpu_time_ms:"posint",memory_bytes:"posint",output_bytes:"posint",
-     process_count:"posint",wall_time_ms:"posint"},
-   network:{endpoints:["string"],mode:"string"},
-   policy_version:"string",reference_semantics:"string",required_role:"string",
-   resources:[{access:"string",id:"id",kind:"string",path:"string"}],
+   limits:{cpu_time_ms:literal(30000),memory_bytes:literal(536870912),
+     output_bytes:literal(10485760),process_count:literal(32),wall_time_ms:literal(60000)},
+   network:literal({endpoints:[],mode:"deny"}),
+   policy_version:literal("v1"),reference_semantics:literal("identity-only"),
+   required_role:literal("verifier"),
+   resources:[{access:access_enum,id:"id",kind:"string",path:"string"}],
    sensitive_material:{credential_refs:["id"],exposure:"string",secret_refs:["id"]},
    tools:[{argv:["string"],executable:"string",network:"bool",resource_ids:["id"],
      sha256:"hex64",tool_id:"id"}]};
@@ -298,9 +313,12 @@ def fixed_policy_shape_ok:
 
 def decision_body_schema:
   {activation_state:"string",decision:"string",
-   evaluator:{driver_ref:content_ref_schema,program_ref:content_ref_schema,
-     policy_set_validator:ref_pair_schema},
-   fail_mode:"string",policy_ref:content_ref_schema,
+   evaluator:{driver_ref:content_ref_schema("text/x-shellscript"),
+     program_ref:content_ref_schema("text/x-jq"),
+     policy_set_validator:{driver_ref:content_ref_schema("text/x-shellscript"),
+       program_ref:content_ref_schema("text/x-jq")}},
+   fail_mode:"string",
+   policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
    semantics:{authority_effect:"string",enforcement_proof:"string",input_contract:"string",
      output_kind:"string",output_schema_version:"number",qualification_effect:"string",
      reference_semantics:"string",verdicts:["string"]}};
@@ -311,11 +329,16 @@ def fixed_decision_shape_ok:
   $d.schema_version == 1 and ($d.id | id_ok) and ($d.body | shape(decision_body_schema));
 
 def policy_set_body_schema:
-  {activation_state:"string",
-   core_contract:{generation_id:"string",package_ref:content_ref_schema,
+  {activation_state:literal("inactive"),
+   core_contract:{generation_id:"string",
+     package_ref:content_ref_schema("application/vnd.ystack.core-contract+json"),
      semantic_identity:"string"},
-   fail_mode:"string",policy_version:"string",
-   sections:[{section_id:"id",policy_ref:content_ref_schema,decision_ref:content_ref_schema}]};
+   fail_mode:literal("closed"),policy_version:literal("v1"),
+   sections:[{section_id:"id",
+       policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
+       decision_ref:content_ref_schema("application/vnd.ystack.control-decision+json")},
+     exact_set("section_id";["credential-policy","duty-separation","evidence-integrity",
+       "kill-switch","risk-gates","sandbox"])]};
 
 def fixed_policy_set_shape_ok:
   ($policy_set[0]) as $s |
