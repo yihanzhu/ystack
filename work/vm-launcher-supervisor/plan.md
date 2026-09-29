@@ -367,7 +367,7 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | --- | --- | ---: | --- |
 | 1 | `review_size: accepted-exception` | 700-950 | the frame codec and its exhaustive damage cases |
 | 2 | `review_size: accepted-exception` | 800-1,100 | guest input: plan, materialization, wiring, inventory |
-| 3 | `review_size: accepted-exception` | 1,100-1,600 | trusted configuration, ACLs, phase A, store and receipt writer |
+| 3 | `review_size: accepted-exception` | 1,100-1,700 | trusted configuration, ACLs, phase A, store and receipt writer |
 | 4 | `review_size: accepted-exception` | 1,300-1,700 | phase B admission and its binding matrix |
 | 5 | `review_size: accepted-exception` | 1,400-1,900 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 1,200-1,700 | guest containment setup and build |
@@ -382,7 +382,9 @@ Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line t
 #470 measured 1,535 after round 1: the component-by-component ancestor walk with
 descriptor-bound reads (R10.1), the accepted-set schema mirror of
 `fixed_accepted_shape_ok`, and the CI-only trust-root anchor hook with its gating
-tests (#463 record). A PR outside its
+tests; 1,600 after round 2, and round 3 adds the Darwin ACL iterator fix with a
+multi-entry test, the runtime driver in the trusted walk and bounded JSON nesting
+(#463 record). A PR outside its
 range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc. The
 plan PR measured 411 lines at its first head; #452's 579-line plan is the precedent.
 
