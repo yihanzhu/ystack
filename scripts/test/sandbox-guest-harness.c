@@ -253,15 +253,22 @@ static int cmd_materialize(int argc, char **argv)
     return 0;
 }
 
-/* inventory <dir>: R8.1 export inventory; prints each evidence file's name
- * on its own line, in the frame's evidence/<nnnn> order. */
+/* inventory <dir> [fail-at-N]: R8.1 export inventory; prints each evidence
+ * file's name on its own line, in the frame's evidence/<nnnn> order.
+ * fail-at-N is only meaningful in a -DYSTACK_TEST_FAULT_INJECT build: it
+ * makes the Nth readdir() call inside ys_evidence_inventory fail. */
 static int cmd_inventory(int argc, char **argv)
 {
     int fd;
     char **names;
     size_t count, i;
     enum ys_plan_status status;
-    if (argc != 3) usage();
+    if (argc != 3 && argc != 4) usage();
+#ifdef YSTACK_TEST_FAULT_INJECT
+    ys_test_readdir_fail_at = (argc == 4) ? (size_t)strtoul(argv[3], NULL, 10) : 0U;
+#else
+    if (argc == 4) usage();
+#endif
     fd = open(argv[2], O_RDONLY | O_DIRECTORY);
     if (fd < 0) die("E_FRAME_IO");
     status = ys_evidence_inventory(fd, &names, &count);
@@ -271,22 +278,30 @@ static int cmd_inventory(int argc, char **argv)
     return 0;
 }
 
-/* exec-report <self-path> <instruction> <stdout-file> <stderr-file>: forks
- * a child, calls ys_exec with R6.4's fixed argv (argv[0] = <self-path>, so
- * the child re-enters this binary as "verify ..." and reports what it
+/* exec-report <self-path> <instruction> <stdout-file> <stderr-file> [overlap]:
+ * forks a child, calls ys_exec with R6.4's fixed argv (argv[0] = <self-path>,
+ * so the child re-enters this binary as "verify ..." and reports what it
  * received); the parent leaves one extra fd open across the fork so the
- * child's "every other descriptor closed" check is non-vacuous. */
+ * child's "every other descriptor closed" check is non-vacuous. "overlap"
+ * forces stdout_fd to literally be fd 0 (the instruction's own destination)
+ * before calling ys_exec, reproducing a caller-supplied descriptor overlap. */
 static int cmd_exec_report(int argc, char **argv)
 {
     int instruction_fd, stdout_fd, stderr_fd, marker_fd, status;
     pid_t pid;
     const char *report_argv[7];
-    if (argc != 6) usage();
+    if (argc != 6 && argc != 7) usage();
+    if (argc == 7 && strcmp(argv[6], "overlap") != 0) usage();
     instruction_fd = open(argv[3], O_RDONLY);
     stdout_fd = open(argv[4], O_WRONLY | O_CREAT | O_APPEND, 0600);
     stderr_fd = open(argv[5], O_WRONLY | O_CREAT | O_APPEND, 0600);
     marker_fd = open("/dev/null", O_RDONLY);
     if (instruction_fd < 0 || stdout_fd < 0 || stderr_fd < 0 || marker_fd < 0) die("E_FRAME_IO");
+    if (argc == 7) {
+        if (dup2(stdout_fd, 0) < 0) die("E_FRAME_IO");
+        (void)close(stdout_fd);
+        stdout_fd = 0;
+    }
     report_argv[0] = argv[2];
     report_argv[1] = YS_PLAN_ARGV[1]; report_argv[2] = YS_PLAN_ARGV[2];
     report_argv[3] = YS_PLAN_ARGV[3]; report_argv[4] = YS_PLAN_ARGV[4];

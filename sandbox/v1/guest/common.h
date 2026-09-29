@@ -179,4 +179,13 @@ void ys_exec(const char *const *argv, const char *const *envp, int instruction_f
  * the array) receives the i-th file's name in that order. */
 enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out);
 
+#ifdef YSTACK_TEST_FAULT_INJECT
+/* Test-only hook, compiled only when this translation unit is built with
+ * -DYSTACK_TEST_FAULT_INJECT (never in a production build): when non-zero,
+ * the Nth readdir() call inside ys_evidence_inventory fails with ENOMEM
+ * instead of returning a real dirent, so the test suite can prove the
+ * readdir-failure path (otherwise untriggerable deterministically). */
+extern size_t ys_test_readdir_fail_at;
+#endif
+
 #endif

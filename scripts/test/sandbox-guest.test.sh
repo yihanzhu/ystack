@@ -30,6 +30,13 @@ h1="$tmp/build1/harness"; h2="$tmp/build2/harness"
 cc_build "$h1"; cc_build "$h2"
 cmp -s "$h1" "$h2" || fail 'two host-compiler builds are not byte-identical'
 pass 'two host-compiler builds of the harness (guest common code) are byte-identical'
+# A second, test-only build with the readdir fault-injection hook compiled
+# in (YSTACK_TEST_FAULT_INJECT): never part of the byte-identity check
+# above, used only for the readdir-failure case near the inventory tests.
+hf="$tmp/build-fault/harness"
+/bin/mkdir -m 700 "$tmp/build-fault"
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_TEST_FAULT_INJECT -I"$guest_dir" \
+  "$harness_src" "$guest_dir/common.c" -o "$hf"
 h="$h1"
 # FIPS 180-4 vectors, through the code (ys_sha256_bytes via `digest`).
 : > "$tmp/fips-empty"
@@ -363,6 +370,17 @@ expected_report=$'argv:ok\nenv:ok\nfd0:ok\nfd1:ok\nfd2:ok\nextra_fds:0'
 [ ! -s "$tmp/exec.err" ] || fail 'exec wiring: stderr must be empty'
 pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables, with fd 0 a regular file, fds 1-2 append-only and every other descriptor closed'
 
+# ys_exec must preserve a source whose value overlaps another destination
+# (e.g. stdout_fd == 0, the instruction's own target): a naive sequential
+# dup2(instruction_fd,0); dup2(stdout_fd,1); ... would clobber stdout_fd's
+# source the moment fd 0 is repointed. "overlap" forces exactly that.
+: > "$tmp/exec-ov.out"; : > "$tmp/exec-ov.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-ov.out" "$tmp/exec-ov.err" overlap
+[ "$(cat "$tmp/exec-ov.out")" = "$expected_report" ] ||
+  fail "exec wiring (overlapping descriptors): unexpected report $(cat "$tmp/exec-ov.out")"
+[ ! -s "$tmp/exec-ov.err" ] || fail 'exec wiring (overlapping descriptors): stderr must be empty'
+pass 'ys_exec wires the same argv, environment and fds correctly even when a caller-supplied source overlaps another destination (stdout_fd forced to fd 0, the instruction target)'
+
 # --- R8.1 export inventory: hard-link alias refused, single link accepted -
 /bin/mkdir -m 700 "$tmp/ev-good" "$tmp/ev-bad"
 /usr/bin/printf ev0 > "$tmp/ev-good/b.bin"; /usr/bin/printf ev1 > "$tmp/ev-good/a.bin"
@@ -375,5 +393,19 @@ status=0
 [ "$status" -ne 0 ] || fail 'inventory: a same-directory hard-link alias must be refused'
 [ "$(cat "$tmp/err")" = E_PLAN_SCHEMA ] || fail "inventory: expected E_PLAN_SCHEMA for a hard-link alias, got $(cat "$tmp/err")"
 pass 'the R8.1 export inventory refuses a same-directory hard-link alias of an evidence file, paired against the single-link control above'
+
+# A readdir() failure (e.g. ENOMEM) returns NULL exactly like end-of-
+# directory; ys_evidence_inventory must tell the two apart via errno, not
+# silently report a partial inventory as YS_PLAN_OK. The fault-injection
+# build ($hf) makes the Nth readdir() call fail this way.
+"$hf" inventory "$tmp/ev-good" > "$tmp/inv-nofail.out"
+[ "$(cat "$tmp/inv-nofail.out")" = $'a.bin\nb.bin' ] ||
+  fail 'inventory (fault-injection build, no injected failure): unexpected output'
+pass 'the fault-injection build behaves exactly like the normal build when no readdir() failure is injected'
+status=0
+"$hf" inventory "$tmp/ev-good" 2 >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] || fail 'inventory: an injected readdir() failure must be refused, not reported as a partial success'
+[ "$(cat "$tmp/err")" = E_PLAN_IO ] || fail "inventory: expected E_PLAN_IO for a readdir() failure, got $(cat "$tmp/err")"
+pass 'a readdir() failure part way through the directory is refused E_PLAN_IO rather than silently returning a partial inventory as YS_PLAN_OK'
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

@@ -796,16 +796,29 @@ enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
 void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
              int stdout_fd, int stderr_fd)
 {
-    int fd, maxfd;
-    if (dup2(instruction_fd, 0) < 0) _exit(126);
-    if (dup2(stdout_fd, 1) < 0) _exit(126);
-    if (dup2(stderr_fd, 2) < 0) _exit(126);
+    int fd, maxfd, in_fd, out_fd, err_fd;
+    /* Each source is preserved on its own fresh fd (>=3) before any dup2
+     * into 0/1/2: a caller-supplied overlap (e.g. stdout_fd == 0, the
+     * instruction's own destination) would otherwise have its source
+     * clobbered by an earlier dup2 in this same call, silently wiring the
+     * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
+     * a failed execve past this function's own close loop below. */
+    in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
+    out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
+    err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
+    if (in_fd < 0 || out_fd < 0 || err_fd < 0) _exit(126);
+    if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0) _exit(126);
+    (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
     maxfd = (int)sysconf(_SC_OPEN_MAX);
     if (maxfd < 3) maxfd = 256;
     for (fd = 3; fd < maxfd; fd++) (void)close(fd);
     execve(argv[0], (char *const *)(const void *)argv, (char *const *)(const void *)envp);
     _exit(127);
 }
+
+#ifdef YSTACK_TEST_FAULT_INJECT
+size_t ys_test_readdir_fail_at = 0;
+#endif
 
 struct evidence_row { char *name; ino_t ino; };
 
@@ -826,34 +839,34 @@ enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *
 
     dh = fdopendir(dirfd);
     if (dh == NULL) return YS_PLAN_ERR_IO;
-    while ((de = readdir(dh)) != NULL) {
+    for (;;) {
         struct stat st;
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-        if (fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-            closedir(dh);
-            for (i = 0; i < count; i++) free(rows[i].name);
-            free(rows);
-            return YS_PLAN_ERR_IO;
+        errno = 0;
+#ifdef YSTACK_TEST_FAULT_INJECT
+        if (ys_test_readdir_fail_at != 0 && --ys_test_readdir_fail_at == 0) {
+            de = NULL;
+            errno = ENOMEM;
+        } else {
+            de = readdir(dh);
         }
+#else
+        de = readdir(dh);
+#endif
+        if (de == NULL) {
+            if (errno != 0) goto io_fail; /* a real readdir() failure, not end-of-directory */
+            break;
+        }
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) goto io_fail;
         if (!S_ISREG(st.st_mode)) continue;
         if (count == cap) {
             size_t nc = (cap == 0U) ? 8U : cap * 2U;
             struct evidence_row *grown = realloc(rows, nc * sizeof *grown);
-            if (grown == NULL) {
-                closedir(dh);
-                for (i = 0; i < count; i++) free(rows[i].name);
-                free(rows);
-                return YS_PLAN_ERR_IO;
-            }
+            if (grown == NULL) goto io_fail;
             rows = grown; cap = nc;
         }
         rows[count].name = strdup(de->d_name);
-        if (rows[count].name == NULL) {
-            closedir(dh);
-            for (i = 0; i < count; i++) free(rows[i].name);
-            free(rows);
-            return YS_PLAN_ERR_IO;
-        }
+        if (rows[count].name == NULL) goto io_fail;
         rows[count].ino = st.st_ino;
         if (st.st_nlink != (nlink_t)1) refused = 1;
         count++;
@@ -878,4 +891,9 @@ enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *
     *names_out = names;
     *count_out = count;
     return YS_PLAN_OK;
+io_fail:
+    closedir(dh);
+    for (i = 0; i < count; i++) free(rows[i].name);
+    free(rows);
+    return YS_PLAN_ERR_IO;
 }
