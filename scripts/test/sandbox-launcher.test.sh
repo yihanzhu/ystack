@@ -236,7 +236,12 @@ def main():
     accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
         {"environment_id": ENV_ID, "scratch_bytes": 16777216,
          "identities": {k: [digest or measured[k]] for k in accepted_keys + ["verification_instructions"]},
-         "mechanisms": {r: ["mechanism.fixture"] for r in
+         # "mechanism.unmeasured" is the stub receipt's own mechanism_id
+         # (PR 3's build_receipt, unchanged pre-PR-5) for every row, on
+         # both the admitted and the refused path -- included here too so
+         # the R15.1 consumer-checker matrix's own is_identity_unaccepted
+         # isn't spuriously tripped by the stub alone.
+         "mechanisms": {r: ["mechanism.fixture", "mechanism.unmeasured"] for r in
                         ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
                          "scratch_bytes", "wall_time_ms"]}}]},
         "id": "sandbox.accepted-identities.v1", "kind": "sandbox_accepted_identity_set", "schema_version": 1}
@@ -788,16 +793,62 @@ receipt_runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/attempt.fi
 pass 'the stub receipt for an admitted attempt records lifecycle.admission admitted, runtime error (the runtime never started) and outcome failed'
 
 # R9.3: the frozen copies (R5.1) an admitted attempt made are its only
-# work_root storage at this stage (no runtime exists before PR 5) -- they
-# must be removed and the removal verified before teardown can honestly
-# claim storage_destroyed: true.
-[ ! -e "$work_root/attempt.fixture-reuse/frozen" ] ||
-  fail 'admitted attempt: frozen copies were not removed before storage_destroyed: true'
+# work_root storage at this stage (no runtime exists before PR 5) -- the
+# WHOLE <work_root>/<attempt_id> directory, not just frozen/ within it,
+# must be gone before teardown can honestly claim storage_destroyed: true.
+[ ! -e "$work_root/attempt.fixture-reuse" ] ||
+  fail 'admitted attempt: <work_root>/<attempt_id> was not removed before storage_destroyed: true'
 teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/attempt.fixture-reuse/receipt.json")
 teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/attempt.fixture-reuse/receipt.json")
 [ "$teardown_state" = confirmed ] && [ "$teardown_destroyed" = true ] ||
   fail 'admitted attempt: expected teardown.state confirmed and storage_destroyed true'
-pass "an admitted attempt's frozen copies are removed and the removal verified before teardown.state confirmed / storage_destroyed: true"
+pass "an admitted attempt's whole work_root attempt directory is removed and the removal verified before teardown.state confirmed / storage_destroyed: true"
+
+# Security boundary (R9.3): teardown must unlink only the entries this
+# attempt is known to have created, never whatever a directory listing
+# happens to find -- an unexpected planted file survives, and that alone
+# must flip storage_destroyed to false rather than being silently deleted.
+build_pkg "$base/pkg-plant.json" '{"attempt_id":"attempt.fixture-plant","nonce":"'"$(printf '%064d' 240)"'"}'
+status=0
+YSTACK_TEST_PLANT_EXTRA_FILE=1 run_launch "$base/pkg-plant.json" || status=$?
+[ "$status" -eq 0 ] || fail "planted-file hook: expected exit 0, got $status ($(cat "$base/err"))"
+[ -e "$work_root/attempt.fixture-plant/frozen/unexpected.txt" ] ||
+  fail 'planted-file hook: the unexpected file should survive teardown, not be deleted'
+teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/attempt.fixture-plant/receipt.json")
+[ "$teardown_destroyed" = false ] ||
+  fail 'planted-file hook: expected storage_destroyed false with an unexpected survivor'
+pass 'an unexpected file planted alongside the frozen copies survives teardown untouched and is reported as storage_destroyed: false, never silently unlinked'
+
+# R10.4: a freeze failure part way through (ENOSPC, a write error, a name
+# collision) must never escape as a traceback with a claimed store dir and
+# no receipt -- the test-only YSTACK_TEST_FREEZE_FAIL hook fails right
+# after the fixed frozen/ files are written, before candidate/ exists.
+build_pkg "$base/pkg-freezefail.json" '{"attempt_id":"attempt.fixture-freezefail","nonce":"'"$(printf '%064d' 241)"'"}'
+status=0
+YSTACK_TEST_FREEZE_FAIL=1 run_launch "$base/pkg-freezefail.json" || status=$?
+[ "$status" -eq 0 ] || fail "freeze-failure hook: expected exit 0 (a receipt, not a traceback), got $status ($(cat "$base/err"))"
+[ ! -e "$work_root/attempt.fixture-freezefail" ] ||
+  fail 'freeze-failure hook: the partial attempt directory should be cleaned up'
+[ -f "$store_root/attempt.fixture-freezefail/receipt.json" ] ||
+  fail 'freeze-failure hook: expected a receipt to still be written'
+pass 'a freeze failure part way through (the test-only YSTACK_TEST_FREEZE_FAIL hook) cleans up the partial attempt directory and still writes a receipt, never a traceback'
+
+# preparation/v1/prepare-candidate.py:1662-1677's closed manifest-entry
+# shape: an unsupported kind (e.g. a symlink) or an out-of-set mode must
+# not be silently filtered out before candidate/<n> selection.
+i=0
+entry_oid=$(python3 -c "print('f' * 40)")
+entry_sha=$(python3 -c "print('a' * 64)")
+for entry in '{"path":"README.md","kind":"symlink","git_mode":"120000","mode":"0500","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
+             '{"path":"README.md","kind":"file","git_mode":"100644","mode":"0777","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}'; do
+  i=$((i + 1))
+  build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-entryshape-'"$i"'","nonce":"'"$(printf '%064d' $((250 + i)))"'","manifest_set":{"entries":['"$entry"']}}'
+  expect_phase_b_refused "manifest entry shape ($entry)" "attempt.fixture-entryshape-$i" \
+    "$base/pkg-pb.json" '["launch.manifest-mismatch"]'
+done
+pass 'a manifest entry with an unsupported kind (e.g. symlink) or an out-of-set mode (e.g. 0777) is refused launch.manifest-mismatch before candidate selection, never silently filtered out'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
 
 build_pkg "$base/pkg-td.json" '{"attempt_id":"attempt.fixture-teardown-fail","nonce":"'"$(printf '%064d' 200)"'"}'
 status=0
@@ -843,6 +894,53 @@ reasons=$("$jq_bin" -c -S '.body.reason_ids' <<<"$check_out")
 [ "$reasons" = '["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]' ] ||
   fail "shipped checker: expected the three shipped-empty-set reasons, got $reasons"
 pass 'the shipped check-sandbox-receipt.sh accepts the receipt and expectation shape and refuses it only with the three shipped-empty-accepted-set reasons (receipt.environment-unlisted, receipt.identity-unaccepted, receipt.stale), never receipt.malformed'
+
+# =============================================================================
+# R15.1 consumer-checker matrix (spec.md:597-625): a temporary repository
+# copy of check-sandbox-receipt.sh carrying THIS fixture's own registry and
+# accepted set (not the real shipped ones) proves the host's and the
+# checker's independent reason derivations agree -- one representative
+# case per class, kept minimal against the review-size budget.
+# =============================================================================
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+# The checker validates control/v1's own JSON shape, so it needs the real
+# shipped files (the fixture's own installed control files are synthetic
+# placeholder bytes, not JSON) -- copied over the installed ones too, so
+# host-side control-mismatch also passes (as the shipped-checker
+# cross-check above does), with control_real=true for every case below.
+/bin/chmod 644 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set"
+/bin/cp "$root/control/v1/sandbox-policy.json" "$installed_control_policy"
+/bin/cp "$root/control/v1/sandbox-decision.json" "$installed_control_decision"
+/bin/cp "$root/control/v1/control-policy-set.json" "$installed_control_policy_set"
+/bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set"
+checker_root="$base/checker"
+/bin/mkdir -p "$checker_root/enforcement/v1" "$checker_root/control/v1" "$checker_root/shadow/v1"
+/bin/cp "$root/enforcement/v1/check-sandbox-receipt.sh" "$root/enforcement/v1/sandbox-receipt.jq" \
+  "$checker_root/enforcement/v1/"
+/bin/cp "$installed_control_policy" "$checker_root/control/v1/sandbox-policy.json"
+/bin/cp "$installed_control_decision" "$checker_root/control/v1/sandbox-decision.json"
+/bin/cp "$installed_control_policy_set" "$checker_root/control/v1/control-policy-set.json"
+/bin/cp "$registry_path" "$checker_root/shadow/v1/shadow-environments.json"
+/bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
+check_case() { # check_case <desc> <attempt-id> <verdict> <reasons-json> [enforcement-verdict]
+  local out ok=1
+  out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root/enforcement/v1/check-sandbox-receipt.sh" \
+    check "$store_root/$2/receipt.json" "$base/expectation.json" "$base/evaluation.json"))
+  [ "$("$jq_bin" -r '.body.check_verdict' <<<"$out")" = "$3" ] || ok=0
+  [ "$("$jq_bin" -c -S '.body.reason_ids' <<<"$out")" = "$4" ] || ok=0
+  [ -z "${5:-}" ] || [ "$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")" = "$5" ] || ok=0
+  [ "$ok" -eq 1 ] || fail "$1: unexpected checker output $out"
+}
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-a","nonce":"'"$(printf '%064d' 260)"'","control_real":true,"set":{"subject.environment_entry_sha256":"'"$entry_sha"'"},"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+run_launch "$base/pkg-chk.json"
+check_case 'class (a): environment_entry_sha256' attempt.fixture-chk-a refused '["receipt.environment-unlisted"]'
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-b","nonce":"'"$(printf '%064d' 261)"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+YSTACK_TEST_IDENTITY_UNREADABLE=guest_init run_launch "$base/pkg-chk.json"
+check_case 'phase-B class (c): identity-missing' attempt.fixture-chk-b valid '["receipt.valid"]' failed
+pass 'the shipped checker, run against this fixture'"'"'s own registry/accepted set, gives the R15.1 class (a) and phase-B class (c) verdicts exactly, matching the host'"'"'s own derivation'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
 
 # =============================================================================
 # R4.2 phase B: every one of the twelve subject and six control leaf fields

@@ -849,6 +849,20 @@ def evaluation_satisfied(raw, control):
             and ref_sha("decision_ref") == control["decision_sha256"])
 
 
+# preparation/v1/prepare-candidate.py:1662-1677's closed manifest-entry
+# shape: kind is "file" or "directory" only, mode is "0400"/"0500" for a
+# file or "0500" for a directory -- anything else (an unsupported kind
+# such as a symlink, or an out-of-set mode such as "0777") must not be
+# silently filtered out before candidate/<n> selection.
+MANIFEST_ENTRY_MODES = {"file": {"0400", "0500"}, "directory": {"0500"}}
+
+
+def manifest_entries_ok(entries):
+    return isinstance(entries, list) and all(
+        isinstance(e, dict) and e.get("kind") in MANIFEST_ENTRY_MODES
+        and e.get("mode") in MANIFEST_ENTRY_MODES[e["kind"]] for e in entries)
+
+
 def candidate_reasons(manifest, candidates):
     """launch.candidate-mismatch / launch.candidate-oversize: the manifest's
     file entries (in order) against the package's candidate/<n> records --
@@ -857,9 +871,14 @@ def candidate_reasons(manifest, candidates):
     if sum(len(c) for c in candidates) > CANDIDATE_EXPORT_BYTES:
         reasons.add("launch.candidate-oversize")
     entries = manifest.get("entries") if isinstance(manifest, dict) else None
-    file_entries = ([e for e in entries if isinstance(e, dict) and e.get("kind") == "file"]
-                     if isinstance(entries, list) else None)
-    if file_entries is None or len(file_entries) != len(candidates):
+    if not isinstance(entries, list):
+        reasons.add("launch.candidate-mismatch")
+        return reasons
+    if not manifest_entries_ok(entries):
+        reasons.add("launch.manifest-mismatch")
+        return reasons
+    file_entries = [e for e in entries if e["kind"] == "file"]
+    if len(file_entries) != len(candidates):
         reasons.add("launch.candidate-mismatch")
         return reasons
     for entry, content in zip(file_entries, candidates):
@@ -1035,19 +1054,30 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
 
 # --- R5.1 freeze by copy: package bytes copied into supervisor-owned files
 # under work_root, exclusively, before anything else touches them again. --
+FROZEN_FIXED_NAMES = ("record.json", "manifest.json", "instruction")
+
+
 def freeze_by_copy(config, attempt_id, uid, gid, package):
+    """R5.1. Returns the candidate/ filenames it created -- the only
+    variable-count entries -- so teardown removes exactly what this
+    attempt made, never whatever a directory listing happens to find."""
     work_fd = os.open(config["work_root"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         attempt_work_fd = mkdir_excl(work_fd, attempt_id, uid, gid)
         try:
             frozen_fd = mkdir_excl(attempt_work_fd, "frozen", uid, gid)
             try:
-                for name in ("record.json", "manifest.json", "instruction"):
+                for name in FROZEN_FIXED_NAMES:
                     write_excl(frozen_fd, name, package[name], uid, gid)
+                if os.environ.get("YSTACK_TEST_FREEZE_FAIL"):
+                    raise OSError("test-only simulated freeze failure")
+                if os.environ.get("YSTACK_TEST_PLANT_EXTRA_FILE"):
+                    write_excl(frozen_fd, "unexpected.txt", b"x", uid, gid)
+                candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
                 candidate_fd = mkdir_excl(frozen_fd, "candidate", uid, gid)
                 try:
-                    for i, content in enumerate(package["candidate"]):
-                        write_excl(candidate_fd, "%05d" % i, content, uid, gid)
+                    for name, content in zip(candidate_names, package["candidate"]):
+                        write_excl(candidate_fd, name, content, uid, gid)
                     os.fsync(candidate_fd)
                 finally:
                     os.close(candidate_fd)
@@ -1060,44 +1090,103 @@ def freeze_by_copy(config, attempt_id, uid, gid, package):
         os.fsync(work_fd)
     finally:
         os.close(work_fd)
+    return candidate_names
 
 
-def remove_frozen(work_root, attempt_id):
-    """Removes the frozen copies (R5.1) that freeze_by_copy just made and
-    verifies the removal (the final rmdir fails, ENOTEMPTY, if anything is
-    left) -- R9.3's "an unexpected entry is left in place ... makes it
-    false", so a cleanup failure here must never be reported as destroyed."""
+def remove_only(dir_fd, created_names):
+    """Unlinks exactly the names this attempt is known to have created,
+    never anything a directory listing happens to find (R9.3's security
+    boundary): an unexpected survivor is left in place, reported by the
+    caller re-checking the directory."""
+    for name in created_names:
+        try:
+            os.unlink(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+    return not os.listdir(dir_fd)
+
+
+def remove_frozen(work_root, attempt_id, candidate_names):
+    """Removes exactly the entries freeze_by_copy created -- the frozen/
+    files, candidate/, frozen/ itself and the attempt's own <work_root>/
+    <attempt_id> directory -- and verifies absence at each level (R9.3:
+    storage_destroyed is true iff the host removed exactly the entries it
+    created and lstat then confirms absence; an unexpected entry is left
+    in place and makes it false, never silently unlinked)."""
     if os.environ.get("YSTACK_TEST_TEARDOWN_FAIL"):
         return False
+    work_fd = None
     try:
         work_fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=work_fd)
         try:
-            attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                  dir_fd=work_fd)
+            frozen_fd = os.open("frozen", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=attempt_fd)
             try:
-                frozen_fd = os.open("frozen", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                     dir_fd=attempt_fd)
+                candidate_fd = os.open("candidate", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                        dir_fd=frozen_fd)
                 try:
-                    candidate_fd = os.open("candidate", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                            dir_fd=frozen_fd)
-                    try:
-                        for name in os.listdir(candidate_fd):
-                            os.unlink(name, dir_fd=candidate_fd)
-                    finally:
-                        os.close(candidate_fd)
-                    os.rmdir("candidate", dir_fd=frozen_fd)
-                    for name in ("record.json", "manifest.json", "instruction"):
-                        os.unlink(name, dir_fd=frozen_fd)
+                    if not remove_only(candidate_fd, candidate_names):
+                        return False
                 finally:
-                    os.close(frozen_fd)
-                os.rmdir("frozen", dir_fd=attempt_fd)
+                    os.close(candidate_fd)
+                os.rmdir("candidate", dir_fd=frozen_fd)
+                if not remove_only(frozen_fd, FROZEN_FIXED_NAMES):
+                    return False
             finally:
-                os.close(attempt_fd)
+                os.close(frozen_fd)
+            os.rmdir("frozen", dir_fd=attempt_fd)
+            if os.listdir(attempt_fd):
+                return False
         finally:
-            os.close(work_fd)
+            os.close(attempt_fd)
+        os.rmdir(attempt_id, dir_fd=work_fd)
+        try:
+            os.stat(attempt_id, dir_fd=work_fd, follow_symlinks=False)
+        except OSError:
+            return True
+        return False
     except OSError:
         return False
-    return True
+    finally:
+        if work_fd is not None:
+            os.close(work_fd)
+
+
+def cleanup_partial_freeze(work_root, attempt_id):
+    """Best-effort cleanup after a freeze_by_copy failure (ENOSPC, a write
+    error, a name collision): the exact set of files written before the
+    failure is unknown, so this recursively removes whatever this
+    attempt's own <work_root>/<attempt_id> directory holds -- never
+    anything outside it -- and reports whether it ended up gone."""
+    try:
+        work_fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        _remove_tree(work_fd, attempt_id)
+    except OSError:
+        pass
+    try:
+        os.stat(attempt_id, dir_fd=work_fd, follow_symlinks=False)
+        ok = False
+    except OSError:
+        ok = True
+    os.close(work_fd)
+    return ok
+
+
+def _remove_tree(parent_fd, name):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except NotADirectoryError:
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    try:
+        for child in os.listdir(fd):
+            _remove_tree(fd, child)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=parent_fd)
 
 
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,
@@ -1408,8 +1497,18 @@ def run_launch(argv):
         # "storage_destroyed follows the removal of its package copies"
         # applies here too -- they are removed and the removal verified
         # before the receipt can honestly claim storage_destroyed: true.
-        freeze_by_copy(config, attempt_id, principal_uid, config["consumer_gid"], package)
-        storage_destroyed = remove_frozen(config["work_root"], attempt_id)
+        # A freeze failure itself (ENOSPC, a write error, a name collision)
+        # must never escape as a traceback with a claimed store dir and no
+        # receipt (R10.4): clean up whatever this attempt's own directory
+        # holds and still write an honest failed-teardown receipt below --
+        # only a receipt-write failure itself exits 70.
+        try:
+            candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
+                                              config["consumer_gid"], package)
+        except OSError:
+            storage_destroyed = cleanup_partial_freeze(config["work_root"], attempt_id)
+        else:
+            storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
         receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                        launch_request_sha256, admitted_at, evidence_manifest_sha256,
                                        identities, "admitted", "error", storage_destroyed)
