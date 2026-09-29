@@ -355,6 +355,28 @@ except OSError:
 [ "$(deepop "$big_path" exists)" = 1 ] || fail 'the deep file must still exist after the refused remove'
 pass 'as the invoking non-root uid, a write to a materialized file, a create inside a materialized directory and a remove from one all fail; reads above already succeeded'
 
+# dirfd (harness-created 0700) is itself "every ... directory" per R5.5:
+# left untouched, a root-level entry stays deletable/replaceable
+# regardless of its own mode (that's the containing directory's mode).
+[ "$(stat_mode "$tmp/mat/out")" = 0500 ] || fail 'the candidate root itself must end at mode 0500'
+[ "$(stat_owner "$tmp/mat/out")" = "$(id -u)" ] || fail 'the candidate root itself must be owned by the invoking uid'
+rootop() { # rootop <remove|create|rename> <arg>...
+  "$python" -c "
+import sys, os
+op, args = sys.argv[1], sys.argv[2:]
+try:
+    if op == 'remove': os.remove(args[0])
+    elif op == 'create': open(args[0], 'wb').close()
+    else: os.rename(args[0], args[1])
+    print('ok')
+except OSError: print('fail')
+" "$@"
+}
+[ "$(rootop remove "$tmp/mat/out/README.md")" = fail ] || fail 'removing a root-level file (README.md) must fail'
+[ "$(rootop create "$tmp/mat/out/new-root-file.txt")" = fail ] || fail 'creating a new file at the candidate root must fail'
+[ "$(rootop rename "$tmp/mat/out/README.md" "$tmp/mat/out/renamed.md")" = fail ] || fail 'renaming a root-level file must fail'
+pass 'the candidate root itself is finalized to mode 0500 and the invoking uid: a root-level remove, create or rename all fail too, not only within a nested materialized directory'
+
 # --- R6.4 exec wiring: argv, the four environment variables, fd 0 regular,
 # fds 1-2 append-only, no other descriptor -------------------------------
 /usr/bin/printf 'the instruction bytes' > "$tmp/instr.txt"

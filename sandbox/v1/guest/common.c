@@ -786,6 +786,13 @@ enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
         if (pfd != dirfd) (void)close(pfd);
         if (rc != 0) return YS_PLAN_ERR_IO;
     }
+    /* dirfd is "every ... directory" too (R5.5, spec.md:209-212):
+     * finalized last so this call still had write access to create its
+     * entries. Otherwise a root-level entry (e.g. README.md, 0400) stays
+     * deletable/replaceable regardless of its own mode -- that is the
+     * containing directory's mode, not the entry's. */
+    if (fchown(dirfd, uid, gid) != 0) return YS_PLAN_ERR_IO;
+    if (fchmod(dirfd, 0500) != 0) return YS_PLAN_ERR_IO;
     return YS_PLAN_OK;
 }
 #ifdef YSTACK_TEST_FAULT_INJECT
