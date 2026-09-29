@@ -122,9 +122,10 @@ expectations are stated separately:
   `:502-510`). Neither is ever `valid`, whatever its lifecycle records.
 
 Every receipt produced is refused by the shipped check, whose accepted set is
-empty. Each denial has a paired positive control. Tests and docs state that this proves contracts, not the Apple
-VM boundary (`work/real-sandbox-boundary/spec.md:68-74`). Restore-manifest entries
-cover the new paths, and every existing gate, policy and test behaves as before.
+empty. Each denial has a paired positive control. Tests and docs state that this
+proves contracts, not the Apple VM boundary
+(`work/real-sandbox-boundary/spec.md:68-74`). Restore-manifest entries cover the
+new paths, and every existing gate, policy and test behaves as before.
 
 ## Affected users and systems
 
