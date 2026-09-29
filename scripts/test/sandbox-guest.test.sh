@@ -442,4 +442,66 @@ status=0
 [ "$status" -ne 0 ] || fail 'inventory: an injected readdir() failure must be refused, not reported as a partial success'
 [ "$(cat "$tmp/err")" = E_PLAN_IO ] || fail "inventory: expected E_PLAN_IO for a readdir() failure, got $(cat "$tmp/err")"
 pass 'a readdir() failure part way through the directory is refused E_PLAN_IO rather than silently returning a partial inventory as YS_PLAN_OK'
+
+# =============================================================================
+# guest/host YSFRAME1 codec cross-check (ystack #463, PR 3 of 9): the C
+# guest (this harness, via sandbox/v1/guest/common.c) and the Python host
+# (sandbox/v1/host-supervisor.py's own frame_write/frame_read, exercised
+# through its frame-write/frame-read/digest test-only commands) must agree
+# on the wire format byte for byte, in both directions. host-supervisor.py's
+# frame-read has no record-name-set restriction (that is host-only, R3.3,
+# checked separately by parse_package), so it is compared here against the
+# harness's frame-read run with no [input|export] set argument either --
+# both then do codec-level extraction only.
+# =============================================================================
+supervisor_src="$root/sandbox/v1/host-supervisor.py"
+/bin/mkdir -m 700 "$tmp/cross"
+/usr/bin/printf 'alpha-bytes' > "$tmp/cross/a.json"
+/usr/bin/printf 'beta-bytes-here' > "$tmp/cross/b"
+/usr/bin/printf '' > "$tmp/cross/empty"
+/bin/mkdir -m 700 "$tmp/cross/candidate"
+/usr/bin/printf 'cand0' > "$tmp/cross/candidate/00000"
+/usr/bin/printf 'cand1' > "$tmp/cross/candidate/00001"
+
+# C encodes, Python decodes.
+"$h" frame-write "$tmp/cross/c-encoded.bin" a.json="$tmp/cross/a.json" b="$tmp/cross/b" \
+  empty="$tmp/cross/empty" candidate/00000="$tmp/cross/candidate/00000" \
+  candidate/00001="$tmp/cross/candidate/00001"
+"$python" "$supervisor_src" frame-read "$tmp/cross/c-encoded.bin" "$tmp/cross/py-decoded"
+cross_ok=1
+cmp -s "$tmp/cross/py-decoded/a.json" "$tmp/cross/a.json" || cross_ok=0
+cmp -s "$tmp/cross/py-decoded/b" "$tmp/cross/b" || cross_ok=0
+cmp -s "$tmp/cross/py-decoded/empty" "$tmp/cross/empty" || cross_ok=0
+cmp -s "$tmp/cross/py-decoded/candidate/00000" "$tmp/cross/candidate/00000" || cross_ok=0
+cmp -s "$tmp/cross/py-decoded/candidate/00001" "$tmp/cross/candidate/00001" || cross_ok=0
+[ "$cross_ok" -eq 1 ] || fail 'codec cross-check: host-supervisor.py frame-read misdecoded a frame the C guest harness wrote'
+pass 'sandbox/v1/host-supervisor.py frame-read decodes, byte for byte, a frame written by the C guest (sandbox/v1/guest/common.c)'
+
+# Python encodes, C decodes (no record-name-set argument: codec only).
+"$python" "$supervisor_src" frame-write "$tmp/cross/py-encoded.bin" a.json="$tmp/cross/a.json" \
+  b="$tmp/cross/b" empty="$tmp/cross/empty" candidate/00000="$tmp/cross/candidate/00000" \
+  candidate/00001="$tmp/cross/candidate/00001"
+"$h" frame-read "$tmp/cross/py-encoded.bin" "$tmp/cross/c-decoded"
+cross_ok=1
+cmp -s "$tmp/cross/c-decoded/a.json" "$tmp/cross/a.json" || cross_ok=0
+cmp -s "$tmp/cross/c-decoded/b" "$tmp/cross/b" || cross_ok=0
+cmp -s "$tmp/cross/c-decoded/empty" "$tmp/cross/empty" || cross_ok=0
+cmp -s "$tmp/cross/c-decoded/candidate/00000" "$tmp/cross/candidate/00000" || cross_ok=0
+cmp -s "$tmp/cross/c-decoded/candidate/00001" "$tmp/cross/candidate/00001" || cross_ok=0
+[ "$cross_ok" -eq 1 ] || fail 'codec cross-check: the C guest harness frame-read misdecoded a frame host-supervisor.py wrote'
+pass 'the C guest harness frame-read decodes, byte for byte, a frame written by sandbox/v1/host-supervisor.py'
+
+# Both encoders must also produce the identical frame for the identical
+# record set (not just mutually decodable output).
+cmp -s "$tmp/cross/c-encoded.bin" "$tmp/cross/py-encoded.bin" ||
+  fail 'codec cross-check: the C guest and Python host encoders produced different bytes for the same record set'
+pass 'the C guest and Python host YSFRAME1 encoders produce byte-identical output for the same record set'
+
+# digest agreement, both directions, on a shared file.
+py_digest=$("$python" "$supervisor_src" digest "$tmp/cross/c-encoded.bin")
+c_digest=$("$h" digest "$tmp/cross/c-encoded.bin")
+[ "$py_digest" = "$c_digest" ] && [ "$py_digest" = "$(sha_file "$tmp/cross/c-encoded.bin")" ] ||
+  fail 'codec cross-check: host-supervisor.py digest and the C guest harness digest disagree'
+pass 'sandbox/v1/host-supervisor.py digest and the C guest harness digest agree on the same bytes'
+
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
