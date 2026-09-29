@@ -108,9 +108,21 @@ cover each refusal before launch (changed, missing and placeholder bytes; manife
 mismatch; a store, attempt or nonce collision), exact argv, environment and fd 0
 wiring, each limit row's `hard`, `none`, `unknown`, `partial` and `unavailable`
 recording, success, violation, refusal, deadline, cancellation, runtime error and
-teardown failure. Every receipt produced passes the merged receipt check with the
-test-only set and is refused by the shipped check. Each denial has a paired
-positive control. Tests and docs state that this proves contracts, not the Apple
+teardown failure. Against the merged receipt check with the test-only set, two
+expectations are stated separately:
+
+- A failure receipt whose observed identities are all in the test-only set, with
+  a missing dependency recorded `unobserved` and the failure recorded in its
+  lifecycle, teardown or limit rows, yields `check_verdict: "valid"` with
+  `enforcement_verdict: "failed"` and the matching `failure.*` reasons, as does
+  every success, violation and failure receipt built from accepted identities.
+- A receipt that records an observed digest outside the test-only set yields
+  `receipt.identity-unaccepted`, and one that records a placeholder digest yields
+  `receipt.placeholder-identity` (`enforcement/v1/sandbox-receipt.jq:205-206`,
+  `:502-510`). Neither is ever `valid`, whatever its lifecycle records.
+
+Every receipt produced is refused by the shipped check, whose accepted set is
+empty. Each denial has a paired positive control. Tests and docs state that this proves contracts, not the Apple
 VM boundary (`work/real-sandbox-boundary/spec.md:68-74`). Restore-manifest entries
 cover the new paths, and every existing gate, policy and test behaves as before.
 
