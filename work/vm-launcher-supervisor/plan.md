@@ -178,17 +178,20 @@ failing for a socket path over 103 bytes, which vfkit refuses (`pkg/rest/rest.go
 `verification_instructions` value its launch package will carry, R2.3, R4.2),
 `check-kernel-config <file>` (the host R2.4 function), `dry-run` (the probe list
 against the fake runtime) and `run <dir>` (a canonical `sandbox_qualification_record`).
-`run` and `dry-run` take two trusted host configurations, `verifier` and `probe`, whose
-`identity_paths.verifier` names the real verifier or the probe executable; every other
-field is identical, and the host supervisor puts whichever executable its own
-configuration names on the input disk (R2.3, R5.2). Real-verifier cases launch through
-the `verifier` configuration and probe modes through the `probe` one. Test: vfkit argv
-and REST calls against a fake `vfkit`, the over-long socket path, `measure` and
-`instruction-digest` on the fixture trees, and the dry run through `host-supervisor.py
-launch` and the fake runtime with both fixture configurations (distinct synthetic
-verifier files): the fake echoes the input disk's `verifier` record digest to stdout,
-and each receipt's `identities.verifier` and `stdout_sha256` must match that
-configuration's executable, never the other.
+`run` and `dry-run` take two trusted host configurations, `verifier` and `probe`, that
+differ in exactly `identity_paths.verifier` (the real verifier or the probe),
+`store_id`, `store_root` and `work_root` (plus, outside the configuration, each one's
+sudoers rule); every other field is identical. The host supervisor puts the executable
+its own configuration names on the input disk (R2.3, R5.2). Real-verifier cases launch
+through `verifier`, probe modes through `probe`, each request with that
+configuration's `store_id`. Test: vfkit argv and REST calls against a fake `vfkit`, the
+over-long socket path, `measure` and `instruction-digest` on the fixture trees, and
+the dry run through `host-supervisor.py launch` and the fake runtime with both fixture
+configurations (distinct synthetic verifier files, stores and work roots): the fake
+echoes the input disk's `verifier` digest to stdout; each receipt's
+`identities.verifier`, `stdout_sha256` and `origin.store_id` match its own
+configuration, and a request carrying the other configuration's `store_id` is refused
+`E_STORE_ID` with nothing written in either store.
 
 ## PR 9: registry entry, docs, restore, manifest (step 4; R12.1, R14.3)
 
@@ -326,20 +329,23 @@ each qualification instruction (the three real-verifier cases and each probe mod
 plus six R7.1 mechanism ids and `scratch_bytes` 16,777,216; the two configurations'
 exact bytes and which runs use which (real verifier: match, mismatch, changed-byte
 refusal and the `HardStop` repeats; probe: every R13.4 probe mode, the mode being the
-instruction), each run with its expected verdict and reasons; the candidate, a #396 bundle from `prepare-candidate.py
-prepare` over the scrubbed dummy-target copy at `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`
-(step-7 post revision), with its arguments and digests; sentinels under
-`~/ystack-quarantine/vml/sentinels/`; the `HardStop` repeat count; and two separate
-qualification install directories (`…/v1/qualify-verifier/`, `…/v1/qualify-probe/`),
-each with its configuration (stores `store.local-macos-vm.qualify-verifier.v1` and
-`…qualify-probe.v1` under `/private/var/db/ystack-sandbox-q/`) and sudoers rule of the
-same shape, sharing one qualification accepted set, all installed, measured and later
-removed by the operator. The manager runs `qualify.py run <dir>` as `yihanzhu`,
-launching through those rules and reading each receipt as the consumer (R2.3). Evidence: receipt digests and verdicts, stop latencies (information
-only), supervisor resource use, and the record's SHA-256 and bytes (kept outside git).
+instruction), each run with its expected verdict and reasons; the candidate, a #396
+bundle from `prepare-candidate.py prepare` over the scrubbed dummy-target copy at
+`e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e` (step-7 post revision), with its arguments
+and digests; sentinels under `~/ystack-quarantine/vml/sentinels/`; the `HardStop`
+repeat count; and two qualification install directories (`…/v1/qualify-verifier/`,
+`…/v1/qualify-probe/`) whose configurations differ only in the PR 8 fields (stores
+`store.local-macos-vm.qualify-verifier.v1` and `…qualify-probe.v1` at
+`/private/var/db/ystack-sandbox-q/store-verifier` and `…/store-probe`, work roots
+`…/w-v` and `…/w-p`), each with its own sudoers rule of the same shape and one shared
+qualification accepted set, all installed, measured and later removed by the operator.
+The manager runs `qualify.py run <dir>` as `yihanzhu`, launching through those rules
+and reading each receipt as the consumer (R2.3). Evidence: receipt digests and verdicts,
+stop latencies (information only), supervisor resource use, the record's SHA-256 and
+bytes (kept outside git).
 
-**Step 9** (R12.3) opens only on a `qualified` record: the record file, the
-`proof_state` change with its `shadow-slice.test.sh` pin, and the accepted-set entry.
+**Step 9** (R12.3) opens only on a `qualified` record: the record file, the `proof_state`
+change and its `shadow-slice.test.sh` pin, and the accepted-set entry.
 
 ## What does not change
 
@@ -352,8 +358,8 @@ target installation, and any change to `config/**`, `ROADMAP.md`, `AGENTS.md`,
 
 ## Follow-up intakes
 
-A future concern for a structural CPU and wall bound, or an operator decision request
-to accept an empirical standard (R7.2). Concerns 5-7 as step-8 R8 lists them.
+A structural CPU and wall bound, or an operator decision on an empirical standard
+(R7.2); concerns 5-7 as step-8 R8 lists them.
 
 ## Review size
 
@@ -389,7 +395,7 @@ plan PR measured 411 lines at its first head; #452's 579-line plan is the preced
   plan's recorded ranges binding, and this plan cites that spec blob. Scope is
   unchanged.
 - **Staged stub.** In PRs 3-4 a passing attempt gets a runtime-error receipt and never
-  runs; no text may present the supervisor as usable before PR 5.
+  runs; no text calls the supervisor usable before PR 5.
 - **Socket path.** vfkit refuses a Unix path over 103 bytes, so under the
   `vml-trust-root` work root an `attempt_id` over 61 bytes fails as a runtime error
   (fail closed). Concern 5 chooses attempt ids.
@@ -412,12 +418,6 @@ git diff --quiet BASE HEAD -- config control enforcement verifiers preparation s
   evals adapters ROADMAP.md AGENTS.md REVIEW.md NORTH_STAR.md .github scripts/lib \
   scripts/merge-pr.sh scripts/codex-review.sh scripts/test/run-all.sh work && echo unchanged
 git diff --name-only --diff-filter=MD BASE HEAD -- scripts/test shadow ':!scripts/test/sandbox-*'
-```
-
-Require both blobs, the accepted plan blob, `risk: high`, only that PR's paths and
-modes, silent `--check`, `unchanged`, and the last command empty except in PR 9.
-
-```sh
 grep -v -e '^$' -e '^#' ci/required-files.txt | while IFS= read -r f; do
   [ -f "$f" ] || echo "missing required file: $f"; done
 shellcheck -x -S style scripts/test/sandbox-guest.test.sh scripts/test/sandbox-launcher.test.sh
@@ -428,7 +428,9 @@ for t in sandbox-guest sandbox-launcher sandbox-receipt file-digest-verifier \
   bash "scripts/test/$t.test.sh" || echo "FAILED $t"; done
 ```
 
-Every command exits 0 and prints no `FAILED` (new suites from the PR creating them);
+Require both blobs, the accepted plan blob, `risk: high`, only that PR's paths and
+modes, silent `--check`, `unchanged`, the `--diff-filter` list empty except in PR 9,
+and every command exiting 0 with no `FAILED` (new suites from the PR creating them);
 record command, head, platform and full output. PR 9 also counts each new manifest path
 once (`grep -Fxc`), resolves both new links and recomputes the registry digests. Never
 run `scripts/test/run-all.sh` locally. On the exact final head and base require every
