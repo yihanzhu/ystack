@@ -77,16 +77,22 @@ Citations are to origin/main at `e73b76a`.
 
 4. **Kernel.** One distribution-built arm64 kernel package, identified by its archive
    digest and the digests of the extracted `Image` and build config; the acquisition
-   request names distribution, package, URL and digest. Before admission the host
-   supervisor refuses a build config lacking any of: `CONFIG_CGROUPS`, `CONFIG_MEMCG`,
+   request names distribution, package, URL and digest, and presents the measured build
+   config against the set below. The initramfs carries no modules, so every
+   boot-critical option must be built in. Before admission the host supervisor refuses a
+   build config in which any of this closed set is absent or `=m` rather than `=y`: the
+   PCI transport the Virtualization framework exposes (`CONFIG_PCI`,
+   `CONFIG_PCI_HOST_GENERIC`, `CONFIG_VIRTIO`, `CONFIG_VIRTIO_PCI`),
+   `CONFIG_VIRTIO_BLK`, `CONFIG_BLK_DEV_INITRD`, `CONFIG_DEVTMPFS`, `CONFIG_PROC_FS`,
+   `CONFIG_SYSFS`, `CONFIG_TMPFS`, `CONFIG_CGROUPS`, `CONFIG_MEMCG`,
    `CONFIG_CGROUP_PIDS`, `CONFIG_CGROUP_SCHED`, `CONFIG_FAIR_GROUP_SCHED`,
-   `CONFIG_CFS_BANDWIDTH`, `CONFIG_SECURITY_LANDLOCK`, `CONFIG_SECCOMP_FILTER`,
-   `CONFIG_FANOTIFY_ACCESS_PERMISSIONS`, `CONFIG_TMPFS`, `CONFIG_PID_NS`,
-   `CONFIG_NET_NS`, `CONFIG_VIRTIO_BLK`, `CONFIG_BLK_DEV_INITRD`, and one of
-   `CONFIG_HZ_250`, `CONFIG_HZ_300`, `CONFIG_HZ_1000`. At boot the guest supervisor
-   requires Landlock ABI 6 or later, `pids.peak` (Linux 6.1), `memory.peak`,
-   `cgroup.kill`, `clone3` with `CLONE_INTO_CGROUP`, and `sched_cfs_bandwidth_slice_us`
-   writable; a missing one records the affected rows `unavailable` (R7.3).
+   `CONFIG_CFS_BANDWIDTH`, `CONFIG_PID_NS`, `CONFIG_NET_NS`, `CONFIG_SECCOMP`,
+   `CONFIG_SECCOMP_FILTER`, `CONFIG_SECURITY_LANDLOCK`, `CONFIG_FANOTIFY`,
+   `CONFIG_FANOTIFY_ACCESS_PERMISSIONS`, and exactly one of `CONFIG_HZ_250`,
+   `CONFIG_HZ_300`, `CONFIG_HZ_1000`. At boot the guest supervisor requires Landlock ABI
+   6 or later, `pids.peak` (Linux 6.1), `memory.peak`, `cgroup.kill`, `clone3` with
+   `CLONE_INTO_CGROUP`, and `sched_cfs_bandwidth_slice_us` writable; a missing one
+   records the affected rows `unavailable` (R7.3).
 5. **Toolchain.** One pinned Zig release archive for macOS arm64, used only as `zig cc
    -target aarch64-linux-musl`: a single archive with bundled musl, no package
    manager. `sandbox/v1/build-guest.py compile <toolchain-dir> <out-dir>` builds
@@ -131,14 +137,14 @@ Citations are to origin/main at `e73b76a`.
 ### R4. Admission
 
 1. **Phase A, no receipt.** Exit 65 with one of these on stderr, writing nothing in the
-   store: `E_USAGE`; `E_CONFIG` (configuration, install directory, installed control
-   files or accepted set fail R10.1 or their shapes, including a placeholder digest in
-   the accepted set); `E_STORE` (store root fails R2.3); `E_PACKAGE` (frame, limit,
-   order or request shape); `E_STORE_ID` (request `store_id` differs from the
-   configuration); `E_NONCE_REUSED` (the file
-   `<work_root>/nonces/<sha256 of the nonce bytes>` already exists; it is created
-   exclusively first); `E_ATTEMPT_EXISTS` (`<store>/<attempt_id>` exists; nothing is
-   touched, per `work/enforcement-evidence-binding/spec.md:64-66`).
+   store: `E_INSTALL_ACL` (R10.1, checked before anything else, usage included);
+   `E_USAGE`; `E_CONFIG` (configuration, install directory, installed control files or
+   accepted set fail R10.1 or their shapes, including a placeholder digest in the
+   accepted set); `E_STORE` (store root fails R2.3); `E_PACKAGE` (frame, limit, order or
+   request shape); `E_STORE_ID` (request `store_id` differs from the configuration);
+   `E_NONCE_REUSED` (the file `<work_root>/nonces/<sha256 of the nonce bytes>` already
+   exists; it is created exclusively first); `E_ATTEMPT_EXISTS` (`<store>/<attempt_id>`
+   exists; nothing is touched, per `work/enforcement-evidence-binding/spec.md:64-66`).
 2. **Phase B, refusal receipt.** The attempt directory is created exclusively, then
    every check below runs; any failure writes a receipt with `admission: "refused"` and
    `payload/refusal.json` (`{"reason_ids":[...]}`, sorted, unique):
@@ -360,6 +366,20 @@ Citations are to origin/main at `e73b76a`.
    every ancestor and each listed file must be owned by uid 0 or `principal_uid` and be
    neither group- nor other-writable; `store_root` and `work_root` must be outside every
    `/sandbox/*` root and never attached to the guest.
+   **ACLs.** Owner and mode are not enough on macOS, where an ACL can grant write,
+   append, delete, `chown` or `chmod` despite them. Every trusted installation file (the
+   installed `sandbox/v1/*.py`, `host-config.json`, every `installed_files` and
+   `identity_paths` entry, and the vfkit executable), and every ancestor directory of
+   each up to `/`, must carry no ACL entry that allows any principal other than uid 0 or
+   `principal_uid` to write, append, add a file or subdirectory, delete, delete a child,
+   write attributes, extended attributes or security, or change owner; deny-only
+   entries, which macOS places on some system directories, pass. It is read the way
+   R10.2 reads the store's ACLs (Darwin `acl_get_fd_np(ACL_TYPE_EXTENDED)` and its entry
+   and permission-set calls through `ctypes`; Linux `system.posix_acl_access` and
+   `system.posix_acl_default`, where any named-user or named-group entry, or a mask
+   granting write, fails); an ACL that cannot be read fails. `vml-install` and `vml-trust-root` check it when they
+   install, and the host supervisor checks it again as its first action at every launch,
+   before it reads stdin or anything else; a failure is phase A `E_INSTALL_ACL`.
 2. **Store writes,** under `work/enforcement-evidence-binding/spec.md:56-75`: directories
    `0750` and files `0440`, owner `principal_uid`, group `consumer_gid` (inherited from
    the parent or set with `fchown`, then verified), no ACL (Darwin
@@ -523,6 +543,11 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    disk. Each denial has a paired positive control. It proves:
    - each phase A error, including a placeholder digest in the accepted set, nonce
      reuse, and an existing attempt left byte-identical;
+   - `E_INSTALL_ACL` for a correctly owned, non-writable install directory, and
+     separately a file and an ancestor, each carrying one ACL entry that grants write
+     (Darwin `/bin/chmod +a`, Linux an `os.setxattr` of `system.posix_acl_access`),
+     refused before stdin is read; the same tree without the entry is the control;
+   - the R2.4 check refusing each set option absent and set `=m`;
    - each phase B reason alone, including changed and missing bytes per slot, and
      manifest, record and candidate mismatch;
    - each of the twelve `subject` and six `control` leaf fields mutated alone in the
@@ -621,7 +646,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 1. Depends on concerns 2 (#436) and 3 (#437), both merged. Concerns 5 and 7 consume
    the receipt, store and qualification (`work/step8-bounded-write-readiness/spec.md:295`,
    `:297`).
-2. This spec PR: `review_size: accepted-exception`, one concern, this file, 500-660
+2. This spec PR: `review_size: accepted-exception`, one concern, this file, 500-700
    lines, for the closed lists one boundary needs in one place (slots, limit and
    boundary rows, seccomp and Landlock sets, four decision packages, test classes). It
    waives only the soft line signal; steps 1-4 ship as standard-size PRs.
