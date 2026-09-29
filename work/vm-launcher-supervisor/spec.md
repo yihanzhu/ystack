@@ -330,17 +330,27 @@ Citations are to origin/main at `e73b76a`.
    `HardStop` path at once. It records `lifecycle.runtime: "error"`.
 3. **Teardown.** `tree_terminated` is true iff the runtime reported the VM stopped and
    its process exited and was reaped. `storage_destroyed` is true iff the host removed
-   exactly the entries it created in `<work_root>/<attempt_id>/` (the two disks, the
-   REST socket, the runtime log) and then the directory, and `lstat` confirms absence;
-   an unexpected entry is left in place and makes it false. `state` is `confirmed` iff
-   both are true, `failed` iff a stop or remove call returned an error, else
-   `unconfirmed`. Nothing outside that directory is stopped or removed.
-4. **Lifecycle.** `runtime: "error"` iff the runtime reported an error, R8.2 failed,
-   `verifier_started` is false, the host issued `HardStop`, or the attempt was
-   cancelled. `control_deadline: "exceeded"` iff runtime start took more than 10,000
-   ms, or export reading, storage removal or payload writing each took more than 5,000
-   ms. The receipt write itself cannot record its own overrun; if it fails, R10.4
-   applies.
+   exactly the entries it created in `<work_root>/<attempt_id>/` (the package copies,
+   the two disks, the REST socket, the runtime log) and then the directory, and `lstat`
+   confirms absence; an unexpected entry is left in place and makes it false. `state` is
+   `confirmed` iff both are true, `failed` iff a stop or remove call returned an error,
+   else `unconfirmed`. Nothing outside that directory is stopped or removed. **No
+   launch:** a phase B refusal starts no runtime and no tree, so `tree_terminated` is
+   true (nothing exists to terminate), `storage_destroyed` follows the removal of its
+   package copies, and `state` follows the same rule; `lifecycle` is `{admission:
+   "refused", runtime: "completed", control_deadline: "met"}` unless removal took over
+   5,000 ms; `payload` is `exit_state: "not-started"`, `exit_code: null`. This is the
+   combination `work/enforcement-evidence-binding/spec.md:139-146` permits for a
+   refusal, and R8 (`:283-292`) then derives exactly `failure.launch-refused`,
+   `failure.observation-unavailable` (rows `unavailable`, plus any `unobserved` slot)
+   and `failure.enforcement-unavailable` (rows `unknown`), adding `failure.teardown` or
+   `failure.supervisor-timeout` only if that removal fails or overruns.
+4. **Lifecycle,** for an admitted attempt. `runtime: "error"` iff the runtime reported
+   an error, R8.2 failed, `verifier_started` is false, the host issued `HardStop`, or
+   the attempt was cancelled. `control_deadline: "exceeded"` iff runtime start took more
+   than 10,000 ms, or export reading, storage removal or payload writing each took more
+   than 5,000 ms. The receipt write itself cannot record its own overrun; if it fails,
+   R10.4 applies.
 5. **Timing and finalization.** `admitted_at` is UTC seconds at admission.
    `terminated_at` is UTC seconds at the confirmed stop; for a refused attempt, the
    refusal instant; for an unconfirmed stop, the instant the supervisor abandons
@@ -544,10 +554,14 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    disk. Each denial has a paired positive control. It proves:
    - each phase A error, including a placeholder digest in the accepted set, nonce
      reuse, and an existing attempt left byte-identical;
-   - `E_INSTALL_ACL` for a correctly owned, non-writable install directory, and
-     separately a file and an ancestor, each carrying one ACL entry that grants write
-     (Darwin `/bin/chmod +a`, Linux an `os.setxattr` of `system.posix_acl_access`),
-     refused before stdin is read; the same tree without the entry is the control;
+   - `E_INSTALL_ACL` for a correctly owned, non-group-writable install directory, and
+     separately a file and an ancestor, each carrying one ACL entry, refused before
+     stdin is read, with the same tree without the entry as the control. On Darwin the
+     entry grants write (`/bin/chmod +a`). On Linux an effective write grant would need
+     write in the mask, which shows as group-write in the mode and fails R10.1 anyway,
+     so the fixture is a named-user entry with write whose mask withholds it (an
+     `os.setxattr` of `system.posix_acl_access`). It is refused because R10.1 rejects
+     any named entry, which is stricter than effective permission by design;
    - the R2.4 check refusing each set option absent and set `=m`;
    - each phase B reason alone, including changed and missing bytes per slot, and
      manifest, record and candidate mismatch;
@@ -599,7 +613,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      `failure.teardown`; storage removal failure adds `failure.teardown`; a `partial` or
      `unavailable` row adds `failure.observation-unavailable`. Every other phase B
      refusal (identity missing, record, manifest, candidate, subject source, candidate or
-     incident fields, instruction mismatch, kernel config) gives
+     incident fields, instruction mismatch, kernel config) gives, per R9.3,
      `failure.launch-refused`, `failure.observation-unavailable` and
      `failure.enforcement-unavailable`: the checker sees only the request's own subject,
      so those refusals are proven by the host alone. Copies edited only to set CPU and
