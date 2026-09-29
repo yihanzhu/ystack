@@ -112,10 +112,11 @@ teardown failure. Against the merged receipt check with the test-only set, two
 expectations are stated separately:
 
 - A failure receipt whose observed identities are all in the test-only set, with
-  a missing dependency recorded `unobserved` and the failure recorded in its
+  any missing dependency recorded `unobserved` and the failure recorded in its
   lifecycle, teardown or limit rows, yields `check_verdict: "valid"` with
-  `enforcement_verdict: "failed"` and the matching `failure.*` reasons, as does
-  every success, violation and failure receipt built from accepted identities.
+  `enforcement_verdict: "failed"` and the matching `failure.*` reasons. Success
+  and violation receipts built from accepted identities yield `valid` with
+  `satisfied` or `violated`.
 - A receipt that records an observed digest outside the test-only set yields
   `receipt.identity-unaccepted`, and one that records a placeholder digest yields
   `receipt.placeholder-identity` (`enforcement/v1/sandbox-receipt.jq:205-206`,
