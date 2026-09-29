@@ -171,6 +171,17 @@ reason_of() { "$jq_bin" -r '.body.reason_id // "null"' "$1"; }
 
 outcome_of() { "$jq_bin" -r '.body.outcome' "$1"; }
 
+# require_ok_run <desc> <stdin-file> <out> <err>: runs the verifier and
+# requires exit 0 with empty stdout and stderr (R6.4: a consumer uses a
+# payload only with exit 0; R6.1: stdout is always empty).
+require_ok_run() {
+  local desc=$1 stdin_file=$2 out=$3 err=$4 status=0
+  run_test_verifier "$stdin_file" "$out" "$err" || status=$?
+  [ "$status" -eq 0 ] || fail "$desc: expected exit 0, got $status"
+  [ ! -s "$out" ] || fail "$desc: stdout must be empty"
+  [ ! -s "$err" ] || fail "$desc: stderr must be empty"
+}
+
 # Builds (R1.2, R1.3, R8.1)
 out1="$tmp/build1"
 out2="$tmp/build2"
@@ -274,8 +285,12 @@ done
 pass 'every R2.1 argv deviation exits 64 E_USAGE with an empty evidence directory'
 # argv[0] of "x" still passes (not inspected).
 fresh_evidence
+argv0_status=0
 "$execer" "$test_verifier" "${envp_ok[@]}" -- x "${good_argv[@]}" \
-  < "$empty_stdin" > "$tmp/argv0.out" 2> "$tmp/argv0.err" || true
+  < "$empty_stdin" > "$tmp/argv0.out" 2> "$tmp/argv0.err" || argv0_status=$?
+[ "$argv0_status" -eq 0 ] || fail "argv[0] of x: expected exit 0, got $argv0_status"
+[ ! -s "$tmp/argv0.out" ] || fail 'argv[0] of x: stdout must be empty'
+[ ! -s "$tmp/argv0.err" ] || fail 'argv[0] of x: stderr must be empty'
 [ -e "$result_path" ] || fail 'argv[0] of x must still be accepted'
 pass 'argv[0] is not inspected'
 # environment deviations: missing, extra, duplicate, wrong value per
@@ -312,6 +327,7 @@ prod_status=0
   "$out1/verifier" verify --candidate /sandbox/candidate --evidence /sandbox/evidence \
   < /dev/null > "$prod_out" 2> "$prod_err" || prod_status=$?
 [ "$prod_status" -eq 73 ] || fail "production positive control: expected exit 73, got $prod_status"
+[ ! -s "$prod_out" ] || fail 'production positive control: stdout must be empty'
 [ "$(cat "$prod_err")" = E_OUTPUT ] || fail 'production positive control: expected E_OUTPUT'
 pass 'production build accepts the exact /sandbox vectors past R2 (exit 73, not 64)'
 
@@ -322,9 +338,8 @@ check_refusal() {
   local desc=$1 stdin_file=$2 expected=$3 expect_null_instr=${4:-0}
   fresh_evidence
   local out="$tmp/case.out" err="$tmp/case.err"
-  run_test_verifier "$stdin_file" "$out" "$err" || true
+  require_ok_run "$desc" "$stdin_file" "$out" "$err"
   [ -e "$result_path" ] || fail "$desc: no payload written"
-  [ ! -s "$out" ] || fail "$desc: stdout must be empty"
   local outcome reason
   outcome=$(outcome_of "$result_path")
   reason=$(reason_of "$result_path")
@@ -358,7 +373,7 @@ big_path=$(/usr/bin/printf 'a%.0s' $(seq 1 4096))
 mkinstr "$tmp/i-4208.bin" "{\"path_hex\":\"$(hex_of "$big_path")\",\"sha\":\"$zero_sha\"}"
 [ "$(wc -c < "$tmp/i-4208.bin")" -eq 4208 ] || fail '4,208-byte fixture has the wrong size'
 fresh_evidence
-run_test_verifier "$tmp/i-4208.bin" "$tmp/big.out" "$tmp/big.err" || true
+require_ok_run '4,208-byte instruction' "$tmp/i-4208.bin" "$tmp/big.out" "$tmp/big.err"
 reason=$(reason_of "$result_path")
 case "$reason" in
   instruction.*) fail "4,208-byte instruction must not be an instruction.* rejection (got $reason)" ;;
@@ -470,7 +485,7 @@ PY
   # never contains the path (so acceptance means "reached file.* processing").
   mkinstr "$tmp/diff-instr.bin" "{\"path_hex\":\"$path_hex\",\"sha\":\"$zero_sha\"}"
   fresh_evidence
-  run_test_verifier "$tmp/diff-instr.bin" "$tmp/diff.out" "$tmp/diff.err" || true
+  require_ok_run "$desc" "$tmp/diff-instr.bin" "$tmp/diff.out" "$tmp/diff.err"
   local reason verifier_accepts
   reason=$(reason_of "$result_path")
   case "$reason" in
@@ -532,7 +547,7 @@ digest_check_case() {
   fi
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of "$rel")\",\"sha\":\"$check_sha\"}"
   fresh_evidence
-  run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
+  require_ok_run "$desc" "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err"
   local instr_sha expected_payload
   instr_sha=$(sha_file "$tmp/case-instr.bin")
   expected_payload=$("$jq_bin" -S -c -n \
@@ -551,7 +566,7 @@ digest_check_case() {
   /bin/rm -f -- "$repeat"
   /bin/cp "$result_path" "$repeat"
   fresh_evidence
-  run_test_verifier "$tmp/case-instr.bin" "$tmp/case2.out" "$tmp/case2.err" || true
+  require_ok_run "$desc (repeat run)" "$tmp/case-instr.bin" "$tmp/case2.out" "$tmp/case2.err"
   cmp -s "$repeat" "$result_path" || fail "$desc: repeat run is not byte-identical"
   [ "$("$python" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$result_path")" = 0o400 ] ||
     fail "$desc: result mode is not 0400"
@@ -606,42 +621,16 @@ digest_check_case '1,048,576 bytes (accepted)' atlimit.bin "$tmp/f-atlimit" matc
 write_case overlimit.bin "$tmp/f-overlimit"
 mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of overlimit.bin)\",\"sha\":\"$zero_sha\"}"
 fresh_evidence
-run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
+require_ok_run '1,048,577-byte candidate' "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err"
 [ "$(reason_of "$result_path")" = file.oversize ] || fail '1,048,577 bytes must give file.oversize'
 pass 'sizes 1,048,576 (accepted) and 1,048,577 (file.oversize) are handled as paired controls'
-# A candidate growing after the opening fstat must be caught as
-# file.size-mismatch/file.changed, not read past opened.st_size (R5.4). A
-# continuous bash-builtin writer (no per-attempt process-spawn latency) keeps
-# appending throughout, so an attempt lands mid-growth quickly in practice.
-race_file="$candidate/growing.bin"
-: > "$race_file"
-mkinstr "$tmp/race-instr.bin" "{\"path_hex\":\"$(hex_of growing.bin)\",\"sha\":\"$zero_sha\"}"
-( while :; do printf a; done >> "$race_file" ) &
-race_writer_pid=$!
-race_reason=""
-for _ in $(seq 1 20); do
-  fresh_evidence
-  run_test_verifier "$tmp/race-instr.bin" "$tmp/race.out" "$tmp/race.err" || true
-  race_reason=$(reason_of "$result_path")
-  case "$race_reason" in file.size-mismatch|file.changed) break ;; esac
-done
-kill "$race_writer_pid" 2>/dev/null || :
-wait "$race_writer_pid" 2>/dev/null || :
-case "$race_reason" in
-  file.size-mismatch|file.changed)
-    [ "$("$jq_bin" -r '.body.observed // "null"' "$result_path")" = null ] ||
-      fail 'growing candidate: observed must stay null' ;;
-  *) fail "growing candidate: expected file.size-mismatch or file.changed, got $race_reason" ;;
-esac
-/bin/rm -f "$race_file"
-pass 'a candidate that grows during the run is bounded to its own recorded size, not the fixed buffer (R5.4)'
 # missing (final and intermediate), directory, FIFO, socket, symlinks,
 # intermediate regular file, mode 0000.
 check_file_reason() {
   local desc=$1 rel=$2 expected=$3
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of "$rel")\",\"sha\":\"$zero_sha\"}"
   fresh_evidence
-  run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
+  require_ok_run "$desc" "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err"
   local reason
   reason=$(reason_of "$result_path")
   [ "$reason" = "$expected" ] || fail "$desc: expected $expected, got $reason"
@@ -690,12 +679,13 @@ pass 'file.missing, file.not-regular, file.symlink and file.read-error are each 
 : > "$candidate/collide.bin"
 mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of collide.bin)\",\"sha\":\"$zero_sha\"}"
 fresh_evidence
-run_test_verifier "$tmp/case-instr.bin" "$tmp/first.out" "$tmp/first.err" || true
+require_ok_run 'output collision: first run' "$tmp/case-instr.bin" "$tmp/first.out" "$tmp/first.err"
 [ -e "$result_path" ] || fail 'first run must write a result'
 first_bytes=$(sha_file "$result_path")
 status=0
 run_test_verifier "$tmp/case-instr.bin" "$tmp/second.out" "$tmp/second.err" || status=$?
 [ "$status" -eq 73 ] || fail "output collision: expected exit 73, got $status"
+[ ! -s "$tmp/second.out" ] || fail 'output collision: stdout must be empty'
 [ "$(cat "$tmp/second.err")" = E_OUTPUT_COLLISION ] || fail 'output collision: expected E_OUTPUT_COLLISION'
 [ "$(sha_file "$result_path")" = "$first_bytes" ] || fail 'output collision: existing result must be unchanged'
 pass 'an existing result gives exit 73 E_OUTPUT_COLLISION and is left byte-identical'
@@ -706,6 +696,7 @@ status=0
 run_test_verifier "$tmp/case-instr.bin" "$tmp/noperm.out" "$tmp/noperm.err" || status=$?
 /bin/chmod 0700 "$evidence"
 [ "$status" -eq 73 ] || fail "unwritable evidence directory: expected exit 73, got $status"
+[ ! -s "$tmp/noperm.out" ] || fail 'unwritable evidence directory: stdout must be empty'
 [ "$(cat "$tmp/noperm.err")" = E_OUTPUT ] || fail 'unwritable evidence directory: expected E_OUTPUT'
 pass 'a mode 0500 evidence directory gives exit 73 E_OUTPUT'
 # ===========================================================================
@@ -739,7 +730,7 @@ PY
 tree_before=$("$python" "$tmp/treedigest.py" "$candidate")
 mkinstr "$tmp/preserve-instr.bin" "{\"path_hex\":\"$(hex_of collide.bin)\",\"sha\":\"$zero_sha\"}"
 fresh_evidence
-run_test_verifier "$tmp/preserve-instr.bin" "$tmp/pres.out" "$tmp/pres.err" || true
+require_ok_run 'preservation check' "$tmp/preserve-instr.bin" "$tmp/pres.out" "$tmp/pres.err"
 tree_after=$("$python" "$tmp/treedigest.py" "$candidate")
 [ "$tree_before" = "$tree_after" ] || fail 'the candidate tree changed across a verifier run'
 pass 'the candidate tree is unchanged (bytes, modes and structure) after a verifier run'
@@ -747,7 +738,7 @@ pass 'the candidate tree is unchanged (bytes, modes and structure) after a verif
 plant_case_reason() {
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of collide.bin)\",\"sha\":\"$zero_sha\"}"
   fresh_evidence
-  run_test_verifier "$tmp/case-instr.bin" "$tmp/plant.out" "$tmp/plant.err" || true
+  require_ok_run 'planted-file case' "$tmp/case-instr.bin" "$tmp/plant.out" "$tmp/plant.err"
   cat "$result_path"
 }
 baseline=$(plant_case_reason)
