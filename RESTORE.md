@@ -334,6 +334,24 @@ reproduction, obtains no credential, calls no model, registers or qualifies
 no environment, and changes the registry's `proof_state` not at all:
 `env.local-macos-dummy-target` stays `unproven`.
 
+### Restore the inactive fixed file-digest verifier
+
+Restore the paths listed under “Inactive fixed file-digest verifier” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/file-digest-verifier.test.sh
+```
+
+The proof builds the production executable with
+`bash verifiers/file-digest/v1/build.sh build <new-directory>` and a test build
+whose only difference is its sandbox root. It shows match, mismatch and every
+closed refusal against real files, digests checked independently, byte-identical
+rebuilds and payloads, and an unchanged candidate. The build uses no network; the
+test fetches only the pinned jq 1.6 release, as the other suites do. Restoring
+these records installs nothing, runs no verifier in a sandbox, accepts no digest,
+and performs no model, credential, publish or target operation.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in

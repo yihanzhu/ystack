@@ -769,6 +769,27 @@ add its manifest and inactive default-set binding only after the payload has a
 durable commit on main. A runnable verifier still requires a separately qualified
 sandbox launcher and fixed verification implementation.
 
+## Inactive fixed file-digest verifier
+
+`verifiers/file-digest/v1/verifier.c` is the fixed file-digest verifier of the
+[sandbox boundary decision](../work/real-sandbox-boundary/spec.md), specified in
+[its spec](../work/fixed-file-digest-verifier/spec.md). It accepts only the sandbox
+policy's fixed invocation and four-variable environment. It reads one trusted
+instruction from standard input and one bounded regular file under the candidate
+root, following no link. It writes one canonical payload: `match`, `mismatch` or one
+closed refusal reason. The digest is SHA-256 over the raw file bytes, not a Git
+object id. `verifiers/file-digest/v1/build.sh` builds it with the host compiler and
+records the source, build-script, compiler and executable digests.
+
+The payload is untrusted verifier output and never a receipt; only the host
+supervisor binds it, by digest. Nothing runs the verifier outside its test. The
+shadow slice still records `tool.git-blob-digest`, the sandbox policy keeps its
+all-ones demonstration tool digest, and no build digest is accepted anywhere. The
+test proves component behaviour on a build whose sandbox root is a temporary
+directory. The production build at `/sandbox`, mounts, limits, containment and
+guest-toolchain identity stay unproven until the launcher and supervisor concern
+qualifies them.
+
 ## Inactive eval and trace framework
 
 `evals/v1/run-evals.sh` runs one offline eval pass over a caller-supplied seed set

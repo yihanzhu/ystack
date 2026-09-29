@@ -327,6 +327,14 @@ scripts/test/default-dormant-publisher-adapter.test.sh
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
 
+# Inactive fixed file-digest verifier
+verifiers/file-digest/v1/verifier.c
+verifiers/file-digest/v1/build.sh
+scripts/test/file-digest-verifier.test.sh
+work/fixed-file-digest-verifier/intent.md
+work/fixed-file-digest-verifier/spec.md
+work/fixed-file-digest-verifier/plan.md
+
 # Inactive default profile assembly
 profiles/default/v1/profile.json
 profiles/default/v1/manifests/claude-code-producer.json
