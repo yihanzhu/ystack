@@ -10,7 +10,7 @@ Tracks #463. Step-8 child concern 4 (`work/step8-bounded-write-readiness/spec.md
 third child of the sandbox decision (`work/real-sandbox-boundary/spec.md:160-161`): one
 host supervisor, one runtime driver, one guest init and guest supervisor, a guest
 build, a native qualification harness and their tests. Everything ships inactive; the
-three reserved decisions of R13 gate every host change, VM boot and qualification.
+four operator requests of R13 gate every host change, VM boot and qualification.
 Citations are to origin/main at `e73b76a`.
 
 ## Requirements
@@ -55,7 +55,7 @@ Citations are to origin/main at `e73b76a`.
    command line; `--cpus`; `--memory`; `virtio-blk` with `readonly`; no device unless
    listed; a REST endpoint on a Unix socket with `GET /vm/state` and `POST /vm/state`
    `HardStop`; a stopped state it reports after guest power-off or hard stop. The
-   install request (R13.2) cites each at the pinned tag's source; a missing one
+   acquisition request (R13.2a) cites each at the pinned tag's source; a missing one
    returns this spec to G2.
 3. **Slots,** each measured by the host supervisor before admission from the installed
    bytes named in its configuration (R10.1), except `verification_instructions`,
@@ -76,8 +76,8 @@ Citations are to origin/main at `e73b76a`.
 | `verification_instructions` | The package's `instruction` bytes, the same bytes the input disk carries |
 
 4. **Kernel.** One distribution-built arm64 kernel package, identified by its archive
-   digest and the digests of the extracted `Image` and build config; the install
-   request names distribution, package, URL and digests. Before admission the host
+   digest and the digests of the extracted `Image` and build config; the acquisition
+   request names distribution, package, URL and digest. Before admission the host
    supervisor refuses a build config lacking any of: `CONFIG_CGROUPS`, `CONFIG_MEMCG`,
    `CONFIG_CGROUP_PIDS`, `CONFIG_CGROUP_SCHED`, `CONFIG_FAIR_GROUP_SCHED`,
    `CONFIG_CFS_BANDWIDTH`, `CONFIG_SECURITY_LANDLOCK`, `CONFIG_SECCOMP_FILTER`,
@@ -205,8 +205,8 @@ Citations are to origin/main at `e73b76a`.
    `splice`, `vmsplice`, `tee`, `sendfile`, `copy_file_range`, `io_uring_setup`,
    `io_uring_enter`, `io_uring_register`, `io_setup`, `io_submit`, `userfaultfd`,
    `perf_event_open`, `bpf`, `ptrace`, `process_vm_readv`, `process_vm_writev`,
-   `mount`, `umount2`, `pivot_root`, `move_mount`, `open_tree`, `fsopen`, `fsmount`,
-   `unshare`, `setns`, `clone3`, `keyctl`, `add_key`, `request_key`, `acct`,
+   `linkat`, `symlinkat`, `mount`, `umount2`, `pivot_root`, `move_mount`, `open_tree`,
+   `fsopen`, `fsmount`, `unshare`, `setns`, `clone3`, `keyctl`, `add_key`, `request_key`, `acct`,
    `swapon`; `openat` with `O_TMPFILE`; `madvise` with `MADV_REMOVE`; `clone` with any
    `CLONE_NEW*` flag. The filter checks `AUDIT_ARCH_AARCH64`.
 4. **Wiring,** as `work/fixed-file-digest-verifier/spec.md:58-78` requires: argv after
@@ -231,10 +231,20 @@ Citations are to origin/main at `e73b76a`.
 | `process_count` | `mechanism.tasks.cgroup-pids.v1` | Tree `pids.max` 32 | `pids.peak`; 1 |
 | `scratch_bytes` | `mechanism.scratch.tmpfs-no-free.v1` | tmpfs `size=` the R12.2 value, `nr_inodes=4096`; no remove, truncate, hole punch, `O_TMPFILE` or `MADV_REMOVE` (R6.2-R6.3) | Used blocks times block size after tree termination; block size |
 
-2. **Why each is hard.** CPU: the tree runs at most 50,000 ms on one CPU at 45% quota;
-   with one quota of carry-in and at most 9 ms overrun per period (bandwidth slice plus
-   one tick at `CONFIG_HZ` 250 or more), usage is at most 22,500 + 45 + 4,500 = 27,045
-   ms. Memory: the tree cannot hold more memory than the guest has. Output and scratch:
+2. **Why each is hard.** CPU and wall rest on an observed termination, not on a
+   configured deadline. The stop is *confirmed* at host time `T_c` when the runtime
+   reports the VM stopped and the supervisor has reaped the vfkit process with
+   `waitpid`; no guest instruction runs after that. The host has no bound on how long
+   `HardStop` takes to complete, and none is claimed. So both rows record
+   `enforcement: "hard"` only for a *self-stopped* attempt: the guest powered off on its
+   own, the stop was confirmed, and `HardStop` was never issued, which gives `T_c` below
+   50,000 ms. Then the tree ran at most `T_c` on one CPU at 45% quota; with one quota of
+   carry-in and at most 9 ms overrun per 100 ms period (bandwidth slice plus one tick at
+   `CONFIG_HZ` 250 or more), CPU is at most 0.45 `T_c` + 45 + 9 ceil(`T_c`/100) <
+   27,045 ms, and wall is `T_c` < 60,000 ms. Every other attempt (`HardStop` issued,
+   cancellation, or stop unconfirmed) records both rows `enforcement: "none"`. A
+   stricter claim for the `HardStop` path needs a measured completion bound and returns
+   to G2. Memory: the tree cannot hold more memory than the guest has. Output and scratch:
    the size limit refuses allocation beyond it, and with every free and overwrite path
    denied, final usage equals peak usage and the streams' final sizes equal the bytes
    written, so the after-termination value is complete. A native probe result above
@@ -245,8 +255,10 @@ Citations are to origin/main at `e73b76a`.
    mechanism is known absent (for example the runtime cannot hard-stop). `observation:
    "complete"` only for a counter read after confirmed tree termination; `partial` for
    one read before it; `unavailable` (with `observed: null`) for a counter not read.
-   `reached` is true when `observed` is at or above `bound`, and also for: CPU, never
-   otherwise; wall, the guest tree deadline fired or the host stop was issued; memory,
+   For CPU and wall, R7.2 governs. `reached` is true when `observed` is at or above
+   `bound`, and also for: CPU, never otherwise; wall, the guest tree deadline fired or
+   the host stop was issued (the wall row is then `observed: null`, `unavailable`, if
+   the stop was never confirmed); memory,
    `memory.events` `oom_kill` above 0; output and scratch, zero free blocks at the end;
    tasks, `pids.events` `max` above 0. A refused attempt records every row `unavailable`
    and `unknown`, `reached: false`, with its configured mechanism and resolution. No
@@ -254,8 +266,10 @@ Citations are to origin/main at `e73b76a`.
 
 ### R8. Guest-to-host channel and payload
 
-1. After confirmed tree termination the guest supervisor writes one frame to the export
-   disk: `report.json`, `stdout`, `stderr`, `evidence/<nnnn>` (four-digit index, one per
+1. Before export the guest supervisor requires every regular file on the output tmpfs
+   to have link count 1 and a distinct inode number; otherwise the output row is
+   `observation: "partial"`. After confirmed tree termination it writes one frame to
+   the export disk: `report.json`, `stdout`, `stderr`, `evidence/<nnnn>` (four-digit index, one per
    evidence file), `end`; then it syncs and powers off. That disk is the only channel.
    The verifier cannot reach it: it is outside the verifier's mount namespace and
    Landlock rules, and the verifier has no socket. Nothing flows from host to guest
@@ -298,16 +312,27 @@ Citations are to origin/main at `e73b76a`.
    ms, or export reading, storage removal or payload writing each took more than 5,000
    ms. The receipt write itself cannot record its own overrun; if it fails, R10.4
    applies.
-5. **Timing:** `admitted_at` and `terminated_at` are UTC seconds at admission and at
-   the confirmed stop (both at the refusal instant for a refused attempt).
+5. **Timing and finalization.** `admitted_at` is UTC seconds at admission.
+   `terminated_at` is UTC seconds at the confirmed stop; for a refused attempt, the
+   refusal instant; for an unconfirmed stop, the instant the supervisor abandons
+   confirmation, which is when it sends `SIGKILL` at 58,000 ms (R9.1). It does not wait
+   again. That receipt then records `teardown` `{state: "unconfirmed", tree_terminated:
+   false}` with `storage_destroyed` as found, `lifecycle.runtime: "error"`, the wall row
+   `unavailable`, the CPU and wall rows `enforcement: "none"`, and, since no guest report
+   exists, `exit_state: "not-started"` with `exit_code: null` and empty payload streams.
+   The receipt contract permits `not-started` only with `runtime: "error"`
+   (`work/enforcement-evidence-binding/spec.md:143-146`), and here it means that no
+   verifier exit was observed. The receipt contract has no distinct "exit unobserved"
+   value, and adding one would be an `enforcement/v1` change (a return-to-G2
+   dependency); every such receipt is `failed` anyway.
 
 ### R10. Configuration, store and receipt
 
 1. **Trusted configuration** `host-config.json` (kind `sandbox_host_config`) beside
    `host-supervisor.py`, `body` exactly: `principal_uid`, `consumer_gid`, `store_id`,
    `store_root`, `work_root`, `environment_id`, `runtime` (vfkit and driver paths),
-   `identity_paths` (the installed file for each R2.3 input but the instruction) and `installed_files`
-   (paths of the installed control policy, decision, policy set, evaluator driver and
+   `identity_paths` (the installed file for each R2.3 input but the instruction) and
+   `installed_files` (paths of the installed control policy, decision, policy set, evaluator driver and
    program, registry and accepted set). The install directory, every ancestor and each
    listed file must be owned by uid 0 or `principal_uid` and be neither group- nor
    other-writable; `store_root` and `work_root` must be outside every `/sandbox/*`
@@ -376,19 +401,29 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 
 ### R13. Reserved decisions
 
-1. Each is a separate decision request on #463 with its own id, posted only when its
-   package is reviewed and merged, in the order R13.2, R13.3, R13.4. Nothing enables
-   before all three are approved. Plan steps 1-4 (R14.4) are inactive and CI-tested
-   with the fake runtime; step 5 waits for R13.2, step 6 for R13.3, steps 7-8 for
-   R13.4.
-2. **`vml-install`** (intent decision 1): the vfkit tag, asset URL, published and
-   measured digests and installed path, with R2.2 evidence; the macOS build and the
-   `host_runtime` file digests, measured read-only; the kernel package (distribution,
-   name, version, URL, archive, `Image` and config digests, R2.4 result); the Zig
-   archive URL and digest; the exact acquisition hosts; every host path created (no
-   service, daemon, kernel extension, profile or system setting changes); the guest
-   build commands and their twice-built digests; offline use after acquisition;
-   rollback by deleting the listed paths. No VM boots under it.
+1. Each is a separate operator decision request on #463 with its own id, since
+   `AGENTS.md:44-48` reserves installation and new network scope to the operator.
+   Requests are posted only when their package is reviewed and merged, in the order
+   R13.2a, R13.2b, R13.3, R13.4. Nothing enables before all four are approved. Plan
+   steps 1-4 (R14.4) are inactive and CI-tested with the fake runtime. Step 5 waits for
+   R13.2a, step 6 for R13.2b, step 7 for R13.3, and steps 8-9 for R13.4.
+2. Intent decision 1 is split into two requests, because the install request must
+   quote measurements that only an acquisition can produce.
+   - **a. `vml-acquire`:** the vfkit tag and asset, the kernel package (distribution,
+     name, version) and the Zig archive, each with its URL and the publisher's stated
+     digest; the exact endpoint hosts; the quarantine directory
+     `~/ystack-quarantine/vml/` under the operator's account, outside every install
+     prefix; R2.2 evidence cited from the tag's source. It authorizes only downloading
+     those exact artifacts there, refusing any byte whose digest differs; extracting
+     the kernel `Image` and config and running the R2.4 check; read-only measurement of
+     the macOS build and the `host_runtime` system files; and running the pinned Zig
+     only to build the guest twice there (R2.5). Nothing else is executed: no vfkit
+     run, no VM boot, and nothing installed into any supervisor prefix.
+   - **b. `vml-install`:** quotes every quarantine measurement (artifact, extracted and
+     twice-built digests, R2.4 result); names every host path created (no service,
+     daemon, kernel extension, profile or system setting); and copies only those
+     measured bytes there, re-measured on arrival. It uses no network. Rollback is
+     deleting the listed paths and the quarantine directory. No VM boots under it.
 3. **`vml-trust-root`** (intent decision 3): the supervisor account name and uid, the
    consumer group name, gid and sole member, the exact `/etc/sudoers.d` file allowing
    only `host-supervisor.py launch` as that account, the install directory and its file
@@ -427,7 +462,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    `sandbox/v1/guest/supervisor.c`, `sandbox/v1/guest/probe.c`,
    `scripts/test/sandbox-launcher.test.sh`, `scripts/test/sandbox-guest.test.sh`,
    `scripts/test/sandbox-fake-runtime.py` (each mode 100755),
-   `scripts/test/sandbox-guest-harness.c`, and in step 8 only
+   `scripts/test/sandbox-guest-harness.c`, and in step 9 only
    `sandbox/v1/qualification/env.local-macos-vm-dummy-target.json`. **Change exactly:**
    `shadow/v1/shadow-environments.json` and `enforcement/v1/accepted-identities.json`
    (R12.3); `scripts/test/shadow-slice.test.sh:343-367` (the expected registry gains
@@ -439,9 +474,10 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    `work/vm-launcher-supervisor/plan.md`. No executable or disk image is committed.
 4. **Steps:** 1 frame format, `common.c` and the guest harness; 2 host supervisor and
    fake runtime; 3 guest init, supervisor, probe and `build-guest.py`; 4 runtime driver,
-   `qualify.py`, the R12.1 append, docs, restore and manifest; 5 R13.2's installation
-   and guest build (no repository change); 6 R13.3's host setup (no repository change);
-   7 the qualification run; 8 the R12.3 qualification PR.
+   `qualify.py`, the R12.1 append, docs, restore and manifest; 5 R13.2a's acquisition
+   and quarantine builds; 6 R13.2b's installation (5 and 6 make no repository change);
+   7 R13.3's host setup (no repository change); 8 the qualification run; 9 the R12.3
+   qualification PR.
 
 ### R15. Tests
 
@@ -470,8 +506,11 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    - for each R7 row, `hard`, `none`, `unknown`, and `partial` and `unavailable`
      observation, and `reached`, as scripted guest reports or fake runtime behaviour;
    - success, violation, refusal, guest deadline, host `HardStop`, cancellation, runtime
-     error, damaged or absent export, unconfirmed stop, and storage removal failure
-     (an unexpected entry);
+     error, damaged or absent export, and storage removal failure (an unexpected entry);
+   - a delayed stop: a fake runtime that ignores `HardStop` and never reports stopped
+     yields the R9.5 finalization at the 58,000 ms abandonment (never a confirmed
+     stop), CPU and wall `enforcement: "none"`, and `failed`; a self-stopped positive
+     control records both `hard`. These cases run in real time, concurrently;
    - store modes, owner, group, link counts and exclusivity after every case;
    - against the merged check in a temporary repository copy with the test-only set:
      success yields `valid`/`satisfied`, violation `valid`/`violated`, and every
@@ -488,10 +527,12 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    `common.c` using the host compiler and proves: frame parse and write, including every
    truncation, trailing-byte and `end` digest case; plan parsing; the exec wiring
    (argv, the four variables, fd 0 regular, fds 1-2 append-only, no other descriptor)
-   by exec'ing a harness child that reports them; candidate records whose plan paths
+   by exec'ing a harness child that reports them; the R8.1 export inventory refusing a
+   same-directory hard-link alias of an evidence file, with a single-link positive
+   control; candidate records whose plan paths
    are `README.md`, a non-ASCII UTF-8 name and a 4,096-byte 64-component path, each
-   materialized byte for byte, and a record name outside the closed set refused; `build-guest.py image` determinism
-   over synthetic inputs, and `compile` refusing an existing output directory. On Linux
+   materialized byte for byte, and a record name outside the closed set refused;
+   `build-guest.py image` determinism over synthetic inputs, and `compile` refusing an existing output directory. On Linux
    it also compiles `init.c`, `supervisor.c` and `probe.c` with `-std=c11 -Wall
    -Wextra -Werror`; Darwin has no Linux headers, so there that case is named as a
    Linux-only proof and CI's Linux run is its evidence.
@@ -516,9 +557,9 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    the receipt, store and qualification (`work/step8-bounded-write-readiness/spec.md:295`,
    `:297`).
 2. This spec PR: `review_size: accepted-exception`, one concern, this one file,
-   500-560 lines. The size is the closed lists the contract needs in one place (ten
+   500-620 lines. The size is the closed lists the contract needs in one place (ten
    slot measurements, six limit rows, eleven boundary rows, the seccomp and Landlock
-   sets, three decision packages); splitting them would scatter one boundary. It
+   sets, four decision packages); splitting them would scatter one boundary. It
    waives only the soft line signal. The plan splits steps 1-4 into implementation
    PRs of standard size.
 
@@ -556,4 +597,4 @@ Intent open questions, answered: runtime, kernel and image pinning (R2); mechani
 blocking row and qualification when a row is `none` (R7, R11); read-only candidate
 (R5); guest-to-host channel and host-only observations (R8); placement, language and
 supervisor identity (R1, R2.3); first environment and `scratch_bytes` (R12); fixture
-stores and what stays unproven (R15); the three requests and their order (R13).
+stores and what stays unproven (R15); the operator requests and their order (R13).
