@@ -381,6 +381,18 @@ pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables,
 [ ! -s "$tmp/exec-ov.err" ] || fail 'exec wiring (overlapping descriptors): stderr must be empty'
 pass 'ys_exec wires the same argv, environment and fds correctly even when a caller-supplied source overlaps another destination (stdout_fd forced to fd 0, the instruction target)'
 
+# ys_exec's close loop must not be blind to a descriptor above a *lowered*
+# soft RLIMIT_NOFILE: sysconf(_SC_OPEN_MAX) alone reflects that soft
+# limit, not the hard one. "lowlimit" opens a marker at fd 128, then lowers
+# the soft limit to 64 (leaving the hard limit untouched) before ys_exec
+# runs; a correct close must still reach fd 128.
+: > "$tmp/exec-ll.out"; : > "$tmp/exec-ll.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-ll.out" "$tmp/exec-ll.err" lowlimit
+[ "$(cat "$tmp/exec-ll.out")" = "$expected_report" ] ||
+  fail "exec wiring (fd 128, soft RLIMIT_NOFILE lowered to 64): unexpected report $(cat "$tmp/exec-ll.out")"
+[ ! -s "$tmp/exec-ll.err" ] || fail 'exec wiring (lowered soft limit): stderr must be empty'
+pass 'ys_exec still closes a descriptor (fd 128) above a soft RLIMIT_NOFILE the caller lowered to 64, not just up to sysconf(_SC_OPEN_MAX)'
+
 # --- R8.1 export inventory: hard-link alias refused, single link accepted -
 /bin/mkdir -m 700 "$tmp/ev-good" "$tmp/ev-bad"
 /usr/bin/printf ev0 > "$tmp/ev-good/b.bin"; /usr/bin/printf ev1 > "$tmp/ev-good/a.bin"

@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -278,29 +279,42 @@ static int cmd_inventory(int argc, char **argv)
     return 0;
 }
 
-/* exec-report <self-path> <instruction> <stdout-file> <stderr-file> [overlap]:
+/* exec-report <self-path> <instruction> <stdout-file> <stderr-file> [overlap|lowlimit]:
  * forks a child, calls ys_exec with R6.4's fixed argv (argv[0] = <self-path>,
  * so the child re-enters this binary as "verify ..." and reports what it
  * received); the parent leaves one extra fd open across the fork so the
  * child's "every other descriptor closed" check is non-vacuous. "overlap"
  * forces stdout_fd to literally be fd 0 (the instruction's own destination)
- * before calling ys_exec, reproducing a caller-supplied descriptor overlap. */
+ * before calling ys_exec, reproducing a caller-supplied descriptor overlap.
+ * "lowlimit" forces the marker fd to be numbered 128, then lowers the soft
+ * RLIMIT_NOFILE to 64 (the hard limit is untouched), reproducing a
+ * descriptor above a lowered soft limit that sysconf(_SC_OPEN_MAX) alone
+ * would never see. */
 static int cmd_exec_report(int argc, char **argv)
 {
     int instruction_fd, stdout_fd, stderr_fd, marker_fd, status;
     pid_t pid;
     const char *report_argv[7];
     if (argc != 6 && argc != 7) usage();
-    if (argc == 7 && strcmp(argv[6], "overlap") != 0) usage();
+    if (argc == 7 && strcmp(argv[6], "overlap") != 0 && strcmp(argv[6], "lowlimit") != 0) usage();
     instruction_fd = open(argv[3], O_RDONLY);
     stdout_fd = open(argv[4], O_WRONLY | O_CREAT | O_APPEND, 0600);
     stderr_fd = open(argv[5], O_WRONLY | O_CREAT | O_APPEND, 0600);
     marker_fd = open("/dev/null", O_RDONLY);
     if (instruction_fd < 0 || stdout_fd < 0 || stderr_fd < 0 || marker_fd < 0) die("E_FRAME_IO");
-    if (argc == 7) {
+    if (argc == 7 && strcmp(argv[6], "overlap") == 0) {
         if (dup2(stdout_fd, 0) < 0) die("E_FRAME_IO");
         (void)close(stdout_fd);
         stdout_fd = 0;
+    }
+    if (argc == 7 && strcmp(argv[6], "lowlimit") == 0) {
+        struct rlimit rl;
+        if (dup2(marker_fd, 128) < 0) die("E_FRAME_IO");
+        (void)close(marker_fd);
+        marker_fd = 128;
+        if (getrlimit(RLIMIT_NOFILE, &rl) != 0) die("E_FRAME_IO");
+        rl.rlim_cur = 64;
+        if (setrlimit(RLIMIT_NOFILE, &rl) != 0) die("E_FRAME_IO");
     }
     report_argv[0] = argv[2];
     report_argv[1] = YS_PLAN_ARGV[1]; report_argv[2] = YS_PLAN_ARGV[2];
@@ -327,7 +341,8 @@ static int cmd_verify_report(int argc, char **argv)
     int argv_ok = (argc == 6 && strcmp(argv[2], YS_PLAN_ARGV[2]) == 0 &&
                    strcmp(argv[3], YS_PLAN_ARGV[3]) == 0 && strcmp(argv[4], YS_PLAN_ARGV[4]) == 0 &&
                    strcmp(argv[5], YS_PLAN_ARGV[5]) == 0);
-    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra = 0, fd, maxfd, fl1, fl2;
+    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra = 0, fd, fl1, fl2;
+    long maxfd;
     struct stat st;
     char **e;
     int count = 0, i;
@@ -344,8 +359,12 @@ static int cmd_verify_report(int argc, char **argv)
     fl1 = fcntl(1, F_GETFL); fl2 = fcntl(2, F_GETFL);
     fd1_ok = (fl1 >= 0 && (fl1 & O_ACCMODE) == O_WRONLY && (fl1 & O_APPEND) != 0);
     fd2_ok = (fl2 >= 0 && (fl2 & O_ACCMODE) == O_WRONLY && (fl2 & O_APPEND) != 0);
-    maxfd = (int)sysconf(_SC_OPEN_MAX);
-    for (fd = 3; fd < maxfd; fd++)
+    /* Matches ys_exec's own close_from ceiling exactly (ys_close_ceiling):
+     * a check bounded only by sysconf(_SC_OPEN_MAX), the soft limit, would
+     * be as blind to a descriptor above a lowered soft limit as the bug
+     * this test exists to catch. */
+    maxfd = ys_close_ceiling();
+    for (fd = 3; fd < (int)maxfd; fd++)
         if (fcntl(fd, F_GETFD) >= 0) extra++;
 
     (void)dprintf(1, "argv:%s\n", argv_ok ? "ok" : "fail");

@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -793,25 +794,73 @@ enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
     return YS_PLAN_OK;
 }
 
+#define YS_CLOSE_RANGE_CAP 65536
+
+/* getrlimit's hard limit is commonly RLIM_INFINITY (unbounded; this is the
+ * ordinary case on macOS), and sysconf(_SC_OPEN_MAX) only ever reflects
+ * the soft limit -- the exact value a caller may have lowered out from
+ * under an fd this process still holds open. So an infinite or unknown
+ * hard limit sweeps to the cap outright; sysconf is never consulted here,
+ * because it would silently reintroduce the soft-limit blindness this
+ * function exists to avoid. */
+long ys_close_ceiling(void)
+{
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_max != RLIM_INFINITY &&
+        limit.rlim_max <= (rlim_t)YS_CLOSE_RANGE_CAP) {
+        return (long)limit.rlim_max;
+    }
+    return YS_CLOSE_RANGE_CAP;
+}
+
+/* Closes every open descriptor >= lowfd. Walks /dev/fd first (present on
+ * both Linux and Darwin, unlike /proc/self/fd), then sweeps lowfd through
+ * ys_close_ceiling() as a belt: sysconf(_SC_OPEN_MAX) alone reflects the
+ * soft limit and would leave a descriptor above it open across execve. */
+static void close_from(int lowfd)
+{
+    DIR *stream = opendir("/dev/fd");
+    int fd;
+    long ceiling;
+
+    if (stream != NULL) {
+        int stream_fd = dirfd(stream);
+        struct dirent *entry;
+        for (;;) {
+            int number;
+            char *end;
+            errno = 0;
+            entry = readdir(stream);
+            if (entry == NULL) break;
+            if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+            number = (int)strtol(entry->d_name, &end, 10);
+            if (end == entry->d_name || *end != '\0') continue;
+            if (number < lowfd || (stream_fd >= 0 && number == stream_fd)) continue;
+            (void)close(number);
+        }
+        (void)closedir(stream);
+    }
+    ceiling = ys_close_ceiling();
+    for (fd = lowfd; fd < (int)ceiling; fd++) (void)close(fd);
+}
+
 void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
              int stdout_fd, int stderr_fd)
 {
-    int fd, maxfd, in_fd, out_fd, err_fd;
+    int in_fd, out_fd, err_fd;
     /* Each source is preserved on its own fresh fd (>=3) before any dup2
      * into 0/1/2: a caller-supplied overlap (e.g. stdout_fd == 0, the
      * instruction's own destination) would otherwise have its source
      * clobbered by an earlier dup2 in this same call, silently wiring the
      * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
-     * a failed execve past this function's own close loop below. */
+     * a failed execve past close_from below. */
     in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
     out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
     err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
     if (in_fd < 0 || out_fd < 0 || err_fd < 0) _exit(126);
     if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0) _exit(126);
     (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
-    maxfd = (int)sysconf(_SC_OPEN_MAX);
-    if (maxfd < 3) maxfd = 256;
-    for (fd = 3; fd < maxfd; fd++) (void)close(fd);
+    close_from(3);
     execve(argv[0], (char *const *)(const void *)argv, (char *const *)(const void *)envp);
     _exit(127);
 }

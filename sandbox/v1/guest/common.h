@@ -163,11 +163,20 @@ enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
                                          const unsigned char *const *file_contents,
                                          const size_t *file_lengths);
 
+/* The finite ceiling a full descriptor sweep must use: the hard
+ * RLIMIT_NOFILE (never the soft rlim_cur, which a caller may have lowered
+ * below an fd this process still holds open) or, if that is unavailable
+ * or infinite, _SC_OPEN_MAX; either way capped at 65,536. Shared by
+ * ys_exec's own close and anything that needs to check its work (e.g. a
+ * test walking every descriptor a wired child could have inherited). */
+long ys_close_ceiling(void);
+
 /* R6.4 wiring: execve's `argv` with `envp`, fd 0 the instruction (a regular
  * file opened read-only from `instruction_fd`, which must be seekable to
  * offset 0), fd 1 and 2 duplicated from `stdout_fd`/`stderr_fd` (opened
  * O_WRONLY|O_APPEND by the caller), every other descriptor above 2 closed
- * first. Does not return on success. */
+ * first (walking /dev/fd, then sweeping to ys_close_ceiling() as a belt).
+ * Does not return on success. */
 void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
              int stdout_fd, int stderr_fd);
 
