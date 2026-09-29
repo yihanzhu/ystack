@@ -71,15 +71,15 @@ target_repo=$("$jq_bin" -r --arg env "$env_id" \
 # order, recomputed on every run (the caller hashes; jq 1.6 has no hash
 # builtin).
 build_entry_digests() {
-  local out=$1 count idx entry_tmp sha envid
-  count=$("$jq_bin" -r '.body.environments | length' "$registry")
+  local out=$1 registry_path=${2:-$registry} count idx entry_tmp sha envid
+  count=$("$jq_bin" -r '.body.environments | length' "$registry_path")
   : >"$tmp/entry-digests.jsonl"
   idx=0
   while [ "$idx" -lt "$count" ]; do
     entry_tmp="$tmp/entry-digest-$idx.json"
-    "$jq_bin" -S -c --argjson i "$idx" '.body.environments[$i]' "$registry" >"$entry_tmp"
+    "$jq_bin" -S -c --argjson i "$idx" '.body.environments[$i]' "$registry_path" >"$entry_tmp"
     sha=$(sha256_path "$entry_tmp")
-    envid=$("$jq_bin" -r --argjson i "$idx" '.body.environments[$i].environment_id' "$registry")
+    envid=$("$jq_bin" -r --argjson i "$idx" '.body.environments[$i].environment_id' "$registry_path")
     "$jq_bin" -nc --arg e "$envid" --arg s "$sha" '{environment_id:$e,sha256:$s}' \
       >>"$tmp/entry-digests.jsonl"
     idx=$((idx + 1))
@@ -239,21 +239,33 @@ recompute() {
   printf '%s\n%s\n' "$tmp/$name-receipt.json" "$tmp/$name-expectation.json"
 }
 
-run_program() {
-  local receipt=$1 expectation_in=$2 evaluation_in=$3 accepted_in=$4 out=$5
+# The general form, letting a caller substitute any of the five fixed files
+# (the malformed-fixed-file cases need this; every other case uses the real
+# ones via the `run_program` wrapper below).
+run_program_full() {
+  local receipt=$1 expectation_in=$2 evaluation_in=$3 policy_in=$4 decision_in=$5 \
+    policy_set_in=$6 registry_in=$7 accepted_in=$8 out=$9
   local entry_digests_file="$tmp/entry-digests-run.json"
-  build_entry_digests "$entry_digests_file"
+  build_entry_digests "$entry_digests_file" "$registry_in"
   "$jq_bin" -nSc -f "$program" \
     --slurpfile receipt "$receipt" --slurpfile expectation "$expectation_in" \
-    --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy" \
-    --slurpfile decision "$decision" --slurpfile policy_set "$policy_set" \
-    --slurpfile registry "$registry" --slurpfile accepted "$accepted_in" \
+    --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy_in" \
+    --slurpfile decision "$decision_in" --slurpfile policy_set "$policy_set_in" \
+    --slurpfile registry "$registry_in" --slurpfile accepted "$accepted_in" \
     --slurpfile entry_digests "$entry_digests_file" \
     --arg receipt_sha "$(sha256_path "$receipt")" \
     --arg expectation_sha "$(sha256_path "$expectation_in")" \
-    --arg evaluation_sha "$(sha256_path "$evaluation_in")" --arg policy_sha "$policy_sha" \
-    --arg decision_sha "$decision_sha" --arg policy_set_sha "$policy_set_sha" \
+    --arg evaluation_sha "$(sha256_path "$evaluation_in")" \
+    --arg policy_sha "$(sha256_path "$policy_in")" \
+    --arg decision_sha "$(sha256_path "$decision_in")" \
+    --arg policy_set_sha "$(sha256_path "$policy_set_in")" \
     --arg accepted_set_sha "$(sha256_path "$accepted_in")" >"$out"
+}
+
+run_program() {
+  local receipt=$1 expectation_in=$2 evaluation_in=$3 accepted_in=$4 out=$5
+  run_program_full "$receipt" "$expectation_in" "$evaluation_in" "$policy" "$decision" \
+    "$policy_set" "$registry" "$accepted_in" "$out"
 }
 
 # Runs the program and compares the output body exactly, plus the envelope.
@@ -347,6 +359,265 @@ run_case outcome-inconsistent \
   "$(mutate "$receipt_satisfied" outcome-inconsistent \
      '.body.outcome={verdict:"failed",reason_ids:["failure.runtime"]}')" \
   "$expectation" "$evaluation" "$accepted" refused none '["receipt.outcome-inconsistent"]'
+
+# PR 2: each of the nine remaining R7.4 reasons alone, mutating a positive
+# control (limit-mismatch is shown twice, by observer and by bound).
+run_case origin-mismatch \
+  "$(mutate "$receipt_satisfied" origin-mismatch '.body.origin.store_id="store.other"')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.origin-mismatch"]'
+run_case replayed-attempt-number \
+  "$(mutate "$receipt_satisfied" replayed-attempt-number '.body.attempt.attempt_number=2')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+run_case subject-mismatch \
+  "$(mutate "$receipt_satisfied" subject-mismatch \
+     ".body.subject.incident_sha256=\"$(syn incident.other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.subject-mismatch"]'
+control_mismatch_receipt=$(mutate "$receipt_satisfied" control-mismatch-r \
+  ".body.control.evaluator_driver_sha256=\"$(syn evaluator-driver.other)\"")
+control_mismatch_expectation=$(mutate "$expectation" control-mismatch-e \
+  ".body.control.evaluator_driver_sha256=\"$(syn evaluator-driver.other)\"")
+run_case control-mismatch "$control_mismatch_receipt" "$control_mismatch_expectation" \
+  "$evaluation" "$accepted" refused none '["receipt.control-mismatch"]'
+eval_violated=$(mutate "$evaluation" eval-violated '.body.verdict="violated"')
+recomputed=$(recompute "$eval_violated" "$receipt_satisfied" "$expectation" eval-violated-ok)
+recomputed_receipt=${recomputed%%$'\n'*}
+recomputed_expectation=${recomputed#*$'\n'}
+run_case evaluation-not-satisfied "$recomputed_receipt" "$recomputed_expectation" "$eval_violated" \
+  "$accepted" refused none '["receipt.evaluation-not-satisfied"]'
+env_mismatch_receipt=$(mutate "$receipt_satisfied" env-mismatch-r \
+  '.body.subject.target_repository_id="repo.other"')
+env_mismatch_expectation=$(mutate "$expectation" env-mismatch-e \
+  '.body.subject.target_repository_id="repo.other"')
+run_case environment-unlisted "$env_mismatch_receipt" "$env_mismatch_expectation" "$evaluation" \
+  "$accepted" refused none '["receipt.environment-unlisted"]'
+run_case stale \
+  "$(mutate "$receipt_satisfied" stale \
+     ".body.origin.accepted_set_sha256=\"$(syn accepted-set.other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.stale"]'
+run_case identity-unaccepted \
+  "$(mutate "$receipt_satisfied" identity-unaccepted \
+     ".body.identities.toolchain.sha256=\"$(syn identity.toolchain-other)\"")" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.identity-unaccepted"]'
+run_case limit-mismatch-observer \
+  "$(mutate "$receipt_satisfied" limit-mismatch-observer \
+     '.body.limits.wall_time_ms.observer="guest-supervisor"')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.limit-mismatch"]'
+run_case limit-mismatch-bound \
+  "$(mutate "$receipt_satisfied" limit-mismatch-bound '.body.limits.memory_bytes.bound=999999999')" \
+  "$expectation" "$evaluation" "$accepted" refused none '["receipt.limit-mismatch"]'
+
+# The companion case: the evaluation verdict changed without `recompute` gives
+# exactly receipt.control-mismatch and receipt.evaluation-not-satisfied.
+run_case control-and-evaluation-mismatch "$receipt_satisfied" "$expectation" "$eval_violated" \
+  "$accepted" refused none '["receipt.control-mismatch","receipt.evaluation-not-satisfied"]'
+
+# Replay: the satisfied control against a second expectation differing only
+# in the nonce-bearing launch_request_sha256, then only in attempt_id.
+run_case replayed-launch-request \
+  "$receipt_satisfied" \
+  "$(mutate "$expectation" replayed-launch-request \
+     ".body.attempt.launch_request_sha256=\"$(syn launch-request.other)\"")" \
+  "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+run_case replayed-attempt-id \
+  "$receipt_satisfied" \
+  "$(mutate "$expectation" replayed-attempt-id '.body.attempt.attempt_id="attempt.other"')" \
+  "$evaluation" "$accepted" refused none '["receipt.replayed"]'
+
+# Integrity: a byte-identical copy of the satisfied control gives the same
+# check, and the output still says origin_check: "not-performed".
+receipt_copy="$tmp/receipt-satisfied-copy.json"
+cp "$receipt_satisfied" "$receipt_copy"
+run_case satisfied-copy "$receipt_copy" "$expectation" "$evaluation" "$accepted" \
+  valid satisfied '["receipt.valid"]'
+
+# The row matrix: for each R6 row, `partial`/`unavailable` give `failed` with
+# failure.observation-unavailable; `none`/`unknown` give `failed` with
+# failure.enforcement-unavailable; `reached` gives `violated` with that row's
+# limit.* reason. None of these is ever `satisfied`.
+row_limit_reason() {
+  case "$1" in
+    cpu_time_ms) printf 'limit.cpu-time-reached' ;;
+    wall_time_ms) printf 'limit.wall-time-reached' ;;
+    memory_bytes) printf 'limit.memory-reached' ;;
+    output_bytes) printf 'limit.output-reached' ;;
+    process_count) printf 'limit.process-count-reached' ;;
+    scratch_bytes) printf 'limit.scratch-reached' ;;
+  esac
+}
+for rb in "cpu_time_ms:30000" "wall_time_ms:60000" "memory_bytes:536870912" \
+  "output_bytes:10485760" "process_count:32" "scratch_bytes:$scratch_bound"; do
+  row=${rb%%:*}
+  bound=${rb#*:}
+  reason=$(row_limit_reason "$row")
+  # Each filter is resolved to a plain variable first: nesting an escaped
+  # `\"..\"` object literal directly inside a "$(...)" that is itself inside
+  # a double-quoted argument gets its backslashes stripped by the outer
+  # quotes before the inner command is parsed, corrupting the JSON. A prior
+  # plain assignment avoids that extra quoting layer.
+  partial_filter=".body.limits.$row.observation=\"partial\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.observation-unavailable\"]}"
+  run_case "row-$row-partial" "$(mutate "$receipt_satisfied" "row-$row-partial" "$partial_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  unavailable_filter=".body.limits.$row.observation=\"unavailable\"|.body.limits.$row.observed=null|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.observation-unavailable\"]}"
+  run_case "row-$row-unavailable" \
+    "$(mutate "$receipt_satisfied" "row-$row-unavailable" "$unavailable_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  none_filter=".body.limits.$row.enforcement=\"none\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.enforcement-unavailable\"]}"
+  run_case "row-$row-enforcement-none" \
+    "$(mutate "$receipt_satisfied" "row-$row-enforcement-none" "$none_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  unknown_filter=".body.limits.$row.enforcement=\"unknown\"|.body.outcome={verdict:\"failed\",reason_ids:[\"failure.enforcement-unavailable\"]}"
+  run_case "row-$row-enforcement-unknown" \
+    "$(mutate "$receipt_satisfied" "row-$row-enforcement-unknown" "$unknown_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid failed '["receipt.valid"]'
+  reached_filter=".body.limits.$row.observed=$bound|.body.limits.$row.reached=true|.body.outcome={verdict:\"violated\",reason_ids:[\"$reason\"]}"
+  run_case "row-$row-reached" "$(mutate "$receipt_satisfied" "row-$row-reached" "$reached_filter")" \
+    "$expectation" "$evaluation" "$accepted" valid violated '["receipt.valid"]'
+done
+
+# Malformed-fixed-file regression: a fixed document whose own body is `null`,
+# the wrong type, or missing a required key is a jq `error` (mapped to
+# E_RELATION by PR 3's driver), never an ordinary refusal. One case per fixed
+# file per variant, with the other four fixed files left real and good.
+expect_fixed_file_error() {
+  local name=$1 policy_in=$2 decision_in=$3 policy_set_in=$4 registry_in=$5 accepted_in=$6
+  local out="$tmp/$name.out" status=0
+  run_program_full "$receipt_satisfied" "$expectation" "$evaluation" "$policy_in" \
+    "$decision_in" "$policy_set_in" "$registry_in" "$accepted_in" "$out" \
+    2>"$tmp/$name.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$out" ] && [ -s "$tmp/$name.err" ] || fail "$name"
+  pass "$name"
+}
+bad_policy_null=$(mutate "$policy" bad-policy-null '.body=null')
+bad_policy_wrong_type=$(mutate "$policy" bad-policy-wrong-type '.body="not-an-object"')
+bad_policy_missing_key=$(mutate "$policy" bad-policy-missing-key 'del(.body.tools)')
+bad_decision_null=$(mutate "$decision" bad-decision-null '.body=null')
+bad_decision_wrong_type=$(mutate "$decision" bad-decision-wrong-type '.body=[]')
+bad_decision_missing_key=$(mutate "$decision" bad-decision-missing-key 'del(.body.fail_mode)')
+bad_policy_set_null=$(mutate "$policy_set" bad-policy-set-null '.body=null')
+bad_policy_set_wrong_type=$(mutate "$policy_set" bad-policy-set-wrong-type '.body=1')
+bad_policy_set_missing_key=$(mutate "$policy_set" bad-policy-set-missing-key 'del(.body.fail_mode)')
+bad_registry_null=$(mutate "$registry" bad-registry-null '.body=null')
+bad_registry_wrong_type=$(mutate "$registry" bad-registry-wrong-type '.body="x"')
+bad_registry_missing_key=$(mutate "$registry" bad-registry-missing-key 'del(.body.registry_version)')
+bad_accepted_null=$(mutate "$accepted" bad-accepted-null '.body=null')
+bad_accepted_wrong_type=$(mutate "$accepted" bad-accepted-wrong-type '.body=[]')
+bad_accepted_missing_key=$(mutate "$accepted" bad-accepted-missing-key 'del(.body.set_version)')
+
+expect_fixed_file_error policy-body-null \
+  "$bad_policy_null" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-body-wrong-type \
+  "$bad_policy_wrong_type" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-body-missing-key \
+  "$bad_policy_missing_key" "$decision" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-null \
+  "$policy" "$bad_decision_null" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-wrong-type \
+  "$policy" "$bad_decision_wrong_type" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error decision-body-missing-key \
+  "$policy" "$bad_decision_missing_key" "$policy_set" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-null \
+  "$policy" "$decision" "$bad_policy_set_null" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-wrong-type \
+  "$policy" "$decision" "$bad_policy_set_wrong_type" "$registry" "$accepted"
+expect_fixed_file_error policy-set-body-missing-key \
+  "$policy" "$decision" "$bad_policy_set_missing_key" "$registry" "$accepted"
+expect_fixed_file_error registry-body-null \
+  "$policy" "$decision" "$policy_set" "$bad_registry_null" "$accepted"
+expect_fixed_file_error registry-body-wrong-type \
+  "$policy" "$decision" "$policy_set" "$bad_registry_wrong_type" "$accepted"
+expect_fixed_file_error registry-body-missing-key \
+  "$policy" "$decision" "$policy_set" "$bad_registry_missing_key" "$accepted"
+expect_fixed_file_error accepted-body-null \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_null"
+expect_fixed_file_error accepted-body-wrong-type \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_wrong_type"
+expect_fixed_file_error accepted-body-missing-key \
+  "$policy" "$decision" "$policy_set" "$registry" "$bad_accepted_missing_key"
+
+# One wrong-type field and one nested shape break per fixed file, at that
+# file's index in `args` (policy/decision/policy_set/registry/accepted).
+mutate_case() {
+  local idx=$1 name=$2 filter=$3
+  local args=("$policy" "$decision" "$policy_set" "$registry" "$accepted")
+  args[idx]=$(mutate "${args[idx]}" "$name" "$filter")
+  expect_fixed_file_error "$name" "${args[@]}"
+}
+mutate_case 0 policy-tools-wrong-type '.body.tools="not-an-array"'
+mutate_case 0 policy-tools-nested-shape '.body.tools=[{}]'
+mutate_case 1 decision-policy-ref-wrong-type '.body.policy_ref=1'
+mutate_case 1 decision-policy-ref-nested-shape '.body.policy_ref.sha256="not-a-sha"'
+mutate_case 2 policy-set-sections-wrong-type '.body.sections="x"'
+mutate_case 2 policy-set-sections-nested-shape '.body.sections[0].policy_ref.sha256=1'
+mutate_case 3 registry-environments-wrong-type '.body.environments="x"'
+mutate_case 3 registry-environments-nested-shape '.body.environments[0].target_repository_id=1'
+mutate_case 4 accepted-environments-wrong-type '.body.environments="x"'
+mutate_case 4 accepted-environments-nested-shape '.body.environments[0].scratch_bytes="x"'
+mutate_case 3 registry-id-wrong-type '.id=1'
+
+# Generic: every top-level body key of every fixed file, set to null alone,
+# one real committed key set per document (this also exercises the network
+# and semantics fields named above).
+doc_paths=("$policy" "$decision" "$policy_set" "$registry" "$accepted")
+for idx in 0 1 2 3 4; do
+  for key in $("$jq_bin" -r '.body|keys[]' "${doc_paths[$idx]}"); do
+    mutate_case "$idx" "doc$idx-body-$key-null" ".body.$key=null"
+  done
+done
+
+# Cross-document: the decision must reference the supplied policy bytes, and
+# the policy set's own "sandbox" section must reference the supplied policy
+# and decision bytes too.
+mutate_case 1 decision-unrelated-policy '.body.policy_ref.sha256=("f"*64)'
+mutate_case 2 policy-set-missing-sandbox-section 'del(.body.sections[-1])'
+mutate_case 2 policy-set-sandbox-section-mismatch '.body.sections[-1].policy_ref.sha256=("f"*64)'
+mutate_case 1 decision-policy-ref-wrong-content-id '.body.policy_ref.content_id="other"'
+mutate_case 1 decision-policy-ref-wrong-media-type '.body.policy_ref.media_type="text/plain"'
+
+# The schema combinator's array-element and exact-key-set coverage: a
+# wrong-typed argv element, a wrong-typed resource_ids element, and an
+# unexpected extra key, all inside one policy tool entry.
+mutate_case 0 policy-tool-argv-null-element '.body.tools[0].argv=[null]'
+mutate_case 0 policy-tool-resource-id-wrong-type '.body.tools[0].resource_ids=[42]'
+mutate_case 0 policy-tool-extra-key '.body.tools[0].extra="x"'
+
+# Generic: every scalar leaf path of every fixed file, set to null alone
+# (paths enumerated from the real file at test time, not hardcoded).
+for idx in 0 1 2 3 4; do
+  while IFS= read -r leaf_path; do
+    leaf_name="doc$idx-leaf-$(printf '%s' "$leaf_path" | shasum -a256 | cut -c1-10)"
+    mutate_case "$idx" "$leaf_name" "setpath($leaf_path;null)"
+  done < <("$jq_bin" -c 'paths(scalars)' "${doc_paths[$idx]}")
+done
+
+# Same-type invalid literals/enums/sets, not just wrong container types.
+mutate_case 0 policy-fail-mode-invalid '.body.fail_mode="not-a-valid-mode"'
+mutate_case 2 policy-set-sections-missing-id 'del(.body.sections[0])'
+mutate_case 2 policy-set-sections-duplicate-id '.body.sections[0].section_id=.body.sections[1].section_id'
+mutate_case 2 policy-set-package-ref-media-type-invalid '.body.core_contract.package_ref.media_type="text/plain"'
+mutate_case 0 policy-resource-access-invalid '.body.resources[0].access="read-execute"'
+
+# Defense by identity: a copy still schema-valid (id_ok tolerates a changed
+# `.id`) is caught by the pin alone, on each of the three pinned files.
+mutate_case 0 policy-tampered-pinned-copy '.id="control-policy.sandbox-tampered"'
+mutate_case 1 decision-tampered-pinned-copy '.id="control-decision.sandbox-tampered"'
+mutate_case 2 policy-set-tampered-pinned-copy '.id="control-policy-set.v1-tampered"'
+
+# The remaining constraints this round adds: an invalid enum, a non-posint,
+# a generation-id pattern break, a non-hex40 commit, and an out-of-enum
+# proof_state.
+mutate_case 1 decision-fail-mode-invalid '.body.fail_mode="open"'
+mutate_case 1 decision-output-schema-version-invalid '.body.semantics.output_schema_version=-1.5'
+mutate_case 2 policy-set-generation-id-invalid '.body.core_contract.generation_id="not-a-valid-id"'
+mutate_case 3 registry-source-root-commit-invalid '.body.environments[0].source_root_commit="short"'
+
+# proof_state (R5.5) never read: another environment turning "proven" must
+# not abort this receipt's own check.
+run_program_full "$receipt_satisfied" "$expectation" "$evaluation" "$policy" "$decision" \
+  "$policy_set" "$(mutate "$registry" other-proven '.body.environments[1].proof_state="proven"')" \
+  "$accepted" "$tmp/other-proven.out"
+"$jq_bin" -e '.body.check_verdict=="valid" and .body.enforcement_verdict=="satisfied"' \
+  "$tmp/other-proven.out" >/dev/null || fail 'registry-other-env-proven-unaffected'
+pass 'registry-other-env-proven-unaffected'
 
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"

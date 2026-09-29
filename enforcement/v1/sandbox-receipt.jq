@@ -236,16 +236,293 @@ def derive_outcome:
 def is_outcome_inconsistent:
   .outcome != (. | derive_outcome);
 
-# The program interface fixed in PR 1: the five fixed documents and
-# `entry_digests` are accepted here but not yet read (PR 2 binds them).
+# Shape checks of the five fixed documents/entry_digests: a mismatch is a
+# repository/caller integrity error, so it's a jq `error` (E_RELATION), not a
+# `reason_id`. `shape($s)` below is the one generic combinator: an object
+# schema recurses each key (exact key set), a one-elem array schema recurses
+# every element, else it's a leaf/constraint kind.
+def num_ok: type == "number" and floor == . and . >= 0;
+
+def get($doc; $path):
+  reduce $path[] as $k ($doc; if (type == "object") then (.[$k] // null) else null end);
+
+def body_ok($fields): (.body | exact($fields));
+
+def str_ok: type == "string"; def bool_ok: type == "boolean";
+
+def leaf_ok($kind):
+  if $kind == "string" then str_ok
+  elif $kind == "bool" then bool_ok
+  elif $kind == "number" then type == "number"
+  elif $kind == "posint" then num_ok
+  elif $kind == "hex64" then sha256_ok
+  elif $kind == "hex40" then type == "string" and test("\\A[0-9a-f]{40}\\z")
+  elif $kind == "id" then id_ok
+  else false end;
+
+def literal($v): {"$kind":"literal",value:$v};
+def enum($vs): {"$kind":"enum",values:$vs}; def media($v): literal($v);
+def exact_set($key;$ids): {"$kind":"exact_set",key:$key,ids:$ids};
+def pattern($re): {"$kind":"pattern",re:$re};
+
+def constraint_ok($c):
+  if $c["$kind"] == "literal" then . == $c.value
+  elif $c["$kind"] == "enum" then (. as $v | ($c.values | index($v))) != null
+  elif $c["$kind"] == "pattern" then type == "string" and test($c.re)
+  else false end;
+
+def shape($s):
+  if ($s | type) == "object" and ($s | has("$kind")) then constraint_ok($s)
+  elif ($s | type) == "object" then
+    type == "object" and (keys | sort) == ($s | keys | sort) and
+    (. as $doc | $s | to_entries | all(.[]; .key as $k | .value as $sub | ($doc[$k] | shape($sub))))
+  elif ($s | type) == "array" then
+    ($s[0]) as $elem | ($s[1]) as $constraint |
+    type == "array" and (. as $arr | $arr | all(.[];shape($elem))) and
+    (if $constraint == null then true
+     else ([.[] | .[$constraint.key]]) as $vals |
+       (($vals | sort) == ($constraint.ids | sort)) and (($vals|length) == ($vals|unique|length))
+     end)
+  else leaf_ok($s) end;
+
+def content_ref_schema($media): {content_id:"id",media_type:media($media),sha256:"hex64"};
+
+# Mirrors control/v1/sandbox.jq policy_ok's `==` checks; round summary has the mapping.
+def policy_body_schema:
+  {activation_state:literal("inactive"),
+   environment:literal({mode:"clear-then-allowlist",variables:[
+     {name:"LANG",value:"C"},{name:"LC_ALL",value:"C"},
+     {name:"PATH",value:"/sandbox/tools"},{name:"TMPDIR",value:"/sandbox/scratch"}]}),
+   evaluation_mode:literal("observation-only"),fail_mode:literal("closed"),
+   filesystem:literal({read_roots:[
+     {access:"read-only",path:"/sandbox/candidate",purpose:"candidate"},
+     {access:"read-only",path:"/sandbox/tools",purpose:"toolchain"}],write_roots:[
+     {access:"write-only",path:"/sandbox/evidence",purpose:"evidence"},
+     {access:"read-write",path:"/sandbox/scratch",purpose:"scratch"}]}),
+   isolation:literal({candidate_only:true,disposable:true,host_access:false}),
+   limits:{cpu_time_ms:literal(30000),memory_bytes:literal(536870912),
+     output_bytes:literal(10485760),process_count:literal(32),wall_time_ms:literal(60000)},
+   network:literal({endpoints:[],mode:"deny"}),
+   policy_version:literal("v1"),reference_semantics:literal("identity-only"),
+   required_role:literal("verifier"),
+   resources:literal([
+     {access:"read-only",id:"resource.candidate",kind:"directory",path:"/sandbox/candidate"},
+     {access:"write-only",id:"resource.evidence",kind:"directory",path:"/sandbox/evidence"},
+     {access:"read-write",id:"resource.scratch",kind:"directory",path:"/sandbox/scratch"},
+     {access:"read-only",id:"resource.toolchain",kind:"directory",path:"/sandbox/tools"}]),
+   sensitive_material:literal({credential_refs:[],exposure:"none",secret_refs:[]}),
+   tools:literal([{argv:["verify","--candidate","/sandbox/candidate","--evidence",
+     "/sandbox/evidence"],executable:"/sandbox/tools/verifier",network:false,
+     resource_ids:["resource.candidate","resource.evidence","resource.scratch"],
+     sha256:("1"*64),tool_id:"tool.verifier"}])};
+
+def fixed_policy_shape_ok:
+  ($policy[0]) as $p |
+  ($p | exact(["body","id","kind","schema_version"])) and $p.kind == "sandbox_policy" and
+  $p.schema_version == 1 and ($p.id | id_ok) and ($p.body | shape(policy_body_schema));
+
+# output_schema_version stays posint (not literal 1): a future bump should
+# not need this file edited.
+def decision_body_schema:
+  {activation_state:literal("inactive"),decision:literal("allow-observation-only-evaluation"),
+   evaluator:{driver_ref:content_ref_schema("text/x-shellscript"),
+     program_ref:content_ref_schema("text/x-jq"),
+     policy_set_validator:{driver_ref:content_ref_schema("text/x-shellscript"),
+       program_ref:content_ref_schema("text/x-jq")}},
+   fail_mode:enum(["closed"]),
+   policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
+   semantics:{authority_effect:literal("none"),enforcement_proof:literal("declaration-only"),
+     input_contract:literal("control-policy-set+duty-evaluation+execution-environment-claim.v1"),
+     output_kind:literal("sandbox_policy_evaluation"),output_schema_version:"posint",
+     qualification_effect:literal("none"),reference_semantics:literal("identity-only"),
+     verdicts:literal(["inconclusive","satisfied","violated"])}};
+
+def fixed_decision_shape_ok:
+  ($decision[0]) as $d |
+  ($d | exact(["body","id","kind","schema_version"])) and $d.kind == "sandbox_decision" and
+  $d.schema_version == 1 and ($d.id | id_ok) and ($d.body | shape(decision_body_schema));
+
+# policy-set.jq shape_ok/relations_ok (round summary has the mapping);
+# semantic_identity mirrors its own pattern (:54), not a literal.
+def policy_set_body_schema:
+  {activation_state:literal("inactive"),
+   core_contract:{generation_id:pattern("\\Ag-[0-9a-f]{64}\\z"),
+     package_ref:content_ref_schema("application/vnd.ystack.core-contract+json"),
+     semantic_identity:pattern("\\Acore\\.contracts\\.v[1-9][0-9]*\\z")},
+   fail_mode:literal("closed"),policy_version:literal("v1"),
+   sections:[{section_id:"id",
+       policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
+       decision_ref:content_ref_schema("application/vnd.ystack.control-decision+json")},
+     exact_set("section_id";["credential-policy","duty-separation","evidence-integrity",
+       "kill-switch","risk-gates","sandbox"])]};
+
+def fixed_policy_set_shape_ok:
+  ($policy_set[0]) as $s |
+  ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
+  $s.schema_version == 1 and ($s.id | id_ok) and ($s.body | shape(policy_set_body_schema));
+
+# registry has no constraint from sandbox.jq/validate.sh. proof_state stays
+# bare `string`: R5.5 forbids reading it, and one environment qualifying
+# must never abort an unrelated receipt check.
+def registry_body_schema:
+  {activation_state:"string",
+   environments:[{description:"string",environment_id:"id",evidence_scope:"string",
+     proof_state:"string",source_root_commit:"hex40",target_repository_id:"id"}],
+   registry_version:"string"};
+
+def fixed_registry_shape_ok:
+  ($registry[0]) as $g |
+  ($g | exact(["body","id","kind","schema_version"])) and
+  $g.kind == "shadow_environment_registry" and $g.schema_version == 1 and ($g.id | id_ok) and
+  ($g.body | shape(registry_body_schema));
+
+def digest_list_ok:
+  type == "array" and length >= 1 and length <= 8 and all(.[];sha256_ok) and
+  all(.[]; . != all_ones_sha and . != all_zeros_sha) and . == (sort | unique);
+
+def id_list_ok:
+  type == "array" and length >= 1 and length <= 8 and all(.[];id_ok) and
+  . == (sort | unique);
+
+def accepted_entry_shape_ok:
+  exact(["environment_id","identities","mechanisms","scratch_bytes"]) and
+  (.environment_id | id_ok) and (.scratch_bytes | type == "number" and floor == . and . > 0) and
+  (.identities | exact(identity_slots) and
+    ([identity_slots[] as $slot | .[$slot]] | all(.[];digest_list_ok))) and
+  (.mechanisms | exact(limit_rows) and
+    ([limit_rows[] as $row | .[$row]] | all(.[];id_list_ok)));
+
+def fixed_accepted_shape_ok:
+  ($accepted[0]) as $a |
+  ($a | exact(["body","id","kind","schema_version"])) and
+  $a.kind == "sandbox_accepted_identity_set" and $a.schema_version == 1 and
+  $a.id == "sandbox.accepted-identities.v1" and
+  ($a | body_ok(["activation_state","environments","set_version"])) and
+  $a.body.activation_state == "inactive" and $a.body.set_version == "v1" and
+  ($a.body.environments | type == "array" and all(.[];accepted_entry_shape_ok));
+
+def entry_digest_item_ok:
+  exact(["environment_id","sha256"]) and (.environment_id | id_ok) and (.sha256 | sha256_ok);
+
+def fixed_entry_digests_shape_ok:
+  ($entry_digests[0] | type == "array" and all(.[];entry_digest_item_ok));
+
+def entry_digests_match_registry:
+  ($registry[0].body.environments | map(.environment_id)) as $reg_ids |
+  ($entry_digests[0] | map(.environment_id)) as $ed_ids |
+  $reg_ids == $ed_ids;
+
+# Cross-document, complete references (content_id+media_type, not sha256
+# alone): the decision, and the policy set's own "sandbox" section, must
+# each reference the same policy/decision bytes under the same name.
+def sandbox_section:
+  $policy_set[0].body.sections | map(select(.section_id == "sandbox")) | .[0];
+
+def expected_policy_ref:
+  {content_id:$policy[0].id,media_type:"application/vnd.ystack.control-policy+json",
+   sha256:$policy_sha};
+def expected_decision_ref:
+  {content_id:$decision[0].id,media_type:"application/vnd.ystack.control-decision+json",
+   sha256:$decision_sha};
+
+def cross_document_ok:
+  ($decision[0].body.policy_ref == expected_policy_ref) and
+  (sandbox_section != null) and (sandbox_section.policy_ref == expected_policy_ref) and
+  (sandbox_section.decision_ref == expected_decision_ref);
+
+# Defense by identity (spec.md:227): pinned by digest, not just schema.
+def policy_pin: "4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e";
+def decision_pin: "c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd";
+def policy_set_pin: "3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8";
+
+def pinned_files_ok:
+  (if $policy_sha != policy_pin then error("fixed-file-identity:policy") else true end) and
+  (if $decision_sha != decision_pin then error("fixed-file-identity:decision") else true end) and
+  (if $policy_set_sha != policy_set_pin then error("fixed-file-identity:policy_set") else true end);
+
+def fixed_files_ok:
+  fixed_policy_shape_ok and fixed_decision_shape_ok and fixed_policy_set_shape_ok and
+  fixed_registry_shape_ok and fixed_accepted_shape_ok and fixed_entry_digests_shape_ok and
+  entry_digests_match_registry and cross_document_ok and pinned_files_ok;
+
+# Lookups against the fixed registry/accepted set/entry digests (read only
+# after fixed_files_ok, so shapes are already sound).
+def registry_entry_for($env_id):
+  $registry[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+
+def entry_digest_for($env_id):
+  $entry_digests[0] | map(select(.environment_id == $env_id)) | .[0].sha256;
+
+def accepted_entry_for($env_id):
+  $accepted[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+
+def row_observer($row):
+  {cpu_time_ms:"guest-supervisor",wall_time_ms:"host-supervisor",memory_bytes:"guest-supervisor",
+   output_bytes:"guest-supervisor",process_count:"guest-supervisor",
+   scratch_bytes:"guest-supervisor"}[$row];
+
+def is_origin_mismatch:
+  $receipt[0].body.origin.store_id != $expectation[0].body.store_id;
+
+def is_replayed:
+  $receipt[0].body.attempt != $expectation[0].body.attempt;
+
+def is_subject_mismatch:
+  $receipt[0].body.subject != $expectation[0].body.subject;
+
+def is_control_mismatch:
+  ($receipt[0].body.control) as $c | ($expectation[0].body.control) as $ec |
+  ($c != $ec) or ($c.policy_sha256 != $policy_sha) or ($c.decision_sha256 != $decision_sha) or
+  ($c.policy_set_sha256 != $policy_set_sha) or
+  ($c.evaluator_driver_sha256 != $decision[0].body.evaluator.driver_ref.sha256) or
+  ($c.evaluator_program_sha256 != $decision[0].body.evaluator.program_ref.sha256) or
+  ($c.sandbox_evaluation_sha256 != $evaluation_sha);
+
+# The evaluation is a caller input, not a fixed file: a bad shape here refuses
+# rather than errors.
+def is_evaluation_not_satisfied:
+  ($receipt[0].body.control) as $c |
+  ((get($evaluation[0];["kind"]) == "sandbox_policy_evaluation") and
+   (get($evaluation[0];["schema_version"]) == 1) and
+   (get($evaluation[0];["body","verdict"]) == "satisfied") and
+   (get($evaluation[0];["body","policy_set","sha256"]) == $c.policy_set_sha256) and
+   (get($evaluation[0];["body","policy_ref","sha256"]) == $c.policy_sha256) and
+   (get($evaluation[0];["body","decision_ref","sha256"]) == $c.decision_sha256)) | not;
+
+def is_environment_unlisted:
+  ($receipt[0].body.subject) as $s |
+  (registry_entry_for($s.environment_id) == null) or
+  (accepted_entry_for($s.environment_id) == null) or
+  ($s.environment_entry_sha256 != entry_digest_for($s.environment_id)) or
+  ($s.target_repository_id != (registry_entry_for($s.environment_id).target_repository_id // null));
+
+def is_stale:
+  $receipt[0].body.origin.accepted_set_sha256 != $accepted_set_sha;
+
+def is_identity_unaccepted:
+  ($receipt[0].body) as $b |
+  (accepted_entry_for($b.subject.environment_id)) as $ae |
+  ($ae == null) or
+  ([identity_slots[] as $slot | ($b.identities[$slot]) as $i |
+     select($i.state == "observed" and $i.sha256 != all_ones_sha and $i.sha256 != all_zeros_sha) |
+     select(($ae.identities[$slot] | index($i.sha256)) == null)] | length > 0) or
+  ([limit_rows[] as $row | ($b.limits[$row].mechanism_id) as $m |
+     select(($ae.mechanisms[$row] | index($m)) == null)] | length > 0);
+
+def is_limit_mismatch:
+  ($receipt[0].body) as $b |
+  (accepted_entry_for($b.subject.environment_id)) as $ae |
+  ([limit_rows[] as $row | ($b.limits[$row]) as $row_val |
+     (if $row == "scratch_bytes" then
+        ($ae.scratch_bytes) as $bound |
+        (if $bound == null then false else $row_val.bound != $bound end)
+      else $row_val.bound != $policy[0].body.limits[$row] end) or
+     ($row_val.observer != row_observer($row))
+   ] | any);
+
 ($receipt[0]) as $r |
 ($expectation[0]) as $e |
-($policy[0]) as $fixed_policy |
-($decision[0]) as $fixed_decision |
-($policy_set[0]) as $fixed_policy_set |
-($registry[0]) as $fixed_registry |
-($accepted[0]) as $fixed_accepted |
-($entry_digests[0]) as $fixed_entry_digests |
+(if fixed_files_ok then true else error("fixed-file-relation") end) as $fixed_ok |
 (if ($r | is_declaration_only) then ["receipt.declaration-only"]
  elif ($r | is_kind_unsupported) then ["receipt.kind-unsupported"]
  elif (($r | receipt_shape_ok) and ($e | expectation_shape_ok) | not)
@@ -253,6 +530,15 @@ def is_outcome_inconsistent:
  else
    (((if ($r | has_placeholder_identity) or ($e | has_placeholder_identity)
       then ["receipt.placeholder-identity"] else [] end) +
+     (if is_origin_mismatch then ["receipt.origin-mismatch"] else [] end) +
+     (if is_replayed then ["receipt.replayed"] else [] end) +
+     (if is_subject_mismatch then ["receipt.subject-mismatch"] else [] end) +
+     (if is_control_mismatch then ["receipt.control-mismatch"] else [] end) +
+     (if is_evaluation_not_satisfied then ["receipt.evaluation-not-satisfied"] else [] end) +
+     (if is_environment_unlisted then ["receipt.environment-unlisted"] else [] end) +
+     (if is_stale then ["receipt.stale"] else [] end) +
+     (if is_identity_unaccepted then ["receipt.identity-unaccepted"] else [] end) +
+     (if is_limit_mismatch then ["receipt.limit-mismatch"] else [] end) +
      (if ($r.body | is_outcome_inconsistent) then ["receipt.outcome-inconsistent"]
       else [] end)) | sort | unique)
  end) as $reasons |
