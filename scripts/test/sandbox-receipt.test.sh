@@ -71,15 +71,15 @@ target_repo=$("$jq_bin" -r --arg env "$env_id" \
 # order, recomputed on every run (the caller hashes; jq 1.6 has no hash
 # builtin).
 build_entry_digests() {
-  local out=$1 count idx entry_tmp sha envid
-  count=$("$jq_bin" -r '.body.environments | length' "$registry")
+  local out=$1 registry_path=${2:-$registry} count idx entry_tmp sha envid
+  count=$("$jq_bin" -r '.body.environments | length' "$registry_path")
   : >"$tmp/entry-digests.jsonl"
   idx=0
   while [ "$idx" -lt "$count" ]; do
     entry_tmp="$tmp/entry-digest-$idx.json"
-    "$jq_bin" -S -c --argjson i "$idx" '.body.environments[$i]' "$registry" >"$entry_tmp"
+    "$jq_bin" -S -c --argjson i "$idx" '.body.environments[$i]' "$registry_path" >"$entry_tmp"
     sha=$(sha256_path "$entry_tmp")
-    envid=$("$jq_bin" -r --argjson i "$idx" '.body.environments[$i].environment_id' "$registry")
+    envid=$("$jq_bin" -r --argjson i "$idx" '.body.environments[$i].environment_id' "$registry_path")
     "$jq_bin" -nc --arg e "$envid" --arg s "$sha" '{environment_id:$e,sha256:$s}' \
       >>"$tmp/entry-digests.jsonl"
     idx=$((idx + 1))
@@ -246,7 +246,7 @@ run_program_full() {
   local receipt=$1 expectation_in=$2 evaluation_in=$3 policy_in=$4 decision_in=$5 \
     policy_set_in=$6 registry_in=$7 accepted_in=$8 out=$9
   local entry_digests_file="$tmp/entry-digests-run.json"
-  build_entry_digests "$entry_digests_file"
+  build_entry_digests "$entry_digests_file" "$registry_in"
   "$jq_bin" -nSc -f "$program" \
     --slurpfile receipt "$receipt" --slurpfile expectation "$expectation_in" \
     --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy_in" \
@@ -609,7 +609,15 @@ mutate_case 1 decision-fail-mode-invalid '.body.fail_mode="open"'
 mutate_case 1 decision-output-schema-version-invalid '.body.semantics.output_schema_version=-1.5'
 mutate_case 2 policy-set-generation-id-invalid '.body.core_contract.generation_id="not-a-valid-id"'
 mutate_case 3 registry-source-root-commit-invalid '.body.environments[0].source_root_commit="short"'
-mutate_case 3 registry-proof-state-invalid '.body.environments[0].proof_state="proven"'
+
+# proof_state (R5.5) never read: another environment turning "proven" must
+# not abort this receipt's own check.
+run_program_full "$receipt_satisfied" "$expectation" "$evaluation" "$policy" "$decision" \
+  "$policy_set" "$(mutate "$registry" other-proven '.body.environments[1].proof_state="proven"')" \
+  "$accepted" "$tmp/other-proven.out"
+"$jq_bin" -e '.body.check_verdict=="valid" and .body.enforcement_verdict=="satisfied"' \
+  "$tmp/other-proven.out" >/dev/null || fail 'registry-other-env-proven-unaffected'
+pass 'registry-other-env-proven-unaffected'
 
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"

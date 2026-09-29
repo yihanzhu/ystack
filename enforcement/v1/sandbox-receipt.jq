@@ -236,20 +236,16 @@ def derive_outcome:
 def is_outcome_inconsistent:
   .outcome != (. | derive_outcome);
 
-# PR 2: shape checks of the five fixed documents and entry_digests. A mismatch
-# here is a repository/caller integrity failure, not a refusal, so it is a jq
-# `error` (the driver maps it to E_RELATION), never a `reason_id`.
+# Shape checks of the five fixed documents/entry_digests: a mismatch is a
+# repository/caller integrity error, so it's a jq `error` (E_RELATION), not a
+# `reason_id`. `shape($s)` below is the one generic combinator: an object
+# schema recurses each key (exact key set), a one-elem array schema recurses
+# every element, else it's a leaf/constraint kind.
 def num_ok: type == "number" and floor == . and . >= 0;
 
 def get($doc; $path):
   reduce $path[] as $k ($doc; if (type == "object") then (.[$k] // null) else null end);
 
-# One generic schema combinator, replacing per-field predicates: a schema
-# value is an object (recurse each key, and the key SET must match exactly),
-# a one-element array (recurse every element against that one schema), or a
-# leaf-kind string. This catches a wrong array-element type, an unexpected
-# key and a `null`/wrong-typed leaf uniformly, by construction, instead of by
-# which predicate happened to be hand-written for that field.
 def body_ok($fields): (.body | exact($fields));
 
 def str_ok: type == "string"; def bool_ok: type == "boolean";
@@ -365,12 +361,13 @@ def fixed_policy_set_shape_ok:
   ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
   $s.schema_version == 1 and ($s.id | id_ok) and ($s.body | shape(policy_set_body_schema));
 
-# registry has no constraint from sandbox.jq/validate.sh; proof_state's enum
-# is provisional (spec.md:864 -- round summary has the gap note).
+# registry has no constraint from sandbox.jq/validate.sh. proof_state stays
+# bare `string`: R5.5 forbids reading it, and one environment qualifying
+# must never abort an unrelated receipt check.
 def registry_body_schema:
   {activation_state:"string",
    environments:[{description:"string",environment_id:"id",evidence_scope:"string",
-     proof_state:enum(["unproven"]),source_root_commit:"hex40",target_repository_id:"id"}],
+     proof_state:"string",source_root_commit:"hex40",target_repository_id:"id"}],
    registry_version:"string"};
 
 def fixed_registry_shape_ok:
@@ -415,15 +412,12 @@ def entry_digests_match_registry:
   ($entry_digests[0] | map(.environment_id)) as $ed_ids |
   $reg_ids == $ed_ids;
 
-# Cross-document: the decision must reference the same policy bytes we were
-# given, and the policy set's own "sandbox" section must reference the same
-# policy and decision bytes too, or the five fixed files do not agree with
-# each other about which sandbox policy is in force.
+# Cross-document, complete references (content_id+media_type, not sha256
+# alone): the decision, and the policy set's own "sandbox" section, must
+# each reference the same policy/decision bytes under the same name.
 def sandbox_section:
   $policy_set[0].body.sections | map(select(.section_id == "sandbox")) | .[0];
 
-# Complete references, not digests alone: content_id and media_type must
-# also match, or a section could carry the right bytes under the wrong name.
 def expected_policy_ref:
   {content_id:$policy[0].id,media_type:"application/vnd.ystack.control-policy+json",
    sha256:$policy_sha};
@@ -451,8 +445,8 @@ def fixed_files_ok:
   fixed_registry_shape_ok and fixed_accepted_shape_ok and fixed_entry_digests_shape_ok and
   entry_digests_match_registry and cross_document_ok and pinned_files_ok;
 
-# PR 2: lookups against the fixed registry, accepted set and entry digests
-# (all read only after `fixed_files_ok`, so their shapes are already sound).
+# Lookups against the fixed registry/accepted set/entry digests (read only
+# after fixed_files_ok, so shapes are already sound).
 def registry_entry_for($env_id):
   $registry[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
 
@@ -467,7 +461,6 @@ def row_observer($row):
    output_bytes:"guest-supervisor",process_count:"guest-supervisor",
    scratch_bytes:"guest-supervisor"}[$row];
 
-# PR 2: the nine remaining R7.4 reasons.
 def is_origin_mismatch:
   $receipt[0].body.origin.store_id != $expectation[0].body.store_id;
 
@@ -527,8 +520,6 @@ def is_limit_mismatch:
      ($row_val.observer != row_observer($row))
    ] | any);
 
-# The program interface fixed in PR 1, extended in PR 2 to read the five
-# fixed documents and `entry_digests`.
 ($receipt[0]) as $r |
 ($expectation[0]) as $e |
 (if fixed_files_ok then true else error("fixed-file-relation") end) as $fixed_ok |
