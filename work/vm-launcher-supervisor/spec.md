@@ -663,7 +663,10 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 2. This spec PR: `review_size: accepted-exception`, one concern, this file, 500-700
    lines, for the closed lists one boundary needs in one place (slots, limit and
    boundary rows, seccomp and Landlock sets, four decision packages, test classes). It
-   waives only the soft line signal; steps 1-4 ship as standard-size PRs.
+   waives only the soft line signal. Steps 1-4 ship as the implementation PRs the
+   accepted plan records, each with its own `review_size` line and evidence-based
+   range, one concern per PR, never split ad hoc. The plan's ranges are the binding
+   sizes; a PR outside its recorded range stops and returns to the plan gate.
 
 ## Design
 
