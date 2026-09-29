@@ -548,15 +548,40 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      confirms its stop but still records both `none`. These cases run in real time,
      concurrently;
    - store modes, owner, group, link counts and exclusivity after every case;
-   - against the merged check in a temporary repository copy with the test-only set:
-     every produced receipt whose observed identities are accepted, including success
-     and limit-reached cases, is `valid`/`failed` with `failure.enforcement-unavailable`
-     plus the matching other `failure.*` reasons; copies edited only to set CPU and wall
-     to `hard` show the host derivation gives `satisfied` and `violated` exactly where
-     the check does; a receipt edited to record an unaccepted digest
-     yields `receipt.identity-unaccepted`, and one with a placeholder digest
-     `receipt.placeholder-identity`, never `valid`; against the shipped files every
-     produced receipt is refused;
+   - against the merged check in a temporary repository copy with the test-only set,
+     the expectation built from the request as the consumer builds it and the package
+     evaluation as evaluation input, every case in exactly one class, each expected
+     set being what `enforcement/v1/sandbox-receipt.jq:526-545` reports for it:
+     (a) *binding refusals*, `refused`: `launch.evaluation-not-satisfied` receipts give
+     `receipt.evaluation-not-satisfied`; a mutated evaluator driver, program or
+     evaluation digest `receipt.control-mismatch`; a mutated policy, decision or
+     policy-set digest `receipt.control-mismatch` and `receipt.evaluation-not-satisfied`;
+     a mutated `environment_entry_sha256` or `target_repository_id`
+     `receipt.environment-unlisted`; an unlisted `environment_id` that and
+     `receipt.identity-unaccepted`; a produced receipt against an expectation differing
+     only in `launch_request_sha256` `receipt.replayed`, only in `store_id`
+     `receipt.origin-mismatch`, and after a digest is added to the accepted set
+     `receipt.stale`;
+     (b) *identity rejections*, `refused`: `launch.identity-unaccepted` and
+     `launch.instruction-unaccepted` receipts give `receipt.identity-unaccepted`; a copy
+     with one slot set to the all-ones digest `receipt.placeholder-identity`;
+     (c) *lifecycle and enforcement failures*, bindings intact, `valid`/`failed`, every
+     admitted receipt carrying `failure.enforcement-unavailable` (R7.2): success,
+     violation and guest deadline give that alone; `HardStop`, cancellation, runtime
+     error and damaged or absent export add `failure.runtime` and
+     `failure.observation-unavailable`; the delayed stop adds those and
+     `failure.teardown`; storage removal failure adds `failure.teardown`; a `partial` or
+     `unavailable` row adds `failure.observation-unavailable`. Every other phase B
+     refusal (identity missing, record, manifest, candidate, subject source, candidate or
+     incident fields, instruction mismatch, kernel config) gives
+     `failure.launch-refused`, `failure.observation-unavailable` and
+     `failure.enforcement-unavailable`: the checker sees only the request's own subject,
+     so those refusals are proven by the host alone. Copies edited only to set CPU and
+     wall `hard`, outcome recomputed, give `satisfied` and `violated` with the matching
+     `limit.*` reason, equal to the host derivation;
+   - against the shipped files, every class (c) receipt gives exactly
+     `receipt.environment-unlisted`, `receipt.identity-unaccepted` and `receipt.stale`,
+     and every class (a) or (b) receipt that set plus its own reasons;
    - receipts equal their `jq -S -c` form, and the host outcome equals the check's;
    - `runtime-vfkit.py` builds exactly the R5.4 vfkit argv and REST calls, against a
      fake `vfkit` executable;
@@ -596,22 +621,18 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 1. Depends on concerns 2 (#436) and 3 (#437), both merged. Concerns 5 and 7 consume
    the receipt, store and qualification (`work/step8-bounded-write-readiness/spec.md:295`,
    `:297`).
-2. This spec PR: `review_size: accepted-exception`, one concern, this one file,
-   500-660 lines. The size is the closed lists the contract needs in one place (ten
-   slot measurements, six limit rows, eleven boundary rows, the seccomp and Landlock
-   sets, four decision packages); splitting them would scatter one boundary. It
-   waives only the soft line signal. The plan splits steps 1-4 into implementation
-   PRs of standard size.
+2. This spec PR: `review_size: accepted-exception`, one concern, this file, 500-660
+   lines, for the closed lists one boundary needs in one place (slots, limit and
+   boundary rows, seccomp and Landlock sets, four decision packages, test classes). It
+   waives only the soft line signal; steps 1-4 ship as standard-size PRs.
 
 ## Design
 
 Package on stdin, freeze by copy, measure every byte, admit or refuse with a receipt,
-boot a one-vCPU guest with two disks and no other device, run the verifier inside
-namespaces, Landlock and seccomp, count on monotone filesystems, export one frame, stop,
-remove only the attempt's files, then write payload and receipt into the store. Every
-guest-side limit follows from a structural bound (guest RAM, a fixed-size filesystem
-that cannot free or overwrite, `pids.max`), not from a poll. CPU and wall stay `none`
-until a stop-completion bound is measured (R7.2).
+boot a one-vCPU guest with two disks, run the verifier inside namespaces, Landlock and
+seccomp, count on monotone filesystems, export one frame, stop, remove only the
+attempt's files, write payload and receipt. Guest-side limits are structural, not
+polled; CPU and wall stay `none` until a stop-completion bound is measured (R7.2).
 
 ## Out of scope
 
@@ -628,15 +649,11 @@ orchestrator or candidate-code runner; any self-host or write-shadow run.
 - **Narrowed rights.** Scratch is readable and writable but cannot free space, and
   evidence files can be opened once. Both are stricter than the declaration, never
   weaker, and exist so the R6 peak and "counted as written" values are exact.
-- **No `satisfied` receipt yet.** CPU and wall are `none` until a `HardStop`
-  completion bound is measured and adopted by G2 (R7.2), so qualification cannot
-  complete before then. Any weaker standard returns to the operator
-  (`work/real-sandbox-boundary/spec.md:118-124`).
-- **Trusted host.** Origin rests on the supervisor account and host administrator
-  (`work/enforcement-evidence-binding/spec.md:84-93`); R13.3 asks that question.
+- **No `satisfied` receipt yet** until G2 adopts a measured `HardStop` bound (R7.2); a
+  weaker standard returns to the operator (`work/real-sandbox-boundary/spec.md:118-124`).
+- **Trusted host.** Origin rests on the supervisor account and administrator (R13.3).
 
-Intent open questions, answered: runtime, kernel and image pinning (R2); mechanism per
-blocking row and qualification when a row is `none` (R7, R11); read-only candidate
-(R5); guest-to-host channel and host-only observations (R8); placement, language and
-supervisor identity (R1, R2.3); first environment and `scratch_bytes` (R12); fixture
-stores and what stays unproven (R15); the operator requests and their order (R13).
+Intent open questions, answered: pinning (R2); mechanisms and `none` rows (R7, R11);
+read-only candidate (R5); guest-to-host channel (R8); placement, language, supervisor
+identity (R1, R2.3); first environment, `scratch_bytes` (R12); fixture stores and what
+stays unproven (R15); operator requests and order (R13).
