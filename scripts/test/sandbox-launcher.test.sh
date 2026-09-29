@@ -141,7 +141,8 @@ def main():
     os.chmod(os.path.join(install_dir, "host-supervisor.py"), 0o555)
 
     identity_keys = ["guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
-                     "host_runtime", "host_supervisor", "image", "toolchain", "verifier"]
+                     "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
+                     "vm_service", "dyld_cache"]
     identities_dir = os.path.join(base, "identities")
     os.makedirs(identities_dir, mode=0o755)
     identity_paths = {}
@@ -172,26 +173,36 @@ def main():
                      "id": "shadow.environments.v1", "kind": "shadow_environment_registry", "schema_version": 1}
     open(installed_files["registry"], "wb").write(canon(registry_doc))
 
-    measured = {k: sha(open(identity_paths[k], "rb").read()) for k in identity_keys}
-    measured["verification_instructions"] = sha(b"instr")
-    digest = "1" * 64 if placeholder else None  # "1"*64 is ALL_ONES
-    accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
-        {"environment_id": ENV_ID, "scratch_bytes": 16777216,
-         "identities": {k: [digest or measured[k]] for k in identity_keys + ["verification_instructions"]},
-         "mechanisms": {r: ["mechanism.fixture"] for r in
-                        ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
-                         "scratch_bytes", "wall_time_ms"]}}]},
-        "id": "sandbox.accepted-identities.v1", "kind": "sandbox_accepted_identity_set", "schema_version": 1}
-    open(installed_files["accepted_set"], "wb").write(canon(accepted_doc))
-    for k in installed_keys:
-        os.chmod(installed_files[k], 0o444)
-
     vfkit_path = os.path.join(base, "vfkit")
     open(vfkit_path, "wb").write(b"fake-vfkit")
     os.chmod(vfkit_path, 0o555)
     driver_path = os.path.join(base, "driver")
     open(driver_path, "wb").write(b"fake-driver")
     os.chmod(driver_path, 0o555)
+
+    # R2.3's composite slots: same formula as host-supervisor.py's own
+    # measure_identities, over these same fixture bytes -- everything else
+    # (the 6 simple slots) stays a raw sha256 of its installed bytes.
+    KERNEL_CONFIG_DEVICES = ["virtio-blk,readonly", "virtio-blk"]
+    host_runtime_digest = sha(canon({"files": [
+        {"path": "vfkit", "sha256": sha(open(vfkit_path, "rb").read())},
+        {"path": "driver", "sha256": sha(open(driver_path, "rb").read())},
+        {"path": "vm_service", "sha256": sha(open(identity_paths["vm_service"], "rb").read())},
+        {"path": "dyld_cache", "sha256": sha(open(identity_paths["dyld_cache"], "rb").read())}]}))
+    guest_kernel_config_digest = sha(canon({
+        "command_line": "console= quiet lsm=landlock rdinit=/init", "cpu_count": 1,
+        "devices": KERNEL_CONFIG_DEVICES,
+        "kernel_build_config_sha256": sha(kernel_config_text.encode()),
+        "memory_bytes": 536870912}))
+
+    measured = {k: sha(open(identity_paths[k], "rb").read()) for k in identity_keys
+                if k not in ("host_runtime", "guest_kernel_config", "host_supervisor")}
+    measured["host_runtime"] = host_runtime_digest
+    measured["guest_kernel_config"] = guest_kernel_config_digest
+    measured["verification_instructions"] = sha(b"instr")
+    accepted_keys = ["guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
+                      "host_runtime", "host_supervisor", "image", "toolchain", "verifier"]
+    digest = "1" * 64 if placeholder else None  # "1"*64 is ALL_ONES
 
     store_root = os.path.join(base, "store")
     os.makedirs(store_root, mode=0o750)
@@ -210,11 +221,37 @@ def main():
     config_path = os.path.join(install_dir, "host-config.json")
     open(config_path, "wb").write(canon(config_doc))
     os.chmod(config_path, 0o444)
+
+    # host_supervisor's composite needs the config file's own bytes (as
+    # written above), the installed host-supervisor.py and the interpreter
+    # that will run it -- sys.executable here, since build_tree.py and
+    # run_launch are invoked with the same "$python".
+    measured["host_supervisor"] = sha(canon({
+        "config_sha256": sha(open(config_path, "rb").read()),
+        "files": [{"path": "host-supervisor.py",
+                   "sha256": sha(open(os.path.join(install_dir, "host-supervisor.py"), "rb").read())}],
+        "python_sha256": sha(open(sys.executable, "rb").read())}))
+
+    digest = "1" * 64 if placeholder else None  # "1"*64 is ALL_ONES
+    accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
+        {"environment_id": ENV_ID, "scratch_bytes": 16777216,
+         "identities": {k: [digest or measured[k]] for k in accepted_keys + ["verification_instructions"]},
+         "mechanisms": {r: ["mechanism.fixture"] for r in
+                        ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
+                         "scratch_bytes", "wall_time_ms"]}}]},
+        "id": "sandbox.accepted-identities.v1", "kind": "sandbox_accepted_identity_set", "schema_version": 1}
+    open(installed_files["accepted_set"], "wb").write(canon(accepted_doc))
+    for k in installed_keys:
+        os.chmod(installed_files[k], 0o444)
+
     print(json.dumps({"install_dir": install_dir, "store_root": store_root,
                        "config_path": config_path, "accepted_set": installed_files["accepted_set"],
-                       "driver_path": driver_path, "registry_path": installed_files["registry"],
+                       "driver_path": driver_path, "vfkit_path": vfkit_path,
+                       "registry_path": installed_files["registry"],
                        "guest_kernel_config_path": identity_paths["guest_kernel_config"],
                        "toolchain_path": identity_paths["toolchain"],
+                       "vm_service_path": identity_paths["vm_service"],
+                       "dyld_cache_path": identity_paths["dyld_cache"],
                        "work_root": work_root, "installed_files": installed_files}))
 
 if __name__ == "__main__":
@@ -304,6 +341,10 @@ def main():
         deep_set(incident_body, path, value)
     incident_doc = {"body": incident_body, "id": "shadow.incident.fixture",
                      "kind": "shadow_incident_record", "schema_version": 1}
+    for path, value in patch.get("incident_doc_set", {}).items():
+        deep_set(incident_doc, path, value)
+    for path in patch.get("incident_doc_delete", []):
+        deep_set(incident_doc, path, _DELETE)
     incident_bytes = hs.canonical(incident_doc)
 
     # The general baseline's "installed" control files (build_tree.py) are
@@ -328,6 +369,15 @@ def main():
     for path, value in patch.get("evaluation_set", {}).items():
         deep_set(evaluation_doc, path, value)
     evaluation_bytes = hs.canonical(evaluation_doc)
+
+    # Malformed-phase-B-document fixtures (R4.2's parsers must yield an
+    # invalid-document result, never an uncaught exception, for any of
+    # these): unparseable, an embedded NaN, or a JSON-legal lone surrogate
+    # escape that canonical()'s own utf-8 encode cannot represent.
+    if "raw_manifest" in patch:
+        manifest_bytes = patch["raw_manifest"].encode()
+    if "raw_incident" in patch:
+        incident_bytes = patch["raw_incident"].encode()
 
     instruction_bytes = patch.get("instruction", "instr").encode()
 
@@ -409,9 +459,12 @@ build_tree() { # build_tree <placeholder: 0|1>  -> prints paths as JSON, sets gl
   # shellcheck disable=SC2034 # part of build_tree's documented fixture-path globals
   accepted_set=$(printf '%s' "$info" | "$jq_bin" -r .accepted_set)
   driver_path=$(printf '%s' "$info" | "$jq_bin" -r .driver_path)
+  vfkit_path=$(printf '%s' "$info" | "$jq_bin" -r .vfkit_path)
   registry_path=$(printf '%s' "$info" | "$jq_bin" -r .registry_path)
   guest_kernel_config_path=$(printf '%s' "$info" | "$jq_bin" -r .guest_kernel_config_path)
   toolchain_path=$(printf '%s' "$info" | "$jq_bin" -r .toolchain_path)
+  vm_service_path=$(printf '%s' "$info" | "$jq_bin" -r .vm_service_path)
+  dyld_cache_path=$(printf '%s' "$info" | "$jq_bin" -r .dyld_cache_path)
   installed_control_policy=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy)
   installed_control_decision=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_decision)
   installed_control_policy_set=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy_set)
@@ -734,6 +787,33 @@ receipt_runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/attempt.fi
   fail 'stub receipt: expected admission admitted, runtime error, verdict failed'
 pass 'the stub receipt for an admitted attempt records lifecycle.admission admitted, runtime error (the runtime never started) and outcome failed'
 
+# R9.3: the frozen copies (R5.1) an admitted attempt made are its only
+# work_root storage at this stage (no runtime exists before PR 5) -- they
+# must be removed and the removal verified before teardown can honestly
+# claim storage_destroyed: true.
+[ ! -e "$work_root/attempt.fixture-reuse/frozen" ] ||
+  fail 'admitted attempt: frozen copies were not removed before storage_destroyed: true'
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/attempt.fixture-reuse/receipt.json")
+teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/attempt.fixture-reuse/receipt.json")
+[ "$teardown_state" = confirmed ] && [ "$teardown_destroyed" = true ] ||
+  fail 'admitted attempt: expected teardown.state confirmed and storage_destroyed true'
+pass "an admitted attempt's frozen copies are removed and the removal verified before teardown.state confirmed / storage_destroyed: true"
+
+build_pkg "$base/pkg-td.json" '{"attempt_id":"attempt.fixture-teardown-fail","nonce":"'"$(printf '%064d' 200)"'"}'
+status=0
+YSTACK_TEST_TEARDOWN_FAIL=1 run_launch "$base/pkg-td.json" || status=$?
+[ "$status" -eq 0 ] || fail "teardown failure hook: expected exit 0, got $status ($(cat "$base/err"))"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/attempt.fixture-teardown-fail/receipt.json")
+teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/attempt.fixture-teardown-fail/receipt.json")
+outcome_reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/attempt.fixture-teardown-fail/receipt.json")
+[ "$teardown_state" = failed ] && [ "$teardown_destroyed" = false ] ||
+  fail 'teardown failure hook: expected teardown.state failed and storage_destroyed false'
+printf '%s' "$outcome_reasons" | "$jq_bin" -e 'index("failure.teardown")' >/dev/null ||
+  fail "teardown failure hook: expected failure.teardown in outcome.reason_ids, got $outcome_reasons"
+pass 'a simulated frozen-copy removal failure (the test-only YSTACK_TEST_TEARDOWN_FAIL hook) is reported honestly: teardown.state failed, storage_destroyed false, failure.teardown in outcome'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
 # =============================================================================
 # the shipped enforcement/v1/check-sandbox-receipt.sh accepts the receipt's
 # own shape (R3/R10.3), even though it is refused against the shipped
@@ -892,6 +972,57 @@ pass 'every remaining R4.2 phase B reason (evaluation not satisfied, candidate c
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
+# guest_kernel_config's composite is built from a single read of the same
+# fd kernel_config_ok also inspects (:945-949's double-read bug): forcing
+# it unreadable must yield launch.identity-missing alone, never a crash
+# and never a spurious launch.kernel-config alongside it.
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-kcfgmiss","nonce":"'"$(printf '%064d' 201)"'"}'
+status=0
+YSTACK_TEST_IDENTITY_UNREADABLE=guest_kernel_config run_launch "$base/pkg-pb.json" || status=$?
+[ "$status" -eq 0 ] || fail "kernel-config unreadable: expected exit 0, got $status ($(cat "$base/err"))"
+reasons=$("$jq_bin" -c -S '.reason_ids' "$store_root/attempt.fixture-pb-kcfgmiss/payload/refusal.json")
+[ "$reasons" = '["launch.identity-missing"]' ] ||
+  fail "kernel-config unreadable: expected launch.identity-missing alone, got $reasons"
+pass 'an unreadable guest_kernel_config (the same fd kernel_config_ok inspects) is refused launch.identity-missing alone, reusing the single measured read rather than a second one'
+
+# =============================================================================
+# Malformed phase B documents (:774-779): a manifest.json that cannot even
+# parse, one with an embedded NaN, and one with a JSON-legal lone-surrogate
+# escape (canonical()'s own utf-8 encode cannot represent it) must each
+# still yield an ordinary refusal receipt -- never an uncaught exception
+# escaping past the attempt directory phase B already claimed.
+# =============================================================================
+i=0
+for raw in '{' '{"a":NaN}' '{"a":"\ud800"}'; do
+  i=$((i + 1))
+  build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-malformed-'"$i"'","nonce":"'"$(printf '%064d' $((210 + i)))"'","raw_manifest":'"$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$raw")"'}'
+  status=0
+  run_launch "$base/pkg-pb.json" || status=$?
+  [ "$status" -eq 0 ] || fail "malformed manifest.json ($raw): expected exit 0 (a refusal receipt), got $status ($(cat "$base/err"))"
+  admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/attempt.fixture-malformed-$i/receipt.json")
+  [ "$admission" = refused ] || fail "malformed manifest.json ($raw): expected lifecycle.admission refused, got $admission"
+  reasons=$("$jq_bin" -c -S '.reason_ids' "$store_root/attempt.fixture-malformed-$i/payload/refusal.json")
+  printf '%s' "$reasons" | "$jq_bin" -e 'index("launch.manifest-mismatch")' >/dev/null ||
+    fail "malformed manifest.json ($raw): expected launch.manifest-mismatch among $reasons"
+done
+pass 'a manifest.json that cannot parse, one with an embedded NaN, and one with a JSON-legal lone-surrogate escape each yield an ordinary refusal receipt (launch.manifest-mismatch), never an uncaught exception'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# =============================================================================
+# R4.2's incident envelope key set (:793-799): shadow/v1/incident-record.jq:
+# 54-59's exact top-level keys, no more, no fewer.
+# =============================================================================
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-incident-extra","nonce":"'"$(printf '%064d' 220)"'","incident_doc_set":{"extra_field":"x"}}'
+expect_phase_b_refused 'an incident.json envelope with an extra top-level key' attempt.fixture-incident-extra \
+  "$base/pkg-pb.json" '["launch.subject-mismatch"]'
+build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-incident-missing","nonce":"'"$(printf '%064d' 221)"'","incident_doc_delete":["schema_version"]}'
+expect_phase_b_refused 'an incident.json envelope missing a required top-level key' attempt.fixture-incident-missing \
+  "$base/pkg-pb.json" '["launch.subject-mismatch"]'
+pass 'an incident.json envelope with an extra or a missing top-level key (beyond exactly body/id/kind/schema_version) is refused launch.subject-mismatch, never accepted as canonical'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
 # =============================================================================
 # R2.3 candidate transport: the three R15.1 tricky paths admit cleanly (the
 # manifest's own "path" field never affects the byte-for-byte content check).
@@ -947,6 +1078,28 @@ build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-m","nonce":"'
 expect_phase_b_refused 'the last required kernel option =m instead of =y' attempt.fixture-kcfg-m "$base/pkg-pb.json" \
   '["launch.identity-unaccepted","launch.kernel-config"]'
 pass 'the R2.4 closed =y set refuses launch.kernel-config both when every option is absent and when the set is otherwise complete but the last option is =m, paired against the full =y control'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# =============================================================================
+# R2.3 host_runtime composite: each of its four constituents (vfkit, driver,
+# the framework's VM service executable, the arm64e dyld shared cache),
+# changed alone, moves the composite digest away from what was accepted --
+# proving it is built from all four validated files, not a stand-in single
+# one (spec.md:60-73).
+# =============================================================================
+i=0
+for target in "$vfkit_path" "$driver_path" "$vm_service_path" "$dyld_cache_path"; do
+  i=$((i + 1))
+  build_tree 0
+  /bin/chmod 644 "$target"
+  /usr/bin/printf 'tampered-constituent' > "$target"
+  /bin/chmod 444 "$target"
+  build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-hostrt-'"$i"'","nonce":"'"$(printf '%064d' $((120 + i)))"'"}'
+  expect_phase_b_refused "host_runtime constituent $i tampered alone" "attempt.fixture-hostrt-$i" \
+    "$base/pkg-pb.json" '["launch.identity-unaccepted"]'
+done
+pass 'each of the host_runtime composite'"'"'s four constituents (vfkit, driver, vm_service, dyld_cache), tampered alone, moves the composite away from the accepted digest: launch.identity-unaccepted alone'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 

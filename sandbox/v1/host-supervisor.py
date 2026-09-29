@@ -399,7 +399,8 @@ _trusted_root_fds = []
 
 # --- host-config.json (R10.1) ---------------------------------------------
 IDENTITY_PATH_KEYS = ("guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
-                      "host_runtime", "host_supervisor", "image", "toolchain", "verifier")
+                      "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
+                      "vm_service", "dyld_cache")
 INSTALLED_FILE_KEYS = ("accepted_set", "control_decision", "control_policy", "control_policy_set",
                        "evaluator_driver", "evaluator_program", "registry")
 
@@ -410,7 +411,9 @@ def is_abs_path(value):
 
 def load_config(config_fd):
     """Reads host-config.json through the fd secure_walk already validated
-    (never a fresh open() of the path string -- see secure_ancestor_fds)."""
+    (never a fresh open() of the path string -- see secure_ancestor_fds).
+    Returns (body, raw) -- the raw bytes feed the host_supervisor composite's
+    own config_sha256 (R2.3), so this must not re-read the file elsewhere."""
     try:
         dup_fd = os.dup(config_fd)
     except OSError:
@@ -449,7 +452,7 @@ def load_config(config_fd):
     for value in installed_files.values():
         require(is_abs_path(value), "E_CONFIG")
     require(canonical(doc) == raw, "E_CONFIG")
-    return body
+    return body, raw
 
 
 def digest_list_ok(value):
@@ -756,11 +759,25 @@ INCIDENT_BODY_KEYS = {"deploy_authority", "failing_check", "git_revision_ref", "
                        "observed_symptom", "reporter_actor_ref", "target_repository_id"}
 
 
+def phase_b_json_ok(raw):
+    """Non-raising bounded-nesting check for phase B document parsers: a
+    malformed document (unbalanced, NaN, a lone surrogate, too deep) must
+    still yield an invalid-document result -- never let it, or json.loads/
+    canonical's own exceptions, escape past the attempt directory phase B
+    has already claimed exclusively, refusing E_PACKAGE with no receipt."""
+    try:
+        bounded_json_nesting(raw)
+        return True
+    except Refusal:
+        return False
+
+
 def parse_record(raw):
     """record.json (candidate_content_preparation): flat, no body/id/kind
     envelope (preparation/v1/prepare-candidate.py's make_record). None if
     it doesn't even parse as an object."""
-    bounded_json_nesting(raw)
+    if not phase_b_json_ok(raw):
+        return None
     try:
         doc = json.loads(raw)
     except (ValueError, RecursionError):
@@ -771,26 +788,34 @@ def parse_record(raw):
 def parse_manifest(raw):
     """manifest.json (candidate_content_manifest): flat; None unless it is
     canonical (R4.2's "manifest not canonical")."""
-    bounded_json_nesting(raw)
+    if not phase_b_json_ok(raw):
+        return None
     try:
         doc = json.loads(raw)
-    except (ValueError, RecursionError):
-        return None
-    if not isinstance(doc, dict) or canonical(doc) != raw:
+        if not isinstance(doc, dict) or canonical(doc) != raw:
+            return None
+    except (ValueError, RecursionError, UnicodeEncodeError):
         return None
     return doc
 
 
+INCIDENT_ENVELOPE_KEYS = {"body", "id", "kind", "schema_version"}
+
+
 def parse_incident(raw):
     """incident.json (shadow_incident_record): returns body only if
-    canonical, with exactly shadow/v1/incident-record.jq:54-59's top-level
-    keys -- R4.2 checks only the binding fields, not the full shadow schema."""
-    bounded_json_nesting(raw)
+    canonical, with exactly shadow/v1/incident-record.jq:54-59's envelope
+    keys (no more, no fewer) and exactly its body keys -- R4.2 checks only
+    the binding fields, not the full shadow schema."""
+    if not phase_b_json_ok(raw):
+        return None
     try:
         doc = json.loads(raw)
-    except (ValueError, RecursionError):
+        if not isinstance(doc, dict) or canonical(doc) != raw:
+            return None
+    except (ValueError, RecursionError, UnicodeEncodeError):
         return None
-    if not isinstance(doc, dict) or canonical(doc) != raw:
+    if set(doc) != INCIDENT_ENVELOPE_KEYS:
         return None
     if doc.get("kind") != "shadow_incident_record" or not is_int(doc.get("schema_version")) \
             or doc.get("schema_version") != 1:
@@ -802,10 +827,11 @@ def parse_incident(raw):
 def evaluation_satisfied(raw, control):
     """Mirrors sandbox-receipt.jq's is_evaluation_not_satisfied, against
     the receipt's own (request-echoed) control block."""
-    bounded_json_nesting(raw)
+    if not phase_b_json_ok(raw):
+        return False
     try:
         doc = json.loads(raw)
-    except (ValueError, RecursionError):
+    except (ValueError, RecursionError, UnicodeEncodeError):
         return False
     if not isinstance(doc, dict) or doc.get("kind") != "sandbox_policy_evaluation" \
             or not is_int(doc.get("schema_version")) or doc.get("schema_version") != 1:
@@ -894,32 +920,80 @@ def environment_unlisted(config, registry_environments, accepted_environments, s
     return registry_entry["target_repository_id"] != subject["target_repository_id"]
 
 
-def measure_identities(identity_fds, instruction_raw):
+# R2.3's guest_kernel_config composite has no spec-named device list; the
+# closed VM shape (R5.4) names exactly two virtio-blk devices, input
+# read-only and export read-write -- used here as a defensible closed
+# representation (judgment call, flagged in the PR).
+KERNEL_CONFIG_DEVICES = ["virtio-blk,readonly", "virtio-blk"]
+
+
+def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supervisor_raw,
+                        python_raw):
     """R2.3: every slot's measured digest is the SHA-256 of its installed
     bytes, read through the fd secure_walk already validated (never a
-    fresh open()); verification_instructions comes from the package's own
-    instruction record. ("observed", digest) normally; ("unobserved", None)
-    only if the installed bytes could not be read at all (launch.identity-
-    missing) -- an observed-but-unaccepted digest is still "observed"."""
+    fresh open()) -- except host_runtime, guest_kernel_config and host_
+    supervisor, each the SHA-256 of a canonical composite over their own
+    several constituent bytes (spec.md:60-73's table); verification_
+    instructions comes from the package's own instruction record.
+    ("observed", digest) normally; ("unobserved", None) only if a
+    constituent's bytes could not be read at all (launch.identity-missing)
+    -- an observed-but-unaccepted digest is still "observed". Also returns
+    the raw guest_kernel_config bytes (or None), so kernel_config_ok reuses
+    this single read instead of a second one through the same fd."""
     # Test-only: a real read failure on an already-R10.1-validated fd (same
     # fd the walk just opened, no re-open by path) has no natural trigger
     # short of a genuine I/O fault, so a named slot can be forced
     # "unreadable" here without touching any file's real permissions.
     forced_unreadable = os.environ.get("YSTACK_TEST_IDENTITY_UNREADABLE")
-    result = {}
-    for slot, fd in identity_fds.items():
+
+    def read_slot(slot):
+        if slot == forced_unreadable:
+            return None
         try:
-            if slot == forced_unreadable:
-                raise OSError("test-only forced unreadable")
-            result[slot] = ("observed", sha256_hex(read_all(fd)))
+            return read_all(identity_fds[slot])
         except OSError:
-            result[slot] = ("unobserved", None)
+            return None
+
+    def observe(raw):
+        return ("observed", sha256_hex(raw)) if raw is not None else ("unobserved", None)
+
+    result = {slot: observe(read_slot(slot)) for slot in
+              ("guest_kernel", "guest_init", "guest_supervisor", "image", "verifier", "toolchain")}
+
+    constituents = [read_slot(slot) for slot in
+                    ("runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache")]
+    if None in constituents:
+        result["host_runtime"] = ("unobserved", None)
+    else:
+        names = ("vfkit", "driver", "vm_service", "dyld_cache")
+        result["host_runtime"] = observe(canonical({"files": [
+            {"path": n, "sha256": sha256_hex(r)} for n, r in zip(names, constituents)]}))
+
+    kernel_config_raw = read_slot("guest_kernel_config")
+    if kernel_config_raw is None:
+        result["guest_kernel_config"] = ("unobserved", None)
+    else:
+        result["guest_kernel_config"] = observe(canonical({
+            "command_line": "console= quiet lsm=landlock rdinit=/init", "cpu_count": 1,
+            "devices": KERNEL_CONFIG_DEVICES,
+            "kernel_build_config_sha256": sha256_hex(kernel_config_raw),
+            "memory_bytes": 536870912}))
+
+    if None in (host_config_raw, host_supervisor_raw, python_raw):
+        result["host_supervisor"] = ("unobserved", None)
+    else:
+        result["host_supervisor"] = observe(canonical({
+            "config_sha256": sha256_hex(host_config_raw),
+            "files": [{"path": "host-supervisor.py", "sha256": sha256_hex(host_supervisor_raw)}],
+            "python_sha256": sha256_hex(python_raw)}))
+
     result["verification_instructions"] = ("observed", sha256_hex(instruction_raw))
-    return result
+    return result, kernel_config_raw
 
 
 def phase_b_reasons(config, request_body, package, identity_fds, installed_digests,
-                     registry_environments, accepted_environments):
+                     registry_environments, accepted_environments, host_config_raw,
+                     host_supervisor_raw, python_raw):
     """Every R4.2 reason, sorted and unique, plus the measured identities
     dict for the receipt. Collects every applicable reason (not just the
     first), matching the receipt's own sorted-unique reason_ids."""
@@ -942,10 +1016,11 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
     instruction_raw = package["instruction"]
     if sha256_hex(instruction_raw) != request_body["instruction_sha256"]:
         reasons.add("launch.instruction-mismatch")
-    measured = measure_identities(identity_fds, instruction_raw)
+    measured, kernel_config_raw = measure_identities(identity_fds, instruction_raw, host_config_raw,
+                                                       host_supervisor_raw, python_raw)
     if any(state == "unobserved" for state, _ in measured.values()):
         reasons.add("launch.identity-missing")
-    if not kernel_config_ok(read_all(identity_fds["guest_kernel_config"])):
+    if kernel_config_raw is not None and not kernel_config_ok(kernel_config_raw):
         reasons.add("launch.kernel-config")
     accepted_entry = entry_for(accepted_environments, subject["environment_id"])
     if accepted_entry is not None:
@@ -985,6 +1060,44 @@ def freeze_by_copy(config, attempt_id, uid, gid, package):
         os.fsync(work_fd)
     finally:
         os.close(work_fd)
+
+
+def remove_frozen(work_root, attempt_id):
+    """Removes the frozen copies (R5.1) that freeze_by_copy just made and
+    verifies the removal (the final rmdir fails, ENOTEMPTY, if anything is
+    left) -- R9.3's "an unexpected entry is left in place ... makes it
+    false", so a cleanup failure here must never be reported as destroyed."""
+    if os.environ.get("YSTACK_TEST_TEARDOWN_FAIL"):
+        return False
+    try:
+        work_fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                  dir_fd=work_fd)
+            try:
+                frozen_fd = os.open("frozen", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                     dir_fd=attempt_fd)
+                try:
+                    candidate_fd = os.open("candidate", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                            dir_fd=frozen_fd)
+                    try:
+                        for name in os.listdir(candidate_fd):
+                            os.unlink(name, dir_fd=candidate_fd)
+                    finally:
+                        os.close(candidate_fd)
+                    os.rmdir("candidate", dir_fd=frozen_fd)
+                    for name in ("record.json", "manifest.json", "instruction"):
+                        os.unlink(name, dir_fd=frozen_fd)
+                finally:
+                    os.close(frozen_fd)
+                os.rmdir("frozen", dir_fd=attempt_fd)
+            finally:
+                os.close(attempt_fd)
+        finally:
+            os.close(work_fd)
+    except OSError:
+        return False
+    return True
 
 
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,
@@ -1113,7 +1226,8 @@ def identities_for_receipt(measured):
 
 
 def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
-                   admitted_at, evidence_manifest_sha256, identities, admission, runtime):
+                   admitted_at, evidence_manifest_sha256, identities, admission, runtime,
+                   storage_destroyed=True):
     now = time.time()
     limits = {}
     for name, bound, observer in LIMIT_ROWS:
@@ -1137,7 +1251,8 @@ def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch
                     "evidence_manifest_sha256": evidence_manifest_sha256, "exit_state": "not-started",
                     "exit_code": None},
         "subject": dict(request_body["subject"]),
-        "teardown": {"state": "confirmed", "tree_terminated": True, "storage_destroyed": True},
+        "teardown": {"state": "confirmed" if storage_destroyed else "failed",
+                     "tree_terminated": True, "storage_destroyed": storage_destroyed},
         "timing": {"admitted_at": utc_stamp(admitted_at), "terminated_at": utc_stamp(now)},
     }
     body["outcome"] = derive_outcome(body)
@@ -1188,24 +1303,40 @@ def run_launch(argv):
         else:
             fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
     require(os.getuid() != 0 and argv == ["launch"], "E_USAGE")
-    config = load_config(fixed_fds[config_path])
+    config, config_raw = load_config(fixed_fds[config_path])
     principal_uid = config["principal_uid"]
     require(principal_uid == os.getuid(), "E_CONFIG")
     for fd in fixed_fds.values():
         if not owner_mode_fd_ok(fd, principal_uid):
             refuse("E_CONFIG")
+    # host-supervisor.py's own installed bytes feed the host_supervisor
+    # composite (R2.3); its fd is read and retained before the generic
+    # close, never re-opened by path.
+    host_supervisor_path = os.path.join(install_dir, "host-supervisor.py")
+    host_supervisor_raw = read_all(fixed_fds[host_supervisor_path])
     for fd in fixed_fds.values():
         os.close(fd)
+    # The interpreter path is measured too (R2.3's host_supervisor slot),
+    # so it goes through the same R10.1 walk as everything else installed.
+    # sys.executable can itself be a symlink (a version shim, common with
+    # both system and third-party interpreters); the walk requires an
+    # already-physical path (same convention as install_directory's own
+    # realpath), so it is resolved once, here, before validation.
+    python_raw = read_all(secure_walk(os.path.realpath(sys.executable), principal_uid,
+                                       check_mode=True))
     # Every identity_paths and control-related installed_files fd is kept
     # open (R2.3/R4.2 read their content below, through these same fds --
     # never a fresh open() of the path string); runtime.vfkit/driver are
-    # ACL/owner-mode-checked only, closed immediately, same as before.
+    # kept open too now (host_runtime composite constituents), under the
+    # same identity_fds dict so the existing close loop covers them.
     identity_fds = {slot: secure_walk(path, principal_uid, check_mode=True)
                      for slot, path in config["identity_paths"].items()}
+    identity_fds["runtime_vfkit"] = secure_walk(config["runtime"]["vfkit"], principal_uid,
+                                                 check_mode=True)
+    identity_fds["runtime_driver"] = secure_walk(config["runtime"]["driver"], principal_uid,
+                                                  check_mode=True)
     installed_fds = {name: secure_walk(path, principal_uid, check_mode=True)
                       for name, path in config["installed_files"].items()}
-    for path in (config["runtime"]["vfkit"], config["runtime"]["driver"]):
-        os.close(secure_walk(path, principal_uid, check_mode=True))
     accepted_set_sha256, accepted_environments = check_accepted_set(installed_fds.pop("accepted_set"))
     registry_environments = load_registry(installed_fds.pop("registry"))
     installed_digests = {}
@@ -1252,7 +1383,8 @@ def run_launch(argv):
     admitted_at = time.time()
     reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
                                             installed_digests, registry_environments,
-                                            accepted_environments)
+                                            accepted_environments, config_raw,
+                                            host_supervisor_raw, python_raw)
     for fd in identity_fds.values():
         os.close(fd)
     identities = identities_for_receipt(measured)
@@ -1271,11 +1403,16 @@ def run_launch(argv):
         payload.append(("refusal.json", canonical({"reason_ids": reason_ids})))
     else:
         # R5.1: freeze by copy before anything else -- still PR 3's own
-        # R9.4 stub past this point (no runtime exists before PR 5).
+        # R9.4 stub past this point (no runtime exists before PR 5), so the
+        # frozen copies are the attempt's only work_root storage; R9.3's
+        # "storage_destroyed follows the removal of its package copies"
+        # applies here too -- they are removed and the removal verified
+        # before the receipt can honestly claim storage_destroyed: true.
         freeze_by_copy(config, attempt_id, principal_uid, config["consumer_gid"], package)
+        storage_destroyed = remove_frozen(config["work_root"], attempt_id)
         receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                        launch_request_sha256, admitted_at, evidence_manifest_sha256,
-                                       identities, "admitted", "error")
+                                       identities, "admitted", "error", storage_destroyed)
     try:
         write_attempt_result(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
                               receipt_bytes, payload)
