@@ -198,6 +198,7 @@ static void hex_encode(const unsigned char *in, size_t len, char *out)
     out[len * 2] = '\0';
 }
 
+/* ---------------------------------------------------------------------- */
 /* R2. Invocation and environment.                                         */
 
 static int argv_ok(int argc, char **argv)
@@ -243,7 +244,7 @@ static void refuse_invocation(const char *code)
     exit(64);
 }
 
-
+/* ---------------------------------------------------------------------- */
 /* UTF-8 decoding (shortest form only) for R3.3 and R4.                    */
 
 static int utf8_decode_one(const unsigned char *s, size_t len, size_t i, size_t *consumed,
@@ -387,7 +388,6 @@ static int path_r4_ok(const unsigned char *path, size_t len, int has_control,
     return 1;
 }
 
-
 /* ---------------------------------------------------------------------- */
 /* Payload assembly (R6).                                                  */
 
@@ -515,6 +515,147 @@ static void write_payload(const unsigned char *bytes, size_t len)
     }
     exit(0);
 }
+
+/* ---------------------------------------------------------------------- */
+/* R5. Reading the candidate file.                                        */
+
+#if defined(__APPLE__)
+#define YSTACK_MTIME_NSEC(st) ((st).st_mtimespec.tv_nsec)
+#else
+#define YSTACK_MTIME_NSEC(st) ((st).st_mtim.tv_nsec)
+#endif
+
+static unsigned char candidate_buffer[CANDIDATE_READ_LIMIT];
+
+static const char *read_candidate(const unsigned char *path, size_t path_len,
+                                   struct component *comps, size_t comp_count,
+                                   int *have_observed, char *observed_hex,
+                                   size_t *observed_size)
+{
+    int rootfd;
+    int dirfd;
+    size_t idx;
+    const char *reason = NULL;
+
+    *have_observed = 0;
+
+    rootfd = open(CANDIDATE_ROOT, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (rootfd < 0) return "file.read-error";
+
+    dirfd = rootfd;
+    for (idx = 0; idx < comp_count && reason == NULL; idx++) {
+        char comp[MAX_PATH_BYTES + 1U];
+        int is_final = (idx + 1U == comp_count);
+        struct stat st;
+
+        memcpy(comp, path + comps[idx].offset, comps[idx].length);
+        comp[comps[idx].length] = '\0';
+
+        if (fstatat(dirfd, comp, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            reason = (errno == ENOENT) ? "file.missing" : "file.read-error";
+            break;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            reason = "file.symlink";
+            break;
+        }
+        if (!is_final) {
+            int newfd;
+            if (!S_ISDIR(st.st_mode)) {
+                reason = "file.not-regular";
+                break;
+            }
+            newfd = openat(dirfd, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (newfd < 0) {
+                reason = (errno == ENOENT) ? "file.missing" : "file.read-error";
+                break;
+            }
+            if (dirfd != rootfd) (void)close(dirfd);
+            dirfd = newfd;
+        } else {
+            int filefd;
+            struct stat opened;
+            struct stat reread;
+            size_t total = 0;
+            int read_error = 0;
+
+            if (!S_ISREG(st.st_mode)) {
+                reason = "file.not-regular";
+                break;
+            }
+            if ((uint64_t)st.st_size > (uint64_t)MAX_CANDIDATE_BYTES) {
+                reason = "file.oversize";
+                break;
+            }
+
+            filefd = openat(dirfd, comp, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY);
+            if (filefd < 0) {
+                reason = "file.read-error";
+                break;
+            }
+            if (fstat(filefd, &opened) != 0) {
+                (void)close(filefd);
+                reason = "file.read-error";
+                break;
+            }
+            if (opened.st_dev != st.st_dev || opened.st_ino != st.st_ino ||
+                !S_ISREG(opened.st_mode) || opened.st_size != st.st_size) {
+                (void)close(filefd);
+                reason = "file.changed";
+                break;
+            }
+
+            while (total < CANDIDATE_READ_LIMIT) {
+                ssize_t r = read(filefd, candidate_buffer + total, CANDIDATE_READ_LIMIT - total);
+                if (r < 0) {
+                    if (errno == EINTR) continue;
+                    read_error = 1;
+                    break;
+                }
+                if (r == 0) break;
+                total += (size_t)r;
+            }
+            if (read_error) {
+                (void)close(filefd);
+                reason = "file.read-error";
+                break;
+            }
+            if (total != (size_t)opened.st_size) {
+                (void)close(filefd);
+                reason = "file.size-mismatch";
+                break;
+            }
+            if (fstat(filefd, &reread) != 0) {
+                (void)close(filefd);
+                reason = "file.read-error";
+                break;
+            }
+            (void)close(filefd);
+            if (reread.st_dev != opened.st_dev || reread.st_ino != opened.st_ino ||
+                reread.st_size != opened.st_size || reread.st_mtime != opened.st_mtime ||
+                YSTACK_MTIME_NSEC(reread) != YSTACK_MTIME_NSEC(opened)) {
+                reason = "file.changed";
+                break;
+            }
+
+            {
+                unsigned char digest[32];
+                sha256_bytes(candidate_buffer, total, digest);
+                hex_encode(digest, sizeof digest, observed_hex);
+                *observed_size = total;
+                *have_observed = 1;
+            }
+        }
+    }
+
+    if (dirfd != rootfd) (void)close(dirfd);
+    (void)close(rootfd);
+    (void)path_len;
+    return reason;
+}
+
+/* ---------------------------------------------------------------------- */
+/* R3. Instruction transport and framing.                                 */
 
 static unsigned char instruction_buffer[INSTRUCTION_READ_LIMIT];
 
@@ -662,19 +803,24 @@ int main(int argc, char **argv)
                 goto write_result;
             }
 
-            /*
-             * R5 (candidate reading) is not yet built: a path accepted by
-             * R4 ends at this stub, which commit 4 replaces with the real
-             * candidate walk, read and compare.
-             */
-            (void)comp_count;
             have_check = 1;
             memcpy(check_path, instruction_buffer + path_off, path_len);
             check_path_len = path_len;
             memcpy(expected_hex, instruction_buffer + digest_off, 64U);
             expected_hex[64] = '\0';
-            outcome = "refused";
-            reason_id = "file.read-error";
+
+            {
+                const char *walk_reason = read_candidate(check_path, check_path_len, comps,
+                                                          comp_count, &have_observed,
+                                                          observed_hex, &observed_size);
+                if (walk_reason != NULL) {
+                    outcome = "refused";
+                    reason_id = walk_reason;
+                } else {
+                    outcome = strcmp(observed_hex, expected_hex) == 0 ? "match" : "mismatch";
+                    reason_id = NULL;
+                }
+            }
         }
     }
 
