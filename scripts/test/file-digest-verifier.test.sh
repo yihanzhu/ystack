@@ -278,6 +278,13 @@ for i in "${!argv_cases_desc[@]}"; do
 done
 pass 'every R2.1 argv deviation exits 64 E_USAGE with an empty evidence directory'
 
+# argv[0] of "x" still passes (not inspected).
+fresh_evidence
+"$execer" "$test_verifier" "${envp_ok[@]}" -- x "${good_argv[@]}" \
+  < "$empty_stdin" > "$tmp/argv0.out" 2> "$tmp/argv0.err" || true
+[ -e "$result_path" ] || fail 'argv[0] of x must still be accepted'
+pass 'argv[0] is not inspected'
+
 # environment deviations: missing, extra, duplicate, wrong value per
 # variable, empty environment.
 declare -a env_cases_desc=()
@@ -303,6 +310,141 @@ for i in "${!env_cases_desc[@]}"; do
     "$execer" "$test_verifier" "$@" -- "$test_verifier" "${good_argv[@]}"
 done
 pass 'every R2.2 environment deviation exits 64 E_ENVIRONMENT with an empty evidence directory'
+
+# Production positive control: exact /sandbox vectors, stdin /dev/null, must
+# not be a 64 refusal (proves R2 checks argv/env shape only, not existence).
+prod_out="$tmp/prod.out" prod_err="$tmp/prod.err"
+prod_status=0
+"$execer" "$out1/verifier" LANG=C LC_ALL=C PATH=/sandbox/tools TMPDIR=/sandbox/scratch -- \
+  "$out1/verifier" verify --candidate /sandbox/candidate --evidence /sandbox/evidence \
+  < /dev/null > "$prod_out" 2> "$prod_err" || prod_status=$?
+[ "$prod_status" -eq 73 ] || fail "production positive control: expected exit 73, got $prod_status"
+[ "$(cat "$prod_err")" = E_OUTPUT ] || fail 'production positive control: expected E_OUTPUT'
+pass 'production build accepts the exact /sandbox vectors past R2 (exit 73, not 64)'
+
+# ===========================================================================
+# R3. Trusted instruction transport and framing.
+# ===========================================================================
+
+check_refusal() {
+  # check_refusal <desc> <stdin-file> <expected-reason> [expect-instr-null]
+  local desc=$1 stdin_file=$2 expected=$3 expect_null_instr=${4:-0}
+  fresh_evidence
+  local out="$tmp/case.out" err="$tmp/case.err"
+  run_test_verifier "$stdin_file" "$out" "$err" || true
+  [ -e "$result_path" ] || fail "$desc: no payload written"
+  [ ! -s "$out" ] || fail "$desc: stdout must be empty"
+  local outcome reason
+  outcome=$(outcome_of "$result_path")
+  reason=$(reason_of "$result_path")
+  [ "$outcome" = refused ] || fail "$desc: expected outcome refused, got $outcome"
+  [ "$reason" = "$expected" ] || fail "$desc: expected reason $expected, got $reason"
+  if [ "$expect_null_instr" = 1 ]; then
+    [ "$("$jq_bin" -r '.body.instruction_sha256 // "null"' "$result_path")" = null ] ||
+      fail "$desc: instruction_sha256 must be null"
+  fi
+  [ "$("$jq_bin" -r '.body.check // "null"' "$result_path")" = null ] ||
+    fail "$desc: check must be null for an instruction.* reason"
+  local canon
+  canon=$("$jq_bin" -S -c . "$result_path")
+  [ "$canon" = "$(cat "$result_path")" ] || fail "$desc: payload is not canonical jq -S -c"
+}
+
+# transport-rejected: stdin as a pipe.
+mkfifo_pipe="$tmp/instr.pipe"
+/usr/bin/mkfifo "$mkfifo_pipe"
+( /usr/bin/printf 'x' > "$mkfifo_pipe" ) &
+writer_pid=$!
+check_refusal 'fd 0 as a pipe' "$mkfifo_pipe" instruction.transport-rejected 1
+wait "$writer_pid" 2>/dev/null || :
+pass 'a pipe on fd 0 gives instruction.transport-rejected with a null instruction digest'
+
+# oversize: 4,209 bytes.
+mkinstr "$tmp/i-oversize.bin" "{\"path_hex\":\"$(hex_of "$(/usr/bin/printf 'a%.0s' $(seq 1 4097))")\",\"sha\":\"$zero_sha\"}"
+[ "$(wc -c < "$tmp/i-oversize.bin")" -eq 4209 ] || fail 'oversize fixture is not 4209 bytes'
+check_refusal '4,209-byte instruction' "$tmp/i-oversize.bin" instruction.oversize 1
+pass 'a 4,209-byte instruction gives instruction.oversize with a null instruction digest'
+
+# largest valid instruction (4,208 bytes, 4,096-byte path): not instruction.*.
+big_path=$(/usr/bin/printf 'a%.0s' $(seq 1 4096))
+mkinstr "$tmp/i-4208.bin" "{\"path_hex\":\"$(hex_of "$big_path")\",\"sha\":\"$zero_sha\"}"
+[ "$(wc -c < "$tmp/i-4208.bin")" -eq 4208 ] || fail '4,208-byte fixture has the wrong size'
+fresh_evidence
+run_test_verifier "$tmp/i-4208.bin" "$tmp/big.out" "$tmp/big.err" || true
+reason=$(reason_of "$result_path")
+case "$reason" in
+  instruction.*) fail "4,208-byte instruction must not be an instruction.* rejection (got $reason)" ;;
+esac
+pass 'the longest valid instruction (4,208 bytes) is not an instruction.* rejection'
+
+# trailing: one byte after the third LF.
+mkinstr "$tmp/i-trailing.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\",\"trailing_hex\":\"78\"}"
+check_refusal 'one trailing byte after the third LF' "$tmp/i-trailing.bin" instruction.trailing
+pass 'a byte after the third LF gives instruction.trailing'
+
+# fourth line (also trailing, since it is bytes after the third LF).
+mkinstr "$tmp/i-fourth.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\",\"trailing_hex\":\"$(hex_of $'extra\n')\"}"
+check_refusal 'a fourth line' "$tmp/i-fourth.bin" instruction.trailing
+pass 'a fourth line gives instruction.trailing'
+
+# malformed: fewer than three LF (missing final LF -- only two LFs present).
+mkinstr "$tmp/i-nolf.bin" "{\"raw_hex\":\"$(hex_of "ystack.file-digest-instruction.v1
+path file.txt
+sha256 $zero_sha")\"}"
+check_refusal 'missing final LF' "$tmp/i-nolf.bin" instruction.malformed
+pass 'a missing final LF gives instruction.malformed'
+
+# malformed: CRLF framing.
+mkinstr "$tmp/i-crlf.bin" "{\"sep_hex\":\"0d0a\",\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\"}"
+check_refusal 'CRLF framing' "$tmp/i-crlf.bin" instruction.malformed
+pass 'CRLF framing gives instruction.malformed'
+
+# malformed: BOM before the header.
+mkinstr "$tmp/i-bom.bin" "{\"header_hex\":\"efbbbf79737461636b2e66696c652d6469676573742d696e737472756374696f6e2e7631\",\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\"}"
+check_refusal 'BOM before the header' "$tmp/i-bom.bin" instruction.malformed
+pass 'a BOM before the header gives instruction.malformed'
+
+# malformed: uppercase hex digest.
+mkinstr "$tmp/i-upperhex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$(printf 'A%.0s' $(seq 1 64))\"}"
+check_refusal 'uppercase hex digest' "$tmp/i-upperhex.bin" instruction.malformed
+pass 'an uppercase hex digest gives instruction.malformed'
+
+# malformed: 63 and 65 hex digits.
+mkinstr "$tmp/i-63hex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"line3_hex\":\"$(hex_of "sha256 $(printf '0%.0s' $(seq 1 63))")\"}"
+check_refusal '63 hex digits' "$tmp/i-63hex.bin" instruction.malformed
+mkinstr "$tmp/i-65hex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"line3_hex\":\"$(hex_of "sha256 $(printf '0%.0s' $(seq 1 65))")\"}"
+check_refusal '65 hex digits' "$tmp/i-65hex.bin" instruction.malformed
+pass '63 and 65 hex digits both give instruction.malformed'
+
+# malformed: wrong / reordered keys.
+mkinstr "$tmp/i-wrongkey.bin" "{\"line2_hex\":\"$(hex_of "route file.txt")\",\"sha\":\"$zero_sha\"}"
+check_refusal 'wrong key on line 2' "$tmp/i-wrongkey.bin" instruction.malformed
+mkinstr "$tmp/i-reordered.bin" "{\"line2_hex\":\"$(hex_of "sha256 $zero_sha")\",\"line3_hex\":\"$(hex_of "path file.txt")\"}"
+check_refusal 'reordered keys' "$tmp/i-reordered.bin" instruction.malformed
+pass 'a wrong or reordered key gives instruction.malformed'
+
+# malformed: NUL byte in the path.
+mkinstr "$tmp/i-nul.bin" "{\"path_hex\":\"$(hex_of file)00$(hex_of .txt)\",\"sha\":\"$zero_sha\"}"
+check_refusal 'a NUL byte' "$tmp/i-nul.bin" instruction.malformed
+pass 'a NUL byte gives instruction.malformed'
+
+# malformed: a trailing space before a line's LF.
+mkinstr "$tmp/i-trailspace.bin" "{\"path_hex\":\"$(hex_of "file.txt ")\",\"sha\":\"$zero_sha\"}"
+check_refusal "line 2's last byte before its LF is a space" "$tmp/i-trailspace.bin" instruction.malformed
+pass "a trailing space before a line's LF gives instruction.malformed"
+
+# malformed: each invalid UTF-8 class in the path.
+mkinstr "$tmp/i-utf8-lone.bin" "{\"path_hex\":\"ff\",\"sha\":\"$zero_sha\"}"
+check_refusal 'a lone 0xff byte' "$tmp/i-utf8-lone.bin" instruction.malformed
+mkinstr "$tmp/i-utf8-overlong.bin" "{\"path_hex\":\"c0af\",\"sha\":\"$zero_sha\"}"
+check_refusal 'an overlong form' "$tmp/i-utf8-overlong.bin" instruction.malformed
+mkinstr "$tmp/i-utf8-surrogate.bin" "{\"path_hex\":\"eda080\",\"sha\":\"$zero_sha\"}"
+check_refusal 'a surrogate' "$tmp/i-utf8-surrogate.bin" instruction.malformed
+mkinstr "$tmp/i-utf8-above.bin" "{\"path_hex\":\"f4908080\",\"sha\":\"$zero_sha\"}"
+check_refusal 'a code point above U+10FFFF' "$tmp/i-utf8-above.bin" instruction.malformed
+mkinstr "$tmp/i-utf8-trunc.bin" "{\"path_hex\":\"e282\",\"sha\":\"$zero_sha\"}"
+check_refusal 'a truncated sequence' "$tmp/i-utf8-trunc.bin" instruction.malformed
+pass 'every invalid UTF-8 class in the path gives instruction.malformed'
 
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
