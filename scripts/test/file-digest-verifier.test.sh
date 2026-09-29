@@ -634,10 +634,8 @@ pass 'match and mismatch for empty, binary, CRLF, no-final-newline and trailing-
 [ "$(sha_file "$tmp/fips-million")" = cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ] || fail 'FIPS one-million-a vector'
 write_case fips-abc.bin "$tmp/fips-abc"
 digest_check_case 'FIPS abc vector against the verifier' fips-abc.bin "$tmp/fips-abc" match
-# The 448-bit message is exactly one block short of its length field (56
-# bytes buffered plus the 0x80 pad byte overflows into a second block), and
-# the one-million-byte message streams across many blocks: both exercise the
-# two-block padding boundary in the new SHA-256, not just system shasum.
+# Run the two-block-boundary and multi-block vectors through the verifier
+# too, not just system shasum.
 write_case fips-448.bin "$tmp/fips-448"
 digest_check_case 'FIPS 448-bit vector against the verifier' fips-448.bin "$tmp/fips-448" match
 write_case fips-million.bin "$tmp/fips-million"
@@ -656,14 +654,10 @@ run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
 [ "$(reason_of "$result_path")" = file.oversize ] || fail '1,048,577 bytes must give file.oversize'
 pass 'sizes 1,048,576 (accepted) and 1,048,577 (file.oversize) are handled as paired controls'
 
-# A candidate that keeps growing after the verifier's opening fstat must be
-# caught as file.size-mismatch or file.changed, never read past its own
-# recorded size (R5.4): the read loop is bounded by that file's own
-# opened.st_size + 1, not by the fixed buffer capacity. A background writer
-# holds the file open and appends continuously across the verifier's whole
-# run, started before each attempt; the case is retried (not looped forever)
-# until the growth is observed, since landing inside the exact read window is
-# not itself deterministic (R8.4) even though the closed outcome is.
+# A candidate growing after the opening fstat must be caught as
+# file.size-mismatch/file.changed, not read past opened.st_size (R5.4). A
+# background writer appends throughout the run; retried since landing inside
+# the read window is not itself deterministic (R8.4), the outcome is.
 race_file="$candidate/growing.bin"
 race_reason=""
 race_attempt=0
