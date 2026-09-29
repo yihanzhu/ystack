@@ -552,23 +552,40 @@ write_case() {
 digest_check_case() {
   # digest_check_case <desc> <rel-path> <expected-file> <outcome: match|mismatch>
   local desc=$1 rel=$2 content=$3 want=$4
-  local real_sha check_sha
+  local real_sha check_sha expected_reason
   real_sha=$(sha_file "$content")
   if [ "$want" = match ]; then
     check_sha=$real_sha
+    expected_reason=file.match
   else
     check_sha=$(printf '%s' "$real_sha" | tr '0123456789abcdef' '1234567890bcdefa')
+    expected_reason=file.mismatch
   fi
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of "$rel")\",\"sha\":\"$check_sha\"}"
   fresh_evidence
   run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
-  local outcome observed_sha observed_size
+  local outcome reason observed_sha observed_size instr_sha
   outcome=$(outcome_of "$result_path")
+  reason=$(reason_of "$result_path")
   [ "$outcome" = "$want" ] || fail "$desc: expected outcome $want, got $outcome"
+  [ "$reason" = "$expected_reason" ] || fail "$desc: expected reason_id $expected_reason, got $reason"
   observed_sha=$("$jq_bin" -r '.body.observed.sha256' "$result_path")
   observed_size=$("$jq_bin" -r '.body.observed.size_bytes' "$result_path")
   [ "$observed_sha" = "$real_sha" ] || fail "$desc: observed digest does not equal shasum -a 256"
   [ "$observed_size" = "$(wc -c < "$content" | tr -d ' ')" ] || fail "$desc: observed size mismatch"
+  instr_sha=$(sha_file "$tmp/case-instr.bin")
+  local expected_payload
+  expected_payload=$("$jq_bin" -S -c -n \
+    --arg expected_sha256 "$check_sha" --arg path "$rel" --arg instruction_sha256 "$instr_sha" \
+    --arg sha256 "$real_sha" --argjson size_bytes "$observed_size" \
+    --arg outcome "$want" --arg reason_id "$expected_reason" '
+    {body:{check:{expected_sha256:$expected_sha256,path:$path},
+           instruction_sha256:$instruction_sha256,
+           observed:{sha256:$sha256,size_bytes:$size_bytes},
+           outcome:$outcome,reason_id:$reason_id},
+     id:"file-digest-payload",kind:"file_digest_verifier_payload",schema_version:1}')
+  [ "$expected_payload" = "$(cat "$result_path")" ] ||
+    fail "$desc: payload does not equal the complete expected object"
   local canon
   canon=$("$jq_bin" -S -c . "$result_path")
   [ "$canon" = "$(cat "$result_path")" ] || fail "$desc: payload is not canonical jq -S -c"
@@ -617,7 +634,15 @@ pass 'match and mismatch for empty, binary, CRLF, no-final-newline and trailing-
 [ "$(sha_file "$tmp/fips-million")" = cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ] || fail 'FIPS one-million-a vector'
 write_case fips-abc.bin "$tmp/fips-abc"
 digest_check_case 'FIPS abc vector against the verifier' fips-abc.bin "$tmp/fips-abc" match
-pass 'the FIPS 180-4 vectors (empty, abc, 448-bit, one million a) match published digests'
+# The 448-bit message is exactly one block short of its length field (56
+# bytes buffered plus the 0x80 pad byte overflows into a second block), and
+# the one-million-byte message streams across many blocks: both exercise the
+# two-block padding boundary in the new SHA-256, not just system shasum.
+write_case fips-448.bin "$tmp/fips-448"
+digest_check_case 'FIPS 448-bit vector against the verifier' fips-448.bin "$tmp/fips-448" match
+write_case fips-million.bin "$tmp/fips-million"
+digest_check_case 'FIPS one-million-a vector against the verifier' fips-million.bin "$tmp/fips-million" match
+pass 'the FIPS 180-4 vectors (empty, abc, 448-bit, one million a) match published digests and the verifier agrees on all four'
 
 # sizes at and past the 1,048,576-byte limit.
 "$python" -c "import sys; sys.stdout.buffer.write(b'a' * 1048576)" > "$tmp/f-atlimit"
@@ -630,6 +655,50 @@ fresh_evidence
 run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
 [ "$(reason_of "$result_path")" = file.oversize ] || fail '1,048,577 bytes must give file.oversize'
 pass 'sizes 1,048,576 (accepted) and 1,048,577 (file.oversize) are handled as paired controls'
+
+# A candidate that keeps growing after the verifier's opening fstat must be
+# caught as file.size-mismatch or file.changed, never read past its own
+# recorded size (R5.4): the read loop is bounded by that file's own
+# opened.st_size + 1, not by the fixed buffer capacity. A background writer
+# holds the file open and appends continuously across the verifier's whole
+# run, started before each attempt; the case is retried (not looped forever)
+# until the growth is observed, since landing inside the exact read window is
+# not itself deterministic (R8.4) even though the closed outcome is.
+race_file="$candidate/growing.bin"
+race_reason=""
+race_attempt=0
+while [ "$race_attempt" -lt 50 ]; do
+  race_attempt=$((race_attempt + 1))
+  : > "$race_file"
+  "$python" - "$race_file" <<'PY' &
+import os, sys, time
+path = sys.argv[1]
+fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+end = time.time() + 0.5
+try:
+    while time.time() < end:
+        os.write(fd, b"a")
+finally:
+    os.close(fd)
+PY
+  race_writer_pid=$!
+  mkinstr "$tmp/race-instr.bin" "{\"path_hex\":\"$(hex_of growing.bin)\",\"sha\":\"$zero_sha\"}"
+  fresh_evidence
+  run_test_verifier "$tmp/race-instr.bin" "$tmp/race.out" "$tmp/race.err" || true
+  wait "$race_writer_pid" 2>/dev/null || :
+  race_reason=$(reason_of "$result_path")
+  case "$race_reason" in
+    file.size-mismatch|file.changed) break ;;
+  esac
+done
+case "$race_reason" in
+  file.size-mismatch|file.changed) : ;;
+  *) fail "growing candidate: expected file.size-mismatch or file.changed after $race_attempt attempts, got $race_reason" ;;
+esac
+[ "$("$jq_bin" -r '.body.observed // "null"' "$result_path")" = null ] ||
+  fail 'growing candidate: observed must stay null for a size-mismatch or changed reason'
+/bin/rm -f "$race_file"
+pass 'a candidate that grows during the run is bounded to its own recorded size, not the fixed buffer (R5.4)'
 
 # missing (final and intermediate), directory, FIFO, socket, symlinks,
 # intermediate regular file, mode 0000.

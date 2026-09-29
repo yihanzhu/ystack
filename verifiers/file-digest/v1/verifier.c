@@ -605,15 +605,28 @@ static const char *read_candidate(const unsigned char *path, size_t path_len,
                 break;
             }
 
-            while (total < CANDIDATE_READ_LIMIT) {
-                ssize_t r = read(filefd, candidate_buffer + total, CANDIDATE_READ_LIMIT - total);
-                if (r < 0) {
-                    if (errno == EINTR) continue;
-                    read_error = 1;
-                    break;
+            {
+                /*
+                 * Bound the read by this file's own recorded size plus one,
+                 * not by the fixed buffer capacity: a file that grows after
+                 * classification must be caught as file.size-mismatch (or
+                 * file.changed on re-fstat) rather than read past its
+                 * expected length. opened.st_size is at most
+                 * MAX_CANDIDATE_BYTES (checked above via st.st_size, which
+                 * opened.st_size was just confirmed to equal), so
+                 * read_limit never exceeds CANDIDATE_READ_LIMIT.
+                 */
+                size_t read_limit = (size_t)opened.st_size + 1U;
+                while (total < read_limit) {
+                    ssize_t r = read(filefd, candidate_buffer + total, read_limit - total);
+                    if (r < 0) {
+                        if (errno == EINTR) continue;
+                        read_error = 1;
+                        break;
+                    }
+                    if (r == 0) break;
+                    total += (size_t)r;
                 }
-                if (r == 0) break;
-                total += (size_t)r;
             }
             if (read_error) {
                 (void)close(filefd);
@@ -816,9 +829,12 @@ int main(int argc, char **argv)
                 if (walk_reason != NULL) {
                     outcome = "refused";
                     reason_id = walk_reason;
+                } else if (strcmp(observed_hex, expected_hex) == 0) {
+                    outcome = "match";
+                    reason_id = "file.match";
                 } else {
-                    outcome = strcmp(observed_hex, expected_hex) == 0 ? "match" : "mismatch";
-                    reason_id = NULL;
+                    outcome = "mismatch";
+                    reason_id = "file.mismatch";
                 }
             }
         }
