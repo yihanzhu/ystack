@@ -59,8 +59,8 @@ Citations are to origin/main at `e73b76a`.
    returns this spec to G2.
 3. **Slots,** each measured by the host supervisor before admission from the installed
    bytes named in its configuration (R10.1), except `verification_instructions`,
-   measured from the package's `instruction` record (R4.2). A composite is the SHA-256 of the
-   canonical document shown; a version name is a label beside a digest, never an
+   measured from the package's `instruction` record (R4.2). A composite is the SHA-256
+   of the canonical document shown; a version name is a label beside a digest, never an
    identity (`work/real-sandbox-boundary/spec.md:45-52`).
 
 | Slot | Bytes measured |
@@ -112,14 +112,16 @@ Citations are to origin/main at `e73b76a`.
    SHA-256 of everything before it. Anything after `end` must be zero bytes. Record
    names are a closed set of ASCII names: the ones R3.3, R5.2 and R8.1 list, with
    `candidate/<nnnnn>` and `evidence/<nnnn>` zero-padded decimal indexes in order from
-   0. No path is ever a record name: a candidate record's path is the manifest entry
-   (in the package) or the plan entry (on the input disk) at its index, a JSON string
+   0. No path is ever a record name: a candidate record's path is the manifest entry (in
+   the package) or the plan entry (on the input disk) at its index, a JSON string
    carrying the preparation component's full path range, strict UTF-8 up to 4,096 bytes
-   and 64 components, byte for byte (`work/candidate-content-preparation/spec.md:262-270`).
-   A frame detects truncation and damage; it authenticates nothing.
+   and 64 components, byte for byte
+   (`work/candidate-content-preparation/spec.md:262-270`). A frame detects truncation
+   and damage; it authenticates nothing.
 3. **Package,** read from stdin, at most 88,080,384 bytes: `request.json`,
-   `evaluation.json` (the admitting `sandbox_policy_evaluation`), `record.json` and
-   `manifest.json` (the #396 bundle's), `instruction`, then `candidate/<nnnnn>` for
+   `evaluation.json` (the admitting `sandbox_policy_evaluation`), `incident.json` (the
+   `shadow_incident_record`, at most 262,144 bytes), `record.json` and `manifest.json`
+   (the #396 bundle's), `instruction`, then `candidate/<nnnnn>` for
    the manifest's file entries in manifest order (index 0 is the first file entry),
    then `end`.
 4. **Invocation:** `sandbox/v1/host-supervisor.py launch`, no other argument. In
@@ -142,22 +144,37 @@ Citations are to origin/main at `e73b76a`.
    `payload/refusal.json` (`{"reason_ids":[...]}`, sorted, unique):
    `launch.identity-missing` (a slot's bytes absent or unreadable: slot `unobserved`
    with that reason), `launch.identity-unaccepted` (a measured digest not in the
-   environment's accepted list), `launch.environment-unlisted`,
-   `launch.control-mismatch` (a `control` digest differs from the installed files),
+   environment's accepted list), `launch.environment-unlisted` (`environment_id` differs
+   from the configuration's or is absent from the installed registry or accepted set;
+   `environment_entry_sha256` differs from the installed entry's canonical digest;
+   `target_repository_id` differs from that entry's), `launch.control-mismatch`
+   (`policy_sha256`, `decision_sha256`, `policy_set_sha256`, `evaluator_driver_sha256`
+   or `evaluator_program_sha256` differs from the installed file's digest, or
+   `sandbox_evaluation_sha256` from the package evaluation's),
    `launch.evaluation-not-satisfied`, `launch.record-mismatch` (record digest differs
    from `subject.candidate.preparation_record_sha256`), `launch.manifest-mismatch`
    (manifest not canonical, or its digest differs from the record's `manifest_sha256`,
-   `preparation/v1/prepare-candidate.py:1925`), `launch.candidate-mismatch` (a missing,
-   extra, resized or changed file, or a mode or kind differing from the manifest entry,
-   `:1662-1677`), `launch.candidate-oversize` (above the preparation export limit,
-   `:54`), `launch.instruction-mismatch` (the SHA-256 of the package's instruction
-   bytes differs from the request's `instruction_sha256`),
+   `preparation/v1/prepare-candidate.py:1925`, or from
+   `subject.candidate.manifest_sha256`), `launch.subject-mismatch` (any `subject.source`
+   field differs from the record's `source`, `subject.candidate.commit_id` or `tree_id`
+   from the record's `candidate` (`:1920-1924`); `incident_sha256` differs from the
+   package incident's digest; the incident is not canonical with the top-level keys of
+   `shadow/v1/incident-record.jq:54-59`, or its `target_repository_id` differs from
+   `subject.target_repository_id`, or its `git_revision_ref` from `{repository_id,
+   hash_algorithm, commit_id}` of `subject.source`), `launch.candidate-mismatch` (a
+   missing, extra, resized or changed file, or a mode or kind differing from the
+   manifest entry, `:1662-1677`), `launch.candidate-oversize` (above the preparation
+   export limit, `:54`), `launch.instruction-mismatch` (the SHA-256 of the package's
+   instruction bytes differs from the request's `instruction_sha256`),
    `launch.instruction-unaccepted` (that digest, which is the
    `verification_instructions` slot, is not in the environment's accepted list),
-   `launch.kernel-config` (R2.4). Admission therefore requires three-way equality of
-   the supplied bytes' digest, the request digest and an accepted identity, and the
-   receipt records the digest of the bytes actually supplied, never an installed or
-   requested value.
+   `launch.kernel-config` (R2.4). Admission therefore requires three-way equality of the
+   supplied bytes' digest, the request digest and an accepted identity, and the receipt
+   records the digest of the bytes actually supplied, never an installed or requested
+   value. Every other echoed field is bound likewise (`subject` and `control` above,
+   `store_id` by R4.1, `launch_request_sha256` computed); only `attempt_id` and
+   `attempt_number` are the consumer's own, bound by the exclusive attempt directory
+   and the expectation.
 3. Otherwise the attempt is admitted; admission is the instant the host deadline clock
    (R9.1) starts.
 
@@ -201,13 +218,13 @@ Citations are to origin/main at `e73b76a`.
    `MAKE_REG`, `MAKE_DIR`; evidence `WRITE_FILE`, `MAKE_REG`.
 3. **seccomp,** default allow, `EPERM` for this closed list: `socket`, `socketpair`,
    `mknod`, `mknodat`, `fallocate`, `truncate`, `ftruncate`, `lseek`, `pwrite64`,
-   `pwritev`, `pwritev2`, `openat2`, `open_by_handle_at`, `name_to_handle_at`,
-   `splice`, `vmsplice`, `tee`, `sendfile`, `copy_file_range`, `io_uring_setup`,
-   `io_uring_enter`, `io_uring_register`, `io_setup`, `io_submit`, `userfaultfd`,
-   `perf_event_open`, `bpf`, `ptrace`, `process_vm_readv`, `process_vm_writev`,
-   `linkat`, `symlinkat`, `mount`, `umount2`, `pivot_root`, `move_mount`, `open_tree`,
-   `fsopen`, `fsmount`, `unshare`, `setns`, `clone3`, `keyctl`, `add_key`, `request_key`, `acct`,
-   `swapon`; `openat` with `O_TMPFILE`; `madvise` with `MADV_REMOVE`; `clone` with any
+   `pwritev`, `pwritev2`, `openat2`, `open_by_handle_at`, `name_to_handle_at`, `splice`,
+   `vmsplice`, `tee`, `sendfile`, `copy_file_range`, `io_uring_setup`, `io_uring_enter`,
+   `io_uring_register`, `io_setup`, `io_submit`, `userfaultfd`, `perf_event_open`,
+   `bpf`, `ptrace`, `process_vm_readv`, `process_vm_writev`, `linkat`, `symlinkat`,
+   `mount`, `umount2`, `pivot_root`, `move_mount`, `open_tree`, `fsopen`, `fsmount`,
+   `unshare`, `setns`, `clone3`, `keyctl`, `add_key`, `request_key`, `acct`, `swapon`;
+   `openat` with `O_TMPFILE`; `madvise` with `MADV_REMOVE`; `clone` with any
    `CLONE_NEW*` flag. The filter checks `AUDIT_ARCH_AARCH64`.
 4. **Wiring,** as `work/fixed-file-digest-verifier/spec.md:58-78` requires: argv after
    `argv[0]` exactly `verify --candidate /sandbox/candidate --evidence
@@ -266,13 +283,13 @@ Citations are to origin/main at `e73b76a`.
 
 ### R8. Guest-to-host channel and payload
 
-1. Before export the guest supervisor requires every regular file on the output tmpfs
-   to have link count 1 and a distinct inode number; otherwise the output row is
-   `observation: "partial"`. After confirmed tree termination it writes one frame to
-   the export disk: `report.json`, `stdout`, `stderr`, `evidence/<nnnn>` (four-digit index, one per
-   evidence file), `end`; then it syncs and powers off. That disk is the only channel.
-   The verifier cannot reach it: it is outside the verifier's mount namespace and
-   Landlock rules, and the verifier has no socket. Nothing flows from host to guest
+1. Before export the guest supervisor requires every regular file on the output tmpfs to
+   have link count 1 and a distinct inode number; otherwise the output row is
+   `observation: "partial"`. After confirmed tree termination it writes one frame to the
+   export disk: `report.json`, `stdout`, `stderr`, `evidence/<nnnn>` (four-digit index,
+   one per evidence file), `end`; then it syncs and powers off. That disk is the only
+   channel. The verifier cannot reach it: it is outside the verifier's mount namespace
+   and Landlock rules, and the verifier has no socket. Nothing flows from host to guest
    after boot.
 2. `report.json`, kind `sandbox_guest_report`, `body` exactly: `plan_sha256`,
    `verifier_started`, `exit_state`, `exit_code`, `tree_terminated`,
@@ -332,11 +349,11 @@ Citations are to origin/main at `e73b76a`.
    `host-supervisor.py`, `body` exactly: `principal_uid`, `consumer_gid`, `store_id`,
    `store_root`, `work_root`, `environment_id`, `runtime` (vfkit and driver paths),
    `identity_paths` (the installed file for each R2.3 input but the instruction) and
-   `installed_files` (paths of the installed control policy, decision, policy set, evaluator driver and
-   program, registry and accepted set). The install directory, every ancestor and each
-   listed file must be owned by uid 0 or `principal_uid` and be neither group- nor
-   other-writable; `store_root` and `work_root` must be outside every `/sandbox/*`
-   root and never attached to the guest.
+   `installed_files` (paths of the installed control policy, decision, policy set,
+   evaluator driver and program, registry and accepted set). The install directory,
+   every ancestor and each listed file must be owned by uid 0 or `principal_uid` and be
+   neither group- nor other-writable; `store_root` and `work_root` must be outside every
+   `/sandbox/*` root and never attached to the guest.
 2. **Store writes,** under `work/enforcement-evidence-binding/spec.md:56-75`: directories
    `0750` and files `0440`, owner `principal_uid`, group `consumer_gid` (inherited from
    the parent or set with `fchown`, then verified), no ACL (Darwin
@@ -384,20 +401,21 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    "c1cacf5a1dbcc5030d66ecd300bf0b115c792e99","target_repository_id":
    "repo.ystack-dummy-target"}`, in canonical form. It inherits nothing from
    `env.local-macos-dummy-target` (`work/real-sandbox-boundary/spec.md:68-74`). It is
-   the step-8 first target's repository (`work/step8-bounded-write-readiness/spec.md:27-29`),
-   so one qualification serves concerns 5-7; a fixtures-only VM entry would need a
-   second qualification and prove no more containment, because probe executables, not
-   candidate bytes, supply adversarial behaviour. Registering an `unproven` entry is
-   within the program authorization
+   the step-8 first target's repository
+   (`work/step8-bounded-write-readiness/spec.md:27-29`), so one qualification serves
+   concerns 5-7; a fixtures-only VM entry would need a second qualification and prove no
+   more containment, because probe executables, not candidate bytes, supply adversarial
+   behaviour. Registering an `unproven` entry is within the program authorization
    (`work/roadmap-program-authorization/decision.md:304-307`).
 2. **`scratch_bytes` = 16,777,216.** The verifier never touches scratch
    (`work/fixed-file-digest-verifier/spec.md:65-69`), scratch lives in guest RAM next to
    the candidate (at most 64 MiB), tools and output (10 MiB), and a multiple of both
    4 KiB and 16 KiB pages keeps the bound exact.
 3. The only `shadow/v1/**` changes are that append (with `proof_state: "unproven"`) and,
-   after R13.4 only, that entry's `proof_state` changed to `"native-qualified"`. The only
-   `enforcement/v1/**` change is, after R13.4 only, appending that environment's entry
-   to `accepted-identities.json` under `work/enforcement-evidence-binding/spec.md:171-177`.
+   after R13.4 only, that entry's `proof_state` changed to `"native-qualified"`. The
+   only `enforcement/v1/**` change is, after R13.4 only, appending that environment's
+   entry to `accepted-identities.json` under
+   `work/enforcement-evidence-binding/spec.md:171-177`.
 
 ### R13. Reserved decisions
 
@@ -493,6 +511,8 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      reuse, and an existing attempt left byte-identical;
    - each phase B reason alone, including changed and missing bytes per slot, and
      manifest, record and candidate mismatch;
+   - each of the twelve `subject` and six `control` leaf fields mutated alone in the
+     request, artifacts intact, refuses with its R4.2 reason and is never admitted;
    - instruction binding: replacing the package instruction and the request's
      `instruction_sha256` together with an unaccepted instruction refuses with
      `launch.instruction-unaccepted`, and the receipt records the replaced bytes'
@@ -523,19 +543,19 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    - `runtime-vfkit.py` builds exactly the R5.4 vfkit argv and REST calls, against a
      fake `vfkit` executable;
    - `qualify.py` runs its probe list end to end in dry-run against the fake runtime.
-2. `scripts/test/sandbox-guest.test.sh` builds `sandbox-guest-harness.c` with
-   `common.c` using the host compiler and proves: frame parse and write, including every
-   truncation, trailing-byte and `end` digest case; plan parsing; the exec wiring
-   (argv, the four variables, fd 0 regular, fds 1-2 append-only, no other descriptor)
-   by exec'ing a harness child that reports them; the R8.1 export inventory refusing a
+2. `scripts/test/sandbox-guest.test.sh` builds `sandbox-guest-harness.c` with `common.c`
+   using the host compiler and proves: frame parse and write, including every
+   truncation, trailing-byte and `end` digest case; plan parsing; the exec wiring (argv,
+   the four variables, fd 0 regular, fds 1-2 append-only, no other descriptor) by
+   exec'ing a harness child that reports them; the R8.1 export inventory refusing a
    same-directory hard-link alias of an evidence file, with a single-link positive
-   control; candidate records whose plan paths
-   are `README.md`, a non-ASCII UTF-8 name and a 4,096-byte 64-component path, each
-   materialized byte for byte, and a record name outside the closed set refused;
-   `build-guest.py image` determinism over synthetic inputs, and `compile` refusing an existing output directory. On Linux
-   it also compiles `init.c`, `supervisor.c` and `probe.c` with `-std=c11 -Wall
-   -Wextra -Werror`; Darwin has no Linux headers, so there that case is named as a
-   Linux-only proof and CI's Linux run is its evidence.
+   control; candidate records whose plan paths are `README.md`, a non-ASCII UTF-8 name
+   and a 4,096-byte 64-component path, each materialized byte for byte, and a record
+   name outside the closed set refused; `build-guest.py image` determinism over
+   synthetic inputs, and `compile` refusing an existing output directory. On Linux it
+   also compiles `init.c`, `supervisor.c` and `probe.c` with `-std=c11 -Wall -Wextra
+   -Werror`; Darwin has no Linux headers, so there that case is named as a Linux-only
+   proof and CI's Linux run is its evidence.
 3. Must pass unedited: `scripts/test/sandbox-receipt.test.sh`,
    `scripts/test/file-digest-verifier.test.sh`,
    `scripts/test/control-sandbox-policy.test.sh`,
