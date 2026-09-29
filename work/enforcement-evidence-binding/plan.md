@@ -345,7 +345,7 @@ keeps its own intake and gates; none is implemented here.
 PR 1: `review_size: accepted-exception`, 600-700 net lines, one concern: the full R3
 receipt shape (12 body fields, 10 identity slots, 6 R6 limit rows) and the 24
 required PR-1 test cases listed above, none of which may be cut. PR 2:
-`review_size: accepted-exception`, 400-520 net lines, one concern: exhaustive
+`review_size: accepted-exception`, 400-560 net lines, one concern: exhaustive
 fixed-file schema and relation validation, meaning every field and shape of the five
 fixed control documents and the references between them. PRs 3-4:
 `review_size: standard`. Estimated net lines:
@@ -353,7 +353,7 @@ fixed control documents and the references between them. PRs 3-4:
 | PR | Estimate | Main content |
 | --- | ---: | --- |
 | 1 | 600-700 | program core 260-300, test scaffolding and 24 cases 330-390, manifest 7 |
-| 2 | 400-520 | program bindings and fixed-file validation, accepted set 1, tests |
+| 2 | 400-560 | program bindings and fixed-file validation, accepted set 1, tests |
 | 3 | 330-400 | driver 200-230, tests 130-170 |
 | 4 | 35-50 | two docs paragraphs, one restore paragraph |
 
@@ -361,8 +361,10 @@ Evidence: PR 1 as built in #455 measured 641 (277 program, 357 test, 7 manifest)
 `scripts/test/control-sandbox-policy.test.sh` is 476 lines for 46 cases, and
 `control/v1/sandbox.jq` 276. PR 2 as built in #457 reached 400 with findings
 open after three review rounds, each requiring exhaustive field and shape validation
-of the five fixed documents and cross-document reference checks; `control/v1/sandbox.jq`
-(276) and `scripts/test/control-sandbox-policy.test.sh` (476) are the precedent for
+of the five fixed documents and cross-document reference checks, and round 6 on #457
+(513 measured at head `ece06b05`) required the remaining literal, enum and pattern
+constraints plus digest pins of the three shipped control documents;
+`control/v1/sandbox.jq` (276) and `scripts/test/control-sandbox-policy.test.sh` (476) are the precedent for
 that validation's size. PR 3's driver follows
 `control/v1/evaluate-sandbox.sh` (220 lines) step for step and keeps its estimate.
 A PR recorded as standard that would pass 400 lines, or PR 1 or PR 2 outside its
