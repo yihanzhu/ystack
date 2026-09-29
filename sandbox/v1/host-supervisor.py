@@ -55,6 +55,12 @@ def require(condition, code):
         refuse(code)
 
 
+def is_int(value):
+    """bool subclasses int in Python, so every JSON integer field must
+    exclude it explicitly, or {"schema_version": true} passes as 1."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 # --- YSFRAME1 (R3.2): shared wire format with the guest's common.c -------
 FRAME_MAGIC = b"YSFRAME1"
 FRAME_END = b"end"
@@ -191,9 +197,8 @@ def _darwin_libc():
 
 def darwin_acl_entries(fd):
     """[(tag, id_type_or_None, id_or_None, perm_bits)]; None id means the
-    qualifier's GUID could not be resolved to a uid/gid (treated as "some
-    other principal" by every caller). Raises OSError if the ACL itself
-    cannot be read (a real error, not simply "no ACL present")."""
+    GUID could not be resolved (treated as "some other principal"). Raises
+    OSError if the ACL can't be read (a real error, not "no ACL present")."""
     lib = _darwin_libc()
     ctypes.set_errno(0)
     acl = lib.acl_get_fd_np(fd, ACL_TYPE_EXTENDED)
@@ -294,9 +299,8 @@ def trust_root_fd():
     """Test-only: YSTACK_SANDBOX_TRUST_ROOT, honored only for a directory
     already owned by the invoking uid and not group/other-writable (an
     attacker who could satisfy that already has the principal's own
-    access). Lets a test anchor the walk below a directory it made clean
-    itself on a host where neither /tmp nor $HOME reach "/" cleanly; unset,
-    the product check still walks from "/" as always."""
+    access) -- lets a test anchor the walk on a host where neither /tmp
+    nor $HOME reach "/" cleanly; unset, the product still walks from "/"."""
     root = os.environ.get("YSTACK_SANDBOX_TRUST_ROOT")
     if not root:
         return None, None
@@ -314,8 +318,7 @@ def trust_root_fd():
 def secure_ancestor_fds(path, principal_uid):
     """Opens every component and validates it as opened: the R10.1 ACL on
     every fd, and -- for every ancestor, never deferred -- the owner/mode
-    too (otherwise only caught by luck, if some other path crosses it).
-    The target's own owner/mode is the caller's choice (see secure_walk)."""
+    too. The target's own owner/mode is the caller's choice (secure_walk)."""
     if not (isinstance(path, str) and path.startswith("/")):
         refuse("E_INSTALL_ACL")
     parts = [p for p in path.split("/") if p and p != "."]
@@ -422,13 +425,13 @@ def load_config(config_fd):
     except ValueError:
         refuse("E_CONFIG")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
-    require(doc.get("kind") == "sandbox_host_config" and doc.get("schema_version") == 1, "E_CONFIG")
+    require(doc.get("kind") == "sandbox_host_config" and is_int(doc.get("schema_version")) and doc.get("schema_version") == 1, "E_CONFIG")
     body = doc.get("body")
     require(isinstance(body, dict) and set(body) == {
         "consumer_gid", "environment_id", "identity_paths", "installed_files",
         "principal_uid", "runtime", "store_id", "store_root", "work_root"}, "E_CONFIG")
-    require(isinstance(body["principal_uid"], int) and body["principal_uid"] >= 0, "E_CONFIG")
-    require(isinstance(body["consumer_gid"], int) and body["consumer_gid"] >= 0, "E_CONFIG")
+    require(is_int(body["principal_uid"]) and body["principal_uid"] >= 0, "E_CONFIG")
+    require(is_int(body["consumer_gid"]) and body["consumer_gid"] >= 0, "E_CONFIG")
     for key in ("store_id", "environment_id"):
         require(isinstance(body[key], str) and body[key], "E_CONFIG")
     for key in ("store_root", "work_root"):
@@ -474,7 +477,7 @@ def accepted_entry_shape_ok(env):
     if not id_ok(env["environment_id"]):
         return False
     scratch_bytes = env["scratch_bytes"]
-    if not (isinstance(scratch_bytes, int) and not isinstance(scratch_bytes, bool) and scratch_bytes > 0):
+    if not (is_int(scratch_bytes) and scratch_bytes > 0):
         return False
     identities = env["identities"]
     if not (isinstance(identities, dict) and set(identities) == set(IDENTITY_SLOTS)):
@@ -502,8 +505,7 @@ def check_accepted_set(fd):
         refuse("E_CONFIG")
     require(canonical(doc) == raw, "E_CONFIG")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
-    require(doc.get("kind") == "sandbox_accepted_identity_set" and doc.get("schema_version") == 1,
-            "E_CONFIG")
+    require(doc.get("kind") == "sandbox_accepted_identity_set" and is_int(doc.get("schema_version")) and doc.get("schema_version") == 1, "E_CONFIG")
     require(doc.get("id") == "sandbox.accepted-identities.v1", "E_CONFIG")
     body = doc.get("body")
     require(isinstance(body, dict) and set(body) == {"activation_state", "environments", "set_version"},
@@ -551,11 +553,8 @@ REQUEST_JSON_DEPTH = 32  # matches prepare-candidate.py's own LIMITS["json_depth
 
 
 def bounded_json_nesting(data):
-    """A pre-parse, non-recursive brace/bracket scan (mirrors
-    preparation/v1/prepare-candidate.py's own bounded_json_nesting): caps
-    nesting before json.loads ever recurses, so a request.json with
-    thousands of nested arrays refuses E_PACKAGE instead of a
-    RecursionError traceback and exit 1."""
+    """Non-recursive brace/bracket scan (mirrors prepare-candidate.py's own
+    bounded_json_nesting): caps nesting before json.loads ever recurses."""
     depth = 0
     in_string = False
     escaped = False
@@ -619,7 +618,7 @@ def parse_request(raw):
     except RecursionError:
         refuse("E_PACKAGE")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_PACKAGE")
-    require(doc.get("kind") == "sandbox_launch_request" and doc.get("schema_version") == 1, "E_PACKAGE")
+    require(doc.get("kind") == "sandbox_launch_request" and is_int(doc.get("schema_version")) and doc.get("schema_version") == 1, "E_PACKAGE")
     require(id_ok(doc.get("id", "")), "E_PACKAGE")
     body = doc.get("body")
     require(isinstance(body, dict) and set(body) == {
@@ -628,8 +627,7 @@ def parse_request(raw):
     require(isinstance(attempt, dict) and set(attempt) == {"attempt_id", "attempt_number"}, "E_PACKAGE")
     require(id_ok(attempt["attempt_id"]), "E_PACKAGE")
     attempt_number = attempt["attempt_number"]
-    require(isinstance(attempt_number, int) and not isinstance(attempt_number, bool)
-            and 1 <= attempt_number <= 1024, "E_PACKAGE")
+    require(is_int(attempt_number) and 1 <= attempt_number <= 1024, "E_PACKAGE")
     control = body["control"]
     require(isinstance(control, dict) and set(control) == CONTROL_KEYS, "E_PACKAGE")
     for value in control.values():

@@ -254,7 +254,7 @@ def main():
     for path in patch.get("delete", []):
         deep_set(body, path, _DELETE)
     request_doc = {"body": body, "id": "sandbox.launch-request.fixture",
-                   "kind": "sandbox_launch_request", "schema_version": 1}
+                   "kind": "sandbox_launch_request", "schema_version": patch.get("doc_schema_version", 1)}
     if "raw_request_depth" in patch:
         n = patch["raw_request_depth"]  # built flat, so json.dumps never has to recurse either
         request_bytes = b"[" * n + b"1" + b"]" * n
@@ -399,9 +399,8 @@ for target_desc_pair in "$config_path:the trusted config file" "$base/root/insta
 done
 
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
-  # Multi-entry ACL regression for the P1 fix: Darwin's ACL_NEXT_ENTRY is
-  # -1, not 1 -- with the wrong constant the entry iterator never advances
-  # past the first entry, so a second entry is silently never inspected.
+  # Multi-entry ACL regression (P1): the wrong ACL_NEXT_ENTRY never
+  # advanced past the first entry, so a second entry went uninspected.
   build_tree 0
   build_pkg "$base/pkg-ok.json" '{}'
   /bin/chmod +a "$(id -un) deny append" "$config_path"
@@ -418,8 +417,7 @@ if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   pass 'a multi-entry ACL is walked in full: two deny-only entries admit, two entries including an everyone-allow-write grant refuse E_INSTALL_ACL -- proving the ACL_NEXT_ENTRY fix actually advances past the first entry'
 fi
 
-# runtime.driver, like vfkit, is a config-listed file (R10.1) and must be
-# walked: a world-writable driver, outside the install tree, is refused.
+# runtime.driver (P2), like vfkit, must be walked: world-writable refuses.
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 /bin/chmod 666 "$driver_path"
@@ -495,6 +493,30 @@ for filt in "${accepted_set_filters[@]}"; do
   build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
 done
 pass 'every accepted-set schema deviation (envelope id, a missing identity slot, a duplicate digest, an invalid mechanism id) is refused E_CONFIG, paired against the accepted control'
+
+# Same class as the attempt_number bug: every integer field must reject
+# bool via is_int (Python's True == 1); expect_refused's own snapshot
+# proves no store write happens either.
+build_pkg "$base/pkg-bool.json" '{"doc_schema_version":true}'
+expect_refused 'E_PACKAGE: request.json schema_version is true, not 1' E_PACKAGE "$base/pkg-bool.json"
+build_pkg "$base/pkg-bool.json" '{"attempt_number":true}'
+expect_refused 'E_PACKAGE: attempt.attempt_number is true, not 1' E_PACKAGE "$base/pkg-bool.json"
+config_bool_filters=('.schema_version = true' '.body.principal_uid = true' '.body.consumer_gid = true')
+for filt in "${config_bool_filters[@]}"; do
+  "$jq_bin" -c "$filt" "$config_path" > "$base/bad-config.json"
+  /bin/chmod 644 "$config_path"; /bin/cp "$base/bad-config.json" "$config_path"; /bin/chmod 444 "$config_path"
+  build_pkg "$base/pkg-ok.json" '{}'
+  expect_refused "E_CONFIG: host-config.json ($filt) set to true" E_CONFIG "$base/pkg-ok.json"
+  build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
+done
+accepted_bool_filters=('.schema_version = true' '.body.environments[0].scratch_bytes = true')
+for filt in "${accepted_bool_filters[@]}"; do
+  mutate_accepted_set "$filt"
+  build_pkg "$base/pkg-ok.json" '{}'
+  expect_refused "E_CONFIG: accepted-set ($filt) set to true" E_CONFIG "$base/pkg-ok.json"
+  build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
+done
+pass 'every integer field the parsers check (request schema_version and attempt_number; host-config.json schema_version, principal_uid, consumer_gid; the accepted set schema_version and scratch_bytes) rejects true (a bool, not an int) with the correct phase A code and no store write'
 
 /bin/chmod 700 "$store_root"
 expect_refused 'E_STORE: store root mode 0700, not 0750' E_STORE "$base/pkg-ok.json"
