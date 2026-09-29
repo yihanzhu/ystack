@@ -91,8 +91,7 @@ jq_dir="$base/bin"
 jq_bin="$jq_dir/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 
-# The hook itself: refused as an anchor unless already owned by this uid
-# and not group/other-writable (negative cases first, including /tmp).
+# The hook: refused unless owned by this uid and not group/other-writable.
 trust_root_hook_ok() { # trust_root_hook_ok <env-value> <expect: none|some>
   local got
   got=$(YSTACK_SANDBOX_TRUST_ROOT="$1" "$python" -c "
@@ -392,9 +391,18 @@ for target_desc_pair in "$config_path:the trusted config file" "$base/root/insta
   pass "$desc carrying one ACL entry is refused E_INSTALL_ACL before stdin is read, paired against the same tree without it"
 done
 
-# A symlink anywhere in a config-named path's chain must be refused, even
-# far from the install tree: resolving the parent first would drop that
-# directory and the symlink itself, silently following it through.
+# A group/other-writable ancestor (no ACL entry, just a bad mode) is
+# refused too, not only caught by luck when some other path crosses it.
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+/bin/chmod 0775 "$base/root"
+expect_refused 'E_CONFIG: an ancestor of the install directory is group-writable' E_CONFIG "$base/pkg-ok.json"
+/bin/chmod 0755 "$base/root"
+expect_admitted 'control: the same ancestor restored to non-group-writable' "$base/pkg-ok.json"
+pass 'a group/other-writable ancestor of the install directory, with no ACL entry at all, is refused E_CONFIG, paired against the same tree without it'
+
+# A symlink anywhere in a config-named path's chain, even far from the
+# install tree, must be refused rather than silently followed through.
 build_tree 0
 /bin/mkdir -m 755 "$base/attacker-writable"
 /bin/ln -s "$base/identities" "$base/attacker-writable/link"
@@ -432,8 +440,7 @@ expect_refused 'E_CONFIG: a placeholder digest in the accepted set' E_CONFIG "$b
 build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
 pass 'a placeholder (all-ones) digest anywhere in the accepted identity set is refused E_CONFIG, paired against the accepted control'
 
-# The full accepted-set schema (mirrored from sandbox-receipt.jq's
-# fixed_accepted_shape_ok), one deviation class per loop iteration.
+# The full accepted-set schema (sandbox-receipt.jq's fixed_accepted_shape_ok).
 mutate_accepted_set() { # mutate_accepted_set <jq-filter>
   "$jq_bin" -S -c "$1" "$accepted_set" > "$base/bad-accepted.json"
   /bin/chmod 644 "$accepted_set"; /bin/cp "$base/bad-accepted.json" "$accepted_set"; /bin/chmod 444 "$accepted_set"
@@ -473,7 +480,9 @@ build_pkg "$base/pkg-bad.json" "{\"set\":{\"subject.source.tree_id\":\"$(python3
 expect_refused 'E_PACKAGE: subject.source.tree_id is 39 hex chars, not the 40 sha1 selects' E_PACKAGE "$base/pkg-bad.json"
 build_pkg "$base/pkg-bad.json" "{\"set\":{\"subject.candidate.commit_id\":\"$(python3 -c 'print("a"*41)')\"}}"
 expect_refused 'E_PACKAGE: subject.candidate.commit_id is 41 hex chars, not the 40 sha1 selects' E_PACKAGE "$base/pkg-bad.json"
-pass 'every frame and request-shape deviation (including a null or wrong-length source/candidate commit_id or tree_id) is refused E_PACKAGE, paired against the accepted control'
+build_pkg "$base/pkg-bad.json" '{"set":{"attempt.attempt_number":true}}'
+expect_refused 'E_PACKAGE: attempt_number is a bool, not an int (Python bool is an int subclass)' E_PACKAGE "$base/pkg-bad.json"
+pass 'every frame and request-shape deviation (including a null or wrong-length source/candidate commit_id or tree_id, and a boolean attempt_number) is refused E_PACKAGE, paired against the accepted control'
 
 build_pkg "$base/pkg-incident.json" '{"incident_bytes":262144}'
 expect_admitted 'an incident.json record at exactly the 262,144-byte cap' "$base/pkg-incident.json"
@@ -569,5 +578,21 @@ reasons=$("$jq_bin" -c -S '.body.reason_ids' <<<"$check_out")
 [ "$reasons" = '["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]' ] ||
   fail "shipped checker: expected the three shipped-empty-set reasons, got $reasons"
 pass 'the shipped check-sandbox-receipt.sh accepts the receipt and expectation shape and refuses it only with the three shipped-empty-accepted-set reasons (receipt.environment-unlisted, receipt.identity-unaccepted, receipt.stale), never receipt.malformed'
+
+# R2.3/store-write descriptor pinning: renaming store_root aside and
+# symlinking a replacement in between admission and the write must not
+# redirect the write. Simulated via the test-only YSTACK_TEST_SWAP_STORE_
+# ANCESTOR hook (no real concurrency in a single synchronous launch).
+build_tree 0
+build_pkg "$base/pkg-swap.json" '{"attempt_id":"attempt.fixture-swap"}'
+/bin/mkdir -m 0700 "$store_root.ystack-test-swapped"
+status=0
+YSTACK_TEST_SWAP_STORE_ANCESTOR=1 run_launch "$base/pkg-swap.json" || status=$?
+[ "$status" -eq 0 ] || fail "store swap: expected exit 0, got $status ($(cat "$base/err"))"
+[ -e "$store_root.ystack-test-orig/attempt.fixture-swap/receipt.json" ] ||
+  fail 'store swap: the write did not land in the originally-validated directory'
+[ ! -e "$store_root.ystack-test-swapped/attempt.fixture-swap" ] ||
+  fail 'store swap: the write followed the swapped-in path instead of the held-open descriptor'
+pass 'a store_root renamed aside and replaced with a symlink between admission and the write (an ancestor swap mid-run) does not redirect the write: it still lands in the originally-validated directory, through the descriptor write_store holds open'
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

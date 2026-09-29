@@ -308,7 +308,11 @@ def trust_root_fd():
     return os.path.normpath(root), fd
 
 
-def secure_ancestor_fds(path):
+def secure_ancestor_fds(path, principal_uid):
+    """Opens every component and validates it as opened: the R10.1 ACL on
+    every fd, and -- for every ancestor, never deferred -- the owner/mode
+    too (otherwise only caught by luck, if some other path crosses it).
+    The target's own owner/mode is the caller's choice (see secure_walk)."""
     if not (isinstance(path, str) and path.startswith("/")):
         refuse("E_INSTALL_ACL")
     parts = [p for p in path.split("/") if p and p != "."]
@@ -322,9 +326,14 @@ def secure_ancestor_fds(path):
         if anchor_fd is not None:
             os.close(anchor_fd)
         fds = [os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)]
+    check_acl_fd(fds[0], principal_uid)
+    if parts and not owner_mode_fd_ok(fds[0], principal_uid):
+        os.close(fds[0])
+        refuse("E_CONFIG")
     for i, part in enumerate(parts):
+        is_last = i == len(parts) - 1
         flags = os.O_RDONLY | os.O_NOFOLLOW
-        if i < len(parts) - 1:
+        if not is_last:
             flags |= os.O_DIRECTORY
         try:
             fd = os.open(part, flags, dir_fd=fds[-1])
@@ -333,6 +342,11 @@ def secure_ancestor_fds(path):
                 os.close(f)
             refuse("E_INSTALL_ACL")
         fds.append(fd)
+        check_acl_fd(fd, principal_uid)
+        if not is_last and not owner_mode_fd_ok(fd, principal_uid):
+            for f in fds:
+                os.close(f)
+            refuse("E_CONFIG")
     return fds
 
 
@@ -360,22 +374,22 @@ def owner_mode_fd_ok(fd, principal_uid):
 
 
 def secure_walk(path, principal_uid, check_mode):
-    """R10.1 ACL on every component (see secure_ancestor_fds), owner/mode too
-    when check_mode; closes ancestor fds, returns the validated target fd."""
-    fds = secure_ancestor_fds(path)
-    try:
-        for fd in fds:
-            check_acl_fd(fd, principal_uid)
-            if check_mode and not owner_mode_fd_ok(fd, principal_uid):
-                refuse("E_CONFIG")
-    except BaseException:
+    """Ancestors already validated by secure_ancestor_fds; the target's own
+    owner/mode is checked here only when check_mode. Closes ancestor fds,
+    returns the validated target fd."""
+    fds = secure_ancestor_fds(path, principal_uid)
+    if check_mode and not owner_mode_fd_ok(fds[-1], principal_uid):
         for f in fds:
             os.close(f)
-        raise
+        refuse("E_CONFIG")
     for f in fds[:-1]:
         os.close(f)
     return fds[-1]
 
+
+# Ancestor fds of the trusted install root, pinned open (never closed) for
+# the process lifetime -- see run_launch's own use, below.
+_trusted_root_fds = []
 
 # --- host-config.json (R10.1) ---------------------------------------------
 IDENTITY_PATH_KEYS = ("guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
@@ -499,27 +513,34 @@ def check_accepted_set(fd):
 
 
 # --- store root (enforcement-evidence-binding spec.md R2.3) ---------------
+def store_root_state_ok(fd, principal_uid, consumer_gid):
+    """R2.3 store-root shape check against an already-open fd, reused to
+    admit and again right before every write (never a fresh open())."""
+    state = os.fstat(fd)
+    ok = (stat.S_ISDIR(state.st_mode) and state.st_uid == principal_uid and
+          state.st_gid == consumer_gid and stat.S_IMODE(state.st_mode) == 0o750)
+    if not ok:
+        return False
+    if sys.platform == "darwin":
+        try:
+            return darwin_acl_entries(fd) == []
+        except OSError:
+            return False
+    return (linux_install_acl_ok(fd) and linux_read_acl_xattr(fd, "system.posix_acl_access") is None
+            and linux_read_acl_xattr(fd, "system.posix_acl_default") is None)
+
+
 def check_store_root(store_root, principal_uid, consumer_gid):
+    """Opens store_root by path exactly once (no earlier fd exists) and
+    returns the open, validated fd to hold through the store write."""
     try:
         fd = os.open(store_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
         refuse("E_STORE")
-    try:
-        state = os.fstat(fd)
-        ok = (stat.S_ISDIR(state.st_mode) and state.st_uid == principal_uid and
-              state.st_gid == consumer_gid and stat.S_IMODE(state.st_mode) == 0o750)
-        if ok:
-            if sys.platform == "darwin":
-                try:
-                    ok = darwin_acl_entries(fd) == []
-                except OSError:
-                    ok = False
-            else:
-                ok = linux_install_acl_ok(fd) and linux_read_acl_xattr(fd, "system.posix_acl_access") is None \
-                    and linux_read_acl_xattr(fd, "system.posix_acl_default") is None
-    finally:
+    if not store_root_state_ok(fd, principal_uid, consumer_gid):
         os.close(fd)
-    require(ok, "E_STORE")
+        refuse("E_STORE")
+    return fd
 
 
 # --- R3.1 request shape (phase A: shape only, no cross-referencing) -------
@@ -567,7 +588,9 @@ def parse_request(raw):
     attempt = body["attempt"]
     require(isinstance(attempt, dict) and set(attempt) == {"attempt_id", "attempt_number"}, "E_PACKAGE")
     require(id_ok(attempt["attempt_id"]), "E_PACKAGE")
-    require(isinstance(attempt["attempt_number"], int) and 1 <= attempt["attempt_number"] <= 1024, "E_PACKAGE")
+    attempt_number = attempt["attempt_number"]
+    require(isinstance(attempt_number, int) and not isinstance(attempt_number, bool)
+            and 1 <= attempt_number <= 1024, "E_PACKAGE")
     control = body["control"]
     require(isinstance(control, dict) and set(control) == CONTROL_KEYS, "E_PACKAGE")
     for value in control.values():
@@ -627,28 +650,27 @@ def write_excl(parent_fd, name, data, uid, gid):
         os.close(fd)
 
 
-def write_store(store_root, attempt_id, uid, gid, receipt_bytes, payload):
-    store_fd = os.open(store_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def write_store(store_fd, uid, gid, attempt_id, receipt_bytes, payload):
+    """Writes through store_fd, held open since check_store_root and
+    rechecked here, so a store_root replaced after admission cannot redirect."""
+    require(store_root_state_ok(store_fd, uid, gid), "E_STORE")
     try:
+        attempt_fd = mkdir_excl(store_fd, attempt_id, uid, gid)
+    except FileExistsError:
+        refuse("E_ATTEMPT_EXISTS")
+    try:
+        payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
         try:
-            attempt_fd = mkdir_excl(store_fd, attempt_id, uid, gid)
-        except FileExistsError:
-            refuse("E_ATTEMPT_EXISTS")
-        try:
-            payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
-            try:
-                for name, data in payload:
-                    write_excl(payload_fd, name, data, uid, gid)
-                os.fsync(payload_fd)
-            finally:
-                os.close(payload_fd)
-            write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
-            os.fsync(attempt_fd)
+            for name, data in payload:
+                write_excl(payload_fd, name, data, uid, gid)
+            os.fsync(payload_fd)
         finally:
-            os.close(attempt_fd)
-        os.fsync(store_fd)
+            os.close(payload_fd)
+        write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
+        os.fsync(attempt_fd)
     finally:
-        os.close(store_fd)
+        os.close(attempt_fd)
+    os.fsync(store_fd)
 
 
 # --- R9.4/R10.3: the PR 3 stub receipt for an admitted attempt whose
@@ -752,6 +774,15 @@ def fixed_acl_targets(install_dir):
     return targets
 
 
+def test_hook_swap_store_ancestor(target):
+    """Test-only (env-var gated at the call site; a real launch never
+    triggers this): renames validated `target` aside and symlinks its old
+    name to a sibling the test pre-creates, standing in for the path being
+    replaced between the store-root check and the write."""
+    os.rename(target, target + ".ystack-test-orig")
+    os.symlink(target + ".ystack-test-swapped", target)
+
+
 def run_launch(argv):
     # R10.1: the ACL walk is checked before anything else, usage included.
     # This process itself runs as the principal (directly under sudo, R13.3;
@@ -760,12 +791,17 @@ def run_launch(argv):
     install_dir = install_directory()
     fixed_targets = fixed_acl_targets(install_dir)
     config_path = os.path.join(install_dir, "host-config.json")
-    # fds stay open so host-config.json is read below through the very fd
-    # this walk validated, and the owner/mode pass can fstat these same
-    # fds instead of re-walking.
+    # fds stay open: host-config.json is read below through the very fd
+    # validated here, and the owner/mode pass can fstat them, not re-walk.
     fixed_fds = {}
     for path in fixed_targets:
-        fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
+        if path == install_dir:
+            # Pinned open in _trusted_root_fds; other targets just re-walk it.
+            root_fds = secure_ancestor_fds(path, os.getuid())
+            _trusted_root_fds.extend(root_fds[:-1])
+            fixed_fds[path] = root_fds[-1]
+        else:
+            fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
     require(os.getuid() != 0 and argv == ["launch"], "E_USAGE")
     config = load_config(fixed_fds[config_path])
     principal_uid = config["principal_uid"]
@@ -786,7 +822,9 @@ def run_launch(argv):
         else:
             os.close(fd)
     check_accepted_set(accepted_set_fd)
-    check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
+    store_fd = check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
+    if os.environ.get("YSTACK_TEST_SWAP_STORE_ANCESTOR"):
+        test_hook_swap_store_ancestor(config["store_root"])
 
     raw = sys.stdin.buffer.read(88080384 + 1)
     require(len(raw) <= 88080384, "E_PACKAGE")
@@ -823,13 +861,15 @@ def run_launch(argv):
     payload = [("stdout", b""), ("stderr", b""),
                ("evidence-manifest.json", evidence_manifest_bytes)]
     try:
-        write_store(config["store_root"], request_body["attempt"]["attempt_id"],
-                    principal_uid, config["consumer_gid"], receipt_bytes, payload)
+        write_store(store_fd, principal_uid, config["consumer_gid"],
+                    request_body["attempt"]["attempt_id"], receipt_bytes, payload)
     except Refusal:
         raise
     except OSError:
         sys.stderr.write("E_STORE_WRITE\n")
         sys.exit(70)
+    finally:
+        os.close(store_fd)
 
 
 # --- test-only frame subcommands, mirroring sandbox-guest-harness.c ------
