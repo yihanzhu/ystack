@@ -199,9 +199,12 @@ Citations are to origin/main at `e73b76a`.
    or Rosetta device. No image is pulled during an attempt.
 5. **Guest start.** `init` mounts `proc`, `sysfs`, `devtmpfs` and `cgroup2` and execs
    `supervisor`. The supervisor checks the input frame and every record against
-   `plan.json`, materializes the candidate into a tmpfs sized for exactly its files
-   with the manifest modes, then remounts it read-only; the verifier goes onto a
-   read-only tools tmpfs with mode `0555`.
+   `plan.json`, materializes the candidate into a tmpfs sized for exactly its files,
+   every file and directory owned by uid and gid 65534 (set with `fchown` before the
+   read-only remount) with the manifest modes kept (files `0400` or `0500`, directories
+   `0500`, `preparation/v1/prepare-candidate.py:1662-1677`), so the dropped identity of
+   R6.1 can read it and cannot write it; then it remounts the tmpfs read-only. The
+   verifier goes onto a read-only tools tmpfs, owned by root, mode `0555`.
 
 ### R6. Starting the verifier
 
@@ -248,31 +251,34 @@ Citations are to origin/main at `e73b76a`.
 | `process_count` | `mechanism.tasks.cgroup-pids.v1` | Tree `pids.max` 32 | `pids.peak`; 1 |
 | `scratch_bytes` | `mechanism.scratch.tmpfs-no-free.v1` | tmpfs `size=` the R12.2 value, `nr_inodes=4096`; no remove, truncate, hole punch, `O_TMPFILE` or `MADV_REMOVE` (R6.2-R6.3) | Used blocks times block size after tree termination; block size |
 
-2. **Why each is hard.** CPU and wall rest on an observed termination, not on a
-   configured deadline. The stop is *confirmed* at host time `T_c` when the runtime
-   reports the VM stopped and the supervisor has reaped the vfkit process with
-   `waitpid`; no guest instruction runs after that. The host has no bound on how long
-   `HardStop` takes to complete, and none is claimed. So both rows record
-   `enforcement: "hard"` only for a *self-stopped* attempt: the guest powered off on its
-   own, the stop was confirmed, and `HardStop` was never issued, which gives `T_c` below
-   50,000 ms. Then the tree ran at most `T_c` on one CPU at 45% quota; with one quota of
-   carry-in and at most 9 ms overrun per 100 ms period (bandwidth slice plus one tick at
-   `CONFIG_HZ` 250 or more), CPU is at most 0.45 `T_c` + 45 + 9 ceil(`T_c`/100) <
-   27,045 ms, and wall is `T_c` < 60,000 ms. Every other attempt (`HardStop` issued,
-   cancellation, or stop unconfirmed) records both rows `enforcement: "none"`. A
-   stricter claim for the `HardStop` path needs a measured completion bound and returns
-   to G2. Memory: the tree cannot hold more memory than the guest has. Output and scratch:
-   the size limit refuses allocation beyond it, and with every free and overwrite path
-   denied, final usage equals peak usage and the streams' final sizes equal the bytes
-   written, so the after-termination value is complete. A native probe result above
-   any of these arguments (R13.4) keeps the mechanism out of the accepted set, and the
-   row stays blocked.
+2. **CPU and wall are `enforcement: "none"` in every receipt.** Both bounds need the
+   tree to stop by a known instant, and the only host-side stop, `HardStop`, has no
+   known completion bound: the stop is *confirmed* at host time `T_c` when the runtime
+   reports the VM stopped and the supervisor has reaped vfkit with `waitpid`, but
+   nothing bounds `T_c` after `HardStop` is issued. An attempt that stopped early shows
+   only that it stayed under the limits, not that the mechanism prevents overrun
+   (`work/enforcement-evidence-binding/spec.md:215-221`). Both rows still record the
+   configured mechanism, the observed values and `reached`. **Consequence:** under the
+   R8 derivation (`:288-292`), `failure.enforcement-unavailable` makes every admitted
+   receipt from this component `failed`; none can be `satisfied` or `violated`. That is
+   acceptable for an inactive component. The only path to `hard` is for `vml-qualify`
+   (R13.4) to measure and record a `HardStop` completion bound, and then a G2 amendment
+   of this spec to adopt it. Given such a bound `B`, CPU would be at most 0.45 (50,000 +
+   `B`) + 45 + 9 ceil((50,000 + `B`)/100) ms, from the 45% quota with one quota of
+   carry-in and at most 9 ms overrun per 100 ms period (bandwidth slice plus a tick at
+   `CONFIG_HZ` 250 or more), and wall would be at most 50,000 + `B` ms. Memory: the tree
+   cannot hold more memory than the guest has. Output and scratch: the size limit
+   refuses allocation beyond it, and with every free and overwrite path denied, final
+   usage equals peak usage and the streams' final sizes equal the bytes written, so the
+   after-termination value is complete. A native probe result above any of these
+   arguments (R13.4) keeps the mechanism out of the accepted set, and the row stays
+   blocked.
 3. **Recording.** `enforcement: "hard"` only when every configured parameter was read
    back after setup; `unknown` when one could not be read back; `none` when the
    mechanism is known absent (for example the runtime cannot hard-stop). `observation:
    "complete"` only for a counter read after confirmed tree termination; `partial` for
    one read before it; `unavailable` (with `observed: null`) for a counter not read.
-   For CPU and wall, R7.2 governs. `reached` is true when `observed` is at or above
+   CPU and wall are always `none` (R7.2). `reached` is true when `observed` is at or above
    `bound`, and also for: CPU, never otherwise; wall, the guest tree deadline fired or
    the host stop was issued (the wall row is then `observed: null`, `unavailable`, if
    the stop was never confirmed); memory,
@@ -412,8 +418,9 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    the candidate (at most 64 MiB), tools and output (10 MiB), and a multiple of both
    4 KiB and 16 KiB pages keeps the bound exact.
 3. The only `shadow/v1/**` changes are that append (with `proof_state: "unproven"`) and,
-   after R13.4 only, that entry's `proof_state` changed to `"native-qualified"`. The
-   only `enforcement/v1/**` change is, after R13.4 only, appending that environment's
+   after R13.4 and the R7.2 amendment only, that entry's `proof_state` changed to
+   `"native-qualified"`. The only `enforcement/v1/**` change is, at that same point,
+   appending that environment's
    entry to `accepted-identities.json` under
    `work/enforcement-evidence-binding/spec.md:171-177`.
 
@@ -424,7 +431,8 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    Requests are posted only when their package is reviewed and merged, in the order
    R13.2a, R13.2b, R13.3, R13.4. Nothing enables before all four are approved. Plan
    steps 1-4 (R14.4) are inactive and CI-tested with the fake runtime. Step 5 waits for
-   R13.2a, step 6 for R13.2b, step 7 for R13.3, and steps 8-9 for R13.4.
+   R13.2a, step 6 for R13.2b, step 7 for R13.3, step 8 for R13.4, and step 9 also for
+   the G2 amendment of R7.2.
 2. Intent decision 1 is split into two requests, because the install request must
    quote measurements that only an acquisition can produce.
    - **a. `vml-acquire`:** the vfkit tag and asset, the kernel package (distribution,
@@ -451,23 +459,29 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 4. **`vml-qualify`** (intent decision 2): the R12.1 entry bytes; the proposed
    accepted-set entry bytes (ten slots, six mechanism ids, `scratch_bytes`); the probe
    list with expected receipt outcomes: the real verifier on match, mismatch and one
-   changed-byte refusal, and `probe` modes for candidate and tools writes, evidence
-   read, list, reopen, truncate, link and rename, scratch free paths, scratch fill,
-   output overflow, each socket family, host and sibling sentinels, environment and
-   descriptors, fork and thread bombs, a 32-thread CPU spin, memory exhaustion, sleep,
-   signalling the supervisor, namespace and cgroup escape, and forged report text on
-   stdout and evidence; the candidate source (the scrubbed dummy-target copy at its
-   step-7 commit); synthetic sentinel locations; the separate qualification install
-   directory and accepted set, removed afterwards; supervisor resource measurements.
-   Approval authorizes only that run and then the R12.3 changes with the qualification
-   record, in one reviewed PR.
+   changed-byte refusal, the `HardStop` completion latency over repeated forced stops
+   (R7.2), and `probe` modes for candidate reads under the dropped identity, candidate
+   and tools writes, evidence read, list, reopen, truncate, link and rename, scratch
+   free paths, scratch fill, output overflow, each socket family, host and sibling
+   sentinels, environment and descriptors, fork and thread bombs, a 32-thread CPU spin,
+   memory exhaustion, sleep, signalling the supervisor, namespace and cgroup escape, and
+   forged report text on stdout and evidence; the candidate source (the scrubbed
+   dummy-target copy at its step-7 commit); synthetic sentinel locations; the separate
+   qualification install directory and accepted set, removed afterwards; supervisor
+   resource measurements. Approval authorizes only that run and its qualification
+   record. The R12.3 changes land in one reviewed PR only after a G2 amendment adopts a
+   measured `HardStop` bound, since before that no receipt can be `satisfied` (R7.2).
 
 ### R14. Inactivity and files
 
-1. Until R13 is complete: no installation, acquisition, VM boot, native probe,
-   account, sudo rule, credential, network, model call, target execution, activation
-   or write. Production refuses by construction: no host configuration exists and the
-   shipped accepted set is empty.
+1. Each bounded action is permitted only after its own approval, and only as that
+   request names it: acquisition, quarantine measurement and builds after `vml-acquire`;
+   installation after `vml-install`; the account, sudo rule and store after
+   `vml-trust-root`; VM boots, probes and the qualification record after `vml-qualify`;
+   the R12.3 PR after the R7.2 amendment as well. No credential, model call, target
+   execution beyond R13.4, activation or write is ever authorized here. Production use
+   stays blocked until every gate has passed. Until then it refuses by construction: no
+   host configuration exists, and the shipped accepted set is empty.
 2. Byte-identical except as R12.3 and R14.3 name: `config/**`, `control/v1/**`,
    `enforcement/v1/**`, `verifiers/file-digest/v1/**`, `preparation/v1/**`,
    `shadow/v1/**`, `scope/v1/**`, `evals/v1/**`, `adapters/**`, `ROADMAP.md`,
@@ -523,19 +537,23 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      64-component path, byte for byte into `plan.json`;
    - the input disk's `plan.json` carries exactly the R6.4 argv, variables and
      instruction bytes, and no nonce, host path or store id;
-   - for each R7 row, `hard`, `none`, `unknown`, and `partial` and `unavailable`
-     observation, and `reached`, as scripted guest reports or fake runtime behaviour;
+   - for the four guest rows other than CPU, `hard`, `none` and `unknown`; for all six
+     rows, `partial` and `unavailable` observation and `reached`; CPU and wall are
+     `none` in every case;
    - success, violation, refusal, guest deadline, host `HardStop`, cancellation, runtime
      error, damaged or absent export, and storage removal failure (an unexpected entry);
    - a delayed stop: a fake runtime that ignores `HardStop` and never reports stopped
      yields the R9.5 finalization at the 58,000 ms abandonment (never a confirmed
-     stop), CPU and wall `enforcement: "none"`, and `failed`; a self-stopped positive
-     control records both `hard`. These cases run in real time, concurrently;
+     stop), CPU and wall `enforcement: "none"`, and `failed`; a self-stopped control
+     confirms its stop but still records both `none`. These cases run in real time,
+     concurrently;
    - store modes, owner, group, link counts and exclusivity after every case;
    - against the merged check in a temporary repository copy with the test-only set:
-     success yields `valid`/`satisfied`, violation `valid`/`violated`, and every
-     failure receipt whose observed identities are accepted `valid`/`failed` with the
-     matching `failure.*` reasons; a receipt edited to record an unaccepted digest
+     every produced receipt whose observed identities are accepted, including success
+     and limit-reached cases, is `valid`/`failed` with `failure.enforcement-unavailable`
+     plus the matching other `failure.*` reasons; copies edited only to set CPU and wall
+     to `hard` show the host derivation gives `satisfied` and `violated` exactly where
+     the check does; a receipt edited to record an unaccepted digest
      yields `receipt.identity-unaccepted`, and one with a placeholder digest
      `receipt.placeholder-identity`, never `valid`; against the shipped files every
      produced receipt is refused;
@@ -551,11 +569,13 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    same-directory hard-link alias of an evidence file, with a single-link positive
    control; candidate records whose plan paths are `README.md`, a non-ASCII UTF-8 name
    and a 4,096-byte 64-component path, each materialized byte for byte, and a record
-   name outside the closed set refused; `build-guest.py image` determinism over
-   synthetic inputs, and `compile` refusing an existing output directory. On Linux it
-   also compiles `init.c`, `supervisor.c` and `probe.c` with `-std=c11 -Wall -Wextra
-   -Werror`; Darwin has no Linux headers, so there that case is named as a Linux-only
-   proof and CI's Linux run is its evidence.
+   name outside the closed set refused; R5.5 materialization with the manifest modes and
+   a given owner (the invoking non-root uid): every file reads, and each write, create
+   or remove attempt fails with `EACCES` (the uid 65534 read is a R13.4 probe);
+   `build-guest.py image` determinism over synthetic inputs, and `compile` refusing an
+   existing output directory. On Linux it also compiles `init.c`, `supervisor.c` and
+   `probe.c` with `-std=c11 -Wall -Wextra -Werror`; Darwin has no Linux headers, so
+   there that case is named as a Linux-only proof and CI's Linux run is its evidence.
 3. Must pass unedited: `scripts/test/sandbox-receipt.test.sh`,
    `scripts/test/file-digest-verifier.test.sh`,
    `scripts/test/control-sandbox-policy.test.sh`,
@@ -577,7 +597,7 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    the receipt, store and qualification (`work/step8-bounded-write-readiness/spec.md:295`,
    `:297`).
 2. This spec PR: `review_size: accepted-exception`, one concern, this one file,
-   500-620 lines. The size is the closed lists the contract needs in one place (ten
+   500-660 lines. The size is the closed lists the contract needs in one place (ten
    slot measurements, six limit rows, eleven boundary rows, the seccomp and Landlock
    sets, four decision packages); splitting them would scatter one boundary. It
    waives only the soft line signal. The plan splits steps 1-4 into implementation
@@ -589,8 +609,9 @@ Package on stdin, freeze by copy, measure every byte, admit or refuse with a rec
 boot a one-vCPU guest with two disks and no other device, run the verifier inside
 namespaces, Landlock and seccomp, count on monotone filesystems, export one frame, stop,
 remove only the attempt's files, then write payload and receipt into the store. Every
-limit follows from a structural bound (guest RAM, one CPU and a hard stop, a fixed-size
-filesystem that cannot free or overwrite), not from a poll.
+guest-side limit follows from a structural bound (guest RAM, a fixed-size filesystem
+that cannot free or overwrite, `pids.max`), not from a poll. CPU and wall stay `none`
+until a stop-completion bound is measured (R7.2).
 
 ## Out of scope
 
@@ -607,9 +628,10 @@ orchestrator or candidate-code runner; any self-host or write-shadow run.
 - **Narrowed rights.** Scratch is readable and writable but cannot free space, and
   evidence files can be opened once. Both are stricter than the declaration, never
   weaker, and exist so the R6 peak and "counted as written" values are exact.
-- **Kernel arithmetic.** The CPU bound rests on documented bandwidth-slice and tick
-  overrun; if R13.4's CPU probe exceeds it, the row stays blocked and a weaker
-  standard returns to the operator (`work/real-sandbox-boundary/spec.md:118-124`).
+- **No `satisfied` receipt yet.** CPU and wall are `none` until a `HardStop`
+  completion bound is measured and adopted by G2 (R7.2), so qualification cannot
+  complete before then. Any weaker standard returns to the operator
+  (`work/real-sandbox-boundary/spec.md:118-124`).
 - **Trusted host.** Origin rests on the supervisor account and host administrator
   (`work/enforcement-evidence-binding/spec.md:84-93`); R13.3 asks that question.
 
