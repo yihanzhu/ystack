@@ -278,6 +278,8 @@ scripts/test/default-github-actions-ci-adapter.test.sh
 telemetry/v1/trace-ledger.jq
 telemetry/v1/validate-trace-ledger.sh
 scripts/test/telemetry-trace-ledger.test.sh
+telemetry/v1/trace-store.py
+scripts/test/telemetry-trace-store.test.sh
 
 # Inactive hermetic eval-record evaluator
 evals/v1/framework.jq
