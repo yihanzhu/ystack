@@ -94,6 +94,10 @@ ShellCheck 0.11.0 (`:86-92`) apply.
    blobs rechecked first (a mismatch stops, `stale`), each with independent review,
    green CI and operator merge.
 
+None of the nine PRs closes #463, and step 9 cannot open under this spec (no
+qualification is possible, R7.2), so #463 stays open until a future concern or an
+operator decision resolves R7.2; the manager records this on the issue.
+
 ## PR 1: frame format and digest (step 1; R3.2)
 
 `common.h`/`common.c`: FIPS 180-4 SHA-256; a `YSFRAME1` reader and writer over a
@@ -168,10 +172,14 @@ line. The Linux compile case adds it.
 
 `runtime-vfkit.py`: the argv above, REST over `AF_UNIX` via `http.client`, and `argv`
 failing for a socket path over 103 bytes, which vfkit refuses (`pkg/rest/rest.go:17-21,141-142`).
-`qualify.py`: `measure <host-config>` (the ten composites), `check-kernel-config <file>`
-(the host R2.4 function), `dry-run` (the probe list against the fake runtime) and `run
+`qualify.py`: `measure <host-config>` (the nine installed slots of R2.3, every slot but
+`verification_instructions`, which R10.1 keeps out of the configuration),
+`instruction-digest <file>` (the SHA-256 of one instruction's bytes, the
+`verification_instructions` value its launch package will carry, R2.3, R4.2),
+`check-kernel-config <file>` (the host R2.4 function), `dry-run` (the probe list against the fake runtime) and `run
 <dir>` (a canonical `sandbox_qualification_record`). Test: vfkit argv and REST calls
-against a fake `vfkit`, the over-long socket path, and the dry run.
+against a fake `vfkit`, the over-long socket path, `measure` and `instruction-digest`
+against the fixture install tree, and the dry run.
 
 ## PR 9: registry entry, docs, restore, manifest (step 4; R12.1, R14.3)
 
@@ -267,7 +275,7 @@ package states. Hosts: `github.com`, its asset redirect host (named from `curl -
 -fL --proto '=https' --max-redirs 2` per artifact and `shasum -a 256` (a mismatch
 deletes the file and stops); `/usr/bin/ar -x` and `/usr/bin/tar -xf` of each `.deb`;
 Python `gzip` of `boot/vmlinuz-*`, requiring the arm64 `Image` magic at offset 56;
-`qualify.py check-kernel-config`; `sw_vers`, `uname -a` and `qualify.py measure` on a
+`qualify.py check-kernel-config`; `sw_vers`, `uname -a` and `qualify.py measure` (nine slots) on a
 draft configuration (vfkit, driver, the Virtualization VM service executable, the arm64e
 dyld shared-cache files); `tar -xJf` of Zig, two `build-guest.py compile` runs into fresh
 directories compared with `cmp`, then `build-guest.py image`. Evidence: each URL, size
@@ -301,8 +309,11 @@ of every path and ancestor, `sudo -l -U yihanzhu`, and one smoke run through the
 with empty stdin giving `E_PACKAGE` (no VM). Rollback: delete those paths, user and groups.
 
 **`vml-qualify`** (step 8; R13.4). The R12.1 entry and digest above; the proposed
-accepted-set entry (ten slots from `qualify.py measure` on the installed configuration,
-six R7.1 mechanism ids, `scratch_bytes` 16,777,216); each R13.4 probe with its expected
+accepted-set entry, whose nine installed slots come from `qualify.py measure` on the
+qualification configuration, whose `verifier` list adds the `probe` digest from the same
+run, and whose `verification_instructions` list is `qualify.py instruction-digest` of
+each qualification instruction (the three real-verifier cases and each probe mode), plus
+six R7.1 mechanism ids and `scratch_bytes` 16,777,216; each R13.4 probe with its expected
 verdict and reasons (a probe launch carries `probe` as the `verifier` record and its
 mode as the instruction); the candidate, a #396 bundle from `prepare-candidate.py
 prepare` over the scrubbed dummy-target copy at `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`
@@ -345,11 +356,13 @@ to accept an empirical standard (R7.2). Concerns 5-7 as step-8 R8 lists them.
 | 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
+| This plan PR | `review_size: accepted-exception` | 400-440 | one plan: the nine-PR split and four decision packages |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
 `prepare-candidate.py` (2,288) and its test plus fixtures (3,209). A PR outside its
-range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc.
+range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc. The
+plan PR measured 411 lines at its first head; #452's 579-line plan is the precedent.
 
 ## Risks
 
@@ -360,8 +373,10 @@ range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc
   structural-bound concern or an operator-accepted empirical standard; concerns 5
   and 6 may be built inactive meanwhile.
 - **R16.2 forecast.** Standard-size PRs would mean 25 or more, several shipping
-  untested halves, so this plan records exceptions as `work/README.md` allows. If the
-  operator holds R16.2 binding, the split returns here; scope is unchanged.
+  untested halves, so this plan records exceptions as `work/README.md` allows. So the
+  plan does not contradict the spec, the manager posts a one-line spec-only G2
+  amendment to R16.2 ("steps 1-4 ship as the plan's recorded PR sizes") before PR 1
+  opens; PR 1 waits for it. Scope is unchanged.
 - **Staged stub.** In PRs 3-4 a passing attempt gets a runtime-error receipt and never
   runs; no text may present the supervisor as usable before PR 5.
 - **Socket path.** vfkit refuses a Unix path over 103 bytes, so under the
