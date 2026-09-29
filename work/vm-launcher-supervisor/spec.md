@@ -377,9 +377,10 @@ Citations are to origin/main at `e73b76a`.
    R10.2 reads the store's ACLs (Darwin `acl_get_fd_np(ACL_TYPE_EXTENDED)` and its entry
    and permission-set calls through `ctypes`; Linux `system.posix_acl_access` and
    `system.posix_acl_default`, where any named-user or named-group entry, or a mask
-   granting write, fails); an ACL that cannot be read fails. `vml-install` and `vml-trust-root` check it when they
-   install, and the host supervisor checks it again as its first action at every launch,
-   before it reads stdin or anything else; a failure is phase A `E_INSTALL_ACL`.
+   granting write, fails); an ACL that cannot be read fails. `vml-install` and
+   `vml-trust-root` check it when they install, and the host supervisor checks it again
+   as its first action at every launch, before it reads stdin or anything else; a
+   failure is phase A `E_INSTALL_ACL`.
 2. **Store writes,** under `work/enforcement-evidence-binding/spec.md:56-75`: directories
    `0750` and files `0440`, owner `principal_uid`, group `consumer_gid` (inherited from
    the parent or set with `fchown`, then verified), no ACL (Darwin
