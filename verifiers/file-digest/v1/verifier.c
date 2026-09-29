@@ -4,16 +4,12 @@
 #endif
 
 /*
- * Fixed file-digest verifier (ystack #437).
- *
- * A straight line: check argv and environment, read and frame the
- * instruction on fd 0, validate the path, walk the candidate without
- * following links, classify before opening, read bounded bytes, hash,
- * compare, and write one canonical payload exclusively. See
- * work/fixed-file-digest-verifier/spec.md for the full contract; this
- * file implements it and nothing else. It is inactive: nothing here
- * runs it against a real sandbox, accepts its digest, or grants it
- * authority.
+ * Fixed file-digest verifier (ystack #437). A straight line: check argv and
+ * environment, read and frame the instruction, validate the path, walk the
+ * candidate without following links, classify before opening, read bounded
+ * bytes, hash, compare, write one canonical payload. See
+ * work/fixed-file-digest-verifier/spec.md. Inactive: nothing here runs
+ * against a real sandbox, accepts its digest, or grants it authority.
  */
 
 #include <errno.h>
@@ -50,8 +46,7 @@ extern char **environ;
 #define CANDIDATE_READ_LIMIT (MAX_CANDIDATE_BYTES + 1U)
 #define PAYLOAD_BUFFER_SIZE 20000U
 
-/* ---------------------------------------------------------------------- */
-/* SHA-256 (FIPS 180-4), streaming over a context.                        */
+/* SHA-256 (FIPS 180-4), streaming over a context. */
 
 struct sha256_ctx {
     uint32_t state[8];
@@ -198,8 +193,7 @@ static void hex_encode(const unsigned char *in, size_t len, char *out)
     out[len * 2] = '\0';
 }
 
-/* ---------------------------------------------------------------------- */
-/* R2. Invocation and environment.                                         */
+/* R2. Invocation and environment. */
 
 static int argv_ok(int argc, char **argv)
 {
@@ -244,8 +238,7 @@ static void refuse_invocation(const char *code)
     exit(64);
 }
 
-/* ---------------------------------------------------------------------- */
-/* UTF-8 decoding (shortest form only) for R3.3 and R4.                    */
+/* UTF-8 decoding (shortest form only) for R3.3 and R4. */
 
 static int utf8_decode_one(const unsigned char *s, size_t len, size_t i, size_t *consumed,
                             uint32_t *cp)
@@ -320,8 +313,7 @@ static int utf8_validate(const unsigned char *s, size_t len, int *has_control)
     return 1;
 }
 
-/* ---------------------------------------------------------------------- */
-/* R4. Path rules.                                                         */
+/* R4. Path rules. */
 
 struct component {
     size_t offset;
@@ -388,8 +380,7 @@ static int path_r4_ok(const unsigned char *path, size_t len, int has_control,
     return 1;
 }
 
-/* ---------------------------------------------------------------------- */
-/* Payload assembly (R6).                                                  */
+/* Payload assembly (R6). */
 
 static size_t append_bytes(unsigned char *out, size_t pos, const void *data, size_t len)
 {
@@ -516,8 +507,7 @@ static void write_payload(const unsigned char *bytes, size_t len)
     exit(0);
 }
 
-/* ---------------------------------------------------------------------- */
-/* R5. Reading the candidate file.                                        */
+/* R5. Reading the candidate file. */
 
 #if defined(__APPLE__)
 #define YSTACK_MTIME_NSEC(st) ((st).st_mtimespec.tv_nsec)
@@ -660,8 +650,7 @@ static const char *read_candidate(const unsigned char *path, size_t path_len,
     return reason;
 }
 
-/* ---------------------------------------------------------------------- */
-/* R3. Instruction transport and framing.                                 */
+/* R3. Instruction transport and framing. */
 
 static unsigned char instruction_buffer[INSTRUCTION_READ_LIMIT];
 

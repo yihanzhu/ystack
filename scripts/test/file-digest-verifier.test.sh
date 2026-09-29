@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Proves the fixed file-digest verifier (ystack #437) against a test build
-# whose only difference from production is its sandbox root. See
-# work/fixed-file-digest-verifier/spec.md and plan.md. No privilege, chroot,
-# namespace or mount is used; nothing here runs the verifier against a real
-# sandbox, accepts its digest, or grants it authority.
+# whose only difference from production is its sandbox root (see
+# work/fixed-file-digest-verifier/spec.md, plan.md). No privilege, chroot,
+# namespace or mount; nothing here runs against a real sandbox, accepts its
+# digest, or grants it authority.
 # shellcheck disable=SC2016
 set -euo pipefail
 export LC_ALL=C
@@ -22,13 +22,16 @@ fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-file-digest-verifier-test.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+
 cleanup() { /bin/chmod -R u+rwX "$tmp" 2>/dev/null || :; /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT
 
 passes=0
+
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 
 sha_file() { /usr/bin/shasum -a 256 -- "$1" | /usr/bin/awk '{print $1}'; }
+
 sha_stdin() { /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'; }
 
 # --- pinned jq 1.6, as scripts/test/shadow-slice.test.sh:24-51 ---------------
@@ -59,7 +62,6 @@ bin="$tmp/bin"
 jq_bin="$bin/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
 [ -x "$python" ] || fail 'python3 required'
-
 # --- exact-exec helper: execve(path, argv, envp) with no shell in between --
 cat > "$tmp/execer.c" <<'EOF'
 #define _POSIX_C_SOURCE 200809L
@@ -92,7 +94,6 @@ int main(int argc, char **argv)
 EOF
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 "$tmp/execer.c" -o "$tmp/execer"
 execer="$tmp/execer"
-
 # Runs "$@" (already the execer invocation) with stdin from $1, stdout/stderr
 # captured, bounded to 20s so a FIFO with no writer cannot hang the suite.
 bounded_run() {
@@ -113,7 +114,6 @@ bounded_run() {
   done
   wait "$pid"
 }
-
 # --- instruction builder (arbitrary bytes via hex, so malformed framing can
 # be built exactly without shell-escaping hazards) -------------------------
 cat > "$tmp/mkinstr.py" <<'PY'
@@ -134,16 +134,17 @@ else:
     data = header + sep + line2 + sep + line3 + sep + trailing
 sys.stdout.buffer.write(data)
 PY
+
 mkinstr() {
   # $1 = output file, $2 = JSON spec (see mkinstr.py)
   "$python" "$tmp/mkinstr.py" > "$1" <<PYIN
 $2
 PYIN
 }
+
 hex_of() { /usr/bin/printf '%s' "$1" | /usr/bin/od -v -An -tx1 | tr -d ' \n'; }
 
 zero_sha="$(printf '0%.0s' $(seq 1 64))"
-
 # --- candidate / evidence scaffolding --------------------------------------
 troot="$tmp/troot"
 /bin/mkdir -m 700 "$troot"
@@ -158,7 +159,6 @@ fresh_evidence() {
 }
 
 envp_ok=(LANG=C LC_ALL=C "PATH=$troot/tools" "TMPDIR=$troot/scratch")
-
 # run_test_verifier <stdin-file> <out> <err> [argv0] [argv2..argv6 via defaults]
 run_test_verifier() {
   local stdin_file=$1 out=$2 err=$3 argv0=${4:-"$test_verifier"}
@@ -168,11 +168,10 @@ run_test_verifier() {
 }
 
 reason_of() { "$jq_bin" -r '.body.reason_id // "null"' "$1"; }
+
 outcome_of() { "$jq_bin" -r '.body.outcome' "$1"; }
 
-# ===========================================================================
 # Builds (R1.2, R1.3, R8.1)
-# ===========================================================================
 out1="$tmp/build1"
 out2="$tmp/build2"
 bash "$build_script" build "$out1"
@@ -224,7 +223,6 @@ if bash "$build_script" wrong "$tmp/never" 2>/dev/null; then fail 'build.sh must
 if bash "$build_script" build "$tmp/never" extra 2>/dev/null; then fail 'build.sh must refuse extra arguments'; fi
 [ ! -e "$tmp/never" ] || fail 'a refused build.sh call must not create its out-dir'
 pass 'build.sh refuses a wrong argument list and leaves only verifier and build-record.json'
-
 # Test build: identical flags, only YSTACK_SANDBOX_ROOT changed (R8.1).
 test_verifier="$tmp/test-verifier"
 (CDPATH='' cd -- "$root/verifiers/file-digest/v1" &&
@@ -232,9 +230,7 @@ test_verifier="$tmp/test-verifier"
     verifier.c -o "$test_verifier")
 pass 'test build compiles with the production flags plus one sandbox-root define'
 
-# ===========================================================================
 # R2. Invocation and environment.
-# ===========================================================================
 empty_stdin="$tmp/empty-stdin"
 : > "$empty_stdin"
 
@@ -252,12 +248,12 @@ check_r2_refused() {
 }
 
 good_argv=(verify --candidate "$candidate" --evidence "$evidence")
-
 # argv deviations: count 5 and 7, each position misspelled, swapped order,
 # test-root paths given (they already are the test-root paths here, so a
 # deviation is a *different* value than the fixed ones).
 declare -a argv_cases_desc=()
 declare -a argv_cases_argv=()
+
 add_argv_case() { argv_cases_desc+=("$1"); shift; argv_cases_argv+=("$*"); }
 
 add_argv_case "argc 5 (one too few)" verify --candidate "$candidate" --evidence
@@ -276,18 +272,17 @@ for i in "${!argv_cases_desc[@]}"; do
     "$execer" "$test_verifier" "${envp_ok[@]}" -- "$test_verifier" "$@"
 done
 pass 'every R2.1 argv deviation exits 64 E_USAGE with an empty evidence directory'
-
 # argv[0] of "x" still passes (not inspected).
 fresh_evidence
 "$execer" "$test_verifier" "${envp_ok[@]}" -- x "${good_argv[@]}" \
   < "$empty_stdin" > "$tmp/argv0.out" 2> "$tmp/argv0.err" || true
 [ -e "$result_path" ] || fail 'argv[0] of x must still be accepted'
 pass 'argv[0] is not inspected'
-
 # environment deviations: missing, extra, duplicate, wrong value per
 # variable, empty environment.
 declare -a env_cases_desc=()
 declare -a env_cases_env=()
+
 add_env_case() { env_cases_desc+=("$1"); shift; env_cases_env+=("$*"); }
 
 add_env_case "missing LANG" LC_ALL=C "PATH=$troot/tools" "TMPDIR=$troot/scratch"
@@ -309,7 +304,6 @@ for i in "${!env_cases_desc[@]}"; do
     "$execer" "$test_verifier" "$@" -- "$test_verifier" "${good_argv[@]}"
 done
 pass 'every R2.2 environment deviation exits 64 E_ENVIRONMENT with an empty evidence directory'
-
 # Production positive control: exact /sandbox vectors, stdin /dev/null, must
 # not be a 64 refusal (proves R2 checks argv/env shape only, not existence).
 prod_out="$tmp/prod.out" prod_err="$tmp/prod.err"
@@ -321,9 +315,7 @@ prod_status=0
 [ "$(cat "$prod_err")" = E_OUTPUT ] || fail 'production positive control: expected E_OUTPUT'
 pass 'production build accepts the exact /sandbox vectors past R2 (exit 73, not 64)'
 
-# ===========================================================================
 # R3. Trusted instruction transport and framing.
-# ===========================================================================
 
 check_refusal() {
   # check_refusal <desc> <stdin-file> <expected-reason> [expect-instr-null]
@@ -348,7 +340,6 @@ check_refusal() {
   canon=$("$jq_bin" -S -c . "$result_path")
   [ "$canon" = "$(cat "$result_path")" ] || fail "$desc: payload is not canonical jq -S -c"
 }
-
 # transport-rejected: stdin as a pipe.
 mkfifo_pipe="$tmp/instr.pipe"
 /usr/bin/mkfifo "$mkfifo_pipe"
@@ -357,13 +348,11 @@ writer_pid=$!
 check_refusal 'fd 0 as a pipe' "$mkfifo_pipe" instruction.transport-rejected 1
 wait "$writer_pid" 2>/dev/null || :
 pass 'a pipe on fd 0 gives instruction.transport-rejected with a null instruction digest'
-
 # oversize: 4,209 bytes.
 mkinstr "$tmp/i-oversize.bin" "{\"path_hex\":\"$(hex_of "$(/usr/bin/printf 'a%.0s' $(seq 1 4097))")\",\"sha\":\"$zero_sha\"}"
 [ "$(wc -c < "$tmp/i-oversize.bin")" -eq 4209 ] || fail 'oversize fixture is not 4209 bytes'
 check_refusal '4,209-byte instruction' "$tmp/i-oversize.bin" instruction.oversize 1
 pass 'a 4,209-byte instruction gives instruction.oversize with a null instruction digest'
-
 # largest valid instruction (4,208 bytes, 4,096-byte path): not instruction.*.
 big_path=$(/usr/bin/printf 'a%.0s' $(seq 1 4096))
 mkinstr "$tmp/i-4208.bin" "{\"path_hex\":\"$(hex_of "$big_path")\",\"sha\":\"$zero_sha\"}"
@@ -375,63 +364,52 @@ case "$reason" in
   instruction.*) fail "4,208-byte instruction must not be an instruction.* rejection (got $reason)" ;;
 esac
 pass 'the longest valid instruction (4,208 bytes) is not an instruction.* rejection'
-
 # trailing: one byte after the third LF.
 mkinstr "$tmp/i-trailing.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\",\"trailing_hex\":\"78\"}"
 check_refusal 'one trailing byte after the third LF' "$tmp/i-trailing.bin" instruction.trailing
 pass 'a byte after the third LF gives instruction.trailing'
-
 # fourth line (also trailing, since it is bytes after the third LF).
 mkinstr "$tmp/i-fourth.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\",\"trailing_hex\":\"$(hex_of $'extra\n')\"}"
 check_refusal 'a fourth line' "$tmp/i-fourth.bin" instruction.trailing
 pass 'a fourth line gives instruction.trailing'
-
 # malformed: fewer than three LF (missing final LF -- only two LFs present).
 mkinstr "$tmp/i-nolf.bin" "{\"raw_hex\":\"$(hex_of "ystack.file-digest-instruction.v1
 path file.txt
 sha256 $zero_sha")\"}"
 check_refusal 'missing final LF' "$tmp/i-nolf.bin" instruction.malformed
 pass 'a missing final LF gives instruction.malformed'
-
 # malformed: CRLF framing.
 mkinstr "$tmp/i-crlf.bin" "{\"sep_hex\":\"0d0a\",\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\"}"
 check_refusal 'CRLF framing' "$tmp/i-crlf.bin" instruction.malformed
 pass 'CRLF framing gives instruction.malformed'
-
 # malformed: BOM before the header.
 mkinstr "$tmp/i-bom.bin" "{\"header_hex\":\"efbbbf79737461636b2e66696c652d6469676573742d696e737472756374696f6e2e7631\",\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$zero_sha\"}"
 check_refusal 'BOM before the header' "$tmp/i-bom.bin" instruction.malformed
 pass 'a BOM before the header gives instruction.malformed'
-
 # malformed: uppercase hex digest.
 mkinstr "$tmp/i-upperhex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"sha\":\"$(printf 'A%.0s' $(seq 1 64))\"}"
 check_refusal 'uppercase hex digest' "$tmp/i-upperhex.bin" instruction.malformed
 pass 'an uppercase hex digest gives instruction.malformed'
-
 # malformed: 63 and 65 hex digits.
 mkinstr "$tmp/i-63hex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"line3_hex\":\"$(hex_of "sha256 $(printf '0%.0s' $(seq 1 63))")\"}"
 check_refusal '63 hex digits' "$tmp/i-63hex.bin" instruction.malformed
 mkinstr "$tmp/i-65hex.bin" "{\"path_hex\":\"$(hex_of file.txt)\",\"line3_hex\":\"$(hex_of "sha256 $(printf '0%.0s' $(seq 1 65))")\"}"
 check_refusal '65 hex digits' "$tmp/i-65hex.bin" instruction.malformed
 pass '63 and 65 hex digits both give instruction.malformed'
-
 # malformed: wrong / reordered keys.
 mkinstr "$tmp/i-wrongkey.bin" "{\"line2_hex\":\"$(hex_of "route file.txt")\",\"sha\":\"$zero_sha\"}"
 check_refusal 'wrong key on line 2' "$tmp/i-wrongkey.bin" instruction.malformed
 mkinstr "$tmp/i-reordered.bin" "{\"line2_hex\":\"$(hex_of "sha256 $zero_sha")\",\"line3_hex\":\"$(hex_of "path file.txt")\"}"
 check_refusal 'reordered keys' "$tmp/i-reordered.bin" instruction.malformed
 pass 'a wrong or reordered key gives instruction.malformed'
-
 # malformed: NUL byte in the path.
 mkinstr "$tmp/i-nul.bin" "{\"path_hex\":\"$(hex_of file)00$(hex_of .txt)\",\"sha\":\"$zero_sha\"}"
 check_refusal 'a NUL byte' "$tmp/i-nul.bin" instruction.malformed
 pass 'a NUL byte gives instruction.malformed'
-
 # malformed: a trailing space before a line's LF.
 mkinstr "$tmp/i-trailspace.bin" "{\"path_hex\":\"$(hex_of "file.txt ")\",\"sha\":\"$zero_sha\"}"
 check_refusal "line 2's last byte before its LF is a space" "$tmp/i-trailspace.bin" instruction.malformed
 pass "a trailing space before a line's LF gives instruction.malformed"
-
 # malformed: each invalid UTF-8 class in the path.
 mkinstr "$tmp/i-utf8-lone.bin" "{\"path_hex\":\"ff\",\"sha\":\"$zero_sha\"}"
 check_refusal 'a lone 0xff byte' "$tmp/i-utf8-lone.bin" instruction.malformed
@@ -445,9 +423,7 @@ mkinstr "$tmp/i-utf8-trunc.bin" "{\"path_hex\":\"e282\",\"sha\":\"$zero_sha\"}"
 check_refusal 'a truncated sequence' "$tmp/i-utf8-trunc.bin" instruction.malformed
 pass 'every invalid UTF-8 class in the path gives instruction.malformed'
 
-# ===========================================================================
 # R4 differential: verifier vs. pinned jq's repo_path_ok, and the shape check.
-# ===========================================================================
 record_skeleton() {
   local path_value=$1
   "$jq_bin" -S -c -n --arg path "$path_value" --arg sha "$zero_sha" '
@@ -504,7 +480,6 @@ PY
   [ "$jq_accepts" = "$shape_accepts" ] || fail "$desc: jq predicate and incident-record shape check disagree"
   [ "$jq_accepts" = "$verifier_accepts" ] || fail "$desc: verifier disagrees with jq's repo_path_ok ($desc)"
 }
-
 # Accepted.
 differential_case '4,096-byte path' "$(hex_of "$big_path")"
 differential_case 'leading U+0020' "$(hex_of " a")"
@@ -522,7 +497,6 @@ differential_case 'U+1F600 (accepted, 4-byte)' "$(hex_of "$(printf '\xf0\x9f\x98
 differential_case 'U+10FFFF (accepted, 4-byte, max code point)' "$(hex_of "$(printf '\xf4\x8f\xbf\xbf')")"
 differential_case '64 components' "$(hex_of "$(printf 'a/%.0s' $(seq 1 63))z")"
 differential_case '.GİT (dotted capital I, not .git)' "$(hex_of "$(printf '.G\xc4\xb0T')")"
-
 # Rejected.
 differential_case '.GIT (rejected)' "$(hex_of ".GIT")"
 differential_case '.Git (rejected)' "$(hex_of ".Git")"
@@ -539,9 +513,7 @@ differential_case 'trailing dot component (rejected)' "$(hex_of "a.")"
 differential_case 'trailing space component (rejected)' "$(hex_of "a ")"
 pass 'the R4 differential corpus agrees between the verifier, jq repo_path_ok and the incident shape check'
 
-# ===========================================================================
 # R5, R6. Reading the candidate file and writing the payload.
-# ===========================================================================
 write_case() {
   # write_case <relative-path-under-candidate> <content-file>
   local rel=$1 src=$2
@@ -552,40 +524,26 @@ write_case() {
 digest_check_case() {
   # digest_check_case <desc> <rel-path> <expected-file> <outcome: match|mismatch>
   local desc=$1 rel=$2 content=$3 want=$4
-  local real_sha check_sha expected_reason
+  local real_sha check_sha expected_reason size
   real_sha=$(sha_file "$content")
-  if [ "$want" = match ]; then
-    check_sha=$real_sha
-    expected_reason=file.match
-  else
-    check_sha=$(printf '%s' "$real_sha" | tr '0123456789abcdef' '1234567890bcdefa')
-    expected_reason=file.mismatch
+  size=$(wc -c < "$content" | tr -d ' ')
+  if [ "$want" = match ]; then check_sha=$real_sha; expected_reason=file.match
+  else check_sha=$(printf '%s' "$real_sha" | tr '0123456789abcdef' '1234567890bcdefa'); expected_reason=file.mismatch
   fi
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of "$rel")\",\"sha\":\"$check_sha\"}"
   fresh_evidence
   run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
-  local outcome reason observed_sha observed_size instr_sha
-  outcome=$(outcome_of "$result_path")
-  reason=$(reason_of "$result_path")
-  [ "$outcome" = "$want" ] || fail "$desc: expected outcome $want, got $outcome"
-  [ "$reason" = "$expected_reason" ] || fail "$desc: expected reason_id $expected_reason, got $reason"
-  observed_sha=$("$jq_bin" -r '.body.observed.sha256' "$result_path")
-  observed_size=$("$jq_bin" -r '.body.observed.size_bytes' "$result_path")
-  [ "$observed_sha" = "$real_sha" ] || fail "$desc: observed digest does not equal shasum -a 256"
-  [ "$observed_size" = "$(wc -c < "$content" | tr -d ' ')" ] || fail "$desc: observed size mismatch"
+  local instr_sha expected_payload
   instr_sha=$(sha_file "$tmp/case-instr.bin")
-  local expected_payload
   expected_payload=$("$jq_bin" -S -c -n \
     --arg expected_sha256 "$check_sha" --arg path "$rel" --arg instruction_sha256 "$instr_sha" \
-    --arg sha256 "$real_sha" --argjson size_bytes "$observed_size" \
+    --arg sha256 "$real_sha" --argjson size_bytes "$size" \
     --arg outcome "$want" --arg reason_id "$expected_reason" '
-    {body:{check:{expected_sha256:$expected_sha256,path:$path},
-           instruction_sha256:$instruction_sha256,
-           observed:{sha256:$sha256,size_bytes:$size_bytes},
-           outcome:$outcome,reason_id:$reason_id},
+    {body:{check:{expected_sha256:$expected_sha256,path:$path},instruction_sha256:$instruction_sha256,
+           observed:{sha256:$sha256,size_bytes:$size_bytes},outcome:$outcome,reason_id:$reason_id},
      id:"file-digest-payload",kind:"file_digest_verifier_payload",schema_version:1}')
   [ "$expected_payload" = "$(cat "$result_path")" ] ||
-    fail "$desc: payload does not equal the complete expected object"
+    fail "$desc: payload does not equal the complete expected object (outcome/reason_id/check/instruction_sha256/observed)"
   local canon
   canon=$("$jq_bin" -S -c . "$result_path")
   [ "$canon" = "$(cat "$result_path")" ] || fail "$desc: payload is not canonical jq -S -c"
@@ -622,7 +580,6 @@ digest_check_case 'no-final-newline file: match' nonl.bin "$tmp/f-nonl" match
 write_case trailnl.bin "$tmp/f-trailnl"
 digest_check_case 'trailing-newline file: match' trailnl.bin "$tmp/f-trailnl" match
 pass 'match and mismatch for empty, binary, CRLF, no-final-newline and trailing-newline files, digests checked against shasum -a 256'
-
 # FIPS 180-4 vectors.
 : > "$tmp/fips-empty"
 /usr/bin/printf 'abc' > "$tmp/fips-abc"
@@ -641,7 +598,6 @@ digest_check_case 'FIPS 448-bit vector against the verifier' fips-448.bin "$tmp/
 write_case fips-million.bin "$tmp/fips-million"
 digest_check_case 'FIPS one-million-a vector against the verifier' fips-million.bin "$tmp/fips-million" match
 pass 'the FIPS 180-4 vectors (empty, abc, 448-bit, one million a) match published digests and the verifier agrees on all four'
-
 # sizes at and past the 1,048,576-byte limit.
 "$python" -c "import sys; sys.stdout.buffer.write(b'a' * 1048576)" > "$tmp/f-atlimit"
 write_case atlimit.bin "$tmp/f-atlimit"
@@ -653,47 +609,32 @@ fresh_evidence
 run_test_verifier "$tmp/case-instr.bin" "$tmp/case.out" "$tmp/case.err" || true
 [ "$(reason_of "$result_path")" = file.oversize ] || fail '1,048,577 bytes must give file.oversize'
 pass 'sizes 1,048,576 (accepted) and 1,048,577 (file.oversize) are handled as paired controls'
-
 # A candidate growing after the opening fstat must be caught as
 # file.size-mismatch/file.changed, not read past opened.st_size (R5.4). A
-# background writer appends throughout the run; retried since landing inside
-# the read window is not itself deterministic (R8.4), the outcome is.
+# continuous bash-builtin writer (no per-attempt process-spawn latency) keeps
+# appending throughout, so an attempt lands mid-growth quickly in practice.
 race_file="$candidate/growing.bin"
+: > "$race_file"
+mkinstr "$tmp/race-instr.bin" "{\"path_hex\":\"$(hex_of growing.bin)\",\"sha\":\"$zero_sha\"}"
+( while :; do printf a; done >> "$race_file" ) &
+race_writer_pid=$!
 race_reason=""
-race_attempt=0
-while [ "$race_attempt" -lt 50 ]; do
-  race_attempt=$((race_attempt + 1))
-  : > "$race_file"
-  "$python" - "$race_file" <<'PY' &
-import os, sys, time
-path = sys.argv[1]
-fd = os.open(path, os.O_WRONLY | os.O_APPEND)
-end = time.time() + 0.5
-try:
-    while time.time() < end:
-        os.write(fd, b"a")
-finally:
-    os.close(fd)
-PY
-  race_writer_pid=$!
-  mkinstr "$tmp/race-instr.bin" "{\"path_hex\":\"$(hex_of growing.bin)\",\"sha\":\"$zero_sha\"}"
+for _ in $(seq 1 20); do
   fresh_evidence
   run_test_verifier "$tmp/race-instr.bin" "$tmp/race.out" "$tmp/race.err" || true
-  wait "$race_writer_pid" 2>/dev/null || :
   race_reason=$(reason_of "$result_path")
-  case "$race_reason" in
-    file.size-mismatch|file.changed) break ;;
-  esac
+  case "$race_reason" in file.size-mismatch|file.changed) break ;; esac
 done
+kill "$race_writer_pid" 2>/dev/null || :
+wait "$race_writer_pid" 2>/dev/null || :
 case "$race_reason" in
-  file.size-mismatch|file.changed) : ;;
-  *) fail "growing candidate: expected file.size-mismatch or file.changed after $race_attempt attempts, got $race_reason" ;;
+  file.size-mismatch|file.changed)
+    [ "$("$jq_bin" -r '.body.observed // "null"' "$result_path")" = null ] ||
+      fail 'growing candidate: observed must stay null' ;;
+  *) fail "growing candidate: expected file.size-mismatch or file.changed, got $race_reason" ;;
 esac
-[ "$("$jq_bin" -r '.body.observed // "null"' "$result_path")" = null ] ||
-  fail 'growing candidate: observed must stay null for a size-mismatch or changed reason'
 /bin/rm -f "$race_file"
 pass 'a candidate that grows during the run is bounded to its own recorded size, not the fixed buffer (R5.4)'
-
 # missing (final and intermediate), directory, FIFO, socket, symlinks,
 # intermediate regular file, mode 0000.
 check_file_reason() {
@@ -745,7 +686,6 @@ check_file_reason 'intermediate component is a symlink' symdirlink/child.bin fil
 check_file_reason 'mode 0000 file' noperm.bin file.read-error
 /bin/chmod 0644 "$candidate/noperm.bin"
 pass 'file.missing, file.not-regular, file.symlink and file.read-error are each produced by their paired case'
-
 # output collision, and an unwritable evidence directory.
 : > "$candidate/collide.bin"
 mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of collide.bin)\",\"sha\":\"$zero_sha\"}"
@@ -768,8 +708,8 @@ run_test_verifier "$tmp/case-instr.bin" "$tmp/noperm.out" "$tmp/noperm.err" || s
 [ "$status" -eq 73 ] || fail "unwritable evidence directory: expected exit 73, got $status"
 [ "$(cat "$tmp/noperm.err")" = E_OUTPUT ] || fail 'unwritable evidence directory: expected E_OUTPUT'
 pass 'a mode 0500 evidence directory gives exit 73 E_OUTPUT'
-
 # ===========================================================================
+
 # Preservation (R7.2, R8.2): a python3 lstat-based tree digest of the
 # candidate is unchanged before and after every case, and a planted fake
 # answer changes nothing.
@@ -803,7 +743,6 @@ run_test_verifier "$tmp/preserve-instr.bin" "$tmp/pres.out" "$tmp/pres.err" || t
 tree_after=$("$python" "$tmp/treedigest.py" "$candidate")
 [ "$tree_before" = "$tree_after" ] || fail 'the candidate tree changed across a verifier run'
 pass 'the candidate tree is unchanged (bytes, modes and structure) after a verifier run'
-
 # Planted manifest.json / expected-digest / instruction-like file: no effect.
 plant_case_reason() {
   mkinstr "$tmp/case-instr.bin" "{\"path_hex\":\"$(hex_of collide.bin)\",\"sha\":\"$zero_sha\"}"
