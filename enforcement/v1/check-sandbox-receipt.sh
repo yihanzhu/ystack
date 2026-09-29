@@ -89,7 +89,7 @@ jq_bin="$scratch/bin/jq"
 snapshot_executable "$live_jq" "$jq_bin"
 physical_regular "$jq_bin" && [ -x "$jq_bin" ] &&
   [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
-  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
+  [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
 canonical_json() {
   local raw=$1 canonical=$2 bom roots
@@ -191,7 +191,7 @@ if ! unchanged "$source_path" "$scratch/driver.sh" ||
 fi
 physical_regular "$jq_bin" && [ -x "$jq_bin" ] &&
   [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
-  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RELATION
+  [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RELATION
 index=0
 while [ "$index" -lt 3 ]; do
   unchanged "${inputs[$index]}" "$scratch/${names[$index]}.json" || emit_error E_RELATION

@@ -663,34 +663,39 @@ expect_driver_matches_program driver-origin-mismatch \
   fail 'driver-satisfied-valid-end-to-end'
 pass 'driver-satisfied-valid-end-to-end'
 
-# The shipped driver, against the shipped (empty) accepted set: every
-# positive control is refused with exactly these three reasons; an
-# exclusive-reason fixture still gets its reason alone.
-expect_shipped_refused() {
-  local name=$1 receipt=$2
-  local out="$tmp/$name.out" err="$tmp/$name.err"
-  run_driver "$driver" "$receipt" "$expectation" "$evaluation" "$out" "$err"
-  if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$err" ] && "$jq_bin" -e '
-    .body.check_verdict=="refused" and .body.reason_ids==
-      ["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]
-  ' "$out" >/dev/null; }; then
-    fail "$name"
+# The shipped driver, against the shipped (empty) accepted set, per
+# plan.md:253-256: positive controls, failure.* and row-matrix fixtures get
+# exactly the trio; R7.4's three exclusive reasons (spec.md:251) stand alone.
+expect_shipped_reasons() {
+  local name=$1 receipt=$2 expectation_in=$3 evaluation_in=$4 reasons=$5
+  local out="$tmp/shipped-$name.out" err="$tmp/shipped-$name.err"
+  run_driver "$driver" "$receipt" "$expectation_in" "$evaluation_in" "$out" "$err"
+  if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$err" ] && "$jq_bin" -e --argjson reasons "$reasons" '.body.check_verdict=="refused" and .body.reason_ids==$reasons' "$out" >/dev/null; }; then
+    fail "shipped-$name"
   fi
-  pass "$name"
+  pass "shipped-$name"
 }
-expect_shipped_refused shipped-satisfied "$receipt_satisfied"
-expect_shipped_refused shipped-violated "$receipt_violated"
-expect_shipped_refused shipped-failed "$receipt_failed"
-shipped_exclusive_out="$tmp/shipped-exclusive.out"
-shipped_exclusive_err="$tmp/shipped-exclusive.err"
-run_driver "$driver" "$(mutate "$receipt_satisfied" shipped-kind-unsupported '.kind="x"')" \
-  "$expectation" "$evaluation" "$shipped_exclusive_out" "$shipped_exclusive_err"
-if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$shipped_exclusive_err" ] &&
-  "$jq_bin" -e '.body.reason_ids==["receipt.kind-unsupported"]' "$shipped_exclusive_out" \
-    >/dev/null; }; then
-  fail 'shipped-exclusive-reason-alone'
-fi
-pass 'shipped-exclusive-reason-alone'
+trio='["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]'
+expect_shipped_reasons control-satisfied "$receipt_satisfied" "$expectation" "$evaluation" "$trio"
+expect_shipped_reasons control-violated "$receipt_violated" "$expectation" "$evaluation" "$trio"
+expect_shipped_reasons control-failed "$receipt_failed" "$expectation" "$evaluation" "$trio"
+for suffix in launch-refused runtime supervisor-timeout teardown observation-unavailable enforcement-unavailable; do
+  expect_shipped_reasons "failure-$suffix" "$tmp/failure-$suffix.json" "$expectation" "$evaluation" "$trio"
+done
+for row in cpu_time_ms wall_time_ms memory_bytes output_bytes process_count scratch_bytes; do
+  for variant in partial unavailable enforcement-none enforcement-unknown reached; do
+    expect_shipped_reasons "row-$row-$variant" "$tmp/row-$row-$variant.json" "$expectation" "$evaluation" "$trio"
+  done
+done
+expect_shipped_reasons declaration-only "$evaluation" "$expectation" "$evaluation" '["receipt.declaration-only"]'
+for suffix in kind schema contract; do
+  expect_shipped_reasons "kind-unsupported-$suffix" "$tmp/kind-unsupported-$suffix.json" "$expectation" "$evaluation" '["receipt.kind-unsupported"]'
+done
+expect_shipped_reasons malformed-missing-key "$tmp/malformed-missing-key.json" "$expectation" "$evaluation" '["receipt.malformed"]'
+expect_shipped_reasons malformed-expectation "$receipt_satisfied" "$tmp/malformed-expectation.json" "$evaluation" '["receipt.malformed"]'
+for suffix in observed-null observed-reached-false not-started-admitted refused-not-not-started confirmed-storage-not-destroyed; do
+  expect_shipped_reasons "malformed-$suffix" "$tmp/malformed-$suffix.json" "$expectation" "$evaluation" '["receipt.malformed"]'
+done
 
 # Error paths: no stdout, one code on stderr, nothing naming the scratch dir.
 expect_driver_error() {
@@ -787,6 +792,18 @@ if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$copy_err" ] &&
   fail 'copy-identity'
 fi
 pass 'copy-identity'
+
+# A TMPDIR with a space breaks the unquoted `$($jq_bin --version)` checks
+# (the scratch-dir jq path then has a space in it too).
+space_tmpdir="$tmp/space dir"
+/bin/mkdir -p "$space_tmpdir"
+space_out="$tmp/space-tmpdir.out" space_err="$tmp/space-tmpdir.err" space_status=0
+TMPDIR="$space_tmpdir" PATH="$bin:/usr/bin:/bin" "$copy_driver" check "$receipt_satisfied" "$expectation" "$evaluation" >"$space_out" 2>"$space_err" || space_status=$?
+if ! { [ "$space_status" -eq 0 ] && [ ! -s "$space_err" ] && /usr/bin/cmp -s "$space_out" "$tmp/driver-satisfied-drv.out"; }; then
+  fail 'runtime-tmpdir-with-space'
+fi
+pass 'runtime-tmpdir-with-space'
+
 driver_rep1="$tmp/driver-rep1.out" driver_rep2="$tmp/driver-rep2.out"
 run_driver "$copy_driver" "$receipt_satisfied" "$expectation" "$evaluation" "$driver_rep1" \
   "$tmp/driver-rep1.err"
