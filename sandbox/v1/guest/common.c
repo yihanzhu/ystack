@@ -1,3 +1,9 @@
+#if defined(__linux__)
+#define _GNU_SOURCE /* syscall() itself, used for close_range: glibc's
+                     * <unistd.h> hides its declaration under plain
+                     * _POSIX_C_SOURCE, and <sys/syscall.h> gives only the
+                     * SYS_* numbers, not the prototype. */
+#endif
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
@@ -820,7 +826,9 @@ int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx)
     (void)closedir(stream);
     return 1;
 }
+#if defined(__APPLE__)
 static void close_visitor(int fd, void *ctx) { (void)ctx; (void)close(fd); }
+#endif
 /* Closes every open descriptor >= lowfd, exhaustively, or fails (1/0): a
  * capped numeric sweep is not exhaustive and a lowered rlimit never closes
  * an fd already open past it, so there is no sweep fallback. Linux:
