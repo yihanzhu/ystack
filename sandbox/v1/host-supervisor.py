@@ -486,9 +486,8 @@ def accepted_entry_shape_ok(env):
 
 
 def check_accepted_set(fd):
-    """Mirrors sandbox-receipt.jq's fixed_accepted_shape_ok in full: any
-    deviation refuses E_CONFIG, not just a placeholder scan. Reads through
-    the already-validated fd (never a fresh open()); closes it when done."""
+    """Mirrors fixed_accepted_shape_ok in full; reads the already-validated
+    fd and returns sha256_hex(raw) for accepted_set_sha256 (no path re-read)."""
     try:
         with os.fdopen(fd, "rb") as handle:
             raw = handle.read()
@@ -510,6 +509,7 @@ def check_accepted_set(fd):
     environments = body["environments"]
     require(isinstance(environments, list) and all(accepted_entry_shape_ok(env) for env in environments),
             "E_CONFIG")
+    return sha256_hex(raw)
 
 
 # --- store root (enforcement-evidence-binding spec.md R2.3) ---------------
@@ -821,7 +821,7 @@ def run_launch(argv):
             accepted_set_fd = fd
         else:
             os.close(fd)
-    check_accepted_set(accepted_set_fd)
+    accepted_set_sha256 = check_accepted_set(accepted_set_fd)
     store_fd = check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
     if os.environ.get("YSTACK_TEST_SWAP_STORE_ANCESTOR"):
         test_hook_swap_store_ancestor(config["store_root"])
@@ -843,16 +843,16 @@ def run_launch(argv):
     except FileExistsError:
         refuse("E_NONCE_REUSED")
 
-    if os.path.lexists(os.path.join(config["store_root"], request_body["attempt"]["attempt_id"])):
+    # fstatat on store_fd, not a path string; any OSError means "not found".
+    try:
+        os.stat(request_body["attempt"]["attempt_id"], dir_fd=store_fd, follow_symlinks=False)
+    except OSError:
+        pass
+    else:
         refuse("E_ATTEMPT_EXISTS")
 
     admitted_at = time.time()
-    with open(config["installed_files"]["accepted_set"], "rb") as handle:
-        accepted_set_sha256 = sha256_hex(handle.read())
-    # R8.3: the receipt's payload.evidence_manifest_sha256 must be the digest
-    # of the exact bytes write_store puts at payload/evidence-manifest.json --
-    # built once here and reused for both, not a separately-hashed empty
-    # string while the store gets the real (nonempty, canonical) manifest.
+    # R8.3: built once, reused for both the receipt digest and the write.
     evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
                                           "kind": "sandbox_evidence_manifest", "schema_version": 1})
     evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
