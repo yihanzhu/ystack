@@ -279,24 +279,27 @@ static int cmd_inventory(int argc, char **argv)
     return 0;
 }
 
-/* exec-report <self-path> <instruction> <stdout-file> <stderr-file> [overlap|lowlimit]:
- * forks a child, calls ys_exec with R6.4's fixed argv (argv[0] = <self-path>,
- * so the child re-enters this binary as "verify ..." and reports what it
- * received); the parent leaves one extra fd open across the fork so the
- * child's "every other descriptor closed" check is non-vacuous. "overlap"
- * forces stdout_fd to literally be fd 0 (the instruction's own destination)
- * before calling ys_exec, reproducing a caller-supplied descriptor overlap.
- * "lowlimit" forces the marker fd to be numbered 128, then lowers the soft
- * RLIMIT_NOFILE to 64 (the hard limit is untouched), reproducing a
- * descriptor above a lowered soft limit that sysconf(_SC_OPEN_MAX) alone
- * would never see. */
+/* exec-report <self-path> <instruction> <stdout-file> <stderr-file>
+ * [overlap|lowlimit|closefail]: forks, calls ys_exec with R6.4's fixed
+ * argv (argv[0] = <self-path>, so the child re-enters this binary as
+ * "verify ..." and reports what it received); the parent leaves one extra
+ * fd open so the child's "every other descriptor closed" check is
+ * non-vacuous. "overlap": forces stdout_fd to literally be fd 0 (the
+ * instruction's own destination) first, reproducing a caller-supplied
+ * overlap. "lowlimit": forces the marker fd to 128, then lowers the soft
+ * RLIMIT_NOFILE to 64 (hard limit untouched), reproducing a descriptor a
+ * limit-bounded sweep would miss. "closefail" (fault-injection build
+ * only): makes ys_exec's own enumeration fail, so this expects the child
+ * to exit 126 (refused, execve never reached), not 0. */
 static int cmd_exec_report(int argc, char **argv)
 {
     int instruction_fd, stdout_fd, stderr_fd, marker_fd, status;
+    int want_refusal = 0;
     pid_t pid;
     const char *report_argv[7];
     if (argc != 6 && argc != 7) usage();
-    if (argc == 7 && strcmp(argv[6], "overlap") != 0 && strcmp(argv[6], "lowlimit") != 0) usage();
+    if (argc == 7 && strcmp(argv[6], "overlap") != 0 && strcmp(argv[6], "lowlimit") != 0 &&
+        strcmp(argv[6], "closefail") != 0) usage();
     instruction_fd = open(argv[3], O_RDONLY);
     stdout_fd = open(argv[4], O_WRONLY | O_CREAT | O_APPEND, 0600);
     stderr_fd = open(argv[5], O_WRONLY | O_CREAT | O_APPEND, 0600);
@@ -316,6 +319,14 @@ static int cmd_exec_report(int argc, char **argv)
         rl.rlim_cur = 64;
         if (setrlimit(RLIMIT_NOFILE, &rl) != 0) die("E_FRAME_IO");
     }
+    if (argc == 7 && strcmp(argv[6], "closefail") == 0) {
+#ifdef YSTACK_TEST_FAULT_INJECT
+        ys_test_close_all_fail = 1;
+        want_refusal = 1;
+#else
+        die("E_USAGE"); /* only meaningful in the -DYSTACK_TEST_FAULT_INJECT build */
+#endif
+    }
     report_argv[0] = argv[2];
     report_argv[1] = YS_PLAN_ARGV[1]; report_argv[2] = YS_PLAN_ARGV[2];
     report_argv[3] = YS_PLAN_ARGV[3]; report_argv[4] = YS_PLAN_ARGV[4];
@@ -327,9 +338,25 @@ static int cmd_exec_report(int argc, char **argv)
         _exit(127);
     }
     (void)close(instruction_fd); (void)close(stdout_fd); (void)close(stderr_fd); (void)close(marker_fd);
-    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status)) die("E_FRAME_IO");
+    if (want_refusal) {
+        if (WEXITSTATUS(status) != 126) die("E_FRAME_IO");
+    } else if (WEXITSTATUS(status) != 0) {
         die("E_FRAME_IO");
+    }
     return 0;
+}
+
+/* Every open descriptor >= 3, via ys_walk_fds (the same exhaustive
+ * enumeration ys_exec's own Darwin close path uses): -1 if the walk could
+ * not be confirmed complete, so the caller never reports a clean "0" for
+ * an enumeration that actually failed (fail closed). */
+static void count_visitor(int fd, void *ctx) { (void)fd; (*(int *)ctx)++; }
+
+static int count_extra_fds(void)
+{
+    int count = 0;
+    return ys_walk_fds(3, count_visitor, &count) ? count : -1;
 }
 
 /* The R6.4 wiring reporter: entered only via ys_exec from cmd_exec_report
@@ -341,8 +368,7 @@ static int cmd_verify_report(int argc, char **argv)
     int argv_ok = (argc == 6 && strcmp(argv[2], YS_PLAN_ARGV[2]) == 0 &&
                    strcmp(argv[3], YS_PLAN_ARGV[3]) == 0 && strcmp(argv[4], YS_PLAN_ARGV[4]) == 0 &&
                    strcmp(argv[5], YS_PLAN_ARGV[5]) == 0);
-    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra = 0, fd, fl1, fl2;
-    long maxfd;
+    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra, fl1, fl2;
     struct stat st;
     char **e;
     int count = 0, i;
@@ -359,20 +385,15 @@ static int cmd_verify_report(int argc, char **argv)
     fl1 = fcntl(1, F_GETFL); fl2 = fcntl(2, F_GETFL);
     fd1_ok = (fl1 >= 0 && (fl1 & O_ACCMODE) == O_WRONLY && (fl1 & O_APPEND) != 0);
     fd2_ok = (fl2 >= 0 && (fl2 & O_ACCMODE) == O_WRONLY && (fl2 & O_APPEND) != 0);
-    /* Matches ys_exec's own close_from ceiling exactly (ys_close_ceiling):
-     * a check bounded only by sysconf(_SC_OPEN_MAX), the soft limit, would
-     * be as blind to a descriptor above a lowered soft limit as the bug
-     * this test exists to catch. */
-    maxfd = ys_close_ceiling();
-    for (fd = 3; fd < (int)maxfd; fd++)
-        if (fcntl(fd, F_GETFD) >= 0) extra++;
+    extra = count_extra_fds();
 
     (void)dprintf(1, "argv:%s\n", argv_ok ? "ok" : "fail");
     (void)dprintf(1, "env:%s\n", env_ok ? "ok" : "fail");
     (void)dprintf(1, "fd0:%s\n", fd0_ok ? "ok" : "fail");
     (void)dprintf(1, "fd1:%s\n", fd1_ok ? "ok" : "fail");
     (void)dprintf(1, "fd2:%s\n", fd2_ok ? "ok" : "fail");
-    (void)dprintf(1, "extra_fds:%d\n", extra);
+    if (extra < 0) (void)dprintf(1, "extra_fds:enum-failed\n");
+    else (void)dprintf(1, "extra_fds:%d\n", extra);
     return 0;
 }
 

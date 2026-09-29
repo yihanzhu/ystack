@@ -9,12 +9,12 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <linux/fs.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #endif
 
 /* --- SHA-256 (FIPS 180-4) ------------------------------------------------ */
@@ -481,13 +481,11 @@ const char *const YS_PLAN_ENVIRONMENT[5] = {
     "\"--evidence\",\"/sandbox/evidence\"]"
 #define YS_PLAN_ENVIRONMENT_JSON \
     "[\"LANG=C\",\"LC_ALL=C\",\"PATH=/sandbox/tools\",\"TMPDIR=/sandbox/scratch\"]"
-
 const char *ys_plan_status_str(enum ys_plan_status status)
 {
     static const char *const table[] = { "ok", "E_PLAN_SCHEMA", "E_PLAN_LIMIT", "E_PLAN_IO" };
     return ((unsigned)status < sizeof table / sizeof table[0]) ? table[status] : "E_PLAN_UNKNOWN";
 }
-
 /* Matches a literal byte string exactly at *pos. */
 static int json_expect(const unsigned char *buf, size_t len, size_t *pos, const char *lit)
 {
@@ -496,9 +494,7 @@ static int json_expect(const unsigned char *buf, size_t len, size_t *pos, const 
     *pos += n;
     return 1;
 }
-
 static int hex_nibble(unsigned char c) { return (c >= '0' && c <= '9') ? (int)(c - '0') : -1; }
-
 /* A `"`-delimited JSON string: decodes exactly the escapes
  * `json.dumps(ensure_ascii=False)` emits (\", \\, \b, \f, \n, \r, \t, or
  * \u00XX for the remaining C0 controls); any other escape, an unescaped
@@ -549,7 +545,6 @@ static int json_parse_string(const unsigned char *buf, size_t len, size_t *pos,
     ok = ys_utf8_validate(out, n, &(int){0});
     return ok;
 }
-
 static int json_parse_uint(const unsigned char *buf, size_t len, size_t *pos, uint64_t *out)
 {
     size_t i = *pos;
@@ -569,7 +564,6 @@ static int json_parse_uint(const unsigned char *buf, size_t len, size_t *pos, ui
     *out = v;
     return 1;
 }
-
 static int parse_hex64(const unsigned char *buf, size_t len, size_t *pos, unsigned char out[65])
 {
     unsigned char s[65];
@@ -583,7 +577,6 @@ static int parse_hex64(const unsigned char *buf, size_t len, size_t *pos, unsign
     out[64] = '\0';
     return 1;
 }
-
 static int parse_entry(const unsigned char *buf, size_t len, size_t *pos, struct ys_plan_entry *e)
 {
     unsigned char kind[16], mode[8];
@@ -619,7 +612,6 @@ static int parse_entry(const unsigned char *buf, size_t len, size_t *pos, struct
     }
     return json_expect(buf, len, pos, "}");
 }
-
 enum ys_plan_status ys_plan_parse(const unsigned char *bytes, size_t len,
                                    struct ys_guest_plan *plan)
 {
@@ -680,14 +672,12 @@ fail:
     free(entries);
     return YS_PLAN_ERR_SCHEMA;
 }
-
 void ys_plan_free(struct ys_guest_plan *plan)
 {
     free(plan->entries);
     plan->entries = NULL;
     plan->entry_count = 0;
 }
-
 /* Splits `path` into its parent directory and leaf component, walking from
  * `dirfd` one component at a time (never handing the kernel a long
  * concatenated string): a 4,096-byte, 64-component candidate path easily
@@ -727,7 +717,6 @@ static int open_parent_dir(int dirfd, const unsigned char *path, size_t path_len
     }
     return -1;
 }
-
 /* Directories are created 0700 (temporarily writable, so a later sibling
  * or child entry can still be created inside one) and tightened to their
  * manifest mode 0500 only in a second pass over the same list, after every
@@ -793,57 +782,70 @@ enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
     }
     return YS_PLAN_OK;
 }
-
-#define YS_CLOSE_RANGE_CAP 65536
-
-/* getrlimit's hard limit is commonly RLIM_INFINITY (unbounded; this is the
- * ordinary case on macOS), and sysconf(_SC_OPEN_MAX) only ever reflects
- * the soft limit -- the exact value a caller may have lowered out from
- * under an fd this process still holds open. So an infinite or unknown
- * hard limit sweeps to the cap outright; sysconf is never consulted here,
- * because it would silently reintroduce the soft-limit blindness this
- * function exists to avoid. */
-long ys_close_ceiling(void)
+#ifdef YSTACK_TEST_FAULT_INJECT
+int ys_test_close_all_fail = 0;
+#endif
+/* Walks the real descriptor table (Linux /proc/self/fd, Darwin /dev/fd;
+ * never a numeric guess), calling visit(fd, ctx) per open fd >= lowfd
+ * (excluding the walk's own dir fd). 1 if complete, 0 if the directory
+ * could not be opened or a readdir() itself failed (errno-checked per
+ * call): either way the caller cannot trust it saw every descriptor. */
+int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx)
 {
-    struct rlimit limit;
-    if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_max != RLIM_INFINITY &&
-        limit.rlim_max <= (rlim_t)YS_CLOSE_RANGE_CAP) {
-        return (long)limit.rlim_max;
-    }
-    return YS_CLOSE_RANGE_CAP;
-}
-
-/* Closes every open descriptor >= lowfd. Walks /dev/fd first (present on
- * both Linux and Darwin, unlike /proc/self/fd), then sweeps lowfd through
- * ys_close_ceiling() as a belt: sysconf(_SC_OPEN_MAX) alone reflects the
- * soft limit and would leave a descriptor above it open across execve. */
-static void close_from(int lowfd)
-{
-    DIR *stream = opendir("/dev/fd");
-    int fd;
-    long ceiling;
-
-    if (stream != NULL) {
-        int stream_fd = dirfd(stream);
-        struct dirent *entry;
-        for (;;) {
-            int number;
-            char *end;
-            errno = 0;
-            entry = readdir(stream);
-            if (entry == NULL) break;
-            if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
-            number = (int)strtol(entry->d_name, &end, 10);
-            if (end == entry->d_name || *end != '\0') continue;
-            if (number < lowfd || (stream_fd >= 0 && number == stream_fd)) continue;
-            (void)close(number);
+#if defined(__linux__)
+    static const char *const fd_dir = "/proc/self/fd";
+#else
+    static const char *const fd_dir = "/dev/fd";
+#endif
+    DIR *stream = opendir(fd_dir);
+    int stream_fd;
+    struct dirent *entry;
+    if (stream == NULL) return 0;
+    stream_fd = dirfd(stream);
+    for (;;) {
+        int number;
+        char *end;
+        errno = 0;
+        entry = readdir(stream);
+        if (entry == NULL) {
+            if (errno != 0) { (void)closedir(stream); return 0; }
+            break;
         }
-        (void)closedir(stream);
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+        number = (int)strtol(entry->d_name, &end, 10);
+        if (end == entry->d_name || *end != '\0') continue;
+        if (number < lowfd || (stream_fd >= 0 && number == stream_fd)) continue;
+        visit(number, ctx);
     }
-    ceiling = ys_close_ceiling();
-    for (fd = lowfd; fd < (int)ceiling; fd++) (void)close(fd);
+    (void)closedir(stream);
+    return 1;
 }
-
+static void close_visitor(int fd, void *ctx) { (void)ctx; (void)close(fd); }
+/* Closes every open descriptor >= lowfd, exhaustively, or fails (1/0): a
+ * capped numeric sweep is not exhaustive and a lowered rlimit never closes
+ * an fd already open past it, so there is no sweep fallback. Linux:
+ * close_range, the one atomic exhaustive primitive. Darwin (this harness's
+ * own build only; the guest is Linux-only): ys_walk_fds. Neither falls
+ * back to the other. */
+static int close_all_from(int lowfd)
+{
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (ys_test_close_all_fail) return 0;
+#endif
+#if defined(__linux__)
+#if defined(SYS_close_range)
+    return syscall(SYS_close_range, (unsigned)lowfd, ~0U, 0U) == 0;
+#else
+    (void)lowfd;
+    return 0; /* the pinned kernel's headers must define close_range */
+#endif
+#elif defined(__APPLE__)
+    return ys_walk_fds(lowfd, close_visitor, NULL);
+#else
+    (void)lowfd;
+    return 0;
+#endif
+}
 void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
              int stdout_fd, int stderr_fd)
 {
@@ -853,30 +855,26 @@ void ys_exec(const char *const *argv, const char *const *envp, int instruction_f
      * instruction's own destination) would otherwise have its source
      * clobbered by an earlier dup2 in this same call, silently wiring the
      * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
-     * a failed execve past close_from below. */
+     * a failed execve past close_all_from below. */
     in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
     out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
     err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
     if (in_fd < 0 || out_fd < 0 || err_fd < 0) _exit(126);
     if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0) _exit(126);
     (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
-    close_from(3);
+    if (!close_all_from(3)) _exit(126); /* cannot confirm every descriptor is closed */
     execve(argv[0], (char *const *)(const void *)argv, (char *const *)(const void *)envp);
     _exit(127);
 }
-
 #ifdef YSTACK_TEST_FAULT_INJECT
 size_t ys_test_readdir_fail_at = 0;
 #endif
-
 struct evidence_row { char *name; ino_t ino; };
-
 static int cmp_evidence_row(const void *a, const void *b)
 {
     const struct evidence_row *ra = a, *rb = b;
     return strcmp(ra->name, rb->name);
 }
-
 enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out)
 {
     DIR *dh;
@@ -885,7 +883,6 @@ enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *
     size_t count = 0, cap = 0, i;
     char **names;
     int refused = 0;
-
     dh = fdopendir(dirfd);
     if (dh == NULL) return YS_PLAN_ERR_IO;
     for (;;) {

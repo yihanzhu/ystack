@@ -182,7 +182,6 @@ pass 'a path component of exactly 255 bytes is accepted and 256 bytes is refused
 if "$h" path-ok "$tmp/comp256mb" 2>"$tmp/err"; then fail 'a 256-byte multibyte path component must be refused'; fi
 [ "$(cat "$tmp/err")" = E_PATH_REJECTED ] || fail 'expected E_PATH_REJECTED for a 256-byte multibyte component'
 pass 'the same 255/256-byte boundary holds for a component built from multibyte UTF-8 (127 U+00E9 plus ASCII), not just single-byte characters'
-
 # =============================================================================
 # PR 2: sandbox_guest_plan parser (R5.2), R5.5 materialization, R6.4 exec
 # wiring, R8.1 export inventory.
@@ -230,7 +229,6 @@ expect_plan_err() { # expect_plan_err <desc> <file>
   [ "$status" -ne 0 ] || fail "$desc: expected refusal, got exit 0"
   [ "$(cat "$tmp/err")" = E_PLAN_SCHEMA ] || fail "$desc: expected E_PLAN_SCHEMA, got $(cat "$tmp/err")"
 }
-
 genplan "$tmp/plan-ok.json" ok '[]'
 expect_plan_ok 'a well-formed empty-entries plan' "$tmp/plan-ok.json" 0
 pass 'a well-formed sandbox_guest_plan (fixed argv/environment, empty entries, both hashes, all nine limits, canonical trailing LF) is accepted'
@@ -239,7 +237,6 @@ for mode in unknownkey dupkey missingkey misorder; do
   expect_plan_err "a $mode plan" "$tmp/plan-$mode.json"
 done
 pass 'an unknown key, a duplicate key, a missing key and a misordered key are each refused E_PLAN_SCHEMA, paired against the accepted well-formed plan'
-
 genplan "$tmp/plan-badescape.json" ok '[{"kind":"directory","mode":"0500","path":"su\u0008b","sha256":null,"size_bytes":null}]'
 expect_plan_err 'a raw \u0008 escape where \b is required' "$tmp/plan-badescape.json"
 zero64=$(/usr/bin/printf '0%.0s' $(seq 1 64))
@@ -332,7 +329,6 @@ os.close(fd)
 PY
 deepop() { "$python" "$tmp/deepop.py" "$tmp/mat/out" "$1" "$2"; }
 big_path=$("$python" -c "print('/'.join(['a'*63]*63+['a'*64]))")
-
 while IFS=$'\t' read -r relpath mode sha; do
   case "$relpath" in
     */*) read -r got_sha got_mode got_uid <<< "$(deepop "$relpath" read | tr '\n' ' ')" ;;
@@ -345,7 +341,6 @@ while IFS=$'\t' read -r relpath mode sha; do
   [ "$got_uid" = "$(id -u)" ] || fail "materialize: $relpath owner is $got_uid, not the invoking uid"
 done < "$tmp/mat/files.tsv"
 pass 'README.md, a non-ASCII UTF-8 name and a 4,096-byte 64-component path are each materialized byte for byte, with the manifest mode and the invoking uid as owner'
-
 "$python" -c "
 import sys
 try:
@@ -369,7 +364,6 @@ expected_report=$'argv:ok\nenv:ok\nfd0:ok\nfd1:ok\nfd2:ok\nextra_fds:0'
 [ "$(cat "$tmp/exec.out")" = "$expected_report" ] || fail "exec wiring: unexpected report $(cat "$tmp/exec.out")"
 [ ! -s "$tmp/exec.err" ] || fail 'exec wiring: stderr must be empty'
 pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables, with fd 0 a regular file, fds 1-2 append-only and every other descriptor closed'
-
 # ys_exec must preserve a source whose value overlaps another destination
 # (e.g. stdout_fd == 0, the instruction's own target): a naive sequential
 # dup2(instruction_fd,0); dup2(stdout_fd,1); ... would clobber stdout_fd's
@@ -380,7 +374,6 @@ pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables,
   fail "exec wiring (overlapping descriptors): unexpected report $(cat "$tmp/exec-ov.out")"
 [ ! -s "$tmp/exec-ov.err" ] || fail 'exec wiring (overlapping descriptors): stderr must be empty'
 pass 'ys_exec wires the same argv, environment and fds correctly even when a caller-supplied source overlaps another destination (stdout_fd forced to fd 0, the instruction target)'
-
 # ys_exec's close loop must not be blind to a descriptor above a *lowered*
 # soft RLIMIT_NOFILE: sysconf(_SC_OPEN_MAX) alone reflects that soft
 # limit, not the hard one. "lowlimit" opens a marker at fd 128, then lowers
@@ -392,6 +385,15 @@ pass 'ys_exec wires the same argv, environment and fds correctly even when a cal
   fail "exec wiring (fd 128, soft RLIMIT_NOFILE lowered to 64): unexpected report $(cat "$tmp/exec-ll.out")"
 [ ! -s "$tmp/exec-ll.err" ] || fail 'exec wiring (lowered soft limit): stderr must be empty'
 pass 'ys_exec still closes a descriptor (fd 128) above a soft RLIMIT_NOFILE the caller lowered to 64, not just up to sysconf(_SC_OPEN_MAX)'
+# ys_exec has no numeric-sweep fallback: if it cannot confirm every
+# descriptor was closed (close_range/the /dev/fd walk itself failing), it
+# must refuse (_exit(126)) rather than proceed to execve. "closefail"
+# (fault-injection build only) forces exactly that failure.
+: > "$tmp/exec-cf.out"; : > "$tmp/exec-cf.err"
+"$hf" exec-report "$hf" "$tmp/instr.txt" "$tmp/exec-cf.out" "$tmp/exec-cf.err" closefail
+[ ! -s "$tmp/exec-cf.out" ] || fail "exec wiring (closefail): the child must never reach the reporter, got $(cat "$tmp/exec-cf.out")"
+[ ! -s "$tmp/exec-cf.err" ] || fail 'exec wiring (closefail): stderr must be empty'
+pass 'ys_exec refuses (exit 126, execve never reached) rather than proceeding when it cannot confirm every descriptor is closed'
 
 # --- R8.1 export inventory: hard-link alias refused, single link accepted -
 /bin/mkdir -m 700 "$tmp/ev-good" "$tmp/ev-bad"
@@ -405,7 +407,6 @@ status=0
 [ "$status" -ne 0 ] || fail 'inventory: a same-directory hard-link alias must be refused'
 [ "$(cat "$tmp/err")" = E_PLAN_SCHEMA ] || fail "inventory: expected E_PLAN_SCHEMA for a hard-link alias, got $(cat "$tmp/err")"
 pass 'the R8.1 export inventory refuses a same-directory hard-link alias of an evidence file, paired against the single-link control above'
-
 # A readdir() failure (e.g. ENOMEM) returns NULL exactly like end-of-
 # directory; ys_evidence_inventory must tell the two apart via errno, not
 # silently report a partial inventory as YS_PLAN_OK. The fault-injection
@@ -419,5 +420,4 @@ status=0
 [ "$status" -ne 0 ] || fail 'inventory: an injected readdir() failure must be refused, not reported as a partial success'
 [ "$(cat "$tmp/err")" = E_PLAN_IO ] || fail "inventory: expected E_PLAN_IO for a readdir() failure, got $(cat "$tmp/err")"
 pass 'a readdir() failure part way through the directory is refused E_PLAN_IO rather than silently returning a partial inventory as YS_PLAN_OK'
-
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
