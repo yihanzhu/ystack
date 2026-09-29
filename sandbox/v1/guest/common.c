@@ -2,19 +2,19 @@
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
-
 /* See common.h. */
-
 #include "common.h"
-
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#endif
 
 /* --- SHA-256 (FIPS 180-4) ------------------------------------------------ */
-
 static const uint32_t SHA256_K[64] = {
     0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U,
     0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
@@ -28,9 +28,7 @@ static const uint32_t SHA256_K[64] = {
     0x5b9cca4fU, 0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
     0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
 };
-
 static uint32_t rotr32(uint32_t v, unsigned b) { return (v >> b) | (v << (32U - b)); }
-
 static void sha256_compress(struct ys_sha256_ctx *ctx, const unsigned char block[64])
 {
     uint32_t w[64], a, b, c, d, e, f, g, h;
@@ -57,7 +55,6 @@ static void sha256_compress(struct ys_sha256_ctx *ctx, const unsigned char block
     ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
     ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
 }
-
 void ys_sha256_init(struct ys_sha256_ctx *ctx)
 {
     ctx->state[0] = 0x6a09e667U; ctx->state[1] = 0xbb67ae85U; ctx->state[2] = 0x3c6ef372U;
@@ -65,7 +62,6 @@ void ys_sha256_init(struct ys_sha256_ctx *ctx)
     ctx->state[6] = 0x1f83d9abU; ctx->state[7] = 0x5be0cd19U;
     ctx->total_bits = 0; ctx->buffered = 0;
 }
-
 void ys_sha256_update(struct ys_sha256_ctx *ctx, const void *data, size_t len)
 {
     const unsigned char *p = data;
@@ -78,7 +74,6 @@ void ys_sha256_update(struct ys_sha256_ctx *ctx, const void *data, size_t len)
         if (ctx->buffered == 64U) { sha256_compress(ctx, ctx->buffer); ctx->buffered = 0; }
     }
 }
-
 void ys_sha256_final(struct ys_sha256_ctx *ctx, unsigned char out[32])
 {
     unsigned char pad[72];
@@ -101,13 +96,11 @@ void ys_sha256_final(struct ys_sha256_ctx *ctx, unsigned char out[32])
         out[i * 4 + 3] = (unsigned char)(ctx->state[i]);
     }
 }
-
 void ys_sha256_bytes(const void *data, size_t len, unsigned char out[32])
 {
     struct ys_sha256_ctx ctx;
     ys_sha256_init(&ctx); ys_sha256_update(&ctx, data, len); ys_sha256_final(&ctx, out);
 }
-
 void ys_hex_encode(const unsigned char *in, size_t len, char *out)
 {
     static const char digits[] = "0123456789abcdef";
@@ -120,7 +113,6 @@ void ys_hex_encode(const unsigned char *in, size_t len, char *out)
 }
 
 /* --- YSFRAME1 -------------------------------------------------------------- */
-
 const char *ys_frame_status_str(enum ys_frame_status status)
 {
     static const char *const table[] = {
@@ -129,7 +121,6 @@ const char *ys_frame_status_str(enum ys_frame_status status)
     };
     return ((unsigned)status < sizeof table / sizeof table[0]) ? table[status] : "E_FRAME_UNKNOWN";
 }
-
 static int full_write(int fd, const void *data, size_t len)
 {
     const unsigned char *p = data;
@@ -141,13 +132,11 @@ static int full_write(int fd, const void *data, size_t len)
     }
     return 1;
 }
-
 static void encode_be64(uint64_t v, unsigned char out[8])
 {
     unsigned i;
     for (i = 0; i < 8U; i++) out[i] = (unsigned char)(v >> (56U - 8U * i));
 }
-
 static uint64_t decode_be64(const unsigned char in[8])
 {
     uint64_t v = 0;
@@ -155,7 +144,6 @@ static uint64_t decode_be64(const unsigned char in[8])
     for (i = 0; i < 8U; i++) v = (v << 8) | (uint64_t)in[i];
     return v;
 }
-
 int ys_frame_writer_open(struct ys_frame_writer *w, int fd)
 {
     w->fd = fd; w->offset = 0; w->closed = 0;
@@ -165,7 +153,6 @@ int ys_frame_writer_open(struct ys_frame_writer *w, int fd)
     w->offset += (off_t)YS_FRAME_MAGIC_LEN;
     return 1;
 }
-
 enum ys_frame_status ys_frame_writer_put(struct ys_frame_writer *w, const char *name,
                                           size_t name_len, const void *data, size_t len)
 {
@@ -187,7 +174,6 @@ enum ys_frame_status ys_frame_writer_put(struct ys_frame_writer *w, const char *
     w->offset += (off_t)(1U + name_len + 8U + len);
     return YS_FRAME_OK;
 }
-
 enum ys_frame_status ys_frame_writer_close(struct ys_frame_writer *w)
 {
     unsigned char digest[YS_FRAME_DIGEST_LEN], len_field[8];
@@ -203,7 +189,6 @@ enum ys_frame_status ys_frame_writer_close(struct ys_frame_writer *w)
     w->closed = 1;
     return YS_FRAME_OK;
 }
-
 /* Exact pread; a short read here (bounds already checked by the caller) is
  * always YS_FRAME_ERR_IO, never an ordinary truncation. */
 static int read_exact(int fd, off_t offset, void *buf, size_t len)
@@ -218,15 +203,29 @@ static int read_exact(int fd, off_t offset, void *buf, size_t len)
     }
     return 1;
 }
-
-enum ys_frame_status ys_frame_reader_open(struct ys_frame_reader *r, int fd)
+/* Regular file: st_size. Linux block device (the guest's input/export
+ * disks; fstat's st_size is 0 there): BLKGETSIZE64. Anything else: refused. */
+enum ys_frame_status ys_frame_descriptor_capacity(int fd, off_t *capacity_out)
 {
     struct stat st;
+    if (fstat(fd, &st) != 0) return YS_FRAME_ERR_IO;
+    if (S_ISREG(st.st_mode)) { *capacity_out = st.st_size; return YS_FRAME_OK; }
+#if defined(__linux__)
+    if (S_ISBLK(st.st_mode)) {
+        uint64_t bytes;
+        if (ioctl(fd, BLKGETSIZE64, &bytes) != 0) return YS_FRAME_ERR_IO;
+        *capacity_out = (off_t)bytes;
+        return YS_FRAME_OK;
+    }
+#endif
+    return YS_FRAME_ERR_IO;
+}
+enum ys_frame_status ys_frame_reader_open(struct ys_frame_reader *r, int fd, off_t capacity)
+{
     unsigned char magic[YS_FRAME_MAGIC_LEN];
     r->fd = fd; r->offset = 0; r->done = 0;
     ys_sha256_init(&r->digest);
-    if (fstat(fd, &st) != 0) return YS_FRAME_ERR_IO;
-    r->total_size = st.st_size;
+    r->total_size = capacity;
     if (r->total_size < (off_t)YS_FRAME_MAGIC_LEN) return YS_FRAME_ERR_TRUNCATED;
     if (!read_exact(fd, 0, magic, YS_FRAME_MAGIC_LEN)) return YS_FRAME_ERR_IO;
     if (memcmp(magic, YS_FRAME_MAGIC, YS_FRAME_MAGIC_LEN) != 0) return YS_FRAME_ERR_MAGIC;
@@ -234,7 +233,6 @@ enum ys_frame_status ys_frame_reader_open(struct ys_frame_reader *r, int fd)
     r->offset = (off_t)YS_FRAME_MAGIC_LEN;
     return YS_FRAME_OK;
 }
-
 /* Every remaining byte to total_size must be zero (R3.2). */
 static enum ys_frame_status check_zero_tail(int fd, off_t offset, off_t total_size)
 {
@@ -249,7 +247,6 @@ static enum ys_frame_status check_zero_tail(int fd, off_t offset, off_t total_si
     }
     return YS_FRAME_OK;
 }
-
 static enum ys_frame_status finish_end_record(struct ys_frame_reader *r, off_t content_offset,
                                                struct ys_frame_record *rec)
 {
@@ -263,37 +260,31 @@ static enum ys_frame_status finish_end_record(struct ys_frame_reader *r, off_t c
     rec->is_end = 1; rec->length = 0; r->done = 1;
     return YS_FRAME_OK;
 }
-
 enum ys_frame_status ys_frame_reader_next(struct ys_frame_reader *r, struct ys_frame_record *rec)
 {
     unsigned char name_len_byte, len_field[8];
     uint64_t length;
     off_t content_offset;
     int is_end;
-
     rec->content = NULL; rec->length = 0; rec->name_len = 0; rec->is_end = 0;
     if (r->done) return YS_FRAME_ERR_IO;
-
     if (r->offset + 1 > r->total_size) return YS_FRAME_ERR_TRUNCATED;
     if (!read_exact(r->fd, r->offset, &name_len_byte, 1U)) return YS_FRAME_ERR_IO;
     if (r->offset + 1 + (off_t)name_len_byte > r->total_size) return YS_FRAME_ERR_TRUNCATED;
     if (name_len_byte > 0 && !read_exact(r->fd, r->offset + 1, rec->name, name_len_byte))
         return YS_FRAME_ERR_IO;
     rec->name[name_len_byte] = '\0'; rec->name_len = name_len_byte;
-
     if (r->offset + 1 + (off_t)name_len_byte + 8 > r->total_size) return YS_FRAME_ERR_TRUNCATED;
     if (!read_exact(r->fd, r->offset + 1 + name_len_byte, len_field, 8U)) return YS_FRAME_ERR_IO;
     length = decode_be64(len_field);
     content_offset = r->offset + 1 + name_len_byte + 8;
     if (length > (uint64_t)(r->total_size - content_offset)) return YS_FRAME_ERR_TRUNCATED;
-
     is_end = (name_len_byte == strlen(YS_FRAME_END_NAME) &&
               memcmp(rec->name, YS_FRAME_END_NAME, name_len_byte) == 0);
     if (is_end) {
         if (length != YS_FRAME_DIGEST_LEN) return YS_FRAME_ERR_DIGEST;
         return finish_end_record(r, content_offset, rec);
     }
-
     if (length > 0) {
         rec->content = malloc((size_t)length);
         if (rec->content == NULL) return YS_FRAME_ERR_IO;
@@ -312,30 +303,25 @@ enum ys_frame_status ys_frame_reader_next(struct ys_frame_reader *r, struct ys_f
 }
 
 /* --- R5.2 / R8.1 record-name sets ------------------------------------------ */
-
 struct fixed_names {
     const char *names[3];
     const char *indexed_prefix;
     size_t indexed_prefix_len;
     unsigned indexed_digits;
 };
-
 static const struct fixed_names INPUT_NAMES =
     { { "plan.json", "instruction", "verifier" }, "candidate/", 10U, 5U };
 static const struct fixed_names EXPORT_NAMES =
     { { "report.json", "stdout", "stderr" }, "evidence/", 9U, 4U };
-
 static const struct fixed_names *names_for(enum ys_record_set set)
 {
     return (set == YS_RECORD_SET_INPUT) ? &INPUT_NAMES : &EXPORT_NAMES;
 }
-
 static int name_equals(const char *name, size_t len, const char *literal)
 {
     size_t lit_len = strlen(literal);
     return len == lit_len && memcmp(name, literal, lit_len) == 0;
 }
-
 /* "<prefix><digits>", exactly `digits` decimal digits, zero-padded
  * (leading zeros required). 1 and *index_out on match, else 0. */
 static int parse_indexed_name(const struct fixed_names *fn, const char *name, size_t len,
@@ -353,12 +339,10 @@ static int parse_indexed_name(const struct fixed_names *fn, const char *name, si
     *index_out = value;
     return 1;
 }
-
 void ys_record_set_init(struct ys_record_set_state *state, enum ys_record_set set)
 {
     state->set = set; state->step = 0; state->next_index = 0;
 }
-
 enum ys_frame_status ys_record_set_advance(struct ys_record_set_state *state, const char *name,
                                             size_t len, uint32_t *index_out)
 {
@@ -377,14 +361,12 @@ enum ys_frame_status ys_record_set_advance(struct ys_record_set_state *state, co
     *index_out = index;
     return YS_FRAME_OK;
 }
-
 enum ys_frame_status ys_record_set_finish(const struct ys_record_set_state *state)
 {
     return (state->step >= 3U) ? YS_FRAME_OK : YS_FRAME_ERR_MISSING;
 }
 
 /* --- Strict UTF-8 and the preparation path range --------------------------- */
-
 static int utf8_decode_one(const unsigned char *s, size_t len, size_t i, size_t *consumed,
                             uint32_t *cp)
 {
@@ -415,12 +397,10 @@ static int utf8_decode_one(const unsigned char *s, size_t len, size_t i, size_t 
     }
     return 0;
 }
-
 static int is_control_codepoint(uint32_t cp)
 {
     return cp <= 0x001FU || (cp >= 0x007FU && cp <= 0x009FU);
 }
-
 int ys_utf8_validate(const unsigned char *s, size_t len, int *has_control)
 {
     size_t i = 0;
@@ -434,9 +414,7 @@ int ys_utf8_validate(const unsigned char *s, size_t len, int *has_control)
     }
     return 1;
 }
-
 struct path_component { size_t offset, length; };
-
 static int split_path_components(const unsigned char *path, size_t len,
                                   struct path_component *comps, size_t cap, size_t *count)
 {
@@ -451,11 +429,10 @@ static int split_path_components(const unsigned char *path, size_t len,
     *count = n;
     return 1;
 }
-
 static int path_component_ok(const unsigned char *path, struct path_component c)
 {
     unsigned char last;
-    if (c.length == 0) return 0;
+    if (c.length == 0 || c.length > 255U) return 0;
     if (c.length == 1U && path[c.offset] == '.') return 0;
     if (c.length == 2U && path[c.offset] == '.' && path[c.offset + 1] == '.') return 0;
     if (c.length == 4U) {
@@ -470,7 +447,6 @@ static int path_component_ok(const unsigned char *path, struct path_component c)
     last = path[c.offset + c.length - 1U];
     return last != '.' && last != ' ';
 }
-
 int ys_path_range_ok(const unsigned char *path, size_t len)
 {
     struct path_component comps[64];

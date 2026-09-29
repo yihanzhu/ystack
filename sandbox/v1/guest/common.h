@@ -66,10 +66,16 @@ struct ys_frame_reader {
     int fd; off_t total_size; off_t offset; struct ys_sha256_ctx digest; int done;
 };
 
-/* Sequential reader over a descriptor of known total size (fstat'd at
- * open). One record per call; is_end means the digest and zero-only tail
- * are already checked and no further call is valid. */
-enum ys_frame_status ys_frame_reader_open(struct ys_frame_reader *r, int fd);
+/* fstat's a regular file, or (Linux) ioctl(BLKGETSIZE64)'s a block device
+ * (the input/export disks are block devices in the guest, whose fstat
+ * st_size is 0); any other descriptor type is refused. Callers open a
+ * reader with this capacity, not raw st_size. */
+enum ys_frame_status ys_frame_descriptor_capacity(int fd, off_t *capacity_out);
+
+/* Sequential reader over a descriptor of the given total capacity. One
+ * record per call; is_end means the digest and zero-only tail are already
+ * checked and no further call is valid. */
+enum ys_frame_status ys_frame_reader_open(struct ys_frame_reader *r, int fd, off_t capacity);
 enum ys_frame_status ys_frame_reader_next(struct ys_frame_reader *r, struct ys_frame_record *rec);
 
 /* R5.2 / R8.1: fixed leading names in order, then a zero-padded,

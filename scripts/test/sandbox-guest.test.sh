@@ -7,23 +7,18 @@
 set -euo pipefail
 export LC_ALL=C
 umask 077
-
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 guest_dir="$root/sandbox/v1/guest"
 harness_src="$root/scripts/test/sandbox-guest-harness.c"
 python=/usr/bin/python3
-
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-sandbox-guest-test.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 cleanup() { /bin/chmod -R u+rwX "$tmp" 2>/dev/null || :; /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT
-
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha_file() { /usr/bin/shasum -a 256 -- "$1" | /usr/bin/awk '{print $1}'; }
-
 cc_build() {
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" \
     "$harness_src" "$guest_dir/common.c" -o "$1"
@@ -34,7 +29,6 @@ cc_build "$h1"; cc_build "$h2"
 cmp -s "$h1" "$h2" || fail 'two host-compiler builds are not byte-identical'
 pass 'two host-compiler builds of the harness (guest common code) are byte-identical'
 h="$h1"
-
 # FIPS 180-4 vectors, through the code (ys_sha256_bytes via `digest`).
 : > "$tmp/fips-empty"
 /usr/bin/printf 'abc' > "$tmp/fips-abc"
@@ -50,12 +44,10 @@ pass 'the FIPS 180-4 vectors (empty, abc, 448-bit, one-million-a) match publishe
 
 # --- helpers ---------------------------------------------------------------
 mkframe() { local out=$1; shift; "$h" frame-write "$out" "$@"; }
-try_read() { # try_read <frame> [set]; writes stderr to $tmp/err
-  local frame=$1 set=${2:-} dir="$tmp/extract" status=0
+try_read() { # try_read <frame> [set] [--capacity=N]; writes stderr to $tmp/err
+  local frame=$1 dir="$tmp/extract" status=0; shift
   /bin/rm -rf -- "$dir"
-  if [ -n "$set" ]; then "$h" frame-read "$frame" "$dir" "$set" 2>"$tmp/err" || status=$?
-  else "$h" frame-read "$frame" "$dir" 2>"$tmp/err" || status=$?
-  fi
+  "$h" frame-read "$frame" "$dir" "$@" 2>"$tmp/err" || status=$?
   return "$status"
 }
 expect_ok() { # expect_ok <desc> <frame> [set]
@@ -76,7 +68,6 @@ mkframe "$tmp/f3.bin" x="$tmp/r0" yy="$tmp/r1"
 full_size=$(wc -c < "$tmp/f3.bin" | tr -d ' ')
 expect_ok 'an untruncated three-record frame' "$tmp/f3.bin"
 pass 'an untruncated three-record frame (magic, two records, end) is accepted'
-
 off=0
 while [ "$off" -lt "$full_size" ]; do
   /bin/dd if="$tmp/f3.bin" of="$tmp/trunc.bin" bs=1 count="$off" 2>/dev/null
@@ -84,7 +75,6 @@ while [ "$off" -lt "$full_size" ]; do
   off=$((off + 1))
 done
 pass 'every truncation offset (0 through one byte short) of the three-record frame is refused E_FRAME_TRUNCATED, paired against the accepted control above'
-
 "$python" - "$tmp/f3.bin" "$tmp/tail-zero.bin" "$tmp/tail-nonzero.bin" <<'PY'
 import sys
 data = open(sys.argv[1], 'rb').read()
@@ -95,7 +85,6 @@ expect_ok 'a zero-only tail past end' "$tmp/tail-zero.bin"
 pass 'a zero-only tail past the end record is accepted'
 expect_err 'a non-zero tail byte past end' E_FRAME_TAIL "$tmp/tail-nonzero.bin"
 pass 'a non-zero tail byte past the end record is refused E_FRAME_TAIL, paired against the zero-tail control'
-
 "$python" -c "
 data = bytearray(open('$tmp/f3.bin', 'rb').read())
 data[-1] ^= 0xFF
@@ -103,7 +92,6 @@ open('$tmp/flip.bin', 'wb').write(data)
 "
 expect_err 'a flipped end-digest byte' E_FRAME_DIGEST "$tmp/flip.bin"
 pass 'a flipped end-digest byte is refused E_FRAME_DIGEST, paired against the accepted three-record frame'
-
 "$python" -c "
 data = bytearray(open('$tmp/f3.bin', 'rb').read())
 data[0] ^= 0xFF
@@ -111,7 +99,6 @@ open('$tmp/badmagic.bin', 'wb').write(data)
 "
 expect_err 'a corrupted magic byte' E_FRAME_MAGIC "$tmp/badmagic.bin"
 pass 'a corrupted magic byte is refused E_FRAME_MAGIC, paired against the accepted three-record frame'
-
 "$python" - "$tmp/len-past.bin" <<'PY'
 import struct, sys
 def rec(name, data):
@@ -130,7 +117,6 @@ mkframe "$tmp/in-good.bin" plan.json="$tmp/plan.json" instruction="$tmp/instruct
   verifier="$tmp/verifier" candidate/00000="$tmp/c0" candidate/00001="$tmp/c1"
 expect_ok 'a well-formed input-set frame' "$tmp/in-good.bin" input
 pass 'a well-formed input-set frame (fixed names in order, contiguous candidate indices) is accepted'
-
 dir="$tmp/roundtrip"
 "$h" frame-read "$tmp/in-good.bin" "$dir" input
 roundtrip_ok=1
@@ -141,13 +127,11 @@ cmp -s "$dir/candidate/00000" "$tmp/c0" || roundtrip_ok=0
 cmp -s "$dir/candidate/00001" "$tmp/c1" || roundtrip_ok=0
 [ "$roundtrip_ok" -eq 1 ] || fail 'round trip: an extracted record differs from its source bytes'
 pass 'byte-identical round trip: frame-write then frame-read reproduces every record exactly'
-
 mkframe "$tmp/in-emptyname.bin" ="$tmp/plan.json" instruction="$tmp/instruction" verifier="$tmp/verifier"
 expect_err 'an empty record name in place of plan.json' E_FRAME_NAME "$tmp/in-emptyname.bin" input
 mkframe "$tmp/in-badname.bin" bogus.json="$tmp/plan.json" instruction="$tmp/instruction" verifier="$tmp/verifier"
 expect_err 'an out-of-set record name in place of plan.json' E_FRAME_NAME "$tmp/in-badname.bin" input
 pass 'an empty or out-of-set record name is refused E_FRAME_NAME, paired against the accepted well-formed frame'
-
 mkframe "$tmp/in-gap.bin" plan.json="$tmp/plan.json" instruction="$tmp/instruction" verifier="$tmp/verifier" \
   candidate/00000="$tmp/c0" candidate/00002="$tmp/c1"
 expect_err 'a candidate index gap (0 then 2)' E_FRAME_INDEX "$tmp/in-gap.bin" input
@@ -167,5 +151,27 @@ mkframe "$tmp/ex-bad.bin" report.json="$tmp/report.json" stdout="$tmp/stdout" st
   "evidence/00000"="$tmp/ev0"
 expect_err 'a five-digit evidence index (wrong width for R8.1)' E_FRAME_NAME "$tmp/ex-bad.bin" export
 pass 'an evidence name of the wrong digit width is refused E_FRAME_NAME, paired against the accepted export frame'
+
+# --- explicit descriptor capacity (not a regular file's raw st_size) -------
+expect_ok 'an explicit --capacity equal to the real size' "$tmp/f3.bin" "--capacity=$full_size"
+pass 'an explicit capacity equal to the actual size is accepted (the auto-detected regular-file path above already covers the default)'
+expect_err 'an explicit --capacity understating the real size' E_FRAME_TRUNCATED "$tmp/f3.bin" "--capacity=$((full_size - 5))"
+pass 'an explicit capacity smaller than the actual bytes is refused E_FRAME_TRUNCATED: the reader trusts the given capacity, not fstat st_size'
+expect_err 'an explicit --capacity overstating the real size' E_FRAME_IO "$tmp/f3.bin" "--capacity=$((full_size + 1000))"
+pass 'an explicit capacity larger than the actual bytes is refused E_FRAME_IO (a real short read past EOF), never a crash or an out-of-bounds read'
+
+# --- preparation path range: component length bound (<=255 bytes) ---------
+"$python" -c "import sys; sys.stdout.buffer.write(b'a' * 255)" > "$tmp/comp255"
+"$python" -c "import sys; sys.stdout.buffer.write(b'a' * 256)" > "$tmp/comp256"
+"$python" -c "import sys; sys.stdout.buffer.write(('é' * 127 + 'a').encode())" > "$tmp/comp255mb"
+"$python" -c "import sys; sys.stdout.buffer.write(('é' * 127 + 'aa').encode())" > "$tmp/comp256mb"
+"$h" path-ok "$tmp/comp255" || fail 'a 255-byte path component must be accepted'
+if "$h" path-ok "$tmp/comp256" 2>"$tmp/err"; then fail 'a 256-byte path component must be refused'; fi
+[ "$(cat "$tmp/err")" = E_PATH_REJECTED ] || fail 'expected E_PATH_REJECTED for a 256-byte component'
+pass 'a path component of exactly 255 bytes is accepted and 256 bytes is refused E_PATH_REJECTED (the boundary itself)'
+"$h" path-ok "$tmp/comp255mb" || fail 'a 255-byte multibyte path component must be accepted'
+if "$h" path-ok "$tmp/comp256mb" 2>"$tmp/err"; then fail 'a 256-byte multibyte path component must be refused'; fi
+[ "$(cat "$tmp/err")" = E_PATH_REJECTED ] || fail 'expected E_PATH_REJECTED for a 256-byte multibyte component'
+pass 'the same 255/256-byte boundary holds for a component built from multibyte UTF-8 (127 U+00E9 plus ASCII), not just single-byte characters'
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

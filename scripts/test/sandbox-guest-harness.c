@@ -105,25 +105,32 @@ static void write_record_file(const char *dir, const struct ys_frame_record *rec
     if (close(fd) != 0) die("E_FRAME_IO");
 }
 
+/* frame-read <in> <dir> [input|export] [--capacity=N]: --capacity overrides
+ * ys_frame_descriptor_capacity's auto-detected size (proves the reader
+ * trusts the given capacity, not a regular file's real st_size). */
 static int cmd_frame_read(int argc, char **argv)
 {
-    int fd;
+    int fd, i, have_set = 0, have_cap = 0;
     struct ys_frame_reader r;
     struct ys_record_set_state set_state;
-    int have_set = 0;
     enum ys_frame_status status;
+    off_t capacity = 0;
 
     if (argc < 4) usage();
-    if (argc >= 5) {
-        if (strcmp(argv[4], "input") == 0) ys_record_set_init(&set_state, YS_RECORD_SET_INPUT);
-        else if (strcmp(argv[4], "export") == 0) ys_record_set_init(&set_state, YS_RECORD_SET_EXPORT);
+    for (i = 4; i < argc; i++) {
+        if (strcmp(argv[i], "input") == 0) { ys_record_set_init(&set_state, YS_RECORD_SET_INPUT); have_set = 1; }
+        else if (strcmp(argv[i], "export") == 0) { ys_record_set_init(&set_state, YS_RECORD_SET_EXPORT); have_set = 1; }
+        else if (strncmp(argv[i], "--capacity=", 11U) == 0) { capacity = (off_t)strtoll(argv[i] + 11, NULL, 10); have_cap = 1; }
         else usage();
-        have_set = 1;
     }
 
     fd = open(argv[2], O_RDONLY);
     if (fd < 0) die("E_FRAME_IO");
-    status = ys_frame_reader_open(&r, fd);
+    if (!have_cap) {
+        status = ys_frame_descriptor_capacity(fd, &capacity);
+        if (status != YS_FRAME_OK) die(ys_frame_status_str(status));
+    }
+    status = ys_frame_reader_open(&r, fd, capacity);
     if (status != YS_FRAME_OK) die(ys_frame_status_str(status));
     if (mkdir(argv[3], 0755) != 0) die("E_FRAME_IO");
 
@@ -164,12 +171,27 @@ static int cmd_digest(int argc, char **argv)
     return 0;
 }
 
+/* path-ok <file>: ys_path_range_ok on the file's raw bytes as one path. */
+static int cmd_path_ok(int argc, char **argv)
+{
+    unsigned char *buf;
+    size_t len;
+    int ok;
+    if (argc != 3) usage();
+    buf = read_whole_file(argv[2], &len);
+    ok = ys_path_range_ok(buf, len);
+    free(buf);
+    if (!ok) die("E_PATH_REJECTED");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) usage();
     if (strcmp(argv[1], "frame-write") == 0) return cmd_frame_write(argc, argv);
     if (strcmp(argv[1], "frame-read") == 0) return cmd_frame_read(argc, argv);
     if (strcmp(argv[1], "digest") == 0) return cmd_digest(argc, argv);
+    if (strcmp(argv[1], "path-ok") == 0) return cmd_path_ok(argc, argv);
     usage();
     return 2;
 }
