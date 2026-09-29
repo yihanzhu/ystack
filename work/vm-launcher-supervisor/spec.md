@@ -58,7 +58,8 @@ Citations are to origin/main at `e73b76a`.
    install request (R13.2) cites each at the pinned tag's source; a missing one
    returns this spec to G2.
 3. **Slots,** each measured by the host supervisor before admission from the installed
-   bytes named in its configuration (R10.1). A composite is the SHA-256 of the
+   bytes named in its configuration (R10.1), except `verification_instructions`,
+   measured from the package's `instruction` record (R4.2). A composite is the SHA-256 of the
    canonical document shown; a version name is a label beside a digest, never an
    identity (`work/real-sandbox-boundary/spec.md:45-52`).
 
@@ -72,7 +73,7 @@ Citations are to origin/main at `e73b76a`.
 | `host_supervisor` | `{config_sha256,files:[{path,sha256}],python_sha256}` over the installed `host-supervisor.py`, the host configuration and the interpreter |
 | `verifier` | The guest-built executable of the unchanged `verifier.c`, default root `/sandbox` |
 | `toolchain` | The pinned toolchain archive (R2.5) |
-| `verification_instructions` | The instruction bytes |
+| `verification_instructions` | The package's `instruction` bytes, the same bytes the input disk carries |
 
 4. **Kernel.** One distribution-built arm64 kernel package, identified by its archive
    digest and the digests of the extracted `Image` and build config; the install
@@ -106,14 +107,21 @@ Citations are to origin/main at `e73b76a`.
    `subject` (the shape of `:114-119`). `launch_request_sha256` is the SHA-256 of these
    canonical bytes. The nonce never enters the guest, the receipt or the store.
 2. **Frame format** `YSFRAME1`, shared by the package, the input disk and the export
-   disk: the 8 magic bytes, then records of a 1-byte name length (1-255), an ASCII name
-   over `[a-z0-9._/-]`, an 8-byte big-endian length and the bytes; last a record named
-   `end` whose 32 bytes are the SHA-256 of everything before it. Anything after `end`
-   must be zero bytes. A frame detects truncation and damage; it authenticates nothing.
+   disk: the 8 magic bytes, then records of a 1-byte name length, the name, an 8-byte
+   big-endian length and the bytes; last a record named `end` whose 32 bytes are the
+   SHA-256 of everything before it. Anything after `end` must be zero bytes. Record
+   names are a closed set of ASCII names: the ones R3.3, R5.2 and R8.1 list, with
+   `candidate/<nnnnn>` and `evidence/<nnnn>` zero-padded decimal indexes in order from
+   0. No path is ever a record name: a candidate record's path is the manifest entry
+   (in the package) or the plan entry (on the input disk) at its index, a JSON string
+   carrying the preparation component's full path range, strict UTF-8 up to 4,096 bytes
+   and 64 components, byte for byte (`work/candidate-content-preparation/spec.md:262-270`).
+   A frame detects truncation and damage; it authenticates nothing.
 3. **Package,** read from stdin, at most 88,080,384 bytes: `request.json`,
    `evaluation.json` (the admitting `sandbox_policy_evaluation`), `record.json` and
-   `manifest.json` (the #396 bundle's), `instruction`, then `candidate/<path>` for each
-   manifest file entry in manifest order, then `end`.
+   `manifest.json` (the #396 bundle's), `instruction`, then `candidate/<nnnnn>` for
+   the manifest's file entries in manifest order (index 0 is the first file entry),
+   then `end`.
 4. **Invocation:** `sandbox/v1/host-supervisor.py launch`, no other argument. In
    production the consumer runs it through the sudo rule of R13.3 as the supervisor
    principal; its configuration comes only from `host-config.json` beside the script.
@@ -142,8 +150,14 @@ Citations are to origin/main at `e73b76a`.
    `preparation/v1/prepare-candidate.py:1925`), `launch.candidate-mismatch` (a missing,
    extra, resized or changed file, or a mode or kind differing from the manifest entry,
    `:1662-1677`), `launch.candidate-oversize` (above the preparation export limit,
-   `:54`), `launch.instruction-mismatch` (digest differs from `instruction_sha256`),
-   `launch.kernel-config` (R2.4).
+   `:54`), `launch.instruction-mismatch` (the SHA-256 of the package's instruction
+   bytes differs from the request's `instruction_sha256`),
+   `launch.instruction-unaccepted` (that digest, which is the
+   `verification_instructions` slot, is not in the environment's accepted list),
+   `launch.kernel-config` (R2.4). Admission therefore requires three-way equality of
+   the supplied bytes' digest, the request digest and an accepted identity, and the
+   receipt records the digest of the bytes actually supplied, never an installed or
+   requested value.
 3. Otherwise the attempt is admitted; admission is the instant the host deadline clock
    (R9.1) starts.
 
@@ -154,11 +168,12 @@ Citations are to origin/main at `e73b76a`.
    The source Git directory, checkout, record, manifest and all bundle metadata stay
    host-side; only candidate file bytes enter the guest.
 2. **Input disk** `<work_root>/<attempt_id>/input.img`, mode `0400`, a frame of
-   `plan.json`, `instruction`, `verifier` and `candidate/<path>` records, padded to a
-   512-byte multiple, attached read-only. `plan.json` (kind `sandbox_guest_plan`)
-   carries the argv, the four variables, the R7 parameters, the candidate entries
-   (path, kind, mode, size, SHA-256), and the verifier and instruction digests; no host
-   path, store id or nonce.
+   `plan.json`, `instruction` (the admitted package bytes), `verifier` and
+   `candidate/<nnnnn>` records, padded to a 512-byte multiple, attached read-only.
+   `plan.json` (kind `sandbox_guest_plan`) carries the argv, the four variables, the R7
+   parameters, the candidate entries in index order (path, kind, mode, size, SHA-256),
+   and the verifier and instruction digests; no host path, store id or nonce. The guest
+   supervisor refuses instruction bytes whose digest differs from the plan's.
 3. **Export disk** `<work_root>/<attempt_id>/export.img`, 12,582,912 zero bytes,
    attached read-write, read by the host only after the VM is stopped (R8).
 4. **VM shape,** closed: 1 vCPU; memory 536,870,912 bytes; the kernel, initramfs and
@@ -291,7 +306,7 @@ Citations are to origin/main at `e73b76a`.
 1. **Trusted configuration** `host-config.json` (kind `sandbox_host_config`) beside
    `host-supervisor.py`, `body` exactly: `principal_uid`, `consumer_gid`, `store_id`,
    `store_root`, `work_root`, `environment_id`, `runtime` (vfkit and driver paths),
-   `identity_paths` (the installed file for each R2.3 input) and `installed_files`
+   `identity_paths` (the installed file for each R2.3 input but the instruction) and `installed_files`
    (paths of the installed control policy, decision, policy set, evaluator driver and
    program, registry and accepted set). The install directory, every ancestor and each
    listed file must be owned by uid 0 or `principal_uid` and be neither group- nor
@@ -442,6 +457,14 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
      reuse, and an existing attempt left byte-identical;
    - each phase B reason alone, including changed and missing bytes per slot, and
      manifest, record and candidate mismatch;
+   - instruction binding: replacing the package instruction and the request's
+     `instruction_sha256` together with an unaccepted instruction refuses with
+     `launch.instruction-unaccepted`, and the receipt records the replaced bytes'
+     digest (so the check gives `receipt.identity-unaccepted`); replacing only one of
+     them refuses with `launch.instruction-mismatch`; the positive control uses an
+     accepted instruction;
+   - candidate transport of `README.md`, a non-ASCII UTF-8 name and a 4,096-byte
+     64-component path, byte for byte into `plan.json`;
    - the input disk's `plan.json` carries exactly the R6.4 argv, variables and
      instruction bytes, and no nonce, host path or store id;
    - for each R7 row, `hard`, `none`, `unknown`, and `partial` and `unavailable`
@@ -465,7 +488,9 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    `common.c` using the host compiler and proves: frame parse and write, including every
    truncation, trailing-byte and `end` digest case; plan parsing; the exec wiring
    (argv, the four variables, fd 0 regular, fds 1-2 append-only, no other descriptor)
-   by exec'ing a harness child that reports them; `build-guest.py image` determinism
+   by exec'ing a harness child that reports them; candidate records whose plan paths
+   are `README.md`, a non-ASCII UTF-8 name and a 4,096-byte 64-component path, each
+   materialized byte for byte, and a record name outside the closed set refused; `build-guest.py image` determinism
    over synthetic inputs, and `compile` refusing an existing output directory. On Linux
    it also compiles `init.c`, `supervisor.c` and `probe.c` with `-std=c11 -Wall
    -Wextra -Werror`; Darwin has no Linux headers, so there that case is named as a
