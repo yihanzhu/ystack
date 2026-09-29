@@ -100,4 +100,108 @@ enum ys_frame_status ys_record_set_finish(const struct ys_record_set_state *stat
 int ys_utf8_validate(const unsigned char *s, size_t len, int *has_control);
 int ys_path_range_ok(const unsigned char *path, size_t len);
 
+/* PR 2: sandbox_guest_plan (R5.2) parsing, R5.5 materialization, R6.4
+ * wiring, R8.1 export inventory. Canonical form only (no whitespace, keys
+ * sorted, one trailing LF): `{"body":{"argv":<fixed>,"entries":[...],
+ * "environment":<fixed>,"instruction_sha256":<hex>,"limits":{...9 R7.1
+ * fields...},"verifier_sha256":<hex>},"kind":"sandbox_guest_plan",
+ * "schema_version":1}\n`. `argv` and `environment` are R6.4's fixed wiring
+ * (YS_PLAN_ARGV / YS_PLAN_ENVIRONMENT below) and are matched literally, not
+ * decoded: the plan never varies them. */
+#define YS_PLAN_ARGV0 "/sandbox/tools/verifier"
+extern const char *const YS_PLAN_ARGV[7]; /* argv0..argv5, NULL */
+extern const char *const YS_PLAN_ENVIRONMENT[5]; /* 4 entries, NULL */
+
+enum ys_plan_status { YS_PLAN_OK = 0, YS_PLAN_ERR_SCHEMA, YS_PLAN_ERR_LIMIT, YS_PLAN_ERR_IO };
+const char *ys_plan_status_str(enum ys_plan_status status);
+
+struct ys_plan_limits {
+    uint64_t bandwidth_slice_us, cpu_max, cpu_max_burst, output_inodes, output_tmpfs_bytes,
+        pids_max, scratch_bytes, scratch_inodes, tree_deadline_ms;
+};
+
+/* One manifest entry. Directories carry no digest or size (R3.2/R5.2:
+ * "directories with null digest and size"); the n-th file entry (0-based,
+ * directories not counted) is frame record candidate/<n>. */
+struct ys_plan_entry {
+    int is_file;
+    char mode[5];
+    unsigned char path[4096];
+    size_t path_len;
+    unsigned char sha256_hex[65];
+    uint64_t size_bytes;
+};
+
+struct ys_guest_plan {
+    struct ys_plan_entry *entries;
+    size_t entry_count;
+    unsigned char instruction_sha256_hex[65];
+    struct ys_plan_limits limits;
+    unsigned char verifier_sha256_hex[65];
+};
+
+/* Parses and validates `bytes[0..len)` per the shape above; unknown,
+ * missing, duplicate or misordered keys, a disallowed escape (anything
+ * `json.dumps(ensure_ascii=False)` would not itself emit) or a type/range
+ * mismatch is YS_PLAN_ERR_SCHEMA. On success, plan->entries is malloc'd
+ * (caller calls ys_plan_free). */
+enum ys_plan_status ys_plan_parse(const unsigned char *bytes, size_t len,
+                                   struct ys_guest_plan *plan);
+void ys_plan_free(struct ys_guest_plan *plan);
+
+/* R5.5 materialization under directory descriptor `dirfd`: entries in plan
+ * order, each path walked one component at a time (never as one long
+ * string: a 4,096-byte candidate path exceeds PATH_MAX on every POSIX
+ * host). A directory is mkdirat'd then fchownat'd to uid:gid, mode 0500; a
+ * file is openat'd (O_CREAT|O_EXCL), written from
+ * file_contents[fi]/file_lengths[fi] (fi = that entry's file index),
+ * fchown'd to uid:gid and fchmod'd to its exact manifest mode, after
+ * checking its written size and SHA-256 against the entry. Every path is
+ * plan-relative (ys_path_range_ok already checked by the parser). */
+enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
+                                         const struct ys_guest_plan *plan,
+                                         const unsigned char *const *file_contents,
+                                         const size_t *file_lengths);
+
+/* Walks the real descriptor table (Linux /proc/self/fd, Darwin /dev/fd;
+ * never a numeric guess), calling visit(fd, ctx) per open fd >= lowfd. 1
+ * if complete, 0 if not confirmed complete (fail-closed, e.g. a test's
+ * own "every other descriptor closed" check). Shared by ys_exec's Darwin
+ * close path and anything checking its work. */
+int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx);
+
+/* R6.4 wiring: execve's `argv` with `envp`, fd 0 the instruction (a regular
+ * file opened read-only from `instruction_fd`, which must be seekable to
+ * offset 0), fd 1 and 2 duplicated from `stdout_fd`/`stderr_fd` (opened
+ * O_WRONLY|O_APPEND by the caller), every other descriptor above 2 closed
+ * exhaustively first (Linux close_range; Darwin, this harness's own build
+ * only, a /dev/fd walk -- no numeric-sweep fallback either way, since a
+ * capped sweep is not exhaustive and a lowered rlimit does not close an
+ * fd already open past it). Refuses (_exit(126)) instead of proceeding to
+ * execve if that closure cannot be confirmed. Does not return on success. */
+void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
+             int stdout_fd, int stderr_fd);
+
+/* R8.1 export inventory: every regular file directly under `dirfd`, sorted
+ * by name, becomes evidence/<index>; refuses (YS_PLAN_ERR_SCHEMA) if any
+ * has link count other than 1 or shares an inode with another (a
+ * same-directory hard-link alias), since either means the evidence set is
+ * not what it claims to be. `names_out[i]` (malloc'd, caller frees each and
+ * the array) receives the i-th file's name in that order. */
+enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out);
+
+#ifdef YSTACK_TEST_FAULT_INJECT
+/* Test-only hook, compiled only when this translation unit is built with
+ * -DYSTACK_TEST_FAULT_INJECT (never in a production build): when non-zero,
+ * the Nth readdir() call inside ys_evidence_inventory fails with ENOMEM
+ * instead of returning a real dirent, so the test suite can prove the
+ * readdir-failure path (otherwise untriggerable deterministically). */
+extern size_t ys_test_readdir_fail_at;
+/* When non-zero, ys_exec's close_all_from refuses immediately (as if
+ * close_range/the /dev/fd walk itself had failed), so the test suite can
+ * prove ys_exec fails closed (_exit(126), execve never reached) rather
+ * than silently proceeding when exhaustive closure can't be confirmed. */
+extern int ys_test_close_all_fail;
+#endif
+
 #endif

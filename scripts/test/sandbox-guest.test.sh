@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Proves the YSFRAME1 frame codec and the R5.2/R8.1 record-name sets
-# (ystack #463, PR 1 of 9). Builds scripts/test/sandbox-guest-harness.c with
-# sandbox/v1/guest/common.c using the host compiler. See
-# work/vm-launcher-supervisor/plan.md ("PR 1") and spec.md R3.2. Not run
-# against a real guest: this proves the codec only.
+# Proves the YSFRAME1 frame codec, the R5.2/R8.1 record-name sets, the
+# sandbox_guest_plan parser, R5.5 materialization, R6.4 exec wiring and the
+# R8.1 export inventory (ystack #463, PRs 1-2). Builds
+# scripts/test/sandbox-guest-harness.c with sandbox/v1/guest/common.c using
+# the host compiler. See work/vm-launcher-supervisor/plan.md ("PR 1",
+# "PR 2") and spec.md R3.2/R5.2/R5.5/R6.4/R8.1. Not run against a real
+# guest: this proves the codec and wiring only.
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -28,6 +30,13 @@ h1="$tmp/build1/harness"; h2="$tmp/build2/harness"
 cc_build "$h1"; cc_build "$h2"
 cmp -s "$h1" "$h2" || fail 'two host-compiler builds are not byte-identical'
 pass 'two host-compiler builds of the harness (guest common code) are byte-identical'
+# A second, test-only build with the readdir fault-injection hook compiled
+# in (YSTACK_TEST_FAULT_INJECT): never part of the byte-identity check
+# above, used only for the readdir-failure case near the inventory tests.
+hf="$tmp/build-fault/harness"
+/bin/mkdir -m 700 "$tmp/build-fault"
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_TEST_FAULT_INJECT -I"$guest_dir" \
+  "$harness_src" "$guest_dir/common.c" -o "$hf"
 h="$h1"
 # FIPS 180-4 vectors, through the code (ys_sha256_bytes via `digest`).
 : > "$tmp/fips-empty"
@@ -173,5 +182,264 @@ pass 'a path component of exactly 255 bytes is accepted and 256 bytes is refused
 if "$h" path-ok "$tmp/comp256mb" 2>"$tmp/err"; then fail 'a 256-byte multibyte path component must be refused'; fi
 [ "$(cat "$tmp/err")" = E_PATH_REJECTED ] || fail 'expected E_PATH_REJECTED for a 256-byte multibyte component'
 pass 'the same 255/256-byte boundary holds for a component built from multibyte UTF-8 (127 U+00E9 plus ASCII), not just single-byte characters'
+# =============================================================================
+# PR 2: sandbox_guest_plan parser (R5.2), R5.5 materialization, R6.4 exec
+# wiring, R8.1 export inventory.
+# =============================================================================
+stat_mode() { "$python" -c "import os,sys;print('0'+oct(os.stat(sys.argv[1]).st_mode&0o777)[2:])" "$1"; }
+stat_owner() { "$python" -c "import os,sys;print(os.stat(sys.argv[1]).st_uid)" "$1"; }
 
+# --- plan parsing ------------------------------------------------------
+cat > "$tmp/genplan.py" <<'PY'
+import sys, json
+out, mode, entries_file = sys.argv[1], sys.argv[2], sys.argv[3]
+entries = json.load(open(entries_file, encoding="utf-8"))
+argv = ["/sandbox/tools/verifier", "verify", "--candidate", "/sandbox/candidate",
+        "--evidence", "/sandbox/evidence"]
+env = ["LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch"]
+limits = {"bandwidth_slice_us": 1, "cpu_max": 2, "cpu_max_burst": 3, "output_inodes": 4,
+          "output_tmpfs_bytes": 5, "pids_max": 6, "scratch_bytes": 7, "scratch_inodes": 8,
+          "tree_deadline_ms": 9}
+h = "0" * 64
+body = {"argv": argv, "entries": entries, "environment": env, "instruction_sha256": h,
+        "limits": limits, "verifier_sha256": h}
+if mode == "missingkey":
+    del body["limits"]
+doc = {"body": body, "kind": "sandbox_guest_plan", "schema_version": 1}
+text = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+if mode == "unknownkey":
+    text = text.replace('"argv"', '"bogus":1,"argv"', 1)
+if mode == "dupkey":
+    text = text[:-2] + ',"schema_version":1}\n'
+if mode == "misorder":
+    text = text.replace('"kind":"sandbox_guest_plan","schema_version":1',
+                         '"schema_version":1,"kind":"sandbox_guest_plan"')
+open(out, "w", encoding="utf-8").write(text)
+PY
+genplan() { /usr/bin/printf '%s' "$3" > "$tmp/entries.json"; "$python" "$tmp/genplan.py" "$1" "$2" "$tmp/entries.json"; }
+expect_plan_ok() { # expect_plan_ok <desc> <file> <expected-entry-count>
+  local desc=$1 file=$2 want=$3 got status=0
+  got=$("$h" plan "$file" 2>"$tmp/err") || status=$?
+  [ "$status" -eq 0 ] || fail "$desc: expected acceptance, got exit $status ($(cat "$tmp/err"))"
+  [ "$got" = "$want" ] || fail "$desc: expected entry_count $want, got $got"
+}
+expect_plan_err() { # expect_plan_err <desc> <file>
+  local desc=$1 file=$2 status=0
+  "$h" plan "$file" >/dev/null 2>"$tmp/err" || status=$?
+  [ "$status" -ne 0 ] || fail "$desc: expected refusal, got exit 0"
+  [ "$(cat "$tmp/err")" = E_PLAN_SCHEMA ] || fail "$desc: expected E_PLAN_SCHEMA, got $(cat "$tmp/err")"
+}
+genplan "$tmp/plan-ok.json" ok '[]'
+expect_plan_ok 'a well-formed empty-entries plan' "$tmp/plan-ok.json" 0
+pass 'a well-formed sandbox_guest_plan (fixed argv/environment, empty entries, both hashes, all nine limits, canonical trailing LF) is accepted'
+for mode in unknownkey dupkey missingkey misorder; do
+  genplan "$tmp/plan-$mode.json" "$mode" '[]'
+  expect_plan_err "a $mode plan" "$tmp/plan-$mode.json"
+done
+pass 'an unknown key, a duplicate key, a missing key and a misordered key are each refused E_PLAN_SCHEMA, paired against the accepted well-formed plan'
+genplan "$tmp/plan-badescape.json" ok '[{"kind":"directory","mode":"0500","path":"su\u0008b","sha256":null,"size_bytes":null}]'
+expect_plan_err 'a raw \u0008 escape where \b is required' "$tmp/plan-badescape.json"
+zero64=$(/usr/bin/printf '0%.0s' $(seq 1 64))
+genplan "$tmp/plan-quote.json" ok "[{\"kind\":\"file\",\"mode\":\"0400\",\"path\":\"a\\\"b.txt\",\"sha256\":\"$zero64\",\"size_bytes\":0}]"
+expect_plan_ok 'a path with a legitimately escaped double quote' "$tmp/plan-quote.json" 1
+pass 'a disallowed \u00XX escape (json.dumps would use \b) is refused E_PLAN_SCHEMA, and a path with a properly escaped double quote decodes and is accepted, paired controls'
+
+# --- R5.5 materialization: README.md, a non-ASCII UTF-8 name and a
+# 4,096-byte 64-component path, each byte for byte; manifest modes and the
+# invoking non-root uid as owner (R13.4 probe: reading as that same uid
+# must work, writing/creating/removing must not). ------------------------
+cat > "$tmp/matsetup.py" <<'PY'
+import sys, json, hashlib, os
+candroot, planout, filesout = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(os.path.join(candroot, "candidate"), exist_ok=True)
+comps = ["a" * 63] * 63 + ["a" * 64]
+big_path = "/".join(comps)
+assert len(big_path.encode("utf-8")) == 4096
+entries = [{"kind": "directory", "mode": "0500", "path": "/".join(comps[:n]),
+            "sha256": None, "size_bytes": None} for n in range(1, 64)]
+files = [("README.md", b"# hello\n", "0400"),
+         ("namé.txt", "café non-ascii\n".encode("utf-8"), "0500"),
+         (big_path, b"deep\n", "0400")]
+for i, (path, data, mode) in enumerate(files):
+    with open(os.path.join(candroot, "candidate", "%05d" % i), "wb") as fh:
+        fh.write(data)
+    entries.append({"kind": "file", "mode": mode, "path": path,
+                     "sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data)})
+argv = ["/sandbox/tools/verifier", "verify", "--candidate", "/sandbox/candidate",
+        "--evidence", "/sandbox/evidence"]
+env = ["LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch"]
+limits = {"bandwidth_slice_us": 1, "cpu_max": 2, "cpu_max_burst": 3, "output_inodes": 4,
+          "output_tmpfs_bytes": 5, "pids_max": 6, "scratch_bytes": 7, "scratch_inodes": 8,
+          "tree_deadline_ms": 9}
+h = "0" * 64
+body = {"argv": argv, "entries": entries, "environment": env, "instruction_sha256": h,
+        "limits": limits, "verifier_sha256": h}
+doc = {"body": body, "kind": "sandbox_guest_plan", "schema_version": 1}
+with open(planout, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n")
+with open(filesout, "w", encoding="utf-8") as fh:
+    for path, data, mode in files:
+        fh.write("%s\t%s\t%s\n" % (path, mode, hashlib.sha256(data).hexdigest()))
+PY
+"$python" "$tmp/matsetup.py" "$tmp/mat" "$tmp/mat/plan.json" "$tmp/mat/files.tsv"
+"$h" materialize "$tmp/mat/plan.json" "$tmp/mat" "$tmp/mat/out" "$(id -u)" "$(id -g)"
+# A 4,096-byte relative path exceeds PATH_MAX as one string on every POSIX
+# host (that is exactly what open_parent_dir's component walk in
+# ys_plan_materialize avoids): this test script walks it the same way,
+# opening one path component at a time via os.open(..., dir_fd=...), never
+# handing the shell or Python a single long path string either.
+cat > "$tmp/deepop.py" <<'PY'
+import sys, os, hashlib
+root, relpath, op = sys.argv[1], sys.argv[2], sys.argv[3]
+parts = relpath.split("/")
+fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+for p in parts[:-1]:
+    nfd = os.open(p, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    os.close(fd)
+    fd = nfd
+leaf = parts[-1]
+if op == "read":
+    lfd = os.open(leaf, os.O_RDONLY, dir_fd=fd)
+    st = os.fstat(lfd)
+    data = b"".join(iter(lambda: os.read(lfd, 65536), b""))
+    os.close(lfd)
+    print(hashlib.sha256(data).hexdigest())
+    print("0" + oct(st.st_mode & 0o777)[2:])
+    print(st.st_uid)
+elif op in ("write", "create", "remove"):
+    try:
+        if op == "write":
+            lfd = os.open(leaf, os.O_WRONLY | os.O_APPEND, dir_fd=fd)
+            os.write(lfd, b"x")
+            os.close(lfd)
+        elif op == "create":
+            os.close(os.open("new.txt", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd))
+        else:
+            os.unlink(leaf, dir_fd=fd)
+        print("ok")
+    except OSError:
+        print("fail")
+elif op == "exists":
+    try:
+        os.stat(leaf, dir_fd=fd)
+        print("1")
+    except FileNotFoundError:
+        print("0")
+os.close(fd)
+PY
+deepop() { "$python" "$tmp/deepop.py" "$tmp/mat/out" "$1" "$2"; }
+big_path=$("$python" -c "print('/'.join(['a'*63]*63+['a'*64]))")
+while IFS=$'\t' read -r relpath mode sha; do
+  case "$relpath" in
+    */*) read -r got_sha got_mode got_uid <<< "$(deepop "$relpath" read | tr '\n' ' ')" ;;
+    *) got_sha=$(sha_file "$tmp/mat/out/$relpath")
+       got_mode=$(stat_mode "$tmp/mat/out/$relpath")
+       got_uid=$(stat_owner "$tmp/mat/out/$relpath") ;;
+  esac
+  [ "$got_sha" = "$sha" ] || fail "materialize: $relpath content does not match its manifest sha256"
+  [ "$got_mode" = "$mode" ] || fail "materialize: $relpath is mode $got_mode, not $mode"
+  [ "$got_uid" = "$(id -u)" ] || fail "materialize: $relpath owner is $got_uid, not the invoking uid"
+done < "$tmp/mat/files.tsv"
+pass 'README.md, a non-ASCII UTF-8 name and a 4,096-byte 64-component path are each materialized byte for byte, with the manifest mode and the invoking uid as owner'
+"$python" -c "
+import sys
+try:
+    fd = open(sys.argv[1], 'ab'); fd.write(b'x'); fd.close(); print('ok')
+except OSError:
+    print('fail')
+" "$tmp/mat/out/README.md" > "$tmp/wr.out"
+[ "$(cat "$tmp/wr.out")" = fail ] || fail 'writing to a materialized 0400 file must fail'
+[ "$(deepop "$big_path" write)" = fail ] || fail 'writing to the deep materialized 0400 file must fail'
+[ "$(deepop "$big_path" create)" = fail ] || fail 'creating a file inside the deep materialized 0500 directory must fail'
+[ "$(deepop "$big_path" remove)" = fail ] || fail 'removing the deep file from its materialized 0500 directory must fail'
+[ "$(deepop "$big_path" exists)" = 1 ] || fail 'the deep file must still exist after the refused remove'
+pass 'as the invoking non-root uid, a write to a materialized file, a create inside a materialized directory and a remove from one all fail; reads above already succeeded'
+
+# dirfd (harness-created 0700) is itself "every ... directory" per R5.5:
+# left untouched, a root-level entry stays deletable/replaceable
+# regardless of its own mode (that's the containing directory's mode).
+[ "$(stat_mode "$tmp/mat/out")" = 0500 ] || fail 'the candidate root itself must end at mode 0500'
+[ "$(stat_owner "$tmp/mat/out")" = "$(id -u)" ] || fail 'the candidate root itself must be owned by the invoking uid'
+rootop() { # rootop <remove|create|rename> <arg>...
+  "$python" -c "
+import sys, os
+op, args = sys.argv[1], sys.argv[2:]
+try:
+    if op == 'remove': os.remove(args[0])
+    elif op == 'create': open(args[0], 'wb').close()
+    else: os.rename(args[0], args[1])
+    print('ok')
+except OSError: print('fail')
+" "$@"
+}
+[ "$(rootop remove "$tmp/mat/out/README.md")" = fail ] || fail 'removing a root-level file (README.md) must fail'
+[ "$(rootop create "$tmp/mat/out/new-root-file.txt")" = fail ] || fail 'creating a new file at the candidate root must fail'
+[ "$(rootop rename "$tmp/mat/out/README.md" "$tmp/mat/out/renamed.md")" = fail ] || fail 'renaming a root-level file must fail'
+pass 'the candidate root itself is finalized to mode 0500 and the invoking uid: a root-level remove, create or rename all fail too, not only within a nested materialized directory'
+
+# --- R6.4 exec wiring: argv, the four environment variables, fd 0 regular,
+# fds 1-2 append-only, no other descriptor -------------------------------
+/usr/bin/printf 'the instruction bytes' > "$tmp/instr.txt"
+: > "$tmp/exec.out"; : > "$tmp/exec.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec.out" "$tmp/exec.err"
+expected_report=$'argv:ok\nenv:ok\nfd0:ok\nfd1:ok\nfd2:ok\nextra_fds:0'
+[ "$(cat "$tmp/exec.out")" = "$expected_report" ] || fail "exec wiring: unexpected report $(cat "$tmp/exec.out")"
+[ ! -s "$tmp/exec.err" ] || fail 'exec wiring: stderr must be empty'
+pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables, with fd 0 a regular file, fds 1-2 append-only and every other descriptor closed'
+# ys_exec must preserve a source whose value overlaps another destination
+# (e.g. stdout_fd == 0, the instruction's own target): a naive sequential
+# dup2(instruction_fd,0); dup2(stdout_fd,1); ... would clobber stdout_fd's
+# source the moment fd 0 is repointed. "overlap" forces exactly that.
+: > "$tmp/exec-ov.out"; : > "$tmp/exec-ov.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-ov.out" "$tmp/exec-ov.err" overlap
+[ "$(cat "$tmp/exec-ov.out")" = "$expected_report" ] ||
+  fail "exec wiring (overlapping descriptors): unexpected report $(cat "$tmp/exec-ov.out")"
+[ ! -s "$tmp/exec-ov.err" ] || fail 'exec wiring (overlapping descriptors): stderr must be empty'
+pass 'ys_exec wires the same argv, environment and fds correctly even when a caller-supplied source overlaps another destination (stdout_fd forced to fd 0, the instruction target)'
+# ys_exec's close loop must not be blind to a descriptor above a *lowered*
+# soft RLIMIT_NOFILE: sysconf(_SC_OPEN_MAX) alone reflects that soft
+# limit, not the hard one. "lowlimit" opens a marker at fd 128, then lowers
+# the soft limit to 64 (leaving the hard limit untouched) before ys_exec
+# runs; a correct close must still reach fd 128.
+: > "$tmp/exec-ll.out"; : > "$tmp/exec-ll.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-ll.out" "$tmp/exec-ll.err" lowlimit
+[ "$(cat "$tmp/exec-ll.out")" = "$expected_report" ] ||
+  fail "exec wiring (fd 128, soft RLIMIT_NOFILE lowered to 64): unexpected report $(cat "$tmp/exec-ll.out")"
+[ ! -s "$tmp/exec-ll.err" ] || fail 'exec wiring (lowered soft limit): stderr must be empty'
+pass 'ys_exec still closes a descriptor (fd 128) above a soft RLIMIT_NOFILE the caller lowered to 64, not just up to sysconf(_SC_OPEN_MAX)'
+# ys_exec has no numeric-sweep fallback: if it cannot confirm every
+# descriptor was closed (close_range/the /dev/fd walk itself failing), it
+# must refuse (_exit(126)) rather than proceed to execve. "closefail"
+# (fault-injection build only) forces exactly that failure.
+: > "$tmp/exec-cf.out"; : > "$tmp/exec-cf.err"
+"$hf" exec-report "$hf" "$tmp/instr.txt" "$tmp/exec-cf.out" "$tmp/exec-cf.err" closefail
+[ ! -s "$tmp/exec-cf.out" ] || fail "exec wiring (closefail): the child must never reach the reporter, got $(cat "$tmp/exec-cf.out")"
+[ ! -s "$tmp/exec-cf.err" ] || fail 'exec wiring (closefail): stderr must be empty'
+pass 'ys_exec refuses (exit 126, execve never reached) rather than proceeding when it cannot confirm every descriptor is closed'
+
+# --- R8.1 export inventory: hard-link alias refused, single link accepted -
+/bin/mkdir -m 700 "$tmp/ev-good" "$tmp/ev-bad"
+/usr/bin/printf ev0 > "$tmp/ev-good/b.bin"; /usr/bin/printf ev1 > "$tmp/ev-good/a.bin"
+got=$("$h" inventory "$tmp/ev-good")
+[ "$got" = $'a.bin\nb.bin' ] || fail 'inventory: expected sorted single-link names a.bin then b.bin'
+pass 'the R8.1 export inventory of single-link evidence files lists them sorted by name (single-link positive control)'
+/usr/bin/printf ev0 > "$tmp/ev-bad/c.bin"; /bin/ln "$tmp/ev-bad/c.bin" "$tmp/ev-bad/c-alias.bin"
+status=0
+"$h" inventory "$tmp/ev-bad" >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] || fail 'inventory: a same-directory hard-link alias must be refused'
+[ "$(cat "$tmp/err")" = E_PLAN_SCHEMA ] || fail "inventory: expected E_PLAN_SCHEMA for a hard-link alias, got $(cat "$tmp/err")"
+pass 'the R8.1 export inventory refuses a same-directory hard-link alias of an evidence file, paired against the single-link control above'
+# A readdir() failure (e.g. ENOMEM) returns NULL exactly like end-of-
+# directory; ys_evidence_inventory must tell the two apart via errno, not
+# silently report a partial inventory as YS_PLAN_OK. The fault-injection
+# build ($hf) makes the Nth readdir() call fail this way.
+"$hf" inventory "$tmp/ev-good" > "$tmp/inv-nofail.out"
+[ "$(cat "$tmp/inv-nofail.out")" = $'a.bin\nb.bin' ] ||
+  fail 'inventory (fault-injection build, no injected failure): unexpected output'
+pass 'the fault-injection build behaves exactly like the normal build when no readdir() failure is injected'
+status=0
+"$hf" inventory "$tmp/ev-good" 2 >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] || fail 'inventory: an injected readdir() failure must be refused, not reported as a partial success'
+[ "$(cat "$tmp/err")" = E_PLAN_IO ] || fail "inventory: expected E_PLAN_IO for a readdir() failure, got $(cat "$tmp/err")"
+pass 'a readdir() failure part way through the directory is refused E_PLAN_IO rather than silently returning a partial inventory as YS_PLAN_OK'
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

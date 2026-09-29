@@ -1,10 +1,18 @@
+#if defined(__linux__)
+#define _GNU_SOURCE /* syscall() itself, used for close_range: glibc's
+                     * <unistd.h> hides its declaration under plain
+                     * _POSIX_C_SOURCE, and <sys/syscall.h> gives only the
+                     * SYS_* numbers, not the prototype. */
+#endif
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
 /* See common.h. */
 #include "common.h"
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -12,6 +20,7 @@
 #if defined(__linux__)
 #include <linux/fs.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #endif
 
 /* --- SHA-256 (FIPS 180-4) ------------------------------------------------ */
@@ -462,4 +471,490 @@ int ys_path_range_ok(const unsigned char *path, size_t len)
     for (i = 0; i < count; i++)
         if (!path_component_ok(path, comps[i])) return 0;
     return 1;
+}
+
+/* --- PR 2: sandbox_guest_plan (R5.2), R5.5 materialization, R6.4 wiring,
+ * R8.1 inventory ------------------------------------------------------- */
+const char *const YS_PLAN_ARGV[7] = {
+    YS_PLAN_ARGV0, "verify", "--candidate", "/sandbox/candidate", "--evidence",
+    "/sandbox/evidence", NULL
+};
+const char *const YS_PLAN_ENVIRONMENT[5] = {
+    "LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", NULL
+};
+#define YS_PLAN_ARGV_JSON \
+    "[\"" YS_PLAN_ARGV0 "\",\"verify\",\"--candidate\",\"/sandbox/candidate\"," \
+    "\"--evidence\",\"/sandbox/evidence\"]"
+#define YS_PLAN_ENVIRONMENT_JSON \
+    "[\"LANG=C\",\"LC_ALL=C\",\"PATH=/sandbox/tools\",\"TMPDIR=/sandbox/scratch\"]"
+const char *ys_plan_status_str(enum ys_plan_status status)
+{
+    static const char *const table[] = { "ok", "E_PLAN_SCHEMA", "E_PLAN_LIMIT", "E_PLAN_IO" };
+    return ((unsigned)status < sizeof table / sizeof table[0]) ? table[status] : "E_PLAN_UNKNOWN";
+}
+/* Matches a literal byte string exactly at *pos. */
+static int json_expect(const unsigned char *buf, size_t len, size_t *pos, const char *lit)
+{
+    size_t n = strlen(lit);
+    if (*pos + n > len || memcmp(buf + *pos, lit, n) != 0) return 0;
+    *pos += n;
+    return 1;
+}
+static int hex_nibble(unsigned char c) { return (c >= '0' && c <= '9') ? (int)(c - '0') : -1; }
+/* A `"`-delimited JSON string: decodes exactly the escapes
+ * `json.dumps(ensure_ascii=False)` emits (\", \\, \b, \f, \n, \r, \t, or
+ * \u00XX for the remaining C0 controls); any other escape, an unescaped
+ * control byte, or invalid UTF-8 in a literal run is refused. */
+static int json_parse_string(const unsigned char *buf, size_t len, size_t *pos,
+                              unsigned char *out, size_t out_cap, size_t *out_len)
+{
+    size_t i = *pos, n = 0;
+    int ok;
+    if (i >= len || buf[i] != '"') return 0;
+    i++;
+    while (i < len && buf[i] != '"') {
+        unsigned char c = buf[i];
+        if (c < 0x20U) return 0;
+        if (c == '\\') {
+            i++;
+            if (i >= len) return 0;
+            switch (buf[i]) {
+                case '"': c = '"'; i++; break;
+                case '\\': c = '\\'; i++; break;
+                case 'b': c = 0x08U; i++; break;
+                case 'f': c = 0x0CU; i++; break;
+                case 'n': c = 0x0AU; i++; break;
+                case 'r': c = 0x0DU; i++; break;
+                case 't': c = 0x09U; i++; break;
+                case 'u': {
+                    int hi, lo;
+                    if (i + 4 >= len || buf[i + 1] != '0' || buf[i + 2] != '0') return 0;
+                    hi = hex_nibble(buf[i + 3]); lo = hex_nibble(buf[i + 4]);
+                    if (hi < 0 || lo < 0) return 0;
+                    c = (unsigned char)(hi * 16 + lo);
+                    if (c == 0x08U || c == 0x09U || c == 0x0AU || c == 0x0CU || c == 0x0DU ||
+                        c > 0x1FU) return 0; /* those five use the short form instead */
+                    i += 5;
+                    break;
+                }
+                default: return 0;
+            }
+        } else {
+            i++;
+        }
+        if (n >= out_cap) return 0;
+        out[n++] = c;
+    }
+    if (i >= len || buf[i] != '"') return 0;
+    *pos = i + 1;
+    *out_len = n;
+    ok = ys_utf8_validate(out, n, &(int){0});
+    return ok;
+}
+static int json_parse_uint(const unsigned char *buf, size_t len, size_t *pos, uint64_t *out)
+{
+    size_t i = *pos;
+    uint64_t v = 0;
+    if (i >= len || buf[i] < '0' || buf[i] > '9') return 0;
+    if (buf[i] == '0') {
+        i++;
+    } else {
+        while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+            unsigned d = (unsigned)(buf[i] - '0');
+            if (v > (UINT64_MAX - d) / 10U) return 0;
+            v = v * 10U + d;
+            i++;
+        }
+    }
+    *pos = i;
+    *out = v;
+    return 1;
+}
+static int parse_hex64(const unsigned char *buf, size_t len, size_t *pos, unsigned char out[65])
+{
+    unsigned char s[65];
+    size_t n, i;
+    if (!json_parse_string(buf, len, pos, s, sizeof s, &n) || n != 64U) return 0;
+    for (i = 0; i < 64U; i++) {
+        unsigned char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    memcpy(out, s, 64U);
+    out[64] = '\0';
+    return 1;
+}
+static int parse_entry(const unsigned char *buf, size_t len, size_t *pos, struct ys_plan_entry *e)
+{
+    unsigned char kind[16], mode[8];
+    size_t kind_len, mode_len;
+    if (!json_expect(buf, len, pos, "{\"kind\":")) return 0;
+    if (!json_parse_string(buf, len, pos, kind, sizeof kind, &kind_len)) return 0;
+    if (kind_len == 4U && memcmp(kind, "file", 4U) == 0) e->is_file = 1;
+    else if (kind_len == 9U && memcmp(kind, "directory", 9U) == 0) e->is_file = 0;
+    else return 0;
+    if (!json_expect(buf, len, pos, ",\"mode\":")) return 0;
+    if (!json_parse_string(buf, len, pos, mode, sizeof mode, &mode_len) || mode_len != 4U) return 0;
+    memcpy(e->mode, mode, 4U);
+    e->mode[4] = '\0';
+    if (e->is_file) {
+        if (strcmp(e->mode, "0400") != 0 && strcmp(e->mode, "0500") != 0) return 0;
+    } else if (strcmp(e->mode, "0500") != 0) {
+        return 0;
+    }
+    if (!json_expect(buf, len, pos, ",\"path\":")) return 0;
+    if (!json_parse_string(buf, len, pos, e->path, sizeof e->path, &e->path_len)) return 0;
+    if (!ys_path_range_ok(e->path, e->path_len)) return 0;
+    if (!json_expect(buf, len, pos, ",\"sha256\":")) return 0;
+    if (e->is_file) {
+        if (!parse_hex64(buf, len, pos, e->sha256_hex)) return 0;
+    } else if (!json_expect(buf, len, pos, "null")) {
+        return 0;
+    }
+    if (!json_expect(buf, len, pos, ",\"size_bytes\":")) return 0;
+    if (e->is_file) {
+        if (!json_parse_uint(buf, len, pos, &e->size_bytes)) return 0;
+    } else if (!json_expect(buf, len, pos, "null")) {
+        return 0;
+    }
+    return json_expect(buf, len, pos, "}");
+}
+enum ys_plan_status ys_plan_parse(const unsigned char *bytes, size_t len,
+                                   struct ys_guest_plan *plan)
+{
+    size_t pos = 0, count = 0, cap = 0;
+    struct ys_plan_entry *entries = NULL;
+    memset(plan, 0, sizeof *plan);
+    if (!json_expect(bytes, len, &pos, "{\"body\":{\"argv\":" YS_PLAN_ARGV_JSON ",\"entries\":["))
+        goto fail;
+    if (pos < len && bytes[pos] != ']') {
+        for (;;) {
+            struct ys_plan_entry e;
+            memset(&e, 0, sizeof e);
+            if (!parse_entry(bytes, len, &pos, &e)) goto fail;
+            if (count == cap) {
+                size_t new_cap = (cap == 0U) ? 8U : cap * 2U;
+                struct ys_plan_entry *grown = realloc(entries, new_cap * sizeof *grown);
+                if (grown == NULL) { free(entries); return YS_PLAN_ERR_IO; }
+                entries = grown; cap = new_cap;
+            }
+            entries[count++] = e;
+            if (pos < len && bytes[pos] == ',') { pos++; continue; }
+            break;
+        }
+    }
+    if (!json_expect(bytes, len, &pos,
+                      "],\"environment\":" YS_PLAN_ENVIRONMENT_JSON ",\"instruction_sha256\":"))
+        goto fail;
+    if (!parse_hex64(bytes, len, &pos, plan->instruction_sha256_hex)) goto fail;
+    if (!json_expect(bytes, len, &pos, ",\"limits\":{")) goto fail;
+    {
+        static const char *const names[9] = {
+            "bandwidth_slice_us", "cpu_max", "cpu_max_burst", "output_inodes",
+            "output_tmpfs_bytes", "pids_max", "scratch_bytes", "scratch_inodes",
+            "tree_deadline_ms"
+        };
+        uint64_t *const slots[9] = {
+            &plan->limits.bandwidth_slice_us, &plan->limits.cpu_max, &plan->limits.cpu_max_burst,
+            &plan->limits.output_inodes, &plan->limits.output_tmpfs_bytes, &plan->limits.pids_max,
+            &plan->limits.scratch_bytes, &plan->limits.scratch_inodes, &plan->limits.tree_deadline_ms
+        };
+        unsigned i;
+        for (i = 0; i < 9U; i++) {
+            if (i > 0U && !json_expect(bytes, len, &pos, ",")) goto fail;
+            if (!json_expect(bytes, len, &pos, "\"") || !json_expect(bytes, len, &pos, names[i]) ||
+                !json_expect(bytes, len, &pos, "\":")) goto fail;
+            if (!json_parse_uint(bytes, len, &pos, slots[i])) goto fail;
+        }
+    }
+    if (!json_expect(bytes, len, &pos, "},\"verifier_sha256\":")) goto fail;
+    if (!parse_hex64(bytes, len, &pos, plan->verifier_sha256_hex)) goto fail;
+    if (!json_expect(bytes, len, &pos, "},\"kind\":\"sandbox_guest_plan\",\"schema_version\":1}\n"))
+        goto fail;
+    if (pos != len) goto fail;
+    plan->entries = entries;
+    plan->entry_count = count;
+    return YS_PLAN_OK;
+fail:
+    free(entries);
+    return YS_PLAN_ERR_SCHEMA;
+}
+void ys_plan_free(struct ys_guest_plan *plan)
+{
+    free(plan->entries);
+    plan->entries = NULL;
+    plan->entry_count = 0;
+}
+/* Splits `path` into its parent directory and leaf component, walking from
+ * `dirfd` one component at a time (never handing the kernel a long
+ * concatenated string): a 4,096-byte, 64-component candidate path easily
+ * exceeds PATH_MAX (1024-4096 depending on platform) as one string even
+ * though every individual component is far under the 255-byte limit.
+ * Returns an fd for the parent (which the caller must close unless it
+ * equals `dirfd`, meaning `path` had no parent components) with `leaf` set
+ * to the final component, or -1 on any error. */
+static int open_parent_dir(int dirfd, const unsigned char *path, size_t path_len,
+                            char *leaf, size_t leaf_cap)
+{
+    int cur = dirfd, opened = 0;
+    size_t start = 0, i;
+    for (i = 0; i <= path_len; i++) {
+        if (i != path_len && path[i] != '/') continue;
+        {
+            size_t clen = i - start;
+            if (i == path_len) {
+                if (clen >= leaf_cap) { if (opened) (void)close(cur); return -1; }
+                memcpy(leaf, path + start, clen);
+                leaf[clen] = '\0';
+                return cur;
+            }
+            {
+                char comp[256];
+                int next;
+                if (clen >= sizeof comp) { if (opened) (void)close(cur); return -1; }
+                memcpy(comp, path + start, clen);
+                comp[clen] = '\0';
+                next = openat(cur, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+                if (opened) (void)close(cur);
+                if (next < 0) return -1;
+                cur = next; opened = 1;
+            }
+        }
+        start = i + 1;
+    }
+    return -1;
+}
+/* Directories are created 0700 (temporarily writable, so a later sibling
+ * or child entry can still be created inside one) and tightened to their
+ * manifest mode 0500 only in a second pass over the same list, after every
+ * file is written; a file needs no such deferral since content is written
+ * through the fd this function itself just opened, never a later create. */
+enum ys_plan_status ys_plan_materialize(int dirfd, uid_t uid, gid_t gid,
+                                         const struct ys_guest_plan *plan,
+                                         const unsigned char *const *file_contents,
+                                         const size_t *file_lengths)
+{
+    size_t i, fi = 0;
+    for (i = 0; i < plan->entry_count; i++) {
+        const struct ys_plan_entry *e = &plan->entries[i];
+        char leaf[256];
+        int pfd = open_parent_dir(dirfd, e->path, e->path_len, leaf, sizeof leaf);
+        if (pfd < 0) return YS_PLAN_ERR_IO;
+        if (!e->is_file) {
+            int rc = (mkdirat(pfd, leaf, 0700) == 0) && (fchownat(pfd, leaf, uid, gid, 0) == 0);
+            if (pfd != dirfd) (void)close(pfd);
+            if (!rc) return YS_PLAN_ERR_IO;
+            continue;
+        }
+        {
+            size_t flen = file_lengths[fi];
+            const unsigned char *data = file_contents[fi];
+            unsigned char digest[32];
+            char hex[65];
+            int fd;
+            size_t written = 0;
+            mode_t mode;
+            if (flen != e->size_bytes) { if (pfd != dirfd) (void)close(pfd); return YS_PLAN_ERR_SCHEMA; }
+            ys_sha256_bytes(data, flen, digest);
+            ys_hex_encode(digest, sizeof digest, hex);
+            if (memcmp(hex, e->sha256_hex, 64U) != 0) {
+                if (pfd != dirfd) (void)close(pfd);
+                return YS_PLAN_ERR_SCHEMA;
+            }
+            fd = openat(pfd, leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+            if (pfd != dirfd) (void)close(pfd);
+            if (fd < 0) return YS_PLAN_ERR_IO;
+            while (written < flen) {
+                ssize_t n = write(fd, data + written, flen - written);
+                if (n < 0) { if (errno == EINTR) continue; (void)close(fd); return YS_PLAN_ERR_IO; }
+                written += (size_t)n;
+            }
+            if (fchown(fd, uid, gid) != 0) { (void)close(fd); return YS_PLAN_ERR_IO; }
+            mode = (strcmp(e->mode, "0500") == 0) ? (mode_t)0500 : (mode_t)0400;
+            if (fchmod(fd, mode) != 0) { (void)close(fd); return YS_PLAN_ERR_IO; }
+            if (close(fd) != 0) return YS_PLAN_ERR_IO;
+            fi++;
+        }
+    }
+    for (i = 0; i < plan->entry_count; i++) {
+        const struct ys_plan_entry *e = &plan->entries[i];
+        char leaf[256];
+        int pfd, rc;
+        if (e->is_file) continue;
+        pfd = open_parent_dir(dirfd, e->path, e->path_len, leaf, sizeof leaf);
+        if (pfd < 0) return YS_PLAN_ERR_IO;
+        rc = fchmodat(pfd, leaf, 0500, 0);
+        if (pfd != dirfd) (void)close(pfd);
+        if (rc != 0) return YS_PLAN_ERR_IO;
+    }
+    /* dirfd is "every ... directory" too (R5.5, spec.md:209-212):
+     * finalized last so this call still had write access to create its
+     * entries. Otherwise a root-level entry (e.g. README.md, 0400) stays
+     * deletable/replaceable regardless of its own mode -- that is the
+     * containing directory's mode, not the entry's. */
+    if (fchown(dirfd, uid, gid) != 0) return YS_PLAN_ERR_IO;
+    if (fchmod(dirfd, 0500) != 0) return YS_PLAN_ERR_IO;
+    return YS_PLAN_OK;
+}
+#ifdef YSTACK_TEST_FAULT_INJECT
+int ys_test_close_all_fail = 0;
+#endif
+/* Walks the real descriptor table (Linux /proc/self/fd, Darwin /dev/fd;
+ * never a numeric guess), calling visit(fd, ctx) per open fd >= lowfd
+ * (excluding the walk's own dir fd). 1 if complete, 0 if the directory
+ * could not be opened or a readdir() itself failed (errno-checked per
+ * call): either way the caller cannot trust it saw every descriptor. */
+int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx)
+{
+#if defined(__linux__)
+    static const char *const fd_dir = "/proc/self/fd";
+#else
+    static const char *const fd_dir = "/dev/fd";
+#endif
+    DIR *stream = opendir(fd_dir);
+    int stream_fd;
+    struct dirent *entry;
+    if (stream == NULL) return 0;
+    stream_fd = dirfd(stream);
+    for (;;) {
+        int number;
+        char *end;
+        errno = 0;
+        entry = readdir(stream);
+        if (entry == NULL) {
+            if (errno != 0) { (void)closedir(stream); return 0; }
+            break;
+        }
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+        number = (int)strtol(entry->d_name, &end, 10);
+        if (end == entry->d_name || *end != '\0') continue;
+        if (number < lowfd || (stream_fd >= 0 && number == stream_fd)) continue;
+        visit(number, ctx);
+    }
+    (void)closedir(stream);
+    return 1;
+}
+#if defined(__APPLE__)
+static void close_visitor(int fd, void *ctx) { (void)ctx; (void)close(fd); }
+#endif
+/* Closes every open descriptor >= lowfd, exhaustively, or fails (1/0): a
+ * capped numeric sweep is not exhaustive and a lowered rlimit never closes
+ * an fd already open past it, so there is no sweep fallback. Linux:
+ * close_range, the one atomic exhaustive primitive. Darwin (this harness's
+ * own build only; the guest is Linux-only): ys_walk_fds. Neither falls
+ * back to the other. */
+static int close_all_from(int lowfd)
+{
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (ys_test_close_all_fail) return 0;
+#endif
+#if defined(__linux__)
+#if defined(SYS_close_range)
+    return syscall(SYS_close_range, (unsigned)lowfd, ~0U, 0U) == 0;
+#else
+    (void)lowfd;
+    return 0; /* the pinned kernel's headers must define close_range */
+#endif
+#elif defined(__APPLE__)
+    return ys_walk_fds(lowfd, close_visitor, NULL);
+#else
+    (void)lowfd;
+    return 0;
+#endif
+}
+void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
+             int stdout_fd, int stderr_fd)
+{
+    int in_fd, out_fd, err_fd;
+    /* Each source is preserved on its own fresh fd (>=3) before any dup2
+     * into 0/1/2: a caller-supplied overlap (e.g. stdout_fd == 0, the
+     * instruction's own destination) would otherwise have its source
+     * clobbered by an earlier dup2 in this same call, silently wiring the
+     * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
+     * a failed execve past close_all_from below. */
+    in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
+    out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
+    err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
+    if (in_fd < 0 || out_fd < 0 || err_fd < 0) _exit(126);
+    if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0) _exit(126);
+    (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
+    if (!close_all_from(3)) _exit(126); /* cannot confirm every descriptor is closed */
+    execve(argv[0], (char *const *)(const void *)argv, (char *const *)(const void *)envp);
+    _exit(127);
+}
+#ifdef YSTACK_TEST_FAULT_INJECT
+size_t ys_test_readdir_fail_at = 0;
+#endif
+struct evidence_row { char *name; ino_t ino; };
+static int cmp_evidence_row(const void *a, const void *b)
+{
+    const struct evidence_row *ra = a, *rb = b;
+    return strcmp(ra->name, rb->name);
+}
+enum ys_plan_status ys_evidence_inventory(int dirfd, char ***names_out, size_t *count_out)
+{
+    DIR *dh;
+    struct dirent *de;
+    struct evidence_row *rows = NULL;
+    size_t count = 0, cap = 0, i;
+    char **names;
+    int refused = 0;
+    dh = fdopendir(dirfd);
+    if (dh == NULL) return YS_PLAN_ERR_IO;
+    for (;;) {
+        struct stat st;
+        errno = 0;
+#ifdef YSTACK_TEST_FAULT_INJECT
+        if (ys_test_readdir_fail_at != 0 && --ys_test_readdir_fail_at == 0) {
+            de = NULL;
+            errno = ENOMEM;
+        } else {
+            de = readdir(dh);
+        }
+#else
+        de = readdir(dh);
+#endif
+        if (de == NULL) {
+            if (errno != 0) goto io_fail; /* a real readdir() failure, not end-of-directory */
+            break;
+        }
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (fstatat(dirfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) goto io_fail;
+        if (!S_ISREG(st.st_mode)) continue;
+        if (count == cap) {
+            size_t nc = (cap == 0U) ? 8U : cap * 2U;
+            struct evidence_row *grown = realloc(rows, nc * sizeof *grown);
+            if (grown == NULL) goto io_fail;
+            rows = grown; cap = nc;
+        }
+        rows[count].name = strdup(de->d_name);
+        if (rows[count].name == NULL) goto io_fail;
+        rows[count].ino = st.st_ino;
+        if (st.st_nlink != (nlink_t)1) refused = 1;
+        count++;
+    }
+    closedir(dh);
+    qsort(rows, count, sizeof *rows, cmp_evidence_row);
+    for (i = 0; i + 1 < count && !refused; i++)
+        if (rows[i].ino == rows[i + 1].ino) refused = 1;
+    if (refused) {
+        for (i = 0; i < count; i++) free(rows[i].name);
+        free(rows);
+        return YS_PLAN_ERR_SCHEMA;
+    }
+    names = malloc((count == 0U ? 1U : count) * sizeof *names);
+    if (names == NULL) {
+        for (i = 0; i < count; i++) free(rows[i].name);
+        free(rows);
+        return YS_PLAN_ERR_IO;
+    }
+    for (i = 0; i < count; i++) names[i] = rows[i].name;
+    free(rows);
+    *names_out = names;
+    *count_out = count;
+    return YS_PLAN_OK;
+io_fail:
+    closedir(dh);
+    for (i = 0; i < count; i++) free(rows[i].name);
+    free(rows);
+    return YS_PLAN_ERR_IO;
 }
