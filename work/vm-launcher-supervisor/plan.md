@@ -1,5 +1,5 @@
 ---
-spec-blob: db3b79c1a4c1fd344c089ee8a3ceaf6cfa4cbfd4
+spec-blob: 1a6c8c0d5d575ea4058dafd0bbb205642218d05b
 intent-blob: dad5c3e210d3772b6cc50cb3f556db06d96a7324
 risk: high
 drafted: 2026-09-29
@@ -8,7 +8,7 @@ drafted: 2026-09-29
 
 Tracks #463. Risk: high (`artifact-high`): independent review, green CI and operator
 merge of this plan come before any code. The spec (blob above) is the contract; this
-plan fixes only what it leaves open. Citations are to origin/main `90a6c99`, where the
+plan fixes only what it leaves open. Citations are to origin/main `daa5302`, where the
 spec's `e73b76a` citations still hold. Only merged content is used, read unchanged.
 
 Steps 1-4 (R14.4) ship as nine PRs from one branch `ystack/impl/vm-launcher-supervisor`,
@@ -176,10 +176,19 @@ failing for a socket path over 103 bytes, which vfkit refuses (`pkg/rest/rest.go
 `verification_instructions`, which R10.1 keeps out of the configuration),
 `instruction-digest <file>` (the SHA-256 of one instruction's bytes, the
 `verification_instructions` value its launch package will carry, R2.3, R4.2),
-`check-kernel-config <file>` (the host R2.4 function), `dry-run` (the probe list against the fake runtime) and `run
-<dir>` (a canonical `sandbox_qualification_record`). Test: vfkit argv and REST calls
-against a fake `vfkit`, the over-long socket path, `measure` and `instruction-digest`
-against the fixture install tree, and the dry run.
+`check-kernel-config <file>` (the host R2.4 function), `dry-run` (the probe list
+against the fake runtime) and `run <dir>` (a canonical `sandbox_qualification_record`).
+`run` and `dry-run` take two trusted host configurations, `verifier` and `probe`, whose
+`identity_paths.verifier` names the real verifier or the probe executable; every other
+field is identical, and the host supervisor puts whichever executable its own
+configuration names on the input disk (R2.3, R5.2). Real-verifier cases launch through
+the `verifier` configuration and probe modes through the `probe` one. Test: vfkit argv
+and REST calls against a fake `vfkit`, the over-long socket path, `measure` and
+`instruction-digest` on the fixture trees, and the dry run through `host-supervisor.py
+launch` and the fake runtime with both fixture configurations (distinct synthetic
+verifier files): the fake echoes the input disk's `verifier` record digest to stdout,
+and each receipt's `identities.verifier` and `stdout_sha256` must match that
+configuration's executable, never the other.
 
 ## PR 9: registry entry, docs, restore, manifest (step 4; R12.1, R14.3)
 
@@ -309,21 +318,24 @@ of every path and ancestor, `sudo -l -U yihanzhu`, and one smoke run through the
 with empty stdin giving `E_PACKAGE` (no VM). Rollback: delete those paths, user and groups.
 
 **`vml-qualify`** (step 8; R13.4). The R12.1 entry and digest above; the proposed
-accepted-set entry, whose nine installed slots come from `qualify.py measure` on the
-qualification configuration, whose `verifier` list adds the `probe` digest from the same
-run, and whose `verification_instructions` list is `qualify.py instruction-digest` of
-each qualification instruction (the three real-verifier cases and each probe mode), plus
-six R7.1 mechanism ids and `scratch_bytes` 16,777,216; each R13.4 probe with its expected
-verdict and reasons (a probe launch carries `probe` as the `verifier` record and its
-mode as the instruction); the candidate, a #396 bundle from `prepare-candidate.py
+accepted-set entry, whose slots are the union of `qualify.py measure` on each of the
+two qualification configurations (so `verifier` lists the real verifier and the probe,
+`host_supervisor` both configuration composites, the other seven slots one digest
+each) and whose `verification_instructions` list is `qualify.py instruction-digest` of
+each qualification instruction (the three real-verifier cases and each probe mode),
+plus six R7.1 mechanism ids and `scratch_bytes` 16,777,216; the two configurations'
+exact bytes and which runs use which (real verifier: match, mismatch, changed-byte
+refusal and the `HardStop` repeats; probe: every R13.4 probe mode, the mode being the
+instruction), each run with its expected verdict and reasons; the candidate, a #396 bundle from `prepare-candidate.py
 prepare` over the scrubbed dummy-target copy at `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e`
 (step-7 post revision), with its arguments and digests; sentinels under
-`~/ystack-quarantine/vml/sentinels/`; the `HardStop` repeat count; and a separate
-qualification install directory, configuration (store `store.local-macos-vm.qualify.v1`
-under `/private/var/db/ystack-sandbox-q/`), accepted set and sudoers file of the same
-shape, installed and later removed by the operator. The manager runs `qualify.py run
-<dir>` as `yihanzhu`, launching through that rule and reading each receipt as the
-consumer (R2.3). Evidence: receipt digests and verdicts, stop latencies (information
+`~/ystack-quarantine/vml/sentinels/`; the `HardStop` repeat count; and two separate
+qualification install directories (`…/v1/qualify-verifier/`, `…/v1/qualify-probe/`),
+each with its configuration (stores `store.local-macos-vm.qualify-verifier.v1` and
+`…qualify-probe.v1` under `/private/var/db/ystack-sandbox-q/`) and sudoers rule of the
+same shape, sharing one qualification accepted set, all installed, measured and later
+removed by the operator. The manager runs `qualify.py run <dir>` as `yihanzhu`,
+launching through those rules and reading each receipt as the consumer (R2.3). Evidence: receipt digests and verdicts, stop latencies (information
 only), supervisor resource use, and the record's SHA-256 and bytes (kept outside git).
 
 **Step 9** (R12.3) opens only on a `qualified` record: the record file, the
@@ -372,11 +384,10 @@ plan PR measured 411 lines at its first head; #452's 579-line plan is the preced
   entry stays `unproven`. Step-8 R7.1 therefore stays blocked on a future
   structural-bound concern or an operator-accepted empirical standard; concerns 5
   and 6 may be built inactive meanwhile.
-- **R16.2 forecast.** Standard-size PRs would mean 25 or more, several shipping
-  untested halves, so this plan records exceptions as `work/README.md` allows. So the
-  plan does not contradict the spec, the manager posts a one-line spec-only G2
-  amendment to R16.2 ("steps 1-4 ship as the plan's recorded PR sizes") before PR 1
-  opens; PR 1 waits for it. Scope is unchanged.
+- **R16.2 sizes.** Standard-size PRs would mean 25 or more, several shipping untested
+  halves. The spec amendment merged in #467 (R16.2, `spec.md:663-669`) makes the
+  plan's recorded ranges binding, and this plan cites that spec blob. Scope is
+  unchanged.
 - **Staged stub.** In PRs 3-4 a passing attempt gets a runtime-error receipt and never
   runs; no text may present the supervisor as usable before PR 5.
 - **Socket path.** vfkit refuses a Unix path over 103 bytes, so under the
