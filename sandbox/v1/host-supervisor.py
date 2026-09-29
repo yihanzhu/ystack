@@ -31,7 +31,7 @@ def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
 
-ALL_ONES = "f" * 64
+ALL_ONES = "1" * 64  # matches enforcement/v1/sandbox-receipt.jq's all_ones_sha
 ALL_ZEROS = "0" * 64
 
 
@@ -142,6 +142,11 @@ def parse_package(data):
             refuse("E_PACKAGE")
         candidates.append(records[i][1])
     named = {name.decode(): content for name, content in records[:len(PACKAGE_FIXED)]}
+    # R3.3: incident.json (the shadow_incident_record) is capped at 262,144
+    # bytes, checked here so an oversize incident record is refused E_PACKAGE
+    # before the nonce is ever consumed.
+    if len(named["incident.json"]) > 262144:
+        refuse("E_PACKAGE")
     named["candidate"] = candidates
     return named
 
@@ -272,63 +277,75 @@ def linux_install_acl_ok(fd):
     return True
 
 
-# --- R10.1 walk: install directory, its ancestors, listed files, their
-# ancestors. Darwin: no dangerous ACL grant to any principal but uid 0 /
-# principal_uid. Linux: no named entry, no write-granting mask. An ACL that
-# cannot be read fails. ---------------------------------------------------
-def check_acl(path, principal_uid):
+# --- R10.1 walk: install directory, ancestors, listed files, their
+# ancestors -- each opened component by component from "/" via openat()+
+# O_NOFOLLOW, never realpath or a plain os.open of the path string:
+# resolving the parent first drops the directory that held a symlink
+# (even an attacker-writable one) from the walk and follows it through.
+# Refusing any symlink component anywhere closes that; a configured path
+# must already be physical/symlink-free (`cd -P`), as check-sandbox-
+# receipt.sh's own physical_regular requires. Darwin: no dangerous ACL
+# grant but uid 0 / principal_uid. Linux: no named entry, no write mask.
+# Later reads of validated content go through the fd this walk returns.
+def trust_root_fd():
+    """Test-only: YSTACK_SANDBOX_TRUST_ROOT, honored only for a directory
+    already owned by the invoking uid and not group/other-writable (an
+    attacker who could satisfy that already has the principal's own
+    access). Lets a test anchor the walk below a directory it made clean
+    itself on a host where neither /tmp nor $HOME reach "/" cleanly; unset,
+    the product check still walks from "/" as always."""
+    root = os.environ.get("YSTACK_SANDBOX_TRUST_ROOT")
+    if not root:
+        return None, None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
-        refuse("E_INSTALL_ACL")
-    try:
-        if sys.platform == "darwin":
-            try:
-                ok = darwin_install_acl_ok(darwin_acl_entries(fd), principal_uid)
-            except OSError:
-                ok = False
-        else:
-            ok = linux_install_acl_ok(fd)
-    finally:
+        return None, None
+    state = os.fstat(fd)
+    if state.st_uid != os.getuid() or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         os.close(fd)
+        return None, None
+    return os.path.normpath(root), fd
+
+
+def secure_ancestor_fds(path):
+    if not (isinstance(path, str) and path.startswith("/")):
+        refuse("E_INSTALL_ACL")
+    parts = [p for p in path.split("/") if p and p != "."]
+    if ".." in parts:
+        refuse("E_INSTALL_ACL")
+    anchor_root, anchor_fd = trust_root_fd()
+    if anchor_root and (path == anchor_root or path.startswith(anchor_root + "/")):
+        fds = [anchor_fd]
+        parts = parts[len([p for p in anchor_root.split("/") if p]):]
+    else:
+        if anchor_fd is not None:
+            os.close(anchor_fd)
+        fds = [os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)]
+    for i, part in enumerate(parts):
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if i < len(parts) - 1:
+            flags |= os.O_DIRECTORY
+        try:
+            fd = os.open(part, flags, dir_fd=fds[-1])
+        except OSError:
+            for f in fds:
+                os.close(f)
+            refuse("E_INSTALL_ACL")
+        fds.append(fd)
+    return fds
+
+
+def check_acl_fd(fd, principal_uid):
+    if sys.platform == "darwin":
+        try:
+            ok = darwin_install_acl_ok(darwin_acl_entries(fd), principal_uid)
+        except OSError:
+            ok = False
+    else:
+        ok = linux_install_acl_ok(fd)
     if not ok:
         refuse("E_INSTALL_ACL")
-
-
-def ancestors(path):
-    parts = []
-    cur = path
-    while True:
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            parts.append(cur)
-            break
-        parts.append(parent)
-        cur = parent
-    return parts
-
-
-def with_ancestors(paths):
-    """Each path itself (checked with O_NOFOLLOW: it must be a real file, not
-    a symlink) plus its containing directory's *resolved* ancestor chain.
-    Resolving first matters on macOS, where /var, /tmp and /etc are
-    themselves symlinks (to /private/var etc.): walking the raw string
-    ancestors of an ordinary path would otherwise flag that top-level
-    symlink as if it were part of the trusted tree, on every host."""
-    seen = []
-    known = set()
-    for path in paths:
-        real_dir = os.path.realpath(os.path.dirname(path))
-        for candidate in [path, real_dir] + ancestors(real_dir):
-            if candidate not in known:
-                known.add(candidate)
-                seen.append(candidate)
-    return seen
-
-
-def acl_walk(paths, principal_uid):
-    for candidate in with_ancestors(paths):
-        check_acl(candidate, principal_uid)
 
 
 def owner_mode_ok(state, principal_uid):
@@ -337,14 +354,27 @@ def owner_mode_ok(state, principal_uid):
     return state.st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0
 
 
-def check_owner_mode_walk(paths, principal_uid):
-    for candidate in with_ancestors(paths):
-        try:
-            state = os.lstat(candidate)
-        except OSError:
-            refuse("E_CONFIG")
-        if stat.S_ISLNK(state.st_mode) or not owner_mode_ok(state, principal_uid):
-            refuse("E_CONFIG")
+def owner_mode_fd_ok(fd, principal_uid):
+    state = os.fstat(fd)
+    return not stat.S_ISLNK(state.st_mode) and owner_mode_ok(state, principal_uid)
+
+
+def secure_walk(path, principal_uid, check_mode):
+    """R10.1 ACL on every component (see secure_ancestor_fds), owner/mode too
+    when check_mode; closes ancestor fds, returns the validated target fd."""
+    fds = secure_ancestor_fds(path)
+    try:
+        for fd in fds:
+            check_acl_fd(fd, principal_uid)
+            if check_mode and not owner_mode_fd_ok(fd, principal_uid):
+                refuse("E_CONFIG")
+    except BaseException:
+        for f in fds:
+            os.close(f)
+        raise
+    for f in fds[:-1]:
+        os.close(f)
+    return fds[-1]
 
 
 # --- host-config.json (R10.1) ---------------------------------------------
@@ -358,10 +388,15 @@ def is_abs_path(value):
     return isinstance(value, str) and value.startswith("/")
 
 
-def load_config(install_dir):
-    config_path = os.path.join(install_dir, "host-config.json")
+def load_config(config_fd):
+    """Reads host-config.json through the fd secure_walk already validated
+    (never a fresh open() of the path string -- see secure_ancestor_fds)."""
     try:
-        with open(config_path, "rb") as handle:
+        dup_fd = os.dup(config_fd)
+    except OSError:
+        refuse("E_CONFIG")
+    try:
+        with os.fdopen(dup_fd, "rb") as handle:
             raw = handle.read()
     except OSError:
         refuse("E_CONFIG")
@@ -397,9 +432,51 @@ def load_config(install_dir):
     return body
 
 
-def check_accepted_set(path):
+def digest_list_ok(value):
+    """Mirrors sandbox-receipt.jq's digest_list_ok: 1-8 sha256 digests, none
+    a placeholder, sorted and unique."""
+    if not (isinstance(value, list) and 1 <= len(value) <= 8
+            and all(sha256_ok(v) for v in value) and not any(placeholder(v) for v in value)):
+        return False
+    return value == sorted(set(value)) and len(value) == len(set(value))
+
+
+def id_list_ok(value):
+    """Mirrors sandbox-receipt.jq's id_list_ok: 1-8 ids, sorted and unique."""
+    if not (isinstance(value, list) and 1 <= len(value) <= 8):
+        return False
+    if not all(id_ok(v) for v in value):
+        return False
+    return value == sorted(set(value)) and len(value) == len(set(value))
+
+
+def accepted_entry_shape_ok(env):
+    if not (isinstance(env, dict) and set(env) == {"environment_id", "identities", "mechanisms",
+                                                     "scratch_bytes"}):
+        return False
+    if not id_ok(env["environment_id"]):
+        return False
+    scratch_bytes = env["scratch_bytes"]
+    if not (isinstance(scratch_bytes, int) and not isinstance(scratch_bytes, bool) and scratch_bytes > 0):
+        return False
+    identities = env["identities"]
+    if not (isinstance(identities, dict) and set(identities) == set(IDENTITY_SLOTS)):
+        return False
+    if not all(digest_list_ok(identities[slot]) for slot in IDENTITY_SLOTS):
+        return False
+    mechanisms = env["mechanisms"]
+    limit_row_names = {row[0] for row in LIMIT_ROWS}
+    if not (isinstance(mechanisms, dict) and set(mechanisms) == limit_row_names):
+        return False
+    return all(id_list_ok(mechanisms[row]) for row in limit_row_names)
+
+
+def check_accepted_set(fd):
+    """Mirrors sandbox-receipt.jq's fixed_accepted_shape_ok in full: any
+    deviation refuses E_CONFIG, not just a placeholder scan. Reads through
+    the already-validated fd (never a fresh open()); closes it when done."""
     try:
-        with open(path, "rb") as handle:
+        with os.fdopen(fd, "rb") as handle:
             raw = handle.read()
     except OSError:
         refuse("E_CONFIG")
@@ -408,15 +485,17 @@ def check_accepted_set(path):
     except ValueError:
         refuse("E_CONFIG")
     require(canonical(doc) == raw, "E_CONFIG")
-    body = doc.get("body") if isinstance(doc, dict) else None
-    require(isinstance(body, dict) and isinstance(body.get("environments"), list), "E_CONFIG")
-    for env in body["environments"]:
-        identities = env.get("identities") if isinstance(env, dict) else None
-        if not isinstance(identities, dict):
-            continue
-        for digests in identities.values():
-            if isinstance(digests, list) and any(placeholder(d) for d in digests if isinstance(d, str)):
-                refuse("E_CONFIG")
+    require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
+    require(doc.get("kind") == "sandbox_accepted_identity_set" and doc.get("schema_version") == 1,
+            "E_CONFIG")
+    require(doc.get("id") == "sandbox.accepted-identities.v1", "E_CONFIG")
+    body = doc.get("body")
+    require(isinstance(body, dict) and set(body) == {"activation_state", "environments", "set_version"},
+            "E_CONFIG")
+    require(body.get("activation_state") == "inactive" and body.get("set_version") == "v1", "E_CONFIG")
+    environments = body["environments"]
+    require(isinstance(environments, list) and all(accepted_entry_shape_ok(env) for env in environments),
+            "E_CONFIG")
 
 
 # --- store root (enforcement-evidence-binding spec.md R2.3) ---------------
@@ -454,6 +533,17 @@ SUBJECT_KEYS = {"environment_id", "environment_entry_sha256", "target_repository
 
 def sha256_ok(value):
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def oid_ok(value, hash_algorithm):
+    """Lowercase hex of the length hash_algorithm selects (40/sha1, 64/sha256);
+    matches sandbox-receipt.jq's oid_ok for source/candidate commit_id/tree_id."""
+    if not isinstance(value, str):
+        return False
+    length = {"sha1": 40, "sha256": 64}.get(hash_algorithm)
+    if length is None:
+        return False
+    return len(value) == length and all(c in "0123456789abcdef" for c in value)
 
 
 def id_ok(value):
@@ -495,9 +585,14 @@ def parse_request(raw):
     source = subject["source"]
     require(isinstance(source, dict) and set(source) == SOURCE_KEYS, "E_PACKAGE")
     require(id_ok(source["repository_id"]) and source["hash_algorithm"] in ("sha1", "sha256"), "E_PACKAGE")
+    hash_algorithm = source["hash_algorithm"]
+    require(oid_ok(source.get("commit_id"), hash_algorithm) and oid_ok(source.get("tree_id"), hash_algorithm),
+            "E_PACKAGE")
     candidate = subject["candidate"]
     require(isinstance(candidate, dict) and set(candidate) == CANDIDATE_KEYS, "E_PACKAGE")
     require(sha256_ok(candidate["preparation_record_sha256"]) and sha256_ok(candidate["manifest_sha256"]),
+            "E_PACKAGE")
+    require(oid_ok(candidate.get("commit_id"), hash_algorithm) and oid_ok(candidate.get("tree_id"), hash_algorithm),
             "E_PACKAGE")
     require(sha256_ok(subject["incident_sha256"]), "E_PACKAGE")
     require(canonical(doc) == raw, "E_PACKAGE")
@@ -609,7 +704,7 @@ def derive_outcome(body):
 
 
 def build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
-                        launch_request_sha256, admitted_at):
+                        launch_request_sha256, admitted_at, evidence_manifest_sha256):
     now = time.time()
     identities = {slot: {"state": "unobserved", "reason_id": "launch.identity-missing"}
                   for slot in IDENTITY_SLOTS}
@@ -632,7 +727,7 @@ def build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
         "origin": {"producer_role": "host-supervisor", "store_id": config["store_id"],
                    "accepted_set_sha256": accepted_set_sha256},
         "payload": {"stdout_sha256": empty, "stderr_sha256": empty,
-                    "evidence_manifest_sha256": empty, "exit_state": "not-started",
+                    "evidence_manifest_sha256": evidence_manifest_sha256, "exit_state": "not-started",
                     "exit_code": None},
         "subject": dict(request_body["subject"]),
         "teardown": {"state": "confirmed", "tree_terminated": True, "storage_destroyed": True},
@@ -664,16 +759,33 @@ def run_launch(argv):
     # principal for this first pass -- config is not loaded yet to name one.
     install_dir = install_directory()
     fixed_targets = fixed_acl_targets(install_dir)
-    acl_walk(fixed_targets, os.getuid())
+    config_path = os.path.join(install_dir, "host-config.json")
+    # fds stay open so host-config.json is read below through the very fd
+    # this walk validated, and the owner/mode pass can fstat these same
+    # fds instead of re-walking.
+    fixed_fds = {}
+    for path in fixed_targets:
+        fixed_fds[path] = secure_walk(path, os.getuid(), check_mode=False)
     require(os.getuid() != 0 and argv == ["launch"], "E_USAGE")
-    config = load_config(install_dir)
+    config = load_config(fixed_fds[config_path])
     principal_uid = config["principal_uid"]
     require(principal_uid == os.getuid(), "E_CONFIG")
+    for fd in fixed_fds.values():
+        if not owner_mode_fd_ok(fd, principal_uid):
+            refuse("E_CONFIG")
+    for fd in fixed_fds.values():
+        os.close(fd)
     config_named = (list(config["identity_paths"].values()) + list(config["installed_files"].values())
                     + [config["runtime"]["vfkit"]])
-    acl_walk(config_named, principal_uid)
-    check_owner_mode_walk(fixed_targets + config_named, principal_uid)
-    check_accepted_set(config["installed_files"]["accepted_set"])
+    accepted_set_path = config["installed_files"]["accepted_set"]
+    accepted_set_fd = None
+    for path in config_named:
+        fd = secure_walk(path, principal_uid, check_mode=True)
+        if path == accepted_set_path and accepted_set_fd is None:
+            accepted_set_fd = fd
+        else:
+            os.close(fd)
+    check_accepted_set(accepted_set_fd)
     check_store_root(config["store_root"], principal_uid, config["consumer_gid"])
 
     raw = sys.stdin.buffer.read(88080384 + 1)
@@ -699,13 +811,17 @@ def run_launch(argv):
     admitted_at = time.time()
     with open(config["installed_files"]["accepted_set"], "rb") as handle:
         accepted_set_sha256 = sha256_hex(handle.read())
+    # R8.3: the receipt's payload.evidence_manifest_sha256 must be the digest
+    # of the exact bytes write_store puts at payload/evidence-manifest.json --
+    # built once here and reused for both, not a separately-hashed empty
+    # string while the store gets the real (nonempty, canonical) manifest.
+    evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
     receipt_bytes = build_stub_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                        launch_request_sha256, admitted_at)
+                                        launch_request_sha256, admitted_at, evidence_manifest_sha256)
     payload = [("stdout", b""), ("stderr", b""),
-               ("evidence-manifest.json", canonical({"body": {"files": []},
-                                                      "id": "evidence-manifest",
-                                                      "kind": "sandbox_evidence_manifest",
-                                                      "schema_version": 1}))]
+               ("evidence-manifest.json", evidence_manifest_bytes)]
     try:
         write_store(config["store_root"], request_body["attempt"]["attempt_id"],
                     principal_uid, config["consumer_gid"], receipt_bytes, payload)

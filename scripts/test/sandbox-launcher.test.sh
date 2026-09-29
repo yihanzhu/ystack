@@ -54,8 +54,7 @@ import sys, importlib.util
 spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
 hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
 try:
-    hs.acl_walk(['$1'], hs.os.getuid())
-    hs.check_owner_mode_walk(['$1'], hs.os.getuid())
+    hs.os.close(hs.secure_walk('$1', hs.os.getuid(), True))
 except hs.Refusal:
     sys.exit(1)
 "
@@ -66,11 +65,24 @@ for candidate_parent in "${TMPDIR:-/tmp}" "$HOME"; do
   if probe_r10_1 "$probe"; then base_parent=$candidate_parent; /bin/rm -rf -- "$probe"; break; fi
   /bin/rm -rf -- "$probe"
 done
-# shellcheck disable=SC2016 # literal env var names in the message, not expansions
-[ -n "$base_parent" ] || fail 'neither $TMPDIR nor $HOME has an R10.1-clean ancestor chain'
+# On most CI runners neither is clean (/tmp is 1777; $HOME's ancestors are
+# out of this test's control). The *product* check is untouched -- a real
+# launch still walks from "/" -- but the test makes its own clean anchor
+# and points the walk at it via YSTACK_SANDBOX_TRUST_ROOT (verified below).
+trust_root=""
+if [ -z "$base_parent" ]; then
+  trust_root=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-sandbox-launcher-trust.XXXXXX")
+  /bin/chmod 0755 "$trust_root"
+  trust_root=$(CDPATH='' cd -P -- "$trust_root" && pwd -P)
+  base_parent=$trust_root
+fi
+export YSTACK_SANDBOX_TRUST_ROOT="$trust_root"
 base=$(/usr/bin/mktemp -d "$base_parent/ystack-sandbox-launcher-test.XXXXXX")
 base=$(CDPATH='' cd -P -- "$base" && pwd -P)
-cleanup() { /bin/chmod -R u+rwX "$base" 2>/dev/null || :; /bin/rm -rf -- "$base"; }
+cleanup() {
+  /bin/chmod -R u+rwX "$base" 2>/dev/null || :; /bin/rm -rf -- "$base"
+  [ -z "$trust_root" ] || /bin/rm -rf -- "$trust_root"
+}
 trap cleanup EXIT
 jq_dir="$base/bin"
 /bin/mkdir -m 0755 "$jq_dir"
@@ -78,6 +90,28 @@ jq_dir="$base/bin"
 /bin/chmod 0555 "$jq_dir/jq"
 jq_bin="$jq_dir/jq"
 [ "$("$jq_bin" --version)" = jq-1.6 ] || fail 'jq identity'
+
+# The hook itself: refused as an anchor unless already owned by this uid
+# and not group/other-writable (negative cases first, including /tmp).
+trust_root_hook_ok() { # trust_root_hook_ok <env-value> <expect: none|some>
+  local got
+  got=$(YSTACK_SANDBOX_TRUST_ROOT="$1" "$python" -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+root, fd = hs.trust_root_fd()
+print('none' if root is None else 'some')
+")
+  [ "$got" = "$2" ] || fail "trust-root hook: expected $2 for '$1', got $got"
+}
+trust_root_hook_ok "" none
+trust_root_hook_ok /nonexistent-ystack-trust-root none
+trust_root_hook_ok /tmp none
+readable_dir=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-trust-probe.XXXXXX")
+/bin/chmod 0755 "$readable_dir"
+trust_root_hook_ok "$readable_dir" some
+/bin/rm -rf -- "$readable_dir"
+pass 'YSTACK_SANDBOX_TRUST_ROOT is honored only for a directory already owned by the invoking uid and not group/other-writable; unset, missing or unclean (including /tmp itself) it is refused as an anchor, falling back to "/"'
 
 # work_root: outside R10.1, kept short for socket paths (R15.1).
 work_root=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ysvml.XXXXXX")
@@ -120,7 +154,7 @@ def main():
         open(p, "wb").write(b"synthetic-" + k.encode())
         installed_files[k] = p
 
-    digest = "f" * 64 if placeholder else "1234567890abcdef" * 4
+    digest = "1" * 64 if placeholder else "1234567890abcdef" * 4  # "1"*64 is ALL_ONES
     accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
         {"environment_id": "env.local-macos-fixture", "scratch_bytes": 16777216,
          "identities": {k: [digest] for k in identity_keys + ["verification_instructions"]},
@@ -224,8 +258,9 @@ def main():
     request_bytes = (json.dumps(patch["raw_request"], ensure_ascii=False).encode()
                      if "raw_request" in patch else hs.canonical(request_doc))
     mode = patch.get("frame", "ok")
+    incident_bytes = b"i" * patch["incident_bytes"] if "incident_bytes" in patch else b"{}\n"
     records = [(b"request.json", request_bytes), (b"evaluation.json", b"{}\n"),
-               (b"incident.json", b"{}\n"), (b"record.json", b"{}\n"),
+               (b"incident.json", incident_bytes), (b"record.json", b"{}\n"),
                (b"manifest.json", b"{}\n"), (b"instruction", b"instr")]
     if mode == "ok":
         data = hs.frame_write(records)
@@ -357,6 +392,22 @@ for target_desc_pair in "$config_path:the trusted config file" "$base/root/insta
   pass "$desc carrying one ACL entry is refused E_INSTALL_ACL before stdin is read, paired against the same tree without it"
 done
 
+# A symlink anywhere in a config-named path's chain must be refused, even
+# far from the install tree: resolving the parent first would drop that
+# directory and the symlink itself, silently following it through.
+build_tree 0
+/bin/mkdir -m 755 "$base/attacker-writable"
+/bin/ln -s "$base/identities" "$base/attacker-writable/link"
+# shellcheck disable=SC2016 # $p is a jq variable, not a shell expansion
+"$jq_bin" -c --arg p "$base/attacker-writable/link/verifier" '.body.identity_paths.verifier = $p' \
+  "$config_path" > "$base/bad-config.json"
+/bin/chmod 644 "$config_path"; /bin/cp "$base/bad-config.json" "$config_path"; /bin/chmod 444 "$config_path"
+build_pkg "$base/pkg-ok.json" '{}'
+expect_refused 'E_INSTALL_ACL: a config-named path reached only through a symlink in an otherwise-writable directory' \
+  E_INSTALL_ACL "$base/pkg-ok.json"
+build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
+pass 'a config-named path whose chain passes through a symlink -- even one sitting in a directory that is not itself part of the trusted tree -- is refused E_INSTALL_ACL rather than silently resolved through, paired against the accepted control'
+
 # =============================================================================
 # every other phase A error, paired against the accepted control above
 # =============================================================================
@@ -381,6 +432,26 @@ expect_refused 'E_CONFIG: a placeholder digest in the accepted set' E_CONFIG "$b
 build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
 pass 'a placeholder (all-ones) digest anywhere in the accepted identity set is refused E_CONFIG, paired against the accepted control'
 
+# The full accepted-set schema (mirrored from sandbox-receipt.jq's
+# fixed_accepted_shape_ok), one deviation class per loop iteration.
+mutate_accepted_set() { # mutate_accepted_set <jq-filter>
+  "$jq_bin" -S -c "$1" "$accepted_set" > "$base/bad-accepted.json"
+  /bin/chmod 644 "$accepted_set"; /bin/cp "$base/bad-accepted.json" "$accepted_set"; /bin/chmod 444 "$accepted_set"
+}
+accepted_set_filters=(
+  '.id = "sandbox.accepted-identities.wrong"'
+  '.body.environments[0].identities |= del(.verifier)'
+  '.body.environments[0].identities.verifier = ["1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd","1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"]'
+  '.body.environments[0].mechanisms.wall_time_ms = ["Mechanism.Bad"]'
+)
+for filt in "${accepted_set_filters[@]}"; do
+  mutate_accepted_set "$filt"
+  build_pkg "$base/pkg-ok.json" '{}'
+  expect_refused "E_CONFIG: accepted-set deviation ($filt)" E_CONFIG "$base/pkg-ok.json"
+  build_tree 0; build_pkg "$base/pkg-ok.json" '{}'
+done
+pass 'every accepted-set schema deviation (envelope id, a missing identity slot, a duplicate digest, an invalid mechanism id) is refused E_CONFIG, paired against the accepted control'
+
 /bin/chmod 700 "$store_root"
 expect_refused 'E_STORE: store root mode 0700, not 0750' E_STORE "$base/pkg-ok.json"
 /bin/chmod 750 "$store_root"
@@ -396,7 +467,19 @@ build_pkg "$base/pkg-bad.json" '{"delete":["subject.incident_sha256"]}'
 expect_refused 'E_PACKAGE: request missing a required field' E_PACKAGE "$base/pkg-bad.json"
 build_pkg "$base/pkg-bad.json" '{"set":{"nonce":"nothex"}}'
 expect_refused 'E_PACKAGE: request nonce not 64 lowercase hex' E_PACKAGE "$base/pkg-bad.json"
-pass 'every frame and request-shape deviation is refused E_PACKAGE, paired against the accepted control'
+build_pkg "$base/pkg-bad.json" '{"set":{"subject.source.commit_id":null}}'
+expect_refused 'E_PACKAGE: subject.source.commit_id is null' E_PACKAGE "$base/pkg-bad.json"
+build_pkg "$base/pkg-bad.json" "{\"set\":{\"subject.source.tree_id\":\"$(python3 -c 'print("a"*39)')\"}}"
+expect_refused 'E_PACKAGE: subject.source.tree_id is 39 hex chars, not the 40 sha1 selects' E_PACKAGE "$base/pkg-bad.json"
+build_pkg "$base/pkg-bad.json" "{\"set\":{\"subject.candidate.commit_id\":\"$(python3 -c 'print("a"*41)')\"}}"
+expect_refused 'E_PACKAGE: subject.candidate.commit_id is 41 hex chars, not the 40 sha1 selects' E_PACKAGE "$base/pkg-bad.json"
+pass 'every frame and request-shape deviation (including a null or wrong-length source/candidate commit_id or tree_id) is refused E_PACKAGE, paired against the accepted control'
+
+build_pkg "$base/pkg-incident.json" '{"incident_bytes":262144}'
+expect_admitted 'an incident.json record at exactly the 262,144-byte cap' "$base/pkg-incident.json"
+build_pkg "$base/pkg-incident.json" '{"attempt_id":"attempt.fixture-incident-over","incident_bytes":262145}'
+expect_refused 'E_PACKAGE: an incident.json record one byte over the 262,144-byte cap' E_PACKAGE "$base/pkg-incident.json"
+pass 'the incident.json record size boundary (262,144 bytes accepted, 262,145 refused E_PACKAGE) holds exactly at the cap'
 
 build_pkg "$base/pkg-bad.json" '{"store_id":"store.wrong"}'
 expect_refused 'E_STORE_ID: request store_id differs from the configuration' E_STORE_ID "$base/pkg-bad.json"
@@ -436,6 +519,18 @@ assert checked > 0, 'nothing under ' + root
 print('ok')
 " "$store_root/attempt.fixture-reuse" "$(id -u)" "$(id -g)" >/dev/null
 pass 'every store directory is 0750 and every store file is 0440, owned by principal_uid:consumer_gid, with link count 1'
+
+# R8.3: the receipt's payload.evidence_manifest_sha256 must be the digest of
+# the exact bytes written to payload/evidence-manifest.json, not a
+# separately-hashed empty string.
+receipt_manifest_sha256=$("$jq_bin" -r '.body.payload.evidence_manifest_sha256' \
+  "$store_root/attempt.fixture-reuse/receipt.json")
+stored_manifest_sha256=$(sha_file "$store_root/attempt.fixture-reuse/payload/evidence-manifest.json")
+[ "$receipt_manifest_sha256" = "$stored_manifest_sha256" ] ||
+  fail "receipt payload.evidence_manifest_sha256 ($receipt_manifest_sha256) does not match the stored manifest's own digest ($stored_manifest_sha256)"
+[ "$receipt_manifest_sha256" != "$(sha_file /dev/null)" ] ||
+  fail 'receipt payload.evidence_manifest_sha256 is the empty-string digest, not the stored (nonempty, canonical) manifest'
+pass "the receipt's payload.evidence_manifest_sha256 equals the stored evidence-manifest.json's own digest, not an empty-string placeholder"
 
 receipt_verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/attempt.fixture-reuse/receipt.json")
 receipt_admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/attempt.fixture-reuse/receipt.json")
