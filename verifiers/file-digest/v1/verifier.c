@@ -320,6 +320,75 @@ static int utf8_validate(const unsigned char *s, size_t len, int *has_control)
 }
 
 /* ---------------------------------------------------------------------- */
+/* R4. Path rules.                                                         */
+
+struct component {
+    size_t offset;
+    size_t length;
+};
+
+static int split_components(const unsigned char *path, size_t len, struct component *comps,
+                             size_t *count)
+{
+    size_t start = 0;
+    size_t n = 0;
+    size_t i;
+
+    for (i = 0; i <= len; i++) {
+        if (i == len || path[i] == '/') {
+            if (n >= MAX_PATH_COMPONENTS) return 0;
+            comps[n].offset = start;
+            comps[n].length = i - start;
+            n++;
+            start = i + 1;
+        }
+    }
+    *count = n;
+    return 1;
+}
+
+static int component_ok(const unsigned char *path, struct component c)
+{
+    unsigned char last;
+
+    if (c.length == 0) return 0;
+    if (c.length == 1U && path[c.offset] == '.') return 0;
+    if (c.length == 2U && path[c.offset] == '.' && path[c.offset + 1] == '.') return 0;
+    if (c.length == 4U) {
+        unsigned char b[4];
+        size_t k;
+        for (k = 0; k < 4U; k++) {
+            unsigned char ch = path[c.offset + k];
+            b[k] = (ch >= 'A' && ch <= 'Z') ? (unsigned char)(ch + 32) : ch;
+        }
+        if (b[0] == '.' && b[1] == 'g' && b[2] == 'i' && b[3] == 't') return 0;
+    }
+    last = path[c.offset + c.length - 1U];
+    if (last == '.' || last == ' ') return 0;
+    return 1;
+}
+
+static int path_r4_ok(const unsigned char *path, size_t len, int has_control,
+                       struct component *comps, size_t *count)
+{
+    size_t i;
+
+    if (len < 1U || len > MAX_PATH_BYTES) return 0;
+    if (has_control) return 0;
+    for (i = 0; i < len; i++) {
+        if (path[i] == '\\') return 0;
+    }
+    if (path[0] == '/') return 0;
+    if (!split_components(path, len, comps, count)) return 0;
+    if (*count < 1U || *count > MAX_PATH_COMPONENTS) return 0;
+    for (i = 0; i < *count; i++) {
+        if (!component_ok(path, comps[i])) return 0;
+    }
+    return 1;
+}
+
+
+/* ---------------------------------------------------------------------- */
 /* Payload assembly (R6).                                                  */
 
 static size_t append_bytes(unsigned char *out, size_t pos, const void *data, size_t len)
@@ -582,19 +651,31 @@ int main(int argc, char **argv)
             goto write_result;
         }
 
-        /*
-         * R4 (path rules) and R5 (candidate reading) are not yet built: a
-         * well-formed instruction ends at this stub, which commit 3 (R4)
-         * and commit 4 (R5) replace in turn.
-         */
-        (void)has_control;
-        have_check = 1;
-        memcpy(check_path, instruction_buffer + path_off, path_len);
-        check_path_len = path_len;
-        memcpy(expected_hex, instruction_buffer + digest_off, 64U);
-        expected_hex[64] = '\0';
-        outcome = "refused";
-        reason_id = "file.read-error";
+        {
+            struct component comps[MAX_PATH_COMPONENTS];
+            size_t comp_count = 0;
+
+            if (!path_r4_ok(instruction_buffer + path_off, path_len, has_control, comps,
+                             &comp_count)) {
+                outcome = "refused";
+                reason_id = "instruction.path-rejected";
+                goto write_result;
+            }
+
+            /*
+             * R5 (candidate reading) is not yet built: a path accepted by
+             * R4 ends at this stub, which commit 4 replaces with the real
+             * candidate walk, read and compare.
+             */
+            (void)comp_count;
+            have_check = 1;
+            memcpy(check_path, instruction_buffer + path_off, path_len);
+            check_path_len = path_len;
+            memcpy(expected_hex, instruction_buffer + digest_off, 64U);
+            expected_hex[64] = '\0';
+            outcome = "refused";
+            reason_id = "file.read-error";
+        }
     }
 
 write_result:

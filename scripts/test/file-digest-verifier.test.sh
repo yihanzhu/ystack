@@ -4,7 +4,7 @@
 # work/fixed-file-digest-verifier/spec.md and plan.md. No privilege, chroot,
 # namespace or mount is used; nothing here runs the verifier against a real
 # sandbox, accepts its digest, or grants it authority.
-# shellcheck disable=SC2016,SC2034
+# shellcheck disable=SC2016
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -445,6 +445,100 @@ check_refusal 'a code point above U+10FFFF' "$tmp/i-utf8-above.bin" instruction.
 mkinstr "$tmp/i-utf8-trunc.bin" "{\"path_hex\":\"e282\",\"sha\":\"$zero_sha\"}"
 check_refusal 'a truncated sequence' "$tmp/i-utf8-trunc.bin" instruction.malformed
 pass 'every invalid UTF-8 class in the path gives instruction.malformed'
+
+# ===========================================================================
+# R4 differential: verifier vs. pinned jq's repo_path_ok, and the shape check.
+# ===========================================================================
+record_skeleton() {
+  local path_value=$1
+  "$jq_bin" -S -c -n --arg path "$path_value" --arg sha "$zero_sha" '
+    {schema_version:1,kind:"shadow_incident_record",id:"incident.r4-differential",
+     body:{deploy_authority:"none",target_repository_id:"fixture.target",
+       git_revision_ref:{repository_id:"fixture.target",hash_algorithm:"sha1",
+         commit_id:("a"*40)},
+       failing_check:{kind:"file-digest",path:$path,expected_sha256:$sha},
+       observed_symptom:"fixture",
+       reporter_actor_ref:"actor.fixture",
+       observed_at:"2026-08-30T00:00:04Z"}}'
+}
+
+differential_case() {
+  # differential_case <desc> <path-hex>
+  local desc=$1 path_hex=$2
+  local path_json
+  path_json=$("$python" - "$path_hex" <<'PY'
+import sys, binascii, json
+print(json.dumps(binascii.unhexlify(sys.argv[1]).decode("utf-8")))
+PY
+)
+  # jq's own predicate.
+  local jq_accepts
+  if "$jq_bin" -e --argjson p "$path_json" -n '$p | (
+      type == "string" and utf8bytelength >= 1 and utf8bytelength <= 4096 and
+      (test("[[:cntrl:]]") | not) and (contains("\\") | not) and
+      (startswith("/") | not) and
+      (split("/") | length <= 64 and
+       all(.[]; . != "" and . != "." and . != ".." and (ascii_downcase != ".git") and
+           (endswith(".") | not) and (endswith(" ") | not))))' \
+      >/dev/null 2>&1; then
+    jq_accepts=1
+  else
+    jq_accepts=0
+  fi
+  # shadow/v1/incident-record.jq shape check on the same value.
+  local record shape_out shape_accepts
+  record=$(record_skeleton "$("$python" -c 'import sys,json;print(json.loads(sys.argv[1]))' "$path_json")")
+  shape_out=$(printf '%s' "$record" |
+    "$jq_bin" -r --arg operation shape --arg record_sha "$zero_sha" -f "$incident_program" 2>/dev/null || true)
+  if [ -z "$shape_out" ]; then shape_accepts=1; else shape_accepts=0; fi
+  # the verifier, through the test build, over a real candidate root that
+  # never contains the path (so acceptance means "reached file.* processing").
+  mkinstr "$tmp/diff-instr.bin" "{\"path_hex\":\"$path_hex\",\"sha\":\"$zero_sha\"}"
+  fresh_evidence
+  run_test_verifier "$tmp/diff-instr.bin" "$tmp/diff.out" "$tmp/diff.err" || true
+  local reason verifier_accepts
+  reason=$(reason_of "$result_path")
+  case "$reason" in
+    instruction.*) verifier_accepts=0 ;;
+    *) verifier_accepts=1 ;;
+  esac
+  [ "$jq_accepts" = "$shape_accepts" ] || fail "$desc: jq predicate and incident-record shape check disagree"
+  [ "$jq_accepts" = "$verifier_accepts" ] || fail "$desc: verifier disagrees with jq's repo_path_ok ($desc)"
+}
+
+# Accepted.
+differential_case '4,096-byte path' "$(hex_of "$big_path")"
+differential_case 'leading U+0020' "$(hex_of " a")"
+differential_case 'internal space' "$(hex_of "a b")"
+differential_case 'x.git (not .git)' "$(hex_of "x.git")"
+differential_case '.gitignore (not .git)' "$(hex_of ".gitignore")"
+differential_case 'U+00A0 (accepted non-control)' "$(hex_of "$(printf '\xc2\xa0')")"
+differential_case 'U+00AD (accepted non-control)' "$(hex_of "$(printf '\xc2\xad')")"
+differential_case 'U+200B (accepted non-control)' "$(hex_of "$(printf '\xe2\x80\x8b')")"
+differential_case 'U+2028 (accepted non-control)' "$(hex_of "$(printf '\xe2\x80\xa8')")"
+differential_case 'U+FEFF inside the path (accepted non-control)' "$(hex_of "$(printf 'a\xef\xbb\xbfb')")"
+differential_case 'U+E000 (accepted non-control)' "$(hex_of "$(printf '\xee\x80\x80')")"
+differential_case 'U+FFFF (accepted non-control)' "$(hex_of "$(printf '\xef\xbf\xbf')")"
+differential_case 'U+1F600 (accepted, 4-byte)' "$(hex_of "$(printf '\xf0\x9f\x98\x80')")"
+differential_case 'U+10FFFF (accepted, 4-byte, max code point)' "$(hex_of "$(printf '\xf4\x8f\xbf\xbf')")"
+differential_case '64 components' "$(hex_of "$(printf 'a/%.0s' $(seq 1 63))z")"
+differential_case '.GİT (dotted capital I, not .git)' "$(hex_of "$(printf '.G\xc4\xb0T')")"
+
+# Rejected.
+differential_case '.GIT (rejected)' "$(hex_of ".GIT")"
+differential_case '.Git (rejected)' "$(hex_of ".Git")"
+differential_case '65 components (rejected)' "$(hex_of "$(printf 'a/%.0s' $(seq 1 64))z")"
+differential_case '4,097-byte path (rejected, oversize)' "$(hex_of "$(/usr/bin/printf 'a%.0s' $(seq 1 4097))")"
+differential_case 'U+0001 (rejected control)' "$(hex_of "$(printf '\x01')")"
+differential_case 'U+001F (rejected control)' "$(hex_of "$(printf '\x1f')")"
+differential_case 'U+007F (rejected control)' "$(hex_of "$(printf '\x7f')")"
+differential_case 'U+0080 (rejected control)' "$(hex_of "$(printf '\xc2\x80')")"
+differential_case 'U+0085 (rejected control)' "$(hex_of "$(printf '\xc2\x85')")"
+differential_case 'U+009F (rejected control)' "$(hex_of "$(printf '\xc2\x9f')")"
+differential_case 'tab (rejected control)' "$(hex_of "$(printf '\t')")"
+differential_case 'trailing dot component (rejected)' "$(hex_of "a.")"
+differential_case 'trailing space component (rejected)' "$(hex_of "a ")"
+pass 'the R4 differential corpus agrees between the verifier, jq repo_path_ok and the incident shape check'
 
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
