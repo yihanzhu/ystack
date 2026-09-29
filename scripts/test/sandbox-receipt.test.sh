@@ -619,6 +619,182 @@ run_program_full "$receipt_satisfied" "$expectation" "$evaluation" "$policy" "$d
   "$tmp/other-proven.out" >/dev/null || fail 'registry-other-env-proven-unaffected'
 pass 'registry-other-env-proven-unaffected'
 
+# PR 3: the driver, following control/v1/evaluate-sandbox.sh's own test style.
+driver="$root/enforcement/v1/check-sandbox-receipt.sh"
+repo_copy="$tmp/repo-copy"
+/bin/mkdir -p "$repo_copy/enforcement/v1" "$repo_copy/control/v1" "$repo_copy/shadow/v1"
+/bin/cp "$program" "$driver" "$repo_copy/enforcement/v1/"
+/bin/cp "$policy" "$decision" "$policy_set" "$repo_copy/control/v1/"
+/bin/cp "$registry" "$repo_copy/shadow/v1/"
+/bin/cp "$accepted" "$repo_copy/enforcement/v1/accepted-identities.json"
+/bin/chmod 0755 "$repo_copy/enforcement/v1/check-sandbox-receipt.sh"
+copy_driver="$repo_copy/enforcement/v1/check-sandbox-receipt.sh"
+
+run_driver() {
+  local bin_driver=$1 receipt=$2 expectation_in=$3 evaluation_in=$4 out=$5 err=$6 status=0
+  PATH="$bin:/usr/bin:/bin" "$bin_driver" check "$receipt" "$expectation_in" "$evaluation_in" \
+    >"$out" 2>"$err" || status=$?
+  DRIVER_STATUS=$status
+}
+
+# Each positive control, and a couple of single-reason fixtures, give output
+# byte-identical to run_program end to end, through the copied repository
+# (the test-only accepted set), and the positive controls are valid.
+expect_driver_matches_program() {
+  local name=$1 receipt=$2 expectation_in=$3 evaluation_in=$4
+  local prog_out="$tmp/$name-prog.out" drv_out="$tmp/$name-drv.out" drv_err="$tmp/$name-drv.err"
+  run_program "$receipt" "$expectation_in" "$evaluation_in" "$accepted" "$prog_out"
+  run_driver "$copy_driver" "$receipt" "$expectation_in" "$evaluation_in" "$drv_out" "$drv_err"
+  if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$drv_err" ] &&
+    /usr/bin/cmp -s "$prog_out" "$drv_out"; }; then
+    fail "$name"
+  fi
+  pass "$name"
+}
+expect_driver_matches_program driver-satisfied "$receipt_satisfied" "$expectation" "$evaluation"
+expect_driver_matches_program driver-violated "$receipt_violated" "$expectation" "$evaluation"
+expect_driver_matches_program driver-failed "$receipt_failed" "$expectation" "$evaluation"
+expect_driver_matches_program driver-kind-unsupported \
+  "$(mutate "$receipt_satisfied" driver-kind-unsupported '.kind="x"')" "$expectation" "$evaluation"
+expect_driver_matches_program driver-origin-mismatch \
+  "$(mutate "$receipt_satisfied" driver-origin-mismatch '.body.origin.store_id="other"')" \
+  "$expectation" "$evaluation"
+"$jq_bin" -e '.body.check_verdict=="valid"' "$tmp/driver-satisfied-drv.out" >/dev/null ||
+  fail 'driver-satisfied-valid-end-to-end'
+pass 'driver-satisfied-valid-end-to-end'
+
+# The shipped driver, against the shipped (empty) accepted set: every
+# positive control is refused with exactly these three reasons; an
+# exclusive-reason fixture still gets its reason alone.
+expect_shipped_refused() {
+  local name=$1 receipt=$2
+  local out="$tmp/$name.out" err="$tmp/$name.err"
+  run_driver "$driver" "$receipt" "$expectation" "$evaluation" "$out" "$err"
+  if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$err" ] && "$jq_bin" -e '
+    .body.check_verdict=="refused" and .body.reason_ids==
+      ["receipt.environment-unlisted","receipt.identity-unaccepted","receipt.stale"]
+  ' "$out" >/dev/null; }; then
+    fail "$name"
+  fi
+  pass "$name"
+}
+expect_shipped_refused shipped-satisfied "$receipt_satisfied"
+expect_shipped_refused shipped-violated "$receipt_violated"
+expect_shipped_refused shipped-failed "$receipt_failed"
+shipped_exclusive_out="$tmp/shipped-exclusive.out"
+shipped_exclusive_err="$tmp/shipped-exclusive.err"
+run_driver "$driver" "$(mutate "$receipt_satisfied" shipped-kind-unsupported '.kind="x"')" \
+  "$expectation" "$evaluation" "$shipped_exclusive_out" "$shipped_exclusive_err"
+if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$shipped_exclusive_err" ] &&
+  "$jq_bin" -e '.body.reason_ids==["receipt.kind-unsupported"]' "$shipped_exclusive_out" \
+    >/dev/null; }; then
+  fail 'shipped-exclusive-reason-alone'
+fi
+pass 'shipped-exclusive-reason-alone'
+
+# Error paths: no stdout, one code on stderr, nothing naming the scratch dir.
+expect_driver_error() {
+  local name=$1 expected=$2 receipt=$3 expectation_in=$4 evaluation_in=$5
+  local out="$tmp/$name.out" err="$tmp/$name.err" status=0
+  PATH="$bin:/usr/bin:/bin" "$driver" check "$receipt" "$expectation_in" "$evaluation_in" \
+    >"$out" 2>"$err" || status=$?
+  if ! { [ "$status" -ne 0 ] && [ ! -s "$out" ] && [ "$(/bin/cat "$err")" = "$expected" ] &&
+    ! /usr/bin/grep -Fq "$tmp" "$err"; }; then
+    fail "$name"
+  fi
+  pass "$name"
+}
+usage_out="$tmp/usage.out" usage_err="$tmp/usage.err" usage_status=0
+PATH="$bin:/usr/bin:/bin" "$driver" check "$receipt_satisfied" "$expectation" \
+  >"$usage_out" 2>"$usage_err" || usage_status=$?
+[ "$usage_status" -ne 0 ] && [ ! -s "$usage_out" ] && [ "$(/bin/cat "$usage_err")" = E_USAGE ] ||
+  fail 'usage-wrong-args'
+pass 'usage-wrong-args'
+"$jq_bin" '.' "$receipt_satisfied" >"$tmp/noncanonical-receipt.json"
+expect_driver_error canonical-violation E_CANONICAL "$tmp/noncanonical-receipt.json" \
+  "$expectation" "$evaluation"
+/usr/bin/printf '\xEF\xBB\xBF' >"$tmp/bom-receipt.json"
+/bin/cat "$receipt_satisfied" >>"$tmp/bom-receipt.json"
+expect_driver_error parse-bom E_PARSE "$tmp/bom-receipt.json" "$expectation" "$evaluation"
+/bin/cat "$receipt_satisfied" "$receipt_satisfied" >"$tmp/two-roots-receipt.json"
+expect_driver_error parse-two-roots E_PARSE "$tmp/two-roots-receipt.json" "$expectation" \
+  "$evaluation"
+"$jq_bin" -n -S -c '{pad:("x"*2000000)}' >"$tmp/oversize-receipt.json"
+expect_driver_error limit-oversize E_LIMIT "$tmp/oversize-receipt.json" "$expectation" \
+  "$evaluation"
+"$jq_bin" -n -S -c 'reduce range(0;33) as $index (0;{value:.})' >"$tmp/depth-receipt.json"
+expect_driver_error limit-depth E_LIMIT "$tmp/depth-receipt.json" "$expectation" "$evaluation"
+ln -s "$receipt_satisfied" "$tmp/symlinked-receipt.json"
+expect_driver_error runtime-symlink E_RUNTIME "$tmp/symlinked-receipt.json" "$expectation" \
+  "$evaluation"
+
+# An input changed mid-run: a wrapper hook, not a timed poll, so the
+# mutation is guaranteed to land before the postflight recheck runs rather
+# than merely likely to (a race copy only, never the shipped driver).
+race_root="$tmp/race-root"
+/bin/cp -R "$repo_copy" "$race_root"
+race_driver="$race_root/enforcement/v1/check-sandbox-receipt.sh"
+race_marker="$tmp/race.marker" race_release="$tmp/race.release"
+"$jq_bin" -Rrs --arg marker "$race_marker" --arg release "$race_release" '
+  split("\n") as $lines |
+  (($lines | to_entries | map(select(.value | test("scratch/output[.]json"))))[0].key) as $i |
+  ($lines[0:$i+1] + [
+    "if [ -n \"${YSTACK_RACE_HOOK:-}\" ]; then",
+    "  : >\"" + $marker + "\"",
+    "  race_wait=0",
+    "  while [ ! -e \"" + $release + "\" ] && [ \"$race_wait\" -lt 1000 ]; do",
+    "    race_wait=$((race_wait + 1)); /bin/sleep 0.01",
+    "  done",
+    "fi"
+  ] + $lines[$i+1:]) | join("\n")
+' "$race_driver" >"$race_driver.patched"
+/bin/mv "$race_driver.patched" "$race_driver"
+/bin/chmod 0755 "$race_driver"
+
+race_receipt="$tmp/race-receipt.json"
+/bin/cp "$receipt_satisfied" "$race_receipt"
+race_out="$tmp/race.out" race_err="$tmp/race.err"
+env -u DYLD_INSERT_LIBRARIES -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH \
+  YSTACK_RACE_HOOK=1 PATH="$bin:/usr/bin:/bin" /usr/bin/perl -e 'alarm shift; exec @ARGV' 10 \
+  "$race_driver" check "$race_receipt" "$expectation" "$evaluation" >"$race_out" 2>"$race_err" &
+race_pid=$!
+attempt=0
+while [ ! -e "$race_marker" ] && kill -0 "$race_pid" 2>/dev/null && [ "$attempt" -lt 500 ]; do
+  attempt=$((attempt + 1))
+  /bin/sleep 0.01
+done
+if [ ! -e "$race_marker" ]; then
+  kill "$race_pid" 2>/dev/null || :
+  wait "$race_pid" 2>/dev/null || :
+  fail 'relation-race marker timeout'
+fi
+"$jq_bin" -S -c '.body.origin.store_id="race-mutated"' "$receipt_satisfied" >"$race_receipt"
+: >"$race_release"
+race_status=0
+wait "$race_pid" || race_status=$?
+[ "$race_status" -ne 0 ] && [ ! -s "$race_out" ] && [ "$(/bin/cat "$race_err")" = E_RELATION ] ||
+  fail 'relation-race'
+pass 'relation-race'
+
+# A byte-identical receipt copy, and two repeat driver runs, give identical
+# output.
+/bin/cp "$receipt_satisfied" "$tmp/receipt-copy.json"
+copy_out="$tmp/copy-identity.out" copy_err="$tmp/copy-identity.err"
+run_driver "$copy_driver" "$tmp/receipt-copy.json" "$expectation" "$evaluation" "$copy_out" \
+  "$copy_err"
+if ! { [ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$copy_err" ] &&
+  /usr/bin/cmp -s "$copy_out" "$tmp/driver-satisfied-drv.out"; }; then
+  fail 'copy-identity'
+fi
+pass 'copy-identity'
+driver_rep1="$tmp/driver-rep1.out" driver_rep2="$tmp/driver-rep2.out"
+run_driver "$copy_driver" "$receipt_satisfied" "$expectation" "$evaluation" "$driver_rep1" \
+  "$tmp/driver-rep1.err"
+run_driver "$copy_driver" "$receipt_satisfied" "$expectation" "$evaluation" "$driver_rep2" \
+  "$tmp/driver-rep2.err"
+/usr/bin/cmp -s "$driver_rep1" "$driver_rep2" || fail 'driver-determinism'
+pass 'driver two runs give byte-identical output'
+
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"
