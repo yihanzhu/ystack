@@ -314,6 +314,27 @@ Its boundary map and four separately gated implementation concerns define what
 must be resolved before use. This decision ships no runtime, and the evaluator's
 declaration-only result still grants no enforcement proof or qualification.
 
+## Inactive sandbox receipt check
+
+`enforcement/v1/check-sandbox-receipt.sh` checks one sandbox enforcement receipt
+against the consumer's expectation for that attempt and the declaration-only
+sandbox evaluation that admitted the launch. It reads the sandbox policy,
+decision and policy set, the environment registry and
+`enforcement/v1/accepted-identities.json` from the repository, never from
+arguments. It returns `valid` or `refused` with a closed list of reasons and, for
+a valid receipt, an enforcement verdict of `satisfied`, `violated` or `failed`,
+as the [accepted receipt contract](../work/enforcement-evidence-binding/spec.md)
+defines.
+
+The check proves shape, binding to one attempt, the accepted identities and
+internal consistency. It never proves origin, and its output always says
+`origin_check: "not-performed"`: a receipt is authentic only when the consumer
+reads it itself from the host supervisor's store, which does not exist yet. The
+shipped accepted identity set is empty, so no receipt can be `valid` today. The
+check is inactive, grants no authority or qualification, changes no gate, and
+runs no candidate, supervisor or network action. Declaration-only sandbox
+evaluations keep their meaning.
+
 ## Inactive credential-policy evaluator
 
 `control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
