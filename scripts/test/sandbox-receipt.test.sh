@@ -596,6 +596,21 @@ mutate_case 2 policy-set-sections-duplicate-id '.body.sections[0].section_id=.bo
 mutate_case 2 policy-set-package-ref-media-type-invalid '.body.core_contract.package_ref.media_type="text/plain"'
 mutate_case 0 policy-resource-access-invalid '.body.resources[0].access="read-execute"'
 
+# Defense by identity: a copy still schema-valid (id_ok tolerates a changed
+# `.id`) is caught by the pin alone, on each of the three pinned files.
+mutate_case 0 policy-tampered-pinned-copy '.id="control-policy.sandbox-tampered"'
+mutate_case 1 decision-tampered-pinned-copy '.id="control-decision.sandbox-tampered"'
+mutate_case 2 policy-set-tampered-pinned-copy '.id="control-policy-set.v1-tampered"'
+
+# The remaining constraints this round adds: an invalid enum, a non-posint,
+# a generation-id pattern break, a non-hex40 commit, and an out-of-enum
+# proof_state.
+mutate_case 1 decision-fail-mode-invalid '.body.fail_mode="open"'
+mutate_case 1 decision-output-schema-version-invalid '.body.semantics.output_schema_version=-1.5'
+mutate_case 2 policy-set-generation-id-invalid '.body.core_contract.generation_id="not-a-valid-id"'
+mutate_case 3 registry-source-root-commit-invalid '.body.environments[0].source_root_commit="short"'
+mutate_case 3 registry-proof-state-invalid '.body.environments[0].proof_state="proven"'
+
 # Repeat runs give byte-identical output.
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep1.out"
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"

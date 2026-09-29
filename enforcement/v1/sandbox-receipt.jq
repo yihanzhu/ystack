@@ -260,16 +260,19 @@ def leaf_ok($kind):
   elif $kind == "number" then type == "number"
   elif $kind == "posint" then num_ok
   elif $kind == "hex64" then sha256_ok
+  elif $kind == "hex40" then type == "string" and test("\\A[0-9a-f]{40}\\z")
   elif $kind == "id" then id_ok
   else false end;
 
 def literal($v): {"$kind":"literal",value:$v};
 def enum($vs): {"$kind":"enum",values:$vs}; def media($v): literal($v);
 def exact_set($key;$ids): {"$kind":"exact_set",key:$key,ids:$ids};
+def pattern($re): {"$kind":"pattern",re:$re};
 
 def constraint_ok($c):
   if $c["$kind"] == "literal" then . == $c.value
   elif $c["$kind"] == "enum" then (. as $v | ($c.values | index($v))) != null
+  elif $c["$kind"] == "pattern" then type == "string" and test($c.re)
   else false end;
 
 def shape($s):
@@ -287,52 +290,69 @@ def shape($s):
   else leaf_ok($s) end;
 
 def content_ref_schema($media): {content_id:"id",media_type:media($media),sha256:"hex64"};
-def access_enum: enum(["read-only","read-write","write-only"]);
 
+# Mirrors control/v1/sandbox.jq policy_ok's `==` checks; round summary has the mapping.
 def policy_body_schema:
   {activation_state:literal("inactive"),
-   environment:{mode:literal("clear-then-allowlist"),variables:[{name:"string",value:"string"}]},
+   environment:literal({mode:"clear-then-allowlist",variables:[
+     {name:"LANG",value:"C"},{name:"LC_ALL",value:"C"},
+     {name:"PATH",value:"/sandbox/tools"},{name:"TMPDIR",value:"/sandbox/scratch"}]}),
    evaluation_mode:literal("observation-only"),fail_mode:literal("closed"),
-   filesystem:{read_roots:[{access:access_enum,path:"string",purpose:"id"}],
-     write_roots:[{access:access_enum,path:"string",purpose:"id"}]},
-   isolation:{candidate_only:"bool",disposable:"bool",host_access:"bool"},
+   filesystem:literal({read_roots:[
+     {access:"read-only",path:"/sandbox/candidate",purpose:"candidate"},
+     {access:"read-only",path:"/sandbox/tools",purpose:"toolchain"}],write_roots:[
+     {access:"write-only",path:"/sandbox/evidence",purpose:"evidence"},
+     {access:"read-write",path:"/sandbox/scratch",purpose:"scratch"}]}),
+   isolation:literal({candidate_only:true,disposable:true,host_access:false}),
    limits:{cpu_time_ms:literal(30000),memory_bytes:literal(536870912),
      output_bytes:literal(10485760),process_count:literal(32),wall_time_ms:literal(60000)},
    network:literal({endpoints:[],mode:"deny"}),
    policy_version:literal("v1"),reference_semantics:literal("identity-only"),
    required_role:literal("verifier"),
-   resources:[{access:access_enum,id:"id",kind:"string",path:"string"}],
-   sensitive_material:{credential_refs:["id"],exposure:"string",secret_refs:["id"]},
-   tools:[{argv:["string"],executable:"string",network:"bool",resource_ids:["id"],
-     sha256:"hex64",tool_id:"id"}]};
+   resources:literal([
+     {access:"read-only",id:"resource.candidate",kind:"directory",path:"/sandbox/candidate"},
+     {access:"write-only",id:"resource.evidence",kind:"directory",path:"/sandbox/evidence"},
+     {access:"read-write",id:"resource.scratch",kind:"directory",path:"/sandbox/scratch"},
+     {access:"read-only",id:"resource.toolchain",kind:"directory",path:"/sandbox/tools"}]),
+   sensitive_material:literal({credential_refs:[],exposure:"none",secret_refs:[]}),
+   tools:literal([{argv:["verify","--candidate","/sandbox/candidate","--evidence",
+     "/sandbox/evidence"],executable:"/sandbox/tools/verifier",network:false,
+     resource_ids:["resource.candidate","resource.evidence","resource.scratch"],
+     sha256:("1"*64),tool_id:"tool.verifier"}])};
 
 def fixed_policy_shape_ok:
   ($policy[0]) as $p |
   ($p | exact(["body","id","kind","schema_version"])) and $p.kind == "sandbox_policy" and
   $p.schema_version == 1 and ($p.id | id_ok) and ($p.body | shape(policy_body_schema));
 
+# output_schema_version stays posint (not literal 1): a future bump should
+# not need this file edited.
 def decision_body_schema:
-  {activation_state:"string",decision:"string",
+  {activation_state:literal("inactive"),decision:literal("allow-observation-only-evaluation"),
    evaluator:{driver_ref:content_ref_schema("text/x-shellscript"),
      program_ref:content_ref_schema("text/x-jq"),
      policy_set_validator:{driver_ref:content_ref_schema("text/x-shellscript"),
        program_ref:content_ref_schema("text/x-jq")}},
-   fail_mode:"string",
+   fail_mode:enum(["closed"]),
    policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
-   semantics:{authority_effect:"string",enforcement_proof:"string",input_contract:"string",
-     output_kind:"string",output_schema_version:"number",qualification_effect:"string",
-     reference_semantics:"string",verdicts:["string"]}};
+   semantics:{authority_effect:literal("none"),enforcement_proof:literal("declaration-only"),
+     input_contract:literal("control-policy-set+duty-evaluation+execution-environment-claim.v1"),
+     output_kind:literal("sandbox_policy_evaluation"),output_schema_version:"posint",
+     qualification_effect:literal("none"),reference_semantics:literal("identity-only"),
+     verdicts:literal(["inconclusive","satisfied","violated"])}};
 
 def fixed_decision_shape_ok:
   ($decision[0]) as $d |
   ($d | exact(["body","id","kind","schema_version"])) and $d.kind == "sandbox_decision" and
   $d.schema_version == 1 and ($d.id | id_ok) and ($d.body | shape(decision_body_schema));
 
+# policy-set.jq shape_ok/relations_ok (round summary has the mapping);
+# semantic_identity mirrors its own pattern (:54), not a literal.
 def policy_set_body_schema:
   {activation_state:literal("inactive"),
-   core_contract:{generation_id:"string",
+   core_contract:{generation_id:pattern("\\Ag-[0-9a-f]{64}\\z"),
      package_ref:content_ref_schema("application/vnd.ystack.core-contract+json"),
-     semantic_identity:"string"},
+     semantic_identity:pattern("\\Acore\\.contracts\\.v[1-9][0-9]*\\z")},
    fail_mode:literal("closed"),policy_version:literal("v1"),
    sections:[{section_id:"id",
        policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
@@ -345,10 +365,12 @@ def fixed_policy_set_shape_ok:
   ($s | exact(["body","id","kind","schema_version"])) and $s.kind == "control_policy_set" and
   $s.schema_version == 1 and ($s.id | id_ok) and ($s.body | shape(policy_set_body_schema));
 
+# registry has no constraint from sandbox.jq/validate.sh; proof_state's enum
+# is provisional (spec.md:864 -- round summary has the gap note).
 def registry_body_schema:
   {activation_state:"string",
    environments:[{description:"string",environment_id:"id",evidence_scope:"string",
-     proof_state:"string",source_root_commit:"string",target_repository_id:"id"}],
+     proof_state:enum(["unproven"]),source_root_commit:"hex40",target_repository_id:"id"}],
    registry_version:"string"};
 
 def fixed_registry_shape_ok:
@@ -414,10 +436,20 @@ def cross_document_ok:
   (sandbox_section != null) and (sandbox_section.policy_ref == expected_policy_ref) and
   (sandbox_section.decision_ref == expected_decision_ref);
 
+# Defense by identity (spec.md:227): pinned by digest, not just schema.
+def policy_pin: "4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e";
+def decision_pin: "c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd";
+def policy_set_pin: "3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8";
+
+def pinned_files_ok:
+  (if $policy_sha != policy_pin then error("fixed-file-identity:policy") else true end) and
+  (if $decision_sha != decision_pin then error("fixed-file-identity:decision") else true end) and
+  (if $policy_set_sha != policy_set_pin then error("fixed-file-identity:policy_set") else true end);
+
 def fixed_files_ok:
   fixed_policy_shape_ok and fixed_decision_shape_ok and fixed_policy_set_shape_ok and
   fixed_registry_shape_ok and fixed_accepted_shape_ok and fixed_entry_digests_shape_ok and
-  entry_digests_match_registry and cross_document_ok;
+  entry_digests_match_registry and cross_document_ok and pinned_files_ok;
 
 # PR 2: lookups against the fixed registry, accepted set and entry digests
 # (all read only after `fixed_files_ok`, so their shapes are already sound).
