@@ -1362,29 +1362,29 @@ kernel_required_options=(
 build_pkg "$base/pkg-ok.json" '{}'
 expect_admitted 'kernel-config control: the full =y set admits' attempt.fixture-0001 "$base/pkg-ok.json"
 
-/bin/chmod 644 "$guest_kernel_config_path"
-/usr/bin/printf 'CONFIG_HZ_250=y\n' > "$guest_kernel_config_path"
-/bin/chmod 444 "$guest_kernel_config_path"
-build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-absent","nonce":"'"$(printf '%064d' 110)"'"}'
-expect_phase_b_refused 'every required kernel option absent' attempt.fixture-kcfg-absent "$base/pkg-pb.json" \
-  '["launch.identity-unaccepted","launch.kernel-config"]'
-
-/bin/chmod 644 "$guest_kernel_config_path"
-: > "$guest_kernel_config_path"
-last=$((${#kernel_required_options[@]} - 1))
-for idx in "${!kernel_required_options[@]}"; do
-  if [ "$idx" -eq "$last" ]; then
-    printf '%s=m\n' "${kernel_required_options[$idx]}" >> "$guest_kernel_config_path"
-  else
-    printf '%s=y\n' "${kernel_required_options[$idx]}" >> "$guest_kernel_config_path"
-  fi
+# Each option (plus the HZ set, via its baseline entry CONFIG_HZ_250)
+# checked individually absent or =m, all others valid.
+all_kernel_options=("${kernel_required_options[@]}" CONFIG_HZ_250)
+i=0
+for opt in "${all_kernel_options[@]}"; do
+  for mode in absent m; do
+    i=$((i + 1))
+    /bin/chmod 644 "$guest_kernel_config_path"
+    : > "$guest_kernel_config_path"
+    for o in "${all_kernel_options[@]}"; do
+      if [ "$o" = "$opt" ]; then
+        [ "$mode" = absent ] || printf '%s=%s\n' "$o" "$mode" >> "$guest_kernel_config_path"
+      else
+        printf '%s=y\n' "$o" >> "$guest_kernel_config_path"
+      fi
+    done
+    /bin/chmod 444 "$guest_kernel_config_path"
+    build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-'"$i"'","nonce":"'"$(printf '%064d' $((150 + i)))"'"}'
+    expect_phase_b_refused "kernel option $opt $mode" "attempt.fixture-kcfg-$i" "$base/pkg-pb.json" \
+      '["launch.identity-unaccepted","launch.kernel-config"]'
+  done
 done
-printf 'CONFIG_HZ_250=y\n' >> "$guest_kernel_config_path"
-/bin/chmod 444 "$guest_kernel_config_path"
-build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-kcfg-m","nonce":"'"$(printf '%064d' 111)"'"}'
-expect_phase_b_refused 'the last required kernel option =m instead of =y' attempt.fixture-kcfg-m "$base/pkg-pb.json" \
-  '["launch.identity-unaccepted","launch.kernel-config"]'
-pass 'the R2.4 closed =y set refuses launch.kernel-config both when every option is absent and when the set is otherwise complete but the last option is =m, paired against the full =y control'
+pass 'the R2.4 closed =y set refuses launch.kernel-config for every required option (and the HZ set), each checked individually absent or =m with every other option valid, paired against the full =y control'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
