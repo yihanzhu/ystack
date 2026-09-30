@@ -1183,10 +1183,22 @@ FROZEN_FIXED_NAMES = ("record.json", "manifest.json", "instruction")
 RESERVED_WORK_ROOT_NAMES = frozenset({"nonces"})
 
 
-def freeze_by_copy(config, attempt_id, uid, gid, package):
+def freeze_by_copy(config, attempt_id, uid, gid, package, created):
     """R5.1. Returns the candidate/ filenames it created -- the only
     variable-count entries -- so teardown removes exactly what this
-    attempt made, never whatever a directory listing happens to find."""
+    attempt made, never whatever a directory listing happens to find.
+
+    findings-477-r9.md finding 1: created[0] is set True the instant
+    this launch's own work_root/<attempt_id> directory actually exists
+    (mkdir_excl succeeded) -- never left for the caller to infer from
+    the exception type. A FileExistsError here (another attempt already
+    owns this work_root entry, a TOCTOU race past the pre-claim
+    work_root_attempt_exists check) means created[0] stays False: this
+    launch made nothing, so the caller must never call remove_frozen
+    against it -- that would delete the OTHER attempt's candidate
+    files, disks and socket, possibly while its runtime is still
+    running, and could misreport storage_destroyed: true for storage
+    this launch never touched."""
     work_fd = os.open(config["work_root"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         try:
@@ -1196,6 +1208,7 @@ def freeze_by_copy(config, attempt_id, uid, gid, package):
             # no cleanup path can run against it (unlike a genuine
             # mid-freeze write failure below).
             refuse("E_ATTEMPT_EXISTS")
+        created[0] = True
         try:
             frozen_fd = mkdir_excl(attempt_work_fd, "frozen", uid, gid)
             try:
@@ -1876,14 +1889,25 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         if state == "stopped":
             confirmed_stopped = stopped_via_mailbox = True
             break
-        if state == "error" and since_spawn >= startup_deadline_s():
+        # findings-477-r9.md finding 2: check the process's own exit
+        # status BEFORE deciding the current state=="error" observation
+        # is a genuine driver failure -- a normal run whose REST
+        # endpoint disappears (e.g. its socket file is removed) in the
+        # same window it exits cleanly between polls must not be
+        # recorded as an error just because driver_state() raced ahead
+        # of proc.poll() and saw the now-gone endpoint first. An error
+        # observed on an EARLIER poll, while the process was still
+        # alive (exit_code was None then), already latched
+        # driver_reported_error True in that iteration and is preserved
+        # untouched here -- this only guards the CURRENT observation.
+        exit_code = proc.poll()
+        if state == "error" and since_spawn >= startup_deadline_s() and exit_code is None:
             # R5.4: past the startup grace, preserve the error but keep
             # supervising the live process -- HardStop/SIGKILL/
             # cancellation below, exiting only on reaped exit or
             # abandonment, never a bare break into a blind wait that
             # would itself disable the normal shutdown path.
             driver_reported_error = True
-        exit_code = proc.poll()
         if exit_code is not None:
             # Accept stopped_exit_status regardless of HardStop or an
             # earlier driver-state error: result["hard_stop"]/
@@ -2543,7 +2567,15 @@ def run_launch(argv):
     # Checked (never removed) before the store is claimed: a work_root
     # collision with no store entry must not surface as a bare freeze
     # failure after admission (an orphan store dir, no receipt).
-    require(not work_root_attempt_exists(config["work_root"], attempt_id), "E_ATTEMPT_EXISTS")
+    # findings-477-r9.md finding 1: test-only skip so a test can
+    # deterministically reproduce the genuine TOCTOU this check exists
+    # to catch (another attempt's work_root entry appearing between
+    # this check and freeze_by_copy's own mkdir_excl) -- with this
+    # skipped, a pre-created work_root/<attempt_id> instead reaches
+    # freeze_by_copy's own FileExistsError/Refusal("E_ATTEMPT_EXISTS")
+    # directly, exactly the path the round-9 fix protects.
+    if not os.environ.get("YSTACK_TEST_SKIP_WORK_ROOT_PRECHECK"):
+        require(not work_root_attempt_exists(config["work_root"], attempt_id), "E_ATTEMPT_EXISTS")
 
     # R4.2: the attempt directory is created exclusively, then every phase B
     # check runs. From here on, any OSError (including a finalization
@@ -2603,6 +2635,7 @@ def run_launch(argv):
             old_handlers = {sig: signal.signal(sig, on_signal)
                              for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
             try:
+                test_slow("YSTACK_TEST_SLOW_FREEZE_MS")  # test-only
                 # R5.1: freeze by copy before anything else -- so a later
                 # change by the consumer's account cannot reach the guest.
                 # A freeze failure itself (ENOSPC, a write error, a name
@@ -2616,13 +2649,37 @@ def run_launch(argv):
                 # raises Refusal("E_ATTEMPT_EXISTS"), not OSError -- the
                 # comment above already promised "a name collision" is
                 # covered, but only OSError was actually caught here.
+                created = [False]
                 try:
                     candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
-                                                      config["consumer_gid"], package)
+                                                      config["consumer_gid"], package, created)
                 except (OSError, Refusal):
-                    candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
-                    storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-                    run_result = stub_run_result()
+                    if created[0]:
+                        # This launch's own work_root entry really was
+                        # created before the failure -- clean up exactly
+                        # what it made, as before.
+                        candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
+                        storage_removal_began = time.monotonic()
+                        test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
+                        storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+                    else:
+                        # findings-477-r9.md finding 1 [P1]: never
+                        # created by THIS launch (e.g. E_ATTEMPT_EXISTS,
+                        # a work_root name-collision TOCTOU) -- never
+                        # call remove_frozen here at all; storage_destroyed
+                        # is unambiguously false, since nothing here was
+                        # ever this launch's to destroy.
+                        storage_destroyed = False
+                    # findings-477-r9.md finding 3 (R9.4): pass the
+                    # elapsed startup status, exactly like the driver-
+                    # argv/Popen/launch-file-write failure paths --
+                    # never the stub's own silent "met" default, which
+                    # would drop failure.supervisor-timeout for a freeze
+                    # (or its own cleanup) that alone already overran
+                    # the startup budget.
+                    run_result = stub_run_result(control_deadline_for_elapsed(admission_mono))
+                    if created[0] and (time.monotonic() - storage_removal_began) > storage_removal_deadline_s():
+                        run_result["control_deadline"] = "exceeded"
                 else:
                     manifest = parse_manifest(package["manifest.json"])
                     plan_bytes = build_plan_json(manifest, sha256_hex(package["instruction"]),

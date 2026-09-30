@@ -331,7 +331,20 @@ def cmd_run(args):
         # not on the frame's own mere presence/validity.
         while True:
             time.sleep(0.02)
-    write_mailbox(socket_path, state="stopped")
+    if scenario.get("vanish_mailbox_on_exit"):
+        # findings-477-r9.md finding 2: the REST endpoint can disappear
+        # entirely on a clean exit (e.g. the runtime removes its own
+        # socket/mailbox during its own teardown) rather than ever
+        # reporting "stopped" -- the host must still recognize this as
+        # a clean, confirmed stop via proc.poll()'s own stopped_exit_status,
+        # never a driver failure just because a state poll races ahead
+        # of the exit and finds no endpoint at all.
+        try:
+            os.unlink(socket_path)
+        except OSError:
+            pass
+    else:
+        write_mailbox(socket_path, state="stopped")
     exit_delay_ms = scenario.get("exit_delay_ms")
     if exit_delay_ms:
         # Reports "stopped" via the mailbox immediately, but the process

@@ -2754,6 +2754,78 @@ pass 'finding 3: an unreadable verifier (armed after the attempt is claimed, ins
 # paths (e.g. the ACL/ownership checks, also inspected rather than
 # black-box tested).
 
+# =============================================================================
+# Fix round 9 (findings-477-r9.md): one test per finding.
+# =============================================================================
+
+# Finding 1 [P1]: freeze_by_copy's own work_root name-collision
+# (Refusal("E_ATTEMPT_EXISTS") from its mkdir_excl) must never call
+# remove_frozen against a directory this launch didn't create. The real
+# trigger is a TOCTOU race between the pre-check (work_root_attempt_exists,
+# just above) and freeze_by_copy's own mkdir_excl -- deterministically
+# reproduced here by pre-creating the work_root entry with a sentinel
+# file and skipping that pre-check (YSTACK_TEST_SKIP_WORK_ROOT_PRECHECK),
+# landing exactly on freeze_by_copy's own collision instead.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+other_dir="$work_root/$attempt_id"
+mkdir -p "$other_dir"
+printf 'sentinel-do-not-touch' > "$other_dir/sentinel.txt"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_SKIP_WORK_ROOT_PRECHECK=1 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 1: expected exit 0, got $status ($(cat "$base/err"))"
+[ -f "$other_dir/sentinel.txt" ] && [ "$(cat "$other_dir/sentinel.txt")" = "sentinel-do-not-touch" ] ||
+  fail "finding 1: expected the pre-existing work_root entry's sentinel file to survive untouched"
+storage_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/$attempt_id/receipt.json")
+[ "$storage_destroyed" = false ] ||
+  fail "finding 1: expected teardown.storage_destroyed false (nothing here was ever this launch's to destroy), got $storage_destroyed"
+pass 'finding 1: freeze_by_copy'"'"'s own work_root name-collision (a pre-existing work_root entry, deterministically reached with the outer pre-check skipped) never calls remove_frozen against it -- the pre-existing sentinel file survives untouched and the receipt honestly reports storage_destroyed: false, never true'
+
+# Finding 2 [P2]: a clean exit whose REST endpoint vanishes entirely
+# (rather than ever reporting "stopped") must still be recognized as a
+# confirmed, clean stop via proc.poll()'s own exit code -- never a
+# driver failure just because a state poll races ahead and finds no
+# endpoint at all.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"vanish_mailbox_on_exit":true}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_STARTUP_MS=0 YSTACK_TEST_POLL_INTERVAL_MS=20 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding 2: expected lifecycle.runtime completed, teardown.state confirmed (a clean exit whose REST endpoint vanished before a state poll could see stopped must still confirm via proc.poll()'s own exit code), got $runtime/$teardown_state"
+pass 'finding 2: a normal run whose REST endpoint disappears entirely on clean exit (never reporting "stopped") is still recognized as a confirmed clean stop via proc.poll()'"'"'s own stopped_exit_status -- driver_state()'"'"'s "error" observation for the now-gone endpoint is not treated as a driver failure once the process has actually already exited cleanly (exit_code is checked first)'
+
+# Finding 3 [P2] (R9.4): a freeze failure that alone already overran the
+# startup budget still records control_deadline exceeded /
+# failure.supervisor-timeout, exactly like the driver-argv/Popen/
+# launch-file-write failure paths -- never the stub's own silent "met"
+# default.
+control_deadline_case 'finding 3: a freeze failure (YSTACK_TEST_FREEZE_FAIL) that alone already overran the (lowered) startup budget still records control_deadline exceeded / failure.supervisor-timeout, not "met" from stub_run_result'"'"'s own former default' \
+  'YSTACK_TEST_FREEZE_FAIL=1 YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_FREEZE_MS=150' '{}'
+
+# Adversarial pass, round 9 (per the coordinator's instruction): every
+# remove_*/shutil.rmtree call after the claim was re-audited for proof
+# the path it targets was actually created by THIS launch.
+#   - remove_only/remove_frozen (freeze-failure and successful-run
+#     paths): now gated on created[0] -- fixed above (finding 1).
+#   - remove_frozen's own second call (the successful-run path, after
+#     run_vm returns): unconditional, but only reached via the "else:"
+#     branch of the freeze_by_copy try/except, i.e. only after
+#     freeze_by_copy returned normally (no exception) -- which means
+#     created[0] is unconditionally true there (freeze_by_copy cannot
+#     return without having created and populated the directory first).
+#   - No other remove_*/rmtree/unlink call exists anywhere in the
+#     post-claim call graph (grepped sandbox/v1/host-supervisor.py for
+#     "remove_", "rmtree", "os.unlink", "os.rmdir" -- the only other
+#     unlink/rmdir call sites are inside remove_only/remove_frozen
+#     themselves, and start.json's own single-file cleanup in run_vm,
+#     which unlinks a file this same run_vm call just wrote moments
+#     earlier in the very same try block, never anything from an
+#     earlier attempt).
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
