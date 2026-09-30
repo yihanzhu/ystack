@@ -1342,16 +1342,30 @@ def create_attempt_dir(store_fd, uid, gid, attempt_id):
         refuse("E_ATTEMPT_EXISTS")
 
 
-def write_payload(attempt_fd, uid, gid, payload):
+def write_payload(attempt_fd, uid, gid, payload, evidence=()):
     """Writes payload/ into the already-claimed attempt_fd. Split from
     receipt.json's own write (below) so its duration can be measured and
     folded into control_deadline (R9.4) before the receipt embedding that
     same control_deadline is built -- the lifecycle is only finalized
-    after payload writing, per spec, not before it."""
+    after payload writing, per spec, not before it.
+
+    findings-477-r6.md finding 3 (spec R10.2): a nonempty evidence export
+    is stored under a real `evidence/` subdirectory, not a flat
+    `evidence.<nnnn>` file -- created with the same store directory mode/
+    ownership as every other store directory (mkdir_excl: 0750,
+    principal_uid:consumer_gid), its files at the standard 0440."""
     payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
     try:
         for name, data in payload:
             write_excl(payload_fd, name, data, uid, gid)
+        if evidence:
+            evidence_fd = mkdir_excl(payload_fd, "evidence", uid, gid)
+            try:
+                for name, data in evidence:
+                    write_excl(evidence_fd, name, data, uid, gid)
+                os.fsync(evidence_fd)
+            finally:
+                os.close(evidence_fd)
         os.fsync(payload_fd)
     finally:
         os.close(payload_fd)
@@ -1594,8 +1608,8 @@ def driver_argv(driver_path, start_path):
     return doc["argv"], doc["stopped_exit_status"]
 
 
-def driver_state(driver_path, socket_path):
-    rc, out = run_driver(driver_path, ["state", socket_path])
+def driver_state(driver_path, socket_path, timeout_s=2.0):
+    rc, out = run_driver(driver_path, ["state", socket_path], timeout_s=timeout_s)
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE")  # test-only
     if rc != 0:
         return "error"
@@ -1603,8 +1617,12 @@ def driver_state(driver_path, socket_path):
     return text if text in ("running", "stopped", "error") else "error"
 
 
-def driver_stop(driver_path, socket_path):
-    rc, _ = run_driver(driver_path, ["stop", socket_path])
+def driver_stop(driver_path, socket_path, timeout_s=2.0):
+    # Returns whether the stop was ACCEPTED (rc == 0), not merely sent --
+    # findings-477-r6.md finding 1: a caller must be able to tell a
+    # rejected/failed stop (endpoint not up yet) from one the runtime
+    # actually honored, and retry only the former.
+    rc, _ = run_driver(driver_path, ["stop", socket_path], timeout_s=timeout_s)
     return rc == 0
 
 
@@ -1645,6 +1663,12 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     a signal could otherwise fall through."""
     work_root = config["work_root"]
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN")
+    if signal_seen[0]:
+        # findings-477-r6.md finding 1(a): a cancellation already pending
+        # before this attempt's runtime is even spawned must never start
+        # one -- finalize as cancelled/error without touching disks, the
+        # driver, or Popen at all (R9.2).
+        return stub_run_result(control_deadline_for_elapsed(admission_mono))
     input_bytes = build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates)
     attempt_dir = os.path.join(work_root, attempt_id)
     input_path = os.path.join(attempt_dir, "input.img")
@@ -1701,11 +1725,13 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     os.close(write_fd)
     drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd), daemon=True)
     drain.start()
+    test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_SPAWN")  # test-only
 
     result["control_deadline"] = control_deadline_for_elapsed(admission_mono)
 
     spawn_mono = time.monotonic()
-    hard_stop_sent = sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
+    stop_requested = stop_accepted = stop_is_hardstop = False
+    sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
     driver_reported_error = escalated_sigkill = False
     while True:
         # R9.2: record cancellation before any exit check this iteration
@@ -1714,8 +1740,45 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         if signal_seen[0]:
             result["cancelled"] = True
 
+        # findings-477-r6.md finding 2: deadline-first -- check every
+        # overdue deadline BEFORE any blocking driver call this
+        # iteration. driver_state()/driver_stop() each have their own
+        # up-to-2s budget; calling one first could itself burn the whole
+        # time remaining to HardStop or SIGKILL and escalate late.
+        elapsed = time.monotonic() - admission_mono
+        if elapsed >= sigkill_deadline_s() and not sigkill_sent:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            sigkill_sent = escalated_sigkill = True
+            break
+        if elapsed >= hardstop_deadline_s():
+            stop_is_hardstop = True
+        if (result["cancelled"] or stop_is_hardstop):
+            stop_requested = True
+        # Cap this iteration's blocking calls by the time left to the
+        # nearer of HardStop/SIGKILL, never a flat 2s -- so a call can't
+        # itself run past the deadline it's supposed to be bounded by.
+        call_budget = sigkill_deadline_s() - elapsed
+        if elapsed < hardstop_deadline_s():
+            call_budget = min(call_budget, hardstop_deadline_s() - elapsed)
+        call_budget = max(0.01, min(2.0, call_budget))
+
+        if stop_requested and not stop_accepted:
+            # finding 1(b): retry every iteration until the runtime
+            # actually ACCEPTS the stop (or SIGKILL fires above) -- a
+            # rejected stop (REST endpoint not up yet) must not silently
+            # give up and let a cancelled/overdue VM run uncontested.
+            stop_accepted = driver_stop(driver_path, socket_path, timeout_s=call_budget)
+            if stop_accepted and stop_is_hardstop:
+                # Only an ACCEPTED stop counts as "HardStop issued" for
+                # the receipt's timing/limit fields (runtime_error, the
+                # wall row's reached) -- never a merely-attempted one.
+                result["hard_stop"] = True
+
         since_spawn = time.monotonic() - spawn_mono
-        state = driver_state(driver_path, socket_path)
+        state = driver_state(driver_path, socket_path, timeout_s=call_budget)
         elapsed = time.monotonic() - admission_mono  # recomputed after driver_state
         if signal_seen[0]:
             result["cancelled"] = True
@@ -1738,20 +1801,6 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             # never masking a genuinely confirmed, reaped stop.
             if exit_code == stopped_exit_status:
                 confirmed_stopped = True
-            break
-        if result["cancelled"] and not hard_stop_sent:
-            driver_stop(driver_path, socket_path)
-            hard_stop_sent = True
-        elif elapsed >= hardstop_deadline_s() and not hard_stop_sent:
-            result["hard_stop"] = True
-            driver_stop(driver_path, socket_path)
-            hard_stop_sent = True
-        elif elapsed >= sigkill_deadline_s() and not sigkill_sent:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            sigkill_sent = escalated_sigkill = True
             break
         # Bound the sleep by the soonest host deadline, not a flat
         # poll_interval_s(), so a slow poll can't also oversleep past one.
@@ -1860,14 +1909,14 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         tree_deadline_fired = gbody["tree_deadline_fired"]
         guest = gbody["limits"]
         stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
-        # Stored by index (evidence.<nnnn>), never by name_hex: the
-        # guest's own filename can legally be up to YS_FRAME_NAME_MAX
-        # (255 decoded bytes, 510 hex characters) -- far past what many
-        # host filesystems allow in one path component. The manifest
-        # (below) is the one place name_hex is recorded; a consumer
-        # correlates a stored file to its manifest entry by content
-        # (sha256), which is unambiguous regardless of naming scheme.
-        evidence_payload = [(("evidence.%04d" % ef["index"]), ef["content"])
+        # Stored under payload/evidence/<nnnn> by index (spec R10.2),
+        # never by name_hex: the guest's own filename can legally be up
+        # to YS_FRAME_NAME_MAX (255 decoded bytes, 510 hex characters) --
+        # far past what many host filesystems allow in one path
+        # component. The manifest (below) is the one place name_hex is
+        # recorded; a consumer correlates a stored file to its manifest
+        # entry by content (sha256), unambiguous regardless of naming.
+        evidence_payload = [(("%04d" % ef["index"]), ef["content"])
                              for ef in validated["evidence"]]
         evidence_manifest_bytes = canonical(
             {"body": {"files": sorted(
@@ -2481,11 +2530,11 @@ def run_launch(argv):
                 test_slow("YSTACK_TEST_SLOW_FINALIZE_MS")
                 test_self_signal("YSTACK_TEST_SELF_SIGNAL_AT_FINALIZE")
                 payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
-                           ("evidence-manifest.json", run_result["evidence_manifest_bytes"])] + \
-                          run_result["evidence_payload"]
+                           ("evidence-manifest.json", run_result["evidence_manifest_bytes"])]
                 payload_write_began = time.monotonic()
                 test_slow("YSTACK_TEST_SLOW_PAYLOAD_WRITE_MS")
-                write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload)
+                write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload,
+                              run_result["evidence_payload"])
                 if (time.monotonic() - payload_write_began) > payload_write_deadline_s():
                     run_result["control_deadline"] = "exceeded"
                 # The lifecycle (control_deadline included) is only

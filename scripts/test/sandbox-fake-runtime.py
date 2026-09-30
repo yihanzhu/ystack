@@ -58,6 +58,15 @@ def cmd_argv(args):
         default_scenario = load_scenario()
     except (OSError, ValueError):
         default_scenario = {}
+    if default_scenario.get("argv_marker_path"):
+        # findings-477-r6.md finding 1(a): proves the driver's own argv
+        # subcommand (hence any spawn) was never invoked at all, for a
+        # cancellation pending before run_vm gets this far -- a file
+        # that only ever gets created here.
+        try:
+            open(default_scenario["argv_marker_path"], "w").close()
+        except OSError:
+            pass
     if default_scenario.get("oversized_argv"):
         # Proves the host's own bounded driver-output reader: this exceeds
         # the fixed 65,536-byte interface cap, so it must be a hard
@@ -119,6 +128,13 @@ def cmd_state(args):
 
 
 def cmd_stop(args):
+    # findings-477-r6.md finding 1: a real stop call against a REST
+    # endpoint nothing is listening on yet must fail (rc != 0), the same
+    # way cmd_state's read_mailbox treats a not-yet-created mailbox file
+    # as "error" -- write_mailbox would otherwise blindly create it,
+    # masking the very rejection host-supervisor.py must retry past.
+    if not os.path.exists(args[0]):
+        return 1
     try:
         write_mailbox(args[0], hardstop=True)
     except OSError:

@@ -2018,13 +2018,27 @@ status=0
 run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "finding 6: expected exit 0, got $status ($(cat "$base/err"))"
 name_hex=$(printf '%s' "file-digest-result.json" | od -An -tx1 | tr -d ' \n')
-[ -f "$store_root/$attempt_id/payload/evidence.0000" ] ||
-  fail "finding 6: expected payload/evidence.0000 (stored by index, not by name_hex) to exist in the receipt store"
-[ "$(cat "$store_root/$attempt_id/payload/evidence.0000")" = "hello evidence" ] ||
+[ -f "$store_root/$attempt_id/payload/evidence/0000" ] ||
+  fail "finding 6: expected payload/evidence/0000 (stored by index, not by name_hex) to exist in the receipt store"
+[ "$(cat "$store_root/$attempt_id/payload/evidence/0000")" = "hello evidence" ] ||
   fail "finding 6: expected the stored evidence file's content to match what the fake runtime exported"
 "$jq_bin" -c '.body.files' "$store_root/$attempt_id/payload/evidence-manifest.json" | grep -q "$name_hex" ||
   fail "finding 6: expected the manifest to list $name_hex (the real verifier's own evidence filename, file-digest-result.json, hex-encoded -- 44 characters, not a 64-character digest)"
-pass 'finding 6: an exported evidence file'"'"'s actual bytes are persisted into payload/evidence.<index> (stored by index, never by its own -- potentially long -- filename) in the receipt store before remove_frozen deletes the export disk, with that real filename (file-digest-result.json) recorded in the manifest'
+# findings-477-r6.md finding 3 (spec R10.2): the evidence subdirectory
+# and its file carry the same store mode/ownership as every other store
+# entry -- 0750 dir, 0440 file, principal_uid:consumer_gid.
+"$python" -c "
+import os, sys
+d = sys.argv[1]; f = sys.argv[2]; uid = int(sys.argv[3]); gid = int(sys.argv[4])
+dst, fst = os.lstat(d), os.lstat(f)
+assert dst.st_mode & 0o7777 == 0o750, oct(dst.st_mode)
+assert dst.st_uid == uid and dst.st_gid == gid
+assert fst.st_mode & 0o7777 == 0o440, oct(fst.st_mode)
+assert fst.st_uid == uid and fst.st_gid == gid and fst.st_nlink == 1
+print('ok')
+" "$store_root/$attempt_id/payload/evidence" "$store_root/$attempt_id/payload/evidence/0000" "$(id -u)" "$(id -g)" >/dev/null \
+  || fail "finding 3 (r6): expected payload/evidence/ (0750) and payload/evidence/0000 (0440) with the store's owner/group"
+pass 'finding 6/3(r6): an exported evidence file'"'"'s actual bytes are persisted into payload/evidence/<index> (stored by index, never by its own -- potentially long -- filename, in the required evidence/ subdirectory at the store'"'"'s standard mode/ownership) in the receipt store before remove_frozen deletes the export disk, with that real filename (file-digest-result.json) recorded in the manifest'
 
 # Finding 7 [P2]: validate every report field's type/range/exit-state
 # consistency before use.
@@ -2486,8 +2500,8 @@ YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN=TERM run_launch "$base/pkg-scn.json" || sta
 [ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = error ] ||
-  fail "finding 2: expected lifecycle.runtime error (cancellation was pending before the runtime was even spawned; the very first poll then finds it already stopped, but the pending cancellation must still be recorded, never reported as a clean completion), got $runtime"
-pass 'finding 2: a cancellation signaled before the runtime is spawned, with a fake that reports stopped on the very first poll, still records lifecycle.runtime error -- signal_seen is checked before every early exit (the "stopped" branch included), not only in the escalation branch further down'
+  fail "finding 2: expected lifecycle.runtime error (cancellation was pending before the runtime was even spawned; the pending cancellation must still be recorded, never reported as a clean completion), got $runtime"
+pass 'finding 2: a cancellation signaled before the runtime is spawned still records lifecycle.runtime error -- signal_seen is checked before every early exit; since findings-477-r6.md finding 1a, a cancellation already pending at this point in fact skips the spawn entirely (see "finding 1(a): cancellation pending" below), so this same signal now also proves the driver'"'"'s run subcommand is never invoked at all'
 
 # Finding 3 [P2]: elapsed is recomputed after every blocking driver call
 # and polling is bounded by the time remaining to the next deadline, so
@@ -2526,6 +2540,88 @@ runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receip
 pass 'finding 1: a signal during driver_state()'"'"'s blocking call, whose result is "stopped", is still folded into cancelled'
 control_deadline_case 'finding 2: a launch-file write failure after a slowed startup still records control_deadline exceeded / failure.supervisor-timeout, not "met" from stub_run_result'"'"'s own former default' \
   'YSTACK_TEST_LAUNCH_WRITE_FAIL=1 YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=150' '{}'
+
+# =============================================================================
+# Fix round 6 (findings-477-r6.md): one test per finding.
+# =============================================================================
+default_scenario_path="$(dirname "$driver_path")/scenario.json"
+
+# Finding 1(a) [P1]: a cancellation already pending before the runtime is
+# spawned must skip the spawn entirely, never invoking the driver at all.
+# Proven with a marker file only the driver's own argv subcommand creates.
+argv_marker="$base/argv-called.marker"
+rm -f "$argv_marker"
+printf '%s' '{"argv_marker_path":"'"$argv_marker"'"}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN=TERM run_launch "$base/pkg-scn.json" || fail "finding 1a: expected exit 0"
+[ -e "$argv_marker" ] &&
+  fail "finding 1a: expected the driver's argv subcommand never to be invoked for a cancellation pending before spawn, but its marker file exists"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "finding 1a: expected lifecycle.runtime error, got $runtime"
+printf '%s' '{}' > "$default_scenario_path"
+pass 'finding 1a: a cancellation already pending at admission is never given a runtime to spawn -- driver_argv (and so Popen) is never invoked, proven by a marker file only that subcommand creates -- and the attempt still finalizes as lifecycle.runtime error'
+
+# Finding 1(b) [P1]: a cancellation arriving right after spawn, while the
+# REST endpoint doesn't exist yet, has its stop retried every poll
+# iteration until accepted -- not abandoned after one failed attempt.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","startup_delay_ms":300}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_SELF_SIGNAL_AFTER_SPAWN=TERM YSTACK_TEST_STARTUP_MS=5000 YSTACK_TEST_HARDSTOP_MS=10000 \
+  YSTACK_TEST_SIGKILL_MS=12000 YSTACK_TEST_POLL_INTERVAL_MS=20 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 1b: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding 1b: expected lifecycle.runtime error, teardown.state confirmed (a cancellation-issued stop, retried past the runtime's 300ms-delayed REST endpoint, confirms well before the 12,000ms SIGKILL deadline), got $runtime/$teardown_state"
+elapsed_s=$("$python" -c "
+import json, datetime
+r = json.load(open('$store_root/$attempt_id/receipt.json'))
+t = r['body']['timing']
+fmt = '%Y-%m-%dT%H:%M:%SZ'
+a = datetime.datetime.strptime(t['admitted_at'], fmt)
+b = datetime.datetime.strptime(t['terminated_at'], fmt)
+print(int((b - a).total_seconds()))
+")
+[ "$elapsed_s" -le 2 ] ||
+  fail "finding 1b: expected the retried stop to be accepted (and the attempt to finish) well under the 12s SIGKILL deadline, took ${elapsed_s}s"
+pass 'finding 1b: a cancellation signaled right after spawn, while the fake'"'"'s REST endpoint is still 300ms from existing, has driver_stop() retried every poll iteration (rejected while the endpoint is absent) until accepted once it appears -- confirmed stopped in about a second, nowhere near the (test-widened) SIGKILL deadline'
+
+# Finding 2 [P2]: an overdue deadline is checked before any blocking
+# driver call each iteration, and each driver_state()/driver_stop() call
+# is itself capped by the time remaining to the next deadline -- so a
+# slow driver call can't itself run past HardStop or SIGKILL.
+printf '%s' '{"slow_state_ms":3000}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","ignore_hardstop_ms":100000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=300 YSTACK_TEST_SIGKILL_MS=1200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "finding 2: expected lifecycle.runtime error (SIGKILL escalation for a runtime ignoring HardStop), got $runtime"
+elapsed_s=$("$python" -c "
+import json, datetime
+r = json.load(open('$store_root/$attempt_id/receipt.json'))
+t = r['body']['timing']
+fmt = '%Y-%m-%dT%H:%M:%SZ'
+a = datetime.datetime.strptime(t['admitted_at'], fmt)
+b = datetime.datetime.strptime(t['terminated_at'], fmt)
+print(int((b - a).total_seconds()))
+")
+[ "$elapsed_s" -le 3 ] ||
+  fail "finding 2: expected SIGKILL near its 1,200ms (test-shortened) deadline despite every state poll being scripted to sleep 3,000ms, took ${elapsed_s}s -- an uncapped call (the old flat ~2s-per-call budget) would instead take several seconds longer, escalating well past both deadlines before a single blocking call even returns"
+pass 'finding 2: an overdue deadline is checked before any blocking driver call each iteration, and driver_state()/driver_stop() are each capped by the time remaining to the nearer of HardStop/SIGKILL -- SIGKILL still fires close to its real (test-shortened) deadline even though every state poll is scripted to sleep 3,000ms, far past a naive flat per-call budget'
+
+# Finding 3 [P2] (spec R10.2): payload/evidence/<nnnn> already has its own
+# dedicated assertion alongside finding 6's test above (the layout, mode
+# and ownership of the evidence subdirectory), added directly there so
+# the two do not duplicate the same fixture and scenario setup.
 
 unset YSTACK_FAKE_SCENARIO
 
