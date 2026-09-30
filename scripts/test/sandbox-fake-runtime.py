@@ -103,6 +103,16 @@ def write_mailbox(socket_path, state=None, hardstop=None):
 
 
 def cmd_state(args):
+    # Reads the default, non-env scenario (state/argv/stop run under an
+    # empty environment) for slow_state_ms, well under run_driver's own
+    # 2,000ms budget so the call still genuinely succeeds.
+    try:
+        default_scenario = load_scenario()
+    except (OSError, ValueError):
+        default_scenario = {}
+    slow_state_ms = default_scenario.get("slow_state_ms")
+    if slow_state_ms:
+        time.sleep(slow_state_ms / 1000.0)
     state = read_mailbox(args[0]).get("state")
     sys.stdout.write((state if state in ("running", "stopped", "error") else "error") + "\n")
     return 0

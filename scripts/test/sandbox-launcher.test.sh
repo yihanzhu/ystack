@@ -2451,6 +2451,72 @@ wall_observed=$("$jq_bin" -r '.body.limits.wall_time_ms.observed' "$store_root/$
   fail "finding 6 (real-time self-stop): expected limits.wall_time_ms.observed within [44000,49000]ms of the scripted 45,000ms self-stop (safely under the real 50,000ms HardStop deadline, so none fires), got ${wall_observed}ms"
 pass "finding 6 (real-time, production deadlines, ~45s wall clock): a runtime that self-stops well under the real 50,000/58,000ms HardStop/SIGKILL deadlines completes cleanly with wall_time_ms.observed matching the real elapsed time -- run concurrently with the delayed-stop case above, so this pair together added roughly one minute, not two, to the suite"
 
+# =============================================================================
+# Fix round 4 (findings-477-r4.md): one test per finding, against the
+# restructured supervision loop.
+# =============================================================================
+build_tree 0
+scenario_path="$base/scenario-case.json"
+export YSTACK_FAKE_SCENARIO="$scenario_path"
+default_scenario_path="$(dirname "$driver_path")/scenario.json"
+
+# Finding 1 [P1]: a driver-state error after the grace period keeps the
+# loop supervising the live process (HardStop/SIGKILL/cancellation still
+# enforced), never a bare break into a blind wait.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","startup_delay_ms":150}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_STARTUP_MS=50 YSTACK_TEST_HARDSTOP_MS=400 YSTACK_TEST_SIGKILL_MS=5000 \
+  YSTACK_TEST_POLL_INTERVAL_MS=20 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 1: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding 1: expected lifecycle.runtime error, teardown.state confirmed (a transient driver-state error -- the mailbox doesn't exist until 150ms, past the 50ms grace -- must not disable HardStop at the 400ms deadline once the endpoint recovers), got $runtime/$teardown_state"
+pass 'finding 1: a driver-state error observed after the startup grace period (a transient REST-endpoint gap, here outlasting a shortened grace) does not break the loop into a blind proc.wait() -- HardStop is still issued at its deadline and the eventual stop is still confirmed, once the endpoint recovers and honors it'
+
+# Finding 2 [P2]: pending cancellation is checked before every early
+# exit, including the very first poll's "stopped" path.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN=TERM run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] ||
+  fail "finding 2: expected lifecycle.runtime error (cancellation was pending before the runtime was even spawned; the very first poll then finds it already stopped, but the pending cancellation must still be recorded, never reported as a clean completion), got $runtime"
+pass 'finding 2: a cancellation signaled before the runtime is spawned, with a fake that reports stopped on the very first poll, still records lifecycle.runtime error -- signal_seen is checked before every early exit (the "stopped" branch included), not only in the escalation branch further down'
+
+# Finding 3 [P2]: elapsed is recomputed after every blocking driver call
+# and polling is bounded by the time remaining to the next deadline, so
+# HardStop/SIGKILL still fire close to their real deadlines even when a
+# state poll takes most of its own budget.
+printf '%s' '{"slow_state_ms":1700}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=3000 YSTACK_TEST_SIGKILL_MS=15000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding 3: expected exit 0, got $status ($(cat "$base/err"))"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$teardown_state" = confirmed ] || fail "finding 3: expected teardown.state confirmed, got $teardown_state"
+elapsed_s=$("$python" -c "
+import json, datetime
+r = json.load(open('$store_root/$attempt_id/receipt.json'))
+t = r['body']['timing']
+fmt = '%Y-%m-%dT%H:%M:%SZ'
+a = datetime.datetime.strptime(t['admitted_at'], fmt)
+b = datetime.datetime.strptime(t['terminated_at'], fmt)
+print(int((b - a).total_seconds()))
+")
+[ "$elapsed_s" -le 6 ] ||
+  fail "finding 3: expected the whole launch (HardStop issued near its 3,000ms deadline, confirmed on the next ~1,700ms-slow poll) to finish within about 6s despite each state poll taking ~1.7s of its own 2,000ms budget, took ${elapsed_s}s instead -- the old stale-elapsed bug would compound an extra ~1.7-3.4s of unnoticed overshoot per missed deadline check"
+pass 'finding 3: elapsed is recomputed fresh after every blocking driver_state() call (never reused from before it), and each poll'"'"'s sleep is bounded by the time remaining to the next deadline -- HardStop still fires close to its real 3,000ms (test-shortened) deadline even though each state poll itself takes ~1,700ms of its own budget, not one or more whole extra polls later'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

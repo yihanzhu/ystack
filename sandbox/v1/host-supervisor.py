@@ -1710,43 +1710,40 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     hard_stop_sent = sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
     driver_reported_error = escalated_sigkill = False
     while True:
-        elapsed = time.monotonic() - admission_mono
+        # R9.2: record cancellation before any exit check this iteration
+        # (before spawn, or racing a "stopped"/exited state) -- never
+        # lost just because the runtime happened to finish first.
+        if signal_seen[0]:
+            result["cancelled"] = True
+
         since_spawn = time.monotonic() - spawn_mono
         state = driver_state(driver_path, socket_path)
+        # driver_state can itself consume close to its 2,000ms budget --
+        # recompute elapsed fresh right after it, every iteration, so a
+        # deadline crossed during that call is noticed this iteration,
+        # not a whole extra blocking call later.
+        elapsed = time.monotonic() - admission_mono
+
         if state == "stopped":
             confirmed_stopped = stopped_via_mailbox = True
             break
         if state == "error" and since_spawn >= startup_deadline_s():
-            # Bounded startup readiness (R5.4): the runtime's REST
-            # endpoint may not exist yet right after Popen, so "error"
-            # (unavailable) alone isn't a failure until this grace period
-            # has passed -- and even then, check the process's own exit
-            # status first: a runtime that already exited cleanly (and
-            # closed its endpoint on the way out) is a confirmed stop,
-            # not a driver failure, per the supported exit-status
-            # confirmation.
-            exit_code = proc.poll()
-            if exit_code == stopped_exit_status:
-                confirmed_stopped = True
-            else:
-                driver_reported_error = True
-            break
+            # R5.4: past the startup grace, preserve the error but keep
+            # supervising the live process -- HardStop/SIGKILL/
+            # cancellation below, exiting only on reaped exit or
+            # abandonment, never a bare break into a blind wait that
+            # would itself disable the normal shutdown path.
+            driver_reported_error = True
         exit_code = proc.poll()
         if exit_code is not None:
-            # Accept the configured stopped_exit_status as confirmation
-            # regardless of whether HardStop was requested: a runtime
-            # that honors HardStop and exits cleanly before the next
-            # state poll (its endpoint can already be gone by then) is
-            # still a genuinely confirmed, reaped stop -- result["hard_stop"]
-            # (below) keeps the HardStop-caused runtime error recorded
-            # separately, so this never turns a forced stop into a
-            # falsely "clean" lifecycle.runtime, only an honestly
-            # confirmed teardown/wall observation.
+            # Accept stopped_exit_status regardless of HardStop or an
+            # earlier driver-state error: result["hard_stop"]/
+            # driver_reported_error keep those error causes separate,
+            # never masking a genuinely confirmed, reaped stop.
             if exit_code == stopped_exit_status:
                 confirmed_stopped = True
             break
-        if signal_seen[0] and not hard_stop_sent:
-            result["cancelled"] = True
+        if result["cancelled"] and not hard_stop_sent:
             driver_stop(driver_path, socket_path)
             hard_stop_sent = True
         elif elapsed >= hardstop_deadline_s() and not hard_stop_sent:
@@ -1760,7 +1757,15 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 pass
             sigkill_sent = escalated_sigkill = True
             break
-        time.sleep(poll_interval_s())
+        # Bound the sleep by the soonest host deadline, not a flat
+        # poll_interval_s(), so a slow poll can't also oversleep past one.
+        remaining = poll_interval_s()
+        for deadline_s in (hardstop_deadline_s(), sigkill_deadline_s()):
+            left = deadline_s - (time.monotonic() - admission_mono)
+            if left > 0:
+                remaining = min(remaining, left)
+        if remaining > 0:
+            time.sleep(remaining)
 
     # R9.3: tree_terminated requires BOTH a confirmed stop and a
     # successful waitpid reap -- a driver "stopped" report whose process
