@@ -504,4 +504,82 @@ c_digest=$("$h" digest "$tmp/cross/c-encoded.bin")
   fail 'codec cross-check: host-supervisor.py digest and the C guest harness digest disagree'
 pass 'sandbox/v1/host-supervisor.py digest and the C guest harness digest agree on the same bytes'
 
+# =============================================================================
+# PR 6 of 9: build-guest.py (image determinism, compile's existing-directory
+# refusal) and, Linux-only, the host-compiler syntax/semantics gate over
+# guest/init.c and guest/supervisor.c. See work/vm-launcher-supervisor/
+# plan.md ("PR 6") and spec.md R2.5. Never runs anything requiring root, a
+# VM or a hypervisor: this proves the deterministic build tooling and that
+# the guest sources parse and typecheck, nothing about their behavior in a
+# real guest (R15.4).
+# =============================================================================
+build_guest="$root/sandbox/v1/build-guest.py"
+
+# --- image determinism over synthetic inputs, cpio structure asserted -----
+/bin/mkdir -m 700 "$tmp/img1" "$tmp/img2"
+/usr/bin/printf 'synthetic-init-bytes' > "$tmp/img1/init"
+/usr/bin/printf 'synthetic-supervisor-bytes-a-bit-longer' > "$tmp/img1/supervisor"
+/bin/cp "$tmp/img1/init" "$tmp/img2/init"
+/bin/cp "$tmp/img1/supervisor" "$tmp/img2/supervisor"
+"$python" "$build_guest" image "$tmp/img1"
+"$python" "$build_guest" image "$tmp/img2"
+cmp -s "$tmp/img1/initramfs.cpio" "$tmp/img2/initramfs.cpio" ||
+  fail 'build-guest.py image: two builds from byte-identical synthetic inputs are not byte-identical'
+pass 'build-guest.py image produces a byte-identical initramfs.cpio for byte-identical synthetic init/supervisor inputs'
+"$python" - "$tmp/img1/initramfs.cpio" "$tmp/img1/init" "$tmp/img1/supervisor" <<'PY'
+import sys
+data, init_bytes, sup_bytes = open(sys.argv[1], 'rb').read(), open(sys.argv[2], 'rb').read(), open(sys.argv[3], 'rb').read()
+pos, entries = 0, []
+while True:
+    assert data[pos:pos + 6] == b'070701', 'bad cpio magic'
+    fields = [int(data[pos + 6 + i * 8:pos + 6 + i * 8 + 8], 16) for i in range(13)]
+    ino, mode, uid, gid, nlink, mtime, filesize = fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6]
+    namesize = fields[11]
+    namestart = pos + 110
+    name = data[namestart:namestart + namesize - 1].decode('ascii')
+    hdrend = namestart + namesize
+    hdrend += (4 - hdrend % 4) % 4
+    filedata = data[hdrend:hdrend + filesize]
+    entries.append((name, ino, uid, gid, mtime, filedata))
+    fend = hdrend + filesize
+    fend += (4 - fend % 4) % 4
+    pos = fend
+    if name == 'TRAILER!!!':
+        break
+names = [e[0] for e in entries]
+assert names == ['init', 'supervisor', 'TRAILER!!!'], 'expected exactly init, supervisor, TRAILER!!! in order: got %r' % names
+for name, ino, uid, gid, mtime, filedata in entries[:2]:
+    assert uid == 0 and gid == 0, '%s: expected uid/gid 0, got %d/%d' % (name, uid, gid)
+    assert mtime == 0, '%s: expected mtime 0, got %d' % (name, mtime)
+assert entries[0][1] == 1 and entries[1][1] == 2, 'expected fixed inode numbers 1 (init), 2 (supervisor): got %d, %d' % (entries[0][1], entries[1][1])
+assert entries[0][5] == init_bytes and entries[1][5] == sup_bytes, 'entry content does not match the source file bytes'
+PY
+pass 'the initramfs.cpio built above has exactly two newc entries (init, supervisor) plus TRAILER!!!, each uid/gid 0 and mtime 0, with fixed inode numbers 1 and 2 and content matching the source bytes exactly'
+
+# --- compile: refuses an existing output directory -------------------------
+/bin/mkdir -m 700 "$tmp/compile-out"
+status=0
+"$python" "$build_guest" compile "$tmp/nonexistent-toolchain" "$tmp/compile-out" >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] || fail 'build-guest.py compile must refuse an output directory that already exists'
+[ "$(cat "$tmp/err")" = E_BUILD_OUT_EXISTS ] ||
+  fail "build-guest.py compile: expected E_BUILD_OUT_EXISTS for an existing output directory, got $(cat "$tmp/err")"
+pass 'build-guest.py compile refuses an output directory that already exists (checked before any toolchain invocation: an unresolvable toolchain path here would otherwise fail first and mask this case)'
+
+# --- Linux-only: the host compiler as a syntax/semantics gate over
+# guest/init.c and guest/supervisor.c. Darwin has no <linux/...> headers
+# (mount(2)'s MS_* flags, seccomp, Landlock, fanotify, clone3), so this case
+# is named Linux-only here and proved instead by the manager's Linux CI
+# dispatch (scripts/test/run-all.sh:66-69, the six-shard run plan.md's
+# Proof section requires); it is not silently skipped, it is stated. -------
+if [ "$(/usr/bin/uname -s)" = Linux ]; then
+  /bin/mkdir -m 700 "$tmp/linuxcc"
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/init.c" \
+    -o "$tmp/linuxcc/init.o"
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/supervisor.c" \
+    -o "$tmp/linuxcc/supervisor.o"
+  pass 'guest/init.c and guest/supervisor.c each compile with -std=c11 -Wall -Wextra -Werror on Linux (the host compiler as a syntax/semantics gate; PR 6, R2.5)'
+else
+  /usr/bin/printf 'SKIP (Linux-only, stated reason): guest/init.c and guest/supervisor.c use Linux-only headers (mount(2) MS_* flags, seccomp, Landlock, fanotify, clone3) this Darwin host does not have; proved by the manager'"'"'s dispatched Linux CI run instead (plan.md Proof section, six-shard run).\n' >&2
+fi
+
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
