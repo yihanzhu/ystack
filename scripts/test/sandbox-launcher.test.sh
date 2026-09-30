@@ -2943,6 +2943,37 @@ teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/re
   fail "finding r13-2: expected lifecycle.runtime completed, teardown.state confirmed (a concurrent, deterministically-ordered mailbox update racing this process's own final write must never make an otherwise-clean exit look abnormal), got $runtime/$teardown_state"
 pass 'finding r13-2: a process mimicking a concurrent cmd_stop'"'"'s own write_mailbox(hardstop=true) call, started (via a marker file, not a timing race) before this run'"'"'s own final "stopped" write, never corrupts or loses either update -- the run still completes cleanly: lifecycle.runtime completed, teardown.state confirmed'
 
+# =============================================================================
+# Fix round 14 (findings-477-r14.md): the mailbox lock is derived from
+# socket_path's own parent directory (an fd flock), not from
+# tempfile.gettempdir() -- run_vm spawns cmd_run under scrub_dyld_env()
+# (which preserves TMPDIR), but run_driver spawns cmd_stop under env={}
+# (no TMPDIR at all), so a lock keyed off tempfile.gettempdir() would
+# have resolved to two different files under a non-default TMPDIR,
+# leaving the two processes'"'"' mailbox updates fully unsynchronized.
+# Forces exactly that mismatch: a custom TMPDIR for the runtime side
+# only, with the concurrent update driven through the real driver
+# contract (a fresh "stop" subprocess under an explicitly empty
+# environment, matching run_driver's own cmd_stop invocation exactly).
+# =============================================================================
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+race_marker_r14="$base/stop-race-driver.marker"
+rm -f "$race_marker_r14"
+custom_tmpdir_r14="$base/r14-custom-tmpdir"
+mkdir -p "$custom_tmpdir_r14"
+printf '%s' '{"concurrent_stop_race":"'"$race_marker_r14"'","concurrent_stop_race_via_driver":true}' \
+  > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+TMPDIR="$custom_tmpdir_r14" run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding r14: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding r14: expected lifecycle.runtime completed, teardown.state confirmed (cmd_stop invoked through the real driver contract, env={}, must still synchronize with the runtime's own final mailbox write even though the runtime was spawned under a non-default TMPDIR that cmd_stop's own empty environment never sees), got $runtime/$teardown_state"
+rm -rf "$custom_tmpdir_r14"
+pass 'finding r14: a concurrent mailbox update driven through the real driver contract (a fresh "stop" subprocess under env={}) still correctly serializes against the runtime'"'"'s own final write even though the runtime process was spawned under a non-default TMPDIR that the stop call'"'"'s own empty environment never inherits -- the mailbox lock is derived from socket_path'"'"'s own parent directory, never from tempfile.gettempdir(), so a TMPDIR mismatch between the two real invocation paths can never leave their updates unsynchronized: lifecycle.runtime completed, teardown.state confirmed'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

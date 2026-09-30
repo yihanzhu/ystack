@@ -31,8 +31,8 @@ import importlib.util
 import json
 import os
 import signal
+import subprocess
 import sys
-import tempfile
 import time
 
 
@@ -114,22 +114,36 @@ def read_mailbox(socket_path):
 def write_mailbox(socket_path, state=None, hardstop=None):
     # findings-477-r13.md finding 2: cmd_run (the runtime process) and
     # cmd_stop (a separate process the host spawns for each stop call)
-    # can both enter this function concurrently -- a shared lock file,
-    # held for the whole read-modify-write-replace, serializes them
-    # completely: a losing writer's read is never stale, and the two
-    # never race over the same tmp path (which could otherwise raise
-    # FileNotFoundError on os.replace, or have one process's update of
-    # state/hardstop silently overwritten by the other's own concurrent,
-    # differently-stale read). Kept in the system tempdir, never inside
-    # socket_path's own attempt directory: the host's own teardown
-    # tracks and removes that directory's exact fixed-name contents
-    # (LAUNCH_FIXED_NAMES), and an extra file there would otherwise be
-    # flagged as an unexpected survivor and make storage_destroyed false.
-    lock_path = os.path.join(tempfile.gettempdir(),
-                              "ystack-mailbox-lock." + socket_path.replace(os.sep, "_"))
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    # can both enter this function concurrently -- the whole
+    # read-modify-write-replace must be serialized, so a losing writer's
+    # read is never stale and the two never race over the same tmp path
+    # (which could otherwise raise FileNotFoundError on os.replace, or
+    # have one process's update of state/hardstop silently overwritten
+    # by the other's own concurrent, differently-stale read).
+    #
+    # findings-477-r14.md: the first attempt at this (a dedicated lock
+    # file named from tempfile.gettempdir()) was itself unsynchronized
+    # across the two callers -- run_vm spawns cmd_run under
+    # scrub_dyld_env() (which preserves TMPDIR), but run_driver spawns
+    # cmd_stop (and argv/state) under env={}, so on any host with a
+    # non-default TMPDIR (e.g. macOS's per-user /var/folders/.../T)
+    # tempfile.gettempdir() resolves to two different directories in
+    # the two processes and they lock two different files -- no
+    # synchronization at all. The regression test missed this because
+    # its forked "concurrent" writer inherits the runtime's own
+    # environment rather than going through run_driver's real, emptied
+    # one.
+    #
+    # Fixed by deriving the lock from socket_path itself -- always the
+    # same literal path in every caller regardless of environment --
+    # with no filesystem side effect of its own: flock an fd opened on
+    # socket_path's own parent directory (advisory directory locking,
+    # supported on both Linux and macOS). This also sidesteps the
+    # in-work_root-vs-tempdir tradeoff entirely: no extra file is ever
+    # created for the host's teardown to notice.
+    dir_fd = os.open(os.path.dirname(socket_path) or ".", os.O_RDONLY)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fcntl.flock(dir_fd, fcntl.LOCK_EX)
         try:
             box = read_mailbox(socket_path)
             if state is not None:
@@ -141,9 +155,9 @@ def write_mailbox(socket_path, state=None, hardstop=None):
                 fh.write(json.dumps(box))
             os.replace(tmp, socket_path)
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            fcntl.flock(dir_fd, fcntl.LOCK_UN)
     finally:
-        os.close(lock_fd)
+        os.close(dir_fd)
 
 
 def cmd_state(args):
@@ -432,7 +446,23 @@ def cmd_run(args):
             marker = scenario["concurrent_stop_race"]
             if os.fork() == 0:
                 open(marker, "w").close()
-                write_mailbox(socket_path, hardstop=True)
+                if scenario.get("concurrent_stop_race_via_driver"):
+                    # findings-477-r14.md: routes this concurrent update
+                    # through the exact same invocation contract
+                    # host-supervisor.py's own run_driver uses for a
+                    # real stop call -- this file's "stop" subcommand,
+                    # under an explicitly empty environment (env={}) --
+                    # rather than an in-process write_mailbox() call, so
+                    # the test proves the lock genuinely resolves to the
+                    # same real object as a real cmd_stop invocation
+                    # would, not merely "some other process that happens
+                    # to share this one's own environment".
+                    subprocess.run(
+                        [sys.executable, os.path.realpath(__file__), "stop", socket_path],
+                        env={}, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                else:
+                    write_mailbox(socket_path, hardstop=True)
                 os._exit(0)
             while not os.path.exists(marker):
                 time.sleep(0.005)
