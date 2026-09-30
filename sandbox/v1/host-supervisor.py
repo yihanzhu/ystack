@@ -1638,12 +1638,13 @@ def driver_argv(driver_path, start_path):
     if rc != 0:
         return None
     try:
+        bounded_json_nesting(out)  # findings-477-r10.md: bound nesting before json.loads recurses
         doc = json.loads(out)
-    except ValueError:
+    except (ValueError, RecursionError, Refusal):
         return None
     if not (isinstance(doc, dict) and set(doc) == {"argv", "stopped_exit_status"}
             and isinstance(doc["argv"], list) and doc["argv"]
-            and all(isinstance(a, str) for a in doc["argv"])
+            and all(isinstance(a, str) and "\x00" not in a for a in doc["argv"])
             and is_int(doc["stopped_exit_status"]) and 0 <= doc["stopped_exit_status"] <= 255):
         return None
     return doc["argv"], doc["stopped_exit_status"]
@@ -1806,7 +1807,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=write_fd, stderr=write_fd,
                                  env=scrub_dyld_env(), start_new_session=True, close_fds=True)
-    except OSError:
+    except (OSError, ValueError):  # findings-477-r10.md: a NUL-in-argv belt-and-braces catch
         os.close(read_fd)
         os.close(write_fd)
         os.close(log_fd)

@@ -81,6 +81,15 @@ def cmd_argv(args):
                                       "stopped_exit_status": 0},
                                      sort_keys=True, separators=(",", ":")) + "\n")
         return 0
+    if default_scenario.get("deep_nesting_argv"):
+        # findings-477-r10.md: bounded-nesting probe (else RecursionError).
+        sys.stdout.write("[" * 2000 + "]" * 2000)
+        return 0
+    if default_scenario.get("nul_in_argv"):
+        # findings-477-r10.md: a NUL in argv (else ValueError from Popen).
+        sys.stdout.write(json.dumps({"argv": ["/bin/echo", "a\x00b"],
+                                      "stopped_exit_status": 0}) + "\n")
+        return 0
     with open(args[0], "rb") as fh:
         start = json.loads(fh.read())
     b = start["body"]

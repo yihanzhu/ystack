@@ -2826,6 +2826,22 @@ control_deadline_case 'finding 3: a freeze failure (YSTACK_TEST_FREEZE_FAIL) tha
 #     earlier in the very same try block, never anything from an
 #     earlier attempt).
 
+# Round 10 (findings-477-r10.md) [P2]: driver_argv bounds nesting and
+# filters unspawnable (NUL-containing) argv entries.
+driver_argv_fail_case() { # driver_argv_fail_case <desc> <default-scenario-json>
+  n=$((n + 1)); local a="attempt.fixture-scn-$n"
+  printf '%s' "$2" > "$default_scenario_path"
+  build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$a"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+  run_launch "$base/pkg-scn.json" || fail "$1: expected exit 0"
+  local v t
+  v=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$a/receipt.json")
+  t=$("$jq_bin" -r '.body.teardown.state' "$store_root/$a/receipt.json")
+  [ "$v" = failed ] && [ "$t" = confirmed ] || fail "$1: expected verdict failed, teardown confirmed, got $v/$t"
+  pass "$1"
+}
+driver_argv_fail_case 'finding: ~2,000 nested arrays in the driver'"'"'s argv response is bounded, never an uncaught RecursionError' '{"deep_nesting_argv":true}'
+driver_argv_fail_case 'finding: a NUL byte in an argv entry from the driver'"'"'s argv response is refused, never an uncaught ValueError from Popen' '{"nul_in_argv":true}'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
