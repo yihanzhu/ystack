@@ -142,7 +142,7 @@ def main():
 
     identity_keys = ["guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
                      "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
-                     "vm_service", "dyld_cache"]
+                     "vm_service"]
     identities_dir = os.path.join(base, "identities")
     os.makedirs(identities_dir, mode=0o755)
     identity_paths = {}
@@ -153,6 +153,16 @@ def main():
         open(p, "wb").write(content)
         os.chmod(p, 0o444)
         identity_paths[k] = p
+
+    # dyld_cache_files: a split arm64e shared cache's several subcache
+    # files, each walked and included in the host_runtime composite.
+    dyld_cache_paths = []
+    for i in range(2):
+        p = os.path.join(identities_dir, "dyld_cache.%d" % i)
+        open(p, "wb").write(b"synthetic-dyld_cache." + str(i).encode())
+        os.chmod(p, 0o444)
+        dyld_cache_paths.append(p)
+    identity_paths["dyld_cache_files"] = dyld_cache_paths
 
     installed_keys = ["accepted_set", "control_decision", "control_policy", "control_policy_set",
                        "evaluator_driver", "evaluator_program", "registry"]
@@ -187,8 +197,9 @@ def main():
     host_runtime_digest = sha(canon({"files": [
         {"path": "vfkit", "sha256": sha(open(vfkit_path, "rb").read())},
         {"path": "driver", "sha256": sha(open(driver_path, "rb").read())},
-        {"path": "vm_service", "sha256": sha(open(identity_paths["vm_service"], "rb").read())},
-        {"path": "dyld_cache", "sha256": sha(open(identity_paths["dyld_cache"], "rb").read())}]}))
+        {"path": "vm_service", "sha256": sha(open(identity_paths["vm_service"], "rb").read())}]
+        + [{"path": "dyld_cache.%d" % i, "sha256": sha(open(p, "rb").read())}
+           for i, p in enumerate(dyld_cache_paths)]}))
     guest_kernel_config_digest = sha(canon({
         "command_line": "console= quiet lsm=landlock rdinit=/init", "cpu_count": 1,
         "devices": KERNEL_CONFIG_DEVICES,
@@ -256,7 +267,7 @@ def main():
                        "guest_kernel_config_path": identity_paths["guest_kernel_config"],
                        "toolchain_path": identity_paths["toolchain"],
                        "vm_service_path": identity_paths["vm_service"],
-                       "dyld_cache_path": identity_paths["dyld_cache"],
+                       "dyld_cache_paths": dyld_cache_paths,
                        "work_root": work_root, "installed_files": installed_files}))
 
 if __name__ == "__main__":
@@ -469,7 +480,9 @@ build_tree() { # build_tree <placeholder: 0|1>  -> prints paths as JSON, sets gl
   guest_kernel_config_path=$(printf '%s' "$info" | "$jq_bin" -r .guest_kernel_config_path)
   toolchain_path=$(printf '%s' "$info" | "$jq_bin" -r .toolchain_path)
   vm_service_path=$(printf '%s' "$info" | "$jq_bin" -r .vm_service_path)
-  dyld_cache_path=$(printf '%s' "$info" | "$jq_bin" -r .dyld_cache_path)
+  dyld_cache_paths=()
+  while IFS= read -r line; do dyld_cache_paths+=("$line"); done < <(
+    printf '%s' "$info" | "$jq_bin" -r '.dyld_cache_paths[]')
   installed_control_policy=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy)
   installed_control_decision=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_decision)
   installed_control_policy_set=$(printf '%s' "$info" | "$jq_bin" -r .installed_files.control_policy_set)
@@ -509,12 +522,18 @@ expect_refused() { # expect_refused <desc> <expected-code> <pkg-file> [launch-ar
   [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
   [ "$(cat "$base/err")" = "$expected" ] || fail "$desc: expected $expected, got $(cat "$base/err")"
 }
-expect_admitted() { # expect_admitted <desc> <pkg-file> -> leaves receipt path in $receipt_path
+expect_phase_a_pass() { # expect_phase_a_pass <desc> <pkg-file> -- phase A only, no admission claim
   local desc=$1 pkgfile=$2 status=0
   run_launch "$pkgfile" || status=$?
   [ "$status" -eq 0 ] || fail "$desc: expected exit 0, got $status ($(cat "$base/err"))"
   [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
   [ ! -s "$base/err" ] || fail "$desc: stderr must be empty"
+}
+expect_admitted() { # expect_admitted <desc> <attempt-id> <pkg-file> -- asserts real admission, not just exit 0
+  local desc=$1 attempt_id=$2 pkgfile=$3 admission
+  expect_phase_a_pass "$desc" "$pkgfile"
+  admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
+  [ "$admission" = admitted ] || fail "$desc: expected lifecycle.admission admitted, got $admission"
 }
 expect_phase_b_refused() { # expect_phase_b_refused <desc> <attempt_id> <pkg-file> <expected-reasons-json>
   local desc=$1 attempt_id=$2 pkgfile=$3 expected=$4 status=0 admission reasons
@@ -537,7 +556,7 @@ canonical_ok() { # canonical_ok <desc> <json-file>
 # =============================================================================
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
-expect_admitted 'a fully correct install tree, store root and package' "$base/pkg-ok.json"
+expect_admitted 'a fully correct install tree, store root and package' attempt.fixture-0001 "$base/pkg-ok.json"
 canonical_ok 'the written receipt' "$store_root/attempt.fixture-0001/receipt.json"
 pass 'a correctly owned, non-group-writable, ACL-free install tree admits the attempt and writes a canonical receipt'
 
@@ -575,7 +594,7 @@ for target_desc_pair in "$config_path:the trusted config file" "$base/root/insta
   acl_grant_write "$target"
   expect_refused "E_INSTALL_ACL: $desc carries one ACL entry" E_INSTALL_ACL "$base/pkg-ok.json"
   acl_clear "$target"
-  expect_admitted "control: $desc without the ACL entry" "$base/pkg-ok.json"
+  expect_admitted "control: $desc without the ACL entry" attempt.fixture-0001 "$base/pkg-ok.json"
   pass "$desc carrying one ACL entry is refused E_INSTALL_ACL before stdin is read, paired against the same tree without it"
 done
 
@@ -586,7 +605,7 @@ if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   build_pkg "$base/pkg-ok.json" '{}'
   /bin/chmod +a "$(id -un) deny append" "$config_path"
   /bin/chmod +a "everyone deny write" "$config_path"
-  expect_admitted 'two deny-only ACL entries on the trusted config file' "$base/pkg-ok.json"
+  expect_admitted 'two deny-only ACL entries on the trusted config file' attempt.fixture-0001 "$base/pkg-ok.json"
   /bin/chmod -N "$config_path"
   build_tree 0
   build_pkg "$base/pkg-ok.json" '{}'
@@ -604,7 +623,7 @@ build_pkg "$base/pkg-ok.json" '{}'
 /bin/chmod 666 "$driver_path"
 expect_refused 'E_CONFIG: runtime.driver itself is world-writable' E_CONFIG "$base/pkg-ok.json"
 /bin/chmod 555 "$driver_path"
-expect_admitted 'control: runtime.driver restored to non-writable' "$base/pkg-ok.json"
+expect_admitted 'control: runtime.driver restored to non-writable' attempt.fixture-0001 "$base/pkg-ok.json"
 pass 'runtime.driver, alongside runtime.vfkit, is included in the R10.1 config-named walk: a world-writable driver is refused E_CONFIG, paired against the same tree without it'
 
 # A group/other-writable ancestor (no ACL entry, just a bad mode) is
@@ -614,7 +633,7 @@ build_pkg "$base/pkg-ok.json" '{}'
 /bin/chmod 0775 "$base/root"
 expect_refused 'E_CONFIG: an ancestor of the install directory is group-writable' E_CONFIG "$base/pkg-ok.json"
 /bin/chmod 0755 "$base/root"
-expect_admitted 'control: the same ancestor restored to non-group-writable' "$base/pkg-ok.json"
+expect_admitted 'control: the same ancestor restored to non-group-writable' attempt.fixture-0001 "$base/pkg-ok.json"
 pass 'a group/other-writable ancestor of the install directory, with no ACL entry at all, is refused E_CONFIG, paired against the same tree without it'
 
 # A symlink anywhere in a config-named path's chain, even far from the
@@ -729,7 +748,7 @@ expect_refused 'E_PACKAGE: request.json nested 2,000 levels deep is bounded, not
 pass 'a request.json with far more nesting than the 32-level cap is refused E_PACKAGE (the pre-parse bounded_json_nesting scan), never a RecursionError exiting 1'
 
 build_pkg "$base/pkg-incident.json" '{"incident_bytes":262144}'
-expect_admitted 'an incident.json record at exactly the 262,144-byte cap' "$base/pkg-incident.json"
+expect_phase_a_pass 'an incident.json record at exactly the 262,144-byte cap' "$base/pkg-incident.json"
 build_pkg "$base/pkg-incident.json" '{"attempt_id":"attempt.fixture-incident-over","incident_bytes":262145}'
 expect_refused 'E_PACKAGE: an incident.json record one byte over the 262,144-byte cap' E_PACKAGE "$base/pkg-incident.json"
 pass 'the incident.json record size boundary (262,144 bytes accepted, 262,145 refused E_PACKAGE) holds exactly at the cap'
@@ -739,7 +758,7 @@ expect_refused 'E_STORE_ID: request store_id differs from the configuration' E_S
 pass 'a request store_id differing from the configuration is refused E_STORE_ID, paired against the accepted control'
 
 build_pkg "$base/pkg-reuse.json" '{"attempt_id":"attempt.fixture-reuse","nonce":"1111111111111111111111111111111111111111111111111111111111111111"}'
-expect_admitted 'first use of a nonce' "$base/pkg-reuse.json"
+expect_admitted 'first use of a nonce' attempt.fixture-reuse "$base/pkg-reuse.json"
 build_pkg "$base/pkg-reuse2.json" '{"attempt_id":"attempt.fixture-reuse-2","nonce":"1111111111111111111111111111111111111111111111111111111111111111"}'
 expect_refused 'E_NONCE_REUSED: the same nonce bytes again' E_NONCE_REUSED "$base/pkg-reuse2.json"
 pass 'reusing the same nonce is refused E_NONCE_REUSED even for a different attempt id, paired against the first (accepted) use'
@@ -855,7 +874,32 @@ run_launch "$base/pkg-collide.json" || status=$?
   fail "pre-existing work_root entry: expected exit 65 E_ATTEMPT_EXISTS, got $status ($(cat "$base/err"))"
 [ -f "$work_root/attempt.fixture-collide/unrelated/marker" ] ||
   fail 'pre-existing work_root entry: its unrelated contents were destroyed'
-pass 'a pre-existing work_root entry sharing an attempt_id refuses E_ATTEMPT_EXISTS with nothing removed, never the write-failure cleanup path'
+[ ! -e "$store_root/attempt.fixture-collide" ] ||
+  fail 'pre-existing work_root entry: the store must never claim an orphan entry for a work-dir collision refused before admission'
+pass 'a pre-existing work_root entry sharing an attempt_id refuses E_ATTEMPT_EXISTS before the store is ever claimed, with nothing removed'
+
+# R10.4: a finalization failure (fchown/fchmod/fsync) right after the
+# attempt directory's exclusive mkdir must not leave a claimed dir with
+# no receipt (exit 1) -- it now falls inside the same E_STORE_WRITE
+# handler as the store write itself, exit 70.
+build_pkg "$base/pkg-finfail.json" '{"attempt_id":"attempt.fixture-finfail","nonce":"'"$(printf '%064d' 244)"'"}'
+status=0
+YSTACK_TEST_MKDIR_FINALIZE_FAIL=attempt.fixture-finfail run_launch "$base/pkg-finfail.json" || status=$?
+[ "$status" -eq 70 ] && [ "$(cat "$base/err")" = E_STORE_WRITE ] ||
+  fail "attempt-dir finalize failure: expected exit 70 E_STORE_WRITE, got $status ($(cat "$base/err"))"
+pass 'a finalization failure right after the attempt directory'"'"'s exclusive mkdir is E_STORE_WRITE/exit 70, never an uncaught exit 1'
+
+# Malformed registry bytes (unbalanced, an embedded NaN, a JSON-legal
+# lone-surrogate escape) refuse E_CONFIG -- an installed config file,
+# never E_PACKAGE (the request's own code), never an uncaught exception.
+/bin/chmod 644 "$registry_path"
+for raw in '{' '{"a":NaN}' '{"a":"\ud800"}'; do
+  python3 -c "import sys; open(sys.argv[1], 'w').write(sys.argv[2])" "$registry_path" "$raw"
+  expect_refused "E_CONFIG: malformed registry ($raw)" E_CONFIG "$base/pkg-ok.json"
+done
+pass 'malformed registry bytes (unbalanced, an embedded NaN, a JSON-legal lone-surrogate escape) each refuse E_CONFIG, never E_PACKAGE or an uncaught exception'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
 
 # prepare-candidate.py:1662-1677's closed manifest-entry shape: an
 # unsupported kind/mode must not be silently filtered out.
@@ -911,7 +955,7 @@ build_pkg "$base/pkg-ok.json" '{}'
 /bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
   "$installed_evaluator_driver" "$installed_evaluator_program"
 build_pkg "$base/pkg-check.json" '{"attempt_id":"attempt.fixture-check","nonce":"3333333333333333333333333333333333333333333333333333333333333333","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
-expect_admitted 'the attempt used for the shipped-checker cross-check' "$base/pkg-check.json"
+expect_admitted 'the attempt used for the shipped-checker cross-check' attempt.fixture-check "$base/pkg-check.json"
 check_out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$root/enforcement/v1/check-sandbox-receipt.sh" check \
   "$store_root/attempt.fixture-check/receipt.json" "$base/expectation.json" "$base/evaluation.json"))
 [ "$("$jq_bin" -r '.body.check_verdict' <<<"$check_out")" = refused ] || fail 'shipped checker: expected check_verdict refused'
@@ -964,6 +1008,88 @@ build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-b","nonce":"'
 YSTACK_TEST_IDENTITY_UNREADABLE=guest_init run_launch "$base/pkg-chk.json"
 check_case 'phase-B class (c): identity-missing' attempt.fixture-chk-b valid '["receipt.valid"]' failed
 pass 'the shipped checker, run against this fixture'"'"'s own registry/accepted set, gives the R15.1 class (a) and phase-B class (c) verdicts exactly, matching the host'"'"'s own derivation'
+
+# The rest of the matrix: every remaining class (a) binding refusal, both
+# class (b) reasons, looped over fresh fixtures (control_real=true so the
+# checker's own control/policy checks agree with the host's).
+patch_json() { # patch_json <in-file> <out-file> <python-expr-mutating "doc">
+  python3 -c "
+import json, importlib.util, sys
+spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+doc = json.loads(open(sys.argv[1], 'rb').read())
+$3
+open(sys.argv[2], 'wb').write(hs.canonical(doc))
+" "$1" "$2"
+}
+n=270
+chk_case() { # chk_case <desc> <patch-json> <verdict> <reasons-json>
+  n=$((n + 1))
+  local attempt_id="attempt.fixture-chk-$n"
+  build_pkg "$base/pkg-chk.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'",'"$2"'}'
+  run_launch "$base/pkg-chk.json"
+  check_case "$1" "$attempt_id" "$3" "$4"
+}
+chk_case 'class (a): control-mismatch alone (evaluator_driver_sha256)' \
+  '"set":{"control.evaluator_driver_sha256":"'"$entry_sha"'"}' refused '["receipt.control-mismatch"]'
+chk_case 'class (a): control-mismatch + evaluation-not-satisfied (decision_sha256)' \
+  '"set":{"control.decision_sha256":"'"$entry_sha"'"}' refused \
+  '["receipt.control-mismatch","receipt.evaluation-not-satisfied"]'
+chk_case 'class (a): evaluation-not-satisfied alone (evaluation.json verdict)' \
+  '"evaluation_set":{"body.verdict":"unsatisfied"}' refused '["receipt.evaluation-not-satisfied"]'
+chk_case 'class (b): identity-unaccepted (unaccepted instruction)' \
+  '"instruction":"unaccepted-instr"' refused '["receipt.identity-unaccepted"]'
+
+# replayed / origin-mismatch: the expectation, mutated after the fact,
+# disagrees with what the receipt actually recorded.
+n=$((n + 1))
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+run_launch "$base/pkg-chk.json"
+patch_json "$base/expectation.json" "$base/expectation.json" \
+  "doc['body']['attempt']['attempt_number'] = 99"
+check_case 'class (a): replayed (expectation attempt differs)' "attempt.fixture-chk-$n" refused '["receipt.replayed"]'
+
+n=$((n + 1))
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+run_launch "$base/pkg-chk.json"
+patch_json "$base/expectation.json" "$base/expectation.json" \
+  "doc['body']['store_id'] = 'store.other'"
+check_case 'class (a): origin-mismatch (expectation store_id differs)' "attempt.fixture-chk-$n" refused '["receipt.origin-mismatch"]'
+
+# stale: the installed accepted set changes after the receipt is written,
+# so the checker's own (current) accepted_set_sha256 no longer matches
+# what the receipt recorded at admission.
+n=$((n + 1))
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+run_launch "$base/pkg-chk.json"
+/bin/chmod 644 "$accepted_set"
+patch_json "$accepted_set" "$accepted_set" \
+  "doc['body']['environments'][0]['identities']['toolchain'] = sorted(set(doc['body']['environments'][0]['identities']['toolchain'] + ['$entry_sha']))"
+/bin/chmod 444 "$accepted_set"
+/bin/rm -f "$checker_root/enforcement/v1/accepted-identities.json"
+/bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
+check_case 'class (a): stale (accepted set changed after admission)' "attempt.fixture-chk-$n" refused '["receipt.stale"]'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+/bin/rm -f "$checker_root/enforcement/v1/accepted-identities.json"
+/bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
+
+# placeholder-identity: a copy of an admitted receipt with one identity
+# slot's digest set to the all-ones placeholder (is_identity_unaccepted
+# explicitly excludes placeholder digests, so this is the sole reason).
+n=$((n + 1))
+build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+run_launch "$base/pkg-chk.json"
+patch_json "$store_root/attempt.fixture-chk-$n/receipt.json" "$base/receipt-placeholder.json" \
+  "doc['body']['identities']['toolchain']['sha256'] = '1' * 64"
+out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root/enforcement/v1/check-sandbox-receipt.sh" \
+  check "$base/receipt-placeholder.json" "$base/expectation.json" "$base/evaluation.json"))
+[ "$("$jq_bin" -r '.body.check_verdict' <<<"$out")" = refused ] &&
+  [ "$("$jq_bin" -c -S '.body.reason_ids' <<<"$out")" = '["receipt.placeholder-identity"]' ] ||
+  fail "class (b) placeholder-identity: unexpected checker output $out"
+pass 'the remaining R15.1 class (a) binding refusals (control-mismatch alone and paired with evaluation-not-satisfied, evaluation-not-satisfied alone, replayed, origin-mismatch, stale) and class (b) reasons (identity-unaccepted, placeholder-identity) each give exactly their spec-listed receipt.* reason set'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
@@ -1066,7 +1192,7 @@ expect_phase_b_refused 'the request and the supplied instruction bytes agree, bu
   attempt.fixture-pb-instrunacc "$base/pkg-pb.json" '["launch.instruction-unaccepted"]'
 
 build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-pb-instrok","nonce":"'"$(printf '%064d' 95)"'"}'
-expect_admitted 'instruction binding positive control: an accepted instruction, both digests intact' "$base/pkg-pb.json"
+expect_admitted 'instruction binding positive control: an accepted instruction, both digests intact' attempt.fixture-pb-instrok "$base/pkg-pb.json"
 
 # A real read failure on an already-R10.1-validated, held-open fd has no
 # natural trigger short of a genuine I/O fault (chmod down to unreadable
@@ -1156,7 +1282,7 @@ i=0
 for name in "README.md" "$(python3 -c 'print("é" * 40)')" "$name_63x63"; do
   i=$((i + 1))
   build_pkg "$base/pkg-path.json" '{"attempt_id":"attempt.fixture-path-'"$i"'","nonce":"'"$(printf '%064d' $((100 + i)))"'","candidate_name":"'"$name"'"}'
-  expect_admitted "candidate transport: a manifest path of ${#name} bytes" "$base/pkg-path.json"
+  expect_admitted "candidate transport: a manifest path of ${#name} bytes" "attempt.fixture-path-$i" "$base/pkg-path.json"
 done
 pass 'a candidate transported under README.md, a non-ASCII UTF-8 manifest path and a 4,096-byte 64-component path all admit cleanly: the manifest path never affects the byte-for-byte content check'
 build_tree 0
@@ -1176,7 +1302,7 @@ kernel_required_options=(
   CONFIG_FANOTIFY_ACCESS_PERMISSIONS
 )
 build_pkg "$base/pkg-ok.json" '{}'
-expect_admitted 'kernel-config control: the full =y set admits' "$base/pkg-ok.json"
+expect_admitted 'kernel-config control: the full =y set admits' attempt.fixture-0001 "$base/pkg-ok.json"
 
 /bin/chmod 644 "$guest_kernel_config_path"
 /usr/bin/printf 'CONFIG_HZ_250=y\n' > "$guest_kernel_config_path"
@@ -1205,14 +1331,14 @@ build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
 # =============================================================================
-# R2.3 host_runtime composite: each of its four constituents (vfkit, driver,
-# the framework's VM service executable, the arm64e dyld shared cache),
-# changed alone, moves the composite digest away from what was accepted --
-# proving it is built from all four validated files, not a stand-in single
-# one (spec.md:60-73).
+# R2.3 host_runtime composite: each constituent (vfkit, driver, the VM
+# service executable, and each of the split arm64e dyld shared cache's
+# several subcache files), changed alone, moves the composite digest away
+# from what was accepted -- proving it is built from every one of them,
+# not a stand-in single file (spec.md:60-73).
 # =============================================================================
 i=0
-for target in "$vfkit_path" "$driver_path" "$vm_service_path" "$dyld_cache_path"; do
+for target in "$vfkit_path" "$driver_path" "$vm_service_path" "${dyld_cache_paths[@]}"; do
   i=$((i + 1))
   build_tree 0
   /bin/chmod 644 "$target"
@@ -1222,7 +1348,18 @@ for target in "$vfkit_path" "$driver_path" "$vm_service_path" "$dyld_cache_path"
   expect_phase_b_refused "host_runtime constituent $i tampered alone" "attempt.fixture-hostrt-$i" \
     "$base/pkg-pb.json" '["launch.identity-unaccepted"]'
 done
-pass 'each of the host_runtime composite'"'"'s four constituents (vfkit, driver, vm_service, dyld_cache), tampered alone, moves the composite away from the accepted digest: launch.identity-unaccepted alone'
+pass 'each host_runtime constituent (vfkit, driver, vm_service, and every dyld_cache_files subcache), tampered alone, moves the composite away from the accepted digest: launch.identity-unaccepted alone'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# An empty dyld_cache_files list is refused E_CONFIG (at least one
+# subcache is required).
+"$jq_bin" -c '.body.identity_paths.dyld_cache_files = []' "$config_path" > "$base/config-empty-dyld.json"
+/bin/chmod 644 "$config_path"
+/bin/cp "$base/config-empty-dyld.json" "$config_path"
+/bin/chmod 444 "$config_path"
+expect_refused 'E_CONFIG: an empty dyld_cache_files list' E_CONFIG "$base/pkg-ok.json"
+pass 'an empty identity_paths.dyld_cache_files list is refused E_CONFIG'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 

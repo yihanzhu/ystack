@@ -400,7 +400,7 @@ _trusted_root_fds = []
 # --- host-config.json (R10.1) ---------------------------------------------
 IDENTITY_PATH_KEYS = ("guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
                       "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
-                      "vm_service", "dyld_cache")
+                      "vm_service", "dyld_cache_files")
 INSTALLED_FILE_KEYS = ("accepted_set", "control_decision", "control_policy", "control_policy_set",
                        "evaluator_driver", "evaluator_program", "registry")
 
@@ -445,8 +445,15 @@ def load_config(config_fd):
     require(is_abs_path(runtime["driver"]) and is_abs_path(runtime["vfkit"]), "E_CONFIG")
     identity_paths = body["identity_paths"]
     require(isinstance(identity_paths, dict) and set(identity_paths) == set(IDENTITY_PATH_KEYS), "E_CONFIG")
-    for value in identity_paths.values():
-        require(is_abs_path(value), "E_CONFIG")
+    for key, value in identity_paths.items():
+        if key == "dyld_cache_files":
+            # Split arm64e shared caches have several subcache files --
+            # every one goes through the R10.1 walk and into the
+            # host_runtime composite; at least one is required.
+            require(isinstance(value, list) and len(value) >= 1
+                    and all(is_abs_path(v) for v in value), "E_CONFIG")
+        else:
+            require(is_abs_path(value), "E_CONFIG")
     installed_files = body["installed_files"]
     require(isinstance(installed_files, dict) and set(installed_files) == set(INSTALLED_FILE_KEYS), "E_CONFIG")
     for value in installed_files.values():
@@ -554,14 +561,18 @@ def read_all(fd):
 
 def load_registry(fd):
     """Reads, bounds, canonical- and shape-checks the installed registry
-    (R10.1 already trusts its ACL/ownership) and returns body["environments"]."""
+    (R10.1 already trusts its ACL/ownership) and returns body["environments"].
+    Malformed bytes (unbalanced, NaN, a lone surrogate) refuse E_CONFIG --
+    this is an installed config file, never E_PACKAGE (the request's own
+    code) and never an uncaught exception escaping from canonical()."""
     raw = read_all(fd)
-    bounded_json_nesting(raw)
     try:
+        bounded_json_nesting(raw)
         doc = json.loads(raw)
-    except (ValueError, RecursionError):
+        canonical_ok = canonical(doc) == raw
+    except (Refusal, ValueError, RecursionError, UnicodeEncodeError):
         refuse("E_CONFIG")
-    require(canonical(doc) == raw, "E_CONFIG")
+    require(canonical_ok, "E_CONFIG")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
     require(doc.get("kind") == "shadow_environment_registry" and is_int(doc.get("schema_version"))
             and doc.get("schema_version") == 1, "E_CONFIG")
@@ -983,20 +994,30 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
         except OSError:
             return None
 
+    def read_slot_list(slot):
+        if slot == forced_unreadable:
+            return None
+        try:
+            return [read_all(fd) for fd in identity_fds[slot]]
+        except OSError:
+            return None
+
     def observe(raw):
         return ("observed", sha256_hex(raw)) if raw is not None else ("unobserved", None)
 
     result = {slot: observe(read_slot(slot)) for slot in
               ("guest_kernel", "guest_init", "guest_supervisor", "image", "verifier", "toolchain")}
 
-    constituents = [read_slot(slot) for slot in
-                    ("runtime_vfkit", "runtime_driver", "vm_service", "dyld_cache")]
-    if None in constituents:
+    constituents = [read_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
+    dyld_cache_raws = read_slot_list("dyld_cache_files")
+    if None in constituents or dyld_cache_raws is None:
         result["host_runtime"] = ("unobserved", None)
     else:
-        names = ("vfkit", "driver", "vm_service", "dyld_cache")
-        result["host_runtime"] = observe(canonical({"files": [
-            {"path": n, "sha256": sha256_hex(r)} for n, r in zip(names, constituents)]}))
+        files = [{"path": n, "sha256": sha256_hex(r)} for n, r in
+                 zip(("vfkit", "driver", "vm_service"), constituents)]
+        files += [{"path": "dyld_cache.%d" % i, "sha256": sha256_hex(r)}
+                  for i, r in enumerate(dyld_cache_raws)]
+        result["host_runtime"] = observe(canonical({"files": files}))
 
     kernel_config_raw = read_slot("guest_kernel_config")
     if kernel_config_raw is None:
@@ -1190,6 +1211,8 @@ def mkdir_excl(parent_fd, name, uid, gid):
     os.mkdir(name, mode=0o700, dir_fd=parent_fd)
     fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
     try:
+        if name == os.environ.get("YSTACK_TEST_MKDIR_FINALIZE_FAIL"):
+            raise OSError("test-only simulated finalize failure")
         os.fchown(fd, uid, gid)
         os.fchmod(fd, 0o750)
         os.fsync(fd)
@@ -1208,6 +1231,21 @@ def write_excl(parent_fd, name, data, uid, gid):
         os.fchown(fd, uid, gid)
         os.fchmod(fd, 0o440)
         os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def work_root_attempt_exists(work_root, attempt_id):
+    """A work_root/<attempt_id> collision (no store entry) must refuse
+    E_ATTEMPT_EXISTS before the store is ever claimed -- checked, not
+    removed; freeze_by_copy's own exclusive mkdir remains the
+    post-admission path for anything created after this check."""
+    fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.stat(attempt_id, dir_fd=fd, follow_symlinks=False)
+        return True
+    except OSError:
+        return False
     finally:
         os.close(fd)
 
@@ -1414,7 +1452,10 @@ def run_launch(argv):
     # kept open too now (host_runtime composite constituents), under the
     # same identity_fds dict so the existing close loop covers them.
     identity_fds = {slot: secure_walk(path, principal_uid, check_mode=True)
-                     for slot, path in config["identity_paths"].items()}
+                     for slot, path in config["identity_paths"].items()
+                     if slot != "dyld_cache_files"}
+    identity_fds["dyld_cache_files"] = [secure_walk(p, principal_uid, check_mode=True)
+                                         for p in config["identity_paths"]["dyld_cache_files"]]
     identity_fds["runtime_vfkit"] = secure_walk(config["runtime"]["vfkit"], principal_uid,
                                                  check_mode=True)
     identity_fds["runtime_driver"] = secure_walk(config["runtime"]["driver"], principal_uid,
@@ -1462,58 +1503,65 @@ def run_launch(argv):
         pass
     else:
         refuse("E_ATTEMPT_EXISTS")
+    # Checked (never removed) before the store is claimed: a work_root
+    # collision with no store entry must not surface as a bare freeze
+    # failure after admission (an orphan store dir, no receipt).
+    require(not work_root_attempt_exists(config["work_root"], attempt_id), "E_ATTEMPT_EXISTS")
 
     # R4.2: the attempt directory is created exclusively, then every phase B
-    # check runs.
-    attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
-    admitted_at = time.time()
-    reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
-                                            installed_digests, registry_environments,
-                                            accepted_environments, config_raw,
-                                            host_supervisor_raw, python_raw)
-    for fd in identity_fds.values():
-        os.close(fd)
-    identities = identities_for_receipt(measured)
-    # R8.3: built once, reused for both the receipt digest and the write.
-    evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
-                                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
-    evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
-    payload = [("stdout", b""), ("stderr", b""),
-               ("evidence-manifest.json", evidence_manifest_bytes)]
-    if reason_ids:
-        # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
-        # ran, so nothing errored), payload/refusal.json alongside it.
-        receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                       launch_request_sha256, admitted_at, evidence_manifest_sha256,
-                                       identities, "refused", "completed")
-        payload.append(("refusal.json", canonical({"reason_ids": reason_ids})))
-    else:
-        # R5.1: freeze by copy before anything else -- still PR 3's own
-        # R9.4 stub past this point (no runtime exists before PR 5), so the
-        # frozen copies are the attempt's only work_root storage; R9.3's
-        # "storage_destroyed follows the removal of its package copies"
-        # applies here too -- they are removed and the removal verified
-        # before the receipt can honestly claim storage_destroyed: true.
-        # A freeze failure itself (ENOSPC, a write error, a name collision)
-        # must never escape as a traceback with a claimed store dir and no
-        # receipt (R10.4): clean up whatever this attempt's own directory
-        # holds and still write an honest failed-teardown receipt below --
-        # only a receipt-write failure itself exits 70.
-        try:
-            candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
-                                              config["consumer_gid"], package)
-        except OSError:
-            # A genuine mid-freeze write failure: the candidate count is
-            # still known from the package, so the same exact-inventory
-            # removal the success path uses applies here too.
-            candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
-            storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-        else:
-            storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-        receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                       launch_request_sha256, admitted_at, evidence_manifest_sha256,
-                                       identities, "admitted", "error", storage_destroyed)
+    # check runs. From here on, any OSError (including a finalization
+    # failure right after mkdir_excl, or the store write itself) is
+    # E_STORE_WRITE/exit 70, never a bare traceback (R10.4).
     try:
+        attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
+        admitted_at = time.time()
+        reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
+                                                installed_digests, registry_environments,
+                                                accepted_environments, config_raw,
+                                                host_supervisor_raw, python_raw)
+        for fd in identity_fds.values():
+            for f in (fd if isinstance(fd, list) else [fd]):
+                os.close(f)
+        identities = identities_for_receipt(measured)
+        # R8.3: built once, reused for both the receipt digest and the write.
+        evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                              "kind": "sandbox_evidence_manifest", "schema_version": 1})
+        evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
+        payload = [("stdout", b""), ("stderr", b""),
+                   ("evidence-manifest.json", evidence_manifest_bytes)]
+        if reason_ids:
+            # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
+            # ran, so nothing errored), payload/refusal.json alongside it.
+            receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
+                                           launch_request_sha256, admitted_at, evidence_manifest_sha256,
+                                           identities, "refused", "completed")
+            payload.append(("refusal.json", canonical({"reason_ids": reason_ids})))
+        else:
+            # R5.1: freeze by copy before anything else -- still PR 3's own
+            # R9.4 stub past this point (no runtime exists before PR 5), so the
+            # frozen copies are the attempt's only work_root storage; R9.3's
+            # "storage_destroyed follows the removal of its package copies"
+            # applies here too -- they are removed and the removal verified
+            # before the receipt can honestly claim storage_destroyed: true.
+            # A freeze failure itself (ENOSPC, a write error, a name collision)
+            # must never escape as a traceback with a claimed store dir and no
+            # receipt (R10.4): clean up whatever this attempt's own directory
+            # holds and still write an honest failed-teardown receipt below --
+            # only a receipt-write failure itself exits 70.
+            try:
+                candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
+                                                  config["consumer_gid"], package)
+            except OSError:
+                # A genuine mid-freeze write failure: the candidate count is
+                # still known from the package, so the same exact-inventory
+                # removal the success path uses applies here too.
+                candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
+                storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+            else:
+                storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+            receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
+                                           launch_request_sha256, admitted_at, evidence_manifest_sha256,
+                                           identities, "admitted", "error", storage_destroyed)
         write_attempt_result(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
                               receipt_bytes, payload)
     except Refusal:
