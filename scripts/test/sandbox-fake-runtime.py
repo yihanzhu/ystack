@@ -29,6 +29,7 @@ the sibling sandbox/v1/ directory).
 import importlib.util
 import json
 import os
+import signal
 import sys
 import time
 
@@ -132,7 +133,22 @@ def cmd_state(args):
     if slow_state_ms:
         time.sleep(slow_state_ms / 1000.0)
     state = read_mailbox(args[0]).get("state")
-    sys.stdout.write((state if state in ("running", "stopped", "error") else "error") + "\n")
+    state = state if state in ("running", "stopped", "error") else "error"
+    sig_name = default_scenario.get("signal_parent_on_stopped")
+    if sig_name and state == "stopped":
+        # findings-477-r12ci.md: deterministic, cross-platform version of
+        # the cancel-during-poll-returns-stopped race (findings-477-r11.md
+        # finding r11) -- signals host-supervisor.py's own pid (our
+        # parent: the driver is always spawned directly by it) from
+        # exactly the state poll that is about to report "stopped", so
+        # cancellation is observed only once the "stopped" observation
+        # is already in hand, never dependent on how fast the "run"
+        # subcommand's own separate process happens to finish relative
+        # to host polling on a given platform (a sleep-then-signal
+        # pattern that landed inside vs. outside the poll window
+        # differently on Linux CI than on macOS).
+        os.kill(os.getppid(), getattr(signal, "SIG" + sig_name))
+    sys.stdout.write(state + "\n")
     return 0
 
 

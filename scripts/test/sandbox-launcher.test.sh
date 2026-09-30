@@ -2536,9 +2536,17 @@ stop_marker="$base/stop-called.marker"
 rm -f "$stop_marker"
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{}' > "$scenario_path"
-printf '%s' '{"stop_marker_path":"'"$stop_marker"'"}' > "$default_scenario_path"
+# findings-477-r12ci.md: deterministic, cross-platform version of this
+# race -- the fake driver's own "state" subcommand signals
+# host-supervisor.py's pid (its own parent) from exactly the poll that
+# is about to report "stopped", rather than a host-side self-signal
+# hook firing on every poll regardless of the mailbox's own content
+# (which raced against the separate "run" subcommand process's own
+# completion speed: reliable on macOS, but landed a poll too early on
+# Linux CI, where the first "state" call still saw "running").
+printf '%s' '{"stop_marker_path":"'"$stop_marker"'","signal_parent_on_stopped":"TERM"}' > "$default_scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE=TERM run_launch "$base/pkg-scn.json" || fail "finding 1: expected exit 0"
+run_launch "$base/pkg-scn.json" || fail "finding 1: expected exit 0"
 printf '%s' '{}' > "$default_scenario_path"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = error ] || fail "finding 1: expected lifecycle.runtime error, got $runtime"
@@ -2551,7 +2559,7 @@ runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receip
 wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$attempt_id/receipt.json")
 [ "$wall_reached" = false ] ||
   fail "finding r11: expected limits.wall_time_ms.reached false (cancellation observed with zero stop calls issued -- a race, not a real HardStop/cancellation-issued stop), got $wall_reached"
-pass 'finding 1: a signal during driver_state()'"'"'s blocking call, whose result is "stopped", is still folded into cancelled'
+pass 'finding 1: a signal delivered by the fake driver'"'"'s own "state" subcommand, from exactly the poll that reports "stopped" (deterministic on any platform since findings-477-r12ci.md), is still folded into cancelled'
 pass 'finding r11 (findings-477-r11.md): the same cancel-during-poll-returns-stopped race issues zero stop calls (proven by the absent stop marker) and records wall_time_ms.reached: false, never true from bare cancellation alone'
 control_deadline_case 'finding 2: a launch-file write failure after a slowed startup still records control_deadline exceeded / failure.supervisor-timeout, not "met" from stub_run_result'"'"'s own former default' \
   'YSTACK_TEST_LAUNCH_WRITE_FAIL=1 YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=150' '{}'
