@@ -1598,6 +1598,19 @@ def write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, export_byte
         os.close(work_fd)
 
 
+def _kill_driver_group(proc):
+    # findings-477-r16.md finding 2: shared by incomplete-read/overflow --
+    # never just proc.pid, so an abandoned helper is cleaned up too.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def run_driver(driver_path, args, timeout_s=2.0):
     """The fixed driver interface (plan.md): empty environment, stdin
     /dev/null, stdout capped 65,536 bytes, 2,000 ms per call. Reads with a
@@ -1666,21 +1679,7 @@ def run_driver(driver_path, args, timeout_s=2.0):
     except OSError:
         pass
     if incomplete:
-        # The driver's own process is never trusted to already be gone
-        # just because it may have exited before the timeout/failure --
-        # kill the whole process GROUP (never just proc.pid, since
-        # start_new_session=True made proc its own group leader) so a
-        # forked-and-abandoned helper still holding the pipe open is
-        # cleaned up too, never left running, then reap bounded rather
-        # than block on a process that may already be a zombie.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
+        _kill_driver_group(proc)
         return None, b""
     if proc.poll() is None:
         try:
@@ -1695,6 +1694,7 @@ def run_driver(driver_path, args, timeout_s=2.0):
             except subprocess.TimeoutExpired:
                 return None, b""
     if overflow:
+        _kill_driver_group(proc)  # findings-477-r16.md finding 2
         return None, b""
     return proc.returncode, b"".join(chunks)
 
@@ -1877,6 +1877,10 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # got to answer.
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
     argv, stopped_exit_status = parsed
+    if argv[0] != config["runtime"]["vfkit"]:
+        # findings-477-r16.md finding 1: exact string equality against
+        # the one path identity measurement actually covers, or no spawn.
+        return stub_run_result(control_deadline_for_elapsed(admission_mono))
     if signal_seen[0] or abandonment_deadline_passed(admission_mono):
         # findings-477-r7.md finding 1: recheck cancellation immediately
         # before Popen, after disk prep (write_launch_disks) and

@@ -186,8 +186,6 @@ def main():
     open(installed_files["registry"], "wb").write(canon(registry_doc))
 
     vfkit_path = os.path.join(base, "vfkit")
-    open(vfkit_path, "wb").write(b"fake-vfkit")
-    os.chmod(vfkit_path, 0o555)
     driver_path = os.path.join(base, "driver")
     shutil.copy(fake_runtime_src, driver_path)
     # The driver's own shebang is a source file constant (#!/usr/bin/python3
@@ -207,6 +205,11 @@ def main():
     with open(driver_path, "wb") as fh:
         fh.write(b"#!" + sys.executable.encode() + b"\n" + rest)
     os.chmod(driver_path, 0o555)
+    # findings-477-r16.md finding 1: argv[0] must equal this path -- a
+    # second copy of the same rewritten script (never a relocated copy of
+    # a signed system binary, which macOS codesign kills on sight).
+    shutil.copy(driver_path, vfkit_path)
+    os.chmod(vfkit_path, 0o555)
     # the fake driver's own default-success scenario, read whenever a test
     # doesn't set YSTACK_FAKE_SCENARIO (an empty environment is used for the
     # driver argv/state/stop calls themselves, so this is a fallback the
@@ -3080,6 +3083,49 @@ rm -f "$pipe_hold_marker"
 status=$?
 [ "$status" -eq 0 ] || fail "finding r15-2: expected exit 0 (rc is None, out is empty, and the forked helper holding the pipe open is gone), got $status: $(cat "$base/out") $(cat "$base/err")"
 pass 'finding r15-2: run_driver() rejects a response it only has because its own read timed out while a forked helper still holds the driver'"'"'s stdout pipe open (a driver reporting stopped then exiting 0, with a child inherited from it never closing that fd) -- returns a rejected, empty response, never the driver'"'"'s exit code plus whatever partial bytes happened to arrive before the timeout, and kills the whole driver process GROUP (not just the already-exited driver pid) so the abandoned helper is confirmed gone, never left running past the call'
+
+# =============================================================================
+# Fix round 16 (findings-477-r16.md): two P2s.
+# =============================================================================
+
+# Finding 1 [P2]: argv[0] must equal the configured vfkit path exactly.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+run_marker="$base/r16-run.marker"; rm -f "$run_marker"
+printf '%s' '{"wrong_argv_exe":true}' > "$default_scenario_path"
+printf '%s' '{"run_marker_path":"'"$run_marker"'"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding r16-1: expected exit 0, got $status ($(cat "$base/err"))"
+[ ! -e "$run_marker" ] || fail "finding r16-1: expected the runtime to never be spawned"
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$verdict" = failed ] && [ "$runtime" = error ] ||
+  fail "finding r16-1: expected outcome.verdict failed, lifecycle.runtime error, got $verdict/$runtime"
+pass 'finding r16-1: a driver argv response naming an executable different from the configured (measured) vfkit path is rejected before ever calling Popen -- exact string equality, no normalization -- proven by the run marker'"'"'s absence: outcome.verdict failed, lifecycle.runtime error'
+
+# Finding 2 [P2]: overflow rejection also kills the driver process group.
+cat > "$base/fake-driver-overflow.py" <<'PY'
+#!/usr/bin/python3
+import os, sys, time
+a = sys.argv[1:]
+if len(a) >= 2 and a[0] == "state":
+    if os.fork() == 0:
+        open(a[1], "w").write(str(os.getpid()))
+        time.sleep(30)
+        os._exit(0)
+    sys.stdout.write("x" * 70000)
+else:
+    sys.exit(1)
+PY
+chmod 555 "$base/fake-driver-overflow.py"
+pipe_hold_marker2="$base/pipe-hold-child2.pid"; rm -f "$pipe_hold_marker2"
+"$python" "$base/run_driver_probe.py" "$install_dir/host-supervisor.py" \
+  "$base/fake-driver-overflow.py" "$pipe_hold_marker2" > "$base/out" 2>"$base/err"
+status=$?
+[ "$status" -eq 0 ] || fail "finding r16-2: expected exit 0 (rc is None, out is empty, and the forked helper is gone), got $status: $(cat "$base/out") $(cat "$base/err")"
+pass 'finding r16-2: run_driver()'"'"'s overflow-rejection branch (>65,536 bytes) now kills the whole driver process GROUP too, not just the incomplete-read branch -- a forked helper still holding the pipe open past the driver'"'"'s own oversized write and exit is confirmed gone after the call, never left running for a teardown elsewhere that can never reach it'
 
 unset YSTACK_FAKE_SCENARIO
 

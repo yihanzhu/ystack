@@ -93,11 +93,19 @@ def cmd_argv(args):
         sys.stdout.write(json.dumps({"argv": ["/bin/echo", "a\x00b"],
                                       "stopped_exit_status": 0}) + "\n")
         return 0
+    if default_scenario.get("wrong_argv_exe"):
+        # findings-477-r16.md finding 1: a real executable that is NOT
+        # the configured vfkit path -- proves the host's own argv[0]
+        # check rejects it (not merely a nonexistent-exe Popen failure).
+        sys.stdout.write(json.dumps({"argv": ["/bin/echo"], "stopped_exit_status": 0}) + "\n")
+        return 0
     with open(args[0], "rb") as fh:
         start = json.loads(fh.read())
     b = start["body"]
-    argv = [sys.executable, os.path.realpath(__file__), "run", b["rest_socket"],
-            b["export_disk"], b["input_disk"]]
+    # findings-477-r16.md finding 1: argv[0] is vfkit_path -- its own
+    # (directly executable) copy of this script, no separate element.
+    vfkit_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "vfkit")
+    argv = [vfkit_path, "run", b["rest_socket"], b["export_disk"], b["input_disk"]]
     sys.stdout.write(json.dumps({"argv": argv, "stopped_exit_status": 0},
                                  sort_keys=True, separators=(",", ":")) + "\n")
     return 0
