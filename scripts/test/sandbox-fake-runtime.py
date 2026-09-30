@@ -64,6 +64,14 @@ def cmd_argv(args):
         # failure (None), never a silent truncation to 65,536 bytes.
         sys.stdout.write("x" * 200000)
         return 0
+    if default_scenario.get("bad_argv_exe"):
+        # Proves the host's Popen-failure path: a syntactically valid
+        # argv response naming an executable that doesn't exist, so
+        # subprocess.Popen itself raises OSError (ENOENT) in run_vm.
+        sys.stdout.write(json.dumps({"argv": ["/nonexistent/ystack-test-exe-xyz"],
+                                      "stopped_exit_status": 0},
+                                     sort_keys=True, separators=(",", ":")) + "\n")
+        return 0
     with open(args[0], "rb") as fh:
         start = json.loads(fh.read())
     b = start["body"]
@@ -171,6 +179,15 @@ def cmd_run(args):
         # host had to force never leaves a clean export either, matching
         # plan.md/spec.md's class (c): HardStop adds both failure.runtime
         # and failure.observation-unavailable, not failure.runtime alone.
+        if scenario.get("hardstop_exit_no_mailbox"):
+            # Exits with stopped_exit_status without ever writing
+            # "stopped" to the mailbox at all -- the host must confirm
+            # this stop from the process's own exit code (proc.poll()),
+            # since driver_state() never reports "stopped" here, and it
+            # must accept stopped_exit_status even though HardStop was
+            # requested (the runtime honored it and exited cleanly
+            # before the next state poll could even see its endpoint).
+            return 0
         write_mailbox(socket_path, state="stopped")
         return 0
 
@@ -193,9 +210,28 @@ def cmd_run(args):
     evidence_files, evidence_records = [], []
     for ev in scenario.get("evidence", []):
         content = ev["content"].encode()
+        # name_hex is the guest's own evidence FILENAME, hex-encoded --
+        # not a content digest (host-supervisor.py's own hex_name_ok, not
+        # sha256_ok, validates it): "name" defaults to the real
+        # verifier's own evidence filename, file-digest-result.json (44
+        # hex characters, nowhere near a 64-character sha256 digest), so
+        # the default scenario exercises this by itself.
+        name = ev.get("name", "file-digest-result.json")
+        name_hex = name.encode().hex()
+        if ev.get("name_hex_override") is not None:
+            name_hex = ev["name_hex_override"]
         evidence_records.append((("evidence/%04d" % ev["index"]).encode(), content))
-        evidence_files.append({"index": ev["index"], "name_hex": hs.sha256_hex(content),
+        evidence_files.append({"index": ev["index"], "name_hex": name_hex,
                                 "size_bytes": len(content)})
+    if scenario.get("duplicate_evidence_index") and evidence_files:
+        # Two declarations of the same index (a different name_hex, the
+        # same single frame record): each index must be required exactly
+        # once, never silently deduplicated by name, which would let one
+        # exported byte manufacture two payload files and double-count
+        # the output sum.
+        dup = dict(evidence_files[0])
+        dup["name_hex"] = "aa" * len(bytes.fromhex(dup["name_hex"]))
+        evidence_files.append(dup)
     report_body = {
         "evidence_files": evidence_files, "exit_code": scenario.get("exit_code", 0),
         "exit_state": scenario.get("exit_state", "exited"), "limits": limits,
@@ -249,6 +285,14 @@ def cmd_run(args):
         while True:
             time.sleep(0.02)
     write_mailbox(socket_path, state="stopped")
+    exit_delay_ms = scenario.get("exit_delay_ms")
+    if exit_delay_ms:
+        # Reports "stopped" via the mailbox immediately, but the process
+        # itself keeps running a while longer -- so the host's own
+        # reap (proc.wait()) genuinely blocks, exercising whether it's
+        # correctly bounded by the absolute abandonment deadline rather
+        # than a fresh, fixed wait of its own.
+        time.sleep(exit_delay_ms / 1000.0)
     return 0
 
 

@@ -740,6 +740,23 @@ def sha256_ok(value):
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
+YS_FRAME_NAME_MAX = 255  # sandbox/v1/guest/common.h's own record-name limit
+
+
+def hex_name_ok(value):
+    """R8.2's evidence name_hex is the guest's own evidence filename,
+    hex-encoded -- an even-length lowercase hex string whose decoded
+    byte length is within the guest's own frame record-name limit
+    (YS_FRAME_NAME_MAX, sandbox/v1/guest/common.h), independent of any
+    digest length: a 64-character sha256 digest is one valid filename
+    among many, not the format itself (the real verifier's own evidence
+    file, file-digest-result.json, hex-encodes to 44 characters)."""
+    if not (isinstance(value, str) and value and len(value) % 2 == 0
+            and all(c in "0123456789abcdef" for c in value)):
+        return False
+    return len(value) // 2 <= YS_FRAME_NAME_MAX
+
+
 def oid_ok(value, hash_algorithm):
     """Lowercase hex of the length hash_algorithm selects (40/sha1, 64/sha256);
     matches sandbox-receipt.jq's oid_ok for source/candidate commit_id/tree_id."""
@@ -1402,6 +1419,17 @@ def runtime_start_deadline_s():
     return int(os.environ.get("YSTACK_TEST_RUNTIME_START_LIMIT_MS", "10000")) / 1000.0
 
 
+def control_deadline_for_elapsed(admission_mono):
+    """R9.4: "exceeded" iff runtime start (measured from admission,
+    R4.3/R9.1) already took more than runtime_start_deadline_s() -- used
+    on run_vm's own early-return paths (a driver-argv or Popen failure)
+    too, not just its successful-spawn path, so a startup overrun is
+    never silently dropped just because the runtime never actually
+    started."""
+    elapsed_ms = (time.monotonic() - admission_mono) * 1000
+    return "exceeded" if elapsed_ms > runtime_start_deadline_s() * 1000 else "met"
+
+
 def export_read_deadline_s():
     return int(os.environ.get("YSTACK_TEST_EXPORT_READ_LIMIT_MS", "5000")) / 1000.0
 
@@ -1418,6 +1446,20 @@ def test_slow(env_name):
     ms = os.environ.get(env_name)
     if ms:
         time.sleep(int(ms) / 1000.0)
+
+
+def test_self_signal(env_name):
+    """Test-only: delivers a signal to this same process at the exact
+    call site, rather than a test racing an external `kill` against a
+    wall-clock sleep it can't guarantee lands in the right window on a
+    slower or more heavily loaded host (a real Linux CI failure this
+    caused: the external timer fired while the runtime was still
+    genuinely running, before the intended finalization window, making
+    a real -- and correct -- mid-run cancellation look like a bug in the
+    window it meant to test instead)."""
+    sig_name = os.environ.get(env_name)
+    if sig_name:
+        os.kill(os.getpid(), getattr(signal, "SIG" + sig_name))
 
 
 def build_plan_json(manifest, instruction_sha256, verifier_sha256):
@@ -1601,6 +1643,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     lifetime, closing the window between Popen and handler installation
     a signal could otherwise fall through."""
     work_root = config["work_root"]
+    test_self_signal("YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN")
     if os.environ.get("YSTACK_TEST_LAUNCH_WRITE_FAIL"):
         # Test-only: simulates an ENOSPC/write-error writing input.img,
         # export.img, start.json or runtime.log -- the caller (run_launch)
@@ -1636,7 +1679,13 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         except OSError:
             pass
     if parsed is None:
-        return stub_run_result()
+        # R9.4: a driver-argv failure still measures elapsed startup time
+        # against the same budget a successful spawn would have -- never
+        # silently "met" just because stub_run_result's own default
+        # resets it, dropping failure.supervisor-timeout when prep alone
+        # had already blown the startup budget before the driver even
+        # got to answer.
+        return stub_run_result(control_deadline_for_elapsed(admission_mono))
     argv, stopped_exit_status = parsed
 
     log_path = os.path.join(attempt_dir, "runtime.log")
@@ -1650,14 +1699,12 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         os.close(read_fd)
         os.close(write_fd)
         os.close(log_fd)
-        return stub_run_result()
+        return stub_run_result(control_deadline_for_elapsed(admission_mono))
     os.close(write_fd)
     drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd), daemon=True)
     drain.start()
 
-    runtime_start_ms = (time.monotonic() - admission_mono) * 1000
-    if runtime_start_ms > runtime_start_deadline_s() * 1000:
-        result["control_deadline"] = "exceeded"
+    result["control_deadline"] = control_deadline_for_elapsed(admission_mono)
 
     spawn_mono = time.monotonic()
     hard_stop_sent = sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
@@ -1679,14 +1726,23 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             # not a driver failure, per the supported exit-status
             # confirmation.
             exit_code = proc.poll()
-            if exit_code == stopped_exit_status and not hard_stop_sent:
+            if exit_code == stopped_exit_status:
                 confirmed_stopped = True
             else:
                 driver_reported_error = True
             break
         exit_code = proc.poll()
         if exit_code is not None:
-            if exit_code == stopped_exit_status and not hard_stop_sent:
+            # Accept the configured stopped_exit_status as confirmation
+            # regardless of whether HardStop was requested: a runtime
+            # that honors HardStop and exits cleanly before the next
+            # state poll (its endpoint can already be gone by then) is
+            # still a genuinely confirmed, reaped stop -- result["hard_stop"]
+            # (below) keeps the HardStop-caused runtime error recorded
+            # separately, so this never turns a forced stop into a
+            # falsely "clean" lifecycle.runtime, only an honestly
+            # confirmed teardown/wall observation.
+            if exit_code == stopped_exit_status:
                 confirmed_stopped = True
             break
         if signal_seen[0] and not hard_stop_sent:
@@ -1721,19 +1777,37 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         reaped = False
         terminated_at = time.time()
     else:
+        # R9.1/R9.5: the 58s abandonment deadline stays active while
+        # reaping too -- two fixed 5s waits here (a driver "stopped" at
+        # 55s, its process then hanging) could otherwise SIGKILL at 60s
+        # and finalize at 65s, well past the deadline this same clock is
+        # supposed to bound. Every wait below is capped by the time
+        # remaining to the absolute admission_mono + sigkill_deadline_s()
+        # instant, never a fresh 5s of its own; once that instant has
+        # already passed, SIGKILL immediately with no wait at all.
         reaped = False
-        try:
-            proc.wait(timeout=5)
-            reaped = True
-        except subprocess.TimeoutExpired:
+        abandon_mono = admission_mono + sigkill_deadline_s()
+        remaining = abandon_mono - time.monotonic()
+        if remaining > 0:
+            try:
+                proc.wait(timeout=remaining)
+                reaped = True
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                remaining = abandon_mono - time.monotonic()
+                if remaining > 0:
+                    try:
+                        proc.wait(timeout=remaining)
+                        reaped = True
+                    except subprocess.TimeoutExpired:
+                        pass
+        else:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
-                pass
-            try:
-                proc.wait(timeout=5)
-                reaped = True
-            except subprocess.TimeoutExpired:
                 pass
         if os.environ.get("YSTACK_TEST_REAP_FAIL"):
             reaped = False
@@ -1785,7 +1859,14 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         tree_deadline_fired = gbody["tree_deadline_fired"]
         guest = gbody["limits"]
         stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
-        evidence_payload = [(("evidence.%s" % ef["name_hex"]), ef["content"])
+        # Stored by index (evidence.<nnnn>), never by name_hex: the
+        # guest's own filename can legally be up to YS_FRAME_NAME_MAX
+        # (255 decoded bytes, 510 hex characters) -- far past what many
+        # host filesystems allow in one path component. The manifest
+        # (below) is the one place name_hex is recorded; a consumer
+        # correlates a stored file to its manifest entry by content
+        # (sha256), which is unambiguous regardless of naming scheme.
+        evidence_payload = [(("evidence.%04d" % ef["index"]), ef["content"])
                              for ef in validated["evidence"]]
         evidence_manifest_bytes = canonical(
             {"body": {"files": sorted(
@@ -1942,24 +2023,32 @@ def validate_export(export_records, plan_sha256):
     stdout_raw, stderr_raw = named[b"stdout"], named[b"stderr"]
     if len(stdout_raw) != body["stdout_bytes"] or len(stderr_raw) != body["stderr_bytes"]:
         return None
-    evidence, seen_names, total_bytes = [], set(), len(stdout_raw) + len(stderr_raw)
+    evidence, seen_indexes, total_bytes = [], set(), len(stdout_raw) + len(stderr_raw)
     for ef in body["evidence_files"]:
-        # name_hex is used as a payload filename (write_payload, below):
-        # sha256_ok's exact lowercase-hex-digest shape keeps it a safe,
-        # bounded filename component, never a path-escaping string.
+        # name_hex is the guest's own evidence filename, not a digest
+        # (hex_name_ok, not sha256_ok) -- stored by index, never by this
+        # name (write_payload/evidence_payload, below), so a long but
+        # legal name can never exceed a host filename limit.
         if not (isinstance(ef, dict) and set(ef) == {"index", "name_hex", "size_bytes"}
                 and is_int(ef.get("index")) and 0 <= ef["index"] <= 9999
-                and isinstance(ef.get("name_hex"), str) and sha256_ok(ef["name_hex"])
+                and isinstance(ef.get("name_hex"), str) and hex_name_ok(ef["name_hex"])
                 and is_int(ef.get("size_bytes")) and ef["size_bytes"] >= 0):
             return None
+        # Each index exactly once (R8.2): two declarations of the same
+        # index would otherwise both read the same frame record, letting
+        # one exported byte manufacture two payload files and double-
+        # count the output sum below.
+        if ef["index"] in seen_indexes:
+            return None
+        seen_indexes.add(ef["index"])
         name = ("evidence/%04d" % ef["index"]).encode()
         content = named.get(name)
-        if content is None or len(content) != ef["size_bytes"] or ef["name_hex"] in seen_names:
+        if content is None or len(content) != ef["size_bytes"]:
             return None
-        seen_names.add(ef["name_hex"])
         total_bytes += ef["size_bytes"]
-        evidence.append({"name_hex": ef["name_hex"], "sha256": sha256_hex(content),
-                          "size_bytes": ef["size_bytes"], "content": content})
+        evidence.append({"index": ef["index"], "name_hex": ef["name_hex"],
+                          "sha256": sha256_hex(content), "size_bytes": ef["size_bytes"],
+                          "content": content})
     # R8.2: an exact evidence inventory -- no frame record under evidence/
     # may go undeclared -- and the guest's own complete output_bytes
     # observation must reconcile against every declared record's actual
@@ -1974,13 +2063,21 @@ def validate_export(export_records, plan_sha256):
     return {"body": body, "stdout": stdout_raw, "stderr": stderr_raw, "evidence": evidence}
 
 
-def stub_run_result():
+def stub_run_result(control_deadline="met"):
     """An admitted attempt whose runtime never started at all (a freeze
-    failure before any disk was written): runtime error, nothing to
-    terminate, empty payload -- verifier_started is false either way."""
+    failure before any disk was written, or -- with control_deadline
+    passed by the caller -- a driver-argv or Popen failure inside run_vm
+    itself): runtime error, nothing to terminate, empty payload --
+    verifier_started is false either way. control_deadline defaults to
+    "met" for the freeze-failure caller (run_launch), which never
+    measures a startup window at all; run_vm's own early-return paths
+    pass their own measured elapsed startup time instead, so a
+    driver/Popen failure that happened only after the startup budget was
+    already blown still keeps failure.supervisor-timeout (R9.4), rather
+    than this stub silently resetting control_deadline to "met"."""
     empty = empty_sha256()
     empty_manifest, empty_manifest_sha = empty_evidence_manifest()
-    return {"runtime": "error", "control_deadline": "met", "tree_terminated": True,
+    return {"runtime": "error", "control_deadline": control_deadline, "tree_terminated": True,
             "terminated_at": time.time(), "exit_state": "not-started", "exit_code": None,
             "stdout_sha256": empty, "stderr_sha256": empty,
             "evidence_manifest_sha256": empty_manifest_sha,
@@ -2380,6 +2477,7 @@ def run_launch(argv):
                     if (time.monotonic() - storage_removal_began) > storage_removal_deadline_s():
                         run_result["control_deadline"] = "exceeded"
                 test_slow("YSTACK_TEST_SLOW_FINALIZE_MS")
+                test_self_signal("YSTACK_TEST_SELF_SIGNAL_AT_FINALIZE")
                 payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
                            ("evidence-manifest.json", run_result["evidence_manifest_bytes"])] + \
                           run_result["evidence_payload"]
@@ -2400,6 +2498,7 @@ def run_launch(argv):
                 # admitted, consumed attempt with a missing or incomplete
                 # receipt.
                 test_slow("YSTACK_TEST_SLOW_RECEIPT_WRITE_MS")
+                test_self_signal("YSTACK_TEST_SELF_SIGNAL_AT_RECEIPT_WRITE")
                 write_receipt_file(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
                                     receipt_bytes)
             finally:

@@ -1925,40 +1925,38 @@ pass 'finding 1: a driver report of stopped whose process is never successfully 
 # (a) a signal before the runtime is even spawned (during a slowed-down
 # disk-prep/runtime-start window) and (b) a signal during finalization,
 # after the runtime already stopped cleanly.
+# Both delivered deterministically (self-signaled from inside the host
+# process at the exact call site, YSTACK_TEST_SELF_SIGNAL_*), not raced
+# from an external `kill` against a wall-clock sleep: an external timer
+# can't guarantee it lands in the intended window on a slower or more
+# loaded host -- exactly what made this flaky on Linux CI (an admitted,
+# real Linux run of finding 2b below: the external sleep elapsed while
+# the target process was still inside phase A/B/freeze/spawn, so the
+# signal landed as a genuine, correct mid-run cancellation instead of
+# the finalization-window case it meant to test).
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{"action":"hang"}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-( CDPATH='' cd -- "$install_dir" \
-    && YSTACK_TEST_SLOW_RUNTIME_START_MS=400 YSTACK_TEST_HARDSTOP_MS=60000 YSTACK_TEST_SIGKILL_MS=65000 \
-       YSTACK_TEST_POLL_INTERVAL_MS=20 exec "$python" host-supervisor.py launch ) \
-    <"$base/pkg-scn.json" >"$base/out" 2>"$base/err" &
-launch_pid=$!
-sleep 0.1
-kill -TERM "$launch_pid" 2>/dev/null || :
 status=0
-wait "$launch_pid" || status=$?
+YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN=TERM YSTACK_TEST_HARDSTOP_MS=60000 YSTACK_TEST_SIGKILL_MS=65000 \
+  YSTACK_TEST_POLL_INTERVAL_MS=20 run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "finding 2a: expected exit 0, got $status ($(cat "$base/err"))"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = error ] ||
   fail "finding 2a: expected lifecycle.runtime error (a signal before the runtime was even spawned must still be caught), got $runtime"
-pass 'finding 2a: a SIGTERM delivered before the runtime is spawned (during a slowed-down disk-prep/runtime-start window, YSTACK_TEST_SLOW_RUNTIME_START_MS) is still caught -- handlers are installed at admission, before freeze/disk-prep/spawn, not just around the poll loop -- and the eventual launch still takes the HardStop path and yields a receipt: lifecycle.runtime error'
+pass 'finding 2a: a SIGTERM delivered before the runtime is spawned (self-signaled at the top of run_vm, before disk prep) is still caught -- handlers are installed at admission, before freeze/disk-prep/spawn, not just around the poll loop -- and the eventual launch still takes the HardStop path and yields a receipt: lifecycle.runtime error'
 
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-( CDPATH='' cd -- "$install_dir" && YSTACK_TEST_SLOW_FINALIZE_MS=400 exec "$python" host-supervisor.py launch ) \
-  <"$base/pkg-scn.json" >"$base/out" 2>"$base/err" &
-launch_pid=$!
-sleep 0.15
-kill -TERM "$launch_pid" 2>/dev/null || :
 status=0
-wait "$launch_pid" || status=$?
+YSTACK_TEST_SELF_SIGNAL_AT_FINALIZE=TERM run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "finding 2b: expected exit 0, got $status ($(cat "$base/err"))"
 [ -f "$store_root/$attempt_id/receipt.json" ] || fail "finding 2b: expected a receipt to still be written"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = completed ] ||
   fail "finding 2b: expected lifecycle.runtime completed (the runtime had already stopped cleanly before the signal arrived, mid-finalization), got $runtime"
-pass 'finding 2b: a SIGTERM delivered during finalization (after the runtime already stopped cleanly, storage removed, only payload/receipt writing left -- YSTACK_TEST_SLOW_FINALIZE_MS) does not abort finalization: handlers stay installed (a no-op past this point) through cleanup, and the receipt is still written, honestly reflecting the clean run that already happened: lifecycle.runtime completed'
+pass 'finding 2b: a SIGTERM delivered during finalization (self-signaled after the runtime already stopped cleanly and storage was removed, only payload/receipt writing left) does not abort finalization: handlers stay installed (a no-op past this point) through cleanup, and the receipt is still written, honestly reflecting the clean run that already happened: lifecycle.runtime completed'
 
 # Finding 3 [P2]: the monotonic clock starts at admission.
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
@@ -2014,19 +2012,19 @@ control_deadline_case 'finding 5d: a slowed payload write past its (lowered) lim
 # Finding 6 [P2]: persist exported evidence bytes before the export disk
 # is removed.
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
-printf '%s' '{"evidence":[{"index":0,"content":"hello evidence"}],"limit_overrides":{"output_bytes":{"observed":14}}}' > "$scenario_path"
+printf '%s' '{"evidence":[{"index":0,"name":"file-digest-result.json","content":"hello evidence"}],"limit_overrides":{"output_bytes":{"observed":14}}}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
 status=0
 run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "finding 6: expected exit 0, got $status ($(cat "$base/err"))"
-name_hex=$(printf '%s' "hello evidence" | shasum -a 256 | awk '{print $1}')
-[ -f "$store_root/$attempt_id/payload/evidence.$name_hex" ] ||
-  fail "finding 6: expected payload/evidence.$name_hex to exist in the receipt store"
-[ "$(cat "$store_root/$attempt_id/payload/evidence.$name_hex")" = "hello evidence" ] ||
+name_hex=$(printf '%s' "file-digest-result.json" | od -An -tx1 | tr -d ' \n')
+[ -f "$store_root/$attempt_id/payload/evidence.0000" ] ||
+  fail "finding 6: expected payload/evidence.0000 (stored by index, not by name_hex) to exist in the receipt store"
+[ "$(cat "$store_root/$attempt_id/payload/evidence.0000")" = "hello evidence" ] ||
   fail "finding 6: expected the stored evidence file's content to match what the fake runtime exported"
 "$jq_bin" -c '.body.files' "$store_root/$attempt_id/payload/evidence-manifest.json" | grep -q "$name_hex" ||
-  fail "finding 6: expected the manifest to list $name_hex too"
-pass 'finding 6: an exported evidence file'"'"'s actual bytes are persisted into payload/evidence.<name_hex> in the receipt store before remove_frozen deletes the export disk, not just its metadata/hash in the manifest (which would otherwise be the only trace left)'
+  fail "finding 6: expected the manifest to list $name_hex (the real verifier's own evidence filename, file-digest-result.json, hex-encoded -- 44 characters, not a 64-character digest)"
+pass 'finding 6: an exported evidence file'"'"'s actual bytes are persisted into payload/evidence.<index> (stored by index, never by its own -- potentially long -- filename) in the receipt store before remove_frozen deletes the export disk, with that real filename (file-digest-result.json) recorded in the manifest'
 
 # Finding 7 [P2]: validate every report field's type/range/exit-state
 # consistency before use.
@@ -2166,23 +2164,29 @@ tree_terminated=$("$jq_bin" -r '.body.teardown.tree_terminated' "$store_root/$at
 pass 'finding 1b: past the startup grace period, an unavailable endpoint is confirmed via proc.poll() first -- a process that exited with stopped_exit_status (even having never created its REST endpoint at all) is a confirmed stop, not a driver failure'
 
 # Finding 2 [P2]: cancellation handlers restored only after receipt
-# writing and finalization complete.
+# writing and finalization complete. Self-signaled at the exact call
+# site (YSTACK_TEST_SELF_SIGNAL_AT_RECEIPT_WRITE), not raced from an
+# external `kill` against a wall-clock sleep -- the external-timer
+# version of this exact test was flaky on Linux CI (the sleep elapsed
+# too early on a slower/more loaded runner, landing the signal while the
+# runtime was still genuinely running rather than during the intended
+# post-completion receipt-write window; result["cancelled"] was then
+# legitimately true, giving the "runtime: error" seen there, which
+# was the test's own timing bug, not the product: signal_seen is read
+# nowhere after run_vm returns, so a signal genuinely delivered only
+# once reaping has already confirmed termination can never retroactively
+# change an already-built receipt's lifecycle/rows).
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
-( CDPATH='' cd -- "$install_dir" && YSTACK_TEST_SLOW_RECEIPT_WRITE_MS=400 exec "$python" host-supervisor.py launch ) \
-  <"$base/pkg-scn.json" >"$base/out" 2>"$base/err" &
-launch_pid=$!
-sleep 0.15
-kill -TERM "$launch_pid" 2>/dev/null || :
 status=0
-wait "$launch_pid" || status=$?
+YSTACK_TEST_SELF_SIGNAL_AT_RECEIPT_WRITE=TERM run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
 [ -f "$store_root/$attempt_id/receipt.json" ] || fail "finding 2: expected a receipt to still be written"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = completed ] ||
-  fail "finding 2: expected lifecycle.runtime completed (the run had already succeeded before the signal, mid-receipt-write), got $runtime"
-pass 'finding 2: a SIGTERM delivered during the receipt.json write itself (YSTACK_TEST_SLOW_RECEIPT_WRITE_MS) does not abort it -- handlers are restored only after write_receipt_file and finalization complete, not before'
+  fail "finding 2: expected lifecycle.runtime completed (the run had already succeeded and been reaped before the signal, mid-receipt-write -- a signal this late can never alter an already-built receipt), got $runtime"
+pass 'finding 2: a SIGTERM delivered during the receipt.json write itself (self-signaled, deterministic on any platform) does not abort it and does not alter the already-final lifecycle/rows -- handlers are restored only after write_receipt_file and finalization complete, not before, and signal_seen is never consulted again once run_vm has returned'
 
 # Finding 3 [P2]: bounded nesting + RecursionError on the guest report.
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
@@ -2271,6 +2275,181 @@ teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/re
 [ "$launch_elapsed" -le 5 ] ||
   fail "finding 8: expected the whole launch to finish in a few seconds (SIGKILL at the ~200ms deadline, no further wait()), took ${launch_elapsed}s instead -- looks like the old double-wait (up to another 10s) regressed"
 pass 'finding 8: after the SIGKILL escalation at the (test-shortened) second deadline, the unconfirmed-stop path finalizes immediately -- terminated_at is the abandonment instant, no further proc.wait() (blocking up to another 10s combined) and no second SIGKILL'
+
+# =============================================================================
+# Fix round 3 (findings-477-r3.md): one test per finding.
+# =============================================================================
+build_tree 0
+scenario_path="$base/scenario-case.json"
+export YSTACK_FAKE_SCENARIO="$scenario_path"
+default_scenario_path="$(dirname "$driver_path")/scenario.json"
+
+# Finding 1 [P2]: the absolute abandonment deadline stays active while
+# reaping -- bounded by admission_mono + sigkill_deadline_s(), never a
+# fresh 5s wait of its own, and no wait at all once already past it.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"exit_delay_ms":2000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+launch_start=$(date +%s)
+status=0
+YSTACK_TEST_HARDSTOP_MS=50000 YSTACK_TEST_SIGKILL_MS=300 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+launch_elapsed=$(( $(date +%s) - launch_start ))
+[ "$status" -eq 0 ] || fail "finding 1: expected exit 0, got $status ($(cat "$base/err"))"
+[ "$launch_elapsed" -le 3 ] ||
+  fail "finding 1: expected the whole launch to finish within a few seconds (reap bounded by the absolute 300ms-from-admission SIGKILL deadline, not two fresh 5s waits of its own), took ${launch_elapsed}s instead"
+pass 'finding 1: reaping is bounded by the same absolute abandonment deadline (admission_mono + sigkill_deadline_s()) as the poll loop itself, not a fresh 5s wait each time -- a driver stopped report whose process then keeps running well past that deadline still finalizes quickly, never the old two-fixed-waits path that could add up to 10s past it'
+
+# Finding 2 [P2]: accept stopped_exit_status as confirmation even after
+# HardStop was requested; the HardStop-caused runtime error is still
+# recorded separately.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","hardstop_exit_no_mailbox":true}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=150 YSTACK_TEST_SIGKILL_MS=5000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+tree_terminated=$("$jq_bin" -r '.body.teardown.tree_terminated' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] && [ "$tree_terminated" = true ] ||
+  fail "finding 2: expected lifecycle.runtime error (HardStop was still requested), teardown.state confirmed, tree_terminated true (the process genuinely exited with stopped_exit_status and was reaped, confirmed via exit status alone since it never wrote 'stopped' to the mailbox) -- got $runtime/$teardown_state/$tree_terminated"
+pass 'finding 2: a runtime that honors HardStop and exits with stopped_exit_status before ever reporting stopped via the mailbox is still a confirmed, reaped stop (teardown.state confirmed) -- HardStop still makes lifecycle.runtime error, kept as a separate fact, never turning a forced-but-clean stop into a falsely unconfirmed teardown'
+
+# Finding 3 [P2]: evidence names are validated as hex-encoded filenames,
+# not digests -- already exercised by finding 6's own default scenario,
+# which now uses "file-digest-result.json" (44 hex characters) as the
+# evidence name; a dedicated case confirms both boundaries.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"evidence":[{"index":0,"name":"file-digest-result.json","content":"x"}],"limit_overrides":{"output_bytes":{"observed":1}}}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 3a: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] ||
+  fail "finding 3a: expected lifecycle.runtime completed (a 44-character hex-encoded filename, file-digest-result.json, is a valid name_hex -- not a sha256 digest), got $runtime"
+pass 'finding 3a: a 44-character hex-encoded evidence filename (file-digest-result.json, the real verifier'"'"'s own output name) is accepted -- name_hex is validated as a hex-encoded filename (hex_name_ok), never required to be exactly a 64-character sha256 digest'
+
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"evidence":[{"index":0,"name_hex_override":"xyz","content":"x"}],"limit_overrides":{"output_bytes":{"observed":1}}}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 3b: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] ||
+  fail "finding 3b: expected lifecycle.runtime error (name_hex 'xyz' is not valid hex at all), got $runtime"
+pass 'finding 3b: a name_hex that is not valid hex at all (odd length, non-hex characters) refuses the report'
+
+# Finding 4 [P2]: each evidence index exactly once.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"evidence":[{"index":0,"content":"x"}],"duplicate_evidence_index":true,"limit_overrides":{"output_bytes":{"observed":1}}}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 4: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] ||
+  fail "finding 4: expected lifecycle.runtime error (two evidence_files declarations of index 0, with different names, must refuse -- one exported byte can never manufacture two payload files), got $runtime"
+pass 'finding 4: two evidence_files declarations of the same index (different names, the same single frame record) refuse the whole report -- each index is required exactly once, and the output sum is computed from the unique exported records only'
+
+# Finding 5 [P2]: startup overruns are preserved on the driver-argv and
+# Popen failure paths too, not reset to "met" by stub_run_result.
+printf '%s' '{"oversized_argv":true}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=150 \
+  run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding 5a: expected exit 0, got $status ($(cat "$base/err"))"
+cd_val=$("$jq_bin" -r '.body.lifecycle.control_deadline' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+has_timeout=0
+if printf '%s' "$reasons" | grep -q "failure.supervisor-timeout"; then has_timeout=1; fi
+if [ "$cd_val" != exceeded ] || [ "$has_timeout" -ne 1 ]; then
+  fail "finding 5a: expected control_deadline exceeded / failure.supervisor-timeout on a driver-argv failure after a slowed startup, got $cd_val / $reasons"
+fi
+pass 'finding 5a: a driver-argv failure (oversized response) after the startup budget was already blown still records control_deadline exceeded / failure.supervisor-timeout, not "met" from stub_run_result'"'"'s own former default'
+
+printf '%s' '{"bad_argv_exe":true}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=150 \
+  run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding 5b: expected exit 0, got $status ($(cat "$base/err"))"
+cd_val=$("$jq_bin" -r '.body.lifecycle.control_deadline' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+has_timeout=0
+if printf '%s' "$reasons" | grep -q "failure.supervisor-timeout"; then has_timeout=1; fi
+if [ "$cd_val" != exceeded ] || [ "$has_timeout" -ne 1 ]; then
+  fail "finding 5b: expected control_deadline exceeded / failure.supervisor-timeout on a Popen failure after a slowed startup, got $cd_val / $reasons"
+fi
+pass 'finding 5b: a Popen failure (a nonexistent executable in the driver'"'"'s own argv response) after the startup budget was already blown still records control_deadline exceeded / failure.supervisor-timeout'
+
+# Finding 6 [P2]: the required real-time default-deadline cases (no
+# YSTACK_TEST_HARDSTOP_MS/SIGKILL_MS overrides -- the actual 50,000/
+# 58,000ms production constants). ~58-60s wall clock: run concurrently
+# as a background pair so the suite grows by ~60s, not ~120s.
+# CI SHARD BUDGETING: this pair alone takes roughly a minute; any CI
+# timeout/shard split for this test file must account for it.
+n=$((n + 1)); attempt_realtime_delayed="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","ignore_hardstop_ms":600000}' > "$base/scenario-realtime-delayed.json"
+build_pkg "$base/pkg-realtime-delayed.json" \
+  '{"attempt_id":"'"$attempt_realtime_delayed"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+n=$((n + 1)); attempt_realtime_selfstop="attempt.fixture-scn-$n"
+printf '%s' '{"self_stop_after_ms":45000}' > "$base/scenario-realtime-selfstop.json"
+build_pkg "$base/pkg-realtime-selfstop.json" \
+  '{"attempt_id":"'"$attempt_realtime_selfstop"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+
+( CDPATH='' cd -- "$install_dir" && YSTACK_FAKE_SCENARIO="$base/scenario-realtime-delayed.json" \
+    exec "$python" host-supervisor.py launch ) \
+  <"$base/pkg-realtime-delayed.json" >"$base/out-realtime-delayed" 2>"$base/err-realtime-delayed" &
+realtime_delayed_pid=$!
+( CDPATH='' cd -- "$install_dir" && YSTACK_FAKE_SCENARIO="$base/scenario-realtime-selfstop.json" \
+    exec "$python" host-supervisor.py launch ) \
+  <"$base/pkg-realtime-selfstop.json" >"$base/out-realtime-selfstop" 2>"$base/err-realtime-selfstop" &
+realtime_selfstop_pid=$!
+
+status_realtime_delayed=0
+wait "$realtime_delayed_pid" || status_realtime_delayed=$?
+status_realtime_selfstop=0
+wait "$realtime_selfstop_pid" || status_realtime_selfstop=$?
+
+[ "$status_realtime_delayed" -eq 0 ] ||
+  fail "finding 6 (real-time delayed-stop): expected exit 0, got $status_realtime_delayed ($(cat "$base/err-realtime-delayed"))"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_realtime_delayed/receipt.json")
+[ "$teardown_state" = unconfirmed ] ||
+  fail "finding 6 (real-time delayed-stop): expected teardown.state unconfirmed, got $teardown_state"
+elapsed_s=$("$python" -c "
+import json, datetime
+r = json.load(open('$store_root/$attempt_realtime_delayed/receipt.json'))
+t = r['body']['timing']
+fmt = '%Y-%m-%dT%H:%M:%SZ'
+a = datetime.datetime.strptime(t['admitted_at'], fmt)
+b = datetime.datetime.strptime(t['terminated_at'], fmt)
+print(int((b - a).total_seconds()))
+")
+[ "$elapsed_s" -ge 55 ] && [ "$elapsed_s" -le 65 ] ||
+  fail "finding 6 (real-time delayed-stop): expected terminated_at - admitted_at within [55,65]s of the real 58,000ms SIGKILL deadline, got ${elapsed_s}s"
+pass "finding 6 (real-time, production deadlines, ~60s wall clock): a runtime that ignores HardStop is finalized unconfirmed at the real 58,000ms SIGKILL deadline (terminated_at within [55,65]s of admission), not just at a test-shortened one"
+
+[ "$status_realtime_selfstop" -eq 0 ] ||
+  fail "finding 6 (real-time self-stop): expected exit 0, got $status_realtime_selfstop ($(cat "$base/err-realtime-selfstop"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_realtime_selfstop/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_realtime_selfstop/receipt.json")
+wall_observed=$("$jq_bin" -r '.body.limits.wall_time_ms.observed' "$store_root/$attempt_realtime_selfstop/receipt.json")
+[ "$runtime" = completed ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding 6 (real-time self-stop): expected lifecycle.runtime completed, teardown.state confirmed, got $runtime/$teardown_state"
+[ "$wall_observed" -ge 44000 ] && [ "$wall_observed" -le 49000 ] ||
+  fail "finding 6 (real-time self-stop): expected limits.wall_time_ms.observed within [44000,49000]ms of the scripted 45,000ms self-stop (safely under the real 50,000ms HardStop deadline, so none fires), got ${wall_observed}ms"
+pass "finding 6 (real-time, production deadlines, ~45s wall clock): a runtime that self-stops well under the real 50,000/58,000ms HardStop/SIGKILL deadlines completes cleanly with wall_time_ms.observed matching the real elapsed time -- run concurrently with the delayed-stop case above, so this pair together added roughly one minute, not two, to the suite"
 
 unset YSTACK_FAKE_SCENARIO
 
