@@ -2531,13 +2531,27 @@ print(int((b - a).total_seconds()))
   fail "finding 3: expected the whole launch (HardStop issued near its 3,000ms deadline, confirmed on the next ~1,700ms-slow poll) to finish within about 6s despite each state poll taking ~1.7s of its own 2,000ms budget, took ${elapsed_s}s instead -- the old stale-elapsed bug would compound an extra ~1.7-3.4s of unnoticed overshoot per missed deadline check"
 pass 'finding 3: elapsed is recomputed fresh after every blocking driver_state() call (never reused from before it), and each poll'"'"'s sleep is bounded by the time remaining to the next deadline -- HardStop still fires close to its real 3,000ms (test-shortened) deadline even though each state poll itself takes ~1,700ms of its own budget, not one or more whole extra polls later'
 
+stop_marker="$base/stop-called.marker"
+rm -f "$stop_marker"
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{}' > "$scenario_path"
+printf '%s' '{"stop_marker_path":"'"$stop_marker"'"}' > "$default_scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
 YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE=TERM run_launch "$base/pkg-scn.json" || fail "finding 1: expected exit 0"
+printf '%s' '{}' > "$default_scenario_path"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 [ "$runtime" = error ] || fail "finding 1: expected lifecycle.runtime error, got $runtime"
+# findings-477-r11.md: a cancellation racing a state poll that returns
+# "stopped" the very same iteration issues zero stop calls (the loop
+# breaks immediately on "stopped", never reaching the stop-request
+# branch) -- wall_time_ms.reached must be false, not true just because
+# result["cancelled"] happened to be true too.
+[ -e "$stop_marker" ] && fail "finding r11: expected driver_stop() never to be called in this race, but its marker file exists"
+wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$attempt_id/receipt.json")
+[ "$wall_reached" = false ] ||
+  fail "finding r11: expected limits.wall_time_ms.reached false (cancellation observed with zero stop calls issued -- a race, not a real HardStop/cancellation-issued stop), got $wall_reached"
 pass 'finding 1: a signal during driver_state()'"'"'s blocking call, whose result is "stopped", is still folded into cancelled'
+pass 'finding r11 (findings-477-r11.md): the same cancel-during-poll-returns-stopped race issues zero stop calls (proven by the absent stop marker) and records wall_time_ms.reached: false, never true from bare cancellation alone'
 control_deadline_case 'finding 2: a launch-file write failure after a slowed startup still records control_deadline exceeded / failure.supervisor-timeout, not "met" from stub_run_result'"'"'s own former default' \
   'YSTACK_TEST_LAUNCH_WRITE_FAIL=1 YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=150' '{}'
 

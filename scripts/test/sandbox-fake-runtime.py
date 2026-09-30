@@ -137,6 +137,19 @@ def cmd_state(args):
 
 
 def cmd_stop(args):
+    try:
+        default_scenario = load_scenario()
+    except (OSError, ValueError):
+        default_scenario = {}
+    if default_scenario.get("stop_marker_path"):
+        # findings-477-r11.md: proves driver_stop() (the "stop"
+        # subcommand) was invoked at least once -- a file only ever
+        # created here, so its ABSENCE after a run proves zero stop
+        # calls occurred, regardless of accept/reject outcome below.
+        try:
+            open(default_scenario["stop_marker_path"], "w").close()
+        except OSError:
+            pass
     # findings-477-r6.md finding 1: a real stop call against a REST
     # endpoint nothing is listening on yet must fail (rc != 0), the same
     # way cmd_state's read_mailbox treats a not-yet-created mailbox file
@@ -149,10 +162,6 @@ def cmd_stop(args):
     # itself the slow one, proving the host recomputes its deadline
     # budget fresh before the NEXT blocking call in the same iteration,
     # not a stale pre-stop budget.
-    try:
-        default_scenario = load_scenario()
-    except (OSError, ValueError):
-        default_scenario = {}
     slow_stop_ms = default_scenario.get("slow_stop_ms")
     if slow_stop_ms:
         time.sleep(slow_stop_ms / 1000.0)

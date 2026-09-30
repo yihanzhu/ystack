@@ -1760,7 +1760,13 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     start_bytes = canonical({"body": start_body, "kind": "sandbox_runtime_start", "schema_version": 1})
 
     result = {"runtime": "error", "tree_terminated": False, "cancelled": False,
-              "hard_stop": False, "control_deadline": "met", "export": None}
+              "hard_stop": False, "control_deadline": "met", "export": None,
+              # findings-477-r11.md: set ONLY where a stop is actually
+              # accepted by the driver (below) -- never inferred from
+              # "cancelled", which can be true with zero stop calls ever
+              # issued (a state poll observing "stopped" the very same
+              # iteration cancellation is first noticed).
+              "stop_issued": False}
     test_slow("YSTACK_TEST_SLOW_RUNTIME_START_MS")
     if os.environ.get("YSTACK_TEST_LAUNCH_WRITE_FAIL"):
         # Test-only (R10.4), after the same slow-startup hook as driver-argv/Popen.
@@ -1873,11 +1879,17 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 do_sigkill()
                 break
             stop_accepted = accepted
-            if stop_accepted and stop_is_hardstop:
-                # Only an ACCEPTED stop counts as "HardStop issued" for
-                # the receipt's timing/limit fields (runtime_error, the
-                # wall row's reached) -- never a merely-attempted one.
-                result["hard_stop"] = True
+            if stop_accepted:
+                # findings-477-r11.md: the one place a stop is actually
+                # issued, for either reason (HardStop-deadline or
+                # cancellation) -- the wall row's reached (R7.3) is
+                # derived from this flag alone, never from "cancelled"
+                # by itself.
+                result["stop_issued"] = True
+                if stop_is_hardstop:
+                    # Only an ACCEPTED stop counts as "HardStop issued"
+                    # for runtime_error -- never a merely-attempted one.
+                    result["hard_stop"] = True
 
         since_spawn = time.monotonic() - spawn_mono
         state, overdue = bounded_driver_call(
@@ -2059,7 +2071,11 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         "evidence_manifest_bytes": evidence_manifest_bytes,
         "evidence_payload": evidence_payload,
         "limits": build_limit_rows(guest, wall_ms,
-                                    tree_deadline_fired or result["hard_stop"] or result["cancelled"],
+                                    # findings-477-r11.md: reached is an
+                                    # issued stop (result["stop_issued"],
+                                    # never bare cancellation) or the
+                                    # guest's own deadline -- R7.3.
+                                    tree_deadline_fired or result["stop_issued"],
                                     wall_complete),
     }
 
@@ -2271,10 +2287,13 @@ def build_limit_rows(guest, wall_ms, wall_stop_or_deadline, wall_complete):
     fixed constant (LIMIT_MECHANISM_IDS): R7.1's table describes the host's
     own configured mechanism for the row, not something the guest, which
     never sends the field at all (R8.2), could report or vary. wall's
-    reached (R7.3) is true for any issued host stop (HardStop or a
-    cancellation, both folded into wall_stop_or_deadline by the caller),
-    the guest's own tree deadline firing (also folded in), or the observed
-    wall time itself reaching the bound -- not just the first two."""
+    reached (R7.3) is true for any host stop actually ACCEPTED by the
+    driver (findings-477-r11.md: result["stop_issued"], regardless of
+    whether HardStop-deadline or cancellation triggered it -- never bare
+    cancellation, which can be true with zero stop calls ever issued),
+    the guest's own tree deadline firing (also folded into
+    wall_stop_or_deadline by the caller), or the observed wall time
+    itself reaching the bound -- not just the first two."""
     rows = {}
     for name, bound, observer in LIMIT_ROWS:
         mechanism_id = LIMIT_MECHANISM_IDS[name]
