@@ -16,9 +16,13 @@ import ctypes.util
 import errno
 import hashlib
 import json
+import math
 import os
+import signal
 import stat
+import subprocess
 import sys
+import threading
 import time
 
 # --- canonical JSON, matching preparation/v1/prepare-candidate.py:281-284 --
@@ -1242,6 +1246,8 @@ def remove_frozen(work_root, attempt_id, candidate_names):
                 finally:
                     os.close(frozen_fd)
                 os.rmdir("frozen", dir_fd=attempt_fd)
+            if not remove_only(attempt_fd, LAUNCH_FIXED_NAMES):
+                return False
             if os.listdir(attempt_fd):
                 return False
         finally:
@@ -1276,14 +1282,14 @@ def mkdir_excl(parent_fd, name, uid, gid):
     return fd
 
 
-def write_excl(parent_fd, name, data, uid, gid):
+def write_excl(parent_fd, name, data, uid, gid, mode=0o440):
     fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode=0o600, dir_fd=parent_fd)
     try:
         written = 0
         while written < len(data):
             written += os.write(fd, data[written:])
         os.fchown(fd, uid, gid)
-        os.fchmod(fd, 0o440)
+        os.fchmod(fd, mode)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -1333,6 +1339,395 @@ def write_attempt_result(store_fd, attempt_fd, uid, gid, receipt_bytes, payload)
     finally:
         os.close(attempt_fd)
     os.fsync(store_fd)
+
+
+# --- R9: the real launch path -- disks, plan.json, the driver interface,
+# the monotonic clock (HardStop then SIGKILL), export reading. ------------
+LAUNCH_FIXED_NAMES = ("input.img", "export.img", "runtime.log", "rest.sock")
+EXPORT_DISK_BYTES = 12582912
+GUEST_PLAN_ARGV = ["/sandbox/tools/verifier", "verify", "--candidate", "/sandbox/candidate",
+                   "--evidence", "/sandbox/evidence"]
+GUEST_PLAN_ENVIRONMENT = ["LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch"]
+GUEST_COMMAND_LINE = "console= quiet lsm=landlock rdinit=/init"
+GUEST_MEMORY_BYTES = 536870912
+# R7.1's nine fixed parameters (spec.md's own table; R9.1's 40,000 ms tree
+# deadline; R12.2's scratch_bytes).
+GUEST_PLAN_LIMITS = {
+    "bandwidth_slice_us": 1000, "cpu_max": 45000, "cpu_max_burst": 0,
+    "output_inodes": 64, "output_tmpfs_bytes": 10485760, "pids_max": 32,
+    "scratch_bytes": 16777216, "scratch_inodes": 4096, "tree_deadline_ms": 40000,
+}
+
+
+def hardstop_deadline_s():
+    # Test-only: real deadlines are 50,000/58,000 ms; lowered here so the
+    # suite stays fast, never mocked -- the same clock logic runs either way.
+    return int(os.environ.get("YSTACK_TEST_HARDSTOP_MS", "50000")) / 1000.0
+
+
+def sigkill_deadline_s():
+    return int(os.environ.get("YSTACK_TEST_SIGKILL_MS", "58000")) / 1000.0
+
+
+def poll_interval_s():
+    return int(os.environ.get("YSTACK_TEST_POLL_INTERVAL_MS", "100")) / 1000.0
+
+
+def build_plan_json(manifest, instruction_sha256, verifier_sha256):
+    """R5.2's sandbox_guest_plan, canonical -- matches guest/common.c's
+    ys_plan_parse literal template exactly (its key order is already
+    alphabetical, so canonical()'s own sort_keys produces it byte for
+    byte)."""
+    entries = []
+    for e in manifest["entries"]:
+        is_file = e["kind"] == "file"
+        entries.append({"kind": e["kind"], "mode": e["mode"], "path": e["path"],
+                         "sha256": e["sha256"] if is_file else None,
+                         "size_bytes": e["size_bytes"] if is_file else None})
+    body = {"argv": GUEST_PLAN_ARGV, "entries": entries, "environment": GUEST_PLAN_ENVIRONMENT,
+            "instruction_sha256": instruction_sha256, "limits": GUEST_PLAN_LIMITS,
+            "verifier_sha256": verifier_sha256}
+    return canonical({"body": body, "kind": "sandbox_guest_plan", "schema_version": 1})
+
+
+def build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates):
+    """R5.2: a frame of plan.json, instruction, verifier and candidate/<n>
+    records, padded to a 512-byte multiple."""
+    records = [(b"plan.json", plan_bytes), (b"instruction", instruction_raw),
+               (b"verifier", verifier_raw)]
+    records += [(("candidate/%05d" % i).encode(), c) for i, c in enumerate(candidates)]
+    data = frame_write(records)
+    return data + b"\x00" * ((-len(data)) % 512)
+
+
+def build_export_disk():
+    return b"\x00" * EXPORT_DISK_BYTES
+
+
+def write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, export_bytes):
+    """Writes input.img (R5.2, 0400) and export.img (R5.3, read-write) as
+    siblings of frozen/ inside the already-claimed attempt directory (a
+    dir_fd-relative reopen of a name this same attempt already owns, not a
+    re-open of anything R10.1-validated by path)."""
+    work_fd = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=work_fd)
+        try:
+            write_excl(attempt_fd, "input.img", input_bytes, uid, gid, mode=0o400)
+            write_excl(attempt_fd, "export.img", export_bytes, uid, gid, mode=0o600)
+            os.fsync(attempt_fd)
+        finally:
+            os.close(attempt_fd)
+    finally:
+        os.close(work_fd)
+
+
+def run_driver(driver_path, args, timeout_s=2.0):
+    """The fixed driver interface (plan.md): empty environment, stdin
+    /dev/null, stdout capped 65,536 bytes, 2,000 ms per call."""
+    try:
+        with open(os.devnull, "rb") as devnull:
+            proc = subprocess.run([driver_path] + list(args), stdin=devnull,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   env={}, timeout=timeout_s)
+    except (OSError, subprocess.SubprocessError):
+        return None, b""
+    return proc.returncode, proc.stdout[:65536]
+
+
+def driver_argv(driver_path, start_path):
+    rc, out = run_driver(driver_path, ["argv", start_path])
+    if rc != 0:
+        return None
+    try:
+        doc = json.loads(out)
+    except ValueError:
+        return None
+    if not (isinstance(doc, dict) and set(doc) == {"argv", "stopped_exit_status"}
+            and isinstance(doc["argv"], list) and doc["argv"]
+            and all(isinstance(a, str) for a in doc["argv"])
+            and is_int(doc["stopped_exit_status"]) and 0 <= doc["stopped_exit_status"] <= 255):
+        return None
+    return doc["argv"], doc["stopped_exit_status"]
+
+
+def driver_state(driver_path, socket_path):
+    rc, out = run_driver(driver_path, ["state", socket_path])
+    if rc != 0:
+        return "error"
+    text = out.decode("utf-8", "replace").strip()
+    return text if text in ("running", "stopped", "error") else "error"
+
+
+def driver_stop(driver_path, socket_path):
+    rc, _ = run_driver(driver_path, ["stop", socket_path])
+    return rc == 0
+
+
+def scrub_dyld_env():
+    """Never launches a process with a live DYLD_* variable (hard rule)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("DYLD_")}
+
+
+def _drain_capped(read_fd, cap, log_fd):
+    """Background thread: copies read_fd to log_fd up to cap bytes,
+    draining (never blocking the child on a full pipe) and discarding
+    anything past the cap."""
+    written = 0
+    while True:
+        try:
+            chunk = os.read(read_fd, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        if written < cap:
+            take = chunk[:cap - written]
+            os.write(log_fd, take)
+            written += len(take)
+
+
+def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_raw, verifier_raw,
+           candidates, plan_sha256):
+    """R5-R9's real launch: disks, start.json + driver argv, spawn, poll/
+    HardStop/SIGKILL, reap, read the export frame. Never raises for a
+    runtime-side failure -- every such case still yields an honest
+    (failed) result; only a host filesystem OSError propagates."""
+    work_root = config["work_root"]
+    input_bytes = build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates)
+    write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, build_export_disk())
+    attempt_dir = os.path.join(work_root, attempt_id)
+    input_path = os.path.join(attempt_dir, "input.img")
+    export_path = os.path.join(attempt_dir, "export.img")
+    socket_path = os.path.join(attempt_dir, "rest.sock")
+    start_path = os.path.join(attempt_dir, "start.json")
+    start_body = {"command_line": GUEST_COMMAND_LINE, "cpu_count": 1,
+                  "export_disk": export_path, "initramfs": config["identity_paths"]["image"],
+                  "input_disk": input_path, "kernel": config["identity_paths"]["guest_kernel"],
+                  "memory_bytes": GUEST_MEMORY_BYTES, "rest_socket": socket_path}
+    start_bytes = canonical({"body": start_body, "kind": "sandbox_runtime_start", "schema_version": 1})
+
+    result = {"runtime": "error", "tree_terminated": False, "cancelled": False,
+              "hard_stop": False, "control_deadline": "met", "export": None}
+    try:
+        fd = os.open(start_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, start_bytes)
+        finally:
+            os.close(fd)
+        parsed = driver_argv(driver_path, start_path)
+    finally:
+        try:
+            os.unlink(start_path)
+        except OSError:
+            pass
+    if parsed is None:
+        return stub_run_result()
+    argv, stopped_exit_status = parsed
+
+    log_path = os.path.join(attempt_dir, "runtime.log")
+    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.fchown(log_fd, uid, gid)
+    read_fd, write_fd = os.pipe()
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=write_fd, stderr=write_fd,
+                                 env=scrub_dyld_env(), start_new_session=True, close_fds=True)
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        os.close(log_fd)
+        return stub_run_result()
+    os.close(write_fd)
+    drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd), daemon=True)
+    drain.start()
+
+    start_mono = time.monotonic()
+    hard_stop_sent = sigkill_sent = confirmed_stopped = False
+    signal_seen = [False]
+
+    def on_signal(signum, frame):
+        signal_seen[0] = True
+
+    old = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        while True:
+            elapsed = time.monotonic() - start_mono
+            if driver_state(driver_path, socket_path) == "stopped":
+                confirmed_stopped = True
+                break
+            exit_code = proc.poll()
+            if exit_code is not None:
+                if exit_code == stopped_exit_status and not hard_stop_sent:
+                    confirmed_stopped = True
+                break
+            if signal_seen[0] and not hard_stop_sent:
+                result["cancelled"] = True
+                driver_stop(driver_path, socket_path)
+                hard_stop_sent = True
+            elif elapsed >= hardstop_deadline_s() and not hard_stop_sent:
+                result["hard_stop"] = True
+                driver_stop(driver_path, socket_path)
+                hard_stop_sent = True
+            elif elapsed >= sigkill_deadline_s() and not sigkill_sent:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                sigkill_sent = True
+                break
+            time.sleep(poll_interval_s())
+    finally:
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
+    end_mono = time.monotonic()
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sigkill_sent = True
+    drain.join(timeout=2)
+    os.close(read_fd)
+    os.close(log_fd)
+
+    terminated_at = time.time()
+    tree_terminated = confirmed_stopped
+    verifier_started = False
+    guest = None
+    tree_deadline_fired = False
+    exit_state, exit_code = "not-started", None
+    empty = empty_sha256()
+    stdout_raw, stderr_raw = b"", b""
+    evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    try:
+        with open(export_path, "rb") as fh:
+            export_raw = fh.read()
+        export_records = frame_read(export_raw)
+    except (OSError, FrameError):
+        export_records = None
+    validated = validate_export(export_records, plan_sha256)
+    if validated is not None:
+        gbody = validated["body"]
+        verifier_started = bool(gbody["verifier_started"])
+        tree_deadline_fired = bool(gbody["tree_deadline_fired"])
+        guest = gbody["limits"]
+        stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
+        evidence_manifest_bytes = canonical(
+            {"body": {"files": sorted(validated["evidence"], key=lambda f: f["name_hex"])},
+             "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
+        if gbody["exit_state"] in ("exited", "signaled"):
+            exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
+    runtime_error = (guest is None or not verifier_started or result["hard_stop"]
+                     or result["cancelled"] or not tree_terminated)
+    wall_complete = tree_terminated
+    wall_ms = math.ceil((end_mono - start_mono) * 1000) if wall_complete else None
+    return {
+        "runtime": "error" if runtime_error else "completed",
+        "control_deadline": result["control_deadline"],
+        "tree_terminated": tree_terminated,
+        "terminated_at": terminated_at,
+        "exit_state": exit_state,
+        "exit_code": exit_code,
+        "stdout_sha256": sha256_hex(stdout_raw) if stdout_raw else empty,
+        "stderr_sha256": sha256_hex(stderr_raw) if stderr_raw else empty,
+        "evidence_manifest_sha256": sha256_hex(evidence_manifest_bytes),
+        "stdout_raw": stdout_raw, "stderr_raw": stderr_raw,
+        "evidence_manifest_bytes": evidence_manifest_bytes,
+        "limits": build_limit_rows(guest, wall_ms, tree_deadline_fired or result["hard_stop"], wall_complete),
+    }
+
+
+GUEST_LIMIT_ROWS = ("cpu_time_ms", "memory_bytes", "output_bytes", "process_count", "scratch_bytes")
+
+
+def validate_export(export_records, plan_sha256):
+    """R8.2: the host's own reading of the export frame against its plan
+    digest and sizes; None on any absence, damage or mismatch -- every
+    guest row is then unavailable and lifecycle.runtime is error."""
+    if export_records is None:
+        return None
+    named = {name: content for name, content in export_records}
+    if b"report.json" not in named:
+        return None
+    try:
+        report = json.loads(named[b"report.json"])
+    except ValueError:
+        return None
+    if not (isinstance(report, dict) and set(report) == {"body", "id", "kind", "schema_version"}
+            and report.get("kind") == "sandbox_guest_report" and is_int(report.get("schema_version"))
+            and report.get("schema_version") == 1):
+        return None
+    body = report.get("body")
+    if not (isinstance(body, dict) and set(body) == {
+            "evidence_files", "exit_code", "exit_state", "limits", "plan_sha256", "stderr_bytes",
+            "stdout_bytes", "tree_deadline_fired", "tree_terminated", "verifier_started"}):
+        return None
+    if body.get("plan_sha256") != plan_sha256 or not isinstance(body.get("limits"), dict) \
+            or set(body["limits"]) != set(GUEST_LIMIT_ROWS):
+        return None
+    stdout_raw, stderr_raw = named.get(b"stdout", b""), named.get(b"stderr", b"")
+    if len(stdout_raw) != body.get("stdout_bytes") or len(stderr_raw) != body.get("stderr_bytes"):
+        return None
+    evidence, seen_names = [], set()
+    for ef in body.get("evidence_files", []):
+        if not (isinstance(ef, dict) and set(ef) == {"index", "name_hex", "size_bytes"}
+                and is_int(ef.get("index")) and isinstance(ef.get("name_hex"), str)):
+            return None
+        name = ("evidence/%04d" % ef["index"]).encode()
+        content = named.get(name)
+        if content is None or len(content) != ef["size_bytes"] or ef["name_hex"] in seen_names:
+            return None
+        seen_names.add(ef["name_hex"])
+        evidence.append({"name_hex": ef["name_hex"], "sha256": sha256_hex(content),
+                          "size_bytes": ef["size_bytes"]})
+    return {"body": body, "stdout": stdout_raw, "stderr": stderr_raw, "evidence": evidence}
+
+
+def stub_run_result():
+    """An admitted attempt whose runtime never started at all (a freeze
+    failure before any disk was written): runtime error, nothing to
+    terminate, empty payload -- verifier_started is false either way."""
+    empty = empty_sha256()
+    empty_manifest = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                 "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    return {"runtime": "error", "control_deadline": "met", "tree_terminated": True,
+            "terminated_at": time.time(), "exit_state": "not-started", "exit_code": None,
+            "stdout_sha256": empty, "stderr_sha256": empty,
+            "evidence_manifest_sha256": sha256_hex(empty_manifest),
+            "stdout_raw": b"", "stderr_raw": b"", "evidence_manifest_bytes": empty_manifest,
+            "limits": build_limit_rows(None, None, False, False)}
+
+
+def build_limit_rows(guest, wall_ms, wall_reached, wall_complete):
+    """The six R7.3 rows: the five guest-reported ones verbatim (plus
+    mechanism_id/observer/bound), CPU and wall always enforcement: "none"
+    (R7.2) -- wall is the one host-only row."""
+    rows = {}
+    for name, bound, observer in LIMIT_ROWS:
+        if name == "wall_time_ms":
+            rows[name] = {"bound": bound, "observed": wall_ms if wall_complete else None,
+                          "resolution": 1, "observation": "complete" if wall_complete else "unavailable",
+                          "enforcement": "none", "reached": wall_reached,
+                          "mechanism_id": "mechanism.wall.host-monotonic-stop.v1", "observer": observer}
+        elif guest is None:
+            rows[name] = {"bound": bound, "observed": None, "resolution": 1,
+                          "observation": "unavailable", "enforcement": "unknown", "reached": False,
+                          "mechanism_id": "mechanism.unmeasured", "observer": observer}
+        else:
+            g = guest[name]
+            enforcement = "none" if name == "cpu_time_ms" else g.get("enforcement", "unknown")
+            rows[name] = {"bound": bound, "observed": g.get("observed"),
+                          "resolution": g.get("resolution", 1), "observation": g.get("observation", "unavailable"),
+                          "enforcement": enforcement, "reached": bool(g.get("reached")),
+                          "mechanism_id": g.get("mechanism_id", "mechanism.unmeasured"), "observer": observer}
+    return rows
 
 
 # --- R9.4/R10.3: the PR 3 stub receipt for an admitted attempt whose
@@ -1402,16 +1797,40 @@ def identities_for_receipt(measured):
 
 
 def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch_request_sha256,
-                   admitted_at, evidence_manifest_sha256, identities, admission, runtime,
-                   storage_destroyed=True):
-    now = time.time()
-    limits = {}
-    for name, bound, observer in LIMIT_ROWS:
-        limits[name] = {"bound": bound, "observed": None, "resolution": 1,
-                        "observation": "unavailable", "enforcement": "unknown",
-                        "reached": False, "mechanism_id": "mechanism.unmeasured",
-                        "observer": observer}
+                   admitted_at, identities, admission, run, storage_destroyed=True):
+    """run is None for a refused (no-launch) attempt -- every row
+    unavailable/unknown, payload not-started, teardown/timing the R9.3
+    no-launch rule (storage_destroyed follows the frozen-copy removal
+    already done by the caller). Otherwise run is run_vm's own result."""
     empty = empty_sha256()
+    if run is None:
+        limits = {name: {"bound": bound, "observed": None, "resolution": 1,
+                         "observation": "unavailable", "enforcement": "unknown", "reached": False,
+                         "mechanism_id": "mechanism.unmeasured", "observer": observer}
+                  for name, bound, observer in LIMIT_ROWS}
+        lifecycle = {"admission": admission, "runtime": "completed", "control_deadline": "met"}
+        payload = {"stdout_sha256": empty, "stderr_sha256": empty,
+                   "evidence_manifest_sha256": empty_sha256(), "exit_state": "not-started",
+                   "exit_code": None}
+        teardown = {"state": "confirmed" if storage_destroyed else "failed",
+                    "tree_terminated": True, "storage_destroyed": storage_destroyed}
+        terminated_at = time.time()
+    else:
+        limits = run["limits"]
+        lifecycle = {"admission": admission, "runtime": run["runtime"],
+                     "control_deadline": run["control_deadline"]}
+        payload = {"stdout_sha256": run["stdout_sha256"], "stderr_sha256": run["stderr_sha256"],
+                   "evidence_manifest_sha256": run["evidence_manifest_sha256"],
+                   "exit_state": run["exit_state"], "exit_code": run["exit_code"]}
+        if not run["tree_terminated"]:
+            teardown_state = "unconfirmed"
+        elif storage_destroyed:
+            teardown_state = "confirmed"
+        else:
+            teardown_state = "failed"
+        teardown = {"state": teardown_state, "tree_terminated": run["tree_terminated"],
+                    "storage_destroyed": storage_destroyed}
+        terminated_at = run["terminated_at"]
     body = {
         "attempt": {"attempt_id": request_body["attempt"]["attempt_id"],
                     "attempt_number": request_body["attempt"]["attempt_number"],
@@ -1419,17 +1838,14 @@ def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch
         "contract_version": "v1",
         "control": dict(request_body["control"]),
         "identities": identities,
-        "lifecycle": {"admission": admission, "runtime": runtime, "control_deadline": "met"},
+        "lifecycle": lifecycle,
         "limits": limits,
         "origin": {"producer_role": "host-supervisor", "store_id": config["store_id"],
                    "accepted_set_sha256": accepted_set_sha256},
-        "payload": {"stdout_sha256": empty, "stderr_sha256": empty,
-                    "evidence_manifest_sha256": evidence_manifest_sha256, "exit_state": "not-started",
-                    "exit_code": None},
+        "payload": payload,
         "subject": dict(request_body["subject"]),
-        "teardown": {"state": "confirmed" if storage_destroyed else "failed",
-                     "tree_terminated": True, "storage_destroyed": storage_destroyed},
-        "timing": {"admitted_at": utc_stamp(admitted_at), "terminated_at": utc_stamp(now)},
+        "teardown": teardown,
+        "timing": {"admitted_at": utc_stamp(admitted_at), "terminated_at": utc_stamp(terminated_at)},
     }
     body["outcome"] = derive_outcome(body)
     doc = {"body": body, "id": "receipt." + launch_request_sha256,
@@ -1573,49 +1989,48 @@ def run_launch(argv):
                                                 installed_digests, registry_environments,
                                                 accepted_environments, config_raw,
                                                 host_supervisor_raw, python_raw)
+        verifier_raw = read_all_or_refuse(identity_fds["verifier"]) if not reason_ids else None
         for fd in identity_fds.values():
             for f in (fd if isinstance(fd, list) else [fd]):
                 os.close(f)
         identities = identities_for_receipt(measured)
-        # R8.3: built once, reused for both the receipt digest and the write.
-        evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
-                                              "kind": "sandbox_evidence_manifest", "schema_version": 1})
-        evidence_manifest_sha256 = sha256_hex(evidence_manifest_bytes)
-        payload = [("stdout", b""), ("stderr", b""),
-                   ("evidence-manifest.json", evidence_manifest_bytes)]
         if reason_ids:
             # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
             # ran, so nothing errored), payload/refusal.json alongside it.
+            empty_manifest = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                                         "kind": "sandbox_evidence_manifest", "schema_version": 1})
+            payload = [("stdout", b""), ("stderr", b""), ("evidence-manifest.json", empty_manifest),
+                       ("refusal.json", canonical({"reason_ids": reason_ids}))]
             receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                           launch_request_sha256, admitted_at, evidence_manifest_sha256,
-                                           identities, "refused", "completed")
-            payload.append(("refusal.json", canonical({"reason_ids": reason_ids})))
+                                           launch_request_sha256, admitted_at, identities, "refused", None)
         else:
-            # R5.1: freeze by copy before anything else -- still PR 3's own
-            # R9.4 stub past this point (no runtime exists before PR 5), so the
-            # frozen copies are the attempt's only work_root storage; R9.3's
-            # "storage_destroyed follows the removal of its package copies"
-            # applies here too -- they are removed and the removal verified
-            # before the receipt can honestly claim storage_destroyed: true.
-            # A freeze failure itself (ENOSPC, a write error, a name collision)
-            # must never escape as a traceback with a claimed store dir and no
-            # receipt (R10.4): clean up whatever this attempt's own directory
-            # holds and still write an honest failed-teardown receipt below --
-            # only a receipt-write failure itself exits 70.
+            # R5.1: freeze by copy before anything else -- so a later change
+            # by the consumer's account cannot reach the guest. A freeze
+            # failure itself (ENOSPC, a write error, a name collision) must
+            # never escape as a traceback with a claimed store dir and no
+            # receipt (R10.4): clean up whatever this attempt's own
+            # directory holds and still write an honest failed-teardown
+            # receipt below -- only a receipt-write failure itself exits 70.
             try:
                 candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
                                                   config["consumer_gid"], package)
             except OSError:
-                # A genuine mid-freeze write failure: the candidate count is
-                # still known from the package, so the same exact-inventory
-                # removal the success path uses applies here too.
                 candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
                 storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+                run_result = stub_run_result()
             else:
+                manifest = parse_manifest(package["manifest.json"])
+                plan_bytes = build_plan_json(manifest, sha256_hex(package["instruction"]),
+                                              measured["verifier"][1])
+                run_result = run_vm(config, attempt_id, principal_uid, config["consumer_gid"],
+                                     config["runtime"]["driver"], plan_bytes, package["instruction"],
+                                     verifier_raw, package["candidate"], sha256_hex(plan_bytes))
                 storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+            payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
+                       ("evidence-manifest.json", run_result["evidence_manifest_bytes"])]
             receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                           launch_request_sha256, admitted_at, evidence_manifest_sha256,
-                                           identities, "admitted", "error", storage_destroyed)
+                                           launch_request_sha256, admitted_at, identities, "admitted",
+                                           run_result, storage_destroyed)
         write_attempt_result(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
                               receipt_bytes, payload)
     except Refusal:

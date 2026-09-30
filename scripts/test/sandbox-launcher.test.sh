@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Proves sandbox/v1/host-supervisor.py's phase A (R4.1), the R10.1 ACL walk,
 # the store root (work/enforcement-evidence-binding/spec.md R2.3), the R10.2
-# store writer and the R10.3 receipt/outcome (ystack #463, PR 3 of 9). See
-# work/vm-launcher-supervisor/plan.md ("PR 3") and spec.md R3/R4.1/R9.4/R10.
-# Not run against a real hypervisor: until PR 5 an admitted attempt ends at
-# one stub receipt (the runtime never started).
+# store writer, the R10.3 receipt/outcome, and (PR 5 of 9) the real launch
+# path -- disks, plan.json, the driver interface, the monotonic HardStop/
+# SIGKILL clock, export reading -- against scripts/test/sandbox-fake-runtime.py,
+# never a real hypervisor. See work/vm-launcher-supervisor/plan.md and
+# spec.md R3/R4.1/R5/R7-R9/R10.
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -132,7 +133,8 @@ KERNEL_REQUIRED_OPTIONS = (
 )
 
 def main():
-    base, src, work_root, placeholder = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
+    base, src, work_root, placeholder, fake_runtime_src = (
+        sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5])
     shutil.rmtree(base, ignore_errors=True)
     os.makedirs(base, mode=0o755)
     install_dir = os.path.join(base, "install")
@@ -187,8 +189,13 @@ def main():
     open(vfkit_path, "wb").write(b"fake-vfkit")
     os.chmod(vfkit_path, 0o555)
     driver_path = os.path.join(base, "driver")
-    open(driver_path, "wb").write(b"fake-driver")
+    shutil.copy(fake_runtime_src, driver_path)
     os.chmod(driver_path, 0o555)
+    # the fake driver's own default-success scenario, read whenever a test
+    # doesn't set YSTACK_FAKE_SCENARIO (an empty environment is used for the
+    # driver argv/state/stop calls themselves, so this is a fallback the
+    # fake reads relative to its own path, not via an env var, for those)
+    open(os.path.join(base, "scenario.json"), "wb").write(canon({}))
 
     # R2.3's composite slots: same formula as host-supervisor.py's own
     # measure_identities, over these same fixture bytes -- everything else
@@ -247,14 +254,19 @@ def main():
     accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
         {"environment_id": ENV_ID, "scratch_bytes": 16777216,
          "identities": {k: [digest or measured[k]] for k in accepted_keys + ["verification_instructions"]},
-         # "mechanism.unmeasured" is the stub receipt's own mechanism_id
-         # (PR 3's build_receipt, unchanged pre-PR-5) for every row, on
-         # both the admitted and the refused path -- included here too so
-         # the R15.1 consumer-checker matrix's own is_identity_unaccepted
-         # isn't spuriously tripped by the stub alone.
-         "mechanisms": {r: ["mechanism.fixture", "mechanism.unmeasured"] for r in
+         # "mechanism.unmeasured" is the refused-path stub receipt's own
+         # mechanism_id for every row; "mechanism.fixture" is
+         # sandbox-fake-runtime.py's own guest-report mechanism_id for its
+         # five rows (PR 5); "mechanism.wall.host-monotonic-stop.v1" is
+         # build_limit_rows's own fixed, unconditional mechanism_id for the
+         # host-only wall row on any real (non-stub) launch -- all included
+         # here so the R15.1 consumer-checker matrix's own
+         # is_identity_unaccepted isn't spuriously tripped on either path.
+         "mechanisms": dict({r: ["mechanism.fixture", "mechanism.unmeasured"] for r in
                         ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
-                         "scratch_bytes", "wall_time_ms"]}}]},
+                         "scratch_bytes"]},
+                        wall_time_ms=sorted(["mechanism.wall.host-monotonic-stop.v1",
+                                              "mechanism.unmeasured"]))}]},
         "id": "sandbox.accepted-identities.v1", "kind": "sandbox_accepted_identity_set", "schema_version": 1}
     open(installed_files["accepted_set"], "wb").write(canon(accepted_doc))
     for k in installed_keys:
@@ -468,8 +480,10 @@ PY
 
 build_tree() { # build_tree <placeholder: 0|1>  -> prints paths as JSON, sets globals
   local info
-  info=$("$python" "$base/build_tree.py" "$base/root" "$supervisor_src" "$work_root" "$1")
+  info=$("$python" "$base/build_tree.py" "$base/root" "$supervisor_src" "$work_root" "$1" \
+    "$root/scripts/test/sandbox-fake-runtime.py")
   install_dir=$(printf '%s' "$info" | "$jq_bin" -r .install_dir)
+  export YSTACK_HOST_SUPERVISOR="$install_dir/host-supervisor.py"
   store_root=$(printf '%s' "$info" | "$jq_bin" -r .store_root)
   config_path=$(printf '%s' "$info" | "$jq_bin" -r .config_path)
   # shellcheck disable=SC2034 # part of build_tree's documented fixture-path globals
@@ -527,7 +541,7 @@ expect_phase_a_pass() { # expect_phase_a_pass <desc> <pkg-file> -- phase A only,
   run_launch "$pkgfile" || status=$?
   [ "$status" -eq 0 ] || fail "$desc: expected exit 0, got $status ($(cat "$base/err"))"
   [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
-  [ ! -s "$base/err" ] || fail "$desc: stderr must be empty"
+  [ ! -s "$base/err" ] || fail "$desc: stderr must be empty ($(cat "$base/err"))"
 }
 expect_admitted() { # expect_admitted <desc> <attempt-id> <pkg-file> -- asserts real admission, not just exit 0
   local desc=$1 attempt_id=$2 pkgfile=$3 admission
@@ -807,9 +821,13 @@ pass "the receipt's payload.evidence_manifest_sha256 equals the stored evidence-
 receipt_verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/attempt.fixture-reuse/receipt.json")
 receipt_admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/attempt.fixture-reuse/receipt.json")
 receipt_runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/attempt.fixture-reuse/receipt.json")
-[ "$receipt_admission" = admitted ] && [ "$receipt_runtime" = error ] && [ "$receipt_verdict" = failed ] ||
-  fail 'stub receipt: expected admission admitted, runtime error, verdict failed'
-pass 'the stub receipt for an admitted attempt records lifecycle.admission admitted, runtime error (the runtime never started) and outcome failed'
+# R9.4/R7.2: a real, successful fake-runtime launch is lifecycle.runtime
+# completed -- but outcome.verdict is still failed, since the wall row's
+# enforcement is permanently "none" (no route to hard in this spec),
+# so failure.enforcement-unavailable fires on every admitted receipt.
+[ "$receipt_admission" = admitted ] && [ "$receipt_runtime" = completed ] && [ "$receipt_verdict" = failed ] ||
+  fail 'admitted receipt: expected admission admitted, runtime completed, verdict failed'
+pass 'a real (fake-runtime) launch that completes cleanly records lifecycle.admission admitted, lifecycle.runtime completed, and outcome.verdict failed only because of the permanent wall-enforcement-unavailable limitation'
 
 # R9.3: the frozen copies (R5.1) an admitted attempt made are its only
 # work_root storage at this stage (no runtime exists before PR 5) -- the
@@ -1436,5 +1454,149 @@ YSTACK_TEST_SWAP_STORE_ANCESTOR=1 run_launch "$base/pkg-swap.json" || status=$?
 [ ! -e "$store_root.ystack-test-swapped/attempt.fixture-swap" ] ||
   fail 'store swap: the write followed the swapped-in path instead of the held-open descriptor'
 pass 'a store_root renamed aside and replaced with a symlink between admission and the write (an ancestor swap mid-run) does not redirect the write: it still lands in the originally-validated directory, through the descriptor write_store holds open'
+
+# =============================================================================
+# R15.1 (remainder): the real launch path's own scenarios, driven through
+# scripts/test/sandbox-fake-runtime.py's scenario.json -- the row matrix,
+# tree_deadline_fired, HardStop, delayed-stop/SIGKILL, self-stop,
+# cancellation, a runtime crash, an absent export and a damaged export.
+# Small test-only clock overrides (YSTACK_TEST_*_MS) keep every case fast;
+# the fake's own 20ms poll tick is well under all of them.
+# =============================================================================
+build_tree 0
+scenario_path="$base/scenario-case.json"
+export YSTACK_FAKE_SCENARIO="$scenario_path"
+n=500
+scenario_case() { # scenario_case <desc> <scenario-json> -- sets $scn_attempt_id (never
+  # a $(...) capture around this: a command substitution runs in a subshell, which
+  # would silently lose this function's own increment of the outer n counter)
+  n=$((n + 1))
+  scn_attempt_id="attempt.fixture-scn-$n"
+  printf '%s' "$2" > "$scenario_path"
+  build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$scn_attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+  expect_admitted "$1 (setup)" "$scn_attempt_id" "$base/pkg-scn.json"
+}
+
+# Row matrix: a guest-reported row (cpu_time_ms) coming back "reached"
+# still surfaces as such in the receipt's own limits row, even though
+# outcome.verdict can never reach "violated" here (the wall row's
+# enforcement is permanently "none", so failure.enforcement-unavailable
+# always wins first -- PR 4/5's documented, permanent limitation).
+scenario_case 'row matrix: a guest limit reported reached' \
+  '{"limit_overrides":{"cpu_time_ms":{"reached":true,"observed":45000}}}'
+attempt_id="$scn_attempt_id"
+reached=$("$jq_bin" -r '.body.limits.cpu_time_ms.reached' "$store_root/$attempt_id/receipt.json")
+enforcement=$("$jq_bin" -r '.body.limits.cpu_time_ms.enforcement' "$store_root/$attempt_id/receipt.json")
+[ "$reached" = true ] && [ "$enforcement" = none ] ||
+  fail 'row matrix: expected cpu_time_ms reached true, enforcement none (R7.2)'
+pass 'a guest-reported row (cpu_time_ms) coming back reached surfaces as limits.cpu_time_ms.reached true, enforcement forced to none (R7.2) regardless'
+
+# R9.1: the guest's own 40s tree-deadline firing is carried into the
+# host-only wall row's "reached" (R7.3's wall-row special case).
+scenario_case 'guest tree_deadline_fired' '{"report_overrides":{"tree_deadline_fired":true}}'
+attempt_id="$scn_attempt_id"
+wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$attempt_id/receipt.json")
+[ "$wall_reached" = true ] || fail 'tree_deadline_fired: expected limits.wall_time_ms.reached true'
+pass "the guest's own tree_deadline_fired is carried into the host-only wall row's reached: true"
+
+# R9.1/R9.2: HardStop, escalation to SIGKILL when the runtime ignores it,
+# and the confirmed/unconfirmed stop each of those two paths yields.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=150 YSTACK_TEST_SIGKILL_MS=5000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "HardStop: expected exit 0, got $status ($(cat "$base/err"))"
+admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$admission" = admitted ] && [ "$runtime" = error ] && [ "$teardown_state" = confirmed ] ||
+  fail "HardStop: expected admitted/error/confirmed, got $admission/$runtime/$teardown_state"
+pass 'a hung runtime that honors HardStop is stopped at the (test-shortened) HardStop deadline: lifecycle.runtime error, teardown.state confirmed (the fake process still exits and is reaped)'
+
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","ignore_hardstop_ms":60000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=250 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "delayed-stop/SIGKILL: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] ||
+  fail "delayed-stop/SIGKILL: expected runtime error, teardown.state unconfirmed, got $runtime/$teardown_state"
+pass 'a runtime that ignores HardStop past the SIGKILL deadline is killed (test-shortened deadlines): lifecycle.runtime error, teardown.state unconfirmed (the process was never confirmed stopped)'
+
+# Self-stop: the runtime transitions to stopped on its own after a short
+# scripted delay, never receiving a HardStop -- a plain, clean completion.
+scenario_case 'self-stop after a short scripted delay' '{"self_stop_after_ms":80}'
+attempt_id="$scn_attempt_id"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] && [ "$teardown_state" = confirmed ] ||
+  fail "self-stop: expected runtime completed, teardown.state confirmed, got $runtime/$teardown_state"
+pass 'a runtime that self-stops on its own after a short scripted delay, never HardStopped, completes cleanly: lifecycle.runtime completed, teardown.state confirmed'
+
+# R9.2: cancellation (SIGTERM after admission) takes the HardStop path
+# immediately, same as an unresponsive runtime timing out.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+( CDPATH='' cd -- "$install_dir" \
+    && YSTACK_TEST_HARDSTOP_MS=60000 YSTACK_TEST_SIGKILL_MS=65000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+       exec "$python" host-supervisor.py launch ) <"$base/pkg-scn.json" >"$base/out" 2>"$base/err" &
+launch_pid=$!
+# Poll for the fake runtime's own "running" mailbox write (rest.sock),
+# so the signal lands once the host is inside run_vm's poll loop with its
+# own SIGINT/SIGTERM/SIGHUP handlers installed -- a blind sleep risked the
+# signal arriving before that (killing the process with its default
+# disposition, exit 143, rather than exercising R9.2's own HardStop path).
+socket_wait="$work_root/$attempt_id/rest.sock"
+for _ in $(seq 1 100); do
+  [ -e "$socket_wait" ] && grep -q running "$socket_wait" 2>/dev/null && break
+  sleep 0.02
+done
+kill -TERM "$launch_pid" 2>/dev/null || :
+status=0
+wait "$launch_pid" || status=$?
+[ "$status" -eq 0 ] || fail "cancellation: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "cancellation: expected lifecycle.runtime error, got $runtime"
+pass 'a SIGTERM delivered to the host process mid-launch (R9.2) takes the HardStop path immediately and still yields a full receipt: lifecycle.runtime error'
+
+# A runtime that crashes (nonzero exit, never writes an export) never
+# confirms the tree stopped: teardown.state unconfirmed, runtime error.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"crash"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "crash: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] ||
+  fail "crash: expected runtime error, teardown.state unconfirmed, got $runtime/$teardown_state"
+pass 'a runtime that crashes (nonzero exit, no export written) never confirms the tree stopped: lifecycle.runtime error, teardown.state unconfirmed'
+
+# R8.2: an absent export (the runtime stops cleanly but never writes one)
+# and a damaged export (a truncated frame) each refuse validation --
+# every guest row unavailable, lifecycle.runtime error -- even though the
+# tree itself is confirmed stopped.
+scenario_case 'absent export' '{"action":"no_export"}'
+attempt_id="$scn_attempt_id"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$cpu_obs" = unavailable ] ||
+  fail "absent export: expected runtime error, limits.cpu_time_ms.observation unavailable, got $runtime/$cpu_obs"
+pass 'a runtime that stops cleanly but never writes an export refuses validation: lifecycle.runtime error, every guest row observation unavailable'
+
+scenario_case 'damaged export' '{"damage_export":true}'
+attempt_id="$scn_attempt_id"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "damaged export: expected lifecycle.runtime error, got $runtime"
+pass 'a truncated (damaged) export frame refuses validation the same way as an absent one: lifecycle.runtime error'
+
+unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
