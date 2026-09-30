@@ -1596,6 +1596,7 @@ def driver_argv(driver_path, start_path):
 
 def driver_state(driver_path, socket_path):
     rc, out = run_driver(driver_path, ["state", socket_path])
+    test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_DRIVER_STATE")  # test-only
     if rc != 0:
         return "error"
     text = out.decode("utf-8", "replace").strip()
@@ -1644,14 +1645,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     a signal could otherwise fall through."""
     work_root = config["work_root"]
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN")
-    if os.environ.get("YSTACK_TEST_LAUNCH_WRITE_FAIL"):
-        # Test-only: simulates an ENOSPC/write-error writing input.img,
-        # export.img, start.json or runtime.log -- the caller (run_launch)
-        # must handle this exactly like a freeze failure (R10.4), not let
-        # it propagate to the outer exit-70 handler.
-        raise OSError("YSTACK_TEST_LAUNCH_WRITE_FAIL")
     input_bytes = build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates)
-    write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, build_export_disk())
     attempt_dir = os.path.join(work_root, attempt_id)
     input_path = os.path.join(attempt_dir, "input.img")
     export_path = os.path.join(attempt_dir, "export.img")
@@ -1666,6 +1660,10 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     result = {"runtime": "error", "tree_terminated": False, "cancelled": False,
               "hard_stop": False, "control_deadline": "met", "export": None}
     test_slow("YSTACK_TEST_SLOW_RUNTIME_START_MS")
+    if os.environ.get("YSTACK_TEST_LAUNCH_WRITE_FAIL"):
+        # Test-only (R10.4), after the same slow-startup hook as driver-argv/Popen.
+        raise OSError("YSTACK_TEST_LAUNCH_WRITE_FAIL")
+    write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, build_export_disk())
     try:
         fd = os.open(start_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
@@ -1718,11 +1716,9 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
 
         since_spawn = time.monotonic() - spawn_mono
         state = driver_state(driver_path, socket_path)
-        # driver_state can itself consume close to its 2,000ms budget --
-        # recompute elapsed fresh right after it, every iteration, so a
-        # deadline crossed during that call is noticed this iteration,
-        # not a whole extra blocking call later.
-        elapsed = time.monotonic() - admission_mono
+        elapsed = time.monotonic() - admission_mono  # recomputed after driver_state
+        if signal_seen[0]:
+            result["cancelled"] = True
 
         if state == "stopped":
             confirmed_stopped = stopped_via_mailbox = True
@@ -1879,6 +1875,8 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                  for ef in validated["evidence"]], key=lambda f: f["name_hex"])},
              "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
         exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
+    if signal_seen[0]:  # last recheck, catches a signal from any wait above
+        result["cancelled"] = True
     runtime_error = (guest is None or not verifier_started or result["hard_stop"]
                      or result["cancelled"] or not tree_terminated or driver_reported_error)
     wall_complete = tree_terminated
@@ -2471,11 +2469,10 @@ def run_launch(argv):
                                              package["instruction"], verifier_raw, package["candidate"],
                                              sha256_hex(plan_bytes), admission_mono, signal_seen)
                     except OSError:
-                        # Same as a freeze failure (R10.4): a launch-file
-                        # write failure (input.img/export.img/start.json/
-                        # runtime.log) must not propagate to the outer
-                        # exit-70 handler and skip cleanup.
-                        run_result = stub_run_result()
+                        # Same as a freeze failure (R10.4); pass the
+                        # elapsed startup status too, as the driver-argv/
+                        # Popen paths do.
+                        run_result = stub_run_result(control_deadline_for_elapsed(admission_mono))
                     storage_removal_began = time.monotonic()
                     test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
                     storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
