@@ -369,7 +369,7 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 2 | `review_size: accepted-exception` | 800-1,100 | guest input: plan, materialization, wiring, inventory |
 | 3 | `review_size: accepted-exception` | 1,100-1,700 | trusted configuration, ACLs, phase A, store and receipt writer |
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
-| 5 | `review_size: accepted-exception` | 1,400-3,100 | the launch lifecycle against the fake runtime |
+| 5 | `review_size: accepted-exception` | 1,400-3,300 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 1,200-1,700 | guest containment setup and build |
 | 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
@@ -388,7 +388,7 @@ infrastructure (validated-descriptor reads, store and receipt writers, test fixt
 rather than duplicating it, and carries the complete consumer-checker matrix for the
 R15.1 classes run in a temporary repository copy, the full dyld shared-cache inventory
 in the host_runtime composite, created-entry teardown and manifest kind/mode
-validation (#463 record). PR 5 as built in #477 measures about 2,900-3,100: the
+validation (#463 record). PR 5 as built in #477 measures about 3,100-3,300: the
 launch lifecycle carries bounded reaping under the absolute deadline, deadline-first
 polling with driver calls capped by the time to the next deadline, cancellation stops
 retried until accepted, post-claim finalization for every failure after the attempt
@@ -396,6 +396,10 @@ is claimed, observation validation against guest-tree termination, foreign
 work-directory preservation on attempt-id collision, clean-exit ordering before
 endpoint-failure poll errors, freeze-failure deadline measurement, malformed
 driver-response containment, wall-limit evidence derived from an issued stop,
+manifest path validation in phase B, creation recording immediately after the
+work-directory mkdir, the wall-time endpoint captured at confirmed stop, a
+deterministic cancel-during-poll race, a bounded drain-worker shutdown that retains
+descriptor ownership, serialized fake-runtime mailbox updates,
 index-stored evidence under the R10.2 layout with hex-name validation, the real-time
 default-deadline cases beside the fast overridden ones, and receipt diagnostics on
 assertion failure (#463 record). A PR outside its
