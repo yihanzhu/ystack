@@ -922,6 +922,19 @@ for edit in 'doc["id"] = []' 'doc["body"]["activation_state"] = {}' 'doc["body"]
   expect_refused "E_CONFIG: registry shape ($edit)" E_CONFIG "$base/pkg-ok.json"
 done
 pass 'a registry envelope id or body leaf field of the wrong type ("id":[], "activation_state":{}, "registry_version":false) is refused E_CONFIG, mirroring the shipped checker'"'"'s own registry_body_schema exactly'
+
+# A config-file read failure (IsADirectoryError, or any other OSError)
+# must never escape the guarded block uncaught -- E_CONFIG/exit 65, not
+# a bare traceback/exit 1. Tested for two different guarded reads.
+/bin/rm -f "$registry_path"
+/bin/mkdir "$registry_path"
+expect_refused 'E_CONFIG: the registry path is a directory' E_CONFIG "$base/pkg-ok.json"
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+/bin/rm -f "$accepted_set"
+/bin/mkdir "$accepted_set"
+expect_refused 'E_CONFIG: the accepted-set path is a directory' E_CONFIG "$base/pkg-ok.json"
+pass 'a config-file path that is a directory (the registry, the accepted set) is refused E_CONFIG, never an uncaught exception past the guarded read'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
@@ -989,15 +1002,18 @@ build_pkg "$base/pkg-ok.json" '{}'
 # is_control_mismatch/is_evaluation_not_satisfied require, so the
 # cross-check below is refused for exactly the three shipped-empty-
 # accepted-set reasons, nothing else.
-/bin/chmod 644 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
-  "$installed_evaluator_driver" "$installed_evaluator_program"
-/bin/cp "$root/control/v1/sandbox-policy.json" "$installed_control_policy"
-/bin/cp "$root/control/v1/sandbox-decision.json" "$installed_control_decision"
-/bin/cp "$root/control/v1/control-policy-set.json" "$installed_control_policy_set"
-/bin/cp "$root/control/v1/evaluate-sandbox.sh" "$installed_evaluator_driver"
-/bin/cp "$root/control/v1/sandbox.jq" "$installed_evaluator_program"
-/bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
-  "$installed_evaluator_driver" "$installed_evaluator_program"
+restore_control() { # copies the real shipped control+evaluator files over the installed ones
+  /bin/chmod 644 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
+    "$installed_evaluator_driver" "$installed_evaluator_program"
+  /bin/cp "$root/control/v1/sandbox-policy.json" "$installed_control_policy"
+  /bin/cp "$root/control/v1/sandbox-decision.json" "$installed_control_decision"
+  /bin/cp "$root/control/v1/control-policy-set.json" "$installed_control_policy_set"
+  /bin/cp "$root/control/v1/evaluate-sandbox.sh" "$installed_evaluator_driver"
+  /bin/cp "$root/control/v1/sandbox.jq" "$installed_evaluator_program"
+  /bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set" \
+    "$installed_evaluator_driver" "$installed_evaluator_program"
+}
+restore_control
 build_pkg "$base/pkg-check.json" '{"attempt_id":"attempt.fixture-check","nonce":"3333333333333333333333333333333333333333333333333333333333333333","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
 expect_admitted 'the attempt used for the shipped-checker cross-check' attempt.fixture-check "$base/pkg-check.json"
 check_out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$root/enforcement/v1/check-sandbox-receipt.sh" check \
@@ -1019,14 +1035,11 @@ build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 # The checker validates control/v1's own JSON shape, so it needs the real
 # shipped files (the fixture's own installed control files are synthetic
-# placeholder bytes, not JSON) -- copied over the installed ones too, so
-# host-side control-mismatch also passes (as the shipped-checker
-# cross-check above does), with control_real=true for every case below.
-/bin/chmod 644 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set"
-/bin/cp "$root/control/v1/sandbox-policy.json" "$installed_control_policy"
-/bin/cp "$root/control/v1/sandbox-decision.json" "$installed_control_decision"
-/bin/cp "$root/control/v1/control-policy-set.json" "$installed_control_policy_set"
-/bin/chmod 444 "$installed_control_policy" "$installed_control_decision" "$installed_control_policy_set"
+# placeholder bytes, not JSON) -- all five (including both evaluator
+# files, previously missed here, which left every control_real:true case
+# below with an unintended launch.control-mismatch) so host-side
+# control-mismatch also passes, with control_real=true for every case.
+restore_control
 checker_root="$base/checker"
 /bin/mkdir -p "$checker_root/enforcement/v1" "$checker_root/control/v1" "$checker_root/shadow/v1"
 /bin/cp "$root/enforcement/v1/check-sandbox-receipt.sh" "$root/enforcement/v1/sandbox-receipt.jq" \
@@ -1036,21 +1049,28 @@ checker_root="$base/checker"
 /bin/cp "$installed_control_policy_set" "$checker_root/control/v1/control-policy-set.json"
 /bin/cp "$registry_path" "$checker_root/shadow/v1/shadow-environments.json"
 /bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
-check_case() { # check_case <desc> <attempt-id> <verdict> <reasons-json> [enforcement-verdict]
-  local out ok=1
+check_case() { # check_case <desc> <attempt-id> <verdict> <reasons-json> <host-reasons: admitted|json> [enforcement-verdict]
+  local out ok=1 admission
+  admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$2/receipt.json")
+  if [ "$5" = admitted ]; then
+    [ "$admission" = admitted ] || ok=0
+  else
+    [ "$admission" = refused ] &&
+      [ "$("$jq_bin" -c -S '.reason_ids' "$store_root/$2/payload/refusal.json" 2>/dev/null)" = "$5" ] || ok=0
+  fi
   out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root/enforcement/v1/check-sandbox-receipt.sh" \
     check "$store_root/$2/receipt.json" "$base/expectation.json" "$base/evaluation.json"))
   [ "$("$jq_bin" -r '.body.check_verdict' <<<"$out")" = "$3" ] || ok=0
   [ "$("$jq_bin" -c -S '.body.reason_ids' <<<"$out")" = "$4" ] || ok=0
-  [ -z "${5:-}" ] || [ "$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")" = "$5" ] || ok=0
-  [ "$ok" -eq 1 ] || fail "$1: unexpected checker output $out"
+  [ -z "${6:-}" ] || [ "$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")" = "$6" ] || ok=0
+  [ "$ok" -eq 1 ] || fail "$1: unexpected output (host admission=$admission) checker=$out"
 }
 build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-a","nonce":"'"$(printf '%064d' 260)"'","control_real":true,"set":{"subject.environment_entry_sha256":"'"$entry_sha"'"},"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
 run_launch "$base/pkg-chk.json"
-check_case 'class (a): environment_entry_sha256' attempt.fixture-chk-a refused '["receipt.environment-unlisted"]'
+check_case 'class (a): environment_entry_sha256' attempt.fixture-chk-a refused '["receipt.environment-unlisted"]' '["launch.environment-unlisted"]'
 build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-b","nonce":"'"$(printf '%064d' 261)"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
 YSTACK_TEST_IDENTITY_UNREADABLE=guest_init run_launch "$base/pkg-chk.json"
-check_case 'phase-B class (c): identity-missing' attempt.fixture-chk-b valid '["receipt.valid"]' failed
+check_case 'phase-B class (c): identity-missing' attempt.fixture-chk-b valid '["receipt.valid"]' '["launch.identity-missing"]' failed
 pass 'the shipped checker, run against this fixture'"'"'s own registry/accepted set, gives the R15.1 class (a) and phase-B class (c) verdicts exactly, matching the host'"'"'s own derivation'
 
 # The rest of the matrix: every remaining class (a) binding refusal, both
@@ -1062,17 +1082,20 @@ chk_case() { # chk_case <desc> <patch-json> <verdict> <reasons-json>
   local attempt_id="attempt.fixture-chk-$n"
   build_pkg "$base/pkg-chk.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'",'"$2"'}'
   run_launch "$base/pkg-chk.json"
-  check_case "$1" "$attempt_id" "$3" "$4"
+  check_case "$1" "$attempt_id" "$3" "$4" "$5"
 }
 chk_case 'class (a): control-mismatch alone (evaluator_driver_sha256)' \
-  '"set":{"control.evaluator_driver_sha256":"'"$entry_sha"'"}' refused '["receipt.control-mismatch"]'
+  '"set":{"control.evaluator_driver_sha256":"'"$entry_sha"'"}' refused '["receipt.control-mismatch"]' \
+  '["launch.control-mismatch"]'
 chk_case 'class (a): control-mismatch + evaluation-not-satisfied (decision_sha256)' \
   '"set":{"control.decision_sha256":"'"$entry_sha"'"}' refused \
-  '["receipt.control-mismatch","receipt.evaluation-not-satisfied"]'
+  '["receipt.control-mismatch","receipt.evaluation-not-satisfied"]' \
+  '["launch.control-mismatch","launch.evaluation-not-satisfied"]'
 chk_case 'class (a): evaluation-not-satisfied alone (evaluation.json verdict)' \
-  '"evaluation_set":{"body.verdict":"unsatisfied"}' refused '["receipt.evaluation-not-satisfied"]'
+  '"evaluation_set":{"body.verdict":"unsatisfied"}' refused '["receipt.evaluation-not-satisfied"]' \
+  '["launch.evaluation-not-satisfied"]'
 chk_case 'class (b): identity-unaccepted (unaccepted instruction)' \
-  '"instruction":"unaccepted-instr"' refused '["receipt.identity-unaccepted"]'
+  '"instruction":"unaccepted-instr"' refused '["receipt.identity-unaccepted"]' '["launch.instruction-unaccepted"]'
 
 # replayed / origin-mismatch: the expectation, mutated after the fact,
 # disagrees with what the receipt actually recorded.
@@ -1081,14 +1104,14 @@ build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonc
 run_launch "$base/pkg-chk.json"
 patch_json "$base/expectation.json" "$base/expectation.json" \
   "doc['body']['attempt']['attempt_number'] = 99"
-check_case 'class (a): replayed (expectation attempt differs)' "attempt.fixture-chk-$n" refused '["receipt.replayed"]'
+check_case 'class (a): replayed (expectation attempt differs)' "attempt.fixture-chk-$n" refused '["receipt.replayed"]' admitted
 
 n=$((n + 1))
 build_pkg "$base/pkg-chk.json" '{"attempt_id":"attempt.fixture-chk-'"$n"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
 run_launch "$base/pkg-chk.json"
 patch_json "$base/expectation.json" "$base/expectation.json" \
   "doc['body']['store_id'] = 'store.other'"
-check_case 'class (a): origin-mismatch (expectation store_id differs)' "attempt.fixture-chk-$n" refused '["receipt.origin-mismatch"]'
+check_case 'class (a): origin-mismatch (expectation store_id differs)' "attempt.fixture-chk-$n" refused '["receipt.origin-mismatch"]' admitted
 
 # stale: the installed accepted set changes after the receipt is written,
 # so the checker's own (current) accepted_set_sha256 no longer matches
@@ -1102,9 +1125,10 @@ patch_json "$accepted_set" "$accepted_set" \
 /bin/chmod 444 "$accepted_set"
 /bin/rm -f "$checker_root/enforcement/v1/accepted-identities.json"
 /bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
-check_case 'class (a): stale (accepted set changed after admission)' "attempt.fixture-chk-$n" refused '["receipt.stale"]'
+check_case 'class (a): stale (accepted set changed after admission)' "attempt.fixture-chk-$n" refused '["receipt.stale"]' admitted
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
+restore_control
 /bin/rm -f "$checker_root/enforcement/v1/accepted-identities.json"
 /bin/cp "$accepted_set" "$checker_root/enforcement/v1/accepted-identities.json"
 

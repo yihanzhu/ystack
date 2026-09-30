@@ -458,7 +458,7 @@ def load_config(config_fd):
     require(isinstance(installed_files, dict) and set(installed_files) == set(INSTALLED_FILE_KEYS), "E_CONFIG")
     for value in installed_files.values():
         require(is_abs_path(value), "E_CONFIG")
-    require(canonical(doc) == raw, "E_CONFIG")
+    require_canonical(doc, raw)
     return body, raw
 
 
@@ -513,7 +513,7 @@ def check_accepted_set(fd):
         doc = json.loads(raw)
     except ValueError:
         refuse("E_CONFIG")
-    require(canonical(doc) == raw, "E_CONFIG")
+    require_canonical(doc, raw)
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
     require(doc.get("kind") == "sandbox_accepted_identity_set" and is_int(doc.get("schema_version")) and doc.get("schema_version") == 1, "E_CONFIG")
     require(doc.get("id") == "sandbox.accepted-identities.v1", "E_CONFIG")
@@ -551,7 +551,10 @@ def read_all(fd):
     (never a fresh open() of the path string). Only for the small
     documents that need their actual bytes parsed (a kernel .config, host-
     config.json, the registry, the accepted set) -- see sha256_fd for a
-    large identity file where only the digest is ever needed."""
+    large identity file where only the digest is ever needed. Raises
+    OSError on any read failure (e.g. the path names a directory) --
+    every caller outside measure_identities' own try/except must catch
+    it, via read_all_or_refuse below, never letting it escape uncaught."""
     os.lseek(fd, 0, os.SEEK_SET)
     chunks = []
     while True:
@@ -560,6 +563,23 @@ def read_all(fd):
             break
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def read_all_or_refuse(fd):
+    try:
+        return read_all(fd)
+    except OSError:
+        refuse("E_CONFIG")
+
+
+def require_canonical(doc, raw):
+    """A malformed but json.loads-able doc (NaN, a lone surrogate) makes
+    canonical() itself raise -- never let that escape uncaught either."""
+    try:
+        ok = canonical(doc) == raw
+    except (ValueError, UnicodeEncodeError):
+        ok = False
+    require(ok, "E_CONFIG")
 
 
 def sha256_fd(fd):
@@ -583,14 +603,13 @@ def load_registry(fd):
     Malformed bytes (unbalanced, NaN, a lone surrogate) refuse E_CONFIG --
     this is an installed config file, never E_PACKAGE (the request's own
     code) and never an uncaught exception escaping from canonical()."""
-    raw = read_all(fd)
     try:
+        raw = read_all(fd)
         bounded_json_nesting(raw)
         doc = json.loads(raw)
-        canonical_ok = canonical(doc) == raw
-    except (Refusal, ValueError, RecursionError, UnicodeEncodeError):
+    except (OSError, Refusal, ValueError, RecursionError, UnicodeEncodeError):
         refuse("E_CONFIG")
-    require(canonical_ok, "E_CONFIG")
+    require_canonical(doc, raw)
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
     require(doc.get("kind") == "shadow_environment_registry" and is_int(doc.get("schema_version"))
             and doc.get("schema_version") == 1 and id_ok(doc.get("id")), "E_CONFIG")
@@ -1470,7 +1489,7 @@ def run_launch(argv):
     # composite (R2.3); its fd is read and retained before the generic
     # close, never re-opened by path.
     host_supervisor_path = os.path.join(install_dir, "host-supervisor.py")
-    host_supervisor_raw = read_all(fixed_fds[host_supervisor_path])
+    host_supervisor_raw = read_all_or_refuse(fixed_fds[host_supervisor_path])
     for fd in fixed_fds.values():
         os.close(fd)
     # The interpreter path is measured too (R2.3's host_supervisor slot),
@@ -1479,8 +1498,8 @@ def run_launch(argv):
     # both system and third-party interpreters); the walk requires an
     # already-physical path (same convention as install_directory's own
     # realpath), so it is resolved once, here, before validation.
-    python_raw = read_all(secure_walk(os.path.realpath(sys.executable), principal_uid,
-                                       check_mode=True))
+    python_raw = read_all_or_refuse(secure_walk(os.path.realpath(sys.executable), principal_uid,
+                                                 check_mode=True))
     # Every identity_paths and control-related installed_files fd is kept
     # open (R2.3/R4.2 read their content below, through these same fds --
     # never a fresh open() of the path string); runtime.vfkit/driver are
@@ -1503,7 +1522,7 @@ def run_launch(argv):
     for name in ("control_policy", "control_decision", "control_policy_set",
                  "evaluator_driver", "evaluator_program"):
         fd = installed_fds.pop(name)
-        installed_digests[name] = sha256_hex(read_all(fd))
+        installed_digests[name] = sha256_hex(read_all_or_refuse(fd))
         os.close(fd)
     for fd in installed_fds.values():
         os.close(fd)
