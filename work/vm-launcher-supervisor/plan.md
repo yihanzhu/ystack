@@ -369,7 +369,7 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 2 | `review_size: accepted-exception` | 800-1,100 | guest input: plan, materialization, wiring, inventory |
 | 3 | `review_size: accepted-exception` | 1,100-1,700 | trusted configuration, ACLs, phase A, store and receipt writer |
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
-| 5 | `review_size: accepted-exception` | 1,400-2,300 | the launch lifecycle against the fake runtime |
+| 5 | `review_size: accepted-exception` | 1,400-2,600 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 1,200-1,700 | guest containment setup and build |
 | 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
@@ -388,11 +388,12 @@ infrastructure (validated-descriptor reads, store and receipt writers, test fixt
 rather than duplicating it, and carries the complete consumer-checker matrix for the
 R15.1 classes run in a temporary repository copy, the full dyld shared-cache inventory
 in the host_runtime composite, created-entry teardown and manifest kind/mode
-validation (#463 record). PR 5 as built in #477 measures about 1,900-2,300: the
-launch lifecycle carries bounded reaping under the absolute deadline, index-stored
-evidence with hex-name validation, the real-time default-deadline cases beside the
-fast overridden ones, and receipt diagnostics on assertion failure (#463 record). A PR
-outside its
+validation (#463 record). PR 5 as built in #477 measures about 2,300-2,600: the
+launch lifecycle carries bounded reaping under the absolute deadline, deadline-first
+polling with driver calls capped by the time to the next deadline, cancellation stops
+retried until accepted, index-stored evidence under the R10.2 layout with hex-name
+validation, the real-time default-deadline cases beside the fast overridden ones, and
+receipt diagnostics on assertion failure (#463 record). A PR outside its
 range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc. The
 plan PR measured 411 lines at its first head; #452's 579-line plan is the precedent.
 
