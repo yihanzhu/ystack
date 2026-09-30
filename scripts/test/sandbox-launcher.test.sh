@@ -2974,6 +2974,113 @@ teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/re
 rm -rf "$custom_tmpdir_r14"
 pass 'finding r14: a concurrent mailbox update driven through the real driver contract (a fresh "stop" subprocess under env={}) still correctly serializes against the runtime'"'"'s own final write even though the runtime process was spawned under a non-default TMPDIR that the stop call'"'"'s own empty environment never inherits -- the mailbox lock is derived from socket_path'"'"'s own parent directory, never from tempfile.gettempdir(), so a TMPDIR mismatch between the two real invocation paths can never leave their updates unsynchronized: lifecycle.runtime completed, teardown.state confirmed'
 
+# NOTE: YSTACK_FAKE_SCENARIO stays exported here (round 15's finding
+# r15-1 test below still needs it, via the same $scenario_path) -- it is
+# unset once, below, only after round 15's own tests are done with it.
+
+# =============================================================================
+# Fix round 15 (findings-477-r15.md): one P1, one P2.
+# =============================================================================
+
+# Finding 1 [P1]: Thread.start() for the log-drain worker raising
+# (host thread/resource exhaustion) after the runtime has already
+# spawned must never abort run_vm uncaught and leave that VM
+# unsupervised -- the normal driver_stop()/HardStop/reap/teardown/
+# receipt machinery must still run to completion exactly as if the
+# drain thread had simply never been needed.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=150 YSTACK_TEST_SIGKILL_MS=5000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  YSTACK_TEST_DRAIN_START_FAIL=1 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding r15-1: expected exit 0, got $status ($(cat "$base/err"))"
+admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+storage_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/$attempt_id/receipt.json")
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime"]'
+[ "$admission" = admitted ] && [ "$runtime" = error ] && [ "$teardown_state" = confirmed ] &&
+  [ "$storage_destroyed" = true ] && [ "$verdict" = failed ] && [ "$reasons" = "$expect_reasons" ] ||
+  fail "finding r15-1: expected admitted/error/confirmed, storage_destroyed true, verdict failed, reasons $expect_reasons -- got $admission/$runtime/$teardown_state storage_destroyed=$storage_destroyed verdict=$verdict reasons=$reasons"
+grep -q 'drain thread for .* failed to start' "$base/err" ||
+  fail "finding r15-1: expected the drain-thread-start-failure warning on stderr (proving the injected failure was actually exercised, not a scenario that happened to pass on its own)"
+pass 'finding r15-1: the log-drain worker'"'"'s own Thread.start() failing (YSTACK_TEST_DRAIN_START_FAIL, standing in for a genuine RuntimeError under host thread exhaustion) right after the runtime has already spawned never aborts run_vm uncaught -- HardStop is still issued at its deadline, honored, reaped and torn down exactly as findings-477-r9.md'"'"'s own HardStop test proves without the injected failure: lifecycle.runtime error, teardown.state confirmed, storage_destroyed true, verdict failed, reasons failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime -- runtime.log capture is the only casualty (a warning on stderr proves it), never the VM'"'"'s own supervision'
+
+# Finding 2 [P2]: run_driver must reject a response it only has because
+# its own read timed out (or failed) while a helper the driver forked
+# still holds the pipe's write end open -- a driver process that has
+# ALREADY exited 0 is not enough on its own to trust whatever partial
+# bytes were read by the time the timeout fired -- and must kill the
+# whole driver process GROUP (not just the driver's own already-exited
+# pid) so that forked-and-abandoned helper is cleaned up too, never
+# left running. Exercises run_driver() directly (imported from
+# host-supervisor.py exactly as sandbox-fake-runtime.py's own
+# load_host_module() does) against a small dedicated fake driver that
+# reproduces the exact repro: prints "stopped\n", forks a child that
+# holds stdout open while sleeping (recording its own pid to a marker
+# file first), and the parent exits 0 immediately.
+cat > "$base/fake-driver-pipe-hold.py" <<'PY'
+#!/usr/bin/python3
+import os, sys, time
+
+def main():
+    args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == "state":
+        marker = args[1]
+        sys.stdout.write("stopped\n")
+        sys.stdout.flush()
+        if os.fork() == 0:
+            with open(marker, "w") as fh:
+                fh.write(str(os.getpid()))
+            time.sleep(30)
+            os._exit(0)
+        return 0
+    return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+PY
+chmod 555 "$base/fake-driver-pipe-hold.py"
+cat > "$base/run_driver_probe.py" <<'PY'
+import importlib.util, os, sys, time
+
+def load(path):
+    spec = importlib.util.spec_from_file_location("_ystack_probe_host", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+def main():
+    host_path, driver_path, marker = sys.argv[1], sys.argv[2], sys.argv[3]
+    hs = load(host_path)
+    rc, out = hs.run_driver(driver_path, ["state", marker], timeout_s=0.5)
+    with open(marker) as fh:
+        child_pid = int(fh.read().strip())
+    alive = True
+    for _ in range(75):
+        try:
+            os.kill(child_pid, 0)
+        except OSError:
+            alive = False
+            break
+        time.sleep(0.02)
+    print("rc=%r out_len=%d child_pid=%d alive=%s" % (rc, len(out), child_pid, alive))
+    sys.exit(0 if (rc is None and out == b"" and not alive) else 1)
+
+main()
+PY
+pipe_hold_marker="$base/pipe-hold-child.pid"
+rm -f "$pipe_hold_marker"
+"$python" "$base/run_driver_probe.py" "$install_dir/host-supervisor.py" \
+  "$base/fake-driver-pipe-hold.py" "$pipe_hold_marker" > "$base/out" 2>"$base/err"
+status=$?
+[ "$status" -eq 0 ] || fail "finding r15-2: expected exit 0 (rc is None, out is empty, and the forked helper holding the pipe open is gone), got $status: $(cat "$base/out") $(cat "$base/err")"
+pass 'finding r15-2: run_driver() rejects a response it only has because its own read timed out while a forked helper still holds the driver'"'"'s stdout pipe open (a driver reporting stopped then exiting 0, with a child inherited from it never closing that fd) -- returns a rejected, empty response, never the driver'"'"'s exit code plus whatever partial bytes happened to arrive before the timeout, and kills the whole driver process GROUP (not just the already-exited driver pid) so the abandoned helper is confirmed gone, never left running past the call'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

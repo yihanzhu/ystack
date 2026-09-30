@@ -1622,20 +1622,37 @@ def run_driver(driver_path, args, timeout_s=2.0):
         devnull.close()
     deadline = time.monotonic() + timeout_s
     chunks, total, overflow = [], 0, False
+    # findings-477-r15.md finding 2: distinct from a clean EOF (an empty
+    # os.read(): the driver -- and everything it left behind -- has
+    # genuinely closed its end of the pipe) -- a read timeout or read
+    # failure only proves THIS host stopped waiting, never that the
+    # driver's output is actually complete. A helper child the driver
+    # forks and leaves running can keep the pipe's write end open well
+    # after the driver process itself has already exited (e.g. exit 0),
+    # so the loop below can still be sitting here, honestly incomplete,
+    # long after the driver's own exit status looks clean. Both must
+    # reject the response outright, never returning a
+    # returncode/partial-output pair a caller (driver_state's "stopped"
+    # confirmation, in particular) could mistake for a complete one.
+    incomplete = False
     read_fd = proc.stdout.fileno()
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            incomplete = True
             break
         try:
             ready, _, _ = select.select([read_fd], [], [], remaining)
         except OSError:
+            incomplete = True
             break
         if not ready:
+            incomplete = True
             break
         try:
             chunk = os.read(read_fd, 65536)
         except OSError:
+            incomplete = True
             break
         if not chunk:
             break
@@ -1648,6 +1665,23 @@ def run_driver(driver_path, args, timeout_s=2.0):
         proc.stdout.close()
     except OSError:
         pass
+    if incomplete:
+        # The driver's own process is never trusted to already be gone
+        # just because it may have exited before the timeout/failure --
+        # kill the whole process GROUP (never just proc.pid, since
+        # start_new_session=True made proc its own group leader) so a
+        # forked-and-abandoned helper still holding the pipe open is
+        # cleaned up too, never left running, then reap bounded rather
+        # than block on a process that may already be a zombie.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, b""
     if proc.poll() is None:
         try:
             proc.wait(timeout=max(0.0, deadline - time.monotonic()))
@@ -1871,7 +1905,35 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     os.close(write_fd)
     drain_stop = threading.Event()
     drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd, drain_stop), daemon=True)
-    drain.start()
+    drain_started = False
+    try:
+        if os.environ.get("YSTACK_TEST_DRAIN_START_FAIL"):
+            # Deterministic stand-in for a genuine RuntimeError("can't
+            # start new thread") under host thread/resource exhaustion.
+            raise RuntimeError("YSTACK_TEST_DRAIN_START_FAIL")
+        drain.start()
+        drain_started = True
+    except Exception as exc:  # noqa: BLE001 -- see comment below
+        # findings-477-r15.md finding 1: proc has ALREADY actually
+        # spawned by this point -- Thread.start() (or anything else in
+        # this narrow post-spawn window) raising here must never abort
+        # run_vm uncaught, which would leave that real VM process
+        # unsupervised forever (no stop, no reap, no teardown, no
+        # receipt). Losing the drain thread only loses runtime.log
+        # capture: drain_started stays False, so the finalization below
+        # skips ever calling drain.join()/is_alive() on a thread that
+        # was never actually started (Thread.join() raises RuntimeError
+        # on one), and closes read_fd/log_fd directly instead -- the
+        # poll loop's own driver_stop()/SIGKILL/reap/teardown/receipt
+        # machinery (already fully responsible for proc's lifecycle
+        # independently of this thread) runs completely unaffected. A
+        # genuinely chatty child that fills its pipe buffer with nobody
+        # draining it just blocks in its own write() until the same
+        # HardStop/SIGKILL deadlines below terminate it -- bounded
+        # exactly like any other hang, never a new one.
+        sys.stderr.write(
+            "warning: drain thread for %s failed to start (%r); "
+            "continuing without runtime.log capture\n" % (attempt_id, exc))
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_SPAWN")  # test-only
 
     result["control_deadline"] = control_deadline_for_elapsed(admission_mono)
@@ -2071,8 +2133,15 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         if stopped_via_mailbox and reaped and proc.returncode is not None \
                 and proc.returncode != stopped_exit_status:
             driver_reported_error = True
-    drain.join(timeout=2)
-    if drain.is_alive():
+    if drain_started:
+        # findings-477-r15.md finding 1: drain_started is False when
+        # drain.start() itself failed above -- Thread.join() raises
+        # RuntimeError on a thread that was never started, so this whole
+        # block (and drain.is_alive(), which would otherwise just
+        # report False anyway) is skipped entirely in that case, falling
+        # straight through to the plain close() below.
+        drain.join(timeout=2)
+    if drain_started and drain.is_alive():
         # findings-477-r13.md finding 1: still blocked on read_fd (e.g. a
         # grandchild process still holding the pipe's write end open) --
         # ask it to stop and give it one more bounded wait to confirm,
@@ -2080,7 +2149,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # read from or write to.
         drain_stop.set()
         drain.join(timeout=2)
-    if drain.is_alive():
+    if drain_started and drain.is_alive():
         # Never observed in practice (the 0.2s select-poll bound above
         # means drain_stop is checked well within either 2s join), but if
         # it somehow ever happens, closing these two descriptors now
