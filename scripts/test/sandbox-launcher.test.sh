@@ -2647,12 +2647,12 @@ pass 'finding 1: a cancellation signaled during disk prep (write_launch_disks) i
 # pre-stop budget), and an overdue deadline discovered there escalates
 # immediately -- generalized once via bounded_driver_call, wrapping
 # every blocking driver call in the loop.
-printf '%s' '{"slow_stop_ms":1100,"slow_state_ms":1100}' > "$default_scenario_path"
+printf '%s' '{"slow_stop_ms":2000,"slow_state_ms":2000}' > "$default_scenario_path"
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{"action":"hang","ignore_hardstop_ms":100000}' > "$scenario_path"
 build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
 status=0
-YSTACK_TEST_HARDSTOP_MS=200 YSTACK_TEST_SIGKILL_MS=1200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+YSTACK_TEST_HARDSTOP_MS=200 YSTACK_TEST_SIGKILL_MS=2100 YSTACK_TEST_POLL_INTERVAL_MS=20 \
   run_launch "$base/pkg-scn.json" || status=$?
 printf '%s' '{}' > "$default_scenario_path"
 [ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
@@ -2667,9 +2667,92 @@ a = datetime.datetime.strptime(t['admitted_at'], fmt)
 b = datetime.datetime.strptime(t['terminated_at'], fmt)
 print(int((b - a).total_seconds()))
 ")
-[ "$elapsed_s" -le 1 ] ||
-  fail "finding 2: expected SIGKILL near its 1,200ms (test-shortened) deadline -- a slowed driver_stop() call (1,100ms) leaves ~1,200ms elapsed, at which point the deadline is re-checked BEFORE the next driver_state() call (also scripted slow, 1,100ms) rather than reusing a stale pre-stop budget for it -- took ${elapsed_s}s instead, consistent with the old stale-budget bug letting a second full slow call run before ever re-checking"
+[ "$elapsed_s" -le 3 ] ||
+  fail "finding 2: expected SIGKILL near its 2,100ms (test-shortened) deadline -- a slowed driver_stop() call (2,000ms) leaves ~2,100ms elapsed, at which point the deadline is re-checked BEFORE the next driver_state() call (also scripted slow, 2,000ms) rather than reusing a stale pre-stop budget for it -- took ${elapsed_s}s instead (>3s, roughly the ~4s an uncapped stale-budget call would add), consistent with the old stale-budget bug letting a second full slow call run before ever re-checking"
 pass 'finding 2: the remaining deadline budget is recomputed (and an overdue SIGKILL deadline re-checked) between driver_stop() and driver_state() in the same iteration via the shared bounded_driver_call helper -- a slowed stop call alone is enough to reach the SIGKILL deadline, and the following driver_state() call is skipped entirely rather than run with a stale budget'
+
+# =============================================================================
+# Fix round 8 (findings-477-r8.md): one test per finding.
+# =============================================================================
+
+# Finding 1 [P2]: the 58s abandonment deadline (R9.1), not just
+# cancellation, is checked before ever spawning the runtime -- a slowed
+# prep phase that alone already burns the whole (test-shortened) window
+# must finalize without launching.
+run_marker="$base/run-called-r8.marker"
+rm -f "$run_marker"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"run_marker_path":"'"$run_marker"'"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_SIGKILL_MS=200 YSTACK_TEST_RUNTIME_START_LIMIT_MS=50 YSTACK_TEST_SLOW_RUNTIME_START_MS=400 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 1: expected exit 0, got $status ($(cat "$base/err"))"
+[ -e "$run_marker" ] &&
+  fail "finding 1: expected the runtime never to be spawned once the 58s (test-shortened) abandonment deadline had already passed during prep, but its marker file exists"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+has_timeout=0
+if printf '%s' "$reasons" | grep -q "failure.supervisor-timeout"; then has_timeout=1; fi
+[ "$runtime" = error ] && [ "$has_timeout" -eq 1 ] ||
+  fail "finding 1: expected lifecycle.runtime error with failure.supervisor-timeout, got $runtime / $reasons"
+pass 'finding 1: a slowed prep phase (write_launch_disks, YSTACK_TEST_SLOW_RUNTIME_START_MS) that alone already exceeds the 58s (test-shortened) abandonment deadline finalizes without ever spawning the runtime -- proven by a marker file only the driver'"'"'s run subcommand creates -- rather than launching a VM only for the poll loop to kill it on its very first iteration'
+
+# Finding 2 [P2] (R7.3): a report claiming tree_terminated: false but a
+# "complete" observation on some row is inconsistent (a counter can't be
+# complete before the tree it's measuring is confirmed terminated) --
+# refused as an invalid export, the spec-faithful choice used throughout
+# this function for every other cross-field violation, never silently
+# downgraded to partial/unavailable.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"report_overrides":{"tree_terminated":false}}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+run_launch "$base/pkg-scn.json" || fail "finding 2: expected exit 0"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] && [ "$cpu_obs" = unavailable ] ||
+  fail "finding 2: expected lifecycle.runtime error and every guest row (e.g. cpu_time_ms) unavailable for a report claiming tree_terminated: false alongside complete observations, got $runtime / $cpu_obs"
+pass 'finding 2: a report with tree_terminated: false but limits rows marked complete is refused as an invalid export (R7.3) -- every guest row then unavailable, never a run_vm that copies complete counters collected before the tree it measures was even confirmed terminated'
+
+# Finding 3 [P2] (R10.4): the verifier is read once, during phase B
+# (measure_identities), and those bytes are reused directly by the
+# admitted path -- never a second read through the same fd afterward,
+# which could previously raise Refusal(E_CONFIG)/exit 65 with the
+# attempt already claimed and no receipt. Armed for "verifier" here,
+# after the attempt is claimed (phase B runs inside the claimed try:
+# block): an unreadable verifier still yields an orderly refused
+# receipt (launch.identity-missing), never a crash -- and structurally,
+# since only one read site exists now at all, the original two-reads
+# race this finding described can no longer happen.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_IDENTITY_UNREADABLE=verifier run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 3: expected exit 0 (an orderly refused receipt, never phase-A exit 65), got $status ($(cat "$base/err"))"
+[ -f "$store_root/$attempt_id/receipt.json" ] || fail "finding 3: expected a receipt to be written despite the unreadable verifier"
+admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.reason_ids' "$store_root/$attempt_id/payload/refusal.json")
+[ "$admission" = refused ] && [ "$reasons" = '["launch.identity-missing"]' ] ||
+  fail "finding 3: expected lifecycle.admission refused with launch.identity-missing alone, got $admission / $reasons"
+pass 'finding 3: an unreadable verifier (armed after the attempt is claimed, inside phase B'"'"'s own single measure_identities read) still yields an orderly launch.identity-missing refused receipt, never an uncaught Refusal/exit 65 with a claimed, receipt-less attempt -- the second read this finding named no longer exists at all'
+
+# Adversarial pass (per the coordinator'"'"'s instruction): a work_root
+# name collision inside freeze_by_copy (mkdir_excl's FileExistsError,
+# converted internally to Refusal("E_ATTEMPT_EXISTS")) previously escaped
+# past the "except OSError:" around its call site -- Refusal is not an
+# OSError -- even though the comment right above it already promised "a
+# name collision" was covered. Reproduced directly via the existing
+# YSTACK_TEST_FREEZE_FAIL-adjacent path is not possible (that hook raises
+# OSError, already handled); this one needs freeze_by_copy's OWN
+# mkdir_excl(work_fd, attempt_id, ...) to observe a pre-existing
+# directory despite the just-passed work_root_attempt_exists check --
+# a genuine TOCTOU race with no deterministic trigger from a black-box
+# test. Fixed directly (except (OSError, Refusal):) and verified by
+# code inspection plus the full adversarial grep pass below; not given
+# its own test since it has no deterministic reproduction, consistent
+# with this file's own precedent for other unreproducible host-fault
+# paths (e.g. the ACL/ownership checks, also inspected rather than
+# black-box tested).
 
 unset YSTACK_FAKE_SCENARIO
 

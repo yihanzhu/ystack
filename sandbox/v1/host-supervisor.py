@@ -1042,7 +1042,11 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
     constituent's bytes could not be read at all (launch.identity-missing)
     -- an observed-but-unaccepted digest is still "observed". Also returns
     the raw guest_kernel_config bytes (or None), so kernel_config_ok reuses
-    this single read instead of a second one through the same fd."""
+    this single read instead of a second one through the same fd, and the
+    raw verifier bytes (or None), reused the same way by run_launch's own
+    build_input_disk call (findings-477-r8.md finding 3) instead of a
+    second read through that fd, which could otherwise raise Refusal
+    (E_CONFIG) well after the attempt is already claimed."""
     # Test-only: a real read failure on an already-R10.1-validated fd (same
     # fd the walk just opened, no re-open by path) has no natural trigger
     # short of a genuine I/O fault, so a named slot can be forced
@@ -1082,7 +1086,15 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
         return ("observed", digest) if digest is not None else ("unobserved", None)
 
     result = {slot: observe_digest(hash_slot(slot)) for slot in
-              ("guest_kernel", "guest_init", "guest_supervisor", "image", "verifier", "toolchain")}
+              ("guest_kernel", "guest_init", "guest_supervisor", "image", "toolchain")}
+    # findings-477-r8.md finding 3 (R10.4): the verifier is the one slot
+    # whose bytes are needed again later (build_input_disk's own
+    # "verifier" record) -- read and retained HERE, through this single
+    # already-R10.1-validated fd, computing its digest from those same
+    # retained bytes (never a second hash_slot()-then-reread pair) so
+    # the caller never needs its own later re-read of this fd at all.
+    verifier_raw = read_slot("verifier")
+    result["verifier"] = observe(verifier_raw)
 
     constituents = [hash_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
     dyld_cache_digests = hash_slot_list("dyld_cache_files")
@@ -1114,15 +1126,18 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
             "python_sha256": sha256_hex(python_raw)}))
 
     result["verification_instructions"] = ("observed", sha256_hex(instruction_raw))
-    return result, kernel_config_raw
+    return result, kernel_config_raw, verifier_raw
 
 
 def phase_b_reasons(config, request_body, package, identity_fds, installed_digests,
                      registry_environments, accepted_environments, host_config_raw,
                      host_supervisor_raw, python_raw):
     """Every R4.2 reason, sorted and unique, plus the measured identities
-    dict for the receipt. Collects every applicable reason (not just the
-    first), matching the receipt's own sorted-unique reason_ids."""
+    dict for the receipt and the raw verifier bytes measure_identities
+    already read (findings-477-r8.md finding 3 -- the caller's own single
+    use of them, never a second read through that fd). Collects every
+    applicable reason (not just the first), matching the receipt's own
+    sorted-unique reason_ids."""
     test_slow("YSTACK_TEST_SLOW_PHASE_B_MS")
     subject, control = request_body["subject"], request_body["control"]
     reasons = set()
@@ -1143,8 +1158,8 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
     instruction_raw = package["instruction"]
     if sha256_hex(instruction_raw) != request_body["instruction_sha256"]:
         reasons.add("launch.instruction-mismatch")
-    measured, kernel_config_raw = measure_identities(identity_fds, instruction_raw, host_config_raw,
-                                                       host_supervisor_raw, python_raw)
+    measured, kernel_config_raw, verifier_raw = measure_identities(
+        identity_fds, instruction_raw, host_config_raw, host_supervisor_raw, python_raw)
     if any(state == "unobserved" for state, _ in measured.values()):
         reasons.add("launch.identity-missing")
     if kernel_config_raw is not None and not kernel_config_ok(kernel_config_raw):
@@ -1157,7 +1172,7 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
             reasons.add("launch.identity-unaccepted")
         if measured["verification_instructions"][1] not in accepted_identities["verification_instructions"]:
             reasons.add("launch.instruction-unaccepted")
-    return sorted(reasons), measured
+    return sorted(reasons), measured, verifier_raw
 
 
 # --- R5.1 freeze by copy: package bytes copied into supervisor-owned files
@@ -1444,6 +1459,18 @@ def control_deadline_for_elapsed(admission_mono):
     return "exceeded" if elapsed_ms > runtime_start_deadline_s() * 1000 else "met"
 
 
+def abandonment_deadline_passed(admission_mono):
+    """findings-477-r8.md finding 1 (R9.1): the host's own 58s SIGKILL/
+    abandonment deadline, measured from admission -- checked before ever
+    spawning the runtime (both at run_vm's own entry and again right
+    before Popen) so freeze, disk prep or the argv driver call alone
+    can't consume the whole supervision window and still launch a VM
+    only for the poll loop to kill it immediately, an avoidable
+    unconfirmed teardown past the deadline. Once past, the attempt
+    finalizes not-started the same way a pending cancellation does."""
+    return time.monotonic() - admission_mono >= sigkill_deadline_s()
+
+
 def export_read_deadline_s():
     return int(os.environ.get("YSTACK_TEST_EXPORT_READ_LIMIT_MS", "5000")) / 1000.0
 
@@ -1698,11 +1725,13 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     a signal could otherwise fall through."""
     work_root = config["work_root"]
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_BEFORE_SPAWN")
-    if signal_seen[0]:
+    if signal_seen[0] or abandonment_deadline_passed(admission_mono):
         # findings-477-r6.md finding 1(a): a cancellation already pending
         # before this attempt's runtime is even spawned must never start
         # one -- finalize as cancelled/error without touching disks, the
-        # driver, or Popen at all (R9.2).
+        # driver, or Popen at all (R9.2). findings-477-r8.md finding 1:
+        # the same applies once the 58s abandonment deadline has already
+        # passed (R9.1) -- spawning now would only be killed immediately.
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
     input_bytes = build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates)
     attempt_dir = os.path.join(work_root, attempt_id)
@@ -1744,13 +1773,17 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # got to answer.
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
     argv, stopped_exit_status = parsed
-    if signal_seen[0]:
+    if signal_seen[0] or abandonment_deadline_passed(admission_mono):
         # findings-477-r7.md finding 1: recheck cancellation immediately
         # before Popen, after disk prep (write_launch_disks) and
         # driver_argv() -- both take real wall time with no check point
         # of their own, so a signal arriving during either must still
         # stop the runtime from ever being spawned, not just from being
-        # supervised once it already is (R9.2).
+        # supervised once it already is (R9.2). findings-477-r8.md
+        # finding 1: the same recheck covers the 58s abandonment
+        # deadline (R9.1) -- a slow freeze/prep/argv call that alone
+        # already burned the whole window must not still spawn a VM only
+        # for the poll loop to kill it on its very first iteration.
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
 
     log_path = os.path.join(attempt_dir, "runtime.log")
@@ -2128,6 +2161,17 @@ def validate_export(export_records, plan_sha256):
             or set(body["limits"]) != set(GUEST_LIMIT_ROWS):
         return None
     if not all(guest_row_ok(name, body["limits"][name]) for name in GUEST_LIMIT_ROWS):
+        return None
+    if not body["tree_terminated"] and any(
+            body["limits"][name]["observation"] == "complete" for name in GUEST_LIMIT_ROWS):
+        # R7.3 (findings-477-r8.md finding 2): "complete" requires the
+        # guest tree to already be confirmed terminated -- a counter
+        # collected before that can never be complete (a later host stop
+        # cannot retroactively make it so), so a report claiming both is
+        # simply inconsistent. Refused as an invalid export (return None,
+        # every guest row then unavailable) rather than silently
+        # downgraded, exactly like every other cross-field violation this
+        # function already refuses -- never a repaired/reinterpreted row.
         return None
     stdout_raw, stderr_raw = named[b"stdout"], named[b"stderr"]
     if len(stdout_raw) != body["stdout_bytes"] or len(stderr_raw) != body["stderr_bytes"]:
@@ -2508,11 +2552,20 @@ def run_launch(argv):
     try:
         attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
         admitted_at = time.time()
-        reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
-                                                installed_digests, registry_environments,
-                                                accepted_environments, config_raw,
-                                                host_supervisor_raw, python_raw)
-        verifier_raw = read_all_or_refuse(identity_fds["verifier"]) if not reason_ids else None
+        reason_ids, measured, verifier_raw = phase_b_reasons(
+            config, request_body, package, identity_fds, installed_digests, registry_environments,
+            accepted_environments, config_raw, host_supervisor_raw, python_raw)
+        # findings-477-r8.md finding 3 (R10.4): verifier_raw was already
+        # read (and retained) once, inside measure_identities, through
+        # the same validated fd -- never a second read here. A second
+        # read's own failure would have raised Refusal(E_CONFIG), the
+        # phase-A exit-65 path, even though the attempt directory above
+        # is already claimed (an unretryable, receipt-less attempt); this
+        # single read is instead covered by the same "any OSError is
+        # E_STORE_WRITE/exit 70" umbrella the comment above already
+        # promises for everything from here on.
+        if reason_ids:
+            verifier_raw = None
         for fd in identity_fds.values():
             for f in (fd if isinstance(fd, list) else [fd]):
                 os.close(f)
@@ -2557,11 +2610,16 @@ def run_launch(argv):
                 # claimed store dir and no receipt (R10.4): clean up
                 # whatever this attempt's own directory holds and still
                 # write an honest failed-teardown receipt below -- only a
-                # receipt-write failure itself exits 70.
+                # receipt-write failure itself exits 70. Also catches
+                # Refusal (adversarial pass, findings-477-r8.md): a
+                # work_root name collision inside freeze_by_copy itself
+                # raises Refusal("E_ATTEMPT_EXISTS"), not OSError -- the
+                # comment above already promised "a name collision" is
+                # covered, but only OSError was actually caught here.
                 try:
                     candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
                                                       config["consumer_gid"], package)
-                except OSError:
+                except (OSError, Refusal):
                     candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
                     storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
                     run_result = stub_run_result()
