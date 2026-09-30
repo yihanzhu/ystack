@@ -135,6 +135,18 @@ def cmd_stop(args):
     # masking the very rejection host-supervisor.py must retry past.
     if not os.path.exists(args[0]):
         return 1
+    # findings-477-r7.md finding 2: slow_stop_ms (the default, non-env
+    # scenario, same as slow_state_ms above) lets a test make THIS call
+    # itself the slow one, proving the host recomputes its deadline
+    # budget fresh before the NEXT blocking call in the same iteration,
+    # not a stale pre-stop budget.
+    try:
+        default_scenario = load_scenario()
+    except (OSError, ValueError):
+        default_scenario = {}
+    slow_stop_ms = default_scenario.get("slow_stop_ms")
+    if slow_stop_ms:
+        time.sleep(slow_stop_ms / 1000.0)
     try:
         write_mailbox(args[0], hardstop=True)
     except OSError:
@@ -146,6 +158,15 @@ def cmd_run(args):
     socket_path, export_disk, input_disk = args[0], args[1], args[2]
     hs = load_host_module()
     scenario = load_scenario()
+    if scenario.get("run_marker_path"):
+        # findings-477-r7.md finding 1: proves the runtime process was
+        # actually spawned (Popen exec'd this "run" subcommand) -- a
+        # file that only ever gets created here, outside work_root so it
+        # survives the attempt directory's own teardown.
+        try:
+            open(scenario["run_marker_path"], "w").close()
+        except OSError:
+            pass
     startup_delay_ms = scenario.get("startup_delay_ms")
     if startup_delay_ms:
         # Simulates the REST endpoint not existing yet right after Popen

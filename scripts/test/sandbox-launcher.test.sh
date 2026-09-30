@@ -2623,6 +2623,54 @@ pass 'finding 2: an overdue deadline is checked before any blocking driver call 
 # and ownership of the evidence subdirectory), added directly there so
 # the two do not duplicate the same fixture and scenario setup.
 
+# =============================================================================
+# Fix round 7 (findings-477-r7.md): one test per finding.
+# =============================================================================
+
+# Finding 1 [P2]: cancellation is rechecked immediately before Popen,
+# after disk prep (write_launch_disks) and driver_argv() -- both take
+# real wall time -- so the runtime is never actually spawned.
+run_marker="$base/run-called.marker"
+rm -f "$run_marker"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"run_marker_path":"'"$run_marker"'"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+YSTACK_TEST_SELF_SIGNAL_DURING_DISK_PREP=TERM run_launch "$base/pkg-scn.json" || fail "finding 1: expected exit 0"
+[ -e "$run_marker" ] &&
+  fail "finding 1: expected the runtime process never to be spawned for a cancellation pending before Popen, but its marker file exists"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "finding 1: expected lifecycle.runtime error, got $runtime"
+pass 'finding 1: a cancellation signaled during disk prep (write_launch_disks) is still rechecked immediately before Popen -- after disk prep and driver_argv() have both consumed real wall time with no check point of their own -- so the runtime is never spawned at all, proven by a marker file only the driver'"'"'s run subcommand creates'
+
+# Finding 2 [P2]: the deadline budget is recomputed fresh between
+# driver_stop() and driver_state() in the same iteration (never a stale
+# pre-stop budget), and an overdue deadline discovered there escalates
+# immediately -- generalized once via bounded_driver_call, wrapping
+# every blocking driver call in the loop.
+printf '%s' '{"slow_stop_ms":1100,"slow_state_ms":1100}' > "$default_scenario_path"
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","ignore_hardstop_ms":100000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=200 YSTACK_TEST_SIGKILL_MS=1200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+printf '%s' '{}' > "$default_scenario_path"
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] || fail "finding 2: expected lifecycle.runtime error (SIGKILL escalation), got $runtime"
+elapsed_s=$("$python" -c "
+import json, datetime
+r = json.load(open('$store_root/$attempt_id/receipt.json'))
+t = r['body']['timing']
+fmt = '%Y-%m-%dT%H:%M:%SZ'
+a = datetime.datetime.strptime(t['admitted_at'], fmt)
+b = datetime.datetime.strptime(t['terminated_at'], fmt)
+print(int((b - a).total_seconds()))
+")
+[ "$elapsed_s" -le 1 ] ||
+  fail "finding 2: expected SIGKILL near its 1,200ms (test-shortened) deadline -- a slowed driver_stop() call (1,100ms) leaves ~1,200ms elapsed, at which point the deadline is re-checked BEFORE the next driver_state() call (also scripted slow, 1,100ms) rather than reusing a stale pre-stop budget for it -- took ${elapsed_s}s instead, consistent with the old stale-budget bug letting a second full slow call run before ever re-checking"
+pass 'finding 2: the remaining deadline budget is recomputed (and an overdue SIGKILL deadline re-checked) between driver_stop() and driver_state() in the same iteration via the shared bounded_driver_call helper -- a slowed stop call alone is enough to reach the SIGKILL deadline, and the following driver_state() call is skipped entirely rather than run with a stale budget'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

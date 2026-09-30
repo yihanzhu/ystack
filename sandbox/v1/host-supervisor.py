@@ -1516,6 +1516,7 @@ def write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, export_byte
     try:
         attempt_fd = os.open(attempt_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=work_fd)
         try:
+            test_self_signal("YSTACK_TEST_SELF_SIGNAL_DURING_DISK_PREP")  # test-only
             write_excl(attempt_fd, "input.img", input_bytes, uid, gid, mode=0o400)
             write_excl(attempt_fd, "export.img", export_bytes, uid, gid, mode=0o600)
             os.fsync(attempt_fd)
@@ -1626,6 +1627,40 @@ def driver_stop(driver_path, socket_path, timeout_s=2.0):
     return rc == 0
 
 
+def bounded_driver_call(fn, admission_mono, signal_seen, result):
+    """findings-477-r7.md: every blocking driver call in run_vm's poll
+    loop (driver_stop, driver_state) goes through this one helper so no
+    call site can regress on any of its three guarantees:
+    (a) an already-overdue SIGKILL deadline is checked BEFORE the call
+        is even attempted -- fn is never invoked once elapsed has
+        already reached sigkill_deadline_s(), no matter how it got that
+        way (including time spent in an EARLIER call this very
+        iteration, e.g. between driver_stop() and driver_state()).
+    (b) the call's own timeout is computed fresh from the time
+        remaining right now (capped by the nearer of HardStop/SIGKILL,
+        never a flat ~2s budget), not reused from before an earlier
+        call in the same iteration already spent part of it.
+    (c) cancellation is rechecked immediately after the call returns,
+        folded into result["cancelled"] the same way every other check
+        site does -- a signal arriving during the call itself is never
+        lost.
+    Returns (value, overdue): value is fn's own return value (None,
+    unused, when overdue); overdue is True when the call was skipped
+    because SIGKILL's own deadline had already passed -- the caller
+    escalates exactly as it does for the top-of-loop check."""
+    elapsed = time.monotonic() - admission_mono
+    if elapsed >= sigkill_deadline_s():
+        return None, True
+    call_budget = sigkill_deadline_s() - elapsed
+    if elapsed < hardstop_deadline_s():
+        call_budget = min(call_budget, hardstop_deadline_s() - elapsed)
+    call_budget = max(0.01, min(2.0, call_budget))
+    value = fn(call_budget)
+    if signal_seen[0]:
+        result["cancelled"] = True
+    return value, False
+
+
 def scrub_dyld_env():
     """Never launches a process with a live DYLD_* variable (hard rule)."""
     return {k: v for k, v in os.environ.items() if not k.startswith("DYLD_")}
@@ -1709,6 +1744,14 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # got to answer.
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
     argv, stopped_exit_status = parsed
+    if signal_seen[0]:
+        # findings-477-r7.md finding 1: recheck cancellation immediately
+        # before Popen, after disk prep (write_launch_disks) and
+        # driver_argv() -- both take real wall time with no check point
+        # of their own, so a signal arriving during either must still
+        # stop the runtime from ever being spawned, not just from being
+        # supervised once it already is (R9.2).
+        return stub_run_result(control_deadline_for_elapsed(admission_mono))
 
     log_path = os.path.join(attempt_dir, "runtime.log")
     log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -1733,6 +1776,18 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     stop_requested = stop_accepted = stop_is_hardstop = False
     sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
     driver_reported_error = escalated_sigkill = False
+
+    def do_sigkill():
+        # Shared by every overdue-SIGKILL check below (the loop top and
+        # after each bounded_driver_call) -- exactly one escalation,
+        # never a per-call-site copy that could drift.
+        nonlocal sigkill_sent, escalated_sigkill
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        sigkill_sent = escalated_sigkill = True
+
     while True:
         # R9.2: record cancellation before any exit check this iteration
         # (before spawn, or racing a "stopped"/exited state) -- never
@@ -1742,35 +1797,35 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
 
         # findings-477-r6.md finding 2: deadline-first -- check every
         # overdue deadline BEFORE any blocking driver call this
-        # iteration. driver_state()/driver_stop() each have their own
-        # up-to-2s budget; calling one first could itself burn the whole
-        # time remaining to HardStop or SIGKILL and escalate late.
+        # iteration, not only once at the top (findings-477-r7.md finding
+        # 2 below: bounded_driver_call repeats this same check before
+        # EVERY call it wraps, including a second call later this same
+        # iteration).
         elapsed = time.monotonic() - admission_mono
         if elapsed >= sigkill_deadline_s() and not sigkill_sent:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            sigkill_sent = escalated_sigkill = True
+            do_sigkill()
             break
         if elapsed >= hardstop_deadline_s():
             stop_is_hardstop = True
         if (result["cancelled"] or stop_is_hardstop):
             stop_requested = True
-        # Cap this iteration's blocking calls by the time left to the
-        # nearer of HardStop/SIGKILL, never a flat 2s -- so a call can't
-        # itself run past the deadline it's supposed to be bounded by.
-        call_budget = sigkill_deadline_s() - elapsed
-        if elapsed < hardstop_deadline_s():
-            call_budget = min(call_budget, hardstop_deadline_s() - elapsed)
-        call_budget = max(0.01, min(2.0, call_budget))
 
         if stop_requested and not stop_accepted:
             # finding 1(b): retry every iteration until the runtime
-            # actually ACCEPTS the stop (or SIGKILL fires above) -- a
-            # rejected stop (REST endpoint not up yet) must not silently
-            # give up and let a cancelled/overdue VM run uncontested.
-            stop_accepted = driver_stop(driver_path, socket_path, timeout_s=call_budget)
+            # actually ACCEPTS the stop (or SIGKILL fires) -- a rejected
+            # stop (REST endpoint not up yet) must not silently give up
+            # and let a cancelled/overdue VM run uncontested.
+            accepted, overdue = bounded_driver_call(
+                lambda budget: driver_stop(driver_path, socket_path, timeout_s=budget),
+                admission_mono, signal_seen, result)
+            if overdue:
+                # findings-477-r7.md finding 2: the stop call above may
+                # itself have consumed the time remaining -- re-checked
+                # here (not the stale budget from before it), never
+                # deferred to the next iteration's own top-of-loop check.
+                do_sigkill()
+                break
+            stop_accepted = accepted
             if stop_accepted and stop_is_hardstop:
                 # Only an ACCEPTED stop counts as "HardStop issued" for
                 # the receipt's timing/limit fields (runtime_error, the
@@ -1778,10 +1833,12 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 result["hard_stop"] = True
 
         since_spawn = time.monotonic() - spawn_mono
-        state = driver_state(driver_path, socket_path, timeout_s=call_budget)
-        elapsed = time.monotonic() - admission_mono  # recomputed after driver_state
-        if signal_seen[0]:
-            result["cancelled"] = True
+        state, overdue = bounded_driver_call(
+            lambda budget: driver_state(driver_path, socket_path, timeout_s=budget),
+            admission_mono, signal_seen, result)
+        if overdue:
+            do_sigkill()
+            break
 
         if state == "stopped":
             confirmed_stopped = stopped_via_mailbox = True
