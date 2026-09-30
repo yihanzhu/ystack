@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+import select
 import signal
 import stat
 import subprocess
@@ -1323,17 +1324,25 @@ def create_attempt_dir(store_fd, uid, gid, attempt_id):
         refuse("E_ATTEMPT_EXISTS")
 
 
-def write_attempt_result(store_fd, attempt_fd, uid, gid, receipt_bytes, payload):
-    """Writes payload/ and receipt.json into the already-claimed attempt_fd,
-    then fsyncs up to the store root."""
+def write_payload(attempt_fd, uid, gid, payload):
+    """Writes payload/ into the already-claimed attempt_fd. Split from
+    receipt.json's own write (below) so its duration can be measured and
+    folded into control_deadline (R9.4) before the receipt embedding that
+    same control_deadline is built -- the lifecycle is only finalized
+    after payload writing, per spec, not before it."""
+    payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
     try:
-        payload_fd = mkdir_excl(attempt_fd, "payload", uid, gid)
-        try:
-            for name, data in payload:
-                write_excl(payload_fd, name, data, uid, gid)
-            os.fsync(payload_fd)
-        finally:
-            os.close(payload_fd)
+        for name, data in payload:
+            write_excl(payload_fd, name, data, uid, gid)
+        os.fsync(payload_fd)
+    finally:
+        os.close(payload_fd)
+
+
+def write_receipt_file(store_fd, attempt_fd, uid, gid, receipt_bytes):
+    """Writes receipt.json into the already-claimed attempt_fd (payload/
+    already written by write_payload), then fsyncs up to the store root."""
+    try:
         write_excl(attempt_fd, "receipt.json", receipt_bytes, uid, gid)
         os.fsync(attempt_fd)
     finally:
@@ -1371,6 +1380,32 @@ def sigkill_deadline_s():
 
 def poll_interval_s():
     return int(os.environ.get("YSTACK_TEST_POLL_INTERVAL_MS", "100")) / 1000.0
+
+
+# R9.4's four control_deadline windows -- each a real 10s/5s bound, test-
+# lowered the same way as the HardStop/SIGKILL clock above so a slow-
+# injection hook (YSTACK_TEST_SLOW_<STAGE>_MS, at each stage's own call
+# site) can trip "exceeded" fast and deterministically.
+def runtime_start_deadline_s():
+    return int(os.environ.get("YSTACK_TEST_RUNTIME_START_LIMIT_MS", "10000")) / 1000.0
+
+
+def export_read_deadline_s():
+    return int(os.environ.get("YSTACK_TEST_EXPORT_READ_LIMIT_MS", "5000")) / 1000.0
+
+
+def storage_removal_deadline_s():
+    return int(os.environ.get("YSTACK_TEST_STORAGE_REMOVAL_LIMIT_MS", "5000")) / 1000.0
+
+
+def payload_write_deadline_s():
+    return int(os.environ.get("YSTACK_TEST_PAYLOAD_WRITE_LIMIT_MS", "5000")) / 1000.0
+
+
+def test_slow(env_name):
+    ms = os.environ.get(env_name)
+    if ms:
+        time.sleep(int(ms) / 1000.0)
 
 
 def build_plan_json(manifest, instruction_sha256, verifier_sha256):
@@ -1424,15 +1459,69 @@ def write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, export_byte
 
 def run_driver(driver_path, args, timeout_s=2.0):
     """The fixed driver interface (plan.md): empty environment, stdin
-    /dev/null, stdout capped 65,536 bytes, 2,000 ms per call."""
+    /dev/null, stdout capped 65,536 bytes, 2,000 ms per call. Reads with a
+    bounded os.read/select loop (cap+1 bytes) rather than subprocess.run's
+    own unbounded PIPE buffering: a driver producing more than the
+    interface's 65,536-byte limit is a hard failure (None), never a
+    silent truncation, and can't grow the pipe buffer past what the
+    interface allows within the two-second call budget."""
+    cap = 65536
     try:
-        with open(os.devnull, "rb") as devnull:
-            proc = subprocess.run([driver_path] + list(args), stdin=devnull,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   env={}, timeout=timeout_s)
-    except (OSError, subprocess.SubprocessError):
+        devnull = open(os.devnull, "rb")
+    except OSError:
         return None, b""
-    return proc.returncode, proc.stdout[:65536]
+    try:
+        try:
+            proc = subprocess.Popen([driver_path] + list(args), stdin=devnull,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     env={}, start_new_session=True)
+        except OSError:
+            return None, b""
+    finally:
+        devnull.close()
+    deadline = time.monotonic() + timeout_s
+    chunks, total, overflow = [], 0, False
+    read_fd = proc.stdout.fileno()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            ready, _, _ = select.select([read_fd], [], [], remaining)
+        except OSError:
+            break
+        if not ready:
+            break
+        try:
+            chunk = os.read(read_fd, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        total += len(chunk)
+        chunks.append(chunk)
+        if total > cap:
+            overflow = True
+            break
+    try:
+        proc.stdout.close()
+    except OSError:
+        pass
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                return None, b""
+    if overflow:
+        return None, b""
+    return proc.returncode, b"".join(chunks)
 
 
 def driver_argv(driver_path, start_path):
@@ -1488,12 +1577,24 @@ def _drain_capped(read_fd, cap, log_fd):
 
 
 def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_raw, verifier_raw,
-           candidates, plan_sha256):
+           candidates, plan_sha256, admission_mono, signal_seen):
     """R5-R9's real launch: disks, start.json + driver argv, spawn, poll/
     HardStop/SIGKILL, reap, read the export frame. Never raises for a
     runtime-side failure -- every such case still yields an honest
-    (failed) result; only a host filesystem OSError propagates."""
+    (failed) result; only a host filesystem OSError propagates (the
+    caller handles a launch-file write failure the same as a freeze
+    failure, R10.4). admission_mono/signal_seen come from the caller,
+    installed at admission (R9.2) and covering disk prep, spawn, polling,
+    reaping and finalization alike -- not just this function's own
+    lifetime, closing the window between Popen and handler installation
+    a signal could otherwise fall through."""
     work_root = config["work_root"]
+    if os.environ.get("YSTACK_TEST_LAUNCH_WRITE_FAIL"):
+        # Test-only: simulates an ENOSPC/write-error writing input.img,
+        # export.img, start.json or runtime.log -- the caller (run_launch)
+        # must handle this exactly like a freeze failure (R10.4), not let
+        # it propagate to the outer exit-70 handler.
+        raise OSError("YSTACK_TEST_LAUNCH_WRITE_FAIL")
     input_bytes = build_input_disk(plan_bytes, instruction_raw, verifier_raw, candidates)
     write_launch_disks(work_root, attempt_id, uid, gid, input_bytes, build_export_disk())
     attempt_dir = os.path.join(work_root, attempt_id)
@@ -1509,6 +1610,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
 
     result = {"runtime": "error", "tree_terminated": False, "cancelled": False,
               "hard_stop": False, "control_deadline": "met", "export": None}
+    test_slow("YSTACK_TEST_SLOW_RUNTIME_START_MS")
     try:
         fd = os.open(start_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
@@ -1541,48 +1643,52 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd), daemon=True)
     drain.start()
 
-    start_mono = time.monotonic()
-    hard_stop_sent = sigkill_sent = confirmed_stopped = False
-    signal_seen = [False]
+    runtime_start_ms = (time.monotonic() - admission_mono) * 1000
+    if runtime_start_ms > runtime_start_deadline_s() * 1000:
+        result["control_deadline"] = "exceeded"
 
-    def on_signal(signum, frame):
-        signal_seen[0] = True
-
-    old = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
-    try:
-        while True:
-            elapsed = time.monotonic() - start_mono
-            if driver_state(driver_path, socket_path) == "stopped":
+    hard_stop_sent = sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
+    driver_reported_error = False
+    while True:
+        elapsed = time.monotonic() - admission_mono
+        state = driver_state(driver_path, socket_path)
+        if state == "error":
+            driver_reported_error = True
+            break
+        if state == "stopped":
+            confirmed_stopped = stopped_via_mailbox = True
+            break
+        exit_code = proc.poll()
+        if exit_code is not None:
+            if exit_code == stopped_exit_status and not hard_stop_sent:
                 confirmed_stopped = True
-                break
-            exit_code = proc.poll()
-            if exit_code is not None:
-                if exit_code == stopped_exit_status and not hard_stop_sent:
-                    confirmed_stopped = True
-                break
-            if signal_seen[0] and not hard_stop_sent:
-                result["cancelled"] = True
-                driver_stop(driver_path, socket_path)
-                hard_stop_sent = True
-            elif elapsed >= hardstop_deadline_s() and not hard_stop_sent:
-                result["hard_stop"] = True
-                driver_stop(driver_path, socket_path)
-                hard_stop_sent = True
-            elif elapsed >= sigkill_deadline_s() and not sigkill_sent:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                sigkill_sent = True
-                break
-            time.sleep(poll_interval_s())
-    finally:
-        for sig, handler in old.items():
-            signal.signal(sig, handler)
-    end_mono = time.monotonic()
+            break
+        if signal_seen[0] and not hard_stop_sent:
+            result["cancelled"] = True
+            driver_stop(driver_path, socket_path)
+            hard_stop_sent = True
+        elif elapsed >= hardstop_deadline_s() and not hard_stop_sent:
+            result["hard_stop"] = True
+            driver_stop(driver_path, socket_path)
+            hard_stop_sent = True
+        elif elapsed >= sigkill_deadline_s() and not sigkill_sent:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            sigkill_sent = True
+            break
+        time.sleep(poll_interval_s())
 
+    # R9.3: tree_terminated requires BOTH a confirmed stop and a
+    # successful waitpid reap -- a driver "stopped" report whose process
+    # never actually gets reaped (or a fake wait() timeout, the
+    # test-only YSTACK_TEST_REAP_FAIL hook below) must not claim
+    # termination the host never actually confirmed.
+    reaped = False
     try:
         proc.wait(timeout=5)
+        reaped = True
     except subprocess.TimeoutExpired:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -1590,44 +1696,63 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
             pass
         try:
             proc.wait(timeout=5)
+            reaped = True
         except subprocess.TimeoutExpired:
             sigkill_sent = True
+    if os.environ.get("YSTACK_TEST_REAP_FAIL"):
+        reaped = False
+    # A "stopped" mailbox report is independent of the process's actual
+    # exit status: a runtime that says stopped but then exits abnormally
+    # (crashes right after writing its own report) is still an error,
+    # never silently accepted as a clean completion.
+    if stopped_via_mailbox and reaped and proc.returncode is not None \
+            and proc.returncode != stopped_exit_status:
+        driver_reported_error = True
     drain.join(timeout=2)
     os.close(read_fd)
     os.close(log_fd)
 
+    tree_terminated = confirmed_stopped and reaped
+    end_mono = time.monotonic()
     terminated_at = time.time()
-    tree_terminated = confirmed_stopped
     verifier_started = False
     guest = None
     tree_deadline_fired = False
     exit_state, exit_code = "not-started", None
     empty = empty_sha256()
     stdout_raw, stderr_raw = b"", b""
+    evidence_payload = []
     evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
                                           "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    export_read_began = time.monotonic()
+    test_slow("YSTACK_TEST_SLOW_EXPORT_READ_MS")
     try:
         with open(export_path, "rb") as fh:
             export_raw = fh.read()
         export_records = frame_read(export_raw)
     except (OSError, FrameError):
         export_records = None
+    if (time.monotonic() - export_read_began) > export_read_deadline_s():
+        result["control_deadline"] = "exceeded"
     validated = validate_export(export_records, plan_sha256)
     if validated is not None:
         gbody = validated["body"]
-        verifier_started = bool(gbody["verifier_started"])
-        tree_deadline_fired = bool(gbody["tree_deadline_fired"])
+        verifier_started = gbody["verifier_started"]
+        tree_deadline_fired = gbody["tree_deadline_fired"]
         guest = gbody["limits"]
         stdout_raw, stderr_raw = validated["stdout"], validated["stderr"]
+        evidence_payload = [(("evidence.%s" % ef["name_hex"]), ef["content"])
+                             for ef in validated["evidence"]]
         evidence_manifest_bytes = canonical(
-            {"body": {"files": sorted(validated["evidence"], key=lambda f: f["name_hex"])},
+            {"body": {"files": sorted(
+                [{"name_hex": ef["name_hex"], "sha256": ef["sha256"], "size_bytes": ef["size_bytes"]}
+                 for ef in validated["evidence"]], key=lambda f: f["name_hex"])},
              "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
-        if gbody["exit_state"] in ("exited", "signaled"):
-            exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
+        exit_state, exit_code = gbody["exit_state"], gbody["exit_code"]
     runtime_error = (guest is None or not verifier_started or result["hard_stop"]
-                     or result["cancelled"] or not tree_terminated)
+                     or result["cancelled"] or not tree_terminated or driver_reported_error)
     wall_complete = tree_terminated
-    wall_ms = math.ceil((end_mono - start_mono) * 1000) if wall_complete else None
+    wall_ms = math.ceil((end_mono - admission_mono) * 1000) if wall_complete else None
     return {
         "runtime": "error" if runtime_error else "completed",
         "control_deadline": result["control_deadline"],
@@ -1640,7 +1765,10 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         "evidence_manifest_sha256": sha256_hex(evidence_manifest_bytes),
         "stdout_raw": stdout_raw, "stderr_raw": stderr_raw,
         "evidence_manifest_bytes": evidence_manifest_bytes,
-        "limits": build_limit_rows(guest, wall_ms, tree_deadline_fired or result["hard_stop"], wall_complete),
+        "evidence_payload": evidence_payload,
+        "limits": build_limit_rows(guest, wall_ms,
+                                    tree_deadline_fired or result["hard_stop"] or result["cancelled"],
+                                    wall_complete),
     }
 
 
@@ -1669,6 +1797,36 @@ def guest_row_ok(row):
     return is_int(row["observed"])
 
 
+def report_body_ok(body):
+    """R8.2's exact report field types/ranges/exit-state consistency,
+    checked before any field is trusted: a checksummed report with
+    evidence_files: null, a string exit_code, a non-bool tree_terminated
+    or a negative stdout_bytes must be refused the same as a damaged
+    frame, never raise (a TypeError abandoning cleanup and the receipt)
+    or silently pass through into a receipt sandbox-receipt.jq rejects."""
+    if not (isinstance(body.get("plan_sha256"), str) and sha256_ok(body["plan_sha256"])):
+        return False
+    for key in ("verifier_started", "tree_deadline_fired", "tree_terminated"):
+        if not isinstance(body.get(key), bool):
+            return False
+    exit_state = body.get("exit_state")
+    if exit_state not in ("exited", "signaled"):
+        return False
+    exit_code = body.get("exit_code")
+    if exit_state == "exited":
+        if not is_int(exit_code) or not (0 <= exit_code <= 255):
+            return False
+    elif exit_code is not None:
+        return False
+    if not is_int(body.get("stdout_bytes")) or body["stdout_bytes"] < 0:
+        return False
+    if not is_int(body.get("stderr_bytes")) or body["stderr_bytes"] < 0:
+        return False
+    if not isinstance(body.get("evidence_files"), list):
+        return False
+    return True
+
+
 def validate_export(export_records, plan_sha256):
     """R8.2: the host's own reading of the export frame against its plan
     digest and sizes; None on any absence, damage or mismatch -- every
@@ -1691,26 +1849,45 @@ def validate_export(export_records, plan_sha256):
             "evidence_files", "exit_code", "exit_state", "limits", "plan_sha256", "stderr_bytes",
             "stdout_bytes", "tree_deadline_fired", "tree_terminated", "verifier_started"}):
         return None
-    if body.get("plan_sha256") != plan_sha256 or not isinstance(body.get("limits"), dict) \
+    if not report_body_ok(body):
+        return None
+    if body["plan_sha256"] != plan_sha256 or not isinstance(body.get("limits"), dict) \
             or set(body["limits"]) != set(GUEST_LIMIT_ROWS):
         return None
     if not all(guest_row_ok(body["limits"][name]) for name in GUEST_LIMIT_ROWS):
         return None
     stdout_raw, stderr_raw = named.get(b"stdout", b""), named.get(b"stderr", b"")
-    if len(stdout_raw) != body.get("stdout_bytes") or len(stderr_raw) != body.get("stderr_bytes"):
+    if len(stdout_raw) != body["stdout_bytes"] or len(stderr_raw) != body["stderr_bytes"]:
         return None
-    evidence, seen_names = [], set()
-    for ef in body.get("evidence_files", []):
+    evidence, seen_names, total_bytes = [], set(), len(stdout_raw) + len(stderr_raw)
+    for ef in body["evidence_files"]:
+        # name_hex is used as a payload filename (write_payload, below):
+        # sha256_ok's exact lowercase-hex-digest shape keeps it a safe,
+        # bounded filename component, never a path-escaping string.
         if not (isinstance(ef, dict) and set(ef) == {"index", "name_hex", "size_bytes"}
-                and is_int(ef.get("index")) and isinstance(ef.get("name_hex"), str)):
+                and is_int(ef.get("index")) and 0 <= ef["index"] <= 9999
+                and isinstance(ef.get("name_hex"), str) and sha256_ok(ef["name_hex"])
+                and is_int(ef.get("size_bytes")) and ef["size_bytes"] >= 0):
             return None
         name = ("evidence/%04d" % ef["index"]).encode()
         content = named.get(name)
         if content is None or len(content) != ef["size_bytes"] or ef["name_hex"] in seen_names:
             return None
         seen_names.add(ef["name_hex"])
+        total_bytes += ef["size_bytes"]
         evidence.append({"name_hex": ef["name_hex"], "sha256": sha256_hex(content),
-                          "size_bytes": ef["size_bytes"]})
+                          "size_bytes": ef["size_bytes"], "content": content})
+    # R8.2: an exact evidence inventory -- no frame record under evidence/
+    # may go undeclared -- and the guest's own complete output_bytes
+    # observation must reconcile against every declared record's actual
+    # size (stdout + stderr + evidence), not just each one checked alone.
+    declared_names = set(("evidence/%04d" % ef["index"]).encode() for ef in body["evidence_files"])
+    present_names = set(n for n in named if n.startswith(b"evidence/"))
+    if declared_names != present_names:
+        return None
+    output_row = body["limits"]["output_bytes"]
+    if output_row["observation"] == "complete" and output_row["observed"] != total_bytes:
+        return None
     return {"body": body, "stdout": stdout_raw, "stderr": stderr_raw, "evidence": evidence}
 
 
@@ -1719,30 +1896,36 @@ def stub_run_result():
     failure before any disk was written): runtime error, nothing to
     terminate, empty payload -- verifier_started is false either way."""
     empty = empty_sha256()
-    empty_manifest = canonical({"body": {"files": []}, "id": "evidence-manifest",
-                                 "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    empty_manifest, empty_manifest_sha = empty_evidence_manifest()
     return {"runtime": "error", "control_deadline": "met", "tree_terminated": True,
             "terminated_at": time.time(), "exit_state": "not-started", "exit_code": None,
             "stdout_sha256": empty, "stderr_sha256": empty,
-            "evidence_manifest_sha256": sha256_hex(empty_manifest),
+            "evidence_manifest_sha256": empty_manifest_sha,
             "stdout_raw": b"", "stderr_raw": b"", "evidence_manifest_bytes": empty_manifest,
+            "evidence_payload": [],
             "limits": build_limit_rows(None, None, False, False)}
 
 
-def build_limit_rows(guest, wall_ms, wall_reached, wall_complete):
+def build_limit_rows(guest, wall_ms, wall_stop_or_deadline, wall_complete):
     """The six R7.3 rows: the five guest-reported ones (plus mechanism_id/
     observer/bound), CPU and wall always enforcement: "none" (R7.2) -- wall
     is the one host-only row. mechanism_id is always the row's own R7.1
     fixed constant (LIMIT_MECHANISM_IDS): R7.1's table describes the host's
     own configured mechanism for the row, not something the guest, which
-    never sends the field at all (R8.2), could report or vary."""
+    never sends the field at all (R8.2), could report or vary. wall's
+    reached (R7.3) is true for any issued host stop (HardStop or a
+    cancellation, both folded into wall_stop_or_deadline by the caller),
+    the guest's own tree deadline firing (also folded in), or the observed
+    wall time itself reaching the bound -- not just the first two."""
     rows = {}
     for name, bound, observer in LIMIT_ROWS:
         mechanism_id = LIMIT_MECHANISM_IDS[name]
         if name == "wall_time_ms":
-            rows[name] = {"bound": bound, "observed": wall_ms if wall_complete else None,
+            observed = wall_ms if wall_complete else None
+            reached = bool(wall_stop_or_deadline or (observed is not None and observed >= bound))
+            rows[name] = {"bound": bound, "observed": observed,
                           "resolution": 1, "observation": "complete" if wall_complete else "unavailable",
-                          "enforcement": "none", "reached": wall_reached,
+                          "enforcement": "none", "reached": reached,
                           "mechanism_id": mechanism_id, "observer": observer}
         elif guest is None:
             rows[name] = {"bound": bound, "observed": None, "resolution": 1,
@@ -1789,6 +1972,18 @@ def utc_stamp(seconds):
 
 def empty_sha256():
     return sha256_hex(b"")
+
+
+def empty_evidence_manifest():
+    """The one canonical empty sandbox_evidence_manifest document, and its
+    own digest -- shared by every writer (a refused receipt, stub_run_result,
+    build_receipt's own run-is-None branch) so a receipt's
+    payload.evidence_manifest_sha256 always binds the exact bytes actually
+    written to payload/evidence-manifest.json, never a separately-hashed
+    empty string."""
+    manifest = canonical({"body": {"files": []}, "id": "evidence-manifest",
+                          "kind": "sandbox_evidence_manifest", "schema_version": 1})
+    return manifest, sha256_hex(manifest)
 
 
 LIMIT_REASON = {"cpu_time_ms": "limit.cpu-time-reached", "wall_time_ms": "limit.wall-time-reached",
@@ -1848,7 +2043,7 @@ def build_receipt(config, accepted_set_sha256, request_doc, request_body, launch
                   for name, bound, observer in LIMIT_ROWS}
         lifecycle = {"admission": admission, "runtime": "completed", "control_deadline": "met"}
         payload = {"stdout_sha256": empty, "stderr_sha256": empty,
-                   "evidence_manifest_sha256": empty_sha256(), "exit_state": "not-started",
+                   "evidence_manifest_sha256": empty_evidence_manifest()[1], "exit_state": "not-started",
                    "exit_code": None}
         teardown = {"state": "confirmed" if storage_destroyed else "failed",
                     "tree_terminated": True, "storage_destroyed": storage_destroyed}
@@ -2023,6 +2218,7 @@ def run_launch(argv):
     try:
         attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
         admitted_at = time.time()
+        admission_mono = time.monotonic()
         reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
                                                 installed_digests, registry_environments,
                                                 accepted_environments, config_raw,
@@ -2035,42 +2231,83 @@ def run_launch(argv):
         if reason_ids:
             # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
             # ran, so nothing errored), payload/refusal.json alongside it.
-            empty_manifest = canonical({"body": {"files": []}, "id": "evidence-manifest",
-                                         "kind": "sandbox_evidence_manifest", "schema_version": 1})
+            empty_manifest, _ = empty_evidence_manifest()
             payload = [("stdout", b""), ("stderr", b""), ("evidence-manifest.json", empty_manifest),
                        ("refusal.json", canonical({"reason_ids": reason_ids}))]
+            write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload)
             receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                            launch_request_sha256, admitted_at, identities, "refused", None)
         else:
-            # R5.1: freeze by copy before anything else -- so a later change
-            # by the consumer's account cannot reach the guest. A freeze
-            # failure itself (ENOSPC, a write error, a name collision) must
-            # never escape as a traceback with a claimed store dir and no
-            # receipt (R10.4): clean up whatever this attempt's own
-            # directory holds and still write an honest failed-teardown
-            # receipt below -- only a receipt-write failure itself exits 70.
+            # R9.2: cancellation handling is installed here, at admission,
+            # and stays installed through disk prep, spawn, polling,
+            # reaping AND finalization (restored only in the finally
+            # below) -- not just around the runtime's own poll loop, so a
+            # signal arriving in any of those windows still takes the
+            # HardStop path (once a runtime exists to stop) and still
+            # yields a receipt, never the process just dying by default
+            # disposition with the attempt directory claimed and nothing
+            # written.
+            signal_seen = [False]
+
+            def on_signal(signum, frame):
+                signal_seen[0] = True
+
+            old_handlers = {sig: signal.signal(sig, on_signal)
+                             for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
             try:
-                candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
-                                                  config["consumer_gid"], package)
-            except OSError:
-                candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
-                storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-                run_result = stub_run_result()
-            else:
-                manifest = parse_manifest(package["manifest.json"])
-                plan_bytes = build_plan_json(manifest, sha256_hex(package["instruction"]),
-                                              measured["verifier"][1])
-                run_result = run_vm(config, attempt_id, principal_uid, config["consumer_gid"],
-                                     config["runtime"]["driver"], plan_bytes, package["instruction"],
-                                     verifier_raw, package["candidate"], sha256_hex(plan_bytes))
-                storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
-            payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
-                       ("evidence-manifest.json", run_result["evidence_manifest_bytes"])]
-            receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
-                                           launch_request_sha256, admitted_at, identities, "admitted",
-                                           run_result, storage_destroyed)
-        write_attempt_result(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
-                              receipt_bytes, payload)
+                # R5.1: freeze by copy before anything else -- so a later
+                # change by the consumer's account cannot reach the guest.
+                # A freeze failure itself (ENOSPC, a write error, a name
+                # collision) must never escape as a traceback with a
+                # claimed store dir and no receipt (R10.4): clean up
+                # whatever this attempt's own directory holds and still
+                # write an honest failed-teardown receipt below -- only a
+                # receipt-write failure itself exits 70.
+                try:
+                    candidate_names = freeze_by_copy(config, attempt_id, principal_uid,
+                                                      config["consumer_gid"], package)
+                except OSError:
+                    candidate_names = ["%05d" % i for i in range(len(package["candidate"]))]
+                    storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+                    run_result = stub_run_result()
+                else:
+                    manifest = parse_manifest(package["manifest.json"])
+                    plan_bytes = build_plan_json(manifest, sha256_hex(package["instruction"]),
+                                                  measured["verifier"][1])
+                    try:
+                        run_result = run_vm(config, attempt_id, principal_uid, config["consumer_gid"],
+                                             config["runtime"]["driver"], plan_bytes,
+                                             package["instruction"], verifier_raw, package["candidate"],
+                                             sha256_hex(plan_bytes), admission_mono, signal_seen)
+                    except OSError:
+                        # Same as a freeze failure (R10.4): a launch-file
+                        # write failure (input.img/export.img/start.json/
+                        # runtime.log) must not propagate to the outer
+                        # exit-70 handler and skip cleanup.
+                        run_result = stub_run_result()
+                    storage_removal_began = time.monotonic()
+                    test_slow("YSTACK_TEST_SLOW_STORAGE_REMOVAL_MS")
+                    storage_destroyed = remove_frozen(config["work_root"], attempt_id, candidate_names)
+                    if (time.monotonic() - storage_removal_began) > storage_removal_deadline_s():
+                        run_result["control_deadline"] = "exceeded"
+                test_slow("YSTACK_TEST_SLOW_FINALIZE_MS")
+                payload = [("stdout", run_result["stdout_raw"]), ("stderr", run_result["stderr_raw"]),
+                           ("evidence-manifest.json", run_result["evidence_manifest_bytes"])] + \
+                          run_result["evidence_payload"]
+                payload_write_began = time.monotonic()
+                test_slow("YSTACK_TEST_SLOW_PAYLOAD_WRITE_MS")
+                write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload)
+                if (time.monotonic() - payload_write_began) > payload_write_deadline_s():
+                    run_result["control_deadline"] = "exceeded"
+                # The lifecycle (control_deadline included) is only
+                # finalized here, after payload writing -- never before.
+                receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
+                                               launch_request_sha256, admitted_at, identities,
+                                               "admitted", run_result, storage_destroyed)
+            finally:
+                for sig, handler in old_handlers.items():
+                    signal.signal(sig, handler)
+        write_receipt_file(store_fd, attempt_fd, principal_uid, config["consumer_gid"], receipt_bytes)
     except Refusal:
         raise
     except OSError:

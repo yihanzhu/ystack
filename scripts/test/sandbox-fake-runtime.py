@@ -50,6 +50,20 @@ def load_scenario():
 
 
 def cmd_argv(args):
+    # argv/state/stop all run under an empty environment (the fixed driver
+    # interface), so load_scenario() always falls back to the default,
+    # non-env path here regardless of what a test set $YSTACK_FAKE_SCENARIO
+    # to for the "run" stage -- read only for the one test-only knob below.
+    try:
+        default_scenario = load_scenario()
+    except (OSError, ValueError):
+        default_scenario = {}
+    if default_scenario.get("oversized_argv"):
+        # Proves the host's own bounded driver-output reader: this exceeds
+        # the fixed 65,536-byte interface cap, so it must be a hard
+        # failure (None), never a silent truncation to 65,536 bytes.
+        sys.stdout.write("x" * 200000)
+        return 0
     with open(args[0], "rb") as fh:
         start = json.loads(fh.read())
     b = start["body"]
@@ -125,6 +139,15 @@ def cmd_run(args):
     if scenario.get("action") == "no_export":
         write_mailbox(socket_path, state="stopped")
         return 0
+    if scenario.get("action") == "stopped_then_bad_exit":
+        # Proves the host's own driver_reported_error tracking: the
+        # mailbox says stopped (driver_state()=="stopped", confirming the
+        # tree the same way a clean run does), but the process then exits
+        # with an abnormal code anyway -- a runtime that crashes right
+        # after writing its own "stopped" report, still an error, never
+        # silently accepted as a clean completion.
+        write_mailbox(socket_path, state="stopped")
+        os._exit(scenario.get("bad_exit_code", 7))
     if stopped_via_hardstop and not scenario.get("hardstop_writes_export"):
         # A real vfkit HardStop forces the VM off before the guest
         # supervisor can sync and power off on its own (R8.1's own
@@ -171,6 +194,11 @@ def cmd_run(args):
                   "kind": "sandbox_guest_report", "schema_version": 1}
     records = [(b"report.json", hs.canonical(report_doc)), (b"stdout", stdout_bytes),
                (b"stderr", stderr_bytes)] + evidence_records
+    if scenario.get("extra_undeclared_evidence"):
+        # R8.2's exact evidence inventory: a frame record under evidence/
+        # that evidence_files never declared must be caught, not silently
+        # ignored (the declared entries alone all still check out fine).
+        records.append((b"evidence/9999", b"undeclared"))
     frame = hs.frame_write(records)
     if scenario.get("damage_export"):
         frame = frame[:-1]
