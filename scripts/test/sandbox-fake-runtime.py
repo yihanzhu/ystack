@@ -112,6 +112,13 @@ def cmd_run(args):
     socket_path, export_disk, input_disk = args[0], args[1], args[2]
     hs = load_host_module()
     scenario = load_scenario()
+    startup_delay_ms = scenario.get("startup_delay_ms")
+    if startup_delay_ms:
+        # Simulates the REST endpoint not existing yet right after Popen
+        # (host-supervisor.py's own bounded-startup-readiness window):
+        # the mailbox file itself doesn't exist until this sleep ends, so
+        # cmd_state's read_mailbox sees "error" (unavailable) until then.
+        time.sleep(startup_delay_ms / 1000.0)
     write_mailbox(socket_path, state="running", hardstop=False)
 
     ignore_hardstop_ms = scenario.get("ignore_hardstop_ms")
@@ -133,6 +140,15 @@ def cmd_run(args):
             break
         time.sleep(0.02)
 
+    if scenario.get("action") == "exit_no_mailbox":
+        # Proves the host's startup-readiness exit-status confirmation:
+        # this process exits cleanly (code 0) without ever writing
+        # anything to the mailbox at all, so driver_state() only ever
+        # sees "error" (the file never exists) -- once past the startup
+        # grace period, the host must check proc.poll() itself and
+        # confirm the stop from the exit code, not just call it a
+        # runtime failure because the endpoint stayed unavailable.
+        return 0
     if scenario.get("action") == "crash":
         write_mailbox(socket_path, state="error")
         return 1
@@ -192,8 +208,27 @@ def cmd_run(args):
     report_body.update(scenario.get("report_overrides", {}))
     report_doc = {"body": report_body, "id": "sandbox.guest-report.fixture",
                   "kind": "sandbox_guest_report", "schema_version": 1}
-    records = [(b"report.json", hs.canonical(report_doc)), (b"stdout", stdout_bytes),
-               (b"stderr", stderr_bytes)] + evidence_records
+    report_record = hs.canonical(report_doc)
+    if scenario.get("raw_report_json_depth"):
+        # Bounded-nesting/RecursionError probe: a report.json this deeply
+        # nested must be an invalid export, never something that escapes
+        # run_vm's own bounded_json_nesting scan or a RecursionError from
+        # json.loads itself and aborts the supervisor.
+        depth = scenario["raw_report_json_depth"]
+        report_record = b"[" * depth + b"]" * depth
+    records = [(b"report.json", report_record)]
+    if not scenario.get("omit_stdout_record"):
+        records.append((b"stdout", stdout_bytes))
+    if not scenario.get("omit_stderr_record"):
+        records.append((b"stderr", stderr_bytes))
+    records += evidence_records
+    if scenario.get("duplicate_stdout_record"):
+        # A second "stdout" record: the exact frame format (R3.2/R8.1) is
+        # closed and has no duplicates -- a naive dict conversion would
+        # silently collapse this to its last value instead of refusing.
+        records.append((b"stdout", b"duplicate"))
+    if scenario.get("unknown_record"):
+        records.append((b"unexpected", b"not a fixed record name"))
     if scenario.get("extra_undeclared_evidence"):
         # R8.2's exact evidence inventory: a frame record under evidence/
         # that evidence_files never declared must be caught, not silently
@@ -204,6 +239,15 @@ def cmd_run(args):
         frame = frame[:-1]
     with open(export_disk, "r+b") as fh:
         fh.write(frame)
+    if scenario.get("hang_after_export"):
+        # R5.3's own gate under test: a valid, complete frame is on disk,
+        # but the runtime never confirms a stop (never writes "stopped")
+        # and instead hangs -- the host must never read/trust this frame
+        # just because it happens to be there; it must gate consumption
+        # on tree_terminated (a confirmed stop AND a successful reap),
+        # not on the frame's own mere presence/validity.
+        while True:
+            time.sleep(0.02)
     write_mailbox(socket_path, state="stopped")
     return 0
 

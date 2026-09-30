@@ -1106,6 +1106,7 @@ def phase_b_reasons(config, request_body, package, identity_fds, installed_diges
     """Every R4.2 reason, sorted and unique, plus the measured identities
     dict for the receipt. Collects every applicable reason (not just the
     first), matching the receipt's own sorted-unique reason_ids."""
+    test_slow("YSTACK_TEST_SLOW_PHASE_B_MS")
     subject, control = request_body["subject"], request_body["control"]
     reasons = set()
     if environment_unlisted(config, registry_environments, accepted_environments, subject):
@@ -1366,6 +1367,17 @@ GUEST_PLAN_LIMITS = {
     "output_inodes": 64, "output_tmpfs_bytes": 10485760, "pids_max": 32,
     "scratch_bytes": 16777216, "scratch_inodes": 4096, "tree_deadline_ms": 40000,
 }
+
+
+def startup_deadline_s():
+    # R5.4: bounded readiness grace after Popen before an "error" (REST
+    # endpoint unavailable) driver_state is treated as a genuine failure
+    # rather than the socket simply not existing yet. Deliberately well
+    # above run_driver's own 2,000ms per-call budget: a single slow or
+    # timed-out "state" poll (a loaded CI runner, contended for CPU) must
+    # not by itself already exhaust the grace period before the runtime
+    # has had a real chance to create its endpoint.
+    return int(os.environ.get("YSTACK_TEST_STARTUP_MS", "10000")) / 1000.0
 
 
 def hardstop_deadline_s():
@@ -1647,16 +1659,30 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     if runtime_start_ms > runtime_start_deadline_s() * 1000:
         result["control_deadline"] = "exceeded"
 
+    spawn_mono = time.monotonic()
     hard_stop_sent = sigkill_sent = confirmed_stopped = stopped_via_mailbox = False
-    driver_reported_error = False
+    driver_reported_error = escalated_sigkill = False
     while True:
         elapsed = time.monotonic() - admission_mono
+        since_spawn = time.monotonic() - spawn_mono
         state = driver_state(driver_path, socket_path)
-        if state == "error":
-            driver_reported_error = True
-            break
         if state == "stopped":
             confirmed_stopped = stopped_via_mailbox = True
+            break
+        if state == "error" and since_spawn >= startup_deadline_s():
+            # Bounded startup readiness (R5.4): the runtime's REST
+            # endpoint may not exist yet right after Popen, so "error"
+            # (unavailable) alone isn't a failure until this grace period
+            # has passed -- and even then, check the process's own exit
+            # status first: a runtime that already exited cleanly (and
+            # closed its endpoint on the way out) is a confirmed stop,
+            # not a driver failure, per the supported exit-status
+            # confirmation.
+            exit_code = proc.poll()
+            if exit_code == stopped_exit_status and not hard_stop_sent:
+                confirmed_stopped = True
+            else:
+                driver_reported_error = True
             break
         exit_code = proc.poll()
         if exit_code is not None:
@@ -1676,7 +1702,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 os.killpg(proc.pid, signal.SIGKILL)
             except OSError:
                 pass
-            sigkill_sent = True
+            sigkill_sent = escalated_sigkill = True
             break
         time.sleep(poll_interval_s())
 
@@ -1685,36 +1711,46 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     # never actually gets reaped (or a fake wait() timeout, the
     # test-only YSTACK_TEST_REAP_FAIL hook below) must not claim
     # termination the host never actually confirmed.
-    reaped = False
-    try:
-        proc.wait(timeout=5)
-        reaped = True
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
+    if escalated_sigkill:
+        # R9.5: the unconfirmed-stop path finalizes at the abandonment
+        # instant itself -- SIGKILL was already sent at the 58s deadline
+        # inside the poll loop above; no further wait() here (blocking up
+        # to another 10s combined) and no second SIGKILL. terminated_at
+        # is this instant, not whenever a wait() we never issue would
+        # have returned.
+        reaped = False
+        terminated_at = time.time()
+    else:
+        reaped = False
         try:
             proc.wait(timeout=5)
             reaped = True
         except subprocess.TimeoutExpired:
-            sigkill_sent = True
-    if os.environ.get("YSTACK_TEST_REAP_FAIL"):
-        reaped = False
-    # A "stopped" mailbox report is independent of the process's actual
-    # exit status: a runtime that says stopped but then exits abnormally
-    # (crashes right after writing its own report) is still an error,
-    # never silently accepted as a clean completion.
-    if stopped_via_mailbox and reaped and proc.returncode is not None \
-            and proc.returncode != stopped_exit_status:
-        driver_reported_error = True
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+                reaped = True
+            except subprocess.TimeoutExpired:
+                pass
+        if os.environ.get("YSTACK_TEST_REAP_FAIL"):
+            reaped = False
+        terminated_at = time.time()
+        # A "stopped" mailbox report is independent of the process's
+        # actual exit status: a runtime that says stopped but then exits
+        # abnormally (crashes right after writing its own report) is
+        # still an error, never silently accepted as a clean completion.
+        if stopped_via_mailbox and reaped and proc.returncode is not None \
+                and proc.returncode != stopped_exit_status:
+            driver_reported_error = True
     drain.join(timeout=2)
     os.close(read_fd)
     os.close(log_fd)
 
     tree_terminated = confirmed_stopped and reaped
     end_mono = time.monotonic()
-    terminated_at = time.time()
     verifier_started = False
     guest = None
     tree_deadline_fired = False
@@ -1724,17 +1760,25 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     evidence_payload = []
     evidence_manifest_bytes = canonical({"body": {"files": []}, "id": "evidence-manifest",
                                           "kind": "sandbox_evidence_manifest", "schema_version": 1})
-    export_read_began = time.monotonic()
-    test_slow("YSTACK_TEST_SLOW_EXPORT_READ_MS")
-    try:
-        with open(export_path, "rb") as fh:
-            export_raw = fh.read()
-        export_records = frame_read(export_raw)
-    except (OSError, FrameError):
-        export_records = None
-    if (time.monotonic() - export_read_began) > export_read_deadline_s():
-        result["control_deadline"] = "exceeded"
-    validated = validate_export(export_records, plan_sha256)
+    validated = None
+    if tree_terminated:
+        # R5.3: stop before read -- the export disk is only guaranteed to
+        # have stopped changing once the tree is confirmed terminated
+        # (both the driver's own "stopped" report and a successful reap);
+        # otherwise every guest row stays unavailable, never a payload
+        # read from a disk a still-running (or never-reaped) runtime
+        # could still be writing to.
+        export_read_began = time.monotonic()
+        test_slow("YSTACK_TEST_SLOW_EXPORT_READ_MS")
+        try:
+            with open(export_path, "rb") as fh:
+                export_raw = fh.read()
+            export_records = frame_read(export_raw)
+        except (OSError, FrameError):
+            export_records = None
+        if (time.monotonic() - export_read_began) > export_read_deadline_s():
+            result["control_deadline"] = "exceeded"
+        validated = validate_export(export_records, plan_sha256)
     if validated is not None:
         gbody = validated["body"]
         verifier_started = gbody["verifier_started"]
@@ -1782,10 +1826,14 @@ OBSERVATION_VALUES = ("complete", "partial", "unavailable")
 ENFORCEMENT_VALUES = ("hard", "none", "unknown")
 
 
-def guest_row_ok(row):
+def guest_row_ok(name, row):
     """R7.3's per-row shape, applied to each of the five guest rows exactly
     (exact-key schema validation, per the PR 3/4 hardening pattern) --
-    observed is an int when observation is complete/partial, else null."""
+    observed is a nonnegative int when observation is complete/partial,
+    else null. Mirrors enforcement/v1/sandbox-receipt.jq's own row_ok
+    exactly: observed >= bound implies reached (one direction only --
+    reached can still be true below bound, per R7.3's other per-row
+    triggers such as an OOM kill or a fired pids.max)."""
     if not (isinstance(row, dict) and set(row) == GUEST_ROW_KEYS):
         return False
     if row["observation"] not in OBSERVATION_VALUES or row["enforcement"] not in ENFORCEMENT_VALUES:
@@ -1794,7 +1842,11 @@ def guest_row_ok(row):
         return False
     if row["observation"] == "unavailable":
         return row["observed"] is None
-    return is_int(row["observed"])
+    if not is_int(row["observed"]) or row["observed"] < 0:
+        return False
+    if row["observed"] >= GUEST_ROW_BOUNDS[name] and not row["reached"]:
+        return False
+    return True
 
 
 def report_body_ok(body):
@@ -1827,18 +1879,49 @@ def report_body_ok(body):
     return True
 
 
+def export_records_ok(export_records):
+    """R3.2/R8.1's closed frame format, checked on the raw record list --
+    before a dict conversion would silently collapse a duplicate name to
+    its last value: exactly one report.json, one stdout and one stderr
+    (never silently defaulted from absence), no unknown record names, and
+    evidence/<nnnn> indexes forming a contiguous 0000..N-1 run (no gaps,
+    no duplicates, nothing out of range)."""
+    seen = set()
+    evidence_indexes = set()
+    has_report = has_stdout = has_stderr = False
+    for name, _content in export_records:
+        if name in seen:
+            return False
+        seen.add(name)
+        if name == b"report.json":
+            has_report = True
+        elif name == b"stdout":
+            has_stdout = True
+        elif name == b"stderr":
+            has_stderr = True
+        elif len(name) == 13 and name.startswith(b"evidence/") and name[9:].isdigit():
+            evidence_indexes.add(int(name[9:]))
+        else:
+            return False
+    return has_report and has_stdout and has_stderr and evidence_indexes == set(range(len(evidence_indexes)))
+
+
 def validate_export(export_records, plan_sha256):
     """R8.2: the host's own reading of the export frame against its plan
     digest and sizes; None on any absence, damage or mismatch -- every
     guest row is then unavailable and lifecycle.runtime is error."""
-    if export_records is None:
+    if export_records is None or not export_records_ok(export_records):
         return None
-    named = {name: content for name, content in export_records}
-    if b"report.json" not in named:
-        return None
+    named = dict(export_records)
     try:
+        bounded_json_nesting(named[b"report.json"])
         report = json.loads(named[b"report.json"])
-    except ValueError:
+    except (ValueError, RecursionError, Refusal):
+        # bounded_json_nesting raises Refusal (E_PACKAGE) in its own
+        # phase-A context; here a guest report this deeply nested (or one
+        # a still-too-permissive scan lets json.loads recurse itself into
+        # a RecursionError on) is simply an invalid export, never
+        # something that should escape run_vm and abort the supervisor.
         return None
     if not (isinstance(report, dict) and set(report) == {"body", "id", "kind", "schema_version"}
             and report.get("kind") == "sandbox_guest_report" and is_int(report.get("schema_version"))
@@ -1854,9 +1937,9 @@ def validate_export(export_records, plan_sha256):
     if body["plan_sha256"] != plan_sha256 or not isinstance(body.get("limits"), dict) \
             or set(body["limits"]) != set(GUEST_LIMIT_ROWS):
         return None
-    if not all(guest_row_ok(body["limits"][name]) for name in GUEST_LIMIT_ROWS):
+    if not all(guest_row_ok(name, body["limits"][name]) for name in GUEST_LIMIT_ROWS):
         return None
-    stdout_raw, stderr_raw = named.get(b"stdout", b""), named.get(b"stderr", b"")
+    stdout_raw, stderr_raw = named[b"stdout"], named[b"stderr"]
     if len(stdout_raw) != body["stdout_bytes"] or len(stderr_raw) != body["stderr_bytes"]:
         return None
     evidence, seen_names, total_bytes = [], set(), len(stdout_raw) + len(stderr_raw)
@@ -1950,6 +2033,7 @@ LIMIT_ROWS = (
     ("process_count", 32, "guest-supervisor"),
     ("scratch_bytes", 16777216, "guest-supervisor"),
 )
+GUEST_ROW_BOUNDS = {name: bound for name, bound, _ in LIMIT_ROWS if name != "wall_time_ms"}
 # R7.1's table: each row's mechanism_id is the host's own fixed
 # configuration, never something the guest reports (R8.2's five guest
 # fields are observed/observation/enforcement/reached/resolution only).
@@ -2218,7 +2302,6 @@ def run_launch(argv):
     try:
         attempt_fd = create_attempt_dir(store_fd, principal_uid, config["consumer_gid"], attempt_id)
         admitted_at = time.time()
-        admission_mono = time.monotonic()
         reason_ids, measured = phase_b_reasons(config, request_body, package, identity_fds,
                                                 installed_digests, registry_environments,
                                                 accepted_environments, config_raw,
@@ -2228,6 +2311,11 @@ def run_launch(argv):
             for f in (fd if isinstance(fd, list) else [fd]):
                 os.close(f)
         identities = identities_for_receipt(measured)
+        # R4.3/R9.1: the deadline clock starts once phase B actually
+        # admits the attempt (after identity hashing/validation, not
+        # before it) -- slow validation (the dyld cache files especially)
+        # must never consume the VM's own execution allowance.
+        admission_mono = time.monotonic()
         if reason_ids:
             # R9.3: no-launch receipt -- refused, runtime "completed" (nothing
             # ran, so nothing errored), payload/refusal.json alongside it.
@@ -2237,6 +2325,7 @@ def run_launch(argv):
             write_payload(attempt_fd, principal_uid, config["consumer_gid"], payload)
             receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                            launch_request_sha256, admitted_at, identities, "refused", None)
+            write_receipt_file(store_fd, attempt_fd, principal_uid, config["consumer_gid"], receipt_bytes)
         else:
             # R9.2: cancellation handling is installed here, at admission,
             # and stays installed through disk prep, spawn, polling,
@@ -2304,10 +2393,18 @@ def run_launch(argv):
                 receipt_bytes = build_receipt(config, accepted_set_sha256, request_doc, request_body,
                                                launch_request_sha256, admitted_at, identities,
                                                "admitted", run_result, storage_destroyed)
+                # Cancellation handlers stay installed through this write
+                # and its fsync too -- restored only in the finally below,
+                # after receipt writing and finalization have finished, so
+                # a SIGTERM/SIGHUP/SIGINT arriving mid-write can't leave an
+                # admitted, consumed attempt with a missing or incomplete
+                # receipt.
+                test_slow("YSTACK_TEST_SLOW_RECEIPT_WRITE_MS")
+                write_receipt_file(store_fd, attempt_fd, principal_uid, config["consumer_gid"],
+                                    receipt_bytes)
             finally:
                 for sig, handler in old_handlers.items():
                     signal.signal(sig, handler)
-        write_receipt_file(store_fd, attempt_fd, principal_uid, config["consumer_gid"], receipt_bytes)
     except Refusal:
         raise
     except OSError:

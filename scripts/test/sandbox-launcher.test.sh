@@ -190,6 +190,22 @@ def main():
     os.chmod(vfkit_path, 0o555)
     driver_path = os.path.join(base, "driver")
     shutil.copy(fake_runtime_src, driver_path)
+    # The driver's own shebang is a source file constant (#!/usr/bin/python3
+    # -- an absolute path was already needed since the driver interface's
+    # argv/state/stop calls run under an EMPTY environment, so a
+    # "#!/usr/bin/env python3" shebang can't resolve python3 via PATH at
+    # all). But a hardcoded absolute path is itself a portability risk
+    # across hosts/distros (exactly what run this fixture) -- rewrite it
+    # to sys.executable, the one interpreter this harness itself is
+    # already known to be running under (the same "$python" the bash
+    # suite uses everywhere else), so the driver never depends on guessing
+    # where python3 happens to live on whatever machine runs the suite.
+    with open(driver_path, "rb") as fh:
+        driver_bytes = fh.read()
+    first_line, _, rest = driver_bytes.partition(b"\n")
+    assert first_line.startswith(b"#!"), "fake runtime driver must start with a shebang line"
+    with open(driver_path, "wb") as fh:
+        fh.write(b"#!" + sys.executable.encode() + b"\n" + rest)
     os.chmod(driver_path, 0o555)
     # the fake driver's own default-success scenario, read whenever a test
     # doesn't set YSTACK_FAKE_SCENARIO (an empty environment is used for the
@@ -546,11 +562,41 @@ expect_phase_a_pass() { # expect_phase_a_pass <desc> <pkg-file> -- phase A only,
   [ ! -s "$base/out" ] || fail "$desc: stdout must be empty"
   [ ! -s "$base/err" ] || fail "$desc: stderr must be empty ($(cat "$base/err"))"
 }
+# Test-only CI diagnostics (stderr, only ever reached on an assertion
+# failure that's about to call fail() and exit anyway): the receipt's own
+# lifecycle/outcome/payload.exit_state/six limit rows, and runtime.log's
+# tail if it's still there (an attempt that made it to a written receipt
+# already had remove_frozen delete it as part of teardown, so its
+# absence there is itself informative, not a bug in this helper).
+dump_receipt_debug() { # dump_receipt_debug <desc> <attempt-id>
+  local d=$1 a=$2 receipt="$store_root/$2/receipt.json" log="$work_root/$2/runtime.log"
+  {
+    printf -- '---- %s: receipt/runtime diagnostics for %s ----\n' "$d" "$a"
+    if [ -f "$receipt" ]; then
+      printf 'lifecycle: %s\n' "$("$jq_bin" -c '.body.lifecycle' "$receipt" 2>/dev/null)"
+      printf 'outcome: %s\n' "$("$jq_bin" -c '.body.outcome' "$receipt" 2>/dev/null)"
+      printf 'payload.exit_state/exit_code: %s\n' \
+        "$("$jq_bin" -c '{exit_state:.body.payload.exit_state,exit_code:.body.payload.exit_code}' "$receipt" 2>/dev/null)"
+      printf 'limits: %s\n' "$("$jq_bin" -c '.body.limits' "$receipt" 2>/dev/null)"
+    else
+      printf '(no receipt.json at %s)\n' "$receipt"
+    fi
+    if [ -f "$log" ]; then
+      printf -- '---- runtime.log tail ----\n'
+      tail -c 4096 "$log"
+    else
+      printf '(runtime.log not present at %s -- already removed by teardown, or never created)\n' "$log"
+    fi
+  } >&2
+}
 expect_admitted() { # expect_admitted <desc> <attempt-id> <pkg-file> -- asserts real admission, not just exit 0
   local desc=$1 attempt_id=$2 pkgfile=$3 admission
   expect_phase_a_pass "$desc" "$pkgfile"
   admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
-  [ "$admission" = admitted ] || fail "$desc: expected lifecycle.admission admitted, got $admission"
+  if [ "$admission" != admitted ]; then
+    dump_receipt_debug "$desc" "$attempt_id"
+    fail "$desc: expected lifecycle.admission admitted, got $admission"
+  fi
 }
 expect_phase_b_refused() { # expect_phase_b_refused <desc> <attempt_id> <pkg-file> <expected-reasons-json>
   local desc=$1 attempt_id=$2 pkgfile=$3 expected=$4 status=0 admission reasons
@@ -828,8 +874,10 @@ receipt_runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/attempt.fi
 # completed -- but outcome.verdict is still failed, since the wall row's
 # enforcement is permanently "none" (no route to hard in this spec),
 # so failure.enforcement-unavailable fires on every admitted receipt.
-[ "$receipt_admission" = admitted ] && [ "$receipt_runtime" = completed ] && [ "$receipt_verdict" = failed ] ||
-  fail 'admitted receipt: expected admission admitted, runtime completed, verdict failed'
+if [ "$receipt_admission" != admitted ] || [ "$receipt_runtime" != completed ] || [ "$receipt_verdict" != failed ]; then
+  dump_receipt_debug 'admitted receipt' attempt.fixture-reuse
+  fail "admitted receipt: expected admission admitted, runtime completed, verdict failed -- got $receipt_admission/$receipt_runtime/$receipt_verdict"
+fi
 pass 'a real (fake-runtime) launch that completes cleanly records lifecycle.admission admitted, lifecycle.runtime completed, and outcome.verdict failed only because of the permanent wall-enforcement-unavailable limitation'
 
 # R9.3: the frozen copies (R5.1) an admitted attempt made are its only
@@ -840,8 +888,10 @@ pass 'a real (fake-runtime) launch that completes cleanly records lifecycle.admi
   fail 'admitted attempt: <work_root>/<attempt_id> was not removed before storage_destroyed: true'
 teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/attempt.fixture-reuse/receipt.json")
 teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/attempt.fixture-reuse/receipt.json")
-[ "$teardown_state" = confirmed ] && [ "$teardown_destroyed" = true ] ||
-  fail 'admitted attempt: expected teardown.state confirmed and storage_destroyed true'
+if [ "$teardown_state" != confirmed ] || [ "$teardown_destroyed" != true ]; then
+  dump_receipt_debug 'admitted attempt teardown' attempt.fixture-reuse
+  fail "admitted attempt: expected teardown.state confirmed and storage_destroyed true -- got $teardown_state/$teardown_destroyed"
+fi
 pass "an admitted attempt's whole work_root attempt directory is removed and the removal verified before teardown.state confirmed / storage_destroyed: true"
 
 # Security boundary (R9.3): teardown must unlink only the entries this
@@ -2084,6 +2134,143 @@ wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$at
 [ "$wall_reached" = true ] ||
   fail "finding 12: expected limits.wall_time_ms.reached true for a cancellation-issued stop (not just a deadline-issued HardStop), got $wall_reached"
 pass 'finding 12: wall_time_ms.reached is true for a cancellation-issued stop too, not only a deadline-issued HardStop -- build_limit_rows folds every issued host stop (HardStop or cancellation), the guest deadline, and observed >= bound into reached'
+
+# =============================================================================
+# Fix round 2 (findings-477-r2.md): one test per finding.
+# =============================================================================
+build_tree 0
+scenario_path="$base/scenario-case.json"
+export YSTACK_FAKE_SCENARIO="$scenario_path"
+
+# Finding 1 [P1]: bounded startup readiness for the REST socket, and
+# exit-status confirmation before treating an unavailable endpoint as a
+# runtime failure.
+scenario_case 'startup delay within the (raised) grace window' \
+  '{"startup_delay_ms":100}'
+attempt_id="$scn_attempt_id"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] ||
+  fail "finding 1a: expected lifecycle.runtime completed (an unavailable endpoint within the startup grace period is not a failure), got $runtime"
+pass 'finding 1a: a driver whose REST endpoint takes a moment to exist after Popen (YSTACK_TEST_STARTUP_MS'"'"'s default grace period) is not treated as a runtime failure -- driver_state()==error is tolerated until the startup deadline, then the run completes normally'
+
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"exit_no_mailbox"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_STARTUP_MS=50 YSTACK_TEST_POLL_INTERVAL_MS=20 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 1b: expected exit 0, got $status ($(cat "$base/err"))"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+tree_terminated=$("$jq_bin" -r '.body.teardown.tree_terminated' "$store_root/$attempt_id/receipt.json")
+[ "$teardown_state" = confirmed ] && [ "$tree_terminated" = true ] ||
+  fail "finding 1b: expected teardown.state confirmed, tree_terminated true (the process exited cleanly, code 0, even though its REST endpoint was never available at all) -- got $teardown_state/$tree_terminated"
+pass 'finding 1b: past the startup grace period, an unavailable endpoint is confirmed via proc.poll() first -- a process that exited with stopped_exit_status (even having never created its REST endpoint at all) is a confirmed stop, not a driver failure'
+
+# Finding 2 [P2]: cancellation handlers restored only after receipt
+# writing and finalization complete.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+( CDPATH='' cd -- "$install_dir" && YSTACK_TEST_SLOW_RECEIPT_WRITE_MS=400 exec "$python" host-supervisor.py launch ) \
+  <"$base/pkg-scn.json" >"$base/out" 2>"$base/err" &
+launch_pid=$!
+sleep 0.15
+kill -TERM "$launch_pid" 2>/dev/null || :
+status=0
+wait "$launch_pid" || status=$?
+[ "$status" -eq 0 ] || fail "finding 2: expected exit 0, got $status ($(cat "$base/err"))"
+[ -f "$store_root/$attempt_id/receipt.json" ] || fail "finding 2: expected a receipt to still be written"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] ||
+  fail "finding 2: expected lifecycle.runtime completed (the run had already succeeded before the signal, mid-receipt-write), got $runtime"
+pass 'finding 2: a SIGTERM delivered during the receipt.json write itself (YSTACK_TEST_SLOW_RECEIPT_WRITE_MS) does not abort it -- handlers are restored only after write_receipt_file and finalization complete, not before'
+
+# Finding 3 [P2]: bounded nesting + RecursionError on the guest report.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"raw_report_json_depth":2000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 3: expected exit 0 (an invalid export, never an escaping RecursionError), got $status ($(cat "$base/err"))"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = error ] ||
+  fail "finding 3: expected lifecycle.runtime error (a report.json nested 2,000 levels deep is an invalid export), got $runtime"
+pass 'finding 3: a report.json nested 2,000 levels deep is refused as an invalid export (bounded_json_nesting reused, RecursionError also caught) -- never escapes run_vm and aborts the supervisor, storage cleanup and receipt production skipped'
+
+# Finding 4 [P2]: nonnegative observations and reached-vs-bound
+# consistency, mirroring the checker's own row_ok.
+for override in '{"cpu_time_ms":{"observed":-1}}' '{"memory_bytes":{"observed":536870912,"reached":false}}'; do
+  n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+  printf '%s' '{"limit_overrides":'"$override"'}' > "$scenario_path"
+  build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+  status=0
+  run_launch "$base/pkg-scn.json" || status=$?
+  [ "$status" -eq 0 ] || fail "finding 4 ($override): expected exit 0, got $status ($(cat "$base/err"))"
+  runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+  cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
+  [ "$runtime" = error ] && [ "$cpu_obs" = unavailable ] ||
+    fail "finding 4 ($override): expected runtime error, cpu_time_ms.observation unavailable, got $runtime/$cpu_obs"
+done
+pass 'finding 4: a negative observation, or one at/above its bound with reached: false, each refuse the report -- mirrors enforcement/v1/sandbox-receipt.jq'"'"'s own row_ok, which would otherwise reject an admitted receipt as invalid instead of the intended valid failure receipt'
+
+# Finding 5 [P2]: the export frame's exact fixed records and contiguous
+# evidence indexes, validated before dict conversion.
+for override in '{"duplicate_stdout_record":true}' '{"unknown_record":true}' '{"omit_stdout_record":true}' '{"omit_stderr_record":true}'; do
+  n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+  printf '%s' "$override" > "$scenario_path"
+  build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+  status=0
+  run_launch "$base/pkg-scn.json" || status=$?
+  [ "$status" -eq 0 ] || fail "finding 5 ($override): expected exit 0, got $status ($(cat "$base/err"))"
+  runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+  [ "$runtime" = error ] ||
+    fail "finding 5 ($override): expected lifecycle.runtime error (a malformed frame record sequence must refuse the export), got $runtime"
+done
+pass 'finding 5: a duplicate stdout record, an unknown record name, or a missing stdout/stderr record each refuse the export as invalid (checked on the raw record list before a dict conversion would silently collapse a duplicate or default a missing one to empty)'
+
+# Finding 6 [P2]: export consumption gated on confirmed termination.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"hang_after_export":true}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 6: expected exit 0, got $status ($(cat "$base/err"))"
+cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
+tree_terminated=$("$jq_bin" -r '.body.teardown.tree_terminated' "$store_root/$attempt_id/receipt.json")
+[ "$tree_terminated" = false ] && [ "$cpu_obs" = unavailable ] ||
+  fail "finding 6: expected teardown.tree_terminated false and every guest row unavailable (a valid, complete export sitting on disk must never be read/trusted without a confirmed stop), got $tree_terminated/$cpu_obs"
+pass 'finding 6: export consumption is gated on tree_terminated -- a runtime that wrote a fully valid, complete export frame but then hung (never confirming a stop) still gets every guest row unavailable, never the payload/observations that frame actually contains (R5.3 stop-before-read)'
+
+# Finding 7 [P2]: the deadline clock starts at the phase-B admission
+# boundary (after identity hashing), not before it.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_SLOW_PHASE_B_MS=300 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding 7: expected exit 0, got $status ($(cat "$base/err"))"
+wall_observed=$("$jq_bin" -r '.body.limits.wall_time_ms.observed' "$store_root/$attempt_id/receipt.json")
+[ "$wall_observed" -lt 300 ] ||
+  fail "finding 7: expected limits.wall_time_ms.observed < 300 (a slowed-down phase B, BEFORE admission, must not be counted against the R9.1 clock), got $wall_observed"
+pass 'finding 7: a slowed-down phase B (identity hashing/validation, YSTACK_TEST_SLOW_PHASE_B_MS=300ms, before admission) is excluded from limits.wall_time_ms.observed -- the clock starts once phase B actually admits the attempt (R4.3/R9.1), not before it, so slow validation can'"'"'t eat into the VM'"'"'s own execution allowance'
+
+# Finding 8 [P2]: the unconfirmed-stop path finalizes immediately after
+# SIGKILL, no further blocking wait.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"action":"hang","ignore_hardstop_ms":60000}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+launch_start=$(date +%s)
+status=0
+YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=200 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-scn.json" || status=$?
+launch_elapsed=$(( $(date +%s) - launch_start ))
+[ "$status" -eq 0 ] || fail "finding 8: expected exit 0, got $status ($(cat "$base/err"))"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$teardown_state" = unconfirmed ] ||
+  fail "finding 8: expected teardown.state unconfirmed, got $teardown_state"
+[ "$launch_elapsed" -le 5 ] ||
+  fail "finding 8: expected the whole launch to finish in a few seconds (SIGKILL at the ~200ms deadline, no further wait()), took ${launch_elapsed}s instead -- looks like the old double-wait (up to another 10s) regressed"
+pass 'finding 8: after the SIGKILL escalation at the (test-shortened) second deadline, the unconfirmed-stop path finalizes immediately -- terminated_at is the abandonment instant, no further proc.wait() (blocking up to another 10s combined) and no second SIGKILL'
 
 unset YSTACK_FAKE_SCENARIO
 
