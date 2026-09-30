@@ -1645,6 +1645,28 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
 
 
 GUEST_LIMIT_ROWS = ("cpu_time_ms", "memory_bytes", "output_bytes", "process_count", "scratch_bytes")
+# R8.2's exact per-row field set for the five guest-reported rows --
+# mechanism_id is NOT one of them (R7.1: the mechanism is the host's own
+# fixed configuration for the row, not something the guest reports; see
+# LIMIT_MECHANISM_IDS below).
+GUEST_ROW_KEYS = frozenset({"observed", "observation", "enforcement", "reached", "resolution"})
+OBSERVATION_VALUES = ("complete", "partial", "unavailable")
+ENFORCEMENT_VALUES = ("hard", "none", "unknown")
+
+
+def guest_row_ok(row):
+    """R7.3's per-row shape, applied to each of the five guest rows exactly
+    (exact-key schema validation, per the PR 3/4 hardening pattern) --
+    observed is an int when observation is complete/partial, else null."""
+    if not (isinstance(row, dict) and set(row) == GUEST_ROW_KEYS):
+        return False
+    if row["observation"] not in OBSERVATION_VALUES or row["enforcement"] not in ENFORCEMENT_VALUES:
+        return False
+    if not isinstance(row["reached"], bool) or not is_int(row["resolution"]) or row["resolution"] < 1:
+        return False
+    if row["observation"] == "unavailable":
+        return row["observed"] is None
+    return is_int(row["observed"])
 
 
 def validate_export(export_records, plan_sha256):
@@ -1671,6 +1693,8 @@ def validate_export(export_records, plan_sha256):
         return None
     if body.get("plan_sha256") != plan_sha256 or not isinstance(body.get("limits"), dict) \
             or set(body["limits"]) != set(GUEST_LIMIT_ROWS):
+        return None
+    if not all(guest_row_ok(body["limits"][name]) for name in GUEST_LIMIT_ROWS):
         return None
     stdout_raw, stderr_raw = named.get(b"stdout", b""), named.get(b"stderr", b"")
     if len(stdout_raw) != body.get("stdout_bytes") or len(stderr_raw) != body.get("stderr_bytes"):
@@ -1706,27 +1730,30 @@ def stub_run_result():
 
 
 def build_limit_rows(guest, wall_ms, wall_reached, wall_complete):
-    """The six R7.3 rows: the five guest-reported ones verbatim (plus
-    mechanism_id/observer/bound), CPU and wall always enforcement: "none"
-    (R7.2) -- wall is the one host-only row."""
+    """The six R7.3 rows: the five guest-reported ones (plus mechanism_id/
+    observer/bound), CPU and wall always enforcement: "none" (R7.2) -- wall
+    is the one host-only row. mechanism_id is always the row's own R7.1
+    fixed constant (LIMIT_MECHANISM_IDS): R7.1's table describes the host's
+    own configured mechanism for the row, not something the guest, which
+    never sends the field at all (R8.2), could report or vary."""
     rows = {}
     for name, bound, observer in LIMIT_ROWS:
+        mechanism_id = LIMIT_MECHANISM_IDS[name]
         if name == "wall_time_ms":
             rows[name] = {"bound": bound, "observed": wall_ms if wall_complete else None,
                           "resolution": 1, "observation": "complete" if wall_complete else "unavailable",
                           "enforcement": "none", "reached": wall_reached,
-                          "mechanism_id": "mechanism.wall.host-monotonic-stop.v1", "observer": observer}
+                          "mechanism_id": mechanism_id, "observer": observer}
         elif guest is None:
             rows[name] = {"bound": bound, "observed": None, "resolution": 1,
                           "observation": "unavailable", "enforcement": "unknown", "reached": False,
                           "mechanism_id": "mechanism.unmeasured", "observer": observer}
         else:
             g = guest[name]
-            enforcement = "none" if name == "cpu_time_ms" else g.get("enforcement", "unknown")
-            rows[name] = {"bound": bound, "observed": g.get("observed"),
-                          "resolution": g.get("resolution", 1), "observation": g.get("observation", "unavailable"),
-                          "enforcement": enforcement, "reached": bool(g.get("reached")),
-                          "mechanism_id": g.get("mechanism_id", "mechanism.unmeasured"), "observer": observer}
+            enforcement = "none" if name == "cpu_time_ms" else g["enforcement"]
+            rows[name] = {"bound": bound, "observed": g["observed"], "resolution": g["resolution"],
+                          "observation": g["observation"], "enforcement": enforcement,
+                          "reached": g["reached"], "mechanism_id": mechanism_id, "observer": observer}
     return rows
 
 
@@ -1740,7 +1767,18 @@ LIMIT_ROWS = (
     ("process_count", 32, "guest-supervisor"),
     ("scratch_bytes", 16777216, "guest-supervisor"),
 )
-IDENTITY_SLOTS = ("host_runtime", "guest_kernel", "guest_kernel_config", "guest_init", "image",
+# R7.1's table: each row's mechanism_id is the host's own fixed
+# configuration, never something the guest reports (R8.2's five guest
+# fields are observed/observation/enforcement/reached/resolution only).
+LIMIT_MECHANISM_IDS = {
+    "cpu_time_ms": "mechanism.cpu.single-vcpu-quota-deadline.v1",
+    "wall_time_ms": "mechanism.wall.host-monotonic-stop.v1",
+    "memory_bytes": "mechanism.memory.vm-ram-ceiling.v1",
+    "output_bytes": "mechanism.output.single-tmpfs-append.v1",
+    "process_count": "mechanism.tasks.cgroup-pids.v1",
+    "scratch_bytes": "mechanism.scratch.tmpfs-no-free.v1",
+}
+IDENTITY_SLOTS =("host_runtime", "guest_kernel", "guest_kernel_config", "guest_init", "image",
                    "host_supervisor", "guest_supervisor", "verifier", "toolchain",
                    "verification_instructions")
 

@@ -103,6 +103,7 @@ def cmd_run(args):
     ignore_hardstop_ms = scenario.get("ignore_hardstop_ms")
     self_stop_after_ms = scenario.get("self_stop_after_ms")
     hang = scenario.get("action") == "hang"
+    stopped_via_hardstop = False
     start = time.monotonic()
     while True:
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -110,6 +111,7 @@ def cmd_run(args):
             break
         if read_mailbox(socket_path).get("hardstop"):
             if ignore_hardstop_ms is None or elapsed_ms >= ignore_hardstop_ms:
+                stopped_via_hardstop = True
                 break
         elif not hang and self_stop_after_ms is None:
             break  # plain success: nothing scripted to wait for
@@ -123,17 +125,26 @@ def cmd_run(args):
     if scenario.get("action") == "no_export":
         write_mailbox(socket_path, state="stopped")
         return 0
+    if stopped_via_hardstop and not scenario.get("hardstop_writes_export"):
+        # A real vfkit HardStop forces the VM off before the guest
+        # supervisor can sync and power off on its own (R8.1's own
+        # export-then-poweroff sequence never completes) -- so a stop the
+        # host had to force never leaves a clean export either, matching
+        # plan.md/spec.md's class (c): HardStop adds both failure.runtime
+        # and failure.observation-unavailable, not failure.runtime alone.
+        write_mailbox(socket_path, state="stopped")
+        return 0
 
     with open(input_disk, "rb") as fh:
         input_records = dict(hs.frame_read(fh.read()))
     plan_sha256 = hs.sha256_hex(input_records[b"plan.json"])
 
-    # "mechanism.fixture" (not row-qualified) matches
-    # sandbox-launcher.test.sh's own accepted-identities.json fixture,
-    # which lists that exact mechanism id (alongside "mechanism.unmeasured")
-    # for every one of the six R7.3 rows.
+    # R8.2's guest report carries exactly these five fields per row --
+    # mechanism_id is never one of them (host-supervisor.py's
+    # build_limit_rows always uses its own R7.1 fixed mechanism_id
+    # constant instead, regardless of what a guest might send).
     limits = {name: {"observed": 0, "observation": "complete", "enforcement": "hard",
-                      "reached": False, "resolution": 1, "mechanism_id": "mechanism.fixture"}
+                      "reached": False, "resolution": 1}
               for name in ("cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
                             "scratch_bytes")}
     for name, override in scenario.get("limit_overrides", {}).items():

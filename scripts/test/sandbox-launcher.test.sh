@@ -254,19 +254,22 @@ def main():
     accepted_doc = {"body": {"activation_state": "inactive", "set_version": "v1", "environments": [
         {"environment_id": ENV_ID, "scratch_bytes": 16777216,
          "identities": {k: [digest or measured[k]] for k in accepted_keys + ["verification_instructions"]},
-         # "mechanism.unmeasured" is the refused-path stub receipt's own
-         # mechanism_id for every row; "mechanism.fixture" is
-         # sandbox-fake-runtime.py's own guest-report mechanism_id for its
-         # five rows (PR 5); "mechanism.wall.host-monotonic-stop.v1" is
-         # build_limit_rows's own fixed, unconditional mechanism_id for the
-         # host-only wall row on any real (non-stub) launch -- all included
-         # here so the R15.1 consumer-checker matrix's own
-         # is_identity_unaccepted isn't spuriously tripped on either path.
-         "mechanisms": dict({r: ["mechanism.fixture", "mechanism.unmeasured"] for r in
-                        ["cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
-                         "scratch_bytes"]},
-                        wall_time_ms=sorted(["mechanism.wall.host-monotonic-stop.v1",
-                                              "mechanism.unmeasured"]))}]},
+         # "mechanism.unmeasured" is every row's mechanism_id on the
+         # refused-path stub receipt and on an admitted-but-guest-is-None
+         # row (a freeze failure or a failed R8.2 validation); the other
+         # id per row is host-supervisor.py's own LIMIT_MECHANISM_IDS --
+         # its R7.1 fixed, unconditional mechanism_id for that row on any
+         # real (validated) launch, guest-reported or (for wall) host-only
+         # -- both included here so the R15.1 consumer-checker matrix's
+         # own is_identity_unaccepted isn't spuriously tripped on any path.
+         "mechanisms": {
+             "cpu_time_ms": sorted(["mechanism.cpu.single-vcpu-quota-deadline.v1", "mechanism.unmeasured"]),
+             "memory_bytes": sorted(["mechanism.memory.vm-ram-ceiling.v1", "mechanism.unmeasured"]),
+             "output_bytes": sorted(["mechanism.output.single-tmpfs-append.v1", "mechanism.unmeasured"]),
+             "process_count": sorted(["mechanism.tasks.cgroup-pids.v1", "mechanism.unmeasured"]),
+             "scratch_bytes": sorted(["mechanism.scratch.tmpfs-no-free.v1", "mechanism.unmeasured"]),
+             "wall_time_ms": sorted(["mechanism.wall.host-monotonic-stop.v1", "mechanism.unmeasured"]),
+         }}]},
         "id": "sandbox.accepted-identities.v1", "kind": "sandbox_accepted_identity_set", "schema_version": 1}
     open(installed_files["accepted_set"], "wb").write(canon(accepted_doc))
     for k in installed_keys:
@@ -1477,19 +1480,73 @@ scenario_case() { # scenario_case <desc> <scenario-json> -- sets $scn_attempt_id
   expect_admitted "$1 (setup)" "$scn_attempt_id" "$base/pkg-scn.json"
 }
 
-# Row matrix: a guest-reported row (cpu_time_ms) coming back "reached"
-# still surfaces as such in the receipt's own limits row, even though
-# outcome.verdict can never reach "violated" here (the wall row's
-# enforcement is permanently "none", so failure.enforcement-unavailable
-# always wins first -- PR 4/5's documented, permanent limitation).
-scenario_case 'row matrix: a guest limit reported reached' \
-  '{"limit_overrides":{"cpu_time_ms":{"reached":true,"observed":45000}}}'
-attempt_id="$scn_attempt_id"
-reached=$("$jq_bin" -r '.body.limits.cpu_time_ms.reached' "$store_root/$attempt_id/receipt.json")
-enforcement=$("$jq_bin" -r '.body.limits.cpu_time_ms.enforcement' "$store_root/$attempt_id/receipt.json")
-[ "$reached" = true ] && [ "$enforcement" = none ] ||
-  fail 'row matrix: expected cpu_time_ms reached true, enforcement none (R7.2)'
-pass 'a guest-reported row (cpu_time_ms) coming back reached surfaces as limits.cpu_time_ms.reached true, enforcement forced to none (R7.2) regardless'
+# R7.3/R8 row matrix: every one of the five guest-reported rows, in turn,
+# across observation complete/partial/unavailable and reached true/false
+# -- asserting the exact row record host-supervisor.py derives (bound,
+# observed, resolution, observation, enforcement -- forced "none" for
+# cpu_time_ms alone (R7.2) -- reached, and mechanism_id, which is always
+# the row's own R7.1 FIXED constant regardless of what the guest sends,
+# since the fake no longer sends one at all) and the outcome this drives:
+# outcome.verdict is always "failed" (the wall row's own enforcement is
+# permanently "none", so failure.enforcement-unavailable always fires --
+# PR 4/5's documented, permanent limitation, so "violated" is provably
+# unreachable), and failure.observation-unavailable appears iff any row
+# is partial or unavailable.
+# Plain functions, not associative arrays: bash 3.2 (macOS's default
+# /bin/bash) has none, and this suite runs under whatever bash is in PATH.
+row_mechanism_id() {
+  case "$1" in
+    cpu_time_ms) echo "mechanism.cpu.single-vcpu-quota-deadline.v1" ;;
+    memory_bytes) echo "mechanism.memory.vm-ram-ceiling.v1" ;;
+    output_bytes) echo "mechanism.output.single-tmpfs-append.v1" ;;
+    process_count) echo "mechanism.tasks.cgroup-pids.v1" ;;
+    scratch_bytes) echo "mechanism.scratch.tmpfs-no-free.v1" ;;
+  esac
+}
+row_bound() {
+  case "$1" in
+    cpu_time_ms) echo 30000 ;;
+    memory_bytes) echo 536870912 ;;
+    output_bytes) echo 10485760 ;;
+    process_count) echo 32 ;;
+    scratch_bytes) echo 16777216 ;;
+  esac
+}
+row_matrix_case() { # row_matrix_case <row> <reached> <observation> <enforcement> <observed-or-null>
+  local row=$1 reached=$2 observation=$3 enforcement=$4 observed=$5
+  scenario_case "row matrix: $row reached=$reached observation=$observation enforcement=$enforcement" \
+    '{"limit_overrides":{"'"$row"'":{"reached":'"$reached"',"observation":"'"$observation"'","enforcement":"'"$enforcement"'","observed":'"$observed"',"resolution":1}}}'
+  local attempt_id="$scn_attempt_id" receipt="$store_root/$scn_attempt_id/receipt.json"
+  local got_reached got_observation got_enforcement got_observed got_resolution got_mechanism got_bound
+  local verdict reasons
+  got_reached=$("$jq_bin" -r ".body.limits.$row.reached" "$receipt")
+  got_observation=$("$jq_bin" -r ".body.limits.$row.observation" "$receipt")
+  got_enforcement=$("$jq_bin" -r ".body.limits.$row.enforcement" "$receipt")
+  got_observed=$("$jq_bin" -c ".body.limits.$row.observed" "$receipt")
+  got_resolution=$("$jq_bin" -r ".body.limits.$row.resolution" "$receipt")
+  got_mechanism=$("$jq_bin" -r ".body.limits.$row.mechanism_id" "$receipt")
+  got_bound=$("$jq_bin" -r ".body.limits.$row.bound" "$receipt")
+  verdict=$("$jq_bin" -r '.body.outcome.verdict' "$receipt")
+  reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$receipt")
+  local expect_enforcement=$enforcement
+  [ "$row" != cpu_time_ms ] || expect_enforcement=none
+  local expect_reasons='["failure.enforcement-unavailable"]'
+  [ "$observation" = complete ] ||
+    expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable"]'
+  [ "$got_reached" = "$reached" ] && [ "$got_observation" = "$observation" ] &&
+    [ "$got_enforcement" = "$expect_enforcement" ] && [ "$got_observed" = "$observed" ] &&
+    [ "$got_resolution" = 1 ] && [ "$got_mechanism" = "$(row_mechanism_id "$row")" ] &&
+    [ "$got_bound" = "$(row_bound "$row")" ] &&
+    [ "$verdict" = failed ] && [ "$reasons" = "$expect_reasons" ] ||
+    fail "row matrix $row/$reached/$observation/$enforcement: got reached=$got_reached observation=$got_observation enforcement=$got_enforcement observed=$got_observed resolution=$got_resolution mechanism=$got_mechanism bound=$got_bound verdict=$verdict reasons=$reasons"
+}
+for row in cpu_time_ms memory_bytes output_bytes process_count scratch_bytes; do
+  row_matrix_case "$row" false complete hard 7
+  row_matrix_case "$row" true complete hard 7
+  row_matrix_case "$row" false partial unknown 3
+  row_matrix_case "$row" false unavailable unknown null
+done
+pass 'every one of the five guest-reported rows (cpu_time_ms, memory_bytes, output_bytes, process_count, scratch_bytes), across reached true/false and observation complete/partial/unavailable, surfaces the exact row record (bound/observed/resolution/observation/enforcement/reached/mechanism_id -- mechanism_id always the row'"'"'s own R7.1 fixed constant, cpu_time_ms'"'"'s enforcement always forced to none per R7.2) and drives outcome.verdict failed with failure.observation-unavailable present iff the row is not complete'
 
 # R9.1: the guest's own 40s tree-deadline firing is carried into the
 # host-only wall row's "reached" (R7.3's wall-row special case).
@@ -1511,9 +1568,14 @@ YSTACK_TEST_HARDSTOP_MS=150 YSTACK_TEST_SIGKILL_MS=5000 YSTACK_TEST_POLL_INTERVA
 admission=$("$jq_bin" -r '.body.lifecycle.admission' "$store_root/$attempt_id/receipt.json")
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
-[ "$admission" = admitted ] && [ "$runtime" = error ] && [ "$teardown_state" = confirmed ] ||
-  fail "HardStop: expected admitted/error/confirmed, got $admission/$runtime/$teardown_state"
-pass 'a hung runtime that honors HardStop is stopped at the (test-shortened) HardStop deadline: lifecycle.runtime error, teardown.state confirmed (the fake process still exits and is reaped)'
+wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$attempt_id/receipt.json")
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime"]'
+[ "$admission" = admitted ] && [ "$runtime" = error ] && [ "$teardown_state" = confirmed ] &&
+  [ "$wall_reached" = true ] && [ "$verdict" = failed ] && [ "$reasons" = "$expect_reasons" ] ||
+  fail "HardStop: expected admitted/error/confirmed, wall_time_ms.reached true (the receipt-visible proof HardStop actually fired at the deadline), verdict failed, reasons $expect_reasons -- got $admission/$runtime/$teardown_state wall_reached=$wall_reached verdict=$verdict reasons=$reasons"
+pass 'a runtime that keeps reporting running past the (test-shortened) HardStop deadline is issued HardStop at that deadline and honors it: lifecycle.runtime error, teardown.state confirmed (the fake process still exits and is reaped, but -- realistically, since a real vfkit HardStop forces the VM off before the guest can sync its export -- writes no export), limits.wall_time_ms.reached true (the one receipt-visible proof HardStop fired), outcome exactly failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime, matching plan.md/spec.md'"'"'s class (c) exactly'
 
 n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
 printf '%s' '{"action":"hang","ignore_hardstop_ms":60000}' > "$scenario_path"
@@ -1524,9 +1586,14 @@ YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=250 YSTACK_TEST_POLL_INTERVAL
 [ "$status" -eq 0 ] || fail "delayed-stop/SIGKILL: expected exit 0, got $status ($(cat "$base/err"))"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
-[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] ||
-  fail "delayed-stop/SIGKILL: expected runtime error, teardown.state unconfirmed, got $runtime/$teardown_state"
-pass 'a runtime that ignores HardStop past the SIGKILL deadline is killed (test-shortened deadlines): lifecycle.runtime error, teardown.state unconfirmed (the process was never confirmed stopped)'
+wall_reached=$("$jq_bin" -r '.body.limits.wall_time_ms.reached' "$store_root/$attempt_id/receipt.json")
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime","failure.teardown"]'
+[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] && [ "$wall_reached" = true ] &&
+  [ "$verdict" = failed ] && [ "$reasons" = "$expect_reasons" ] ||
+  fail "delayed-stop/SIGKILL: expected runtime error, teardown.state unconfirmed, wall_time_ms.reached true (HardStop was attempted before the SIGKILL escalation), reasons $expect_reasons -- got $runtime/$teardown_state wall_reached=$wall_reached verdict=$verdict reasons=$reasons"
+pass 'a runtime that ignores HardStop (still reporting running) past the second, SIGKILL deadline is killed (test-shortened deadlines): lifecycle.runtime error, teardown.state unconfirmed (the process was never confirmed stopped, so the export it never wrote leaves every guest row unavailable too, and teardown itself is not confirmed), limits.wall_time_ms.reached true (HardStop was still attempted first), outcome exactly failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime + failure.teardown'
 
 # Self-stop: the runtime transitions to stopped on its own after a short
 # scripted delay, never receiving a HardStop -- a plain, clean completion.
@@ -1562,8 +1629,14 @@ status=0
 wait "$launch_pid" || status=$?
 [ "$status" -eq 0 ] || fail "cancellation: expected exit 0, got $status ($(cat "$base/err"))"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
-[ "$runtime" = error ] || fail "cancellation: expected lifecycle.runtime error, got $runtime"
-pass 'a SIGTERM delivered to the host process mid-launch (R9.2) takes the HardStop path immediately and still yields a full receipt: lifecycle.runtime error'
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime"]'
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] && [ "$verdict" = failed ] &&
+  [ "$reasons" = "$expect_reasons" ] ||
+  fail "cancellation: expected lifecycle.runtime error, teardown.state confirmed, verdict failed, reasons $expect_reasons -- got $runtime/$teardown_state verdict=$verdict reasons=$reasons"
+pass 'a SIGTERM delivered to the host process mid-launch (R9.2) takes the HardStop path immediately (same as a deadline timeout, so the same no-clean-export consequence applies) and still yields a full receipt: lifecycle.runtime error, teardown.state confirmed, outcome exactly failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime'
 
 # A runtime that crashes (nonzero exit, never writes an export) never
 # confirms the tree stopped: teardown.state unconfirmed, runtime error.
@@ -1575,9 +1648,13 @@ run_launch "$base/pkg-scn.json" || status=$?
 [ "$status" -eq 0 ] || fail "crash: expected exit 0, got $status ($(cat "$base/err"))"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
 teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
-[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] ||
-  fail "crash: expected runtime error, teardown.state unconfirmed, got $runtime/$teardown_state"
-pass 'a runtime that crashes (nonzero exit, no export written) never confirms the tree stopped: lifecycle.runtime error, teardown.state unconfirmed'
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime","failure.teardown"]'
+[ "$runtime" = error ] && [ "$teardown_state" = unconfirmed ] && [ "$verdict" = failed ] &&
+  [ "$reasons" = "$expect_reasons" ] ||
+  fail "crash: expected runtime error, teardown.state unconfirmed, reasons $expect_reasons -- got $runtime/$teardown_state verdict=$verdict reasons=$reasons"
+pass 'a runtime that crashes (nonzero exit, no export written) never confirms the tree stopped: lifecycle.runtime error, teardown.state unconfirmed, outcome exactly failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime + failure.teardown'
 
 # R8.2: an absent export (the runtime stops cleanly but never writes one)
 # and a damaged export (a truncated frame) each refuse validation --
@@ -1586,16 +1663,182 @@ pass 'a runtime that crashes (nonzero exit, no export written) never confirms th
 scenario_case 'absent export' '{"action":"no_export"}'
 attempt_id="$scn_attempt_id"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
 cpu_obs=$("$jq_bin" -r '.body.limits.cpu_time_ms.observation' "$store_root/$attempt_id/receipt.json")
-[ "$runtime" = error ] && [ "$cpu_obs" = unavailable ] ||
-  fail "absent export: expected runtime error, limits.cpu_time_ms.observation unavailable, got $runtime/$cpu_obs"
-pass 'a runtime that stops cleanly but never writes an export refuses validation: lifecycle.runtime error, every guest row observation unavailable'
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime"]'
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] && [ "$cpu_obs" = unavailable ] &&
+  [ "$verdict" = failed ] && [ "$reasons" = "$expect_reasons" ] ||
+  fail "absent export: expected runtime error, teardown.state confirmed, limits.cpu_time_ms.observation unavailable, reasons $expect_reasons -- got $runtime/$teardown_state cpu_obs=$cpu_obs verdict=$verdict reasons=$reasons"
+pass 'a runtime that stops cleanly but never writes an export refuses validation: lifecycle.runtime error, teardown.state confirmed, every guest row observation unavailable, outcome exactly failure.enforcement-unavailable + failure.observation-unavailable + failure.runtime'
 
 scenario_case 'damaged export' '{"damage_export":true}'
 attempt_id="$scn_attempt_id"
 runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
-[ "$runtime" = error ] || fail "damaged export: expected lifecycle.runtime error, got $runtime"
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$attempt_id/receipt.json")
+reasons=$("$jq_bin" -c -S '.body.outcome.reason_ids' "$store_root/$attempt_id/receipt.json")
+expect_reasons='["failure.enforcement-unavailable","failure.observation-unavailable","failure.runtime"]'
+[ "$runtime" = error ] && [ "$teardown_state" = confirmed ] && [ "$verdict" = failed ] &&
+  [ "$reasons" = "$expect_reasons" ] ||
+  fail "damaged export: expected lifecycle.runtime error, teardown.state confirmed, reasons $expect_reasons -- got $runtime/$teardown_state verdict=$verdict reasons=$reasons"
 pass 'a truncated (damaged) export frame refuses validation the same way as an absent one: lifecycle.runtime error'
+
+# =============================================================================
+# R15.1 class (c) against the merged checker: every launch-path case above,
+# rebuilt with control_real:true (so the checker's own control/policy
+# checks agree with the host's), cross-checked through
+# enforcement/v1/check-sandbox-receipt.sh in the temporary checker_root2 --
+# bindings intact so check_verdict is always "valid", and
+# enforcement_verdict (the checker's own independent derive_outcome,
+# recomputed from the receipt's recorded fields, never trusting
+# body.outcome) equals the host's own outcome.verdict in every case.
+#
+# restore_control (real shipped control/evaluator bytes over the
+# installed placeholders) happens here, not earlier: every class (c) pkg
+# below sets control_real:true to match, but every scenario_case/manual
+# launch test earlier in this section did not, and would mismatch
+# (launch.control-mismatch) against real bytes it never declared.
+# =============================================================================
+restore_control
+checker_root2="$base/checker2"
+/bin/mkdir -p "$checker_root2/enforcement/v1" "$checker_root2/control/v1" "$checker_root2/shadow/v1"
+/bin/cp "$root/enforcement/v1/check-sandbox-receipt.sh" "$root/enforcement/v1/sandbox-receipt.jq" \
+  "$checker_root2/enforcement/v1/"
+/bin/cp "$installed_control_policy" "$checker_root2/control/v1/sandbox-policy.json"
+/bin/cp "$installed_control_decision" "$checker_root2/control/v1/sandbox-decision.json"
+/bin/cp "$installed_control_policy_set" "$checker_root2/control/v1/control-policy-set.json"
+/bin/cp "$registry_path" "$checker_root2/shadow/v1/shadow-environments.json"
+/bin/cp "$accepted_set" "$checker_root2/enforcement/v1/accepted-identities.json"
+class_c_setup() { # class_c_setup <scenario-json> -- writes scenario, builds the pkg
+  # (control_real, expectation/evaluation out), sets $cc_attempt_id
+  n=$((n + 1))
+  cc_attempt_id="attempt.fixture-cc-$n"
+  printf '%s' "$1" > "$scenario_path"
+  build_pkg "$base/pkg-cc.json" '{"attempt_id":"'"$cc_attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'","control_real":true,"expectation_out":"'"$base/expectation.json"'","evaluation_out":"'"$base/evaluation.json"'"}'
+}
+class_c_check() { # class_c_check <desc> <expect-enforcement-verdict> -- run_launch
+  # already done by the caller; asserts checker agreement with the host
+  local out cv rv ev host_verdict
+  out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root2/enforcement/v1/check-sandbox-receipt.sh" \
+    check "$store_root/$cc_attempt_id/receipt.json" "$base/expectation.json" "$base/evaluation.json"))
+  cv=$("$jq_bin" -r '.body.check_verdict' <<<"$out")
+  rv=$("$jq_bin" -c -S '.body.reason_ids' <<<"$out")
+  ev=$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")
+  host_verdict=$("$jq_bin" -r '.body.outcome.verdict' "$store_root/$cc_attempt_id/receipt.json")
+  [ "$cv" = valid ] && [ "$rv" = '["receipt.valid"]' ] && [ "$ev" = "$2" ] && [ "$ev" = "$host_verdict" ] ||
+    fail "$1: checker expected valid/[receipt.valid]/$2 matching the host's own $host_verdict -- got $cv/$rv/$ev"
+}
+
+class_c_setup '{}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): success' failed
+
+class_c_setup '{"limit_overrides":{"memory_bytes":{"reached":true,"observed":536870913}}}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): violation (a guest row reached, still failed -- never violated, R7.2)' failed
+
+class_c_setup '{"report_overrides":{"tree_deadline_fired":true}}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): guest tree_deadline_fired' failed
+
+class_c_setup '{"action":"hang"}'
+YSTACK_TEST_HARDSTOP_MS=150 YSTACK_TEST_SIGKILL_MS=5000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): host HardStop' failed
+
+class_c_setup '{"action":"hang"}'
+( CDPATH='' cd -- "$install_dir" \
+    && YSTACK_TEST_HARDSTOP_MS=60000 YSTACK_TEST_SIGKILL_MS=65000 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+       exec "$python" host-supervisor.py launch ) <"$base/pkg-cc.json" >"$base/out" 2>"$base/err" &
+launch_pid=$!
+socket_wait="$work_root/$cc_attempt_id/rest.sock"
+for _ in $(seq 1 100); do
+  [ -e "$socket_wait" ] && grep -q running "$socket_wait" 2>/dev/null && break
+  sleep 0.02
+done
+kill -TERM "$launch_pid" 2>/dev/null || :
+wait "$launch_pid" || :
+class_c_check 'class (c): cancellation (SIGTERM)' failed
+
+class_c_setup '{"action":"crash"}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): runtime error (crash)' failed
+
+class_c_setup '{"damage_export":true}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): damaged export' failed
+
+class_c_setup '{"action":"no_export"}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): absent export' failed
+
+class_c_setup '{"action":"hang","ignore_hardstop_ms":60000}'
+YSTACK_TEST_HARDSTOP_MS=100 YSTACK_TEST_SIGKILL_MS=250 YSTACK_TEST_POLL_INTERVAL_MS=20 \
+  run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): delayed stop (ignores HardStop, killed at the SIGKILL deadline)' failed
+
+class_c_setup '{}'
+YSTACK_TEST_TEARDOWN_FAIL=1 run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): storage removal failure' failed
+
+class_c_setup '{"limit_overrides":{"output_bytes":{"observation":"partial","enforcement":"unknown"}}}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): a partial row' failed
+
+class_c_setup '{"limit_overrides":{"process_count":{"observation":"unavailable","enforcement":"unknown","observed":null}}}'
+run_launch "$base/pkg-cc.json"
+class_c_check 'class (c): an unavailable row' failed
+pass 'every launch-path class (c) case (success, violation, guest deadline, host HardStop, cancellation, runtime error, damaged export, absent export, delayed stop, storage removal failure, a partial row and an unavailable row), run through the merged check-sandbox-receipt.sh with control_real bindings intact, gives check_verdict valid and enforcement_verdict exactly equal to the host'"'"'s own outcome.verdict (failed in every case here, per R7.2'"'"'s permanent limitation)'
+
+# The edited-hard copies: the same success and violation receipts above,
+# with limits.cpu_time_ms.enforcement and limits.wall_time_ms.enforcement
+# set to "hard" and body.outcome recomputed to match (host-supervisor.py's
+# own derive_outcome, reused so this is the same formula, not a second
+# hand-rolled copy) -- the checker's *independent* jq derive_outcome, which
+# never trusts the stored body.outcome, must still recompute exactly
+# "satisfied" for the untouched-limits copy and "violated" (with the
+# matching limit.*-reached reason) for the reached copy, equal to what the
+# host would derive if these two rows ever got a route to hard (R7.2).
+edit_hard_copy() { # edit_hard_copy <in-receipt> <out-receipt>
+  "$python" -c "
+import sys, json, importlib.util
+spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+doc = json.loads(open(sys.argv[1], 'rb').read())
+body = doc['body']
+body['limits']['cpu_time_ms']['enforcement'] = 'hard'
+body['limits']['wall_time_ms']['enforcement'] = 'hard'
+body['outcome'] = hs.derive_outcome(body)
+open(sys.argv[2], 'wb').write(hs.canonical(doc))
+" "$1" "$2"
+}
+class_c_setup '{}'
+run_launch "$base/pkg-cc.json"
+edit_hard_copy "$store_root/$cc_attempt_id/receipt.json" "$base/receipt-hard-ok.json"
+out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root2/enforcement/v1/check-sandbox-receipt.sh" \
+  check "$base/receipt-hard-ok.json" "$base/expectation.json" "$base/evaluation.json"))
+cv=$("$jq_bin" -r '.body.check_verdict' <<<"$out")
+ev=$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")
+rv=$("$jq_bin" -c -S '.body.reason_ids' <<<"$out")
+[ "$cv" = valid ] && [ "$ev" = satisfied ] && [ "$rv" = '["receipt.valid"]' ] ||
+  fail "edited-hard success copy: expected valid/satisfied, got $cv/$ev/$rv"
+
+class_c_setup '{"limit_overrides":{"memory_bytes":{"reached":true,"observed":536870913}}}'
+run_launch "$base/pkg-cc.json"
+edit_hard_copy "$store_root/$cc_attempt_id/receipt.json" "$base/receipt-hard-violated.json"
+out=$("$jq_bin" -c . <(PATH="$jq_dir:$PATH" bash "$checker_root2/enforcement/v1/check-sandbox-receipt.sh" \
+  check "$base/receipt-hard-violated.json" "$base/expectation.json" "$base/evaluation.json"))
+cv=$("$jq_bin" -r '.body.check_verdict' <<<"$out")
+ev=$("$jq_bin" -r '.body.enforcement_verdict' <<<"$out")
+host_reasons=$("$python" -c "
+import json
+print(json.loads(open('$base/receipt-hard-violated.json','rb').read())['body']['outcome']['reason_ids'])
+")
+[ "$cv" = valid ] && [ "$ev" = violated ] ||
+  fail "edited-hard violated copy: expected valid/violated, got $cv/$ev (host's own recomputed reason_ids: $host_reasons)"
+pass 'a copy of each of the success and violation receipts above, edited only to set limits.cpu_time_ms/wall_time_ms.enforcement to hard and outcome recomputed by host-supervisor.py'"'"'s own derive_outcome, is independently re-derived by the merged checker'"'"'s own jq derive_outcome (never trusting the stored body.outcome) to exactly satisfied and violated respectively -- the two formulas agree'
 
 unset YSTACK_FAKE_SCENARIO
 
