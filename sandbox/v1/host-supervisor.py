@@ -548,7 +548,10 @@ def registry_entry_shape_ok(entry):
 
 def read_all(fd):
     """Reads the whole already-open, already-validated fd from its start
-    (never a fresh open() of the path string)."""
+    (never a fresh open() of the path string). Only for the small
+    documents that need their actual bytes parsed (a kernel .config, host-
+    config.json, the registry, the accepted set) -- see sha256_fd for a
+    large identity file where only the digest is ever needed."""
     os.lseek(fd, 0, os.SEEK_SET)
     chunks = []
     while True:
@@ -557,6 +560,21 @@ def read_all(fd):
             break
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def sha256_fd(fd):
+    """Streams the fd through hashlib.sha256 in fixed-size chunks, never
+    accumulating its bytes -- an identity file (a shared-cache subcache,
+    a kernel image) can be multi-gigabyte on a real host, and only its
+    digest is ever needed."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(fd, 1048576)
+        if not chunk:
+            break
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_registry(fd):
@@ -575,9 +593,13 @@ def load_registry(fd):
     require(canonical_ok, "E_CONFIG")
     require(isinstance(doc, dict) and set(doc) == {"body", "id", "kind", "schema_version"}, "E_CONFIG")
     require(doc.get("kind") == "shadow_environment_registry" and is_int(doc.get("schema_version"))
-            and doc.get("schema_version") == 1, "E_CONFIG")
+            and doc.get("schema_version") == 1 and id_ok(doc.get("id")), "E_CONFIG")
     body = doc.get("body")
     require(isinstance(body, dict) and set(body) == {"activation_state", "environments", "registry_version"},
+            "E_CONFIG")
+    # Mirrors sandbox-receipt.jq:373-377's registry_body_schema exactly:
+    # both leaf fields are strings, not just present.
+    require(isinstance(body["activation_state"], str) and isinstance(body["registry_version"], str),
             "E_CONFIG")
     environments = body["environments"]
     require(isinstance(environments, list) and all(registry_entry_shape_ok(e) for e in environments), "E_CONFIG")
@@ -994,29 +1016,42 @@ def measure_identities(identity_fds, instruction_raw, host_config_raw, host_supe
         except OSError:
             return None
 
-    def read_slot_list(slot):
+    def hash_slot(slot):
+        # Streamed (sha256_fd), never a full read: this slot's bytes are
+        # never needed, only their digest.
         if slot == forced_unreadable:
             return None
         try:
-            return [read_all(fd) for fd in identity_fds[slot]]
+            return sha256_fd(identity_fds[slot])
+        except OSError:
+            return None
+
+    def hash_slot_list(slot):
+        if slot == forced_unreadable:
+            return None
+        try:
+            return [sha256_fd(fd) for fd in identity_fds[slot]]
         except OSError:
             return None
 
     def observe(raw):
         return ("observed", sha256_hex(raw)) if raw is not None else ("unobserved", None)
 
-    result = {slot: observe(read_slot(slot)) for slot in
+    def observe_digest(digest):
+        return ("observed", digest) if digest is not None else ("unobserved", None)
+
+    result = {slot: observe_digest(hash_slot(slot)) for slot in
               ("guest_kernel", "guest_init", "guest_supervisor", "image", "verifier", "toolchain")}
 
-    constituents = [read_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
-    dyld_cache_raws = read_slot_list("dyld_cache_files")
-    if None in constituents or dyld_cache_raws is None:
+    constituents = [hash_slot(slot) for slot in ("runtime_vfkit", "runtime_driver", "vm_service")]
+    dyld_cache_digests = hash_slot_list("dyld_cache_files")
+    if None in constituents or dyld_cache_digests is None:
         result["host_runtime"] = ("unobserved", None)
     else:
-        files = [{"path": n, "sha256": sha256_hex(r)} for n, r in
+        files = [{"path": n, "sha256": d} for n, d in
                  zip(("vfkit", "driver", "vm_service"), constituents)]
-        files += [{"path": "dyld_cache.%d" % i, "sha256": sha256_hex(r)}
-                  for i, r in enumerate(dyld_cache_raws)]
+        files += [{"path": "dyld_cache.%d" % i, "sha256": d}
+                  for i, d in enumerate(dyld_cache_digests)]
         result["host_runtime"] = observe(canonical({"files": files}))
 
     kernel_config_raw = read_slot("guest_kernel_config")

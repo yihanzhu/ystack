@@ -901,6 +901,50 @@ pass 'malformed registry bytes (unbalanced, an embedded NaN, a JSON-legal lone-s
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
+patch_json() { # patch_json <in-file> <out-file> <python-expr-mutating "doc">
+  python3 -c "
+import json, importlib.util, sys
+spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+doc = json.loads(open(sys.argv[1], 'rb').read())
+$3
+open(sys.argv[2], 'wb').write(hs.canonical(doc))
+" "$1" "$2"
+}
+# The registry's envelope id and both body leaf fields must be the exact
+# type the shipped checker's fixed_registry_shape_ok requires
+# (sandbox-receipt.jq:373-377), not merely present.
+for edit in 'doc["id"] = []' 'doc["body"]["activation_state"] = {}' 'doc["body"]["registry_version"] = False'; do
+  patch_json "$registry_path" "$base/registry-badshape.json" "$edit"
+  /bin/chmod 644 "$registry_path"
+  /bin/cp "$base/registry-badshape.json" "$registry_path"
+  /bin/chmod 444 "$registry_path"
+  expect_refused "E_CONFIG: registry shape ($edit)" E_CONFIG "$base/pkg-ok.json"
+done
+pass 'a registry envelope id or body leaf field of the wrong type ("id":[], "activation_state":{}, "registry_version":false) is refused E_CONFIG, mirroring the shipped checker'"'"'s own registry_body_schema exactly'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
+# R2.3 (memory): sha256_fd streams a file through hashlib.sha256 in fixed
+# chunks, never accumulating its bytes -- proven against a real (sparse)
+# 64 MiB file and shasum, independent of any fixture wiring.
+large_path="$base/large-identity-file"
+/usr/bin/truncate -s 67108864 "$large_path"
+expected_sha=$(/usr/bin/shasum -a 256 "$large_path" | /usr/bin/awk '{print $1}')
+streamed_sha=$("$python" -c "
+import importlib.util, os
+spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
+hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
+fd = os.open('$large_path', os.O_RDONLY)
+print(hs.sha256_fd(fd))
+")
+[ "$streamed_sha" = "$expected_sha" ] ||
+  fail "sha256_fd: expected $expected_sha, got $streamed_sha"
+/bin/rm -f "$large_path"
+pass 'sha256_fd streams a 64 MiB file through hashlib.sha256 in fixed chunks and matches shasum exactly, never accumulating the file'"'"'s bytes'
+build_tree 0
+build_pkg "$base/pkg-ok.json" '{}'
+
 # prepare-candidate.py:1662-1677's closed manifest-entry shape: an
 # unsupported kind/mode must not be silently filtered out.
 i=0
@@ -1012,16 +1056,6 @@ pass 'the shipped checker, run against this fixture'"'"'s own registry/accepted 
 # The rest of the matrix: every remaining class (a) binding refusal, both
 # class (b) reasons, looped over fresh fixtures (control_real=true so the
 # checker's own control/policy checks agree with the host's).
-patch_json() { # patch_json <in-file> <out-file> <python-expr-mutating "doc">
-  python3 -c "
-import json, importlib.util, sys
-spec = importlib.util.spec_from_file_location('hs', '$supervisor_src')
-hs = importlib.util.module_from_spec(spec); spec.loader.exec_module(hs)
-doc = json.loads(open(sys.argv[1], 'rb').read())
-$3
-open(sys.argv[2], 'wb').write(hs.canonical(doc))
-" "$1" "$2"
-}
 n=270
 chk_case() { # chk_case <desc> <patch-json> <verdict> <reasons-json>
   n=$((n + 1))
