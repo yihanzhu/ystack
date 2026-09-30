@@ -1739,18 +1739,36 @@ def scrub_dyld_env():
     return {k: v for k, v in os.environ.items() if not k.startswith("DYLD_")}
 
 
-def _drain_capped(read_fd, cap, log_fd):
+def _drain_capped(read_fd, cap, log_fd, stop_event):
     """Background thread: copies read_fd to log_fd up to cap bytes,
     draining (never blocking the child on a full pipe) and discarding
-    anything past the cap."""
+    anything past the cap.
+
+    findings-477-r13.md finding 1: bounded by stop_event, checked before
+    every read via a short select() timeout rather than a raw blocking
+    os.read() -- so a caller that gives up waiting for this thread (its
+    own drain.join(timeout=...) already returned while this thread was
+    still blocked on read_fd, e.g. a grandchild still holding the write
+    end open) can ask it to stop and then confirm, via another join,
+    that it actually has, before ever closing read_fd/log_fd out from
+    under it. Closing first and only then having this thread's own
+    still-pending read/write resume risks writing into whatever those
+    fd numbers were reused for meanwhile (possibly receipt.json)."""
     written = 0
-    while True:
+    while not stop_event.is_set():
+        try:
+            ready, _, _ = select.select([read_fd], [], [], 0.2)
+        except OSError:
+            break
+        if not ready:
+            continue
         try:
             chunk = os.read(read_fd, 65536)
         except OSError:
             break
         if not chunk:
             break
+        test_slow("YSTACK_TEST_DRAIN_PAUSE_MS")  # test-only: pauses between read and write
         if written < cap:
             take = chunk[:cap - written]
             os.write(log_fd, take)
@@ -1851,7 +1869,8 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         os.close(log_fd)
         return stub_run_result(control_deadline_for_elapsed(admission_mono))
     os.close(write_fd)
-    drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd), daemon=True)
+    drain_stop = threading.Event()
+    drain = threading.Thread(target=_drain_capped, args=(read_fd, 65536, log_fd, drain_stop), daemon=True)
     drain.start()
     test_self_signal("YSTACK_TEST_SELF_SIGNAL_AFTER_SPAWN")  # test-only
 
@@ -1947,12 +1966,28 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # untouched here -- this only guards the CURRENT observation.
         exit_code = proc.poll()
         if state == "error" and since_spawn >= startup_deadline_s() and exit_code is None:
-            # R5.4: past the startup grace, preserve the error but keep
-            # supervising the live process -- HardStop/SIGKILL/
-            # cancellation below, exiting only on reaped exit or
-            # abandonment, never a bare break into a blind wait that
-            # would itself disable the normal shutdown path.
-            driver_reported_error = True
+            # findings-477-r13ci.md: exit_code is None here can still
+            # mean "already exited, not yet reaped" (an OS reap-timing
+            # race, worse under load) rather than "genuinely still
+            # running" -- give it one short, bounded second chance
+            # (capped by both a small constant and the time remaining to
+            # the nearest deadline) to become reapable before concluding
+            # this observation is a genuine driver malfunction, so a
+            # clean exit whose endpoint happened to vanish first is never
+            # misclassified just because our own proc.poll() call landed
+            # a moment too early.
+            recheck_budget = min(0.2, max(0.0, sigkill_deadline_s() - (time.monotonic() - admission_mono)))
+            recheck_deadline = time.monotonic() + recheck_budget
+            while exit_code is None and time.monotonic() < recheck_deadline:
+                time.sleep(0.01)
+                exit_code = proc.poll()
+            if exit_code is None:
+                # R5.4: past the startup grace, preserve the error but keep
+                # supervising the live process -- HardStop/SIGKILL/
+                # cancellation below, exiting only on reaped exit or
+                # abandonment, never a bare break into a blind wait that
+                # would itself disable the normal shutdown path.
+                driver_reported_error = True
         if exit_code is not None:
             # Accept stopped_exit_status regardless of HardStop or an
             # earlier driver-state error: result["hard_stop"]/
@@ -2037,8 +2072,26 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
                 and proc.returncode != stopped_exit_status:
             driver_reported_error = True
     drain.join(timeout=2)
-    os.close(read_fd)
-    os.close(log_fd)
+    if drain.is_alive():
+        # findings-477-r13.md finding 1: still blocked on read_fd (e.g. a
+        # grandchild process still holding the pipe's write end open) --
+        # ask it to stop and give it one more bounded wait to confirm,
+        # rather than closing descriptors it might still be about to
+        # read from or write to.
+        drain_stop.set()
+        drain.join(timeout=2)
+    if drain.is_alive():
+        # Never observed in practice (the 0.2s select-poll bound above
+        # means drain_stop is checked well within either 2s join), but if
+        # it somehow ever happens, closing these two descriptors now
+        # would risk a delayed read/write landing on whatever they get
+        # reused for next (possibly receipt.json) -- leak them
+        # deliberately instead and say so, rather than risk that.
+        sys.stderr.write(
+            "warning: drain thread for %s did not stop within bound; leaking read_fd/log_fd\n" % attempt_id)
+    else:
+        os.close(read_fd)
+        os.close(log_fd)
 
     tree_terminated = confirmed_stopped and reaped
     verifier_started = False

@@ -26,11 +26,13 @@ the scripted sandbox_guest_report export frame via the host's own frame
 codec (imported from host-supervisor.py, at $YSTACK_HOST_SUPERVISOR or
 the sibling sandbox/v1/ directory).
 """
+import fcntl
 import importlib.util
 import json
 import os
 import signal
 import sys
+import tempfile
 import time
 
 
@@ -110,15 +112,38 @@ def read_mailbox(socket_path):
 
 
 def write_mailbox(socket_path, state=None, hardstop=None):
-    box = read_mailbox(socket_path)
-    if state is not None:
-        box["state"] = state
-    if hardstop is not None:
-        box["hardstop"] = hardstop
-    tmp = socket_path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(json.dumps(box))
-    os.replace(tmp, socket_path)
+    # findings-477-r13.md finding 2: cmd_run (the runtime process) and
+    # cmd_stop (a separate process the host spawns for each stop call)
+    # can both enter this function concurrently -- a shared lock file,
+    # held for the whole read-modify-write-replace, serializes them
+    # completely: a losing writer's read is never stale, and the two
+    # never race over the same tmp path (which could otherwise raise
+    # FileNotFoundError on os.replace, or have one process's update of
+    # state/hardstop silently overwritten by the other's own concurrent,
+    # differently-stale read). Kept in the system tempdir, never inside
+    # socket_path's own attempt directory: the host's own teardown
+    # tracks and removes that directory's exact fixed-name contents
+    # (LAUNCH_FIXED_NAMES), and an extra file there would otherwise be
+    # flagged as an unexpected survivor and make storage_destroyed false.
+    lock_path = os.path.join(tempfile.gettempdir(),
+                              "ystack-mailbox-lock." + socket_path.replace(os.sep, "_"))
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            box = read_mailbox(socket_path)
+            if state is not None:
+                box["state"] = state
+            if hardstop is not None:
+                box["hardstop"] = hardstop
+            tmp = "%s.tmp.%d" % (socket_path, os.getpid())
+            with open(tmp, "w") as fh:
+                fh.write(json.dumps(box))
+            os.replace(tmp, socket_path)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
 
 
 def cmd_state(args):
@@ -192,6 +217,14 @@ def cmd_run(args):
     socket_path, export_disk, input_disk = args[0], args[1], args[2]
     hs = load_host_module()
     scenario = load_scenario()
+    if scenario.get("emit_runtime_output"):
+        # findings-477-r13.md finding 1: real bytes on this process's own
+        # stdout (the host's runtime.log capture, distinct from the
+        # guest report's own "stdout"/"stderr" fields below), flushed
+        # early so the host's drain thread has something concrete to
+        # read well before this process's own eventual exit.
+        sys.stdout.write(scenario["emit_runtime_output"])
+        sys.stdout.flush()
     if scenario.get("run_marker_path"):
         # findings-477-r7.md finding 1: proves the runtime process was
         # actually spawned (Popen exec'd this "run" subcommand) -- a
@@ -377,7 +410,32 @@ def cmd_run(args):
             os.unlink(socket_path)
         except OSError:
             pass
+        # findings-477-r13ci.md: a short, deterministic pause here (this
+        # process is still genuinely alive and unreaped throughout) --
+        # any state poll landing during it is guaranteed to see
+        # state=="error" with exit_code still None at that exact moment,
+        # reliably exercising the supervisor's own bounded reap-retry
+        # rather than depending on how the OS happens to schedule/reap
+        # relative to a poll landing right at this process's own exit.
+        delay_ms = scenario["vanish_mailbox_on_exit"]
+        time.sleep((delay_ms if isinstance(delay_ms, (int, float)) else 50) / 1000.0)
     else:
+        if scenario.get("concurrent_stop_race"):
+            # findings-477-r13.md finding 2: forks a process that mimics
+            # a concurrent cmd_stop's own write_mailbox(hardstop=True)
+            # call, deterministically ordered (a marker file, not a race
+            # on timing) to have already started -- acquired the lock or
+            # be waiting on it -- before this process's own final
+            # "stopped" write below, so the two genuinely overlap on the
+            # same mailbox file through write_mailbox()'s real
+            # serialization, never a raw sleep-then-hope race.
+            marker = scenario["concurrent_stop_race"]
+            if os.fork() == 0:
+                open(marker, "w").close()
+                write_mailbox(socket_path, hardstop=True)
+                os._exit(0)
+            while not os.path.exists(marker):
+                time.sleep(0.005)
         write_mailbox(socket_path, state="stopped")
     exit_delay_ms = scenario.get("exit_delay_ms")
     if exit_delay_ms:

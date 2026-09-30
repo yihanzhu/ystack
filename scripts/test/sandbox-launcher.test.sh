@@ -2903,6 +2903,46 @@ wall_observed=$("$jq_bin" -r '.body.limits.wall_time_ms.observed' "$store_root/$
   fail "finding r12-3: expected limits.wall_time_ms.observed under 1,000ms (the stop itself completes quickly; a 1,500ms-slow log drain, held open by a grandchild inheriting the pipe, must never inflate it), got ${wall_observed}ms"
 pass 'finding r12-3: limits.wall_time_ms.observed is captured immediately at the confirmed-stop instant (alongside terminated_at), before drain.join() -- a 1,500ms-slow log drain (a grandchild process still holding the host'"'"'s pipe open) never inflates the reported wall observation'
 
+# =============================================================================
+# Fix round 13 (findings-477-r13.md): one test per finding.
+# =============================================================================
+
+# Finding 1 [P2]: the drain worker's own descriptors are never closed
+# out from under it -- a worker paused between its own read and write
+# still finishes (confirmed via drain_stop plus a bounded second join)
+# before finalization ever closes read_fd/log_fd, so a delayed write
+# can never land on a reused descriptor number.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"emit_runtime_output":"RUNTIME-OUTPUT-MARKER-R13"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_DRAIN_PAUSE_MS=2500 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding r13-1: expected exit 0, got $status ($(cat "$base/err"))"
+"$jq_bin" -e . "$store_root/$attempt_id/receipt.json" >/dev/null ||
+  fail "finding r13-1: expected receipt.json to be byte-valid JSON"
+grep -rl "RUNTIME-OUTPUT-MARKER-R13" "$store_root/$attempt_id" >/dev/null 2>&1 &&
+  fail "finding r13-1: expected no store file to contain runtime output (a paused drain worker's delayed write must never land on a reused/closed descriptor)"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] || fail "finding r13-1: expected lifecycle.runtime completed, got $runtime"
+pass 'finding r13-1: a drain worker paused between its own read and write (YSTACK_TEST_DRAIN_PAUSE_MS, well past drain.join()'"'"'s own 2s timeout) is confirmed stopped (drain_stop plus a second bounded join) before read_fd/log_fd are ever closed -- receipt.json stays byte-valid JSON, no store file picks up stray runtime output, and finalization still completes normally: lifecycle.runtime completed'
+
+# Finding 2 [P2]: cmd_run and cmd_stop can both enter write_mailbox
+# concurrently (a natural completion racing a host stop) -- the whole
+# read-modify-write-replace is now serialized by a flock, so neither
+# writer's update is lost and neither raises FileNotFoundError racing
+# over a shared tmp path.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+race_marker="$base/stop-race.marker"
+rm -f "$race_marker"
+printf '%s' '{"concurrent_stop_race":"'"$race_marker"'"}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+run_launch "$base/pkg-scn.json" || fail "finding r13-2: expected exit 0"
+runtime=$("$jq_bin" -r '.body.lifecycle.runtime' "$store_root/$attempt_id/receipt.json")
+teardown_state=$("$jq_bin" -r '.body.teardown.state' "$store_root/$attempt_id/receipt.json")
+[ "$runtime" = completed ] && [ "$teardown_state" = confirmed ] ||
+  fail "finding r13-2: expected lifecycle.runtime completed, teardown.state confirmed (a concurrent, deterministically-ordered mailbox update racing this process's own final write must never make an otherwise-clean exit look abnormal), got $runtime/$teardown_state"
+pass 'finding r13-2: a process mimicking a concurrent cmd_stop'"'"'s own write_mailbox(hardstop=true) call, started (via a marker file, not a timing race) before this run'"'"'s own final "stopped" write, never corrupts or loses either update -- the run still completes cleanly: lifecycle.runtime completed, teardown.state confirmed'
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
