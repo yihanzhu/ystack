@@ -371,6 +371,15 @@ def cmd_run(args):
         # correctly bounded by the absolute abandonment deadline rather
         # than a fresh, fixed wait of its own.
         time.sleep(exit_delay_ms / 1000.0)
+    slow_drain_ms = scenario.get("slow_drain_ms")
+    if slow_drain_ms and os.fork() == 0:
+        # findings-477-r12.md finding 3: a grandchild inheriting our own
+        # stdout/stderr (the host's log-drain pipe) that outlives OUR own
+        # exit -- keeps the host's drain thread blocked on read() (no
+        # EOF yet) well past when the host already confirms the stop,
+        # proving wall_time_ms is captured before, not after, that drain.
+        time.sleep(slow_drain_ms / 1000.0)
+        os._exit(0)
     return 0
 
 

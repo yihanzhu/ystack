@@ -1037,13 +1037,14 @@ entry_sha=$(python3 -c "print('a' * 64)")
 for entry in '{"path":"README.md","kind":"symlink","git_mode":"120000","mode":"0500","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
              '{"path":"README.md","kind":"file","git_mode":"100644","mode":"0777","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
              '{"path":"README.md","kind":[],"git_mode":"100644","mode":"0400","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
-             '{"path":"README.md","kind":"file","git_mode":"100644","mode":{},"blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}'; do
+             '{"path":"README.md","kind":"file","git_mode":"100644","mode":{},"blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
+             '{"kind":"file","git_mode":"100644","mode":"0400","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}'; do
   i=$((i + 1))
   build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-entryshape-'"$i"'","nonce":"'"$(printf '%064d' $((250 + i)))"'","manifest_set":{"entries":['"$entry"']}}'
   expect_phase_b_refused "manifest entry shape ($entry)" "attempt.fixture-entryshape-$i" \
     "$base/pkg-pb.json" '["launch.manifest-mismatch"]'
 done
-pass 'a manifest entry with an unsupported kind (e.g. symlink), an out-of-set mode (e.g. 0777), or a non-string kind/mode (a list, a dict) is refused launch.manifest-mismatch before candidate selection, never silently filtered out or a TypeError'
+pass 'a manifest entry with an unsupported kind (e.g. symlink), an out-of-set mode (e.g. 0777), a non-string kind/mode (a list, a dict), or a missing path (findings-477-r12.md finding 1 -- otherwise a KeyError in build_plan_json well after the attempt is claimed) is refused launch.manifest-mismatch before candidate selection, never silently filtered out or an uncaught exception'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
@@ -2855,6 +2856,44 @@ driver_argv_fail_case() { # driver_argv_fail_case <desc> <default-scenario-json>
 }
 driver_argv_fail_case 'finding: ~2,000 nested arrays in the driver'"'"'s argv response is bounded, never an uncaught RecursionError' '{"deep_nesting_argv":true}'
 driver_argv_fail_case 'finding: a NUL byte in an argv entry from the driver'"'"'s argv response is refused, never an uncaught ValueError from Popen' '{"nul_in_argv":true}'
+
+# =============================================================================
+# Fix round 12 (findings-477-r12.md): one test per remaining finding
+# (finding 1's test was folded into the existing manifest-entry-shape
+# loop above, right beside its sibling shape violations).
+# =============================================================================
+# driver_argv_fail_case above never resets default_scenario_path after
+# its own last call (nul_in_argv) -- reset it here so it can't leak into
+# either test below (finding r12-3 in particular needs a real, working
+# driver_argv() response to ever reach its own poll loop at all).
+printf '%s' '{}' > "$default_scenario_path"
+
+# Finding 2 [P2]: created[0] is set the instant os.mkdir succeeds, not
+# after mkdir_excl's own later finalization -- a finalization failure
+# (YSTACK_TEST_WORKDIR_MKDIR_FAIL, dedicated so it can't also fire on the
+# earlier, unrelated store-side attempt-dir mkdir sharing the same name)
+# still triggers cleanup, never treating this launch's own just-created
+# work_root directory as foreign.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+status=0
+YSTACK_TEST_WORKDIR_MKDIR_FAIL=1 run_launch "$base/pkg-scn.json" || status=$?
+[ "$status" -eq 0 ] || fail "finding r12-2: expected exit 0, got $status ($(cat "$base/err"))"
+storage_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_root/$attempt_id/receipt.json")
+[ "$storage_destroyed" = true ] ||
+  fail "finding r12-2: expected teardown.storage_destroyed true (created[0] must already be true when a post-mkdir finalize failure strikes), got $storage_destroyed"
+pass 'finding r12-2: a work_root mkdir finalization failure (fchown/fchmod/fsync) striking right after a successful os.mkdir still cleans up (storage_destroyed: true) -- created[0] is set the instant os.mkdir itself succeeds, not after mkdir_excl'"'"'s later finalization'
+
+# Finding 3 [P2]: wall_time_ms is captured at the confirmed-stop instant,
+# before the log-drain join, never inflated by a slow drain.
+n=$((n + 1)); attempt_id="attempt.fixture-scn-$n"
+printf '%s' '{"slow_drain_ms":1500}' > "$scenario_path"
+build_pkg "$base/pkg-scn.json" '{"attempt_id":"'"$attempt_id"'","nonce":"'"$(printf '%064d' "$n")"'"}'
+run_launch "$base/pkg-scn.json" || fail "finding r12-3: expected exit 0"
+wall_observed=$("$jq_bin" -r '.body.limits.wall_time_ms.observed' "$store_root/$attempt_id/receipt.json")
+[ "$wall_observed" -lt 1000 ] ||
+  fail "finding r12-3: expected limits.wall_time_ms.observed under 1,000ms (the stop itself completes quickly; a 1,500ms-slow log drain, held open by a grandchild inheriting the pipe, must never inflate it), got ${wall_observed}ms"
+pass 'finding r12-3: limits.wall_time_ms.observed is captured immediately at the confirmed-stop instant (alongside terminated_at), before drain.join() -- a 1,500ms-slow log drain (a grandchild process still holding the host'"'"'s pipe open) never inflates the reported wall observation'
 
 unset YSTACK_FAKE_SCENARIO
 

@@ -944,6 +944,12 @@ def manifest_entries_ok(entries):
             return False
         if kind not in MANIFEST_ENTRY_MODES or mode not in MANIFEST_ENTRY_MODES[kind]:
             return False
+        # findings-477-r12.md finding 1: path is required (and indexed
+        # unconditionally, both kinds) by build_plan_json below -- absent
+        # here, it would otherwise raise an uncaught KeyError well after
+        # the attempt is claimed and files are frozen (no receipt).
+        if not isinstance(e.get("path"), str):
+            return False
     return True
 
 
@@ -1190,8 +1196,14 @@ def freeze_by_copy(config, attempt_id, uid, gid, package, created):
 
     findings-477-r9.md finding 1: created[0] is set True the instant
     this launch's own work_root/<attempt_id> directory actually exists
-    (mkdir_excl succeeded) -- never left for the caller to infer from
-    the exception type. A FileExistsError here (another attempt already
+    -- never left for the caller to infer from the exception type. Per
+    findings-477-r12.md finding 2, that instant is os.mkdir's own
+    success (mark_created, passed as mkdir_excl's on_created), not
+    mkdir_excl's later open/fchown/fchmod/fsync finalization, which can
+    still fail afterward without undoing the fact that the directory
+    now genuinely exists and belongs to this launch.
+
+    A FileExistsError here (another attempt already
     owns this work_root entry, a TOCTOU race past the pre-claim
     work_root_attempt_exists check) means created[0] stays False: this
     launch made nothing, so the caller must never call remove_frozen
@@ -1199,16 +1211,28 @@ def freeze_by_copy(config, attempt_id, uid, gid, package, created):
     files, disks and socket, possibly while its runtime is still
     running, and could misreport storage_destroyed: true for storage
     this launch never touched."""
+    def mark_created():
+        created[0] = True
+        if os.environ.get("YSTACK_TEST_WORKDIR_MKDIR_FAIL"):
+            # Test-only: simulates a finalization failure (fchown/fchmod/
+            # fsync) striking right after os.mkdir succeeds -- proves
+            # created[0] is already true by the time such an exception
+            # can even occur, distinct from the store-side attempt dir's
+            # own YSTACK_TEST_MKDIR_FINALIZE_FAIL (keyed by attempt_id,
+            # which this work_root mkdir shares -- a dedicated hook here
+            # avoids firing on the earlier, unrelated store-side mkdir).
+            raise OSError("test-only simulated post-mkdir finalize failure")
     work_fd = os.open(config["work_root"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         try:
-            attempt_work_fd = mkdir_excl(work_fd, attempt_id, uid, gid)
+            attempt_work_fd = mkdir_excl(work_fd, attempt_id, uid, gid, on_created=mark_created)
         except FileExistsError:
             # Never ours to touch: refuse before anything is written, so
             # no cleanup path can run against it (unlike a genuine
-            # mid-freeze write failure below).
+            # mid-freeze write failure below, which can now still fail
+            # AFTER os.mkdir itself succeeded -- on_created above has
+            # already set created[0] True by then).
             refuse("E_ATTEMPT_EXISTS")
-        created[0] = True
         try:
             frozen_fd = mkdir_excl(attempt_work_fd, "frozen", uid, gid)
             try:
@@ -1314,8 +1338,16 @@ def remove_frozen(work_root, attempt_id, candidate_names):
 
 # --- R10.2 store writer: O_CREAT|O_EXCL relative to a directory fd, fsync,
 # then the final mode; directories 0750, files 0440. --------------------
-def mkdir_excl(parent_fd, name, uid, gid):
+def mkdir_excl(parent_fd, name, uid, gid, on_created=None):
     os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    if on_created is not None:
+        # findings-477-r12.md finding 2: called the instant os.mkdir
+        # itself succeeds -- before the open/fchown/fchmod/fsync
+        # finalization below, any step of which can still fail (e.g. the
+        # YSTACK_TEST_MKDIR_FINALIZE_FAIL hook) without undoing the fact
+        # that the directory now genuinely exists and belongs to this
+        # caller.
+        on_created()
     fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
     try:
         if name == os.environ.get("YSTACK_TEST_MKDIR_FINALIZE_FAIL"):
@@ -1953,6 +1985,7 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         # have returned.
         reaped = False
         terminated_at = time.time()
+        end_mono = time.monotonic()  # findings-477-r12.md finding 3: see below
     else:
         # R9.1/R9.5: the 58s abandonment deadline stays active while
         # reaping too -- two fixed 5s waits here (a driver "stopped" at
@@ -1989,6 +2022,13 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
         if os.environ.get("YSTACK_TEST_REAP_FAIL"):
             reaped = False
         terminated_at = time.time()
+        # findings-477-r12.md finding 3 (spec R9's "admission to confirmed
+        # VM stop"): captured HERE, immediately alongside terminated_at,
+        # not after drain.join() below -- the drain thread can still be
+        # processing buffered runtime.log output for up to its own 2s
+        # join timeout after the process is already reaped, which must
+        # never inflate the reported wall observation.
+        end_mono = time.monotonic()
         # A "stopped" mailbox report is independent of the process's
         # actual exit status: a runtime that says stopped but then exits
         # abnormally (crashes right after writing its own report) is
@@ -2001,7 +2041,6 @@ def run_vm(config, attempt_id, uid, gid, driver_path, plan_bytes, instruction_ra
     os.close(log_fd)
 
     tree_terminated = confirmed_stopped and reaped
-    end_mono = time.monotonic()
     verifier_started = False
     guest = None
     tree_deadline_fired = False
