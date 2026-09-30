@@ -819,10 +819,8 @@ teardown_destroyed=$("$jq_bin" -r '.body.teardown.storage_destroyed' "$store_roo
   fail 'planted-file hook: expected storage_destroyed false with an unexpected survivor'
 pass 'an unexpected file planted alongside the frozen copies survives teardown untouched and is reported as storage_destroyed: false, never silently unlinked'
 
-# R10.4: a freeze failure part way through (ENOSPC, a write error, a name
-# collision) must never escape as a traceback with a claimed store dir and
-# no receipt -- the test-only YSTACK_TEST_FREEZE_FAIL hook fails right
-# after the fixed frozen/ files are written, before candidate/ exists.
+# R10.4: a freeze failure part way through must never escape as a
+# traceback with a claimed store dir and no receipt.
 build_pkg "$base/pkg-freezefail.json" '{"attempt_id":"attempt.fixture-freezefail","nonce":"'"$(printf '%064d' 241)"'"}'
 status=0
 YSTACK_TEST_FREEZE_FAIL=1 run_launch "$base/pkg-freezefail.json" || status=$?
@@ -833,20 +831,47 @@ YSTACK_TEST_FREEZE_FAIL=1 run_launch "$base/pkg-freezefail.json" || status=$?
   fail 'freeze-failure hook: expected a receipt to still be written'
 pass 'a freeze failure part way through (the test-only YSTACK_TEST_FREEZE_FAIL hook) cleans up the partial attempt directory and still writes a receipt, never a traceback'
 
-# preparation/v1/prepare-candidate.py:1662-1677's closed manifest-entry
-# shape: an unsupported kind (e.g. a symlink) or an out-of-set mode must
-# not be silently filtered out before candidate/<n> selection.
+# Security (R9.3): "nonces" collides with the replay-marker directory --
+# reserved E_PACKAGE before the nonce is touched, so markers survive.
+/bin/mkdir -p "$work_root/nonces"
+marker="$work_root/nonces/pre-existing-marker"
+: > "$marker"
+build_pkg "$base/pkg-nonces.json" '{"attempt_id":"nonces","nonce":"'"$(printf '%064d' 242)"'"}'
+status=0
+run_launch "$base/pkg-nonces.json" || status=$?
+[ "$status" -eq 65 ] && [ "$(cat "$base/err")" = E_PACKAGE ] ||
+  fail "attempt_id \"nonces\": expected exit 65 E_PACKAGE, got $status ($(cat "$base/err"))"
+[ -f "$marker" ] || fail 'attempt_id "nonces": a prior nonce marker was destroyed'
+pass 'an attempt_id equal to the reserved work_root name "nonces" is refused E_PACKAGE before the nonce is touched; every prior replay marker survives untouched'
+
+# Any other pre-existing work_root entry must refuse E_ATTEMPT_EXISTS
+# with nothing removed, never the write-failure cleanup path.
+/bin/mkdir -p "$work_root/attempt.fixture-collide/unrelated"
+: > "$work_root/attempt.fixture-collide/unrelated/marker"
+build_pkg "$base/pkg-collide.json" '{"attempt_id":"attempt.fixture-collide","nonce":"'"$(printf '%064d' 243)"'"}'
+status=0
+run_launch "$base/pkg-collide.json" || status=$?
+[ "$status" -eq 65 ] && [ "$(cat "$base/err")" = E_ATTEMPT_EXISTS ] ||
+  fail "pre-existing work_root entry: expected exit 65 E_ATTEMPT_EXISTS, got $status ($(cat "$base/err"))"
+[ -f "$work_root/attempt.fixture-collide/unrelated/marker" ] ||
+  fail 'pre-existing work_root entry: its unrelated contents were destroyed'
+pass 'a pre-existing work_root entry sharing an attempt_id refuses E_ATTEMPT_EXISTS with nothing removed, never the write-failure cleanup path'
+
+# prepare-candidate.py:1662-1677's closed manifest-entry shape: an
+# unsupported kind/mode must not be silently filtered out.
 i=0
 entry_oid=$(python3 -c "print('f' * 40)")
 entry_sha=$(python3 -c "print('a' * 64)")
 for entry in '{"path":"README.md","kind":"symlink","git_mode":"120000","mode":"0500","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
-             '{"path":"README.md","kind":"file","git_mode":"100644","mode":"0777","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}'; do
+             '{"path":"README.md","kind":"file","git_mode":"100644","mode":"0777","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
+             '{"path":"README.md","kind":[],"git_mode":"100644","mode":"0400","blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}' \
+             '{"path":"README.md","kind":"file","git_mode":"100644","mode":{},"blob_oid":"'"$entry_oid"'","size_bytes":5,"sha256":"'"$entry_sha"'"}'; do
   i=$((i + 1))
   build_pkg "$base/pkg-pb.json" '{"attempt_id":"attempt.fixture-entryshape-'"$i"'","nonce":"'"$(printf '%064d' $((250 + i)))"'","manifest_set":{"entries":['"$entry"']}}'
   expect_phase_b_refused "manifest entry shape ($entry)" "attempt.fixture-entryshape-$i" \
     "$base/pkg-pb.json" '["launch.manifest-mismatch"]'
 done
-pass 'a manifest entry with an unsupported kind (e.g. symlink) or an out-of-set mode (e.g. 0777) is refused launch.manifest-mismatch before candidate selection, never silently filtered out'
+pass 'a manifest entry with an unsupported kind (e.g. symlink), an out-of-set mode (e.g. 0777), or a non-string kind/mode (a list, a dict) is refused launch.manifest-mismatch before candidate selection, never silently filtered out or a TypeError'
 build_tree 0
 build_pkg "$base/pkg-ok.json" '{}'
 
