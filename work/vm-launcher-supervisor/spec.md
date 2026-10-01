@@ -531,10 +531,60 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    candidate source (the scrubbed dummy-target copy at its step-7 commit); synthetic
    sentinel locations; the separate qualification install directory and accepted set,
    removed afterwards; supervisor resource measurements. Approval authorizes only that
-   run and its qualification record. R12.3 waits only on a qualified result, which needs
-   every boundary row enforced (`work/real-sandbox-boundary/spec.md:63-66`). CPU and
-   wall stay `none`, so here the run proves the other rows but cannot qualify: R12.3
-   does not land and the entry stays `unproven`. Step-8 R7.1 needs a `satisfied` receipt
+   run and its qualification record.
+
+   Probe evidence distinguishes prerequisites, the operation actually attempted,
+   its result and cleanup. Preserve the operation's result when cleanup fails.
+   Missing prerequisites, unattempted checks, unsupported operations and incomplete
+   observations are not tested denials. Record which required subchecks completed;
+   one completed subcheck cannot stand for the whole mode. Probe output is ordinary
+   payload, never a guest report or authority to accept a receipt or qualification.
+
+   One mode and bounded parameters may use the existing admitted, hash-bound
+   instruction bytes on regular read-only fd 0. The plan defines their closed
+   grammar and bounds. This adds no descriptor, environment variable, argv argument,
+   frame record, `plan.json` field or post-boot channel. R6.4 and the fixed verifier's
+   instruction contract remain unchanged; host paths still do not enter `plan.json`.
+
+   Sentinel modes bind the exact approved synthetic fixture path, role, length and
+   content digest. The trusted qualification harness must establish the matching
+   regular file and readable control outside the guest before each case and verify
+   the same fixture afterwards. Bind those checks to the instruction digest and
+   corresponding receipt/payload. A missing or changed outside fixture invalidates
+   the case. A missing path inside the private VM records only that namespace view;
+   it cannot alone prove isolation from a known-present host or sibling fixture.
+   Do not substitute unrelated paths, put sentinels at the host root or add shares.
+   State which sibling resource the fixture represents; do not claim untested access.
+
+   The complete R6.4 descriptor contract remains required. Observe fd 0-2's actual
+   file types, access modes and append flags. A current soft or hard limit is not
+   proof that no inherited fd exists above it. A partial scan records its range and
+   remains incomplete even with correct fd 0-2 and no detected leak. It cannot
+   fulfill the native descriptor probe. Do not expose `/proc`, retain another
+   descriptor, or close/rewire descriptors to hide the state being observed.
+
+   Establish the intended supervisor relationship before a signal attempt. In the
+   R6.1 PID namespace the verifier is namespace init; the supervisor is outside it.
+   Ancestor unaddressability is not an attempted signal or a signal refusal and
+   cannot fulfill the required supervisor-signal probe. Do not substitute self,
+   broadcast or unrelated-process targets. If the intended target or complete fd
+   set cannot be observed, keep that obligation unresolved and report it explicitly.
+
+   Socket coverage includes each distinct Linux socket family, not a representative
+   subset. Record the tested domain and establish that the build UAPI covers the
+   selected native kernel's family domain. Darwin or current CI header maxima do
+   not establish that coverage. Unknown or mismatched domains and unsupported or
+   unexecuted family checks remain incomplete, never sandbox refusals or fulfilled
+   native coverage. Preserve each attempted family's arguments and actual result.
+
+   Inactive probes may report these unavailable or incomplete observations; that
+   does not complete their native obligations or Roadmap acceptance. R12.3 needs a
+   qualified result with every boundary row enforced and all required native proof
+   complete (`work/real-sandbox-boundary/spec.md:63-66`). CPU and wall stay `none`;
+   any additional gap in required evidence also blocks qualification. No run qualifies
+   under this spec: R12.3 does not land and the entry stays `unproven`. No missing
+   probe is waived; accepting weaker evidence requires the operator. Step-8 R7.1
+   needs a `satisfied` receipt
    and qualification (`work/step8-bounded-write-readiness/spec.md:275-279`), so concerns
    5 and 6 may be built inactive, but no write scope is proposable until an R7.2 future
    concern lands.
@@ -681,6 +731,14 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    and source-text assertions do not substitute for behavioral proof. Test-only
    syscall substitutions may observe setup order and inject failures, but are
    unavailable in production builds and do not establish kernel enforcement.
+
+   Probe tests execute production parsing, actions and result handling with bounded
+   low-level operation substitutions, not replacements for whole actions. Cover
+   setup failure, tested refusal, unexpected success, unsupported/incomplete checks
+   and cleanup failure; sentinel binding and readable controls; wrong descriptor
+   type/access/append state and extra fds above a lowered soft limit; supervisor
+   relationship/target selection; and the complete declared socket-family domain.
+   These tests run no native pressure, socket, signal or privileged probe actions.
 
    Required cases are:
 
