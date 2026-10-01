@@ -834,7 +834,11 @@ int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx)
     return 1;
 }
 #if defined(__APPLE__)
-static void close_visitor(int fd, void *ctx) { (void)ctx; (void)close(fd); }
+static void close_visitor(int fd, void *ctx)
+{
+    int keep = *(const int *)ctx;
+    if (fd != keep) (void)close(fd);
+}
 #endif
 /* Closes every open descriptor >= lowfd, exhaustively, or fails (1/0): a
  * capped numeric sweep is not exhaustive and a lowered rlimit never closes
@@ -842,47 +846,108 @@ static void close_visitor(int fd, void *ctx) { (void)ctx; (void)close(fd); }
  * close_range, the one atomic exhaustive primitive. Darwin (this harness's
  * own build only; the guest is Linux-only): ys_walk_fds. Neither falls
  * back to the other. */
-static int close_all_from(int lowfd)
+static int close_all_except(int lowfd, int keepfd)
 {
 #ifdef YSTACK_TEST_FAULT_INJECT
     if (ys_test_close_all_fail) return 0;
 #endif
 #if defined(__linux__)
 #if defined(SYS_close_range)
-    return syscall(SYS_close_range, (unsigned)lowfd, ~0U, 0U) == 0;
+    if (keepfd < lowfd) return syscall(SYS_close_range, (unsigned)lowfd, ~0U, 0U) == 0;
+    if (keepfd > lowfd && syscall(SYS_close_range, (unsigned)lowfd,
+                                  (unsigned)keepfd - 1U, 0U) != 0)
+        return 0;
+    return syscall(SYS_close_range, (unsigned)keepfd + 1U, ~0U, 0U) == 0;
 #else
     (void)lowfd;
     return 0; /* the pinned kernel's headers must define close_range */
 #endif
 #elif defined(__APPLE__)
-    return ys_walk_fds(lowfd, close_visitor, NULL);
+    return ys_walk_fds(lowfd, close_visitor, &keepfd);
 #else
     (void)lowfd;
     return 0;
 #endif
 }
-void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
-             int stdout_fd, int stderr_fd)
+
+static int outcome_write(int fd, enum ys_exec_outcome_kind kind,
+                         enum ys_exec_phase phase, int error_number)
 {
-    int in_fd, out_fd, err_fd;
+    struct ys_exec_outcome outcome;
+    const unsigned char *bytes = (const unsigned char *)&outcome;
+    size_t written = 0;
+    outcome.kind = (uint8_t)kind;
+    outcome.phase = (uint8_t)phase;
+    outcome.reserved = 0;
+    outcome.error_number = error_number;
+    while (written < sizeof outcome) {
+        ssize_t n;
+#ifdef YSTACK_TEST_FAULT_INJECT
+        if (ys_test_outcome_write_mode == 1) {
+            ys_test_outcome_write_mode = 0;
+            errno = EINTR;
+            n = -1;
+        } else if (ys_test_outcome_write_mode == 2) {
+            errno = EPIPE;
+            n = -1;
+        } else
+#endif
+        n = write(fd, bytes + written, sizeof outcome - written);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return 0;
+        written += (size_t)n;
+    }
+    return 1;
+}
+
+static void outcome_abort(void)
+{
+    abort();
+}
+
+void ys_exec_report_failure(int outcome_fd, enum ys_exec_phase phase, int error_number)
+{
+    if (!outcome_write(outcome_fd, YS_EXEC_FAILURE, phase, error_number)) outcome_abort();
+}
+
+static void exec_fail(int outcome_fd, enum ys_exec_phase phase, int error_number, int status)
+{
+    ys_exec_report_failure(outcome_fd, phase, error_number);
+    _exit(status);
+}
+
+void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
+             int stdout_fd, int stderr_fd, int outcome_fd)
+{
+    int in_fd, out_fd, err_fd, status_fd, flags;
     /* Each source is preserved on its own fresh fd (>=3) before any dup2
      * into 0/1/2: a caller-supplied overlap (e.g. stdout_fd == 0, the
      * instruction's own destination) would otherwise have its source
      * clobbered by an earlier dup2 in this same call, silently wiring the
      * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
-     * a failed execve past close_all_from below. */
+     * a failed execve past close_all_except below. */
+    status_fd = fcntl(outcome_fd, F_DUPFD_CLOEXEC, 3);
+    if (status_fd < 0) exec_fail(outcome_fd, YS_EXEC_PHASE_DUPLICATE, errno, 126);
     in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
     out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
     err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
-    if (in_fd < 0 || out_fd < 0 || err_fd < 0) _exit(126);
-    if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0) _exit(126);
+    if (in_fd < 0 || out_fd < 0 || err_fd < 0)
+        exec_fail(status_fd, YS_EXEC_PHASE_DUPLICATE, errno, 126);
+    if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0)
+        exec_fail(status_fd, YS_EXEC_PHASE_WIRE, errno, 126);
     (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
-    if (!close_all_from(3)) _exit(126); /* cannot confirm every descriptor is closed */
+    if (!close_all_except(3, status_fd))
+        exec_fail(status_fd, YS_EXEC_PHASE_CLOSE, errno, 126);
+    flags = fcntl(status_fd, F_GETFD);
+    if (flags < 0 || (flags & FD_CLOEXEC) == 0)
+        exec_fail(status_fd, YS_EXEC_PHASE_CLOSE, errno, 126);
+    if (!outcome_write(status_fd, YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0)) outcome_abort();
     execve(argv[0], (char *const *)(const void *)argv, (char *const *)(const void *)envp);
-    _exit(127);
+    exec_fail(status_fd, YS_EXEC_PHASE_EXECVE, errno, 127);
 }
 #ifdef YSTACK_TEST_FAULT_INJECT
 size_t ys_test_readdir_fail_at = 0;
+int ys_test_outcome_write_mode = 0;
 #endif
 struct evidence_row { char *name; ino_t ino; };
 static int cmp_evidence_row(const void *a, const void *b)

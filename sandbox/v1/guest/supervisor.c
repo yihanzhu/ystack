@@ -45,6 +45,7 @@
 #include <sys/prctl.h>
 #include <sys/reboot.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
@@ -151,6 +152,15 @@ struct loaded_input {
     size_t candidate_count;
 };
 
+static void loaded_input_free(struct loaded_input *input)
+{
+    size_t i;
+    free(input->plan_bytes); free(input->instruction); free(input->verifier);
+    for (i = 0; i < input->candidate_count; i++) free(input->candidates[i]);
+    free(input->candidates); free(input->candidate_lens);
+    memset(input, 0, sizeof *input);
+}
+
 static unsigned char *take_content(struct ys_frame_record *rec, size_t *len_out)
 {
     unsigned char *p = rec->content;
@@ -171,8 +181,8 @@ static int load_input(int fd, struct loaded_input *out)
     off_t cap;
     size_t cand_cap = 0;
     memset(out, 0, sizeof *out);
-    if (ys_frame_descriptor_capacity(fd, &cap) != YS_FRAME_OK) return 0;
-    if (ys_frame_reader_open(&r, fd, cap) != YS_FRAME_OK) return 0;
+    if (ys_frame_descriptor_capacity(fd, &cap) != YS_FRAME_OK) goto fail;
+    if (ys_frame_reader_open(&r, fd, cap) != YS_FRAME_OK) goto fail;
     ys_record_set_init(&set, YS_RECORD_SET_INPUT);
     for (;;) {
         struct ys_frame_record rec;
@@ -180,10 +190,13 @@ static int load_input(int fd, struct loaded_input *out)
         uint32_t index;
         memset(&rec, 0, sizeof rec);
         st = ys_frame_reader_next(&r, &rec);
-        if (st != YS_FRAME_OK) return 0;
-        if (rec.is_end) return 1;
+        if (st != YS_FRAME_OK) goto fail;
+        if (rec.is_end) {
+            if (ys_record_set_finish(&set) == YS_FRAME_OK) return 1;
+            goto fail;
+        }
         st = ys_record_set_advance(&set, rec.name, rec.name_len, &index);
-        if (st != YS_FRAME_OK) { free(rec.content); return 0; }
+        if (st != YS_FRAME_OK) { free(rec.content); goto fail; }
         if (rec.name_len == 9U && memcmp(rec.name, "plan.json", 9U) == 0) {
             out->plan_bytes = take_content(&rec, &out->plan_len);
         } else if (rec.name_len == 11U && memcmp(rec.name, "instruction", 11U) == 0) {
@@ -194,15 +207,33 @@ static int load_input(int fd, struct loaded_input *out)
             if (index >= cand_cap) {
                 size_t nc = (cand_cap == 0U) ? 8U : cand_cap * 2U;
                 unsigned char **cg = realloc(out->candidates, nc * sizeof *cg);
-                size_t *lg = realloc(out->candidate_lens, nc * sizeof *lg);
-                if (cg == NULL || lg == NULL) { free(rec.content); return 0; }
-                out->candidates = cg; out->candidate_lens = lg; cand_cap = nc;
+                size_t *lg;
+                if (cg == NULL) { free(rec.content); goto fail; }
+                out->candidates = cg;
+                lg = realloc(out->candidate_lens, nc * sizeof *lg);
+                if (lg == NULL) { free(rec.content); goto fail; }
+                out->candidate_lens = lg; cand_cap = nc;
             }
             out->candidates[index] = take_content(&rec, &out->candidate_lens[index]);
             if (index + 1U > out->candidate_count) out->candidate_count = index + 1U;
         }
         free(rec.content);
     }
+fail:
+    loaded_input_free(out);
+    return 0;
+}
+
+static int candidate_count_matches(const struct ys_guest_plan *plan, size_t candidate_count)
+{
+    size_t files = 0, i;
+    for (i = 0; i < plan->entry_count; i++) {
+        if (plan->entries[i].is_file) {
+            if (files == SIZE_MAX) return 0;
+            files++;
+        }
+    }
+    return files == candidate_count;
 }
 
 /* --- tmpfs mounts ----------------------------------------------------------
@@ -392,6 +423,32 @@ static int cgroup_populated(void)
     line = strstr(buf, "populated ");
     if (line == NULL) return -1;
     return (line[10] == '0') ? 0 : 1;
+}
+
+#ifdef YSTACK_SUPERVISOR_TEST
+static int (*ys_test_population_reader)(void);
+#endif
+
+static int confirm_tree_terminated(unsigned attempts)
+{
+    unsigned i;
+    for (i = 0; i < attempts; i++) {
+        int populated;
+#ifdef YSTACK_SUPERVISOR_TEST
+        populated = ys_test_population_reader != NULL ? ys_test_population_reader() : -1;
+#else
+        populated = cgroup_populated();
+#endif
+        if (populated < 0) return 0;
+        if (populated == 0) return 1;
+#ifndef YSTACK_SUPERVISOR_TEST
+        {
+            struct timespec ts = { 0, 100000000L };
+            nanosleep(&ts, NULL);
+        }
+#endif
+    }
+    return 0;
 }
 
 /* --- clone3 (R6.1) ---------------------------------------------------------
@@ -881,36 +938,80 @@ static int apply_seccomp(void)
     return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) == 0;
 }
 
-/* The child, after clone3: pivot into the tmpfs root the parent already
- * fully prepared (R6.1), drop identity, apply Landlock and seccomp, then
- * ys_exec's the verifier (R6.4). Writes one byte to `started_fd` right
- * before that call -- the parent's only signal that setup reached the
- * exec wiring, since ys_exec itself never returns either way. Does not
- * return: every path ends in ys_exec or _exit(125). */
-static void child_main(int instruction_fd, int stdout_fd, int stderr_fd, int started_fd)
+/* The child reports every setup refusal through the close-on-exec outcome
+ * channel. Successful exec closes that channel before verifier code runs. */
+static void child_refuse(int outcome_fd, int error_number)
 {
-    if (chdir(NEWROOT_DIR) != 0) _exit(125);
-    if (syscall(SYS_pivot_root, ".", ".") != 0) _exit(125);
-    if (umount2(".", MNT_DETACH) != 0) _exit(125);
-    if (chdir("/") != 0) _exit(125);
-    if (!run_privilege_sequence(actual_privilege_step, NULL)) _exit(125);
+    ys_exec_report_failure(outcome_fd, YS_EXEC_PHASE_CHILD_SETUP, error_number);
+    _exit(125);
+}
+
+static void child_main(int instruction_fd, int stdout_fd, int stderr_fd, int outcome_fd)
+{
+    if (chdir(NEWROOT_DIR) != 0) child_refuse(outcome_fd, errno);
+    if (syscall(SYS_pivot_root, ".", ".") != 0) child_refuse(outcome_fd, errno);
+    if (umount2(".", MNT_DETACH) != 0) child_refuse(outcome_fd, errno);
+    if (chdir("/") != 0) child_refuse(outcome_fd, errno);
+    if (!run_privilege_sequence(actual_privilege_step, NULL)) child_refuse(outcome_fd, errno);
     {
         struct rlimit core, rt;
         core.rlim_cur = 0; core.rlim_max = 0;
         rt.rlim_cur = 0; rt.rlim_max = 0;
-        if (setrlimit(RLIMIT_CORE, &core) != 0) _exit(125);
-        if (setrlimit(RLIMIT_RTPRIO, &rt) != 0) _exit(125);
+        if (setrlimit(RLIMIT_CORE, &core) != 0) child_refuse(outcome_fd, errno);
+        if (setrlimit(RLIMIT_RTPRIO, &rt) != 0) child_refuse(outcome_fd, errno);
     }
     {
         struct sched_param sp;
         memset(&sp, 0, sizeof sp);
-        if (sched_setscheduler(0, SCHED_OTHER, &sp) != 0) _exit(125);
+        if (sched_setscheduler(0, SCHED_OTHER, &sp) != 0) child_refuse(outcome_fd, errno);
     }
-    if (!apply_landlock()) _exit(125);
-    if (!apply_seccomp()) _exit(125);
-    (void)write(started_fd, "K", 1);
-    ys_exec(YS_PLAN_ARGV, YS_PLAN_ENVIRONMENT, instruction_fd, stdout_fd, stderr_fd);
+    if (!apply_landlock()) child_refuse(outcome_fd, errno);
+    if (!apply_seccomp()) child_refuse(outcome_fd, errno);
+    ys_exec(YS_PLAN_ARGV, YS_PLAN_ENVIRONMENT, instruction_fd, stdout_fd, stderr_fd,
+            outcome_fd);
     _exit(125); /* unreached: ys_exec never returns */
+}
+
+struct exec_channel_state {
+    unsigned char bytes[2U * sizeof(struct ys_exec_outcome)];
+    size_t length;
+    int eof;
+    int invalid;
+};
+
+static int drain_exec_channel(int fd, struct exec_channel_state *state)
+{
+    for (;;) {
+        ssize_t n;
+        if (state->length == sizeof state->bytes) { state->invalid = 1; return 0; }
+        n = read(fd, state->bytes + state->length, sizeof state->bytes - state->length);
+        if (n > 0) { state->length += (size_t)n; continue; }
+        if (n == 0) { state->eof = 1; return 1; }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+        state->invalid = 1;
+        return 0;
+    }
+}
+
+static int exec_channel_confirms_execution(const struct exec_channel_state *state,
+                                           int child_status)
+{
+    struct ys_exec_outcome first;
+    if (state->invalid || !state->eof || state->length != sizeof first ||
+        !WIFEXITED(child_status))
+        return 0;
+    memcpy(&first, state->bytes, sizeof first);
+    return first.kind == YS_EXEC_READY && first.phase == YS_EXEC_PHASE_EXECVE &&
+           first.reserved == 0 && first.error_number == 0;
+}
+
+static int execution_was_verified(const struct exec_channel_state *state, int child_status,
+                                  int child_reaped, int tree_terminated,
+                                  int tree_deadline_fired, int containment_failure)
+{
+    return child_reaped && tree_terminated && !tree_deadline_fired &&
+           !containment_failure && exec_channel_confirms_execution(state, child_status);
 }
 
 /* --- report.json (R8.2) ---------------------------------------------------
@@ -934,6 +1035,7 @@ struct json_writer { char *buf; size_t len, cap; };
 #ifdef YSTACK_SUPERVISOR_TEST
 static size_t ys_test_report_cap_limit;
 static int ys_test_report_sizes;
+static int ys_test_format_failure;
 #endif
 
 static int evidence_file_size(const char *path, off_t *size_out)
@@ -976,6 +1078,9 @@ static int json_appendf(struct json_writer *w, const char *format, ...)
     va_list ap, copy;
     int required, written;
     va_start(ap, format);
+#ifdef YSTACK_SUPERVISOR_TEST
+    if (ys_test_format_failure) { va_end(ap); return 0; }
+#endif
     va_copy(copy, ap);
     required = vsnprintf(NULL, 0, format, copy);
     va_end(copy);
@@ -1010,6 +1115,7 @@ static char *build_report_json(const char plan_sha256_hex[65],
 {
     struct json_writer w = { NULL, 0U, 0U };
     size_t i;
+    if (s->evidence_count > 10000U) goto fail;
     if (!json_appendf(&w, "{\"body\":{\"evidence_files\":[")) goto fail;
     for (i = 0; i < s->evidence_count; i++) {
         char hex[513];
@@ -1041,7 +1147,8 @@ static char *build_report_json(const char plan_sha256_hex[65],
         !json_appendf(&w,
                       "},\"plan_sha256\":\"%.64s\",\"stderr_bytes\":%llu,\"stdout_bytes\":%llu,"
                       "\"tree_deadline_fired\":%s,\"tree_terminated\":%s,\"verifier_started\":%s},"
-                      "\"kind\":\"sandbox_guest_report\",\"schema_version\":1}\n",
+                      "\"id\":\"sandbox.guest-report.v1\",\"kind\":\"sandbox_guest_report\","
+                      "\"schema_version\":1}\n",
                       plan_sha256_hex, (unsigned long long)s->stderr_bytes,
                       (unsigned long long)s->stdout_bytes,
                       s->tree_deadline_fired ? "true" : "false",
@@ -1112,12 +1219,13 @@ static int inode_history_record(struct fanotify_state *fs, dev_t dev, ino_t ino)
  * empty (size 0) regular file's inode, denies every other open --
  * including a second open of a file this same rule already approved once
  * (R7.1: "allows only the first open of an empty inode"). */
-static void fanotify_service(struct fanotify_state *fs)
+static int fanotify_service(struct fanotify_state *fs)
 {
     char buf[4096];
-    ssize_t len = read(fs->fd, buf, sizeof buf);
+    ssize_t len;
     struct fanotify_event_metadata *m;
-    if (len <= 0) return;
+    do { len = read(fs->fd, buf, sizeof buf); } while (len < 0 && errno == EINTR);
+    if (len <= 0) return 0;
     for (m = (struct fanotify_event_metadata *)buf; FAN_EVENT_OK(m, len); m = FAN_EVENT_NEXT(m, len)) {
         struct fanotify_response resp;
         struct stat st;
@@ -1128,10 +1236,20 @@ static void fanotify_service(struct fanotify_state *fs)
                 allow = 1;
             resp.fd = m->fd;
             resp.response = allow ? FAN_ALLOW : FAN_DENY;
-            (void)write(fs->fd, &resp, sizeof resp);
+            {
+                const unsigned char *bytes = (const unsigned char *)&resp;
+                size_t written = 0;
+                while (written < sizeof resp) {
+                    ssize_t n = write(fs->fd, bytes + written, sizeof resp - written);
+                    if (n < 0 && errno == EINTR) continue;
+                    if (n <= 0) { (void)close(m->fd); return 0; }
+                    written += (size_t)n;
+                }
+            }
             (void)close(m->fd);
-        }
+        } else return 0;
     }
+    return 1;
 }
 
 /* Writes the instruction in the supervisor-only /ys tmpfs, closes that
@@ -1176,13 +1294,18 @@ int main(void)
     struct fanotify_state fan;
     struct report_state rs;
     size_t i;
-    int started_pipe[2];
+    int outcome_pipe[2] = { -1, -1 };
+    struct exec_channel_state outcome;
+    int child_status = 0;
+    int child_reaped = 0;
+    int containment_failure = 0;
     pid_t child_pid = -1;
     struct timespec t0, tnow;
     uint64_t deadline_ms, page_size;
     long measured_page_size;
 
     memset(&rs, 0, sizeof rs);
+    memset(&outcome, 0, sizeof outcome);
     fanotify_state_init(&fan);
 
     if (getpid() != 1) die("not running as pid 1 (init should have exec'd us directly)");
@@ -1208,7 +1331,8 @@ int main(void)
     /* candidate tmpfs: materialized, then finalized read-only (R5.5). */
     {
         uint64_t total, inodes;
-        if (!candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
+        if (!candidate_count_matches(&plan, in.candidate_count) ||
+            !candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
         if (!mkdir_p(CANDIDATE_DIR, 0700) ||
             !mount_tmpfs(CANDIDATE_DIR, total, inodes))
             goto export_partial;
@@ -1293,21 +1417,18 @@ int main(void)
         if (outfd < 0 || errfd < 0 || instr_fd < 0) goto export_partial;
         instr_priv_fd = instr_fd;
         if (!fanotify_open_mark(&fan)) goto export_partial;
-        if (pipe2(started_pipe, O_CLOEXEC) != 0) goto export_partial;
+        if (pipe2(outcome_pipe, O_CLOEXEC) != 0) goto export_partial;
+        if (fcntl(outcome_pipe[0], F_SETFL, O_NONBLOCK) != 0) goto export_partial;
         child_pid = ys_clone3_into_cgroup(cg.cgroup_fd);
         if (child_pid == 0) {
-            (void)close(started_pipe[0]);
-            child_main(instr_priv_fd, outfd, errfd, started_pipe[1]);
+            (void)close(outcome_pipe[0]);
+            child_main(instr_priv_fd, outfd, errfd, outcome_pipe[1]);
             _exit(125);
         }
         (void)close(outfd); (void)close(errfd); (void)close(instr_priv_fd);
-        (void)close(started_pipe[1]);
+        (void)close(outcome_pipe[1]);
+        outcome_pipe[1] = -1;
         if (child_pid < 0) goto export_partial;
-        {
-            char sentinel = 0;
-            rs.verifier_started = (read(started_pipe[0], &sentinel, 1) == 1 && sentinel == 'K');
-            (void)close(started_pipe[0]);
-        }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -1323,26 +1444,32 @@ int main(void)
             (void)write_str(TREE_CGROUP "/cgroup.kill", "1");
             break;
         }
-        if (fan.fd >= 0) {
-            struct pollfd pfd = { fan.fd, POLLIN, 0 };
-            if (poll(&pfd, 1, (int)(remaining_ms > 200 ? 200 : remaining_ms)) > 0 &&
-                (pfd.revents & POLLIN))
-                fanotify_service(&fan);
-        } else {
-            struct timespec ts = { 0, 200000000L };
-            nanosleep(&ts, NULL);
+        {
+            struct pollfd pfds[2];
+            nfds_t count = 0;
+            if (fan.fd >= 0) pfds[count++] = (struct pollfd){ fan.fd, POLLIN, 0 };
+            if (outcome_pipe[0] >= 0 && !outcome.eof)
+                pfds[count++] = (struct pollfd){ outcome_pipe[0], POLLIN | POLLHUP, 0 };
+            if (poll(pfds, count, (int)(remaining_ms > 200 ? 200 : remaining_ms)) > 0) {
+                nfds_t p;
+                for (p = 0; p < count; p++) {
+                    if (pfds[p].fd == fan.fd && (pfds[p].revents & POLLIN) &&
+                        !fanotify_service(&fan)) {
+                        containment_failure = 1;
+                        (void)write_str(TREE_CGROUP "/cgroup.kill", "1");
+                    }
+                    if (pfds[p].fd == outcome_pipe[0] &&
+                        (pfds[p].revents & (POLLIN | POLLHUP)))
+                        (void)drain_exec_channel(outcome_pipe[0], &outcome);
+                }
+            }
+            if (containment_failure) break;
         }
         r = waitpid(child_pid, &status, WNOHANG);
         if (r == child_pid) {
-            rs.tree_terminated = (cgroup_populated() == 0);
-            if (!rs.tree_terminated) {
-                int tries;
-                for (tries = 0; tries < 50 && cgroup_populated() != 0; tries++) {
-                    struct timespec ts = { 0, 100000000L };
-                    nanosleep(&ts, NULL);
-                }
-                rs.tree_terminated = (cgroup_populated() == 0);
-            }
+            rs.tree_terminated = confirm_tree_terminated(51U);
+            child_status = status;
+            child_reaped = 1;
             if (WIFEXITED(status)) { rs.exit_signaled = 0; rs.exit_code = WEXITSTATUS(status); }
             else { rs.exit_signaled = 1; }
             goto reaped;
@@ -1350,19 +1477,27 @@ int main(void)
     }
     /* Deadline path: wait for cgroup.events populated 0, then reap. */
     {
-        int tries, status;
-        for (tries = 0; tries < 400 && cgroup_populated() != 0; tries++) {
-            struct timespec ts = { 0, 100000000L };
-            nanosleep(&ts, NULL);
-        }
-        rs.tree_terminated = (cgroup_populated() == 0);
+        int status;
+        rs.tree_terminated = confirm_tree_terminated(401U);
         if (waitpid(child_pid, &status, 0) == child_pid) {
+            child_status = status;
+            child_reaped = 1;
             if (WIFEXITED(status)) { rs.exit_signaled = 0; rs.exit_code = WEXITSTATUS(status); }
             else { rs.exit_signaled = 1; }
         }
     }
 reaped:
-    if (fan.fd >= 0) { (void)close(fan.fd); fan.fd = -1; } /* closed before export (R7.1) */
+    if (outcome_pipe[0] >= 0) {
+        (void)drain_exec_channel(outcome_pipe[0], &outcome);
+        (void)close(outcome_pipe[0]);
+        outcome_pipe[0] = -1;
+    }
+    rs.verifier_started = execution_was_verified(&outcome, child_status, child_reaped,
+                                                  rs.tree_terminated,
+                                                  rs.tree_deadline_fired,
+                                                  containment_failure);
+    if (!rs.tree_terminated || containment_failure) goto poweroff;
+    if (fan.fd >= 0) { (void)close(fan.fd); fan.fd = -1; }
 
     /* Counters, collected only after confirmed termination (R7.3
      * "complete" requires it); otherwise every row this loop has not
@@ -1461,6 +1596,7 @@ export_partial:
                 struct ys_frame_writer w;
                 if (ys_frame_writer_open(&w, export_fd) != 0) {
                     unsigned char *stdout_buf, *stderr_buf;
+                    int frame_ok = 0;
                     int sfd = open(OUTPUT_DIR "/stdout", O_RDONLY | O_CLOEXEC);
                     int efd = open(OUTPUT_DIR "/stderr", O_RDONLY | O_CLOEXEC);
                     stdout_buf = malloc(rs.stdout_bytes ? rs.stdout_bytes : 1U);
@@ -1477,17 +1613,27 @@ export_partial:
                             if (n <= 0) break;
                             got2 += (size_t)n;
                         }
-                        (void)ys_frame_writer_put(&w, "report.json", 11U, report, report_len);
-                        (void)ys_frame_writer_put(&w, "stdout", 6U, stdout_buf, got1);
-                        (void)ys_frame_writer_put(&w, "stderr", 6U, stderr_buf, got2);
-                        for (i = 0; i < rs.evidence_count; i++) {
-                            char name[16];
+                        frame_ok = got1 == rs.stdout_bytes && got2 == rs.stderr_bytes &&
+                            ys_frame_writer_put(&w, "report.json", 11U, report, report_len) ==
+                                YS_FRAME_OK &&
+                            ys_frame_writer_put(&w, "stdout", 6U, stdout_buf, got1) == YS_FRAME_OK &&
+                            ys_frame_writer_put(&w, "stderr", 6U, stderr_buf, got2) == YS_FRAME_OK;
+                        for (i = 0; frame_ok && i < rs.evidence_count; i++) {
+                            char name[32];
                             char path[300];
                             struct stat st;
                             unsigned char *buf;
                             int fd;
-                            snprintf(name, sizeof name, "evidence/%04zu", i);
-                            snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, rs.evidence_names[i]);
+                            int name_len = snprintf(name, sizeof name, "evidence/%04zu", i);
+                            int path_len;
+                            if (i > 9999U || name_len < 0 || (size_t)name_len >= sizeof name) {
+                                frame_ok = 0; break;
+                            }
+                            path_len = snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR,
+                                                rs.evidence_names[i]);
+                            if (path_len < 0 || (size_t)path_len >= sizeof path) {
+                                frame_ok = 0; break;
+                            }
                             fd = open(path, O_RDONLY | O_CLOEXEC);
                             if (fd >= 0 && fstat(fd, &st) == 0) {
                                 buf = malloc(st.st_size ? (size_t)st.st_size : 1U);
@@ -1498,17 +1644,20 @@ export_partial:
                                         if (n <= 0) break;
                                         got += (size_t)n;
                                     }
-                                    (void)ys_frame_writer_put(&w, name, strlen(name), buf, got);
+                                    if ((off_t)got != st.st_size ||
+                                        ys_frame_writer_put(&w, name, (size_t)name_len, buf, got) !=
+                                            YS_FRAME_OK)
+                                        frame_ok = 0;
                                     free(buf);
-                                }
-                            }
+                                } else frame_ok = 0;
+                            } else frame_ok = 0;
                             if (fd >= 0) (void)close(fd);
                         }
                     }
                     if (sfd >= 0) (void)close(sfd);
                     if (efd >= 0) (void)close(efd);
                     free(stdout_buf); free(stderr_buf);
-                    (void)ys_frame_writer_close(&w);
+                    if (frame_ok && ys_frame_writer_close(&w) != YS_FRAME_OK) frame_ok = 0;
                 }
                 free(report);
             }
@@ -1618,11 +1767,16 @@ static int test_report_writer(void)
     ys_test_report_sizes = 1;
     report = build_report_json(plan_digest, &state, &length);
     if (report == NULL || length <= 8192U || report[length] != '\0' || report[length - 1U] != '\n' ||
-        strstr(report, "\"index\":31") == NULL) {
+        strstr(report, "\"index\":31") == NULL ||
+        strstr(report, "\"id\":\"sandbox.guest-report.v1\"") == NULL) {
         free(report);
         return 0;
     }
     free(report);
+    ys_test_format_failure = 1;
+    report = build_report_json(plan_digest, &state, &length);
+    ys_test_format_failure = 0;
+    if (report != NULL) { free(report); return 0; }
     ys_test_report_cap_limit = 1024U;
     report = build_report_json(plan_digest, &state, &length);
     ys_test_report_cap_limit = 0U;
@@ -1670,6 +1824,50 @@ static int test_fanotify_history(void)
     for (i = 1; i < sizeof state.seen / sizeof state.seen[0]; i++)
         if (!inode_history_record(&state, 1, (ino_t)(i + 1U))) return 0;
     return state.seen_count == 256U && !inode_history_record(&state, 1, 9999);
+}
+
+static int join_path(char *out, size_t cap, const char *parent, const char *leaf);
+
+static int fanotify_decision(struct fanotify_state *state, int peer, int event_fd,
+                             uint32_t expected)
+{
+    struct fanotify_event_metadata event;
+    struct fanotify_response response;
+    if (event_fd < 0) return 0;
+    memset(&event, 0, sizeof event);
+    event.event_len = FAN_EVENT_METADATA_LEN;
+    event.vers = FANOTIFY_METADATA_VERSION;
+    event.metadata_len = FAN_EVENT_METADATA_LEN;
+    event.mask = FAN_OPEN_PERM;
+    event.fd = event_fd;
+    if (write(peer, &event, sizeof event) != (ssize_t)sizeof event ||
+        !fanotify_service(state) ||
+        read(peer, &response, sizeof response) != (ssize_t)sizeof response)
+        return 0;
+    return response.fd == event_fd && response.response == expected;
+}
+
+static int test_fanotify_service(const char *directory)
+{
+    char empty_path[512], full_path[512];
+    struct fanotify_state state;
+    int sockets[2], empty_fd, full_fd;
+    if (!join_path(empty_path, sizeof empty_path, directory, "fan-empty") ||
+        !join_path(full_path, sizeof full_path, directory, "fan-full") ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0)
+        return 0;
+    empty_fd = open(empty_path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    full_fd = open(full_path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (empty_fd < 0 || full_fd < 0 || write(full_fd, "x", 1) != 1) return 0;
+    fanotify_state_init(&state);
+    state.fd = sockets[0];
+    if (!fanotify_decision(&state, sockets[1], dup(empty_fd), FAN_ALLOW) ||
+        !fanotify_decision(&state, sockets[1], dup(empty_fd), FAN_DENY) ||
+        !fanotify_decision(&state, sockets[1], dup(full_fd), FAN_DENY))
+        return 0;
+    (void)close(empty_fd); (void)close(full_fd);
+    (void)close(sockets[0]); (void)close(sockets[1]);
+    return 1;
 }
 
 static int test_checked_arithmetic(void)
@@ -1720,7 +1918,52 @@ static int test_geometry(void)
     if (!candidate_geometry(&plan, 8192U, &size, &inodes) ||
         size != 4U * 8192U || inodes != 3U)
         return 0;
-    return !candidate_geometry(&plan, 0U, &size, &inodes);
+    if (candidate_geometry(&plan, 0U, &size, &inodes)) return 0;
+    if (!candidate_count_matches(&plan, 1U) || candidate_count_matches(&plan, 0U) ||
+        candidate_count_matches(&plan, 2U))
+        return 0;
+    plan.entry_count = 0U;
+    return candidate_count_matches(&plan, 0U);
+}
+
+static int write_input_test_frame(int fd, int omit_verifier, size_t candidates)
+{
+    struct ys_frame_writer writer;
+    size_t i;
+    if (!ys_frame_writer_open(&writer, fd) ||
+        ys_frame_writer_put(&writer, "plan.json", 9U, "{}", 2U) != YS_FRAME_OK ||
+        ys_frame_writer_put(&writer, "instruction", 11U, "x", 1U) != YS_FRAME_OK)
+        return 0;
+    if (!omit_verifier &&
+        ys_frame_writer_put(&writer, "verifier", 8U, "v", 1U) != YS_FRAME_OK)
+        return 0;
+    for (i = 0; i < candidates; i++) {
+        char name[15];
+        int n = snprintf(name, sizeof name, "candidate/%04zu", i);
+        if (n != 14 || ys_frame_writer_put(&writer, name, 14U, "c", 1U) != YS_FRAME_OK)
+            return 0;
+    }
+    return ys_frame_writer_close(&writer) == YS_FRAME_OK;
+}
+
+static int test_input_loading(const char *directory)
+{
+    char good[512], missing[512];
+    struct loaded_input input;
+    int fd;
+    if (!join_path(good, sizeof good, directory, "input-good") ||
+        !join_path(missing, sizeof missing, directory, "input-missing"))
+        return 0;
+    fd = open(good, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0 || !write_input_test_frame(fd, 0, 2U) || lseek(fd, 0, SEEK_SET) != 0 ||
+        !load_input(fd, &input) || input.candidate_count != 2U) return 0;
+    loaded_input_free(&input);
+    (void)close(fd);
+    fd = open(missing, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0 || !write_input_test_frame(fd, 1, 0U) || lseek(fd, 0, SEEK_SET) != 0 ||
+        load_input(fd, &input)) return 0;
+    (void)close(fd);
+    return 1;
 }
 
 static int test_instruction_descriptor(const char *directory)
@@ -2032,14 +2275,112 @@ static int test_filter(void)
     return 1;
 }
 
+static int test_exec_classification(void)
+{
+    struct exec_channel_state state;
+    struct ys_exec_outcome ready = { YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0U, 0 };
+    struct ys_exec_outcome failure = { YS_EXEC_FAILURE, YS_EXEC_PHASE_EXECVE, 0U, ENOENT };
+    int exited0 = 0 << 8;
+    int exited126 = 126 << 8;
+    int exited127 = 127 << 8;
+    memset(&state, 0, sizeof state);
+    memcpy(state.bytes, &ready, sizeof ready);
+    state.length = sizeof ready; state.eof = 1;
+    if (!exec_channel_confirms_execution(&state, exited0) ||
+        !exec_channel_confirms_execution(&state, exited126) ||
+        !exec_channel_confirms_execution(&state, exited127))
+        return 0;
+    if (!execution_was_verified(&state, exited0, 1, 1, 0, 0) ||
+        execution_was_verified(&state, exited0, 1, 1, 1, 0) ||
+        execution_was_verified(&state, exited0, 1, 1, 0, 1) ||
+        execution_was_verified(&state, exited0, 0, 1, 0, 0) ||
+        execution_was_verified(&state, exited0, 1, 0, 0, 0))
+        return 0;
+    if (exec_channel_confirms_execution(&state, SIGKILL) ||
+        (state.eof = 0, exec_channel_confirms_execution(&state, exited0)))
+        return 0;
+    state.eof = 1; state.length--;
+    if (exec_channel_confirms_execution(&state, exited0)) return 0;
+    state.length = sizeof ready; state.invalid = 1;
+    if (exec_channel_confirms_execution(&state, exited0)) return 0;
+    state.invalid = 0;
+    memcpy(state.bytes, &failure, sizeof failure);
+    if (exec_channel_confirms_execution(&state, exited127)) return 0;
+    memcpy(state.bytes, &ready, sizeof ready);
+    memcpy(state.bytes + sizeof ready, &failure, sizeof failure);
+    state.length = sizeof ready + sizeof failure;
+    if (exec_channel_confirms_execution(&state, exited127)) return 0;
+    memcpy(state.bytes, &ready, sizeof ready); state.length = sizeof ready;
+    state.bytes[2] = 1U;
+    return !exec_channel_confirms_execution(&state, exited0);
+}
+
+static int population_mode, population_calls;
+static int test_population_read(void)
+{
+    population_calls++;
+    if (population_mode < 0) return -1;
+    if (population_mode == 0) return 0;
+    return population_mode == 1 ? 1 : (population_calls < 3 ? 1 : 0);
+}
+
+static int test_termination_confirmation(void)
+{
+    ys_test_population_reader = test_population_read;
+    population_mode = 0; population_calls = 0;
+    if (!confirm_tree_terminated(4U) || population_calls != 1) return 0;
+    population_mode = -1; population_calls = 0;
+    if (confirm_tree_terminated(4U) || population_calls != 1) return 0;
+    population_mode = 1; population_calls = 0;
+    if (confirm_tree_terminated(4U) || population_calls != 4) return 0;
+    population_mode = 2; population_calls = 0;
+    if (!confirm_tree_terminated(4U) || population_calls != 3) return 0;
+    ys_test_population_reader = NULL;
+    return 1;
+}
+
+static int write_validation_report(const char *path)
+{
+    struct report_state state;
+    char digest[65];
+    char *report;
+    size_t length;
+    FILE *stream;
+    memset(&state, 0, sizeof state);
+    memset(digest, 'a', 64U); digest[64] = '\0';
+    state.verifier_started = 1; state.tree_terminated = 1;
+    state.cpu = (struct guest_row){ 0U, "complete", "none", 0, 1U };
+    state.memory = (struct guest_row){ 0U, "complete", "hard", 0, 4096U };
+    state.output = (struct guest_row){ 0U, "complete", "hard", 0, 1U };
+    state.tasks = (struct guest_row){ 0U, "complete", "hard", 0, 1U };
+    state.scratch = (struct guest_row){ 0U, "complete", "hard", 0, 4096U };
+    report = build_report_json(digest, &state, &length);
+    if (report == NULL) return 0;
+    stream = fopen(path, "wb");
+    if (stream == NULL) { free(report); return 0; }
+    {
+        int ok = fwrite(report, 1, length, stream) == length;
+        if (fclose(stream) != 0) ok = 0;
+        if (!ok) {
+            free(report);
+            return 0;
+        }
+    }
+    free(report);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 2) return 2;
-    if (!test_report_writer() || !test_fanotify_history() || !test_checked_arithmetic() ||
+    if (argc != 2 && argc != 3) return 2;
+    if (!test_report_writer() || !test_fanotify_history() || !test_fanotify_service(argv[1]) ||
+        !test_checked_arithmetic() || !test_input_loading(argv[1]) ||
         !test_geometry() ||
         !test_instruction_descriptor(argv[1]) || !test_privilege_order() ||
-        !test_actual_privilege_state() || !test_searchable_ancestors(argv[1]) || !test_filter())
+        !test_actual_privilege_state() || !test_searchable_ancestors(argv[1]) || !test_filter() ||
+        !test_exec_classification() || !test_termination_confirmation())
         return 1;
+    if (argc == 3 && !write_validation_report(argv[2])) return 1;
     (void)printf("production supervisor helpers: report, fanotify, geometry, instruction, privilege order, traversal, filter: ok\n");
     return 0;
 }

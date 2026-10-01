@@ -179,8 +179,26 @@ int ys_walk_fds(int lowfd, void (*visit)(int fd, void *ctx), void *ctx);
  * capped sweep is not exhaustive and a lowered rlimit does not close an
  * fd already open past it). Refuses (_exit(126)) instead of proceeding to
  * execve if that closure cannot be confirmed. Does not return on success. */
+enum ys_exec_phase {
+    YS_EXEC_PHASE_CHILD_SETUP = 1,
+    YS_EXEC_PHASE_DUPLICATE = 2,
+    YS_EXEC_PHASE_WIRE = 3,
+    YS_EXEC_PHASE_CLOSE = 4,
+    YS_EXEC_PHASE_EXECVE = 5
+};
+enum ys_exec_outcome_kind { YS_EXEC_READY = 1, YS_EXEC_FAILURE = 2 };
+struct ys_exec_outcome {
+    uint8_t kind;
+    uint8_t phase;
+    uint16_t reserved;
+    int32_t error_number;
+};
+
+/* outcome_fd is a pipe writer owned by the trusted child. It is retained
+ * through setup with FD_CLOEXEC, so successful exec is observed as EOF. */
+void ys_exec_report_failure(int outcome_fd, enum ys_exec_phase phase, int error_number);
 void ys_exec(const char *const *argv, const char *const *envp, int instruction_fd,
-             int stdout_fd, int stderr_fd);
+             int stdout_fd, int stderr_fd, int outcome_fd);
 
 /* R8.1 export inventory: every regular file directly under `dirfd`, sorted
  * by name, becomes evidence/<index>; refuses (YS_PLAN_ERR_SCHEMA) if any
@@ -202,6 +220,8 @@ extern size_t ys_test_readdir_fail_at;
  * prove ys_exec fails closed (_exit(126), execve never reached) rather
  * than silently proceeding when exhaustive closure can't be confirmed. */
 extern int ys_test_close_all_fail;
+/* 1 injects one EINTR and then clears; 2 makes every outcome write fail. */
+extern int ys_test_outcome_write_mode;
 #endif
 
 #endif

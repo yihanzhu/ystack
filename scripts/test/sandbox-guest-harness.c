@@ -293,13 +293,19 @@ static int cmd_inventory(int argc, char **argv)
  * to exit 126 (refused, execve never reached), not 0. */
 static int cmd_exec_report(int argc, char **argv)
 {
-    int instruction_fd, stdout_fd, stderr_fd, marker_fd, status;
-    int want_refusal = 0;
+    int instruction_fd, stdout_fd, stderr_fd, marker_fd, status, outcome_pipe[2];
+    struct ys_exec_outcome outcomes[2];
+    ssize_t outcome_bytes;
+    int want_refusal = 0, expected_exit = 0, want_exec_failure = 0, want_report_failure = 0;
+    int want_pre_exec_death = 0, want_post_ready_death = 0;
     pid_t pid;
     const char *report_argv[7];
     if (argc != 6 && argc != 7) usage();
     if (argc == 7 && strcmp(argv[6], "overlap") != 0 && strcmp(argv[6], "lowlimit") != 0 &&
-        strcmp(argv[6], "closefail") != 0) usage();
+        strcmp(argv[6], "closefail") != 0 && strcmp(argv[6], "exit126") != 0 &&
+        strcmp(argv[6], "exit127") != 0 && strcmp(argv[6], "execfail") != 0 &&
+        strcmp(argv[6], "eintr") != 0 && strcmp(argv[6], "reportfail") != 0 &&
+        strcmp(argv[6], "predeath") != 0 && strcmp(argv[6], "afterreadydeath") != 0) usage();
     instruction_fd = open(argv[3], O_RDONLY);
     stdout_fd = open(argv[4], O_WRONLY | O_CREAT | O_APPEND, 0600);
     stderr_fd = open(argv[5], O_WRONLY | O_CREAT | O_APPEND, 0600);
@@ -327,21 +333,68 @@ static int cmd_exec_report(int argc, char **argv)
         die("E_USAGE"); /* only meaningful in the -DYSTACK_TEST_FAULT_INJECT build */
 #endif
     }
-    report_argv[0] = argv[2];
+    if (argc == 7 && strcmp(argv[6], "exit126") == 0) expected_exit = 126;
+    if (argc == 7 && strcmp(argv[6], "exit127") == 0) expected_exit = 127;
+    if (argc == 7 && strcmp(argv[6], "execfail") == 0) want_exec_failure = 1;
+    if (argc == 7 && strcmp(argv[6], "predeath") == 0) want_pre_exec_death = 1;
+    if (argc == 7 && strcmp(argv[6], "afterreadydeath") == 0) want_post_ready_death = 1;
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (argc == 7 && strcmp(argv[6], "eintr") == 0) ys_test_outcome_write_mode = 1;
+    if (argc == 7 && strcmp(argv[6], "reportfail") == 0) {
+        ys_test_close_all_fail = 1;
+        ys_test_outcome_write_mode = 2;
+        want_report_failure = 1;
+    }
+#endif
+    report_argv[0] = want_exec_failure ? "/definitely/missing/ystack-verifier" : argv[2];
     report_argv[1] = YS_PLAN_ARGV[1]; report_argv[2] = YS_PLAN_ARGV[2];
     report_argv[3] = YS_PLAN_ARGV[3]; report_argv[4] = YS_PLAN_ARGV[4];
     report_argv[5] = YS_PLAN_ARGV[5]; report_argv[6] = NULL;
+    if (pipe(outcome_pipe) != 0) die("E_FRAME_IO");
     pid = fork();
     if (pid < 0) die("E_FRAME_IO");
     if (pid == 0) {
-        ys_exec(report_argv, YS_PLAN_ENVIRONMENT, instruction_fd, stdout_fd, stderr_fd);
+        (void)close(outcome_pipe[0]);
+        if (want_pre_exec_death) abort();
+        if (want_post_ready_death) {
+            struct ys_exec_outcome ready = {
+                YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0U, 0
+            };
+            if (write(outcome_pipe[1], &ready, sizeof ready) != (ssize_t)sizeof ready)
+                _exit(125);
+            abort();
+        }
+        ys_exec(report_argv, YS_PLAN_ENVIRONMENT, instruction_fd, stdout_fd, stderr_fd,
+                outcome_pipe[1]);
         _exit(127);
     }
+    (void)close(outcome_pipe[1]);
     (void)close(instruction_fd); (void)close(stdout_fd); (void)close(stderr_fd); (void)close(marker_fd);
-    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status)) die("E_FRAME_IO");
-    if (want_refusal) {
-        if (WEXITSTATUS(status) != 126) die("E_FRAME_IO");
-    } else if (WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) < 0) die("E_FRAME_IO");
+    outcome_bytes = read(outcome_pipe[0], outcomes, sizeof outcomes);
+    (void)close(outcome_pipe[0]);
+    if (want_pre_exec_death) {
+        if (!WIFSIGNALED(status) || outcome_bytes != 0) die("E_FRAME_IO");
+    } else if (want_post_ready_death) {
+        if (!WIFSIGNALED(status) || outcome_bytes != (ssize_t)sizeof outcomes[0] ||
+            outcomes[0].kind != YS_EXEC_READY) die("E_FRAME_IO");
+    } else if (want_report_failure) {
+        if (!WIFSIGNALED(status) || outcome_bytes != 0) die("E_FRAME_IO");
+    } else if (!WIFEXITED(status)) {
+        die("E_FRAME_IO");
+    } else if (want_refusal) {
+        if (WEXITSTATUS(status) != 126 || outcome_bytes != (ssize_t)sizeof outcomes[0] ||
+            outcomes[0].kind != YS_EXEC_FAILURE || outcomes[0].phase != YS_EXEC_PHASE_CLOSE)
+            die("E_FRAME_IO");
+    } else if (want_exec_failure) {
+        if (WEXITSTATUS(status) != 127 || outcome_bytes != (ssize_t)sizeof outcomes ||
+            outcomes[0].kind != YS_EXEC_READY || outcomes[1].kind != YS_EXEC_FAILURE ||
+            outcomes[1].phase != YS_EXEC_PHASE_EXECVE)
+            die("E_FRAME_IO");
+    } else if (WEXITSTATUS(status) != expected_exit) {
+        die("E_FRAME_IO");
+    } else if (outcome_bytes != (ssize_t)sizeof outcomes[0] ||
+               outcomes[0].kind != YS_EXEC_READY) {
         die("E_FRAME_IO");
     }
     return 0;
@@ -398,6 +451,8 @@ static int cmd_verify_report(int argc, char **argv)
     (void)dprintf(1, "fd2:%s\n", fd2_ok ? "ok" : "fail");
     if (extra < 0) (void)dprintf(1, "extra_fds:enum-failed\n");
     else (void)dprintf(1, "extra_fds:%d\n", extra);
+    if (strstr(argv[0], "exit126") != NULL) return 126;
+    if (strstr(argv[0], "exit127") != NULL) return 127;
     return 0;
 }
 

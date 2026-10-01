@@ -417,6 +417,38 @@ pass 'ys_exec still closes a descriptor (fd 128) above a soft RLIMIT_NOFILE the 
 [ ! -s "$tmp/exec-cf.err" ] || fail 'exec wiring (closefail): stderr must be empty'
 pass 'ys_exec refuses (exit 126, execve never reached) rather than proceeding when it cannot confirm every descriptor is closed'
 
+/bin/cp "$h" "$tmp/verifier-exit126"
+/bin/cp "$h" "$tmp/verifier-exit127"
+: > "$tmp/exec-126.out"; : > "$tmp/exec-126.err"
+"$h" exec-report "$tmp/verifier-exit126" "$tmp/instr.txt" "$tmp/exec-126.out" \
+  "$tmp/exec-126.err" exit126
+: > "$tmp/exec-127.out"; : > "$tmp/exec-127.err"
+"$h" exec-report "$tmp/verifier-exit127" "$tmp/instr.txt" "$tmp/exec-127.out" \
+  "$tmp/exec-127.err" exit127
+pass 'the close-on-exec outcome channel confirms real verifier exits 126 and 127 without classifying their reserved numbers as pre-exec failure'
+
+: > "$tmp/exec-missing.out"; : > "$tmp/exec-missing.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-missing.out" "$tmp/exec-missing.err" execfail
+[ ! -s "$tmp/exec-missing.out" ] || fail 'execve failure must not run the verifier fixture'
+pass 'the outcome channel distinguishes execve failure from a real executable returning 127'
+
+: > "$tmp/exec-eintr.out"; : > "$tmp/exec-eintr.err"
+"$hf" exec-report "$hf" "$tmp/instr.txt" "$tmp/exec-eintr.out" "$tmp/exec-eintr.err" eintr
+[ "$(cat "$tmp/exec-eintr.out")" = "$expected_report" ] ||
+  fail 'an interrupted outcome write must retry and still confirm the executed verifier'
+: > "$tmp/exec-reportfail.out"; : > "$tmp/exec-reportfail.err"
+"$hf" exec-report "$hf" "$tmp/instr.txt" "$tmp/exec-reportfail.out" \
+  "$tmp/exec-reportfail.err" reportfail
+pass 'interrupted outcome writes retry, while an unreportable controlled failure terminates by signal and cannot resemble an ordinary verifier exit'
+
+: > "$tmp/exec-predeath.out"; : > "$tmp/exec-predeath.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-predeath.out" \
+  "$tmp/exec-predeath.err" predeath
+: > "$tmp/exec-afterreadydeath.out"; : > "$tmp/exec-afterreadydeath.err"
+"$h" exec-report "$h" "$tmp/instr.txt" "$tmp/exec-afterreadydeath.out" \
+  "$tmp/exec-afterreadydeath.err" afterreadydeath
+pass 'a child death both before readiness and after readiness remains distinguishable from a normally exited verifier'
+
 # --- R8.1 export inventory: hard-link alias refused, single link accepted -
 /bin/mkdir -m 700 "$tmp/ev-good" "$tmp/ev-bad"
 /usr/bin/printf ev0 > "$tmp/ev-good/b.bin"; /usr/bin/printf ev1 > "$tmp/ev-good/a.bin"
@@ -631,6 +663,7 @@ with tarfile.open(archive, 'w:xz', format=tarfile.PAX_FORMAT) as tf:
 PY
 "$python" "$build_guest" compile "$tmp/toolchain-a" "$tmp/build-a"
 "$python" "$build_guest" compile "$tmp/toolchain-b" "$tmp/build-b"
+"$python" "$build_guest" compile "$tmp/toolchain-a" "$tmp/build-a-repeat"
 "$python" - "$tmp/build-a/build-record.json" "$tmp/build-b/build-record.json" \
   "$tmp/toolchain-a/toolchain.tar.xz" "$tmp/toolchain-b/toolchain.tar.xz" "$marker" "$root" <<'PY'
 import hashlib, json, os, stat, sys
@@ -658,13 +691,19 @@ for item in body_a['sources'] + body_a['headers']:
     assert item['sha256'] == digest(os.path.join(sys.argv[6], item['path']))
 assert body_a['script_sha256'] == digest(os.path.join(sys.argv[6], 'sandbox/v1/build-guest.py'))
 lines = open(sys.argv[5], encoding='utf-8').read().splitlines()
-assert len(lines) == 6, 'expected three compiler calls per build, got %d' % len(lines)
+assert len(lines) == 9, 'expected three compiler calls per build, got %d' % len(lines)
 assert all('.ystack-toolchain-' in line for line in lines), 'compiler must run from private extraction'
 assert all('/toolchain-a/' not in line and '/toolchain-b/' not in line for line in lines)
 PY
 for target in init supervisor verifier; do
   cmp -s "$tmp/build-a/$target" "$tmp/build-b/$target" ||
     fail "synthetic compiler produced different $target bytes across separate archive builds"
+done
+cmp -s "$tmp/build-a/build-record.json" "$tmp/build-a-repeat/build-record.json" ||
+  fail 'identical archives, sources and configuration must produce byte-identical complete build records'
+for target in init supervisor verifier; do
+  cmp -s "$tmp/build-a/$target" "$tmp/build-a-repeat/$target" ||
+    fail "identical build inputs produced different repeat $target bytes"
 done
 pass 'the real compile command privately copies and safely extracts the archive, builds mandatory init/supervisor/verifier targets, records sources/headers and the archive digest, and produces identical target bytes in separate directories; changing bundled bytes changes archive identity'
 
@@ -865,13 +904,28 @@ if [ "$(/usr/bin/uname -s)" = Linux ]; then
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/supervisor.c" \
     -o "$tmp/linuxcc/supervisor.o"
   pass 'guest/init.c and guest/supervisor.c each compile with -std=c11 -Wall -Wextra -Werror on Linux (the host compiler as a syntax/semantics gate; PR 6, R2.5)'
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+    -DYSTACK_INIT_TEST "$guest_dir/init.c" -o "$tmp/linuxcc/init-production-test"
+  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+    "$tmp/linuxcc/init-production-test"
+  pass 'the production init setup path preserves directory and mount order, stops at every injected failure and hands off only to /supervisor'
   /usr/bin/cc -std=c11 -Wall -Wextra -O1 -g -fno-omit-frame-pointer \
     -fsanitize=address,undefined -DYSTACK_SUPERVISOR_TEST -I"$guest_dir" \
     "$guest_dir/supervisor.c" "$guest_dir/common.c" -o "$tmp/linuxcc/supervisor-production-test"
   /bin/mkdir -m 700 "$tmp/supervisor-production"
   ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
-    "$tmp/linuxcc/supervisor-production-test" "$tmp/supervisor-production"
+    "$tmp/linuxcc/supervisor-production-test" "$tmp/supervisor-production" \
+      "$tmp/production-report.json"
   pass 'the production supervisor report writer, filter generator, instruction descriptor, fanotify history, privilege sequence and tmpfs geometry pass their Linux ASan/UBSan helper tests'
+  "$python" - "$root/sandbox/v1/host-supervisor.py" "$tmp/production-report.json" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('host_supervisor', sys.argv[1])
+host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
+report = open(sys.argv[2], 'rb').read()
+records = [(b'report.json', report), (b'stdout', b''), (b'stderr', b'')]
+assert host.validate_export(records, 'a' * 64) is not None
+PY
+  pass 'a production-built canonical guest report and complete export pass the unchanged host validate_export consumer'
 else
   /usr/bin/printf 'SKIP (Linux-only, stated reason): guest/init.c and guest/supervisor.c use Linux-only headers (mount(2) MS_* flags, seccomp, Landlock, fanotify, clone3) this Darwin host does not have. The production-helper ASan/UBSan, generated-filter and actual descriptor-mode tests require Linux and remain for dispatched CI; this Darwin run does not count them as passed.\n' >&2
 fi
