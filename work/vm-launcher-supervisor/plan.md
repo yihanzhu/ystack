@@ -367,9 +367,9 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | --- | --- | ---: | --- |
 | 1 | `review_size: accepted-exception` | 700-950 | the frame codec and its exhaustive damage cases |
 | 2 | `review_size: accepted-exception` | 800-1,100 | guest input: plan, materialization, wiring, inventory |
-| 3 | `review_size: accepted-exception` | 1,100-1,500 | trusted configuration, ACLs, phase A, store and receipt writer |
-| 4 | `review_size: accepted-exception` | 1,300-1,700 | phase B admission and its binding matrix |
-| 5 | `review_size: accepted-exception` | 1,400-1,900 | the launch lifecycle against the fake runtime |
+| 3 | `review_size: accepted-exception` | 1,100-1,700 | trusted configuration, ACLs, phase A, store and receipt writer |
+| 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
+| 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 1,200-1,700 | guest containment setup and build |
 | 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
@@ -378,7 +378,34 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
-`prepare-candidate.py` (2,288) and its test plus fixtures (3,209). A PR outside its
+`prepare-candidate.py` (2,288) and its test plus fixtures (3,209). PR 3 as built in
+#470 measures about 1,600-1,700: the component-by-component ancestor walk with
+descriptor-bound reads and ACL iteration (R10.1), the accepted-set schema mirror of
+`fixed_accepted_shape_ok`, the runtime driver in the trusted walk, bounded JSON
+nesting, and the CI-only trust-root anchor hook with its gating tests (#463 record).
+PR 4 as built in #473 measures about 1,200-1,500: it extends PR 3's phase-A
+infrastructure (validated-descriptor reads, store and receipt writers, test fixtures)
+rather than duplicating it, and carries the complete consumer-checker matrix for the
+R15.1 classes run in a temporary repository copy, the full dyld shared-cache inventory
+in the host_runtime composite, created-entry teardown and manifest kind/mode
+validation (#463 record). PR 5 as built in #477 measures about 3,300-3,500: the
+launch lifecycle carries bounded reaping under the absolute deadline, deadline-first
+polling with driver calls capped by the time to the next deadline, cancellation stops
+retried until accepted, post-claim finalization for every failure after the attempt
+is claimed, observation validation against guest-tree termination, foreign
+work-directory preservation on attempt-id collision, clean-exit ordering before
+endpoint-failure poll errors, freeze-failure deadline measurement, malformed
+driver-response containment, wall-limit evidence derived from an issued stop,
+manifest path validation in phase B, creation recording immediately after the
+work-directory mkdir, the wall-time endpoint captured at confirmed stop, a
+deterministic cancel-during-poll race, a bounded drain-worker shutdown that retains
+descriptor ownership, serialized fake-runtime mailbox updates,
+an environment-independent mailbox lock, post-spawn initialization guarded so the
+runtime is always stopped, reaped and receipted, timed-out driver reads rejected as
+incomplete with the driver process tree cleaned up,
+index-stored evidence under the R10.2 layout with hex-name validation, the real-time
+default-deadline cases beside the fast overridden ones, and receipt diagnostics on
+assertion failure (#463 record). A PR outside its
 range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc. The
 plan PR measured 411 lines at its first head; #452's 579-line plan is the precedent.
 
