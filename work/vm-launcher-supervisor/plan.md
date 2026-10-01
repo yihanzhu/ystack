@@ -60,7 +60,7 @@ Host Python runs on 3.9 (Command Line Tools) to 3.12 (CI), stdlib only, canonica
 
 | Path | PR | Mode |
 | --- | --- | --- |
-| `sandbox/v1/guest/common.h`, `common.c` | 1 (created), 2 | 100644 |
+| `sandbox/v1/guest/common.h`, `common.c` | 1 (created), 2, 6 | 100644 |
 | `scripts/test/sandbox-guest-harness.c` | 1 (created), 2, 6 | 100644 |
 | `scripts/test/sandbox-guest.test.sh` | 1 (created), 2, 3, 6, 7 | 100755 |
 | `sandbox/v1/host-supervisor.py` | 3 (created), 4, 5 | 100755 |
@@ -165,6 +165,11 @@ CPU and wall enforcement remain `none`; these tests cannot qualify the environme
 
 Guest setup and reporting implement these requirements:
 
+- Finish input record-set validation before accepting the frame. Before any
+  materialization, require exactly one candidate record per file entry in the parsed
+  plan, with matching order, bytes and lengths; directories consume no record. Missing
+  fixed records, missing candidates and extra candidates refuse before the
+  materializer indexes the arrays.
 - Derive candidate data capacity from each file's page-rounded allocation using the
   measured page size and checked arithmetic. Count the root and manifest entries for
   inode capacity; use finite positive capacity for empty input. Justify any additional
@@ -186,11 +191,45 @@ Guest setup and reporting implement these requirements:
   read-only descriptor reaches fd 0; duplication or `F_SETFL` cannot change access
   mode. Preserve the exact argv, environment and other descriptor rules.
 - Initialize all fanotify history and descriptor state before use. Permit only the
-  first open of an empty regular inode; deny when history cannot record it. Close the
-  group after tree termination and before export, including checked failure cleanup.
+  first open of an empty regular inode; deny when history cannot record it. Only
+  confirmed tree termination permits normal group closure, output inventory and
+  export, in that order. A failed population read or exhausted confirmation deadline
+  takes a separate failure shutdown, retains containment until shutdown and exports
+  no normal report. It cannot claim complete observations or confirmed termination;
+  the unchanged host records the absent export as runtime error under R8.2.
 - Build reports with checked capacity arithmetic and checked formatting results.
   Account for full hexadecimal evidence names and every other field; refuse an
   incomplete report on allocation or formatting failure. Never advance past capacity.
+  Use the canonical `body`, `id`, `kind`, `schema_version` envelope required by the
+  unchanged host `validate_export`; do not relax that consumer to fit the producer.
+
+Extend the shared `ys_exec` API in `common.c` and `common.h` with a close-on-exec
+pipe between trusted child setup and guest supervisor. The parent closes its writer;
+the child closes its reader. No other process retains a writer. Preserve exactly the
+outcome writer during descriptor setup, close every unrelated descriptor above 2
+exhaustively, and verify `FD_CLOEXEC` on the writer before `execve`. Successful exec
+closes it before verifier code runs. The verifier still receives only fd 0, 1 and 2,
+with the exact R6.4 argv, environment and access modes. No general descriptor
+allowlist, duplicate wiring, tracing mechanism or verifier protocol is added.
+
+The pipe carries a bounded, closed protocol: one readiness record after setup and
+before `execve`, and a failure record with phase and error for each controlled
+setup, wiring or exec failure. Readiness is not proof of execution. Every controlled
+normal exit before exec must deliver its complete failure record first; failed
+reporting must not leave an unmarked normal exit. The parent treats truncated,
+malformed, duplicated or failed channel operations as unverified. Handle interrupted
+operations and integrate channel reads with child status, fanotify and deadlines;
+no unbounded read or wait for the channel may delay the R9.1 deadline.
+
+An explicit failure record means setup or exec failed, never verifier exit. Confirm
+an ordinary executable outcome only after complete readiness, channel EOF with no
+failure, and a normally exited child, backed by the pre-exec exit rule above. Retain
+its actual exit code, including 126 or 127; never classify by reserved exit numbers.
+EOF alone cannot prove exec: death closes the pipe too. A signal, deadline or channel
+ambiguity that cannot distinguish pre-exec death from post-exec death stays
+unverified. Known failure and unverified execution produce no ordinary guest export;
+the host keeps the existing runtime-error, unavailable-observation and empty-payload
+path. Nothing invents `verifier_started`, a verifier exit or a new receipt state.
 
 `build-guest.py compile|image` follows R2.5. Resolve required sources from the
 repository root, including the unchanged verifier and project headers; missing
@@ -205,21 +244,39 @@ Tests extend `sandbox-guest.test.sh` and the existing `sandbox-guest-harness.c` 
 invoke production init/supervisor helpers, not copied implementations. Separate test
 builds may substitute syscalls to record setup order and inject failures; those
 substitutions are compiled out of production, with no runtime bypass. Cover all
-R15.2 cases with allowed controls beside denials: maximum report names/counts and
-writer failures; privilege ordering and final state; traversal and forbidden writes;
-filter flag combinations and advice values; fanotify initialization, first/repeated
-open and full history; read-only instruction descriptors with writable copies closed;
-and many-small-file, zero-length, boundary and invalid/overflow geometry cases.
+R15.2 cases with allowed controls beside denials: maximum report names/counts,
+allocation and injected formatting failures; privilege ordering and final state;
+traversal and forbidden writes; filter flags and advice values; fanotify
+initialization, first/repeated open and full history; read-only instruction
+descriptors with writable copies closed; and many-small-file, zero-length, boundary
+and invalid/overflow geometry cases.
+Pass a production-built report and complete export through the unchanged host
+validator. Exercise production input loading with missing fixed records and missing,
+extra and correctly matched candidate counts, including the allocation boundary.
+Exercise the production init path's directory/mount order, each failure stop and
+supervisor exec handoff. Exercise the fanotify service's regular-file and empty-file
+checks and actual allow/deny response decisions, not just its inode-history helper.
+Drive termination control through confirmed-empty, population-read failure and
+exhausted confirmation; only the first may enter normal close/inventory/export.
+
+Exercise shared execution and parent classification together: setup/wiring and
+closure failure; `execve` failure; real executed fixtures returning 0, 126 and 127;
+descriptor overlap and descriptors above a lowered limit; no outcome descriptor in
+the executable; pre-exec death before/after readiness; channel damage, failed failure
+reporting and interrupted operations. Unknown outcomes must not become ordinary
+reports, bypass containment or postpone deadlines.
 
 A recording synthetic compiler archive tests the real `compile` command, mandatory
 targets, source/header identities, archive digest, safe extraction, unsafe-member
 refusal before invocation, incomplete-build refusal and separate-directory
 reproducibility. Changing bundled headers while keeping compiler bytes unchanged
-must change the archive identity. Retain synthetic-image determinism and the Linux
+must change the archive identity. Also build twice from identical archive, source
+and configuration bytes into fresh directories and compare every executable and
+complete build record byte for byte. Retain image determinism and the Linux
 `-std=c11 -Wall -Wextra -Werror` compile gates for init and supervisor. Execute the
-production report path under Linux ASan/UBSan, evaluate the generated filter with
-positive and negative inputs, and exercise real descriptor modes. Privileged Linux
-setup cases use only capabilities already available in the isolated test environment;
+production report and input paths under Linux ASan/UBSan, evaluate the generated
+filter with positive and negative inputs, and exercise real descriptor modes.
+Privileged Linux setup uses only capabilities already available in the test environment;
 report unavailable capabilities explicitly, never as passes. These are contract tests;
 R13.4 still supplies the separately authorized arm64 guest and Apple VM proof.
 
