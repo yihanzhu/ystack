@@ -910,7 +910,7 @@ if [ "$(/usr/bin/uname -s)" = Linux ]; then
     "$tmp/linuxcc/init-production-test"
   pass 'the production init setup path preserves directory and mount order, stops at every injected failure and hands off only to /supervisor'
   /usr/bin/cc -std=c11 -Wall -Wextra -O1 -g -fno-omit-frame-pointer \
-    -fsanitize=address,undefined -DYSTACK_SUPERVISOR_TEST -I"$guest_dir" \
+    -fsanitize=address,undefined -DYSTACK_SUPERVISOR_TEST -DYSTACK_TEST_FAULT_INJECT -I"$guest_dir" \
     "$guest_dir/supervisor.c" "$guest_dir/common.c" -o "$tmp/linuxcc/supervisor-production-test"
   /bin/mkdir -m 700 "$tmp/supervisor-production"
   ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
