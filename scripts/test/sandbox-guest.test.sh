@@ -905,6 +905,15 @@ probe_result=$("$tmp/probe-production-test") || fail 'the probe production-path 
   fail "unexpected probe production-path fixture output: $probe_result"
 pass 'the bounded probe fixture exercises the closed YSPROBE1 parser, request binding, action/result classification, cleanup preservation and signal target selection without native probe actions'
 
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
+  -DYSTACK_TEST_NO_SOCKET_CONSTANTS -I"$guest_dir" \
+  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-missing-socket-facts-test"
+missing_facts_result=$("$tmp/probe-missing-socket-facts-test") ||
+  fail 'the probe fallback build without Linux socket constants failed'
+[ "$missing_facts_result" = 'probe production parser/action/result fixture: ok' ] ||
+  fail "unexpected missing-socket-facts fixture output: $missing_facts_result"
+pass 'the private socket-facts fallback compiles and runs with Linux header constants unavailable'
+
 # Sanitizers exercise the same bounded private fixture where the host compiler
 # supports them. This remains substituted host proof, never native qualification.
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \

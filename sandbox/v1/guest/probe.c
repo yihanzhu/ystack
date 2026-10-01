@@ -35,9 +35,7 @@
 #define OUTPUT_ATTEMPT (12U * 1024U * 1024U)
 #define FD_SCAN_FIRST 3
 #define FD_SCAN_LAST 1023
-#if defined(YSTACK_PROBE_TEST) && !defined(SOCK_CLOEXEC)
-#define SOCK_CLOEXEC 0
-#endif
+#define TEST_CLOEXEC 0x40000000
 
 enum action {
     ACT_CANDIDATE_READ, ACT_CANDIDATE_WRITE, ACT_TOOLS_WRITE,
@@ -98,7 +96,7 @@ static const struct mode modes[] = {
  * socket-family                          socket
  * host-sentinel, sibling-sentinel        open, read
  * environment                            environment
- * descriptors                            fd0, fd1, fd2, fd-scan
+ * descriptors                            fd0, fd1, fd2, fd-scan, fd-leaks
  * fork-bomb                              fork
  * thread-bomb                            thread
  * cpu-spin-32                            cpu
@@ -135,6 +133,13 @@ struct request {
     const struct mode *mode; char path[PATH_CAP]; uint64_t size;
     unsigned char expected_digest[32]; unsigned family;
     char instruction_digest[65];
+};
+
+struct socket_facts {
+    long domain_max;
+    int linux_build, cloexec_available, cloexec;
+    int netlink_available, netlink, usersock_available, usersock;
+    int packet_available, packet, vsock_available, vsock;
 };
 
 static const char *const pre_names[] = {"ok", "failed", "unknown"};
@@ -243,100 +248,6 @@ static int parse_request_bytes(const unsigned char *bytes, size_t length, struct
     return 1;
 }
 
-static int read_request(struct request *request)
-{
-    unsigned char bytes[INPUT_CAP + 1U]; size_t used = 0;
-    for (;;) {
-        ssize_t n = read(STDIN_FILENO, bytes + used, sizeof bytes - used);
-        if (n < 0) { if (errno == EINTR) continue; return -1; }
-        if (n == 0) break;
-        used += (size_t)n; if (used == sizeof bytes) return 0;
-    }
-    return parse_request_bytes(bytes, used, request) ? 1 : 0;
-}
-
-static void add_record(struct result *result, const char *name, enum prerequisite pre,
-                       int attempted, int completed, enum outcome outcome, int error_number,
-                       int cleanup_error, uint64_t v1, uint64_t v2, uint64_t v3)
-{
-    struct record *r;
-    if (result->count >= RECORD_CAP) abort();
-    r = &result->records[result->count++]; r->name = name; r->prerequisite = pre;
-    r->attempted = attempted; r->completed = completed; r->outcome = outcome;
-    r->error_number = error_number; r->cleanup_error = cleanup_error;
-    r->value[0] = v1; r->value[1] = v2; r->value[2] = v3;
-}
-
-static enum outcome classify_errno(int error_number)
-{
-    if (error_number == EPERM || error_number == EACCES || error_number == EROFS) return OUT_REFUSED;
-    if (error_number == EAFNOSUPPORT || error_number == EPROTONOSUPPORT || error_number == ESOCKTNOSUPPORT ||
-        error_number == EOPNOTSUPP) return OUT_UNSUPPORTED;
-    return OUT_INCOMPLETE;
-}
-
-static int result_complete(const struct result *result)
-{
-    size_t i;
-    if (result->force_incomplete) return 0;
-    for (i = 0; i < result->count; i++)
-        if (result->records[i].prerequisite != PRE_OK || !result->records[i].attempted ||
-            !result->records[i].completed || result->records[i].outcome == OUT_INCOMPLETE ||
-            result->records[i].cleanup_error != 0) return 0;
-    return 1;
-}
-
-static int appendf(char *line, size_t *used, const char *format, ...)
-{
-    va_list args; int n;
-    if (*used >= RESULT_CAP) return 0;
-    va_start(args, format); n = vsnprintf(line + *used, RESULT_CAP - *used, format, args); va_end(args);
-    if (n < 0 || (size_t)n >= RESULT_CAP - *used) return 0;
-    *used += (size_t)n; return 1;
-}
-
-static int write_all(int fd, const void *data, size_t length)
-{
-    size_t off = 0;
-    while (off < length) {
-        ssize_t n = write(fd, (const unsigned char *)data + off, length - off);
-        if (n < 0) { if (errno == EINTR) continue; return 0; }
-        if (n == 0) return 0;
-        off += (size_t)n;
-    }
-    return 1;
-}
-
-static int format_result(const struct request *request, const struct result *result,
-                         char line[RESULT_CAP], size_t *line_length)
-{
-    size_t used = 0, i; const char *domain = "none"; char domain_buf[48];
-    if (result->domain != NULL) domain = result->domain;
-    else if (request->mode->action == ACT_SOCKET_FAMILY) {
-        if (result->domain_max == 0U) domain = "unknown";
-        else { (void)snprintf(domain_buf, sizeof domain_buf, "linux-build-af-v1/%u", result->domain_max); domain = domain_buf; }
-    }
-    if (!appendf(line, &used, "YSPROBE1 %s %s %s %s %zu", request->mode->name,
-                 request->instruction_digest, result_complete(result) ? "complete" : "incomplete",
-                 domain, result->count)) return 0;
-    for (i = 0; i < result->count; i++) {
-        const struct record *r = &result->records[i];
-        if (!appendf(line, &used, " %s:%s:%d:%d:%s:%d:%d:%llu:%llu:%llu", r->name,
-                     pre_names[r->prerequisite], r->attempted, r->completed,
-                     outcome_names[r->outcome], r->error_number, r->cleanup_error,
-                     (unsigned long long)r->value[0], (unsigned long long)r->value[1],
-                     (unsigned long long)r->value[2])) return 0;
-    }
-    if (!appendf(line, &used, "\n")) return 0;
-    *line_length = used; return 1;
-}
-
-static int emit_result(const struct request *request, const struct result *result)
-{
-    char line[RESULT_CAP]; size_t length;
-    return format_result(request, result, line, &length) && write_all(STDOUT_FILENO, line, length);
-}
-
 #ifdef YSTACK_PROBE_TEST
 /* This boundary replaces only low-level operations. Parser, action selection,
  * iteration, accounting, classification and result production stay unchanged. */
@@ -347,9 +258,11 @@ enum test_scenario {
     TEST_DESCRIPTOR_VALID, TEST_DESCRIPTOR_WRONG,
     TEST_DESCRIPTOR_BAD_ACCESS, TEST_DESCRIPTOR_MISSING_APPEND,
     TEST_DESCRIPTOR_MISSING, TEST_DESCRIPTOR_METADATA_ERROR,
-    TEST_DESCRIPTOR_LEAK3, TEST_DESCRIPTOR_LEAK128, TEST_DESCRIPTOR_SCAN_ERROR,
+    TEST_DESCRIPTOR_LEAK3, TEST_DESCRIPTOR_LEAK128, TEST_DESCRIPTOR_LEAKS,
+    TEST_DESCRIPTOR_SCAN_ERROR, TEST_DESCRIPTOR_SCAN_AFTER_LEAK,
     TEST_SOCKET_REFUSED, TEST_SOCKET_SUCCESS, TEST_SOCKET_UNSUPPORTED,
-    TEST_SOCKET_INVALID, TEST_SOCKET_CLOSE_ERROR, TEST_WRITE_SHORT,
+    TEST_SOCKET_INVALID, TEST_SOCKET_EACCES, TEST_SOCKET_EROFS,
+    TEST_SOCKET_CLOSE_ERROR, TEST_WRITE_SHORT,
     TEST_WRITE_EINTR, TEST_WRITE_ZERO, TEST_WRITE_ERROR, TEST_WRITE_PREFIX_ERROR,
     TEST_ALLOC_FAIL, TEST_RESOURCE_PARTIAL, TEST_OPERATION_REFUSED, TEST_OPERATION_CLEANUP,
     TEST_SCRATCH_MMAP_FAIL, TEST_SCRATCH_MKDIR_FAIL
@@ -361,25 +274,94 @@ struct test_state {
     size_t byte_count, read_offset;
     uint64_t write_requested, write_returned;
     unsigned write_calls, open_calls, read_calls, close_calls, socket_calls;
+    unsigned fail_open_call, fail_write_call, fail_close_call;
+    int injected_error;
     unsigned worker_calls, allocation_calls, sleep_calls;
     int socket_family, socket_type, socket_protocol;
     pid_t pid, parent;
     unsigned char captured[128]; size_t captured_length;
 };
+enum script_kind { SCRIPT_READ, SCRIPT_WRITE, SCRIPT_OPEN, SCRIPT_CLOSE, SCRIPT_SOCKET,
+                   SCRIPT_MALLOC, SCRIPT_FREE };
+struct script_step {
+    enum script_kind kind;
+    int fd, flags, protocol, error_number;
+    mode_t mode;
+    size_t length;
+    ssize_t returned;
+    const char *path;
+    const unsigned char *bytes;
+};
+#define SCRIPT_CAP 64U
+static struct script_step test_script[SCRIPT_CAP];
+static size_t script_count, script_cursor;
+static int script_active;
 static struct test_state test_state;
 static unsigned char test_allocation[BLOCK_SIZE];
+static struct socket_facts test_socket_facts;
+
+static void script_fail(const char *message)
+{
+    (void)fprintf(stderr, "FAIL script %s at step %zu/%zu\n", message, script_cursor, script_count);
+    abort();
+}
+
+static struct script_step *script_next(enum script_kind kind)
+{
+    struct script_step *step;
+    if (script_cursor >= script_count) script_fail("exhausted");
+    step = &test_script[script_cursor++];
+    if (step->kind != kind) script_fail("operation order");
+    return step;
+}
+
+static void script_add(enum script_kind kind, int fd, int flags, mode_t mode,
+                       int protocol, size_t length, ssize_t returned, int error_number,
+                       const char *path, const void *bytes)
+{
+    struct script_step *step;
+    if (script_count >= SCRIPT_CAP) script_fail("capacity");
+    step = &test_script[script_count++]; memset(step, 0, sizeof *step);
+    step->kind = kind; step->fd = fd; step->flags = flags; step->mode = mode;
+    step->protocol = protocol; step->length = length; step->returned = returned;
+    step->error_number = error_number; step->path = path; step->bytes = bytes;
+}
 
 static void test_reset(enum test_scenario scenario)
 {
     memset(&test_state, 0, sizeof test_state);
+    memset(&test_socket_facts, 0, sizeof test_socket_facts);
     test_state.scenario = scenario;
     test_state.pid = 1;
     test_state.parent = 0;
+    test_socket_facts.domain_max = 8;
+    test_socket_facts.linux_build = 1;
+    test_socket_facts.cloexec_available = 1;
+    test_socket_facts.cloexec = TEST_CLOEXEC;
+    test_socket_facts.netlink_available = 1;
+    test_socket_facts.netlink = 3;
+    test_socket_facts.usersock_available = 1;
+    test_socket_facts.usersock = 7;
+    test_socket_facts.packet_available = 1;
+    test_socket_facts.packet = 4;
+    test_socket_facts.vsock_available = 1;
+    test_socket_facts.vsock = 5;
+    script_count = 0; script_cursor = 0; script_active = 0;
 }
 
 static int test_open(const char *path, int flags, mode_t mode)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_OPEN);
+        if (strcmp(path, step->path) != 0 || flags != step->flags || mode != step->mode)
+            script_fail("open arguments");
+        if (step->returned < 0) errno = step->error_number;
+        return (int)step->returned;
+    }
     (void)path; (void)flags; (void)mode; test_state.open_calls++;
+    if (test_state.open_calls == test_state.fail_open_call) {
+        errno = test_state.injected_error; return -1;
+    }
     if (test_state.scenario == TEST_FILE_REFUSED) { errno = EPERM; return -1; }
     if (test_state.scenario == TEST_SENTINEL_ABSENT) { errno = ENOENT; return -1; }
     if (test_state.scenario == TEST_OPERATION_REFUSED && test_state.open_calls > 1U) {
@@ -390,6 +372,15 @@ static int test_open(const char *path, int flags, mode_t mode)
 
 static ssize_t test_read(int fd, void *buffer, size_t length)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_READ);
+        if (fd != step->fd || length != step->length) script_fail("read arguments");
+        if (step->returned < 0) errno = step->error_number;
+        else if ((size_t)step->returned > length || (step->returned > 0 && step->bytes == NULL))
+            script_fail("read result");
+        else if (step->returned > 0) memcpy(buffer, step->bytes, (size_t)step->returned);
+        return step->returned;
+    }
     size_t left, take; (void)fd; test_state.read_calls++;
     if (test_state.scenario == TEST_FILE_READ_ERROR) { errno = EIO; return -1; }
     left = test_state.byte_count - test_state.read_offset;
@@ -401,8 +392,20 @@ static ssize_t test_read(int fd, void *buffer, size_t length)
 
 static ssize_t test_write(int fd, const void *buffer, size_t length)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_WRITE);
+        if (fd != step->fd || length != step->length ||
+            (step->bytes != NULL && memcmp(buffer, step->bytes, length) != 0))
+            script_fail("write arguments");
+        if (step->returned < 0) errno = step->error_number;
+        if (step->returned > (ssize_t)length) script_fail("write result");
+        return step->returned;
+    }
     size_t returned = length, room, copy; (void)fd;
     test_state.write_calls++; test_state.write_requested += length;
+    if (test_state.write_calls == test_state.fail_write_call) {
+        errno = test_state.injected_error; return -1;
+    }
     if (test_state.scenario == TEST_WRITE_EINTR && test_state.write_calls == 1U) { errno = EINTR; return -1; }
     if (test_state.scenario == TEST_WRITE_ZERO) return 0;
     if (test_state.scenario == TEST_WRITE_ERROR) { errno = EIO; return -1; }
@@ -419,7 +422,16 @@ static ssize_t test_write(int fd, const void *buffer, size_t length)
 
 static int test_close(int fd)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_CLOSE);
+        if (fd != step->fd) script_fail("close arguments");
+        if (step->returned < 0) errno = step->error_number;
+        return (int)step->returned;
+    }
     (void)fd; test_state.close_calls++;
+    if (test_state.close_calls == test_state.fail_close_call) {
+        errno = test_state.injected_error; return -1;
+    }
     if (test_state.scenario == TEST_FILE_CLEANUP_ERROR || test_state.scenario == TEST_SOCKET_CLOSE_ERROR) {
         errno = EIO; return -1;
     }
@@ -452,18 +464,30 @@ static int test_fcntl(int fd, int command)
         if (test_state.scenario == TEST_DESCRIPTOR_MISSING_APPEND && fd == 2) return O_WRONLY;
         return O_WRONLY | O_APPEND;
     }
-    if (test_state.scenario == TEST_DESCRIPTOR_LEAK3 && fd == 3) return 0;
-    if (test_state.scenario == TEST_DESCRIPTOR_LEAK128 && fd == 128) return 0;
-    if (test_state.scenario == TEST_DESCRIPTOR_SCAN_ERROR && fd == 77) { errno = EIO; return -1; }
+    if ((test_state.scenario == TEST_DESCRIPTOR_LEAK3 || test_state.scenario == TEST_DESCRIPTOR_LEAKS ||
+         test_state.scenario == TEST_DESCRIPTOR_SCAN_AFTER_LEAK) && fd == 3) return 0;
+    if ((test_state.scenario == TEST_DESCRIPTOR_LEAK128 || test_state.scenario == TEST_DESCRIPTOR_LEAKS) && fd == 128) return 0;
+    if ((test_state.scenario == TEST_DESCRIPTOR_SCAN_ERROR || test_state.scenario == TEST_DESCRIPTOR_SCAN_AFTER_LEAK) && fd == 77) {
+        errno = EIO; return -1;
+    }
     errno = EBADF; return -1;
 }
 
 static int test_socket(int family, int type, int protocol)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_SOCKET);
+        if (family != step->fd || type != step->flags || protocol != step->protocol)
+            script_fail("socket arguments");
+        if (step->returned < 0) errno = step->error_number;
+        return (int)step->returned;
+    }
     test_state.socket_calls++; test_state.socket_family = family;
     test_state.socket_type = type; test_state.socket_protocol = protocol;
     if (test_state.scenario == TEST_SOCKET_SUCCESS || test_state.scenario == TEST_SOCKET_CLOSE_ERROR) return 42;
     if (test_state.scenario == TEST_SOCKET_UNSUPPORTED) errno = EAFNOSUPPORT;
+    else if (test_state.scenario == TEST_SOCKET_EACCES) errno = EACCES;
+    else if (test_state.scenario == TEST_SOCKET_EROFS) errno = EROFS;
     else if (test_state.scenario == TEST_SOCKET_INVALID) errno = EINVAL;
     else errno = EPERM;
     return -1;
@@ -490,6 +514,12 @@ static int test_unshare(int flags) { (void)flags; errno = EPERM; return -1; }
 #endif
 static void *test_malloc(size_t size)
 {
+    if (script_active) {
+        struct script_step *step = script_next(SCRIPT_MALLOC);
+        if (size != step->length) script_fail("malloc arguments");
+        if (step->returned < 0) { errno = step->error_number; return NULL; }
+        return test_allocation;
+    }
     test_state.allocation_calls++;
     if (test_state.scenario == TEST_ALLOC_FAIL ||
         (test_state.scenario == TEST_RESOURCE_PARTIAL && test_state.allocation_calls > 2U)) {
@@ -501,6 +531,11 @@ static void *test_malloc(size_t size)
 }
 static void test_free(void *memory)
 {
+    if (script_active) {
+        (void)script_next(SCRIPT_FREE);
+        if (memory != test_allocation) script_fail("free arguments");
+        return;
+    }
     if (memory != test_allocation) free(memory);
 }
 static pid_t test_fork(void)
@@ -573,30 +608,121 @@ static int test_munmap(void *address, size_t length) { (void)address; (void)leng
 #endif
 #endif
 
-static int payload_write_all(int fd, const void *data, size_t length)
+static int read_request(struct request *request)
 {
-    size_t offset = 0;
-    while (offset < length) {
-        ssize_t n = write(fd, (const unsigned char *)data + offset, length - offset);
+    unsigned char bytes[INPUT_CAP + 1U]; size_t used = 0;
+    for (;;) {
+        ssize_t n = read(STDIN_FILENO, bytes + used, sizeof bytes - used);
+        if (n < 0) { if (errno == EINTR) continue; return -1; }
+        if (n == 0) break;
+        used += (size_t)n; if (used == sizeof bytes) return 0;
+    }
+    return parse_request_bytes(bytes, used, request) ? 1 : 0;
+}
+
+static void add_record(struct result *result, const char *name, enum prerequisite pre,
+                       int attempted, int completed, enum outcome outcome, int error_number,
+                       int cleanup_error, uint64_t v1, uint64_t v2, uint64_t v3)
+{
+    struct record *r;
+    if (result->count >= RECORD_CAP) abort();
+    r = &result->records[result->count++]; r->name = name; r->prerequisite = pre;
+    r->attempted = attempted; r->completed = completed; r->outcome = outcome;
+    r->error_number = error_number; r->cleanup_error = cleanup_error;
+    r->value[0] = v1; r->value[1] = v2; r->value[2] = v3;
+}
+
+static enum outcome classify_errno(int error_number)
+{
+    if (error_number == EPERM || error_number == EACCES || error_number == EROFS) return OUT_REFUSED;
+    if (error_number == EAFNOSUPPORT || error_number == EPROTONOSUPPORT || error_number == ESOCKTNOSUPPORT ||
+        error_number == EOPNOTSUPP) return OUT_UNSUPPORTED;
+    return OUT_INCOMPLETE;
+}
+
+static int result_complete(const struct result *result)
+{
+    size_t i;
+    if (result->force_incomplete) return 0;
+    for (i = 0; i < result->count; i++)
+        if (result->records[i].prerequisite != PRE_OK || !result->records[i].attempted ||
+            !result->records[i].completed || result->records[i].outcome == OUT_INCOMPLETE ||
+            result->records[i].outcome == OUT_UNSUPPORTED ||
+            result->records[i].cleanup_error != 0) return 0;
+    return 1;
+}
+
+static int appendf(char *line, size_t *used, const char *format, ...)
+{
+    va_list args; int n;
+    if (*used >= RESULT_CAP) return 0;
+    va_start(args, format); n = vsnprintf(line + *used, RESULT_CAP - *used, format, args); va_end(args);
+    if (n < 0 || (size_t)n >= RESULT_CAP - *used) return 0;
+    *used += (size_t)n; return 1;
+}
+
+static int write_all(int fd, const void *data, size_t length)
+{
+    size_t off = 0;
+    while (off < length) {
+        ssize_t n = write(fd, (const unsigned char *)data + off, length - off);
         if (n < 0) { if (errno == EINTR) continue; return 0; }
         if (n == 0) return 0;
-        offset += (size_t)n;
+        off += (size_t)n;
     }
     return 1;
 }
+
+static int format_result(const struct request *request, const struct result *result,
+                         char line[RESULT_CAP], size_t *line_length)
+{
+    size_t used = 0, i; const char *domain = "none"; char domain_buf[48];
+    if (result->domain != NULL) domain = result->domain;
+    else if (request->mode->action == ACT_SOCKET_FAMILY) {
+        if (result->domain_max == 0U) domain = "unknown";
+        else { (void)snprintf(domain_buf, sizeof domain_buf, "linux-build-af-v1/%u", result->domain_max); domain = domain_buf; }
+    }
+    if (!appendf(line, &used, "YSPROBE1 %s %s %s %s %zu", request->mode->name,
+                 request->instruction_digest, result_complete(result) ? "complete" : "incomplete",
+                 domain, result->count)) return 0;
+    for (i = 0; i < result->count; i++) {
+        const struct record *r = &result->records[i];
+        if (!appendf(line, &used, " %s:%s:%d:%d:%s:%d:%d:%llu:%llu:%llu", r->name,
+                     pre_names[r->prerequisite], r->attempted, r->completed,
+                     outcome_names[r->outcome], r->error_number, r->cleanup_error,
+                     (unsigned long long)r->value[0], (unsigned long long)r->value[1],
+                     (unsigned long long)r->value[2])) return 0;
+    }
+    if (!appendf(line, &used, "\n")) return 0;
+    *line_length = used; return 1;
+}
+
+static int emit_result(const struct request *request, const struct result *result)
+{
+    char line[RESULT_CAP]; size_t length;
+    return format_result(request, result, line, &length) && write_all(STDOUT_FILENO, line, length);
+}
+
 
 static void file_action(struct result *result, const char *name, const char *path, int flags,
                         mode_t mode, int do_read, const void *write_data, size_t write_length,
                         int success_expected)
 {
     int fd = open(path, flags, mode), primary = 0, cleanup = 0; ssize_t n = -1; unsigned char byte;
-    if (fd < 0) { primary = errno; add_record(result, name, PRE_OK, 1, 1, classify_errno(primary), primary, 0, 0, 0, 0); return; }
+    if (fd < 0) {
+        enum outcome outcome = classify_errno(errno); primary = errno;
+        add_record(result, name, PRE_OK, 1, outcome == OUT_REFUSED, outcome,
+                   primary, 0, 0, 0, 0); return;
+    }
     if (do_read) n = read(fd, &byte, 1U);
     else if (write_data != NULL) n = write(fd, write_data, write_length);
     else n = 0;
     if (n < 0) primary = errno;
     if (close(fd) != 0) cleanup = errno;
-    add_record(result, name, PRE_OK, 1, n >= 0, n >= 0 ? (success_expected ? OUT_SUCCESS : OUT_VIOLATION) : classify_errno(primary),
+    add_record(result, name, PRE_OK, 1,
+               do_read ? n >= 0 : write_data != NULL ? (size_t)(n < 0 ? 0 : n) == write_length : 1,
+               n >= 0 ? (success_expected ? OUT_SUCCESS : OUT_VIOLATION) :
+               (!success_expected && write_data != NULL ? OUT_VIOLATION : classify_errno(primary)),
                primary, cleanup, n > 0 ? (uint64_t)n : 0U, n > 0 && do_read ? byte : 0U, 0);
 }
 
@@ -637,7 +763,9 @@ static void evidence_unary(struct result *result, const char *name, const char *
     else if (kind == 2) { rc = truncate(path, 0); if (rc != 0) saved = errno; }
     else if (kind == 3) { rc = link(path, "/sandbox/evidence/link-target"); if (rc != 0) saved = errno; }
     else { rc = rename(path, "/sandbox/evidence/rename-target"); if (rc != 0) saved = errno; }
-    add_record(result, name, PRE_OK, 1, rc >= 0, rc >= 0 ? OUT_VIOLATION : classify_errno(saved), saved,
+    add_record(result, name, PRE_OK, 1,
+               rc >= 0 || saved == EPERM || saved == EACCES || saved == EROFS,
+               rc >= 0 ? OUT_VIOLATION : classify_errno(saved), saved,
                cleanup, rc >= 0 ? 1U : 0U, 0, 0);
 }
 
@@ -680,7 +808,8 @@ static void sentinel_action(const struct request *request, struct result *result
     while (used < request->size + 1U) {
         n = read(fd, data + used, (size_t)request->size + 1U - used);
         if (n < 0) { if (errno == EINTR) continue; saved = errno; break; }
-        if (n == 0) break; used += (size_t)n;
+        if (n == 0) break;
+        used += (size_t)n;
     }
     if (close(fd) != 0) cleanup = errno;
     if (saved != 0) add_record(result, "read", PRE_OK, 1, 0, OUT_INCOMPLETE, saved, cleanup, used, request->size, 0);
@@ -694,7 +823,7 @@ static void sentinel_action(const struct request *request, struct result *result
 
 static void descriptor_action(struct result *result)
 {
-    int fd, leaks = 0, first = 0;
+    int fd, leaks = 0, first = 0, failed = 0, scan_error = 0;
     for (fd = 0; fd <= 2; fd++) {
         struct stat st; int flags, saved = 0, correct;
         if (fstat(fd, &st) != 0) saved = errno;
@@ -711,44 +840,81 @@ static void descriptor_action(struct result *result)
     for (fd = FD_SCAN_FIRST; fd <= FD_SCAN_LAST; fd++) {
         int rc; errno = 0; rc = fcntl(fd, F_GETFD);
         if (rc >= 0) { if (leaks == 0) first = fd; leaks++; }
-        else if (errno != EBADF) { add_record(result, "fd-scan", PRE_OK, 1, 0, OUT_INCOMPLETE, errno, 0,
-            FD_SCAN_FIRST, FD_SCAN_LAST, (uint64_t)fd); result->force_incomplete = 1; return; }
+        else if (errno != EBADF) { failed = fd; scan_error = errno; break; }
     }
-    add_record(result, "fd-scan", PRE_OK, 1, 1, leaks == 0 ? OUT_INCOMPLETE : OUT_VIOLATION, 0, 0,
-               FD_SCAN_FIRST, FD_SCAN_LAST, leaks == 0 ? 0U : (uint64_t)first);
+    add_record(result, "fd-scan", PRE_OK, 1, scan_error == 0,
+               scan_error == 0 ? OUT_SUCCESS : OUT_INCOMPLETE, scan_error, 0,
+               FD_SCAN_FIRST, FD_SCAN_LAST, (uint64_t)failed);
+    add_record(result, "fd-leaks", PRE_OK, 1, scan_error == 0,
+               leaks != 0 ? OUT_VIOLATION : scan_error == 0 ? OUT_SUCCESS : OUT_INCOMPLETE,
+               scan_error, 0, (uint64_t)leaks, (uint64_t)first, 0);
     result->force_incomplete = 1;
+}
+
+static struct socket_facts build_socket_facts(void)
+{
+    struct socket_facts facts = {0};
+#if defined(__linux__) && !defined(YSTACK_TEST_NO_SOCKET_CONSTANTS)
+    facts.linux_build = 1;
+#if defined(AF_MAX)
+    facts.domain_max = AF_MAX;
+#endif
+#if defined(SOCK_CLOEXEC)
+    facts.cloexec_available = 1; facts.cloexec = SOCK_CLOEXEC;
+#endif
+#if defined(AF_NETLINK)
+    facts.netlink_available = 1; facts.netlink = AF_NETLINK;
+#endif
+#if defined(NETLINK_USERSOCK)
+    facts.usersock_available = 1; facts.usersock = NETLINK_USERSOCK;
+#endif
+#if defined(AF_PACKET)
+    facts.packet_available = 1; facts.packet = AF_PACKET;
+#endif
+#if defined(AF_VSOCK)
+    facts.vsock_available = 1; facts.vsock = AF_VSOCK;
+#endif
+#endif
+#ifdef YSTACK_PROBE_TEST
+    (void)facts;
+    return test_socket_facts;
+#else
+    return facts;
+#endif
 }
 
 static void socket_action(const struct request *request, struct result *result)
 {
-#if (defined(__linux__) && defined(AF_MAX)) || defined(YSTACK_PROBE_TEST)
-    int type = SOCK_STREAM | SOCK_CLOEXEC, protocol = 0, fd, saved = 0, cleanup = 0;
-#ifdef YSTACK_PROBE_TEST
-    const unsigned domain_max = 8U;
-#else
-    const unsigned domain_max = AF_MAX;
-#endif
-    result->domain_max = domain_max;
-    if (request->family >= domain_max) { add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_INCOMPLETE, 0, 0,
+    struct socket_facts facts = build_socket_facts();
+    int type, protocol = 0, fd, saved = 0, cleanup = 0, completed;
+    if (!facts.linux_build || !facts.cloexec_available || facts.domain_max <= 0 || facts.domain_max > 65536L) {
+        result->domain = "unknown"; result->force_incomplete = 1;
+        add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_INCOMPLETE, 0, 0,
+                   request->family, 0, 0); return;
+    }
+    result->domain_max = (unsigned)facts.domain_max;
+    if (request->family >= (unsigned long)facts.domain_max) { add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_INCOMPLETE, 0, 0,
         request->family, 0, 0); result->force_incomplete = 1; return; }
-#ifdef YSTACK_PROBE_TEST
-    if (request->family == 3U) { type = SOCK_RAW | SOCK_CLOEXEC; protocol = 7; }
-    if (request->family == 4U) { type = SOCK_RAW | SOCK_CLOEXEC; protocol = 0; }
-#endif
-#ifdef AF_NETLINK
-    if (request->family == AF_NETLINK) { type = SOCK_RAW | SOCK_CLOEXEC; protocol = NETLINK_USERSOCK; }
-#endif
-#ifdef AF_PACKET
-    if (request->family == AF_PACKET) { type = SOCK_RAW | SOCK_CLOEXEC; protocol = 0; }
-#endif
+    type = SOCK_STREAM | facts.cloexec;
+    if (facts.netlink_available && request->family == (unsigned)facts.netlink) {
+        if (!facts.usersock_available) {
+            add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_UNSUPPORTED, ENOSYS, 0,
+                       request->family, 0, 0); result->force_incomplete = 1; return;
+        }
+        type = SOCK_RAW | facts.cloexec; protocol = facts.usersock;
+    } else if (facts.packet_available && request->family == (unsigned)facts.packet) {
+        type = SOCK_RAW | facts.cloexec;
+    } else if (facts.vsock_available && request->family == (unsigned)facts.vsock) {
+        type = SOCK_STREAM | facts.cloexec;
+    }
     fd = socket((int)request->family, type, protocol);
     if (fd < 0) saved = errno; else if (close(fd) != 0) cleanup = errno;
-    add_record(result, "socket", PRE_OK, 1, 1, fd >= 0 ? OUT_VIOLATION : classify_errno(saved), saved, cleanup,
+    completed = fd >= 0 || saved == EPERM;
+    add_record(result, "socket", PRE_OK, 1, completed,
+               fd >= 0 ? OUT_VIOLATION : saved == EPERM ? OUT_REFUSED :
+               (saved == EAFNOSUPPORT || saved == EPROTONOSUPPORT || saved == ESOCKTNOSUPPORT || saved == EOPNOTSUPP) ? OUT_UNSUPPORTED : OUT_INCOMPLETE,
+               saved, cleanup,
                request->family, (uint64_t)(unsigned)type, (uint64_t)(unsigned)protocol);
-#else
-    (void)request; result->domain = "unknown"; result->force_incomplete = 1;
-    add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_INCOMPLETE, 0, 0, 0, 0, 0);
-#endif
 }
 
 static void signal_action(struct result *result)
@@ -916,11 +1082,10 @@ static void scratch_action(struct result *result)
     size_t i;
     for (i = 0; i < sizeof names / sizeof names[0]; i++) {
         char path[96];
-        int fd, setup_cleanup = 0, setup, rc = -1, saved = 0, cleanup = 0;
+        int fd = -1, setup_cleanup = 0, setup = 0, rc = -1, saved = 0, cleanup = 0;
         (void)snprintf(path, sizeof path, "/sandbox/scratch/probe-%zu", i);
         if (i == 5U) {
             if (mkdir(path, 0700) != 0) setup = errno;
-            else setup = 0;
             if (setup == 0) {
                 rc = rmdir(path);
                 if (rc != 0) saved = errno;
@@ -940,11 +1105,25 @@ static void scratch_action(struct result *result)
             continue;
 #endif
         } else {
+#if !defined(__linux__)
+            if (i == 1U) {
+                add_record(result, names[i], PRE_UNKNOWN, 0, 0, OUT_UNSUPPORTED,
+                           ENOSYS, 0, 0, 0, 0);
+                continue;
+            }
+#endif
+#if !defined(MADV_REMOVE)
+            if (i == 2U) {
+                add_record(result, names[i], PRE_UNKNOWN, 0, 0, OUT_UNSUPPORTED,
+                           ENOSYS, 0, 0, 0, 0);
+                continue;
+            }
+#endif
             setup = establish_block(path, &setup_cleanup);
             if (setup == 0 && setup_cleanup == 0) {
                 if (i == 0U) {
                     fd = open(path, O_RDWR | O_CLOEXEC, 0);
-                    if (fd < 0) saved = errno;
+                    if (fd < 0) setup = errno;
                     else {
                         rc = ftruncate(fd, 0);
                         if (rc != 0) saved = errno;
@@ -953,25 +1132,23 @@ static void scratch_action(struct result *result)
                 } else if (i == 1U) {
 #if defined(__linux__)
                     fd = open(path, O_RDWR | O_CLOEXEC, 0);
-                    if (fd < 0) saved = errno;
+                    if (fd < 0) setup = errno;
                     else {
                         rc = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                                        0, 1);
                         if (rc != 0) saved = errno;
                         if (close(fd) != 0) cleanup = errno;
                     }
-#else
-                    saved = ENOSYS;
 #endif
                 } else if (i == 2U) {
 #if defined(MADV_REMOVE)
                     void *page;
                     fd = open(path, O_RDWR | O_CLOEXEC, 0);
-                    if (fd < 0) saved = errno;
+                    if (fd < 0) setup = errno;
                     else {
                         page = mmap(NULL, 4096U, PROT_READ | PROT_WRITE,
                                     MAP_SHARED, fd, 0);
-                        if (page == MAP_FAILED) saved = errno;
+                        if (page == MAP_FAILED) setup = errno;
                         else {
                             rc = madvise(page, 4096U, MADV_REMOVE);
                             if (rc != 0) saved = errno;
@@ -981,8 +1158,6 @@ static void scratch_action(struct result *result)
                         if (close(fd) != 0 && cleanup == 0)
                             cleanup = errno;
                     }
-#else
-                    saved = ENOSYS;
 #endif
                 } else if (i == 3U) {
                     rc = truncate(path, 0);
@@ -999,7 +1174,8 @@ static void scratch_action(struct result *result)
         } else {
             enum outcome outcome = rc == 0 ? OUT_VIOLATION :
                 (saved == ENOSYS ? OUT_UNSUPPORTED : classify_errno(saved));
-            add_record(result, names[i], PRE_OK, 1, rc == 0, outcome,
+            int completed = rc == 0 || saved == EPERM || saved == EACCES || saved == EROFS;
+            add_record(result, names[i], PRE_OK, 1, completed, outcome,
                        saved, cleanup, 0, 0, 0);
         }
     }
@@ -1049,7 +1225,8 @@ static void run_action(const struct request *request, struct result *result)
             else rc = 0;
             if (closedir(directory) != 0) cleanup = errno;
         }
-        add_record(result, "list", PRE_OK, 1, rc == 0,
+        add_record(result, "list", PRE_OK, 1,
+                   rc == 0 || saved == EPERM || saved == EACCES || saved == EROFS,
                    rc == 0 ? OUT_VIOLATION : classify_errno(saved),
                    saved, cleanup, 0, 0, 0);
         break;
@@ -1096,7 +1273,8 @@ static void run_action(const struct request *request, struct result *result)
     case ACT_NAMESPACE_ESCAPE:
 #if defined(__linux__)
         { int rc = unshare(CLONE_NEWUSER | CLONE_NEWNS), saved = rc == 0 ? 0 : errno;
-          add_record(result, "unshare", PRE_OK, 1, rc == 0, rc == 0 ? OUT_VIOLATION : classify_errno(saved),
+          enum outcome outcome = rc == 0 ? OUT_VIOLATION : classify_errno(saved);
+          add_record(result, "unshare", PRE_OK, 1, rc == 0 || outcome == OUT_REFUSED, outcome,
                      saved, 0, 0, 0, 0); }
 #else
         add_record(result, "unshare", PRE_UNKNOWN, 0, 0, OUT_UNSUPPORTED, ENOSYS, 0, 0, 0, 0);
@@ -1134,7 +1312,7 @@ static int probe_main(void)
     struct request request; struct result result; int parsed = read_request(&request);
     if (parsed <= 0) { const char *line = parsed < 0 ? read_error : input_error; return write_all(STDOUT_FILENO, line, strlen(line)) ? 64 : 74; }
     if (request.mode->action == ACT_OUTPUT_OVERFLOW) return stream_payload(OUTPUT_ATTEMPT);
-    if (request.mode->action == ACT_FORGED_STDOUT) return payload_write_all(STDOUT_FILENO, forged, sizeof forged - 1U) ? 0 : 73;
+    if (request.mode->action == ACT_FORGED_STDOUT) return write_all(STDOUT_FILENO, forged, sizeof forged - 1U) ? 0 : 73;
     run_action(&request, &result); return emit_result(&request, &result) ? 0 : 74;
 }
 
@@ -1263,6 +1441,8 @@ static void result_tests(void)
           "signal never guesses target");
     memset(&r, 0, sizeof r); add_record(&r, "x", PRE_OK, 1, 1, OUT_VIOLATION, 0, EIO, 1, 2, 3);
     check(!result_complete(&r) && r.records[0].outcome == OUT_VIOLATION, "cleanup does not erase primary");
+    memset(&r, 0, sizeof r); add_record(&r, "x", PRE_OK, 1, 1, OUT_UNSUPPORTED, ENOSYS, 0, 0, 0, 0);
+    check(!result_complete(&r), "unsupported observation cannot complete coverage");
     check(classify_errno(EPERM) == OUT_REFUSED && classify_errno(EAFNOSUPPORT) == OUT_UNSUPPORTED && classify_errno(EINVAL) == OUT_INCOMPLETE, "errno classes");
 
     {
@@ -1380,9 +1560,10 @@ static void descriptor_tests(void)
     struct request q; struct result r;
     make_request("YSPROBE1 descriptors\n", &q);
     test_reset(TEST_DESCRIPTOR_VALID); run_action(&q, &r);
-    check(r.count == 4U && r.records[0].outcome == OUT_SUCCESS && r.records[1].outcome == OUT_SUCCESS &&
-          r.records[2].outcome == OUT_SUCCESS && r.records[3].outcome == OUT_INCOMPLETE &&
-          r.records[3].value[0] == 3U && r.records[3].value[1] == 1023U && !result_complete(&r),
+    check(r.count == 5U && r.records[0].outcome == OUT_SUCCESS && r.records[1].outcome == OUT_SUCCESS &&
+          r.records[2].outcome == OUT_SUCCESS && r.records[3].outcome == OUT_SUCCESS &&
+          r.records[3].value[0] == 3U && r.records[3].value[1] == 1023U &&
+          r.records[4].outcome == OUT_SUCCESS && !result_complete(&r),
           "valid fd metadata still partial census");
 
     test_reset(TEST_DESCRIPTOR_WRONG); run_action(&q, &r);
@@ -1406,16 +1587,25 @@ static void descriptor_tests(void)
           r.records[1].error_number == EIO, "standard descriptor inspection error incomplete");
 
     test_reset(TEST_DESCRIPTOR_LEAK3); run_action(&q, &r);
-    check(r.records[3].outcome == OUT_VIOLATION && r.records[3].value[2] == 3U,
+    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 1U && r.records[4].value[1] == 3U,
           "extra fd3 detected");
 
     test_reset(TEST_DESCRIPTOR_LEAK128); run_action(&q, &r);
-    check(r.records[3].outcome == OUT_VIOLATION && r.records[3].value[2] == 128U,
+    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 1U && r.records[4].value[1] == 128U,
           "high fd128 detected independently of limits");
+
+    test_reset(TEST_DESCRIPTOR_LEAKS); run_action(&q, &r);
+    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 2U &&
+          r.records[4].value[1] == 3U, "descriptor leak count and first fd retained");
 
     test_reset(TEST_DESCRIPTOR_SCAN_ERROR); run_action(&q, &r);
     check(r.records[3].outcome == OUT_INCOMPLETE && !r.records[3].completed && r.records[3].error_number == EIO,
           "descriptor inspection error incomplete");
+
+    test_reset(TEST_DESCRIPTOR_SCAN_AFTER_LEAK); run_action(&q, &r);
+    check(r.records[3].value[2] == 77U && r.records[4].outcome == OUT_VIOLATION &&
+          !r.records[4].completed && r.records[4].value[0] == 1U && r.records[4].value[1] == 3U,
+          "descriptor scan error retains the known leak lower bound");
 }
 
 static void signal_tests(void)
@@ -1454,6 +1644,26 @@ static void signal_tests(void)
     run_action(&q, &r);
     check(!r.records[1].attempted,
           "self relationship never substitutes self signal");
+}
+
+static void environment_tests(void)
+{
+    static char *correct[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", NULL};
+    static char *missing[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", NULL};
+    static char *extra[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", "X=1", NULL};
+    static char *duplicate[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "PATH=/sandbox/tools", NULL};
+    static char *wrong[] = {"LANG=C", "LC_ALL=C", "PATH=/bin", "TMPDIR=/sandbox/scratch", NULL};
+    static char *reordered[] = {"LC_ALL=C", "LANG=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", NULL};
+    char **cases[] = {correct, missing, extra, duplicate, wrong, reordered};
+    extern char **environ;
+    char **saved = environ;
+    struct request q; struct result r; size_t i;
+    make_request("YSPROBE1 environment\n", &q);
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        environ = cases[i]; run_action(&q, &r); environ = saved;
+        check(r.records[0].completed && r.records[0].outcome == (i == 0U ? OUT_SUCCESS : OUT_VIOLATION),
+              "environment exact ordered inventory");
+    }
 }
 
 static void evidence_tests(void)
@@ -1508,12 +1718,28 @@ static void scratch_tests(void)
     test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
     check(r.count == 7U, "scratch setup failures cannot reduce required set");
     for (i = 0; i < 5U; i++)
+        if (i != 1U && i != 2U)
         check(r.records[i].prerequisite == PRE_FAILED && !r.records[i].attempted,
               "scratch failed setup leaves destructive operation unattempted");
 
+    test_reset(TEST_DEFAULT); test_state.fail_write_call = 1U; test_state.injected_error = EIO;
+    run_action(&q, &r);
+    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
+          r.records[0].error_number == EIO, "scratch initial write failure blocks named operation");
+
+    test_reset(TEST_DEFAULT); test_state.fail_close_call = 1U; test_state.injected_error = EIO;
+    run_action(&q, &r);
+    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
+          r.records[0].cleanup_error == EIO, "scratch initial close failure blocks named operation");
+
+    test_reset(TEST_DEFAULT); test_state.fail_open_call = 2U; test_state.injected_error = EACCES;
+    run_action(&q, &r);
+    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
+          r.records[0].error_number == EACCES, "scratch reopen failure is a prerequisite failure");
+
 #if defined(MADV_REMOVE)
     test_reset(TEST_SCRATCH_MMAP_FAIL); run_action(&q, &r);
-    check(r.records[2].prerequisite == PRE_OK && r.records[2].attempted == 1 &&
+    check(r.records[2].prerequisite == PRE_FAILED && r.records[2].attempted == 0 &&
           r.records[2].completed == 0 && r.records[2].outcome == OUT_INCOMPLETE &&
           r.records[2].error_number == ENOMEM,
           "scratch mmap failure leaves MADV_REMOVE uncompleted");
@@ -1535,7 +1761,7 @@ static void socket_tests(void)
               r.records[0].outcome == OUT_REFUSED && r.records[0].error_number == EPERM,
               "each synthetic build-domain family attempted once");
         if (family != 3U && family != 4U) {
-            check(test_state.socket_type == (SOCK_STREAM | SOCK_CLOEXEC) &&
+            check(test_state.socket_type == (SOCK_STREAM | TEST_CLOEXEC) &&
                   test_state.socket_protocol == 0,
                   "ordinary synthetic domain member uses stream tuple");
         }
@@ -1544,7 +1770,7 @@ static void socket_tests(void)
               r.records[0].value[2] == (uint64_t)(unsigned)test_state.socket_protocol,
               "socket result preserves the exact requested tuple");
         check(r.records[0].attempted && r.records[0].completed,
-              "socket syscall completion is explicit");
+              "socket refusal completion is explicit");
     }
     make_request("YSPROBE1 socket-family 8\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
     check(test_state.socket_calls == 0U && r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].attempted,
@@ -1560,16 +1786,40 @@ static void socket_tests(void)
     test_reset(TEST_SOCKET_INVALID); run_action(&q, &r);
     check(r.records[0].outcome == OUT_INCOMPLETE && r.records[0].error_number == EINVAL,
           "socket invalid incomplete");
+    test_reset(TEST_SOCKET_EACCES); run_action(&q, &r);
+    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed && r.records[0].error_number == EACCES,
+          "socket EACCES is not a seccomp refusal");
+    test_reset(TEST_SOCKET_EROFS); run_action(&q, &r);
+    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed && r.records[0].error_number == EROFS,
+          "socket EROFS is not a seccomp refusal");
     test_reset(TEST_SOCKET_CLOSE_ERROR); run_action(&q, &r);
     check(r.records[0].outcome == OUT_VIOLATION && r.records[0].cleanup_error == EIO,
           "socket success retained across close failure");
 
     make_request("YSPROBE1 socket-family 3\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-    check(test_state.socket_type == (SOCK_RAW | SOCK_CLOEXEC) && test_state.socket_protocol == 7,
+    check(test_state.socket_type == (SOCK_RAW | TEST_CLOEXEC) && test_state.socket_protocol == 7,
           "synthetic netlink member uses raw special tuple");
     make_request("YSPROBE1 socket-family 4\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-    check(test_state.socket_type == (SOCK_RAW | SOCK_CLOEXEC) && test_state.socket_protocol == 0,
+    check(test_state.socket_type == (SOCK_RAW | TEST_CLOEXEC) && test_state.socket_protocol == 0,
           "synthetic packet member uses raw protocol-zero tuple");
+
+    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = 0; run_action(&q, &r);
+    check(!r.records[0].attempted && r.records[0].prerequisite == PRE_UNKNOWN && test_state.socket_calls == 0U,
+          "zero socket domain is unknown without a call");
+    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = -1; run_action(&q, &r);
+    check(!r.records[0].attempted && test_state.socket_calls == 0U,
+          "negative socket domain cannot narrow into a valid bound");
+    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = 65537; run_action(&q, &r);
+    check(!r.records[0].attempted && test_state.socket_calls == 0U,
+          "oversized socket domain is unknown without a call");
+    test_reset(TEST_DEFAULT); test_socket_facts.linux_build = 0; run_action(&q, &r);
+    check(!r.records[0].attempted && strcmp(r.domain, "unknown") == 0,
+          "non-Linux socket facts remain unknown");
+    make_request("YSPROBE1 socket-family 3\n", &q);
+    test_reset(TEST_DEFAULT); test_socket_facts.usersock_available = 0; run_action(&q, &r);
+    check(!r.records[0].attempted && r.records[0].outcome == OUT_UNSUPPORTED &&
+          !result_complete(&r) && test_state.socket_calls == 0U,
+          "missing NETLINK protocol metadata is unattempted unsupported");
 }
 
 static void output_tests(void)
@@ -1600,25 +1850,25 @@ static void output_tests(void)
           "abrupt output failure retains prefix count without invented completion");
 
     test_reset(TEST_DEFAULT);
-    check(payload_write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
+    check(write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
           test_state.captured_length == sizeof forged - 1U &&
           memcmp(test_state.captured, forged, sizeof forged - 1U) == 0,
           "forged stdout production payload is exact and complete");
 
     test_reset(TEST_WRITE_SHORT);
-    check(payload_write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
+    check(write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
           test_state.write_calls > 1U && test_state.write_returned == sizeof forged - 1U &&
           memcmp(test_state.captured, forged, sizeof forged - 1U) == 0,
           "forged stdout short writes retain exact payload");
 
     test_reset(TEST_WRITE_ERROR);
-    check(!payload_write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
+    check(!write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
           test_state.write_returned == 0U, "forged stdout write error stays incomplete");
 }
 
 static void every_action_fixture(void)
 {
-    size_t i; char instruction[512]; struct request q; struct result r;
+    size_t i; char instruction[512]; int rc;
     char digest[65]; static const unsigned char one[] = "x";
     digest_hex(one, 1U, digest);
     for (i = 0; i < sizeof modes / sizeof modes[0]; i++) {
@@ -1628,9 +1878,12 @@ static void every_action_fixture(void)
         else if (modes[i].action == ACT_HOST_SENTINEL || modes[i].action == ACT_SIBLING_SENTINEL)
             (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s 2f78 1 %s\n", modes[i].name, digest);
         else (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s\n", modes[i].name);
-        make_request(instruction, &q); test_reset(TEST_RESOURCE_PARTIAL);
-        test_state.bytes[0] = 'x'; test_state.byte_count = 1U; run_action(&q, &r);
-        check(r.count > 0U && r.count <= RECORD_CAP, "every returning mode runs production action and produces records");
+        test_reset(TEST_RESOURCE_PARTIAL);
+        memcpy(test_state.bytes, instruction, strlen(instruction));
+        test_state.byte_count = strlen(instruction);
+        rc = probe_main();
+        check(rc == 0 && test_state.write_calls != 0U,
+              "every returning mode runs through production entry, action and result output");
     }
 }
 
@@ -1669,13 +1922,126 @@ static void bounded_resource_tests(void)
           "scratch fill counts and discards the complete production target");
 }
 
+static void script_input(const char *instruction)
+{
+    size_t length = strlen(instruction);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U,
+               (ssize_t)length, 0, NULL, instruction);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U - length,
+               0, 0, NULL, NULL);
+}
+
+static void script_output(const char *line, ssize_t returned, int error_number)
+{
+    script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, strlen(line), returned,
+               error_number, NULL, line);
+}
+
+static int run_scripted_entry(void)
+{
+    int rc;
+    script_active = 1;
+    rc = probe_main();
+    script_active = 0;
+    check(script_cursor == script_count, "entry consumes complete finite script");
+    return rc;
+}
+
+static void entry_tests(void)
+{
+    static const char candidate_read[] = "YSPROBE1 candidate-read\n";
+    static const char candidate_read_line[] =
+        "YSPROBE1 candidate-read 8cb4151b0b7362dd7790f616f3c5c546a4a3a5d24fe678800b37873b971f95a9 complete none 1 read:ok:1:1:success:0:0:1:120:0\n";
+    static const char candidate_write[] = "YSPROBE1 candidate-write\n";
+    static const char candidate_write_line[] =
+        "YSPROBE1 candidate-write 7647cd80a363d28fbfd2f2f6c81b4540dce2b2b56b1e9a94e64bff21b823f3be complete none 1 create:ok:1:1:refused:1:0:0:0:0\n";
+    static const char socket_request[] = "YSPROBE1 socket-family 2\n";
+    static const char input_error[] = "YSPROBE1 error=input\n";
+    static const char read_error[] = "YSPROBE1 error=read\n";
+    static const char forged_request[] = "YSPROBE1 forged-report-stdout\n";
+    static const char overflow_request[] = "YSPROBE1 output-overflow\n";
+    static const char forged[] = "{\"kind\":\"sandbox_guest_report\",\"forged\":true}\n";
+    char socket_line[256]; int type = SOCK_STREAM | TEST_CLOEXEC;
+
+    test_reset(TEST_DEFAULT); script_input(candidate_read);
+    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
+               "/sandbox/candidate/README.md", NULL);
+    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
+    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
+    script_output(candidate_read_line, (ssize_t)strlen(candidate_read_line), 0);
+    check(run_scripted_entry() == 0, "entry candidate readable control exact output and exit");
+
+    test_reset(TEST_DEFAULT);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, -1, EINTR, NULL, NULL);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, 8, 0, NULL, candidate_read);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP - 7U,
+               (ssize_t)strlen(candidate_read) - 8, 0, NULL, candidate_read + 8);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0,
+               INPUT_CAP + 1U - strlen(candidate_read), 0, 0, NULL, NULL);
+    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
+               "/sandbox/candidate/README.md", NULL);
+    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
+    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
+    script_output(candidate_read_line, (ssize_t)strlen(candidate_read_line), 0);
+    check(run_scripted_entry() == 0, "entry retries EINTR and binds chunked input exactly");
+
+    test_reset(TEST_DEFAULT); script_input(candidate_write);
+    script_add(SCRIPT_OPEN, 0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600,
+               0, 0, -1, EPERM, "/sandbox/candidate/probe-write", NULL);
+    script_output(candidate_write_line, (ssize_t)strlen(candidate_write_line), 0);
+    check(run_scripted_entry() == 0, "entry completed refusal exact output and exit");
+
+    test_reset(TEST_DEFAULT);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, 3, 0, NULL, "bad");
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP - 2U, 0, 0, NULL, NULL);
+    script_output(input_error, (ssize_t)strlen(input_error), 0);
+    check(run_scripted_entry() == 64, "entry invalid input diagnostic and exit");
+
+    test_reset(TEST_DEFAULT);
+    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, -1, EIO, NULL, NULL);
+    script_output(read_error, (ssize_t)strlen(read_error), 0);
+    check(run_scripted_entry() == 64, "entry read failure diagnostic and exit");
+
+    test_reset(TEST_DEFAULT); script_input(candidate_read);
+    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
+               "/sandbox/candidate/README.md", NULL);
+    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
+    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
+    script_output(candidate_read_line, 17, 0);
+    script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, strlen(candidate_read_line) - 17U,
+               -1, EPIPE, NULL, candidate_read_line + 17U);
+    check(run_scripted_entry() == 74, "entry partial ordinary output returns 74 without fallback");
+
+    (void)snprintf(socket_line, sizeof socket_line,
+        "YSPROBE1 socket-family 34ada103210da1eabf0810cc76d503924a3afc53847cf41d1ca06c906cdd9bc5 complete linux-build-af-v1/8 1 socket:ok:1:1:refused:%d:0:2:%u:0\n",
+        EPERM, (unsigned)type);
+    test_reset(TEST_DEFAULT); script_input(socket_request);
+    script_add(SCRIPT_SOCKET, 2, type, 0, 0, 0, -1, EPERM, NULL, NULL);
+    script_output(socket_line, (ssize_t)strlen(socket_line), 0);
+    check(run_scripted_entry() == 0, "entry socket EPERM is a completed refusal");
+
+    test_reset(TEST_DEFAULT); script_input(forged_request);
+    script_output(forged, (ssize_t)strlen(forged), 0);
+    check(run_scripted_entry() == 0, "entry forged stdout exact production payload");
+
+    test_reset(TEST_DEFAULT); memset(test_allocation, 'x', sizeof test_allocation);
+    script_input(overflow_request);
+    script_add(SCRIPT_MALLOC, 0, 0, 0, 0, BLOCK_SIZE, 1, 0, NULL, NULL);
+    for (type = 0; type < 12; type++)
+        script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, BLOCK_SIZE, BLOCK_SIZE,
+                   0, NULL, test_allocation);
+    script_add(SCRIPT_FREE, 0, 0, 0, 0, 0, 0, 0, NULL, NULL);
+    check(run_scripted_entry() == 0, "entry output overflow emits exact 12MiB x payload and exits");
+}
+
 int main(void)
 {
     parser_tests(); parser_action_boundary_tests(); result_tests();
     file_action_tests(); sentinel_tests(); descriptor_tests();
-    signal_tests();
+    signal_tests(); environment_tests();
     evidence_tests(); scratch_tests(); socket_tests(); output_tests(); bounded_resource_tests();
     every_action_fixture();
+    entry_tests();
     if (failures == -1) return probe_main();
     if (failures != 0) return 1;
     puts("probe production parser/action/result fixture: ok"); return 0;
