@@ -848,7 +848,7 @@ private_left=$(/usr/bin/find "$tmp" -maxdepth 1 \
   fail "build-guest.py left private build state behind: $private_left"
 pass 'compile removes every private archive copy, extraction directory and staging directory after both success and failure'
 
-for missing in init.c supervisor.c common.c common.h verifier.c; do
+for missing in init.c supervisor.c probe.c common.c common.h verifier.c; do
   case_root="$tmp/missing-$missing"
   /bin/mkdir -p "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
   /bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
@@ -873,64 +873,52 @@ for missing in init.c supervisor.c common.c common.h verifier.c; do
 done
 pass 'compile resolves the four-target source inventory and shared header from the repository root and refuses every previously mandatory input before compiler invocation'
 
-# The host fixture substitutes only the action body. It exercises fd-0 parsing,
-# the complete closed dispatch set and one-result-line contract without running
-# a bomb, exhaustion, privilege or native-containment probe on the development host.
+# A present path is insufficient: mandatory sources and headers are repository
+# regular files, never links resolved outside the recorded source inventory.
+case_root="$tmp/symlink-probe-source"
+/bin/mkdir -p "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
+/bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
+/bin/cp "$build_guest" "$case_root/sandbox/v1/build-guest.py"
+/bin/cp "$guest_dir/init.c" "$guest_dir/probe.c" "$guest_dir/supervisor.c" \
+  "$guest_dir/common.c" "$guest_dir/common.h" "$case_root/sandbox/v1/guest/"
+/bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
+  "$case_root/verifiers/file-digest/v1/verifier.c"
+/bin/mv "$case_root/sandbox/v1/guest/probe.c" "$case_root/probe-real.c"
+/bin/ln -s "$case_root/probe-real.c" "$case_root/sandbox/v1/guest/probe.c"
+before_lines=$(/usr/bin/wc -l < "$marker" | /usr/bin/tr -d ' ')
+status=0
+"$python" "$case_root/sandbox/v1/build-guest.py" compile "$tmp/toolchain-a" \
+  "$tmp/build-symlink-probe" >/dev/null 2>"$tmp/err" || status=$?
+after_lines=$(/usr/bin/wc -l < "$marker" | /usr/bin/tr -d ' ')
+[ "$status" -ne 0 ] && [ "$before_lines" = "$after_lines" ] &&
+  [ ! -e "$tmp/build-symlink-probe" ] ||
+  fail 'a symlinked mandatory probe source must fail before compiler invocation'
+pass 'compile rejects a symlinked mandatory probe source before compiler invocation and leaves no build output'
+
+# The private test build uses the production parser, action dispatcher and result
+# model. Its compile-time low-level fixture never runs pressure, socket, signal,
+# privileged, or host/sibling-sentinel operations on this development host.
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST -I"$guest_dir" \
-  "$guest_dir/probe.c" -o "$tmp/probe-dispatch-test"
-probe_index=0
-while IFS= read -r probe_mode; do
-  /usr/bin/printf '%s\n' "$probe_mode" > "$tmp/probe-mode"
-  probe_result=$("$tmp/probe-dispatch-test" < "$tmp/probe-mode")
-  [ "$probe_result" = "probe $probe_mode allowed 0 $probe_index" ] ||
-    fail "probe dispatch $probe_mode returned $probe_result"
-  probe_index=$((probe_index + 1))
-done <<'MODES'
-candidate-read
-candidate-write
-tools-write
-evidence-read
-evidence-list
-evidence-reopen
-evidence-truncate
-evidence-link
-evidence-rename
-scratch-free
-scratch-fill
-output-overflow
-socket-unix
-socket-inet
-socket-inet6
-socket-netlink
-host-sentinel
-sibling-sentinel
-environment
-descriptors
-fork-bomb
-thread-bomb
-cpu-spin-32
-memory-exhaustion
-sleep
-signal-supervisor
-namespace-escape
-cgroup-escape
-forged-report-stdout
-forged-report-evidence
-MODES
-[ "$probe_index" -eq 30 ] || fail 'probe fixture did not cover the complete closed mode set'
-for invalid_probe in empty unknown multiple overlong; do
-  case "$invalid_probe" in
-    empty) : > "$tmp/probe-mode" ;;
-    unknown) /usr/bin/printf '%s\n' unknown > "$tmp/probe-mode" ;;
-    multiple) /usr/bin/printf '%s\n' candidate-read candidate-write > "$tmp/probe-mode" ;;
-    overlong) /usr/bin/printf '%065d\n' 0 > "$tmp/probe-mode" ;;
-  esac
-  probe_status=0
-  probe_result=$("$tmp/probe-dispatch-test" < "$tmp/probe-mode") || probe_status=$?
-  [ "$probe_status" -eq 64 ] && [ "$probe_result" = 'probe invalid denied 22 0' ] ||
-    fail "probe parser $invalid_probe did not fail closed with one result line"
-done
-pass 'the bounded host fixture selects every R13.4 mode from fd 0 exactly once and rejects empty, unknown, multiple and overlong selections without executing probe actions'
+  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-test"
+probe_result=$("$tmp/probe-production-test") || fail 'the probe production-path fixture failed'
+[ "$probe_result" = 'probe production parser/action/result fixture: ok' ] ||
+  fail "unexpected probe production-path fixture output: $probe_result"
+pass 'the bounded probe fixture exercises the closed YSPROBE1 parser, request binding, action/result classification, cleanup preservation and signal target selection without native probe actions'
+
+# Sanitizers exercise the same bounded private fixture where the host compiler
+# supports them. This remains substituted host proof, never native qualification.
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+  -fsanitize=address,undefined -DYSTACK_PROBE_TEST -I"$guest_dir" \
+  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-sanitized"
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+    "$tmp/probe-production-sanitized" >/dev/null
+  /usr/bin/printf 'SKIP (Darwin capability): leak detection is unsupported by the platform ASan runtime; the same bounded fixture ran with ASan memory checks and UBSan. Linux CI runs detect_leaks=1.\n' >&2
+else
+  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+    "$tmp/probe-production-sanitized" >/dev/null
+fi
+pass 'the bounded production-path probe fixture passes ASan/UBSan without executing native qualification actions'
 
 # --- Linux-only: the host compiler as a syntax/semantics gate over
 # guest/init.c, guest/supervisor.c and guest/probe.c. Darwin has no <linux/...> headers
