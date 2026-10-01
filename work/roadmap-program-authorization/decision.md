@@ -336,3 +336,65 @@ post-self-host-milestone sequencing above is unchanged.
 This record is evidence of the operator's decision, not a source of authority.
 
 Prepared against base `32836eff287fb94a4b73b1c543b2c68bb217029c`.
+
+## Manager succession — 2026-10-01
+
+Operator yihanzhu directly told Codex session
+`01a09ae7-9bd4-77f3-8c15-966143bebff4` on 2026-10-01:
+“之前是claude接管了，现在我们接回来完成roadmap”.
+
+That direct handback ends the 2026-09-27 delegation to Claude Code session
+`dd83267a-8ae2-4699-9afa-a8ca0bf3421c` and reinstates the named Codex session as
+the sole manager/publisher for `yihanzhu/ystack` (repository ID `1270665750`).
+The earlier succession entries remain historical. This direct operator decision
+supplies authority; this record does not transfer permissions, appoint a manager,
+or authorize another session, clone, live yshifu or target.
+
+The same bounded program continues, including RC-1 accepted on 2026-09-27 for
+steps 7–10. The working sequence remains 7, then 8, 9 and 10; step 11 is dropped
+and step 12 deferred on the conditions already recorded above. The accepted source
+blobs and ROADMAP.md remain unchanged. This appendix records succession only,
+under the direct handback and RC-1's record-only scope; it changes no governance
+policy, product scope, code or acceptance standard.
+
+All reserved operator decisions remain reserved, including RC-1's first write-scope
+activation, credentials, network beyond CI, non-dormant publisher identity, target
+installation, and listed code or policy changes. Safety or authority expansion,
+release, deployment, production actions, first real target execution and destructive
+disposition still require the operator. The dummy target remains read-only.
+Construction mode stays retired; no live command, prompt or profile is installed,
+activated or synced.
+
+Use the current global AGENTS.md GPT model routing for Codex delegation, including
+its author/reviewer separation and model-identity reporting. The historical Claude
+coder alias does not select a Codex model. The earlier Claude-specific hook and
+project-directory observations are historical, not claims about this Codex session.
+
+OD-1's protected publishing path remains
+`gh pr merge --squash --match-head-commit <reviewed head>`. The manager must first
+read the complete fresh independent review, resolve every Important finding,
+verify exact head/base, required green CI and consistent labels, then record the
+merge receipt. No protection bypass, direct main push or published-history rewrite
+is allowed. Artifact hashes, risk checks, stage order, read-only reviewers, claims,
+recovery, restoration and the rounds cap remain required. This is manual process,
+not a claim of mechanical enforcement or fresh review acceptance.
+
+The manager's handback reconciliation preserves the vm-launcher-supervisor PR 6
+attempt (a planned slice, not a GitHub PR number):
+
+- Repository: `yihanzhu/ystack`; branch: `ystack/impl/vm-launcher-supervisor`.
+- Local HEAD: `b6ea9e96c78ac86eb03718b4858cbb7558906dca`.
+- Parent and old base: `a00777c34e648d347cfb1eb4ca1f2e01b2a5bbc1`.
+- Remote branch/head: absent; PR: absent; worktree: clean.
+- Intake: #463, still `claimed`; prior claim ID:
+  `claim-vm-launcher-supervisor-pr6-20261003T2300Z-3b7e5c21`.
+  The claim comment was created on 2026-09-30. The ID is opaque; its embedded date
+  does not establish the comment's time or authority.
+
+Preserve and reverify that same attempt before resuming. Do not reset, discard or
+replace it, or launch a duplicate coder. No review acceptance carries forward
+without fresh raw independent review at the applicable exact head/base. Frozen
+#183 and unresolved dirty attempts, including the dirty credential-export plan
+attempt, remain excluded without an explicit disposition.
+
+Prepared against base `a00777c34e648d347cfb1eb4ca1f2e01b2a5bbc1`.
