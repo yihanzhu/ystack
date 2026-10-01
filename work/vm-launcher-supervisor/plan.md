@@ -285,10 +285,12 @@ R13.4 still supplies the separately authorized arm64 guest and Apple VM proof.
 
 Change only `sandbox/v1/guest/probe.c`, `scripts/test/sandbox-guest.test.sh` and
 `sandbox/v1/build-guest.py`. The probe uses the existing SHA-256 implementation and
-instruction transport. Do not change common code, the guest supervisor, a shared
-test script or the fixed verifier. Its argv, environment and final fd 0-2 remain
-exactly R6.4. Probe output is untrusted payload, never receipt or qualification
-authority. Incomplete observations retain the unfulfilled native obligations.
+instruction transport. Do not change common code, the guest supervisor, the general
+shared harness `sandbox-guest-harness.c`, `run-all.sh`, `scripts/lib/*.sh` or the
+fixed verifier. The allowed guest test script stays in scope. Probe argv,
+environment and final fd 0-2 remain exactly R6.4. Output is untrusted payload,
+never receipt or qualification authority. Incomplete observations retain the
+unfulfilled native obligations.
 
 ### Instruction and result
 
@@ -319,7 +321,8 @@ All parameters stay in the existing admitted instruction bytes, whose exact dige
 binds the request. Add no fd, variable, argv argument, frame record, `plan.json`
 field or post-boot channel. Do not change the real verifier's instruction grammar.
 
-Normal output is one LF-terminated ASCII line, at most 8,192 bytes:
+On return, modes other than `output-overflow` and `forged-report-stdout` emit one
+LF-terminated ASCII result line, at most 8,192 bytes:
 `YSPROBE1 <mode> <instruction-sha256> <checks> <domain> <count> <records>\n`.
 `checks` is `complete` or `incomplete` for this mode's declared subchecks, never a
 safety verdict. `domain` is `none` for other modes, `unknown` for an unavailable
@@ -343,9 +346,33 @@ paths, unsupported calls, invalid arguments and resource errors do not become
 denials. A failed required subcheck or cleanup makes `checks` incomplete; an
 unexpected successful operation stays visible as `violation` regardless. Record
 all check meanings and the three value fields beside the mode table in source.
-The stdout-forgery mode is the explicit output exception: it writes its adversarial
-report text and uses its production completion branch, without a normal result line.
-Its write failure remains a failure; the host must never treat that text as authority.
+
+Stdout contracts are selected by the admitted instruction, not guessed from payload:
+
+- `output-overflow` attempts 12,582,912 bytes (12 MiB) of `x` on fd 1, using the
+  existing 1 MiB blocks and counting actual positive write returns. Handle short
+  writes and interruption without shrinking the target. Allocation failure, a zero
+  write or terminal write error stops the attempt. Emit no result line, header,
+  trailer or fallback diagnostic on stdout, stderr or evidence. Return 0 only if
+  the write loop reaches its target; otherwise return 73 if control returns at all.
+  These exit codes are diagnostics, not operation or enforcement proof. The payload
+  may be empty or only a prefix; a full output file need not accept another byte.
+- `forged-report-stdout` writes `{"kind":"sandbox_guest_report","forged":true}\n`
+  on fd 1 and uses its production completion branch, with no normal result line.
+  Return 0 only after writing the full text, otherwise 73 if control returns.
+  Partial text stays incomplete regardless of exit status. The text, including a
+  complete forged report, never becomes receipt authority.
+- Other modes retain the closed result format when they return. In particular,
+  `scratch-fill`, `fork-bomb`, `thread-bomb`, `cpu-spin-32`, `memory-exhaustion` and
+  `sleep` can stop before or during result emission. Do not require a result from a
+  process that did not reach the formatter, reduce its workload to obtain one, or
+  synthesize a completed/refused subcheck after termination. Empty, partial or
+  truncated output is incomplete evidence, even if the process status is known.
+
+Input-error lines above apply before any mode action. Once a payload-writing mode
+starts, it does not switch to an ordinary result or another output channel. Missing
+output does not distinguish a failed prerequisite, unattempted operation, loss of
+export or termination after progress. Preserve that uncertainty.
 
 ### Fixtures and actions
 
@@ -437,7 +464,11 @@ process/thread creation, sleep and privileged operations below the action layer.
 Unscripted calls fail the test; none falls through to a real dangerous operation.
 Finite syscall scripts bound retries/partial writes. A test-only loop-step budget
 can stop pressure iterations, marking them incomplete; it is absent in production
-and cannot replace a whole action or claim the native workload completed.
+and cannot replace a whole action or claim the native workload completed. For an
+abrupt-termination scenario, the test driver instead ends execution at a scripted
+low-level call/checkpoint, retaining captured bytes without running the production
+formatter or inventing a probe result. This sends no real signal and establishes
+no actual kill cause or native termination proof.
 
 Tests invoke production parsing through action and final output, checking exact
 call order, arguments, attempted/completed records and saved primary/cleanup errors:
@@ -464,6 +495,14 @@ call order, arguments, attempted/completed records and saved primary/cleanup err
   checker or action. These fixtures do not verify native match.
 - Bounded resource setup success/failure and partial worker creation, without actual
   fork/thread/CPU/memory pressure, socket, signal, sleep or privileged native actions.
+- The production output-overflow branch: scripted full 12 MiB write accounting,
+  short writes, interrupted writes, allocation/zero-write/terminal-write failure,
+  and abrupt stop after a prefix. Assert exact fd, block bytes, requested lengths,
+  returned-byte accounting and no result formatter, trailer or alternate channel.
+  Keep the production target constant; scripts count/discard pressure bytes rather
+  than creating a native pressure load. For other resource modes, distinguish a
+  returned incomplete result, a partial result write and simulated termination
+  before emission. Assert that the last case has no invented completion record.
 
 The shell suite compiles production with Linux strict warnings and runs the test
 build and its applicable ASan/UBSan cases. Keep all existing guest, shared-exec,
@@ -511,13 +550,56 @@ their instruction digests. Bind the exact selected-kernel domain evidence to tha
 build, check the numeric interval and aliases, and reject missing/duplicate cases.
 The harness compares each payload's declared build domain and actual arguments with
 that evidence. Unknown/mismatched domains and unsupported/unexecuted checks remain
-incomplete. Parse the closed probe-result grammar; validate subcheck cardinality,
-state consistency and digest binding. A partial fd census or unaddressable ancestor
-never fulfills its native probe. Synthetic tests exercise missing/changed sentinel
-controls, payload/request mismatch, unknown/mismatched domains and omitted families,
+incomplete. For modes with ordinary result output, parse the entire closed grammar;
+validate subcheck cardinality, state consistency and digest binding. A partial fd
+census or unaddressable ancestor never fulfills its native probe. Synthetic tests
+exercise missing/changed sentinel controls, payload/request mismatch,
+unknown/mismatched domains and omitted families,
 alongside valid bindings; they do not create native qualification evidence. Under
 R7.2 every receipt remains failed, and additional evidence gaps also block a
 qualified record. No fixture control or clean action result can waive another row.
+
+For every mode, first require the unchanged receipt checks and verify stored
+stdout/stderr/evidence against their receipt digests. Select the output contract
+from the bound instruction and executable identity. For any mode, the two exact
+input-error lines are diagnostics, never completed actions. Never search arbitrary
+payload for a plausible result, reinterpret forged text as a guest report, or relax export
+validation to recover rejected bytes. Classify the available evidence as follows:
+
+- An ordinary result is valid only if the entire stdout is the one bounded line,
+  with its exact mode, instruction digest and consistent required records. Even a
+  valid line supplies only the reported subchecks; incomplete fields stay incomplete.
+  Missing, oversized, extra, malformed, partial or truncated text supplies no valid
+  result. A completed runtime, met control deadline, exited state with code 0 and
+  confirmed teardown are necessary to use a line as completed-case evidence, but
+  none substitutes for the line or completes its incomplete subchecks. Conflicting
+  runtime/exit evidence makes the case incomplete too.
+- For `output-overflow`, permitted payload is only the observed `x` prefix up to
+  the 12 MiB attempted target. For stdout forgery, compare against the fixed text
+  and distinguish a complete match from a strict prefix. These payloads are not
+  ordinary result records. Record only available bytes/length/digest and existing
+  receipt observations; neither a prefix nor exit status supplies a completed
+  workload, syscall errno, permission refusal or native fulfillment. Empty output
+  establishes nothing about progress. Unexpected bytes are a payload mismatch,
+  not success.
+- Use only existing receipt facts: lifecycle admission/runtime/control_deadline,
+  payload exit_state/exit_code and digests, limit rows and teardown. The unchanged
+  guest verifies execution only on its normal, confirmed path; a signaled, deadline
+  or otherwise unverified path emits no ordinary export. Without a valid export,
+  the host can store empty payload, `runtime: error`, `exit_state: not-started`,
+  null exit code and unavailable guest observations. Those fields cannot tell
+  whether the probe actually ran, how far it got or why it stopped. No raw guest
+  report, killed flag, per-operation status or lost pressure bytes are available
+  through this fallback. Do not invent them or infer a cause from a reached flag.
+
+An absent receipt or missing/digest-mismatched stored payload is unusable evidence;
+it is not an observed empty stream. Known termination, an exit status and a valid
+payload shape never substitute for missing operation proof. Required native cases
+remain incomplete where these facts cannot establish them. PR 8 tests the actual
+consumer with bound synthetic receipts/payloads: ordinary complete/incomplete lines,
+extra bytes and truncation, raw pressure/forgery, returned errors, missing results,
+and the unchanged no-export fallback after simulated termination. No new receipt
+field, transport, parser bypass or native qualification is introduced.
 
 ## PR 9: registry entry, docs, restore, manifest (step 4; R12.1, R14.3)
 
