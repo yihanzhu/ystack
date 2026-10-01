@@ -93,16 +93,38 @@ Citations are to origin/main at `e73b76a`.
    6 or later, `pids.peak` (Linux 6.1), `memory.peak`, `cgroup.kill`, `clone3` with
    `CLONE_INTO_CGROUP`, and `sched_cfs_bandwidth_slice_us` writable; a missing one
    records the affected rows `unavailable` (R7.3).
-5. **Toolchain.** One pinned Zig release archive for macOS arm64, used only as `zig cc
-   -target aarch64-linux-musl`: a single archive with bundled musl, no package
-   manager. `sandbox/v1/build-guest.py compile <toolchain-dir> <out-dir>` builds
-   `init`, `supervisor`, `probe` and `verifier` with exactly `-std=c11 -Wall -Wextra
-   -Werror -O2 -static` plus that target, refuses an existing output directory, and
-   writes a canonical `sandbox_guest_build` record (source, script, archive and
-   executable digests, flags). Two builds in fresh directories must be byte-identical,
-   or the plan stops rather than waiving it (as
-   `work/fixed-file-digest-verifier/spec.md:38-44`). `build-guest.py image <out-dir>`
-   assembles the initramfs of R2.3 deterministically.
+5. **Toolchain.** One pinned Zig release archive for macOS arm64, with bundled musl
+   and no package manager. The command remains `sandbox/v1/build-guest.py compile
+   <toolchain-dir> <out-dir>`. `<toolchain-dir>` contains the supplied archive as
+   `toolchain.tar.xz`; its filename is a location convention, not identity. The
+   command refuses an existing output directory before invoking the compiler.
+
+   The build copies the archive into a fresh private build workspace, hashes that
+   copy and extracts only that copy into a fresh directory. It invokes the extracted
+   `zig`, never an executable from a previously extracted caller directory. Extraction
+   rejects absolute or escaping paths, duplicate destinations, unsupported special
+   files and links that escape the extraction root. It must not follow a previously
+   created link while creating another member. Archive or extraction failure stops
+   before compiler invocation.
+
+   `archive_sha256` is the SHA-256 of the archive bytes actually extracted. A compiler
+   executable digest, caller-supplied digest or directory name cannot substitute for
+   it. The R13.2a acquisition decision compares these bytes with the approved release
+   digest; offline build tests do not establish release authenticity.
+
+   The command builds the required `init`, `supervisor` and unchanged repository
+   `verifiers/file-digest/v1/verifier.c`; a missing required source is an error before
+   compiler invocation. `probe` joins this required set when the accepted plan's
+   probe PR introduces its source. Each build uses exactly `zig cc -target
+   aarch64-linux-musl` and `-std=c11 -Wall -Wextra -Werror -O2 -static`.
+
+   A successful build writes canonical `sandbox_guest_build` with the archive,
+   build-script, project source and header, and executable digests and flags. Source
+   names are repository-relative and output identities omit temporary paths. It
+   writes no success record for an incomplete target set. Two builds in fresh
+   directories must produce byte-identical executables and build records, or work
+   stops rather than waiving it (as `work/fixed-file-digest-verifier/spec.md:38-44`).
+   `build-guest.py image <out-dir>` assembles R2.3's initramfs deterministically.
 
 ### R3. Launch request and package
 
@@ -211,6 +233,19 @@ Citations are to origin/main at `e73b76a`.
    `0500`, `preparation/v1/prepare-candidate.py:1662-1677`), so the dropped identity of
    R6.1 can read it and cannot write it; then it remounts the tmpfs read-only. The
    verifier goes onto a read-only tools tmpfs, owned by root, mode `0555`.
+
+   Determine the guest page size at runtime. Candidate tmpfs data capacity accounts
+   for each file's page-rounded allocation separately, using checked arithmetic;
+   inode capacity accounts for the candidate root and every manifest entry. Empty
+   input still uses a finite positive tmpfs capacity. Do not assume 4 KiB pages or
+   size the filesystem by rounding only the sum of logical file lengths. Any
+   additional allocation allowance must have a stated filesystem reason. This
+   changes neither the admitted logical-byte limit nor the guest RAM bound.
+
+   Before dropping identity, set and verify directory ownership and search
+   permissions so uid 65534 can traverse `/`, `/sandbox`, the candidate root and
+   tools root. These ancestors remain non-writable to that identity. Candidate
+   manifest modes and the existing per-mount restrictions remain unchanged.
 
 ### R6. Starting the verifier
 
@@ -640,6 +675,43 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    existing output directory. On Linux it also compiles `init.c`, `supervisor.c` and
    `probe.c` with `-std=c11 -Wall -Wextra -Werror`; Darwin has no Linux headers, so
    there that case is named as a Linux-only proof and CI's Linux run is its evidence.
+
+   The guest containment/build PR also exercises the production init, supervisor and
+   build paths. Tests call the functions used by production; copied implementations
+   and source-text assertions do not substitute for behavioral proof. Test-only
+   syscall substitutions may observe setup order and inject failures, but are
+   unavailable in production builds and do not establish kernel enforcement.
+
+   Required cases are:
+
+   - report construction at maximum evidence-name length and supported inode count,
+     including allocation and formatting failure;
+   - privilege-transition order and final identity, capabilities and `no_new_privs`;
+   - required directory traversal and forbidden writes;
+   - seccomp allowed and denied controls for ordinary `O_DIRECTORY`, `O_TMPFILE`,
+     `MADV_REMOVE`, other advice values and namespace clone flags;
+   - initialized fanotify history, first open, repeated empty-inode open and full
+     history;
+   - readable fd 0 with writes refused and no writable instruction descriptor
+     retained;
+   - candidate sizing for many small files, zero-length files, page boundaries and
+     invalid or overflowing geometry.
+
+   Build tests run `compile` with a recording synthetic toolchain archive. They
+   verify actual archive hashing, controlled extraction, rejection of unsafe members
+   before invocation, the mandatory target/source set, recorded source/header
+   identities, existing-output refusal, and deterministic results in separate
+   directories. Synthetic-toolchain success is build-contract evidence, not Zig
+   reproducibility.
+
+   On Linux, execute the production report path with AddressSanitizer and
+   UndefinedBehaviorSanitizer, evaluate the produced seccomp program against positive
+   and negative syscall inputs, and exercise actual file-descriptor access modes.
+   Privileged setup behavior is tested in isolated Linux execution only where the
+   existing test environment provides the required capabilities. Missing capability
+   is reported explicitly and is not a pass. The selected arm64 kernel, real guest
+   boot and Apple VM boundary remain unproven until the separately authorized R13.4
+   run.
 3. Must pass unedited: `scripts/test/sandbox-receipt.test.sh`,
    `scripts/test/file-digest-verifier.test.sh`,
    `scripts/test/control-sandbox-policy.test.sh`,
@@ -660,10 +732,11 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 1. Depends on concerns 2 (#436) and 3 (#437), both merged. Concerns 5 and 7 consume
    the receipt, store and qualification (`work/step8-bounded-write-readiness/spec.md:295`,
    `:297`).
-2. This spec PR: `review_size: accepted-exception`, one concern, this file, 500-700
+2. This spec PR: `review_size: accepted-exception`, one concern, this file, 650-850
    lines, for the closed lists one boundary needs in one place (slots, limit and
-   boundary rows, seccomp and Landlock sets, four decision packages, test classes). It
-   waives only the soft line signal. Steps 1-4 ship as the implementation PRs the
+   boundary rows, seccomp and Landlock sets, four decision packages, build provenance
+   and production-path test classes). It waives only the soft line signal. Steps 1-4
+   ship as the implementation PRs the
    accepted plan records, each with its own `review_size` line and evidence-based
    range, one concern per PR, never split ad hoc. The plan's ranges are the binding
    sizes; a PR outside its recorded range stops and returns to the plan gate.
