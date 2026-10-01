@@ -220,8 +220,9 @@ extern size_t ys_test_readdir_fail_at;
  * prove ys_exec fails closed (_exit(126), execve never reached) rather
  * than silently proceeding when exhaustive closure can't be confirmed. */
 extern int ys_test_close_all_fail;
-/* 1 injects one EINTR and then clears; 2 makes every outcome write fail. */
+/* 1 injects one EINTR; 2 fails every write; 3 fails failure records. */
 extern int ys_test_outcome_write_mode;
+extern int ys_test_exec_fail_phase;
 #endif
 
 #endif

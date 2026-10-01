@@ -236,6 +236,16 @@ static int candidate_count_matches(const struct ys_guest_plan *plan, size_t cand
     return files == candidate_count;
 }
 
+static enum ys_plan_status materialize_loaded_candidate(int dirfd, uid_t uid, gid_t gid,
+                                                         const struct ys_guest_plan *plan,
+                                                         const struct loaded_input *input)
+{
+    if (!candidate_count_matches(plan, input->candidate_count)) return YS_PLAN_ERR_SCHEMA;
+    return ys_plan_materialize(dirfd, uid, gid, plan,
+                               (const unsigned char *const *)input->candidates,
+                               input->candidate_lens);
+}
+
 /* --- tmpfs mounts ----------------------------------------------------------
  * Every guest tmpfs is sized with slack beyond the raw file-byte total: a
  * tmpfs charges directory entries and inode metadata against its own
@@ -423,32 +433,6 @@ static int cgroup_populated(void)
     line = strstr(buf, "populated ");
     if (line == NULL) return -1;
     return (line[10] == '0') ? 0 : 1;
-}
-
-#ifdef YSTACK_SUPERVISOR_TEST
-static int (*ys_test_population_reader)(void);
-#endif
-
-static int confirm_tree_terminated(unsigned attempts)
-{
-    unsigned i;
-    for (i = 0; i < attempts; i++) {
-        int populated;
-#ifdef YSTACK_SUPERVISOR_TEST
-        populated = ys_test_population_reader != NULL ? ys_test_population_reader() : -1;
-#else
-        populated = cgroup_populated();
-#endif
-        if (populated < 0) return 0;
-        if (populated == 0) return 1;
-#ifndef YSTACK_SUPERVISOR_TEST
-        {
-            struct timespec ts = { 0, 100000000L };
-            nanosleep(&ts, NULL);
-        }
-#endif
-    }
-    return 0;
 }
 
 /* --- clone3 (R6.1) ---------------------------------------------------------
@@ -978,16 +962,24 @@ struct exec_channel_state {
     int eof;
     int invalid;
 };
+#ifdef YSTACK_SUPERVISOR_TEST
+static int ys_test_channel_eintr;
+#endif
 
 static int drain_exec_channel(int fd, struct exec_channel_state *state)
 {
     for (;;) {
         ssize_t n;
         if (state->length == sizeof state->bytes) { state->invalid = 1; return 0; }
+#ifdef YSTACK_SUPERVISOR_TEST
+        if (ys_test_channel_eintr > 0) {
+            ys_test_channel_eintr--; errno = EINTR; n = -1;
+        } else
+#endif
         n = read(fd, state->bytes + state->length, sizeof state->bytes - state->length);
         if (n > 0) { state->length += (size_t)n; continue; }
         if (n == 0) { state->eof = 1; return 1; }
-        if (errno == EINTR) continue;
+        if (errno == EINTR) return 1;
         if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
         state->invalid = 1;
         return 0;
@@ -1189,7 +1181,8 @@ static int fanotify_open_mark(struct fanotify_state *fs)
 {
 #if defined(SYS_fanotify_init) && defined(SYS_fanotify_mark)
     fanotify_state_init(fs);
-    fs->fd = (int)syscall(SYS_fanotify_init, FAN_CLASS_CONTENT | FAN_CLOEXEC, O_RDONLY);
+    fs->fd = (int)syscall(SYS_fanotify_init, FAN_CLASS_CONTENT | FAN_CLOEXEC | FAN_NONBLOCK,
+                          O_RDONLY);
     if (fs->fd < 0) return 0;
     if (syscall(SYS_fanotify_mark, fs->fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, (uint64_t)FAN_OPEN_PERM,
                 AT_FDCWD, OUTPUT_DIR) != 0) {
@@ -1224,7 +1217,8 @@ static int fanotify_service(struct fanotify_state *fs)
     char buf[4096];
     ssize_t len;
     struct fanotify_event_metadata *m;
-    do { len = read(fs->fd, buf, sizeof buf); } while (len < 0 && errno == EINTR);
+    len = read(fs->fd, buf, sizeof buf);
+    if (len < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
     if (len <= 0) return 0;
     for (m = (struct fanotify_event_metadata *)buf; FAN_EVENT_OK(m, len); m = FAN_EVENT_NEXT(m, len)) {
         struct fanotify_response resp;
@@ -1241,7 +1235,7 @@ static int fanotify_service(struct fanotify_state *fs)
                 size_t written = 0;
                 while (written < sizeof resp) {
                     ssize_t n = write(fs->fd, bytes + written, sizeof resp - written);
-                    if (n < 0 && errno == EINTR) continue;
+                    if (n < 0 && errno == EINTR) { (void)close(m->fd); return 0; }
                     if (n <= 0) { (void)close(m->fd); return 0; }
                     written += (size_t)n;
                 }
@@ -1251,6 +1245,219 @@ static int fanotify_service(struct fanotify_state *fs)
     }
     return 1;
 }
+
+enum controller_branch { CONTROLLER_FAILURE, CONTROLLER_NORMAL };
+struct controller_result {
+    int child_status, child_reaped, tree_terminated, deadline_fired;
+    int containment_failure, kill_failed, verifier_started;
+};
+struct controller_ops {
+    int (*now)(struct timespec *, void *);
+    int (*poll_fds)(struct pollfd *, nfds_t, int, void *);
+    pid_t (*wait_child)(pid_t, int *, void *);
+    int (*population)(void *);
+    int (*kill_tree)(void *);
+    int (*service_fan)(struct fanotify_state *, void *);
+    void (*tick)(void *);
+    pid_t (*launch)(void *);
+};
+
+static int deadline_after_ms(const struct timespec *start, uint64_t milliseconds,
+                             struct timespec *deadline)
+{
+    uint64_t seconds = milliseconds / 1000U;
+    uint64_t nanoseconds = (milliseconds % 1000U) * 1000000U + (uint64_t)start->tv_nsec;
+    uint64_t carry = nanoseconds / 1000000000U;
+    if (start->tv_sec < 0 || start->tv_nsec < 0 || start->tv_nsec >= 1000000000L ||
+        seconds > (uint64_t)INT64_MAX - (uint64_t)start->tv_sec ||
+        carry > (uint64_t)INT64_MAX - (uint64_t)start->tv_sec - seconds)
+        return 0;
+    deadline->tv_sec = start->tv_sec + (time_t)seconds + (time_t)carry;
+    deadline->tv_nsec = (long)(nanoseconds % 1000000000U);
+    return deadline->tv_sec >= start->tv_sec;
+}
+
+static int deadline_remaining(const struct timespec *deadline,
+                              const struct controller_ops *ops, void *opaque,
+                              int *milliseconds)
+{
+    struct timespec now;
+    int64_t seconds, nanoseconds, value;
+    if (!ops->now(&now, opaque)) return -1;
+    if (now.tv_sec > deadline->tv_sec ||
+        (now.tv_sec == deadline->tv_sec && now.tv_nsec >= deadline->tv_nsec))
+        return 0;
+    seconds = (int64_t)deadline->tv_sec - (int64_t)now.tv_sec;
+    nanoseconds = (int64_t)deadline->tv_nsec - (int64_t)now.tv_nsec;
+    if (nanoseconds < 0) { seconds--; nanoseconds += 1000000000; }
+    if (seconds > INT_MAX / 1000) value = INT_MAX;
+    else {
+        value = seconds * 1000 + (nanoseconds + 999999) / 1000000;
+        if (value > INT_MAX) value = INT_MAX;
+    }
+    *milliseconds = (int)value;
+    return 1;
+}
+
+static enum controller_branch control_child(pid_t child, struct fanotify_state *fan,
+                                              int outcome_fd,
+                                              const struct timespec *deadline,
+                                              const struct controller_ops *ops, void *opaque,
+                                              struct controller_result *result)
+{
+    struct exec_channel_state outcome;
+    int failed = 0;
+    memset(result, 0, sizeof *result);
+    memset(&outcome, 0, sizeof outcome);
+    for (;;) {
+        struct pollfd fds[2];
+        nfds_t count = 0, p;
+        int remaining, polled, status;
+        pid_t waited;
+        int time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
+        if (fan->fd >= 0) fds[count++] = (struct pollfd){ fan->fd, POLLIN, 0 };
+        if (!outcome.eof) fds[count++] = (struct pollfd){ outcome_fd, POLLIN | POLLHUP, 0 };
+        polled = ops->poll_fds(fds, count, remaining > 200 ? 200 : remaining, opaque);
+        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
+        if (polled < 0) { if (errno == EINTR) continue; failed = 1; break; }
+        for (p = 0; p < count; p++) {
+            if ((fds[p].fd == fan->fd && (fds[p].revents & (POLLERR | POLLHUP | POLLNVAL))) ||
+                (fds[p].fd == outcome_fd && (fds[p].revents & (POLLERR | POLLNVAL)))) {
+                failed = 1; break;
+            }
+            if (fds[p].fd == fan->fd && (fds[p].revents & POLLIN) &&
+                !ops->service_fan(fan, opaque)) { failed = 1; break; }
+            if (fds[p].fd == outcome_fd && (fds[p].revents & (POLLIN | POLLHUP)) &&
+                !drain_exec_channel(outcome_fd, &outcome)) { failed = 1; break; }
+            time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+            if (time_state <= 0) {
+                result->deadline_fired = time_state == 0; failed = 1; break;
+            }
+        }
+        if (failed) break;
+        waited = ops->wait_child(child, &status, opaque);
+        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
+        if (waited < 0) { if (errno == EINTR) continue; failed = 1; break; }
+        if (waited == 0) continue;
+        if (waited != child) { failed = 1; break; }
+        result->child_reaped = 1;
+        result->child_status = status;
+        for (;;) {
+            int populated;
+            time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+            if (time_state <= 0) {
+                result->deadline_fired = time_state == 0; failed = 1; break;
+            }
+            populated = ops->population(opaque);
+            if (populated < 0) { failed = 1; break; }
+            if (populated == 0) { result->tree_terminated = 1; break; }
+            ops->tick(opaque);
+        }
+        if (failed) break;
+        if (!drain_exec_channel(outcome_fd, &outcome)) { failed = 1; break; }
+        time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+        if (time_state <= 0) { result->deadline_fired = time_state == 0; failed = 1; break; }
+        result->verifier_started = execution_was_verified(&outcome, status, 1, 1, 0, 0);
+        return result->verifier_started ? CONTROLLER_NORMAL : CONTROLLER_FAILURE;
+    }
+    result->containment_failure = 1;
+    if (!ops->kill_tree(opaque)) result->kill_failed = 1;
+    for (;;) {
+        int remaining, time_state = deadline_remaining(deadline, ops, opaque, &remaining);
+        int status, populated;
+        pid_t waited;
+        if (time_state <= 0) { if (time_state == 0) result->deadline_fired = 1; break; }
+        if (!result->child_reaped) {
+            waited = ops->wait_child(child, &status, opaque);
+            if (waited == child) {
+                result->child_reaped = 1; result->child_status = status;
+            } else if (waited < 0 && errno != EINTR) break;
+        }
+        populated = ops->population(opaque);
+        if (populated < 0) break;
+        if (populated == 0) result->tree_terminated = 1;
+        if (result->child_reaped && result->tree_terminated) break;
+        ops->tick(opaque);
+    }
+    return CONTROLLER_FAILURE;
+}
+
+static int enter_normal_finish(enum controller_branch branch, struct fanotify_state *fan)
+{
+    if (branch != CONTROLLER_NORMAL) return 0;
+    if (fan->fd >= 0) { (void)close(fan->fd); fan->fd = -1; }
+    return 1;
+}
+
+static int launch_and_control(uint64_t milliseconds, struct fanotify_state *fan,
+                              int outcome_fd, const struct controller_ops *ops, void *opaque,
+                              struct controller_result *result, pid_t *child_out)
+{
+    struct timespec start, deadline;
+    pid_t child;
+    memset(result, 0, sizeof *result);
+    if (!ops->now(&start, opaque) || !deadline_after_ms(&start, milliseconds, &deadline))
+        return 0;
+    child = ops->launch(opaque);
+    if (child <= 0) return 0;
+    *child_out = child;
+    return enter_normal_finish(control_child(child, fan, outcome_fd, &deadline,
+                                              ops, opaque, result), fan);
+}
+
+#ifndef YSTACK_SUPERVISOR_TEST
+struct production_launch_state {
+    int cgroup_fd, instruction_fd, stdout_fd, stderr_fd;
+    int outcome_reader, outcome_writer;
+};
+static pid_t production_launch(void *opaque)
+{
+    struct production_launch_state *state = opaque;
+    pid_t child = ys_clone3_into_cgroup(state->cgroup_fd);
+    if (child == 0) {
+        (void)close(state->outcome_reader);
+        child_main(state->instruction_fd, state->stdout_fd, state->stderr_fd,
+                   state->outcome_writer);
+        _exit(125);
+    }
+    (void)close(state->stdout_fd); (void)close(state->stderr_fd);
+    (void)close(state->instruction_fd); (void)close(state->outcome_writer);
+    state->outcome_writer = -1;
+    return child;
+}
+static int production_now(struct timespec *value, void *opaque)
+{ (void)opaque; return clock_gettime(CLOCK_MONOTONIC, value) == 0; }
+static int production_poll(struct pollfd *fds, nfds_t count, int timeout, void *opaque)
+{ (void)opaque; return poll(fds, count, timeout); }
+static pid_t production_wait(pid_t child, int *status, void *opaque)
+{ (void)opaque; return waitpid(child, status, WNOHANG); }
+static int production_population(void *opaque)
+{ (void)opaque; return cgroup_populated(); }
+static int production_kill(void *opaque)
+{ (void)opaque; return write_str(TREE_CGROUP "/cgroup.kill", "1"); }
+static int production_fan(struct fanotify_state *fan, void *opaque)
+{ (void)opaque; return fanotify_service(fan); }
+static void production_tick(void *opaque)
+{
+    struct timespec interval = { 0, 10000000L };
+    (void)opaque;
+    (void)nanosleep(&interval, NULL);
+}
+static const struct controller_ops PRODUCTION_CONTROLLER = {
+    production_now, production_poll, production_wait, production_population,
+    production_kill, production_fan, production_tick, production_launch
+};
+
+static _Noreturn void power_down(void)
+{
+    sync();
+    (void)reboot(RB_POWER_OFF);
+    for (;;) pause();
+}
+#endif
 
 /* Writes the instruction in the supervisor-only /ys tmpfs, closes that
  * writable description, reopens it read-only, and unlinks the name. */
@@ -1295,17 +1502,14 @@ int main(void)
     struct report_state rs;
     size_t i;
     int outcome_pipe[2] = { -1, -1 };
-    struct exec_channel_state outcome;
     int child_status = 0;
-    int child_reaped = 0;
-    int containment_failure = 0;
     pid_t child_pid = -1;
-    struct timespec t0, tnow;
+    struct controller_result controller_result;
+    struct production_launch_state launch_state;
     uint64_t deadline_ms, page_size;
     long measured_page_size;
 
     memset(&rs, 0, sizeof rs);
-    memset(&outcome, 0, sizeof outcome);
     fanotify_state_init(&fan);
 
     if (getpid() != 1) die("not running as pid 1 (init should have exec'd us directly)");
@@ -1331,16 +1535,13 @@ int main(void)
     /* candidate tmpfs: materialized, then finalized read-only (R5.5). */
     {
         uint64_t total, inodes;
-        if (!candidate_count_matches(&plan, in.candidate_count) ||
-            !candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
+        if (!candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
         if (!mkdir_p(CANDIDATE_DIR, 0700) ||
             !mount_tmpfs(CANDIDATE_DIR, total, inodes))
             goto export_partial;
         cand_fd = open(CANDIDATE_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (cand_fd < 0 ||
-            ys_plan_materialize(cand_fd, GUEST_UID, GUEST_GID, &plan,
-                                 (const unsigned char *const *)in.candidates, in.candidate_lens) !=
-                YS_PLAN_OK)
+        if (cand_fd < 0 || materialize_loaded_candidate(cand_fd, GUEST_UID, GUEST_GID,
+                                                        &plan, &in) != YS_PLAN_OK)
             goto export_partial;
         (void)close(cand_fd);
         if (!make_searchable_read_only(CANDIDATE_DIR)) goto export_partial;
@@ -1419,85 +1620,25 @@ int main(void)
         if (!fanotify_open_mark(&fan)) goto export_partial;
         if (pipe2(outcome_pipe, O_CLOEXEC) != 0) goto export_partial;
         if (fcntl(outcome_pipe[0], F_SETFL, O_NONBLOCK) != 0) goto export_partial;
-        child_pid = ys_clone3_into_cgroup(cg.cgroup_fd);
-        if (child_pid == 0) {
-            (void)close(outcome_pipe[0]);
-            child_main(instr_priv_fd, outfd, errfd, outcome_pipe[1]);
-            _exit(125);
-        }
-        (void)close(outfd); (void)close(errfd); (void)close(instr_priv_fd);
-        (void)close(outcome_pipe[1]);
-        outcome_pipe[1] = -1;
-        if (child_pid < 0) goto export_partial;
+        launch_state = (struct production_launch_state){ cg.cgroup_fd, instr_priv_fd,
+            outfd, errfd, outcome_pipe[0], outcome_pipe[1] };
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (;;) {
-        int status;
-        pid_t r;
-        long remaining_ms;
-        clock_gettime(CLOCK_MONOTONIC, &tnow);
-        remaining_ms = (long)deadline_ms -
-                       (long)((tnow.tv_sec - t0.tv_sec) * 1000 + (tnow.tv_nsec - t0.tv_nsec) / 1000000);
-        if (remaining_ms <= 0) {
-            rs.tree_deadline_fired = 1;
-            (void)write_str(TREE_CGROUP "/cgroup.kill", "1");
-            break;
-        }
-        {
-            struct pollfd pfds[2];
-            nfds_t count = 0;
-            if (fan.fd >= 0) pfds[count++] = (struct pollfd){ fan.fd, POLLIN, 0 };
-            if (outcome_pipe[0] >= 0 && !outcome.eof)
-                pfds[count++] = (struct pollfd){ outcome_pipe[0], POLLIN | POLLHUP, 0 };
-            if (poll(pfds, count, (int)(remaining_ms > 200 ? 200 : remaining_ms)) > 0) {
-                nfds_t p;
-                for (p = 0; p < count; p++) {
-                    if (pfds[p].fd == fan.fd && (pfds[p].revents & POLLIN) &&
-                        !fanotify_service(&fan)) {
-                        containment_failure = 1;
-                        (void)write_str(TREE_CGROUP "/cgroup.kill", "1");
-                    }
-                    if (pfds[p].fd == outcome_pipe[0] &&
-                        (pfds[p].revents & (POLLIN | POLLHUP)))
-                        (void)drain_exec_channel(outcome_pipe[0], &outcome);
-                }
-            }
-            if (containment_failure) break;
-        }
-        r = waitpid(child_pid, &status, WNOHANG);
-        if (r == child_pid) {
-            rs.tree_terminated = confirm_tree_terminated(51U);
-            child_status = status;
-            child_reaped = 1;
-            if (WIFEXITED(status)) { rs.exit_signaled = 0; rs.exit_code = WEXITSTATUS(status); }
-            else { rs.exit_signaled = 1; }
-            goto reaped;
-        }
+    if (!launch_and_control(deadline_ms, &fan, outcome_pipe[0], &PRODUCTION_CONTROLLER,
+                            &launch_state, &controller_result, &child_pid)) {
+        rs.tree_deadline_fired = controller_result.deadline_fired;
+        goto poweroff;
     }
-    /* Deadline path: wait for cgroup.events populated 0, then reap. */
-    {
-        int status;
-        rs.tree_terminated = confirm_tree_terminated(401U);
-        if (waitpid(child_pid, &status, 0) == child_pid) {
-            child_status = status;
-            child_reaped = 1;
-            if (WIFEXITED(status)) { rs.exit_signaled = 0; rs.exit_code = WEXITSTATUS(status); }
-            else { rs.exit_signaled = 1; }
-        }
-    }
-reaped:
+    child_status = controller_result.child_status;
+    rs.tree_terminated = controller_result.tree_terminated;
+    rs.tree_deadline_fired = controller_result.deadline_fired;
+    rs.verifier_started = controller_result.verifier_started;
+    if (WIFEXITED(child_status)) { rs.exit_signaled = 0; rs.exit_code = WEXITSTATUS(child_status); }
+    else { rs.exit_signaled = 1; }
     if (outcome_pipe[0] >= 0) {
-        (void)drain_exec_channel(outcome_pipe[0], &outcome);
         (void)close(outcome_pipe[0]);
         outcome_pipe[0] = -1;
     }
-    rs.verifier_started = execution_was_verified(&outcome, child_status, child_reaped,
-                                                  rs.tree_terminated,
-                                                  rs.tree_deadline_fired,
-                                                  containment_failure);
-    if (!rs.tree_terminated || containment_failure) goto poweroff;
-    if (fan.fd >= 0) { (void)close(fan.fd); fan.fd = -1; }
 
     /* Counters, collected only after confirmed termination (R7.3
      * "complete" requires it); otherwise every row this loop has not
@@ -1667,9 +1808,7 @@ export_partial:
     }
 
 poweroff:
-    sync();
-    (void)reboot(RB_POWER_OFF);
-    return 0;
+    power_down();
 }
 #else
 struct privilege_test_state { enum privilege_step seen[8]; size_t count; int fail_at; };
@@ -1926,21 +2065,56 @@ static int test_geometry(void)
     return candidate_count_matches(&plan, 0U);
 }
 
-static int write_input_test_frame(int fd, int omit_verifier, size_t candidates)
+static char *input_test_plan(size_t files, int include_directory, size_t *length)
+{
+    struct json_writer writer = { NULL, 0U, 0U };
+    unsigned char digest[32];
+    char hex[65];
+    size_t i;
+    ys_sha256_bytes("c", 1U, digest); ys_hex_encode(digest, sizeof digest, hex);
+    if (!json_appendf(&writer,
+        "{\"body\":{\"argv\":[\"/sandbox/tools/verifier\",\"verify\",\"--candidate\","
+        "\"/sandbox/candidate\",\"--evidence\",\"/sandbox/evidence\"],\"entries\":["))
+        goto fail;
+    if (include_directory && !json_appendf(&writer,
+        "{\"kind\":\"directory\",\"mode\":\"0500\",\"path\":\"d\","
+        "\"sha256\":null,\"size_bytes\":null}")) goto fail;
+    for (i = 0; i < files; i++)
+        if (!json_appendf(&writer,
+            "%s{\"kind\":\"file\",\"mode\":\"0400\",\"path\":\"f%02zu\","
+            "\"sha256\":\"%s\",\"size_bytes\":1}",
+            (i != 0U || include_directory) ? "," : "", i, hex)) goto fail;
+    if (!json_appendf(&writer,
+        "],\"environment\":[\"LANG=C\",\"LC_ALL=C\",\"PATH=/sandbox/tools\","
+        "\"TMPDIR=/sandbox/scratch\"],\"instruction_sha256\":\"%064d\","
+        "\"limits\":{\"bandwidth_slice_us\":1,\"cpu_max\":2,\"cpu_max_burst\":3,"
+        "\"output_inodes\":4,\"output_tmpfs_bytes\":5,\"pids_max\":6,"
+        "\"scratch_bytes\":7,\"scratch_inodes\":8,\"tree_deadline_ms\":9},"
+        "\"verifier_sha256\":\"%064d\"},\"kind\":\"sandbox_guest_plan\","
+        "\"schema_version\":1}\n", 0, 0)) goto fail;
+    *length = writer.len;
+    return writer.buf;
+fail:
+    free(writer.buf);
+    return NULL;
+}
+
+static int write_input_test_frame(int fd, const char *plan, size_t plan_length,
+                                  int omit_verifier, size_t candidates)
 {
     struct ys_frame_writer writer;
     size_t i;
     if (!ys_frame_writer_open(&writer, fd) ||
-        ys_frame_writer_put(&writer, "plan.json", 9U, "{}", 2U) != YS_FRAME_OK ||
+        ys_frame_writer_put(&writer, "plan.json", 9U, plan, plan_length) != YS_FRAME_OK ||
         ys_frame_writer_put(&writer, "instruction", 11U, "x", 1U) != YS_FRAME_OK)
         return 0;
     if (!omit_verifier &&
         ys_frame_writer_put(&writer, "verifier", 8U, "v", 1U) != YS_FRAME_OK)
         return 0;
     for (i = 0; i < candidates; i++) {
-        char name[15];
-        int n = snprintf(name, sizeof name, "candidate/%04zu", i);
-        if (n != 14 || ys_frame_writer_put(&writer, name, 14U, "c", 1U) != YS_FRAME_OK)
+        char name[16];
+        int n = snprintf(name, sizeof name, "candidate/%05zu", i);
+        if (n != 15 || ys_frame_writer_put(&writer, name, 15U, "c", 1U) != YS_FRAME_OK)
             return 0;
     }
     return ys_frame_writer_close(&writer) == YS_FRAME_OK;
@@ -1948,21 +2122,45 @@ static int write_input_test_frame(int fd, int omit_verifier, size_t candidates)
 
 static int test_input_loading(const char *directory)
 {
-    char good[512], missing[512];
+    char frame[512], output[512];
     struct loaded_input input;
-    int fd;
-    if (!join_path(good, sizeof good, directory, "input-good") ||
-        !join_path(missing, sizeof missing, directory, "input-missing"))
-        return 0;
-    fd = open(good, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-    if (fd < 0 || !write_input_test_frame(fd, 0, 2U) || lseek(fd, 0, SEEK_SET) != 0 ||
-        !load_input(fd, &input) || input.candidate_count != 2U) return 0;
-    loaded_input_free(&input);
-    (void)close(fd);
-    fd = open(missing, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-    if (fd < 0 || !write_input_test_frame(fd, 1, 0U) || lseek(fd, 0, SEEK_SET) != 0 ||
-        load_input(fd, &input)) return 0;
-    (void)close(fd);
+    size_t cases[][2] = { { 9U, 8U }, { 9U, 9U }, { 8U, 9U } };
+    size_t c;
+    for (c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+        struct ys_guest_plan plan;
+        char *plan_bytes;
+        size_t plan_length;
+        int fd, dirfd;
+        if (!join_path(frame, sizeof frame, directory, c == 0 ? "input-short" :
+                       (c == 1 ? "input-match" : "input-extra")) ||
+            !join_path(output, sizeof output, directory, c == 0 ? "out-short" :
+                       (c == 1 ? "out-match" : "out-extra"))) return 0;
+        plan_bytes = input_test_plan(cases[c][0], 1, &plan_length);
+        fd = open(frame, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (plan_bytes == NULL || fd < 0 ||
+            !write_input_test_frame(fd, plan_bytes, plan_length, 0, cases[c][1]) ||
+            lseek(fd, 0, SEEK_SET) != 0 || !load_input(fd, &input) ||
+            ys_plan_parse(input.plan_bytes, input.plan_len, &plan) != YS_PLAN_OK ||
+            mkdir(output, 0700) != 0) return 0;
+        dirfd = open(output, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (dirfd < 0) return 0;
+        if ((materialize_loaded_candidate(dirfd, geteuid(), getegid(), &plan, &input) ==
+             YS_PLAN_OK) != (c == 1U)) return 0;
+        (void)close(dirfd); (void)chmod(output, 0700); (void)close(fd);
+        ys_plan_free(&plan); loaded_input_free(&input); free(plan_bytes);
+    }
+    {
+        char *plan_bytes;
+        size_t plan_length;
+        int fd;
+        plan_bytes = input_test_plan(0U, 0, &plan_length);
+        if (!join_path(frame, sizeof frame, directory, "input-missing") || plan_bytes == NULL)
+            return 0;
+        fd = open(frame, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (fd < 0 || !write_input_test_frame(fd, plan_bytes, plan_length, 1, 0U) ||
+            lseek(fd, 0, SEEK_SET) != 0 || load_input(fd, &input)) return 0;
+        (void)close(fd); free(plan_bytes);
+    }
     return 1;
 }
 
@@ -2275,68 +2473,195 @@ static int test_filter(void)
     return 1;
 }
 
-static int test_exec_classification(void)
-{
-    struct exec_channel_state state;
-    struct ys_exec_outcome ready = { YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0U, 0 };
-    struct ys_exec_outcome failure = { YS_EXEC_FAILURE, YS_EXEC_PHASE_EXECVE, 0U, ENOENT };
-    int exited0 = 0 << 8;
-    int exited126 = 126 << 8;
-    int exited127 = 127 << 8;
-    memset(&state, 0, sizeof state);
-    memcpy(state.bytes, &ready, sizeof ready);
-    state.length = sizeof ready; state.eof = 1;
-    if (!exec_channel_confirms_execution(&state, exited0) ||
-        !exec_channel_confirms_execution(&state, exited126) ||
-        !exec_channel_confirms_execution(&state, exited127))
-        return 0;
-    if (!execution_was_verified(&state, exited0, 1, 1, 0, 0) ||
-        execution_was_verified(&state, exited0, 1, 1, 1, 0) ||
-        execution_was_verified(&state, exited0, 1, 1, 0, 1) ||
-        execution_was_verified(&state, exited0, 0, 1, 0, 0) ||
-        execution_was_verified(&state, exited0, 1, 0, 0, 0))
-        return 0;
-    if (exec_channel_confirms_execution(&state, SIGKILL) ||
-        (state.eof = 0, exec_channel_confirms_execution(&state, exited0)))
-        return 0;
-    state.eof = 1; state.length--;
-    if (exec_channel_confirms_execution(&state, exited0)) return 0;
-    state.length = sizeof ready; state.invalid = 1;
-    if (exec_channel_confirms_execution(&state, exited0)) return 0;
-    state.invalid = 0;
-    memcpy(state.bytes, &failure, sizeof failure);
-    if (exec_channel_confirms_execution(&state, exited127)) return 0;
-    memcpy(state.bytes, &ready, sizeof ready);
-    memcpy(state.bytes + sizeof ready, &failure, sizeof failure);
-    state.length = sizeof ready + sizeof failure;
-    if (exec_channel_confirms_execution(&state, exited127)) return 0;
-    memcpy(state.bytes, &ready, sizeof ready); state.length = sizeof ready;
-    state.bytes[2] = 1U;
-    return !exec_channel_confirms_execution(&state, exited0);
-}
+struct controller_test_state {
+    pid_t child;
+    int fake, now_ms, poll_advance, fan_advance, wait_advance, tick_advance;
+    int poll_error, wait_mode, population_mode, population_calls;
+    int kill_ok, kill_calls, now_calls, expire_on_now;
+    int mode, expected_exit, outcome_writer, launch_advance;
+};
 
-static int population_mode, population_calls;
-static int test_population_read(void)
+static int controller_test_now(struct timespec *value, void *opaque)
 {
-    population_calls++;
-    if (population_mode < 0) return -1;
-    if (population_mode == 0) return 0;
-    return population_mode == 1 ? 1 : (population_calls < 3 ? 1 : 0);
-}
-
-static int test_termination_confirmation(void)
-{
-    ys_test_population_reader = test_population_read;
-    population_mode = 0; population_calls = 0;
-    if (!confirm_tree_terminated(4U) || population_calls != 1) return 0;
-    population_mode = -1; population_calls = 0;
-    if (confirm_tree_terminated(4U) || population_calls != 1) return 0;
-    population_mode = 1; population_calls = 0;
-    if (confirm_tree_terminated(4U) || population_calls != 4) return 0;
-    population_mode = 2; population_calls = 0;
-    if (!confirm_tree_terminated(4U) || population_calls != 3) return 0;
-    ys_test_population_reader = NULL;
+    struct controller_test_state *state = opaque;
+    if (!state->fake) return clock_gettime(CLOCK_MONOTONIC, value) == 0;
+    if (state->now_ms < 0) return 0;
+    state->now_calls++;
+    if (state->now_calls == state->expire_on_now) state->now_ms = 5;
+    value->tv_sec = state->now_ms / 1000;
+    value->tv_nsec = (state->now_ms % 1000) * 1000000L;
     return 1;
+}
+static int controller_test_poll(struct pollfd *fds, nfds_t count, int timeout, void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    nfds_t i;
+    if (!state->fake) return poll(fds, count, timeout);
+    state->now_ms += state->poll_advance;
+    if (state->poll_error) { errno = state->poll_error; return -1; }
+    for (i = 0; i < count; i++) fds[i].revents = fds[i].fd == 99 ? POLLIN : POLLIN | POLLHUP;
+    return (int)count;
+}
+static pid_t controller_test_wait(pid_t child, int *status, void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    if (!state->fake) return waitpid(child, status, WNOHANG);
+    state->now_ms += state->wait_advance;
+    if (state->wait_mode == 0) return 0;
+    if (state->wait_mode < 0) { errno = state->wait_mode == -1 ? EINTR : ECHILD; return -1; }
+    *status = 0;
+    return child;
+}
+static int controller_test_population(void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    state->population_calls++;
+    if (state->population_mode < 0) return -1;
+    if (state->population_mode == 0) return 0;
+    if (state->population_mode == 2) { state->now_ms += 5; return 0; }
+    return state->population_mode == 1 ? 1 : (state->population_calls < 3 ? 1 : 0);
+}
+static int controller_test_kill(void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    state->kill_calls++;
+    if (state->fake) return state->kill_ok;
+    return kill(state->child, SIGKILL) == 0 || errno == ESRCH;
+}
+static int controller_test_fan(struct fanotify_state *fan, void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    if (!state->fake) return fanotify_service(fan);
+    state->now_ms += state->fan_advance;
+    return 1;
+}
+static void controller_test_tick(void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    if (state->fake) state->now_ms += state->tick_advance;
+    else { struct timespec interval = { 0, 1000000L }; (void)nanosleep(&interval, NULL); }
+}
+static pid_t controller_test_launch(void *opaque)
+{
+    struct controller_test_state *state = opaque;
+    pid_t child;
+    if (state->fake) { state->now_ms += state->launch_advance; return state->child; }
+    child = fork();
+    if (child == 0) {
+        int nullfd;
+        struct ys_exec_outcome ready = { YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0U, 0 };
+        const char *args[] = { "/proc/self/exe", "exec-fixture",
+            state->expected_exit == 126 ? "126" : (state->expected_exit == 127 ? "127" : "0"),
+            NULL };
+        const char *const env[] = { NULL };
+        if (state->mode == 1) { ys_exec_report_failure(state->outcome_writer,
+            YS_EXEC_PHASE_CHILD_SETUP, EIO); _exit(125); }
+        if (state->mode == 6) abort();
+        if (state->mode == 7) { (void)write(state->outcome_writer, &ready, sizeof ready); abort(); }
+        if (state->mode == 8) { (void)write(state->outcome_writer, &ready, 1U); _exit(0); }
+        if (state->mode == 9) { (void)write(state->outcome_writer, &ready, sizeof ready);
+            (void)write(state->outcome_writer, &ready, sizeof ready); _exit(0); }
+        nullfd = open("/dev/null", O_RDWR);
+        if (nullfd < 0) _exit(125);
+        ys_test_exec_fail_phase = state->mode == 2 ? YS_EXEC_PHASE_DUPLICATE :
+                                  (state->mode == 3 ? YS_EXEC_PHASE_WIRE :
+                                  (state->mode == 4 ? YS_EXEC_PHASE_CLOSE : 0));
+        ys_test_outcome_write_mode = state->mode == 10 ? 3 : (state->mode == 11 ? 1 : 0);
+        if (state->mode == 5 || state->mode == 10) args[0] = "/definitely/missing/verifier";
+        ys_exec(args, env, nullfd, nullfd, nullfd, state->outcome_writer);
+        _exit(125);
+    }
+    (void)close(state->outcome_writer); state->outcome_writer = -1; state->child = child;
+    return child;
+}
+static const struct controller_ops TEST_CONTROLLER = {
+    controller_test_now, controller_test_poll, controller_test_wait,
+    controller_test_population, controller_test_kill, controller_test_fan,
+    controller_test_tick, controller_test_launch
+};
+
+static int run_exec_controller_case(int mode, int expected_exit, int expect_normal)
+{
+    int channel[2], status;
+    pid_t child;
+    struct fanotify_state fan;
+    struct controller_result result;
+    struct controller_test_state state;
+    if (pipe2(channel, O_CLOEXEC) != 0 || fcntl(channel[0], F_SETFL, O_NONBLOCK) != 0)
+        return 0;
+    memset(&state, 0, sizeof state); state.kill_ok = 1; state.mode = mode;
+    state.expected_exit = expected_exit; state.outcome_writer = channel[1];
+    ys_test_channel_eintr = mode == 12 ? 1 : 0;
+    fanotify_state_init(&fan);
+    status = launch_and_control(2000U, &fan, channel[0], &TEST_CONTROLLER, &state,
+                                &result, &child);
+    (void)close(channel[0]);
+    return (status != 0) == expect_normal && result.child_reaped &&
+           result.tree_terminated && (expect_normal ?
+           (WIFEXITED(result.child_status) && WEXITSTATUS(result.child_status) == expected_exit) : 1);
+}
+
+static int test_exec_controller(void)
+{
+    int mode;
+    if (!run_exec_controller_case(0, 0, 1) || !run_exec_controller_case(0, 126, 1) ||
+        !run_exec_controller_case(0, 127, 1) || !run_exec_controller_case(11, 0, 1) ||
+        !run_exec_controller_case(12, 0, 1)) return 0;
+    for (mode = 1; mode <= 10; mode++)
+        if (!run_exec_controller_case(mode, 0, 0)) return 0;
+    return 1;
+}
+
+static int fake_controller_case(int initial_ms, int poll_advance, int fan_advance,
+                                int wait_advance, int wait_mode, int population_mode,
+                                int kill_ok, int expect_deadline, int expect_kill_failed)
+{
+    int channel[2];
+    struct ys_exec_outcome ready = { YS_EXEC_READY, YS_EXEC_PHASE_EXECVE, 0U, 0 };
+    struct fanotify_state fan;
+    struct controller_result result;
+    struct controller_test_state state;
+    if (pipe(channel) != 0 || write(channel[1], &ready, sizeof ready) != (ssize_t)sizeof ready)
+        return 0;
+    (void)close(channel[1]);
+    memset(&state, 0, sizeof state);
+    state.fake = 1; state.now_ms = initial_ms == 5 ? 0 : initial_ms;
+    state.launch_advance = initial_ms == 5 ? 5 : 0; state.child = 42;
+    state.poll_advance = poll_advance;
+    state.fan_advance = fan_advance; state.wait_advance = wait_advance;
+    if (poll_advance == -1 || poll_advance == -2) {
+        state.poll_advance = 1; state.poll_error = poll_advance == -1 ? EINTR : EIO;
+    }
+    if (fan_advance == -1) { state.fan_advance = 0; state.expire_on_now = 4; }
+    state.tick_advance = 1; state.wait_mode = wait_mode;
+    state.population_mode = population_mode; state.kill_ok = kill_ok;
+    fanotify_state_init(&fan); fan.fd = 99;
+    if (launch_and_control(5U, &fan, channel[0], &TEST_CONTROLLER, &state, &result,
+                           &state.child) || fan.fd != 99) return 0;
+    (void)close(channel[0]);
+    return result.deadline_fired == expect_deadline && result.kill_failed == expect_kill_failed &&
+           state.kill_calls == (initial_ms < 0 ? 0 : 1) && !result.verifier_started;
+}
+
+static int test_controller_failures(void)
+{
+    struct timespec near_limit = { (time_t)INT64_MAX, 999999999L }, deadline;
+    return !deadline_after_ms(&near_limit, 1U, &deadline) &&
+           fake_controller_case(-1, 0, 0, 0, 1, 0, 1, 0, 0) &&
+           fake_controller_case(5, 0, 0, 0, 1, 0, 1, 1, 0) &&
+           fake_controller_case(0, 5, 0, 0, 1, 0, 1, 1, 0) &&
+           fake_controller_case(0, 0, 5, 0, 1, 0, 1, 1, 0) &&
+           fake_controller_case(0, 0, -1, 0, 1, 0, 1, 1, 0) &&
+           fake_controller_case(0, 0, 0, 5, 1, 0, 1, 1, 0) &&
+           fake_controller_case(0, 0, 0, 0, 1, 2, 1, 1, 0) &&
+           fake_controller_case(0, 0, 0, 0, 1, -1, 1, 0, 0) &&
+           fake_controller_case(0, 0, 0, 0, 1, 1, 1, 1, 0) &&
+           fake_controller_case(0, 1, 0, 0, 0, 1, 0, 1, 1) &&
+           fake_controller_case(0, 0, 0, 1, -1, 1, 1, 1, 0) &&
+           fake_controller_case(0, 0, 0, 0, -2, 1, 1, 0, 0) &&
+           fake_controller_case(0, -1, 0, 0, 1, 1, 1, 1, 0) &&
+           fake_controller_case(0, -2, 0, 0, 1, 1, 1, 1, 0) &&
+           fake_controller_case(0, -2, 0, 0, 0, 1, 0, 1, 1);
 }
 
 static int write_validation_report(const char *path)
@@ -2372,16 +2697,17 @@ static int write_validation_report(const char *path)
 
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "exec-fixture") == 0) return atoi(argv[2]);
     if (argc != 2 && argc != 3) return 2;
     if (!test_report_writer() || !test_fanotify_history() || !test_fanotify_service(argv[1]) ||
         !test_checked_arithmetic() || !test_input_loading(argv[1]) ||
         !test_geometry() ||
         !test_instruction_descriptor(argv[1]) || !test_privilege_order() ||
         !test_actual_privilege_state() || !test_searchable_ancestors(argv[1]) || !test_filter() ||
-        !test_exec_classification() || !test_termination_confirmation())
+        !test_exec_controller() || !test_controller_failures())
         return 1;
     if (argc == 3 && !write_validation_report(argv[2])) return 1;
-    (void)printf("production supervisor helpers: report, fanotify, geometry, instruction, privilege order, traversal, filter: ok\n");
+    (void)printf("production supervisor helpers: report, input materialization, execution controller, deadline, termination, fanotify, geometry, instruction, privilege order, traversal, filter: ok\n");
     return 0;
 }
 #endif

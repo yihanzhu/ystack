@@ -890,6 +890,9 @@ static int outcome_write(int fd, enum ys_exec_outcome_kind kind,
         } else if (ys_test_outcome_write_mode == 2) {
             errno = EPIPE;
             n = -1;
+        } else if (ys_test_outcome_write_mode == 3 && kind == YS_EXEC_FAILURE) {
+            errno = EPIPE;
+            n = -1;
         } else
 #endif
         n = write(fd, bytes + written, sizeof outcome - written);
@@ -927,15 +930,27 @@ void ys_exec(const char *const *argv, const char *const *envp, int instruction_f
      * wrong stream. F_DUPFD_CLOEXEC also keeps a temporary from surviving
      * a failed execve past close_all_except below. */
     status_fd = fcntl(outcome_fd, F_DUPFD_CLOEXEC, 3);
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (ys_test_exec_fail_phase == YS_EXEC_PHASE_DUPLICATE)
+        exec_fail(status_fd >= 0 ? status_fd : outcome_fd, YS_EXEC_PHASE_DUPLICATE, EIO, 126);
+#endif
     if (status_fd < 0) exec_fail(outcome_fd, YS_EXEC_PHASE_DUPLICATE, errno, 126);
     in_fd = fcntl(instruction_fd, F_DUPFD_CLOEXEC, 3);
     out_fd = fcntl(stdout_fd, F_DUPFD_CLOEXEC, 3);
     err_fd = fcntl(stderr_fd, F_DUPFD_CLOEXEC, 3);
     if (in_fd < 0 || out_fd < 0 || err_fd < 0)
         exec_fail(status_fd, YS_EXEC_PHASE_DUPLICATE, errno, 126);
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (ys_test_exec_fail_phase == YS_EXEC_PHASE_WIRE)
+        exec_fail(status_fd, YS_EXEC_PHASE_WIRE, EIO, 126);
+#endif
     if (dup2(in_fd, 0) < 0 || dup2(out_fd, 1) < 0 || dup2(err_fd, 2) < 0)
         exec_fail(status_fd, YS_EXEC_PHASE_WIRE, errno, 126);
     (void)close(in_fd); (void)close(out_fd); (void)close(err_fd);
+#ifdef YSTACK_TEST_FAULT_INJECT
+    if (ys_test_exec_fail_phase == YS_EXEC_PHASE_CLOSE)
+        exec_fail(status_fd, YS_EXEC_PHASE_CLOSE, EIO, 126);
+#endif
     if (!close_all_except(3, status_fd))
         exec_fail(status_fd, YS_EXEC_PHASE_CLOSE, errno, 126);
     flags = fcntl(status_fd, F_GETFD);
@@ -948,6 +963,7 @@ void ys_exec(const char *const *argv, const char *const *envp, int instruction_f
 #ifdef YSTACK_TEST_FAULT_INJECT
 size_t ys_test_readdir_fail_at = 0;
 int ys_test_outcome_write_mode = 0;
+int ys_test_exec_fail_phase = 0;
 #endif
 struct evidence_row { char *name; ino_t ino; };
 static int cmp_evidence_row(const void *a, const void *b)
