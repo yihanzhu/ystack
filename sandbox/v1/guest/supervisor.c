@@ -31,9 +31,11 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <limits.h>
 #include <poll.h>
 #include <sched.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +51,10 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef SECCOMP_RET_ACTION_FULL
+#define SECCOMP_RET_ACTION_FULL 0xffff0000U
+#endif
 
 /* --- disk layout (R5.4): the two virtio-blk devices, in the order the
  * vfkit argv (plan.md "Interfaces fixed by this plan") attaches them --
@@ -205,8 +211,6 @@ static int load_input(int fd, struct loaded_input *out)
  * `size=` budget in page units, so "sized for exactly its files" (R5.5)
  * still needs room for the directory tree a manifest with subdirectories
  * materializes -- one page per directory is a generous, fixed allowance. */
-#define TMPFS_PAGE 4096ULL
-
 static int mount_tmpfs(const char *target, uint64_t size_bytes, uint64_t nr_inodes)
 {
     char opts[128];
@@ -216,10 +220,64 @@ static int mount_tmpfs(const char *target, uint64_t size_bytes, uint64_t nr_inod
     return mount("tmpfs", target, "tmpfs", MS_NOSUID, opts) == 0;
 }
 
+static int checked_add_u64(uint64_t a, uint64_t b, uint64_t *out)
+{
+    if (UINT64_MAX - a < b) return 0;
+    *out = a + b;
+    return 1;
+}
+
+static int checked_mul_u64(uint64_t a, uint64_t b, uint64_t *out)
+{
+    if (a != 0U && b > UINT64_MAX / a) return 0;
+    *out = a * b;
+    return 1;
+}
+
+static int rounded_allocation(uint64_t bytes, uint64_t page_size, uint64_t *out)
+{
+    uint64_t with_slack;
+    if (page_size == 0U) return 0;
+    if (bytes == 0U) { *out = 0U; return 1; }
+    if (!checked_add_u64(bytes, page_size - 1U, &with_slack)) return 0;
+    *out = (with_slack / page_size) * page_size;
+    return 1;
+}
+
+static int candidate_geometry(const struct ys_guest_plan *plan, uint64_t page_size,
+                              uint64_t *size_bytes, uint64_t *nr_inodes)
+{
+    uint64_t data = 0U, directories = 1U, metadata, rounded;
+    size_t i;
+    for (i = 0; i < plan->entry_count; i++) {
+        if (plan->entries[i].is_file) {
+            if (!rounded_allocation(plan->entries[i].size_bytes, page_size, &rounded) ||
+                !checked_add_u64(data, rounded, &data))
+                return 0;
+        } else if (!checked_add_u64(directories, 1U, &directories)) {
+            return 0;
+        }
+    }
+    /* One page per directory covers tmpfs directory-entry and inode metadata. */
+    if (!checked_mul_u64(directories, page_size, &metadata) ||
+        !checked_add_u64(data, metadata, size_bytes))
+        return 0;
+    if (*size_bytes == 0U) *size_bytes = page_size;
+    if (plan->entry_count == SIZE_MAX ||
+        !checked_add_u64(1U, (uint64_t)plan->entry_count, nr_inodes))
+        return 0;
+    return *nr_inodes > 0U;
+}
+
 static int mkdir_p(const char *path, mode_t mode)
 {
     if (mkdir(path, mode) == 0) return 1;
     return errno == EEXIST;
+}
+
+static int make_searchable_read_only(const char *path)
+{
+    return chmod(path, 0555) == 0;
 }
 
 /* MS_REMOUNT|MS_BIND scopes the new flags to this one mountpoint (the
@@ -380,20 +438,99 @@ struct ys_cap_header { uint32_t version; int pid; };
 struct ys_cap_data { uint32_t effective, permitted, inheritable; };
 #define YS_CAP_VERSION_3 0x20080522U
 
-static int drop_all_capabilities(void)
+static int drop_bounding_capabilities(void)
 {
     int i;
-    for (i = 0; i <= 63; i++) (void)prctl(PR_CAPBSET_DROP, i, 0, 0, 0);
+    for (i = 0; i <= 63; i++) {
+        int present = prctl(PR_CAPBSET_READ, i, 0, 0, 0);
+        if (present < 0) {
+            if (errno == EINVAL) break;
+            return 0;
+        }
+        if (present != 0 && prctl(PR_CAPBSET_DROP, i, 0, 0, 0) != 0) return 0;
+    }
+    return 1;
+}
+
+static int clear_all_capabilities(void)
+{
 #ifndef YS_NO_CAPSET
     {
         struct ys_cap_header hdr = { YS_CAP_VERSION_3, 0 };
         struct ys_cap_data data[2];
         memset(data, 0, sizeof data);
-        return syscall(SYS_capset, &hdr, data) == 0;
+        if (syscall(SYS_capset, &hdr, data) != 0) return 0;
+        return prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) == 0;
     }
 #else
     return 0;
 #endif
+}
+
+static int final_privilege_state_ok(void)
+{
+#if defined(SYS_capget)
+    struct ys_cap_header hdr = { YS_CAP_VERSION_3, 0 };
+    struct ys_cap_data data[2];
+    gid_t groups[1];
+    int i;
+    memset(data, 0xff, sizeof data);
+    if (getuid() != GUEST_UID || geteuid() != GUEST_UID || getgid() != GUEST_GID ||
+        getegid() != GUEST_GID || getgroups(1, groups) != 0 ||
+        syscall(SYS_capget, &hdr, data) != 0 || prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
+        return 0;
+    for (i = 0; i < 2; i++)
+        if (data[i].effective != 0U || data[i].permitted != 0U || data[i].inheritable != 0U)
+            return 0;
+    for (i = 0; i <= 63; i++) {
+        int present = prctl(PR_CAPBSET_READ, i, 0, 0, 0);
+        if (present < 0) {
+            if (errno == EINVAL) break;
+            return 0;
+        }
+        if (present != 0) return 0;
+    }
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+enum privilege_step {
+    PRIV_CLEAR_GROUPS,
+    PRIV_SET_GIDS,
+    PRIV_DROP_BOUNDING,
+    PRIV_SET_UIDS,
+    PRIV_CLEAR_CAPS,
+    PRIV_NO_NEW_PRIVS,
+    PRIV_VERIFY
+};
+
+static int actual_privilege_step(enum privilege_step step, void *unused)
+{
+    (void)unused;
+    switch (step) {
+    case PRIV_CLEAR_GROUPS: return setgroups(0, NULL) == 0;
+    case PRIV_SET_GIDS: return setresgid(GUEST_GID, GUEST_GID, GUEST_GID) == 0;
+    case PRIV_DROP_BOUNDING: return drop_bounding_capabilities();
+    case PRIV_SET_UIDS: return setresuid(GUEST_UID, GUEST_UID, GUEST_UID) == 0;
+    case PRIV_CLEAR_CAPS: return clear_all_capabilities();
+    case PRIV_NO_NEW_PRIVS: return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0;
+    case PRIV_VERIFY: return final_privilege_state_ok();
+    }
+    return 0;
+}
+
+static int run_privilege_sequence(int (*perform)(enum privilege_step, void *), void *ctx)
+{
+    static const enum privilege_step order[] = {
+        PRIV_CLEAR_GROUPS, PRIV_SET_GIDS, PRIV_DROP_BOUNDING, PRIV_SET_UIDS,
+        PRIV_CLEAR_CAPS, PRIV_NO_NEW_PRIVS, PRIV_VERIFY
+    };
+    size_t i;
+    for (i = 0; i < sizeof order / sizeof order[0]; i++)
+        if (!perform(order[i], ctx)) return 0;
+    return 1;
 }
 
 /* Landlock (R6.2): this concern's own attr/rule structs (not
@@ -498,10 +635,12 @@ static int apply_landlock(void)
 struct seccomp_prog_builder {
     struct sock_filter insn[YS_SECCOMP_MAX_INSN];
     size_t n;
+    int failed;
 };
 static void sb_push(struct seccomp_prog_builder *b, struct sock_filter f)
 {
     if (b->n < YS_SECCOMP_MAX_INSN) b->insn[b->n++] = f;
+    else b->failed = 1;
 }
 static void add_deny(struct seccomp_prog_builder *b, uint32_t nr)
 {
@@ -525,6 +664,37 @@ static void add_deny_if_arg_set(struct seccomp_prog_builder *b, uint32_t nr, uns
     sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
              (unsigned)offsetof(struct seccomp_data, nr))); /* re-arm for the next check */
 }
+
+static void add_deny_if_arg_mask_eq(struct seccomp_prog_builder *b, uint32_t nr,
+                                    unsigned arg_index, uint32_t mask)
+{
+    unsigned arg_off = (unsigned)offsetof(struct seccomp_data, args[arg_index]);
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+             (unsigned)offsetof(struct seccomp_data, nr)));
+    sb_push(b, (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, nr, 0, 5));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, arg_off));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_ALU | BPF_AND | BPF_K, mask));
+    sb_push(b, (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, mask, 0, 1));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
+             SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+             (unsigned)offsetof(struct seccomp_data, nr)));
+}
+
+static void add_deny_if_arg_eq(struct seccomp_prog_builder *b, uint32_t nr, unsigned arg_index,
+                               uint32_t value)
+{
+    unsigned arg_off = (unsigned)offsetof(struct seccomp_data, args[arg_index]);
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+             (unsigned)offsetof(struct seccomp_data, nr)));
+    sb_push(b, (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, nr, 0, 4));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, arg_off));
+    sb_push(b, (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, value, 0, 1));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
+             SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+    sb_push(b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+             (unsigned)offsetof(struct seccomp_data, nr)));
+}
 #ifndef O_TMPFILE
 #define O_TMPFILE 020200000
 #endif
@@ -535,11 +705,11 @@ static void add_deny_if_arg_set(struct seccomp_prog_builder *b, uint32_t nr, uns
 #define MADV_REMOVE 9
 #endif
 
-static int apply_seccomp(void)
+static int build_seccomp_filter(struct seccomp_prog_builder *out)
 {
     struct seccomp_prog_builder b;
-    struct sock_fprog prog;
     b.n = 0;
+    b.failed = 0;
     sb_push(&b, (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
              (unsigned)offsetof(struct seccomp_data, arch)));
     sb_push(&b, (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0));
@@ -687,18 +857,27 @@ static int apply_seccomp(void)
     add_deny(&b, __NR_swapon);
 #endif
 #ifdef __NR_openat
-    add_deny_if_arg_set(&b, __NR_openat, 2, O_TMPFILE);
+    add_deny_if_arg_mask_eq(&b, __NR_openat, 2, O_TMPFILE);
 #endif
 #ifdef __NR_madvise
-    add_deny_if_arg_set(&b, __NR_madvise, 2, MADV_REMOVE);
+    add_deny_if_arg_eq(&b, __NR_madvise, 2, MADV_REMOVE);
 #endif
 #ifdef __NR_clone
     add_deny_if_arg_set(&b, __NR_clone, 0, YS_CLONE_NEWMASK);
 #endif
     sb_push(&b, (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+    if (b.failed || b.n > USHRT_MAX) return 0;
+    *out = b;
+    return 1;
+}
+
+static int apply_seccomp(void)
+{
+    struct seccomp_prog_builder b;
+    struct sock_fprog prog;
+    if (!build_seccomp_filter(&b)) return 0;
     prog.len = (unsigned short)b.n;
     prog.filter = b.insn;
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return 0;
     return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) == 0;
 }
 
@@ -714,10 +893,7 @@ static void child_main(int instruction_fd, int stdout_fd, int stderr_fd, int sta
     if (syscall(SYS_pivot_root, ".", ".") != 0) _exit(125);
     if (umount2(".", MNT_DETACH) != 0) _exit(125);
     if (chdir("/") != 0) _exit(125);
-    if (setgroups(0, NULL) != 0) _exit(125);
-    if (setresgid(GUEST_GID, GUEST_GID, GUEST_GID) != 0) _exit(125);
-    if (!drop_all_capabilities()) _exit(125);
-    if (setresuid(GUEST_UID, GUEST_UID, GUEST_UID) != 0) _exit(125);
+    if (!run_privilege_sequence(actual_privilege_step, NULL)) _exit(125);
     {
         struct rlimit core, rt;
         core.rlim_cur = 0; core.rlim_max = 0;
@@ -753,86 +929,130 @@ struct report_state {
     char **evidence_names; size_t evidence_count;
 };
 
-static size_t append_row(char *buf, size_t cap, size_t pos, const char *name,
-                          const struct guest_row *r)
+struct json_writer { char *buf; size_t len, cap; };
+
+#ifdef YSTACK_SUPERVISOR_TEST
+static size_t ys_test_report_cap_limit;
+static int ys_test_report_sizes;
+#endif
+
+static int evidence_file_size(const char *path, off_t *size_out)
 {
-    int n;
+#ifdef YSTACK_SUPERVISOR_TEST
+    if (ys_test_report_sizes) { *size_out = (off_t)strlen(path); return 1; }
+#endif
+    {
+        struct stat st;
+        if (stat(path, &st) != 0 || st.st_size < 0) return 0;
+        *size_out = st.st_size;
+        return 1;
+    }
+}
+
+static int json_reserve(struct json_writer *w, size_t additional)
+{
+    size_t needed, next;
+    char *grown;
+    if (SIZE_MAX - w->len <= additional) return 0;
+    needed = w->len + additional + 1U;
+    if (needed <= w->cap) return 1;
+    next = w->cap == 0U ? 1024U : w->cap;
+    while (next < needed) {
+        if (next > SIZE_MAX / 2U) { next = needed; break; }
+        next *= 2U;
+    }
+#ifdef YSTACK_SUPERVISOR_TEST
+    if (ys_test_report_cap_limit != 0U && next > ys_test_report_cap_limit) return 0;
+#endif
+    grown = realloc(w->buf, next);
+    if (grown == NULL) return 0;
+    w->buf = grown;
+    w->cap = next;
+    return 1;
+}
+
+static int json_appendf(struct json_writer *w, const char *format, ...)
+{
+    va_list ap, copy;
+    int required, written;
+    va_start(ap, format);
+    va_copy(copy, ap);
+    required = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+    if (required < 0 || !json_reserve(w, (size_t)required)) { va_end(ap); return 0; }
+    written = vsnprintf(w->buf + w->len, w->cap - w->len, format, ap);
+    va_end(ap);
+    if (written != required || (size_t)written >= w->cap - w->len) return 0;
+    w->len += (size_t)written;
+    return 1;
+}
+
+static int append_row(struct json_writer *w, const char *name, const struct guest_row *r)
+{
     if (r->observation != NULL && strcmp(r->observation, "unavailable") == 0)
-        n = snprintf(buf + pos, cap - pos,
-                      "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"unavailable\","
-                      "\"observed\":null,\"reached\":false,\"resolution\":%llu}",
-                      name, r->enforcement, (unsigned long long)r->resolution);
-    else
-        n = snprintf(buf + pos, cap - pos,
-                      "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"%s\","
-                      "\"observed\":%llu,\"reached\":%s,\"resolution\":%llu}",
-                      name, r->enforcement, r->observation, (unsigned long long)r->observed,
-                      r->reached ? "true" : "false", (unsigned long long)r->resolution);
-    return (n < 0) ? pos : pos + (size_t)n;
+        return json_appendf(w,
+                            "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"unavailable\","
+                            "\"observed\":null,\"reached\":false,\"resolution\":%llu}",
+                            name, r->enforcement, (unsigned long long)r->resolution);
+    return json_appendf(w,
+                        "\"%s\":{\"enforcement\":\"%s\",\"observation\":\"%s\","
+                        "\"observed\":%llu,\"reached\":%s,\"resolution\":%llu}",
+                        name, r->enforcement, r->observation,
+                        (unsigned long long)r->observed, r->reached ? "true" : "false",
+                        (unsigned long long)r->resolution);
 }
 
 /* Builds the canonical report.json bytes into a malloc'd buffer (caller
- * frees). Returns NULL only on an internal buffer-sizing failure -- every
- * field is already bounded (hex digests, small integers, a short,
- * evidence-count-bounded array), so that should not happen in practice. */
+ * frees). Missing evidence metadata, invalid names and any formatting or
+ * allocation failure abort the report rather than emitting partial JSON. */
 static char *build_report_json(const char plan_sha256_hex[65],
                                 const struct report_state *s, size_t *len_out)
 {
-    size_t cap = 8192 + s->evidence_count * 96U;
-    char *buf = malloc(cap);
-    size_t pos = 0;
+    struct json_writer w = { NULL, 0U, 0U };
     size_t i;
-    int n;
-    if (buf == NULL) return NULL;
-    n = snprintf(buf + pos, cap - pos, "{\"body\":{\"evidence_files\":[");
-    pos += (size_t)n;
+    if (!json_appendf(&w, "{\"body\":{\"evidence_files\":[")) goto fail;
     for (i = 0; i < s->evidence_count; i++) {
         char hex[513];
         size_t namelen = strlen(s->evidence_names[i]);
-        struct stat st;
+        off_t file_size;
         char path[300];
-        if (namelen > 255U) namelen = 255U;
+        int path_len;
+        if (namelen > 255U) goto fail;
         ys_hex_encode((const unsigned char *)s->evidence_names[i], namelen, hex);
         hex[namelen * 2U] = '\0';
-        snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, s->evidence_names[i]);
-        if (stat(path, &st) != 0) st.st_size = 0;
-        n = snprintf(buf + pos, cap - pos, "%s{\"index\":%zu,\"name_hex\":\"%s\",\"size_bytes\":%lld}",
-                      (i == 0U) ? "" : ",", i, hex, (long long)st.st_size);
-        pos += (size_t)n;
+        path_len = snprintf(path, sizeof path, "%s/%s", EVIDENCE_SUBDIR, s->evidence_names[i]);
+        if (path_len < 0 || (size_t)path_len >= sizeof path) goto fail;
+        if (!evidence_file_size(path, &file_size)) goto fail;
+        if (!json_appendf(&w, "%s{\"index\":%zu,\"name_hex\":\"%s\",\"size_bytes\":%lld}",
+                          (i == 0U) ? "" : ",", i, hex, (long long)file_size))
+            goto fail;
     }
-    n = snprintf(buf + pos, cap - pos, "],");
-    pos += (size_t)n;
+    if (!json_appendf(&w, "],")) goto fail;
     if (s->exit_signaled)
-        n = snprintf(buf + pos, cap - pos, "\"exit_code\":null,\"exit_state\":\"signaled\",");
+        { if (!json_appendf(&w, "\"exit_code\":null,\"exit_state\":\"signaled\",")) goto fail; }
     else
-        n = snprintf(buf + pos, cap - pos, "\"exit_code\":%d,\"exit_state\":\"exited\",",
-                      s->exit_code);
-    pos += (size_t)n;
-    n = snprintf(buf + pos, cap - pos, "\"limits\":{");
-    pos += (size_t)n;
-    pos = append_row(buf, cap, pos, "cpu_time_ms", &s->cpu);
-    n = snprintf(buf + pos, cap - pos, ",");
-    pos += (size_t)n;
-    pos = append_row(buf, cap, pos, "memory_bytes", &s->memory);
-    n = snprintf(buf + pos, cap - pos, ",");
-    pos += (size_t)n;
-    pos = append_row(buf, cap, pos, "output_bytes", &s->output);
-    n = snprintf(buf + pos, cap - pos, ",");
-    pos += (size_t)n;
-    pos = append_row(buf, cap, pos, "process_count", &s->tasks);
-    n = snprintf(buf + pos, cap - pos, ",");
-    pos += (size_t)n;
-    pos = append_row(buf, cap, pos, "scratch_bytes", &s->scratch);
-    n = snprintf(buf + pos, cap - pos,
-                  "},\"plan_sha256\":\"%.64s\",\"stderr_bytes\":%llu,\"stdout_bytes\":%llu,"
-                  "\"tree_deadline_fired\":%s,\"tree_terminated\":%s,\"verifier_started\":%s},"
-                  "\"kind\":\"sandbox_guest_report\",\"schema_version\":1}\n",
-                  plan_sha256_hex, (unsigned long long)s->stderr_bytes,
-                  (unsigned long long)s->stdout_bytes, s->tree_deadline_fired ? "true" : "false",
-                  s->tree_terminated ? "true" : "false", s->verifier_started ? "true" : "false");
-    pos += (size_t)n;
-    *len_out = pos;
-    return buf;
+        { if (!json_appendf(&w, "\"exit_code\":%d,\"exit_state\":\"exited\",", s->exit_code)) goto fail; }
+    if (!json_appendf(&w, "\"limits\":{") ||
+        !append_row(&w, "cpu_time_ms", &s->cpu) || !json_appendf(&w, ",") ||
+        !append_row(&w, "memory_bytes", &s->memory) || !json_appendf(&w, ",") ||
+        !append_row(&w, "output_bytes", &s->output) || !json_appendf(&w, ",") ||
+        !append_row(&w, "process_count", &s->tasks) || !json_appendf(&w, ",") ||
+        !append_row(&w, "scratch_bytes", &s->scratch) ||
+        !json_appendf(&w,
+                      "},\"plan_sha256\":\"%.64s\",\"stderr_bytes\":%llu,\"stdout_bytes\":%llu,"
+                      "\"tree_deadline_fired\":%s,\"tree_terminated\":%s,\"verifier_started\":%s},"
+                      "\"kind\":\"sandbox_guest_report\",\"schema_version\":1}\n",
+                      plan_sha256_hex, (unsigned long long)s->stderr_bytes,
+                      (unsigned long long)s->stdout_bytes,
+                      s->tree_deadline_fired ? "true" : "false",
+                      s->tree_terminated ? "true" : "false",
+                      s->verifier_started ? "true" : "false"))
+        goto fail;
+    *len_out = w.len;
+    return w.buf;
+fail:
+    free(w.buf);
+    return NULL;
 }
 
 /* --- fanotify first-open rule (R7.1's output_bytes row, R8.1) -------------
@@ -852,14 +1072,22 @@ struct fanotify_state {
     size_t seen_count;
 };
 
+static void fanotify_state_init(struct fanotify_state *fs)
+{
+    memset(fs, 0, sizeof *fs);
+    fs->fd = -1;
+}
+
 static int fanotify_open_mark(struct fanotify_state *fs)
 {
 #if defined(SYS_fanotify_init) && defined(SYS_fanotify_mark)
+    fanotify_state_init(fs);
     fs->fd = (int)syscall(SYS_fanotify_init, FAN_CLASS_CONTENT | FAN_CLOEXEC, O_RDONLY);
     if (fs->fd < 0) return 0;
     if (syscall(SYS_fanotify_mark, fs->fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM, (uint64_t)FAN_OPEN_PERM,
                 AT_FDCWD, OUTPUT_DIR) != 0) {
         (void)close(fs->fd);
+        fs->fd = -1;
         return 0;
     }
     return 1;
@@ -869,13 +1097,14 @@ static int fanotify_open_mark(struct fanotify_state *fs)
 #endif
 }
 
-static int inode_already_seen(struct fanotify_state *fs, dev_t dev, ino_t ino)
+static int inode_history_record(struct fanotify_state *fs, dev_t dev, ino_t ino)
 {
     size_t i;
     for (i = 0; i < fs->seen_count; i++)
-        if (fs->seen[i].dev == dev && fs->seen[i].ino == ino) return 1;
-    if (fs->seen_count < 256U) fs->seen[fs->seen_count++] = (struct seen_inode){ dev, ino };
-    return 0;
+        if (fs->seen[i].dev == dev && fs->seen[i].ino == ino) return 0;
+    if (fs->seen_count >= sizeof fs->seen / sizeof fs->seen[0]) return 0;
+    fs->seen[fs->seen_count++] = (struct seen_inode){ dev, ino };
+    return 1;
 }
 
 /* Reads and answers every pending permission event; called whenever
@@ -895,7 +1124,7 @@ static void fanotify_service(struct fanotify_state *fs)
         int allow = 0;
         if (m->fd >= 0) {
             if (fstat(m->fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0 &&
-                !inode_already_seen(fs, st.st_dev, st.st_ino))
+                inode_history_record(fs, st.st_dev, st.st_ino))
                 allow = 1;
             resp.fd = m->fd;
             resp.response = allow ? FAN_ALLOW : FAN_DENY;
@@ -905,32 +1134,37 @@ static void fanotify_service(struct fanotify_state *fs)
     }
 }
 
-/* Puts `len` bytes of `data` into a private, anonymous, seekable file (the
- * instruction copy R6.4 wires to the verifier's fd 0): memfd_create when
- * the kernel has it, else an O_TMPFILE regular file unlinked from the
- * start (both leave nothing else able to open it by path). Returns a
- * descriptor already lseek'd back to offset 0, or -1. */
-static int memfd_or_tmpfile(const unsigned char *data, size_t len)
+/* Writes the instruction in the supervisor-only /ys tmpfs, closes that
+ * writable description, reopens it read-only, and unlinks the name. */
+static int readonly_instruction_at(int dirfd, const unsigned char *data, size_t len)
 {
-    int fd = -1;
-#if defined(SYS_memfd_create)
-    fd = (int)syscall(SYS_memfd_create, "instr", 0U);
-#endif
-    if (fd < 0) fd = open("/ys", O_RDWR | O_TMPFILE | O_CLOEXEC, 0600);
-    if (fd < 0) return -1;
+    static const char name[] = ".instruction";
+    int write_fd = openat(dirfd, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    int read_fd = -1;
+    if (write_fd < 0) return -1;
     {
         size_t written = 0;
         while (written < len) {
-            ssize_t n = write(fd, data + written, len - written);
-            if (n < 0) { (void)close(fd); return -1; }
+            ssize_t n = write(write_fd, data + written, len - written);
+            if (n < 0) { if (errno == EINTR) continue; goto fail; }
+            if (n == 0) goto fail;
             written += (size_t)n;
         }
     }
-    if (lseek(fd, 0, SEEK_SET) != 0) { (void)close(fd); return -1; }
-    return fd;
+    if (fsync(write_fd) != 0 || close(write_fd) != 0) { write_fd = -1; goto fail; }
+    write_fd = -1;
+    read_fd = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (read_fd < 0 || unlinkat(dirfd, name, 0) != 0) goto fail;
+    return read_fd;
+fail:
+    if (write_fd >= 0) (void)close(write_fd);
+    if (read_fd >= 0) (void)close(read_fd);
+    (void)unlinkat(dirfd, name, 0);
+    return -1;
 }
 
 /* --- main ------------------------------------------------------------------ */
+#ifndef YSTACK_SUPERVISOR_TEST
 int main(void)
 {
     int input_fd, export_fd, instr_priv_fd, cand_fd, tools_fd;
@@ -945,10 +1179,11 @@ int main(void)
     int started_pipe[2];
     pid_t child_pid = -1;
     struct timespec t0, tnow;
-    uint64_t deadline_ms;
+    uint64_t deadline_ms, page_size;
+    long measured_page_size;
 
     memset(&rs, 0, sizeof rs);
-    fan.fd = -1;
+    fanotify_state_init(&fan);
 
     if (getpid() != 1) die("not running as pid 1 (init should have exec'd us directly)");
     input_fd = open(INPUT_DEVICE, O_RDONLY | O_CLOEXEC);
@@ -966,17 +1201,16 @@ int main(void)
 
     if (!mkdir_p("/ys", 0700)) goto export_partial;
     deadline_ms = plan.limits.tree_deadline_ms;
+    measured_page_size = sysconf(_SC_PAGESIZE);
+    if (measured_page_size <= 0) goto export_partial;
+    page_size = (uint64_t)measured_page_size;
 
     /* candidate tmpfs: materialized, then finalized read-only (R5.5). */
     {
-        uint64_t total = 0;
-        size_t dirs = 1, files = 0;
-        for (i = 0; i < plan.entry_count; i++) {
-            if (plan.entries[i].is_file) { total += plan.entries[i].size_bytes; files++; }
-            else dirs++;
-        }
+        uint64_t total, inodes;
+        if (!candidate_geometry(&plan, page_size, &total, &inodes)) goto export_partial;
         if (!mkdir_p(CANDIDATE_DIR, 0700) ||
-            !mount_tmpfs(CANDIDATE_DIR, total + dirs * TMPFS_PAGE, files + dirs + 1U))
+            !mount_tmpfs(CANDIDATE_DIR, total, inodes))
             goto export_partial;
         cand_fd = open(CANDIDATE_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         if (cand_fd < 0 ||
@@ -985,12 +1219,17 @@ int main(void)
                 YS_PLAN_OK)
             goto export_partial;
         (void)close(cand_fd);
+        if (!make_searchable_read_only(CANDIDATE_DIR)) goto export_partial;
         if (!remount_ro(CANDIDATE_DIR, MS_NOEXEC)) goto export_partial;
     }
     /* tools tmpfs: the verifier only, root-owned, read-only+executable. */
-    if (!mkdir_p(TOOLS_DIR, 0700) ||
-        !mount_tmpfs(TOOLS_DIR, in.verifier_len + TMPFS_PAGE, 2U))
-        goto export_partial;
+    {
+        uint64_t verifier_allocation, tools_size;
+        if (!rounded_allocation((uint64_t)in.verifier_len, page_size, &verifier_allocation) ||
+            !checked_add_u64(verifier_allocation, page_size, &tools_size) ||
+            !mkdir_p(TOOLS_DIR, 0700) || !mount_tmpfs(TOOLS_DIR, tools_size, 2U))
+            goto export_partial;
+    }
     tools_fd = open(TOOLS_DIR, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (tools_fd < 0) goto export_partial;
     {
@@ -1006,6 +1245,7 @@ int main(void)
             goto export_partial;
     }
     (void)close(tools_fd);
+    if (!make_searchable_read_only(TOOLS_DIR)) goto export_partial;
     if (!remount_ro(TOOLS_DIR, 0)) goto export_partial;
 
     /* output tmpfs (stdout, stderr, evidence/) and scratch tmpfs. */
@@ -1034,8 +1274,9 @@ int main(void)
      * nothing but pivot into it. Everything lives under /sandbox (R6.1,
      * R6.4's fixed argv/PATH/TMPDIR), so the new root itself holds nothing
      * but that one directory. */
-    if (!mkdir_p(NEWROOT_DIR, 0700) || !mount_tmpfs(NEWROOT_DIR, 5U * TMPFS_PAGE, 10U) ||
-        !mkdir_p(NEWROOT_DIR "/sandbox", 0500))
+    if (!mkdir_p(NEWROOT_DIR, 0700) || !mount_tmpfs(NEWROOT_DIR, 5U * page_size, 10U) ||
+        !make_searchable_read_only(NEWROOT_DIR) || !mkdir_p(NEWROOT_DIR "/sandbox", 0555) ||
+        !make_searchable_read_only(NEWROOT_DIR "/sandbox"))
         goto export_partial;
     if (!bind_into_newroot(CANDIDATE_DIR, "candidate", 1, 1) ||
         !bind_into_newroot(TOOLS_DIR, "tools", 1, 0) ||
@@ -1046,7 +1287,9 @@ int main(void)
     {
         int outfd = openat(AT_FDCWD, OUTPUT_DIR "/stdout", O_WRONLY | O_CREAT | O_EXCL | O_APPEND, 0600);
         int errfd = openat(AT_FDCWD, OUTPUT_DIR "/stderr", O_WRONLY | O_CREAT | O_EXCL | O_APPEND, 0600);
-        int instr_fd = memfd_or_tmpfile(in.instruction, in.instruction_len);
+        int ysfd = open("/ys", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        int instr_fd = ysfd < 0 ? -1 : readonly_instruction_at(ysfd, in.instruction, in.instruction_len);
+        if (ysfd >= 0) (void)close(ysfd);
         if (outfd < 0 || errfd < 0 || instr_fd < 0) goto export_partial;
         instr_priv_fd = instr_fd;
         if (!fanotify_open_mark(&fan)) goto export_partial;
@@ -1279,3 +1522,525 @@ poweroff:
     (void)reboot(RB_POWER_OFF);
     return 0;
 }
+#else
+struct privilege_test_state { enum privilege_step seen[8]; size_t count; int fail_at; };
+
+static int record_privilege_step(enum privilege_step step, void *opaque)
+{
+    struct privilege_test_state *state = opaque;
+    state->seen[state->count++] = step;
+    return (int)step != state->fail_at;
+}
+
+static uint32_t evaluate_filter(const struct seccomp_prog_builder *b,
+                                const struct seccomp_data *data)
+{
+    uint32_t accumulator = 0U;
+    size_t pc = 0U;
+    while (pc < b->n) {
+        const struct sock_filter *instruction = &b->insn[pc];
+        switch (BPF_CLASS(instruction->code)) {
+        case BPF_LD:
+            if (instruction->k > sizeof *data - sizeof accumulator) return 0U;
+            memcpy(&accumulator, (const unsigned char *)data + instruction->k,
+                   sizeof accumulator);
+            pc++;
+            break;
+        case BPF_ALU:
+            if (BPF_OP(instruction->code) != BPF_AND) return 0U;
+            accumulator &= instruction->k;
+            pc++;
+            break;
+        case BPF_JMP: {
+            int condition;
+            if (BPF_OP(instruction->code) == BPF_JEQ) condition = accumulator == instruction->k;
+            else if (BPF_OP(instruction->code) == BPF_JSET)
+                condition = (accumulator & instruction->k) != 0U;
+            else return 0U;
+            pc += 1U + (condition ? instruction->jt : instruction->jf);
+            break;
+        }
+        case BPF_RET:
+            return instruction->k;
+        default:
+            return 0U;
+        }
+    }
+    return 0U;
+}
+
+static uint32_t filter_result(const struct seccomp_prog_builder *b, uint32_t arch, int nr,
+                              unsigned arg_index, uint64_t arg)
+{
+    struct seccomp_data data;
+    memset(&data, 0, sizeof data);
+    data.arch = arch;
+    data.nr = nr;
+    data.args[arg_index] = arg;
+    return evaluate_filter(b, &data);
+}
+
+static int filter_denies(const struct seccomp_prog_builder *b, int nr, unsigned arg_index,
+                         uint64_t arg)
+{
+    uint32_t result = filter_result(b, AUDIT_ARCH_AARCH64, nr, arg_index, arg);
+    return (result & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_ERRNO;
+}
+
+static int test_report_writer(void)
+{
+    struct report_state state;
+    char *names[61];
+    char plan_digest[65];
+    char *report;
+    size_t length, i;
+    memset(&state, 0, sizeof state);
+    memset(plan_digest, 'a', 64U);
+    plan_digest[64] = '\0';
+    state.verifier_started = 1;
+    state.tree_terminated = 1;
+    state.cpu = (struct guest_row){ 1U, "complete", "none", 0, 1U };
+    state.memory = (struct guest_row){ 2U, "complete", "hard", 0, 4096U };
+    state.output = (struct guest_row){ 3U, "complete", "hard", 0, 1U };
+    state.tasks = (struct guest_row){ 4U, "complete", "hard", 0, 1U };
+    state.scratch = (struct guest_row){ 5U, "complete", "hard", 0, 4096U };
+    state.evidence_names = names;
+    state.evidence_count = sizeof names / sizeof names[0];
+    for (i = 0; i < state.evidence_count; i++) {
+        names[i] = malloc(256U);
+        if (names[i] == NULL) return 0;
+        memset(names[i], 'a' + (int)(i % 26U), 255U);
+        names[i][252] = (char)('0' + (i / 10U));
+        names[i][253] = (char)('0' + (i % 10U));
+        names[i][254] = 'z';
+        names[i][255] = '\0';
+    }
+    ys_test_report_sizes = 1;
+    report = build_report_json(plan_digest, &state, &length);
+    if (report == NULL || length <= 8192U || report[length] != '\0' || report[length - 1U] != '\n' ||
+        strstr(report, "\"index\":31") == NULL) {
+        free(report);
+        return 0;
+    }
+    free(report);
+    ys_test_report_cap_limit = 1024U;
+    report = build_report_json(plan_digest, &state, &length);
+    ys_test_report_cap_limit = 0U;
+    for (i = 0; i < state.evidence_count; i++) free(names[i]);
+    if (report != NULL) { free(report); return 0; }
+    memset(&state, 0, sizeof state);
+    state.verifier_started = 1;
+    state.exit_signaled = 1;
+    state.cpu = (struct guest_row){ 0U, "unavailable", "none", 0, 1U };
+    state.memory = (struct guest_row){ 0U, "unavailable", "hard", 0, 4096U };
+    state.output = (struct guest_row){ 0U, "unavailable", "hard", 0, 1U };
+    state.tasks = (struct guest_row){ 0U, "unavailable", "hard", 0, 1U };
+    state.scratch = (struct guest_row){ 0U, "unavailable", "hard", 0, 4096U };
+    report = build_report_json(plan_digest, &state, &length);
+    if (report == NULL || strstr(report, "\"exit_code\":null") == NULL ||
+        strstr(report, "\"observed\":null") == NULL) {
+        free(report);
+        return 0;
+    }
+    free(report);
+    state.evidence_names = names;
+    state.evidence_count = 1U;
+    names[0] = malloc(257U);
+    if (names[0] == NULL) return 0;
+    memset(names[0], 'x', 256U);
+    names[0][256] = '\0';
+    report = build_report_json(plan_digest, &state, &length);
+    free(names[0]);
+    if (report != NULL) { free(report); return 0; }
+    names[0] = (char *)"missing-evidence";
+    ys_test_report_sizes = 0;
+    report = build_report_json(plan_digest, &state, &length);
+    if (report != NULL) { free(report); return 0; }
+    return 1;
+}
+
+static int test_fanotify_history(void)
+{
+    struct fanotify_state state;
+    size_t i;
+    memset(&state, 0xa5, sizeof state);
+    fanotify_state_init(&state);
+    if (state.fd != -1 || state.seen_count != 0U) return 0;
+    if (!inode_history_record(&state, 1, 1) || inode_history_record(&state, 1, 1)) return 0;
+    for (i = 1; i < sizeof state.seen / sizeof state.seen[0]; i++)
+        if (!inode_history_record(&state, 1, (ino_t)(i + 1U))) return 0;
+    return state.seen_count == 256U && !inode_history_record(&state, 1, 9999);
+}
+
+static int test_checked_arithmetic(void)
+{
+    uint64_t result;
+    if (!checked_add_u64(0U, 0U, &result) || result != 0U ||
+        !checked_add_u64(UINT64_MAX - 1U, 1U, &result) || result != UINT64_MAX ||
+        checked_add_u64(UINT64_MAX, 1U, &result))
+        return 0;
+    if (!checked_mul_u64(0U, UINT64_MAX, &result) || result != 0U ||
+        !checked_mul_u64(UINT64_MAX, 1U, &result) || result != UINT64_MAX ||
+        checked_mul_u64(UINT64_MAX, 2U, &result))
+        return 0;
+    if (!rounded_allocation(1U, 65536U, &result) || result != 65536U ||
+        !rounded_allocation(65536U, 65536U, &result) || result != 65536U ||
+        !rounded_allocation(65537U, 65536U, &result) || result != 131072U ||
+        rounded_allocation(UINT64_MAX, 65536U, &result))
+        return 0;
+    return 1;
+}
+
+static int test_geometry(void)
+{
+    struct ys_plan_entry entries[10];
+    struct ys_guest_plan plan;
+    uint64_t size, inodes;
+    size_t i;
+    memset(entries, 0, sizeof entries);
+    memset(&plan, 0, sizeof plan);
+    plan.entries = entries;
+    plan.entry_count = 10U;
+    for (i = 0; i < 10U; i++) { entries[i].is_file = 1; entries[i].size_bytes = 1U; }
+    if (!candidate_geometry(&plan, 16384U, &size, &inodes) ||
+        size != 11U * 16384U || inodes != 11U)
+        return 0;
+    plan.entry_count = 0U;
+    if (!candidate_geometry(&plan, 8192U, &size, &inodes) || size != 8192U || inodes != 1U)
+        return 0;
+    plan.entry_count = 1U;
+    entries[0].size_bytes = 8192U;
+    if (!candidate_geometry(&plan, 8192U, &size, &inodes) || size != 16384U || inodes != 2U)
+        return 0;
+    entries[0].size_bytes = UINT64_MAX;
+    if (candidate_geometry(&plan, 8192U, &size, &inodes)) return 0;
+    entries[0].size_bytes = 8193U;
+    entries[1].is_file = 0;
+    plan.entry_count = 2U;
+    if (!candidate_geometry(&plan, 8192U, &size, &inodes) ||
+        size != 4U * 8192U || inodes != 3U)
+        return 0;
+    return !candidate_geometry(&plan, 0U, &size, &inodes);
+}
+
+static int test_instruction_descriptor(const char *directory)
+{
+    static const unsigned char content[] = "instruction bytes";
+    unsigned char readback[sizeof content];
+    struct stat st;
+    int dirfd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int fd, flags;
+    if (dirfd < 0) return 0;
+    fd = readonly_instruction_at(dirfd, content, sizeof content - 1U);
+    (void)close(dirfd);
+    if (fd < 0) return 0;
+    flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || (flags & O_ACCMODE) != O_RDONLY || fstat(fd, &st) != 0 ||
+        !S_ISREG(st.st_mode) || write(fd, "x", 1) != -1 || errno != EBADF ||
+        read(fd, readback, sizeof content - 1U) != (ssize_t)(sizeof content - 1U) ||
+        memcmp(readback, content, sizeof content - 1U) != 0) {
+        (void)close(fd);
+        return 0;
+    }
+    (void)close(fd);
+    dirfd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0) return 0;
+    fd = readonly_instruction_at(dirfd, content, 0U);
+    (void)close(dirfd);
+    if (fd < 0 || fstat(fd, &st) != 0 || st.st_size != 0 || write(fd, "x", 1) != -1 ||
+        errno != EBADF) {
+        if (fd >= 0) (void)close(fd);
+        return 0;
+    }
+    (void)close(fd);
+    dirfd = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0) return 0;
+    fd = openat(dirfd, ".instruction", O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0 || close(fd) != 0 || readonly_instruction_at(dirfd, content,
+        sizeof content - 1U) != -1 || unlinkat(dirfd, ".instruction", 0) != 0) {
+        if (fd >= 0) (void)close(fd);
+        (void)close(dirfd);
+        return 0;
+    }
+    (void)close(dirfd);
+    return 1;
+}
+
+static int test_privilege_order(void)
+{
+    static const enum privilege_step expected[] = {
+        PRIV_CLEAR_GROUPS, PRIV_SET_GIDS, PRIV_DROP_BOUNDING, PRIV_SET_UIDS,
+        PRIV_CLEAR_CAPS, PRIV_NO_NEW_PRIVS, PRIV_VERIFY
+    };
+    struct privilege_test_state state;
+    size_t i;
+    memset(&state, 0, sizeof state);
+    state.fail_at = -1;
+    if (!run_privilege_sequence(record_privilege_step, &state) ||
+        state.count != sizeof expected / sizeof expected[0] ||
+        memcmp(state.seen, expected, sizeof expected) != 0)
+        return 0;
+    for (i = 0; i < sizeof expected / sizeof expected[0]; i++) {
+        memset(&state, 0, sizeof state);
+        state.fail_at = (int)expected[i];
+        if (run_privilege_sequence(record_privilege_step, &state) || state.count != i + 1U)
+            return 0;
+    }
+    return 1;
+}
+
+static int child_succeeded(pid_t child)
+{
+    int status;
+    return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int test_actual_privilege_state(void)
+{
+    pid_t child;
+    if (geteuid() != 0) {
+        (void)printf("SKIP: actual uid/gid/capability drop needs uid 0 in the isolated test environment\n");
+        return 1;
+    }
+    child = fork();
+    if (child < 0) return 0;
+    if (child == 0) _exit(run_privilege_sequence(actual_privilege_step, NULL) ? 0 : 1);
+    return child_succeeded(child);
+}
+
+static int join_path(char *out, size_t cap, const char *parent, const char *leaf)
+{
+    int length = snprintf(out, cap, "%s/%s", parent, leaf);
+    return length >= 0 && (size_t)length < cap;
+}
+
+static int test_searchable_ancestors(const char *base)
+{
+    char sandbox[512], candidate[512], tools[512], verifier[512], unwanted[512];
+    int fd;
+    pid_t child;
+    if (!join_path(sandbox, sizeof sandbox, base, "sandbox") ||
+        !join_path(candidate, sizeof candidate, sandbox, "candidate") ||
+        !join_path(tools, sizeof tools, sandbox, "tools") ||
+        !join_path(verifier, sizeof verifier, tools, "verifier") ||
+        !join_path(unwanted, sizeof unwanted, candidate, "unwanted"))
+        return 0;
+    if (mkdir(sandbox, 0700) != 0 || mkdir(candidate, 0700) != 0 || mkdir(tools, 0700) != 0)
+        return 0;
+    fd = open(verifier, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0555);
+    if (fd < 0 || write(fd, "tool", 4) != 4 || close(fd) != 0 || chmod(verifier, 0555) != 0 ||
+        !make_searchable_read_only(base) || !make_searchable_read_only(sandbox) ||
+        !make_searchable_read_only(candidate) || !make_searchable_read_only(tools))
+        return 0;
+    child = fork();
+    if (child < 0) return 0;
+    if (child == 0) {
+        int candidate_fd, tool_fd, denied_fd;
+        if (geteuid() == 0 && (setgroups(0, NULL) != 0 ||
+            setresgid(GUEST_GID, GUEST_GID, GUEST_GID) != 0 ||
+            setresuid(GUEST_UID, GUEST_UID, GUEST_UID) != 0))
+            _exit(2);
+        candidate_fd = open(candidate, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        tool_fd = open(verifier, O_RDONLY | O_CLOEXEC);
+        denied_fd = open(unwanted, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (denied_fd >= 0) { (void)close(denied_fd); _exit(3); }
+        if (candidate_fd < 0 || tool_fd < 0) _exit(4);
+        (void)close(candidate_fd);
+        (void)close(tool_fd);
+        _exit(0);
+    }
+    if (geteuid() != 0)
+        (void)printf("SKIP: ancestor access used enforced 0555 modes but actual uid 65534 needs uid 0\n");
+    return child_succeeded(child);
+}
+
+static int test_filter(void)
+{
+    struct seccomp_prog_builder builder;
+    static const int direct_denials[] = {
+#ifdef __NR_socket
+        __NR_socket,
+#endif
+#ifdef __NR_socketpair
+        __NR_socketpair,
+#endif
+#ifdef __NR_mknod
+        __NR_mknod,
+#endif
+#ifdef __NR_mknodat
+        __NR_mknodat,
+#endif
+#ifdef __NR_fallocate
+        __NR_fallocate,
+#endif
+#ifdef __NR_truncate
+        __NR_truncate,
+#endif
+#ifdef __NR_ftruncate
+        __NR_ftruncate,
+#endif
+#ifdef __NR_lseek
+        __NR_lseek,
+#endif
+#ifdef __NR_pwrite64
+        __NR_pwrite64,
+#endif
+#ifdef __NR_pwritev
+        __NR_pwritev,
+#endif
+#ifdef __NR_pwritev2
+        __NR_pwritev2,
+#endif
+#ifdef __NR_openat2
+        __NR_openat2,
+#endif
+#ifdef __NR_open_by_handle_at
+        __NR_open_by_handle_at,
+#endif
+#ifdef __NR_name_to_handle_at
+        __NR_name_to_handle_at,
+#endif
+#ifdef __NR_splice
+        __NR_splice,
+#endif
+#ifdef __NR_vmsplice
+        __NR_vmsplice,
+#endif
+#ifdef __NR_tee
+        __NR_tee,
+#endif
+#ifdef __NR_sendfile
+        __NR_sendfile,
+#endif
+#ifdef __NR_copy_file_range
+        __NR_copy_file_range,
+#endif
+#ifdef __NR_io_uring_setup
+        __NR_io_uring_setup,
+#endif
+#ifdef __NR_io_uring_enter
+        __NR_io_uring_enter,
+#endif
+#ifdef __NR_io_uring_register
+        __NR_io_uring_register,
+#endif
+#ifdef __NR_io_setup
+        __NR_io_setup,
+#endif
+#ifdef __NR_io_submit
+        __NR_io_submit,
+#endif
+#ifdef __NR_userfaultfd
+        __NR_userfaultfd,
+#endif
+#ifdef __NR_perf_event_open
+        __NR_perf_event_open,
+#endif
+#ifdef __NR_bpf
+        __NR_bpf,
+#endif
+#ifdef __NR_ptrace
+        __NR_ptrace,
+#endif
+#ifdef __NR_process_vm_readv
+        __NR_process_vm_readv,
+#endif
+#ifdef __NR_process_vm_writev
+        __NR_process_vm_writev,
+#endif
+#ifdef __NR_linkat
+        __NR_linkat,
+#endif
+#ifdef __NR_symlinkat
+        __NR_symlinkat,
+#endif
+#ifdef __NR_mount
+        __NR_mount,
+#endif
+#ifdef __NR_umount2
+        __NR_umount2,
+#endif
+#ifdef __NR_pivot_root
+        __NR_pivot_root,
+#endif
+#ifdef __NR_move_mount
+        __NR_move_mount,
+#endif
+#ifdef __NR_open_tree
+        __NR_open_tree,
+#endif
+#ifdef __NR_fsopen
+        __NR_fsopen,
+#endif
+#ifdef __NR_fsmount
+        __NR_fsmount,
+#endif
+#ifdef __NR_unshare
+        __NR_unshare,
+#endif
+#ifdef __NR_setns
+        __NR_setns,
+#endif
+#ifdef __NR_clone3
+        __NR_clone3,
+#endif
+#ifdef __NR_keyctl
+        __NR_keyctl,
+#endif
+#ifdef __NR_add_key
+        __NR_add_key,
+#endif
+#ifdef __NR_request_key
+        __NR_request_key,
+#endif
+#ifdef __NR_acct
+        __NR_acct,
+#endif
+#ifdef __NR_swapon
+        __NR_swapon,
+#endif
+    };
+    size_t i;
+    if (!build_seccomp_filter(&builder) || builder.failed || builder.n == 0U) return 0;
+    builder.n = YS_SECCOMP_MAX_INSN;
+    builder.failed = 0;
+    sb_push(&builder, (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+    if (!builder.failed || !build_seccomp_filter(&builder)) return 0;
+    for (i = 0; i < sizeof direct_denials / sizeof direct_denials[0]; i++)
+        if (!filter_denies(&builder, direct_denials[i], 0U, 0U)) return 0;
+#ifdef __NR_read
+    if (filter_denies(&builder, __NR_read, 0U, 0U)) return 0;
+#endif
+#ifdef __NR_openat
+    if (filter_denies(&builder, __NR_openat, 2U, O_RDONLY | O_DIRECTORY) ||
+        !filter_denies(&builder, __NR_openat, 2U, O_TMPFILE | O_RDWR))
+        return 0;
+#endif
+#ifdef __NR_madvise
+    if (!filter_denies(&builder, __NR_madvise, 2U, MADV_REMOVE) ||
+        filter_denies(&builder, __NR_madvise, 2U, MADV_REMOVE | 16U))
+        return 0;
+#endif
+#ifdef __NR_clone
+    if (filter_denies(&builder, __NR_clone, 0U, SIGCHLD) ||
+        !filter_denies(&builder, __NR_clone, 0U, CLONE_NEWNS | SIGCHLD))
+        return 0;
+#endif
+    if ((filter_result(&builder, 0U, 0, 0U, 0U) & SECCOMP_RET_ACTION_FULL) !=
+        SECCOMP_RET_ERRNO)
+        return 0;
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc != 2) return 2;
+    if (!test_report_writer() || !test_fanotify_history() || !test_checked_arithmetic() ||
+        !test_geometry() ||
+        !test_instruction_descriptor(argv[1]) || !test_privilege_order() ||
+        !test_actual_privilege_state() || !test_searchable_ancestors(argv[1]) || !test_filter())
+        return 1;
+    (void)printf("production supervisor helpers: report, fanotify, geometry, instruction, privilege order, traversal, filter: ok\n");
+    return 0;
+}
+#endif

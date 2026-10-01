@@ -368,7 +368,7 @@ static int cmd_verify_report(int argc, char **argv)
     int argv_ok = (argc == 6 && strcmp(argv[2], YS_PLAN_ARGV[2]) == 0 &&
                    strcmp(argv[3], YS_PLAN_ARGV[3]) == 0 && strcmp(argv[4], YS_PLAN_ARGV[4]) == 0 &&
                    strcmp(argv[5], YS_PLAN_ARGV[5]) == 0);
-    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra, fl1, fl2;
+    int env_ok, fd0_ok, fd1_ok, fd2_ok, extra, fl0, fl1, fl2;
     struct stat st;
     char **e;
     int count = 0, i;
@@ -381,7 +381,11 @@ static int cmd_verify_report(int argc, char **argv)
             if (strcmp(environ[j], YS_PLAN_ENVIRONMENT[i]) == 0) { seen = 1; break; }
         if (!seen) env_ok = 0;
     }
-    fd0_ok = (fstat(0, &st) == 0 && S_ISREG(st.st_mode) && lseek(0, 0, SEEK_CUR) == 0);
+    fl0 = fcntl(0, F_GETFL);
+    errno = 0;
+    fd0_ok = (fstat(0, &st) == 0 && S_ISREG(st.st_mode) && lseek(0, 0, SEEK_CUR) == 0 &&
+              fl0 >= 0 && (fl0 & O_ACCMODE) == O_RDONLY && write(0, "x", 1) == -1 &&
+              errno == EBADF);
     fl1 = fcntl(1, F_GETFL); fl2 = fcntl(2, F_GETFL);
     fd1_ok = (fl1 >= 0 && (fl1 & O_ACCMODE) == O_WRONLY && (fl1 & O_APPEND) != 0);
     fd2_ok = (fl2 >= 0 && (fl2 & O_ACCMODE) == O_WRONLY && (fl2 & O_APPEND) != 0);

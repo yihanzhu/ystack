@@ -377,7 +377,7 @@ except OSError: print('fail')
 [ "$(rootop rename "$tmp/mat/out/README.md" "$tmp/mat/out/renamed.md")" = fail ] || fail 'renaming a root-level file must fail'
 pass 'the candidate root itself is finalized to mode 0500 and the invoking uid: a root-level remove, create or rename all fail too, not only within a nested materialized directory'
 
-# --- R6.4 exec wiring: argv, the four environment variables, fd 0 regular,
+# --- R6.4 exec wiring: argv, the four environment variables, fd 0 regular/read-only,
 # fds 1-2 append-only, no other descriptor -------------------------------
 /usr/bin/printf 'the instruction bytes' > "$tmp/instr.txt"
 : > "$tmp/exec.out"; : > "$tmp/exec.err"
@@ -385,7 +385,7 @@ pass 'the candidate root itself is finalized to mode 0500 and the invoking uid: 
 expected_report=$'argv:ok\nenv:ok\nfd0:ok\nfd1:ok\nfd2:ok\nextra_fds:0'
 [ "$(cat "$tmp/exec.out")" = "$expected_report" ] || fail "exec wiring: unexpected report $(cat "$tmp/exec.out")"
 [ ! -s "$tmp/exec.err" ] || fail 'exec wiring: stderr must be empty'
-pass 'ys_exec delivers exactly the R6.4 argv and the four environment variables, with fd 0 a regular file, fds 1-2 append-only and every other descriptor closed'
+pass 'ys_exec delivers exactly the R6.4 argv and environment, with fd 0 a regular read-only file that rejects writes, fds 1-2 append-only and every other descriptor closed'
 # ys_exec must preserve a source whose value overlaps another destination
 # (e.g. stdout_fd == 0, the instruction's own target): a naive sequential
 # dup2(instruction_fd,0); dup2(stdout_fd,1); ... would clobber stdout_fd's
@@ -556,6 +556,27 @@ assert entries[0][5] == init_bytes and entries[1][5] == sup_bytes, 'entry conten
 PY
 pass 'the initramfs.cpio built above has exactly two newc entries (init, supervisor) plus TRAILER!!!, each uid/gid 0 and mtime 0, with fixed inode numbers 1 and 2 and content matching the source bytes exactly'
 
+# image refuses to overwrite its deterministic result and refuses either
+# missing executable before creating a result.
+status=0
+"$python" "$build_guest" image "$tmp/img1" >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] && [ "$(cat "$tmp/err")" = E_BUILD_OUT_EXISTS ] ||
+  fail 'build-guest.py image must refuse to overwrite initramfs.cpio'
+for absent in init supervisor; do
+  /bin/mkdir -m 700 "$tmp/img-missing-$absent"
+  if [ "$absent" = init ]; then
+    /usr/bin/printf supervisor > "$tmp/img-missing-$absent/supervisor"
+  else
+    /usr/bin/printf init > "$tmp/img-missing-$absent/init"
+  fi
+  status=0
+  "$python" "$build_guest" image "$tmp/img-missing-$absent" >/dev/null 2>"$tmp/err" || status=$?
+  [ "$status" -ne 0 ] && [ "$(cat "$tmp/err")" = E_BUILD_MISSING_INPUT ] &&
+    [ ! -e "$tmp/img-missing-$absent/initramfs.cpio" ] ||
+    fail "build-guest.py image must refuse a missing $absent without creating output"
+done
+pass 'image refuses an existing initramfs and each missing required executable without overwriting or creating output'
+
 # --- compile: refuses an existing output directory -------------------------
 /bin/mkdir -m 700 "$tmp/compile-out"
 status=0
@@ -564,6 +585,272 @@ status=0
 [ "$(cat "$tmp/err")" = E_BUILD_OUT_EXISTS ] ||
   fail "build-guest.py compile: expected E_BUILD_OUT_EXISTS for an existing output directory, got $(cat "$tmp/err")"
 pass 'build-guest.py compile refuses an output directory that already exists (checked before any toolchain invocation: an unresolvable toolchain path here would otherwise fail first and mask this case)'
+
+# --- compile: controlled archive extraction and complete provenance --------
+/bin/mkdir -m 700 "$tmp/toolchain-a" "$tmp/toolchain-b"
+marker="$tmp/compiler-invocations"
+"$python" - "$tmp/toolchain-a/toolchain.tar.xz" "$marker" bundled-a <<'PY'
+import io, sys, tarfile
+archive, marker, bundled = sys.argv[1:]
+zig = b'''#!/bin/sh
+printf '%s\n' "$0 $*" >> "''' + marker.encode() + b'''"
+out=
+previous=
+for argument do
+  if [ "$previous" = -o ]; then out=$argument; fi
+  previous=$argument
+done
+[ -n "$out" ] || exit 41
+printf 'synthetic-%s\n' "${out##*/}" > "$out"
+'''
+with tarfile.open(archive, 'w:xz', format=tarfile.PAX_FORMAT) as tf:
+    for name, data, mode in [('zig-fake/zig', zig, 0o755), ('zig-fake/lib/header.h', bundled.encode(), 0o644)]:
+        info = tarfile.TarInfo(name)
+        info.size, info.mode, info.uid, info.gid, info.mtime = len(data), mode, 0, 0, 0
+        tf.addfile(info, io.BytesIO(data))
+PY
+"$python" - "$tmp/toolchain-b/toolchain.tar.xz" "$marker" bundled-b <<'PY'
+import io, sys, tarfile
+archive, marker, bundled = sys.argv[1:]
+zig = b'''#!/bin/sh
+printf '%s\n' "$0 $*" >> "''' + marker.encode() + b'''"
+out=
+previous=
+for argument do
+  if [ "$previous" = -o ]; then out=$argument; fi
+  previous=$argument
+done
+[ -n "$out" ] || exit 41
+printf 'synthetic-%s\n' "${out##*/}" > "$out"
+'''
+with tarfile.open(archive, 'w:xz', format=tarfile.PAX_FORMAT) as tf:
+    for name, data, mode in [('zig-fake/zig', zig, 0o755), ('zig-fake/lib/header.h', bundled.encode(), 0o644)]:
+        info = tarfile.TarInfo(name)
+        info.size, info.mode, info.uid, info.gid, info.mtime = len(data), mode, 0, 0, 0
+        tf.addfile(info, io.BytesIO(data))
+PY
+"$python" "$build_guest" compile "$tmp/toolchain-a" "$tmp/build-a"
+"$python" "$build_guest" compile "$tmp/toolchain-b" "$tmp/build-b"
+"$python" - "$tmp/build-a/build-record.json" "$tmp/build-b/build-record.json" \
+  "$tmp/toolchain-a/toolchain.tar.xz" "$tmp/toolchain-b/toolchain.tar.xz" "$marker" "$root" <<'PY'
+import hashlib, json, os, stat, sys
+raw_a = open(sys.argv[1], 'rb').read()
+raw_b = open(sys.argv[2], 'rb').read()
+record_a = json.loads(raw_a)
+record_b = json.loads(raw_b)
+digest = lambda path: hashlib.sha256(open(path, 'rb').read()).hexdigest()
+body_a, body_b = record_a['body'], record_b['body']
+assert record_a['kind'] == 'sandbox_guest_build'
+assert record_a['schema_version'] == 1
+assert raw_a.endswith(b'\n') and raw_a == (json.dumps(record_a, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n').encode()
+assert [item['name'] for item in body_a['executables']] == ['init', 'supervisor', 'verifier']
+for name in ('init', 'supervisor', 'verifier'):
+    assert stat.S_IMODE(os.stat(os.path.join(os.path.dirname(sys.argv[1]), name)).st_mode) == 0o555
+assert body_a['archive_sha256'] == digest(sys.argv[3])
+assert body_b['archive_sha256'] == digest(sys.argv[4])
+assert body_a['archive_sha256'] != body_b['archive_sha256'], 'bundled-header change must change archive identity'
+source_paths = [item['path'] for item in body_a['sources']]
+assert 'verifiers/file-digest/v1/verifier.c' in source_paths
+assert 'sandbox/v1/guest/init.c' in source_paths and 'sandbox/v1/guest/supervisor.c' in source_paths
+assert [item['path'] for item in body_a['headers']] == ['sandbox/v1/guest/common.h']
+assert body_a['flags'] == ['-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', '-static', '-target', 'aarch64-linux-musl']
+for item in body_a['sources'] + body_a['headers']:
+    assert item['sha256'] == digest(os.path.join(sys.argv[6], item['path']))
+assert body_a['script_sha256'] == digest(os.path.join(sys.argv[6], 'sandbox/v1/build-guest.py'))
+lines = open(sys.argv[5], encoding='utf-8').read().splitlines()
+assert len(lines) == 6, 'expected three compiler calls per build, got %d' % len(lines)
+assert all('.ystack-toolchain-' in line for line in lines), 'compiler must run from private extraction'
+assert all('/toolchain-a/' not in line and '/toolchain-b/' not in line for line in lines)
+PY
+for target in init supervisor verifier; do
+  cmp -s "$tmp/build-a/$target" "$tmp/build-b/$target" ||
+    fail "synthetic compiler produced different $target bytes across separate archive builds"
+done
+pass 'the real compile command privately copies and safely extracts the archive, builds mandatory init/supervisor/verifier targets, records sources/headers and the archive digest, and produces identical target bytes in separate directories; changing bundled bytes changes archive identity'
+
+unsafe_marker="$tmp/unsafe-compiler-ran"
+/bin/mkdir -m 700 "$tmp/toolchain-unsafe"
+"$python" - "$tmp/toolchain-unsafe/toolchain.tar.xz" "$unsafe_marker" <<'PY'
+import io, sys, tarfile
+with tarfile.open(sys.argv[1], 'w:xz') as tf:
+    for name, data, mode in [('zig-fake/zig', ('#!/bin/sh\ntouch %s\n' % sys.argv[2]).encode(), 0o755),
+                             ('../escape', b'bad', 0o644)]:
+        info = tarfile.TarInfo(name); info.size = len(data); info.mode = mode
+        tf.addfile(info, io.BytesIO(data))
+PY
+status=0
+"$python" "$build_guest" compile "$tmp/toolchain-unsafe" "$tmp/build-unsafe" >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] && [ ! -e "$unsafe_marker" ] && [ ! -e "$tmp/build-unsafe" ] ||
+  fail 'unsafe archive member must be refused before compiler invocation and leave no output directory'
+pass 'an unsafe toolchain archive member is rejected before compiler invocation and leaves no partial build'
+
+# Every tar member type and topology that could escape or make extraction
+# ambiguous is rejected before the synthetic compiler gets control.
+archive_attack_marker="$tmp/archive-attack-compiler-ran"
+"$python" - "$tmp" "$archive_attack_marker" <<'PY'
+import io, os, sys, tarfile
+root, marker = sys.argv[1:]
+zig = ('#!/bin/sh\ntouch %s\nexit 99\n' % marker).encode()
+cases = {
+    'absolute': ('file', '/escape', b'x'),
+    'symlink': ('symlink', 'zig-fake/link', b''),
+    'hardlink': ('hardlink', 'zig-fake/hard', b''),
+    'fifo': ('fifo', 'zig-fake/fifo', b''),
+    'duplicate': ('duplicate', 'zig-fake/duplicate', b'x'),
+    'second-root': ('file', 'other-root/file', b'x'),
+    'file-parent': ('file-parent', 'zig-fake/file/child', b'x'),
+}
+for case, (kind, name, data) in cases.items():
+    directory = os.path.join(root, 'toolchain-attack-' + case)
+    os.mkdir(directory, 0o700)
+    with tarfile.open(os.path.join(directory, 'toolchain.tar.xz'), 'w:xz') as tf:
+        info = tarfile.TarInfo('zig-fake/zig'); info.size = len(zig); info.mode = 0o755
+        tf.addfile(info, io.BytesIO(zig))
+        if kind == 'symlink':
+            info = tarfile.TarInfo(name); info.type = tarfile.SYMTYPE; info.linkname = '/tmp'
+            tf.addfile(info)
+        elif kind == 'hardlink':
+            info = tarfile.TarInfo(name); info.type = tarfile.LNKTYPE; info.linkname = 'zig-fake/zig'
+            tf.addfile(info)
+        elif kind == 'fifo':
+            info = tarfile.TarInfo(name); info.type = tarfile.FIFOTYPE
+            tf.addfile(info)
+        elif kind == 'duplicate':
+            for _ in range(2):
+                info = tarfile.TarInfo(name); info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        elif kind == 'file-parent':
+            parent = tarfile.TarInfo('zig-fake/file'); parent.size = 1
+            tf.addfile(parent, io.BytesIO(b'x'))
+            info = tarfile.TarInfo(name); info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        else:
+            info = tarfile.TarInfo(name); info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+PY
+for attack in absolute symlink hardlink fifo duplicate second-root file-parent; do
+  status=0
+  "$python" "$build_guest" compile "$tmp/toolchain-attack-$attack" \
+    "$tmp/build-attack-$attack" >/dev/null 2>"$tmp/err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -e "$archive_attack_marker" ] &&
+    [ ! -e "$tmp/build-attack-$attack" ] ||
+    fail "archive attack $attack must be refused before compiler invocation"
+done
+pass 'absolute paths, links, special files, duplicate names, multiple roots and file-as-parent archive layouts are all refused before compiler invocation'
+
+/bin/mkdir -m 700 "$tmp/toolchain-fail"
+"$python" - "$tmp/toolchain-fail/toolchain.tar.xz" <<'PY'
+import io, tarfile, sys
+zig = b'''#!/bin/sh
+out=
+previous=
+for argument do
+  if [ "$previous" = -o ]; then out=$argument; fi
+  previous=$argument
+done
+case "$out" in */supervisor) exit 42;; esac
+printf synthetic > "$out"
+'''
+with tarfile.open(sys.argv[1], 'w:xz') as tf:
+    info = tarfile.TarInfo('zig-fake/zig'); info.size = len(zig); info.mode = 0o755
+    tf.addfile(info, io.BytesIO(zig))
+PY
+status=0
+"$python" "$build_guest" compile "$tmp/toolchain-fail" "$tmp/build-fail" >/dev/null 2>"$tmp/err" || status=$?
+[ "$status" -ne 0 ] && [ ! -e "$tmp/build-fail" ] ||
+  fail 'compiler failure must leave no incomplete output directory'
+pass 'a compiler failure refuses the incomplete build and removes its private staging directory'
+
+# Archive and compiler preconditions fail closed without promoting a result.
+/bin/mkdir -m 700 "$tmp/toolchain-missing" "$tmp/toolchain-symlink" \
+  "$tmp/toolchain-corrupt" "$tmp/toolchain-nozig" "$tmp/toolchain-nonexec" \
+  "$tmp/toolchain-nooutput" "$tmp/toolchain-symlink-output"
+/bin/ln -s "$tmp/toolchain-a/toolchain.tar.xz" "$tmp/toolchain-symlink/toolchain.tar.xz"
+/usr/bin/printf 'not an xz tar archive' > "$tmp/toolchain-corrupt/toolchain.tar.xz"
+"$python" - "$tmp" <<'PY'
+import io, os, sys, tarfile
+root = sys.argv[1]
+cases = {
+    'nozig': ('zig-fake/not-zig', b'not a compiler', 0o755),
+    'nonexec': ('zig-fake/zig', b'#!/bin/sh\nexit 99\n', 0o644),
+    'nooutput': ('zig-fake/zig', b'#!/bin/sh\nexit 0\n', 0o755),
+    'symlink-output': ('zig-fake/zig', b'''#!/bin/sh
+out=
+previous=
+for argument do
+  if [ "$previous" = -o ]; then out=$argument; fi
+  previous=$argument
+done
+/bin/ln -s /dev/null "$out"
+''', 0o755),
+}
+for case, (name, data, mode) in cases.items():
+    archive = os.path.join(root, 'toolchain-' + case, 'toolchain.tar.xz')
+    with tarfile.open(archive, 'w:xz') as tf:
+        info = tarfile.TarInfo(name); info.size = len(data); info.mode = mode
+        tf.addfile(info, io.BytesIO(data))
+PY
+for invalid in missing symlink corrupt nozig nonexec nooutput symlink-output; do
+  status=0
+  "$python" "$build_guest" compile "$tmp/toolchain-$invalid" \
+    "$tmp/build-invalid-$invalid" >/dev/null 2>"$tmp/err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -e "$tmp/build-invalid-$invalid" ] ||
+    fail "invalid toolchain case $invalid must fail without promoting an output directory"
+done
+pass 'missing, symlinked, corrupt, compiler-less, non-executable, no-output and symlink-output toolchains all fail closed without a partial result'
+
+# Success and every refusal remove the private archive copy, extraction and
+# staging directories; their names are observable here only in this test root.
+private_left=$(/usr/bin/find "$tmp" -maxdepth 1 \
+  \( -name '.ystack-toolchain-*' -o -name '.ystack-build-*' \) -print)
+[ -z "$private_left" ] ||
+  fail "build-guest.py left private build state behind: $private_left"
+pass 'compile removes every private archive copy, extraction directory and staging directory after both success and failure'
+
+for missing in init.c supervisor.c common.c common.h verifier.c; do
+  case_root="$tmp/missing-$missing"
+  /bin/mkdir -p "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
+  /bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
+  /bin/cp "$build_guest" "$case_root/sandbox/v1/build-guest.py"
+  /bin/cp "$guest_dir/init.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
+    "$guest_dir/common.h" "$case_root/sandbox/v1/guest/"
+  /bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
+    "$case_root/verifiers/file-digest/v1/verifier.c"
+  if [ "$missing" = verifier.c ]; then
+    /bin/rm "$case_root/verifiers/file-digest/v1/verifier.c"
+  else
+    /bin/rm "$case_root/sandbox/v1/guest/$missing"
+  fi
+  before_lines=$(/usr/bin/wc -l < "$marker" | /usr/bin/tr -d ' ')
+  status=0
+  "$python" "$case_root/sandbox/v1/build-guest.py" compile "$tmp/toolchain-a" \
+    "$tmp/build-missing-$missing" >/dev/null 2>"$tmp/err" || status=$?
+  after_lines=$(/usr/bin/wc -l < "$marker" | /usr/bin/tr -d ' ')
+  [ "$status" -ne 0 ] && [ "$before_lines" = "$after_lines" ] &&
+    [ ! -e "$tmp/build-missing-$missing" ] ||
+    fail "missing mandatory $missing must be refused before compiler invocation"
+done
+pass 'compile resolves every mandatory source and header from the repository root and refuses each missing input before compiler invocation'
+
+# probe.c is the one staged target: absent in PR 6, mandatory as soon as PR 7
+# adds it. Exercise that source-discovery branch in a private repository copy.
+probe_root="$tmp/probe-repo"
+/bin/mkdir -p "$probe_root/sandbox/v1/guest" "$probe_root/verifiers/file-digest/v1"
+/bin/chmod 700 "$probe_root/sandbox/v1/guest" "$probe_root/verifiers/file-digest/v1"
+/bin/cp "$build_guest" "$probe_root/sandbox/v1/build-guest.py"
+/bin/cp "$guest_dir/init.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
+  "$guest_dir/common.h" "$probe_root/sandbox/v1/guest/"
+/bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
+  "$probe_root/verifiers/file-digest/v1/verifier.c"
+/usr/bin/printf '%s\n' 'int main(void) { return 0; }' > "$probe_root/sandbox/v1/guest/probe.c"
+"$python" "$probe_root/sandbox/v1/build-guest.py" compile "$tmp/toolchain-a" "$tmp/build-probe"
+"$python" - "$tmp/build-probe/build-record.json" <<'PY'
+import json, sys
+body = json.load(open(sys.argv[1], encoding='utf-8'))['body']
+assert [item['name'] for item in body['executables']] == ['init', 'probe', 'supervisor', 'verifier']
+assert 'sandbox/v1/guest/probe.c' in [item['path'] for item in body['sources']]
+PY
+pass 'compile keeps probe explicitly staged: it is absent from PR 6 builds and becomes a recorded mandatory target when probe.c exists'
 
 # --- Linux-only: the host compiler as a syntax/semantics gate over
 # guest/init.c and guest/supervisor.c. Darwin has no <linux/...> headers
@@ -578,8 +865,15 @@ if [ "$(/usr/bin/uname -s)" = Linux ]; then
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/supervisor.c" \
     -o "$tmp/linuxcc/supervisor.o"
   pass 'guest/init.c and guest/supervisor.c each compile with -std=c11 -Wall -Wextra -Werror on Linux (the host compiler as a syntax/semantics gate; PR 6, R2.5)'
+  /usr/bin/cc -std=c11 -Wall -Wextra -O1 -g -fno-omit-frame-pointer \
+    -fsanitize=address,undefined -DYSTACK_SUPERVISOR_TEST -I"$guest_dir" \
+    "$guest_dir/supervisor.c" "$guest_dir/common.c" -o "$tmp/linuxcc/supervisor-production-test"
+  /bin/mkdir -m 700 "$tmp/supervisor-production"
+  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+    "$tmp/linuxcc/supervisor-production-test" "$tmp/supervisor-production"
+  pass 'the production supervisor report writer, filter generator, instruction descriptor, fanotify history, privilege sequence and tmpfs geometry pass their Linux ASan/UBSan helper tests'
 else
-  /usr/bin/printf 'SKIP (Linux-only, stated reason): guest/init.c and guest/supervisor.c use Linux-only headers (mount(2) MS_* flags, seccomp, Landlock, fanotify, clone3) this Darwin host does not have; proved by the manager'"'"'s dispatched Linux CI run instead (plan.md Proof section, six-shard run).\n' >&2
+  /usr/bin/printf 'SKIP (Linux-only, stated reason): guest/init.c and guest/supervisor.c use Linux-only headers (mount(2) MS_* flags, seccomp, Landlock, fanotify, clone3) this Darwin host does not have. The production-helper ASan/UBSan, generated-filter and actual descriptor-mode tests require Linux and remain for dispatched CI; this Darwin run does not count them as passed.\n' >&2
 fi
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2

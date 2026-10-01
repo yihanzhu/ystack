@@ -18,20 +18,25 @@ subcommand installs anything, uses the network or runs a built executable.
                                        <out-dir>/supervisor, deterministically.
 """
 import hashlib
+import json
 import os
+import pathlib
+import shutil
+import stat
 import subprocess
 import sys
+import tarfile
+import tempfile
 
 SELF_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(SELF_DIR))
 GUEST_DIR = os.path.join(SELF_DIR, "guest")
-VERIFIER_SRC = os.path.join(
-    os.path.dirname(SELF_DIR), "verifiers", "file-digest", "v1", "verifier.c")
+VERIFIER_SRC = os.path.join(REPO_ROOT, "verifiers", "file-digest", "v1", "verifier.c")
 FLAGS = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", "-static"]
 TARGET = "aarch64-linux-musl"
 
 
 def canonical(value):
-    import json
     return (json.dumps(value, ensure_ascii=False, sort_keys=True,
                         separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n")
 
@@ -45,7 +50,6 @@ def sha256_file(path):
         return sha256_hex(fh.read())
 
 
-# (executable name, guest sources besides common.c, needs common.c)
 _GUEST_TARGETS = [
     ("init", ["init.c"], True),
     ("supervisor", ["supervisor.c"], True),
@@ -54,56 +58,164 @@ _GUEST_TARGETS = [
 
 
 def _targets():
-    """Every guest executable this checkout can currently build: init and
-    supervisor always (this PR), probe once guest/probe.c exists (PR 7),
-    plus the unchanged verifier.c (already merged, concern 3)."""
+    """Return the mandatory targets and the explicitly staged optional probe."""
     out = []
     for name, extra, needs_common in _GUEST_TARGETS:
         src = os.path.join(GUEST_DIR, extra[0])
-        if os.path.exists(src):
-            sources = [src] + ([os.path.join(GUEST_DIR, "common.c")] if needs_common else [])
-            out.append((name, sources))
-    if os.path.exists(VERIFIER_SRC):
-        out.append(("verifier", [VERIFIER_SRC]))
+        if name == "probe" and not os.path.exists(src):
+            continue
+        sources = [src] + ([os.path.join(GUEST_DIR, "common.c")] if needs_common else [])
+        headers = [os.path.join(GUEST_DIR, "common.h")] if needs_common else []
+        out.append((name, sources, headers))
+    out.append(("verifier", [VERIFIER_SRC], []))
     return out
+
+
+class BuildError(Exception):
+    pass
+
+
+def _required_regular_files(targets):
+    required = {os.path.abspath(__file__)}
+    for _, sources, headers in targets:
+        required.update(sources)
+        required.update(headers)
+    for path in required:
+        if not os.path.isfile(path) or os.path.islink(path):
+            raise BuildError("required input is missing or not a regular file")
+
+
+def _copy_archive(source, destination):
+    digest = hashlib.sha256()
+    with open(source, "rb") as src, open(destination, "xb") as dst:
+        while True:
+            block = src.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+            dst.write(block)
+    return digest.hexdigest()
+
+
+def _safe_members(archive):
+    seen = set()
+    files = set()
+    roots = set()
+    total_size = 0
+    members = archive.getmembers()
+    if not members or len(members) > 100000:
+        raise BuildError("empty or oversized toolchain archive index")
+    for member in members:
+        pure = pathlib.PurePosixPath(member.name)
+        if (not member.name or pure.is_absolute() or ".." in pure.parts or
+                member.issym() or member.islnk() or not (member.isdir() or member.isfile())):
+            raise BuildError("unsafe toolchain archive member")
+        normalized = pure.as_posix().rstrip("/")
+        if (not normalized or len(member.name.encode("utf-8")) > 4096 or
+                normalized in seen or any(parent.as_posix() in files for parent in pure.parents)):
+            raise BuildError("duplicate toolchain archive member")
+        if member.size < 0 or total_size + member.size > 4 * 1024 * 1024 * 1024:
+            raise BuildError("toolchain archive expands past its bound")
+        total_size += member.size
+        seen.add(normalized)
+        roots.add(pure.parts[0])
+        if member.isfile():
+            files.add(normalized)
+    if len(roots) != 1:
+        raise BuildError("toolchain archive must have one root directory")
+    return members
+
+
+def _extract_archive(archive_path, destination):
+    zig_paths = []
+    with tarfile.open(archive_path, "r:xz") as archive:
+        members = _safe_members(archive)
+        for member in members:
+            pure = pathlib.PurePosixPath(member.name)
+            target = os.path.join(destination, *pure.parts)
+            if member.isdir():
+                os.makedirs(target, mode=0o700, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise BuildError("unreadable toolchain archive member")
+            with source, open(target, "xb") as output:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
+            os.chmod(target, member.mode & 0o777)
+            if len(pure.parts) == 2 and pure.parts[1] == "zig":
+                zig_paths.append(target)
+    if len(zig_paths) != 1 or not os.access(zig_paths[0], os.X_OK):
+        raise BuildError("toolchain archive must contain one executable <root>/zig")
+    return zig_paths[0]
+
+
+def _identity(path):
+    return {"path": os.path.relpath(path, REPO_ROOT), "sha256": sha256_file(path)}
 
 
 def cmd_compile(toolchain_dir, out_dir):
     if os.path.exists(out_dir):
         sys.stderr.write("E_BUILD_OUT_EXISTS\n")
         return 65
-    zig = os.path.join(toolchain_dir, "zig")
-    os.makedirs(out_dir)
-    sources_seen = {}
-    executables = []
-    for name, sources in _targets():
-        exe = os.path.join(out_dir, name)
-        argv = ([zig, "cc", "-target", TARGET] + FLAGS + sources + ["-o", exe])
-        subprocess.run(argv, check=True, cwd=SELF_DIR)
-        os.chmod(exe, 0o555)
-        executables.append({"name": name, "sha256": sha256_file(exe)})
-        for src in sources:
-            rel = os.path.relpath(src, os.path.dirname(SELF_DIR))
-            sources_seen[rel] = sha256_file(src)
-    # "archive" (R2.5): the toolchain directory carries no original .tar.xz
-    # at this call site (only its extracted contents), so the zig binary
-    # actually invoked stands in as the toolchain's own identity -- the
-    # bytes this build in fact depended on.
-    archive_sha256 = sha256_file(zig) if os.path.exists(zig) else None
-    record = {
-        "body": {
-            "archive_sha256": archive_sha256,
-            "executables": sorted(executables, key=lambda e: e["name"]),
-            "flags": FLAGS + ["-target", TARGET],
-            "script_sha256": sha256_file(os.path.abspath(__file__)),
-            "sources": [{"path": p, "sha256": h} for p, h in sorted(sources_seen.items())],
-        },
-        "kind": "sandbox_guest_build",
-        "schema_version": 1,
-    }
-    with open(os.path.join(out_dir, "build-record.json"), "wb") as fh:
-        fh.write(canonical(record))
-    return 0
+    targets = _targets()
+    archive_source = os.path.join(toolchain_dir, "toolchain.tar.xz")
+    parent = os.path.dirname(os.path.abspath(out_dir))
+    os.makedirs(parent, exist_ok=True)
+    private_dir = tempfile.mkdtemp(prefix=".ystack-toolchain-", dir=parent)
+    stage_dir = tempfile.mkdtemp(prefix=".ystack-build-", dir=parent)
+    os.chmod(private_dir, 0o700)
+    os.chmod(stage_dir, 0o700)
+    try:
+        _required_regular_files(targets)
+        if not os.path.isfile(archive_source) or os.path.islink(archive_source):
+            raise BuildError("missing toolchain archive")
+        private_archive = os.path.join(private_dir, "toolchain.tar.xz")
+        archive_sha256 = _copy_archive(archive_source, private_archive)
+        extract_dir = os.path.join(private_dir, "extract")
+        os.mkdir(extract_dir, 0o700)
+        zig = _extract_archive(private_archive, extract_dir)
+        sources = {}
+        headers = {}
+        executables = []
+        for name, target_sources, target_headers in targets:
+            exe = os.path.join(stage_dir, name)
+            argv = [zig, "cc", "-target", TARGET] + FLAGS + target_sources + ["-o", exe]
+            subprocess.run(argv, check=True, cwd=SELF_DIR, env={})
+            if not os.path.isfile(exe) or os.path.islink(exe):
+                raise BuildError("compiler did not create target")
+            os.chmod(exe, 0o555)
+            executables.append({"name": name, "sha256": sha256_file(exe)})
+            for path in target_sources:
+                sources[path] = _identity(path)
+            for path in target_headers:
+                headers[path] = _identity(path)
+        record = {
+            "body": {
+                "archive_sha256": archive_sha256,
+                "executables": sorted(executables, key=lambda item: item["name"]),
+                "flags": FLAGS + ["-target", TARGET],
+                "headers": sorted(headers.values(), key=lambda item: item["path"]),
+                "script_sha256": sha256_file(os.path.abspath(__file__)),
+                "sources": sorted(sources.values(), key=lambda item: item["path"]),
+            },
+            "kind": "sandbox_guest_build",
+            "schema_version": 1,
+        }
+        with open(os.path.join(stage_dir, "build-record.json"), "xb") as fh:
+            fh.write(canonical(record))
+        if os.path.exists(out_dir):
+            raise BuildError("output appeared during build")
+        os.rename(stage_dir, out_dir)
+        stage_dir = None
+        return 0
+    except (BuildError, OSError, subprocess.CalledProcessError, tarfile.TarError) as exc:
+        sys.stderr.write("E_BUILD_FAILED: %s\n" % exc)
+        return 65
+    finally:
+        shutil.rmtree(private_dir, ignore_errors=True)
+        if stage_dir is not None:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 # --- R2.3/R2.5: the deterministic two-file "newc" cpio initramfs -----------
@@ -153,13 +265,16 @@ def cmd_image(out_dir):
     if not (os.path.isfile(init_path) and os.path.isfile(supervisor_path)):
         sys.stderr.write("E_BUILD_MISSING_INPUT\n")
         return 65
+    out_path = os.path.join(out_dir, "initramfs.cpio")
+    if os.path.exists(out_path):
+        sys.stderr.write("E_BUILD_OUT_EXISTS\n")
+        return 65
     with open(init_path, "rb") as fh:
         init_bytes = fh.read()
     with open(supervisor_path, "rb") as fh:
         supervisor_bytes = fh.read()
     image = build_initramfs(init_bytes, supervisor_bytes)
-    out_path = os.path.join(out_dir, "initramfs.cpio")
-    with open(out_path, "wb") as fh:
+    with open(out_path, "xb") as fh:
         fh.write(image)
     return 0
 
