@@ -1,5 +1,5 @@
 ---
-spec-blob: 1a6c8c0d5d575ea4058dafd0bbb205642218d05b
+spec-blob: c789e5757417cfe0ae829be391112d987323b845
 intent-blob: dad5c3e210d3772b6cc50cb3f556db06d96a7324
 risk: high
 drafted: 2026-09-29
@@ -60,7 +60,8 @@ Host Python runs on 3.9 (Command Line Tools) to 3.12 (CI), stdlib only, canonica
 
 | Path | PR | Mode |
 | --- | --- | --- |
-| `sandbox/v1/guest/common.h`, `common.c`; `scripts/test/sandbox-guest-harness.c` | 1 (created), 2 | 100644 |
+| `sandbox/v1/guest/common.h`, `common.c` | 1 (created), 2 | 100644 |
+| `scripts/test/sandbox-guest-harness.c` | 1 (created), 2, 6 | 100644 |
 | `scripts/test/sandbox-guest.test.sh` | 1 (created), 2, 3, 6, 7 | 100755 |
 | `sandbox/v1/host-supervisor.py` | 3 (created), 4, 5 | 100755 |
 | `scripts/test/sandbox-launcher.test.sh` | 3 (created), 4, 5, 8 | 100755 |
@@ -115,8 +116,8 @@ materialization under a directory descriptor (`mkdirat`/`openat`, `fchown` to a 
 uid and gid, manifest modes, size and digest checks); the R6.4 wiring (`ys_exec`); the
 R8.1 inventory. Harness `plan`, `materialize`, `inventory` and `exec-report` (a child
 printing argv, environment, fds 0-2 with their `fstat` and `O_APPEND` state, and every
-other open descriptor). Test: every R15.2 case except `build-guest.py` and the
-Linux-only compile.
+other open descriptor). Test: R15.2's frame, plan, wiring, inventory and
+materialization cases. Production init, supervisor and build proof belongs to PR 6.
 
 ## PR 3: configuration, ACLs, package and phase A (step 2; R3, R4.1, R10)
 
@@ -154,14 +155,73 @@ delayed-stop and self-stop cases, and class (c) with the edited-`hard` copies.
 
 ## PR 6: guest init, supervisor and build (step 3; R2.5, R5.5-R9.1)
 
-`init.c` (mounts, exec). `supervisor.c`: input checks; candidate, tools, output and
-scratch tmpfs; the tree cgroup with read-back of every R7.1 parameter; `clone3` with
-namespaces, the child's root and identity drop; R6.2 Landlock and R6.3 seccomp; the
-fanotify first-open rule (its group closed after tree termination, before export); the
-40,000 ms tree deadline; counters, report, export, `sync`, power-off.
-`build-guest.py compile|image`. Test: `image` determinism over synthetic inputs,
-`compile` refusing an existing directory, and on Linux the `-std=c11 -Wall -Wextra
--Werror` compile of `init.c` and `supervisor.c` (named Linux-only on Darwin).
+`init.c` retains the mounts and exec of R5.5. `supervisor.c` checks inputs; prepares
+candidate, tools, output and scratch tmpfs; sets the tree cgroup with read-back of
+every R7.1 parameter; and uses `clone3` with the accepted namespaces. The child keeps
+`pivot_root` and old-root detachment. No additional boot-root transition or chroot
+fallback is introduced. R6.2 Landlock, R6.3 seccomp, the fanotify first-open rule,
+40,000 ms tree deadline, counters, report, export, `sync` and power-off remain required.
+CPU and wall enforcement remain `none`; these tests cannot qualify the environment.
+
+Guest setup and reporting implement these requirements:
+
+- Derive candidate data capacity from each file's page-rounded allocation using the
+  measured page size and checked arithmetic. Count the root and manifest entries for
+  inode capacity; use finite positive capacity for empty input. Justify any additional
+  allowance and preserve logical-byte and RAM limits. Do not assume 4 KiB geometry.
+- Prepare non-writable but searchable root, `/sandbox`, candidate and tools ancestors
+  for uid 65534 before dropping privilege. Preserve candidate manifest modes and all
+  per-mount flags.
+- After the root transition, clear supplementary groups and set all GIDs. Drop the
+  bounding set while still privileged, set all UIDs to 65534, then clear remaining
+  effective, permitted, inheritable and ambient capabilities. Establish `no_new_privs`
+  before Landlock restriction and seccomp installation. Check every required change
+  and the final identity/capability state; any failure prevents verifier execution.
+- The seccomp `O_TMPFILE` test matches the full temporary-file flag combination,
+  allowing ordinary `O_DIRECTORY`. `MADV_REMOVE` uses equality, not a bitmask;
+  namespace clone flags use their mask. Preserve the architecture check and closed
+  denied-syscall list; fail rather than silently truncate a generated filter.
+- Create the instruction in the supervisor's private tmpfs, reopen it read-only,
+  and close all writable references before child execution. Only that regular
+  read-only descriptor reaches fd 0; duplication or `F_SETFL` cannot change access
+  mode. Preserve the exact argv, environment and other descriptor rules.
+- Initialize all fanotify history and descriptor state before use. Permit only the
+  first open of an empty regular inode; deny when history cannot record it. Close the
+  group after tree termination and before export, including checked failure cleanup.
+- Build reports with checked capacity arithmetic and checked formatting results.
+  Account for full hexadecimal evidence names and every other field; refuse an
+  incomplete report on allocation or formatting failure. Never advance past capacity.
+
+`build-guest.py compile|image` follows R2.5. Resolve required sources from the
+repository root, including the unchanged verifier and project headers; missing
+required inputs fail before compiler invocation. Only the probe is staged until
+PR 7. Compile from a fresh controlled extraction of the private archive copy at
+`<toolchain-dir>/toolchain.tar.xz`; never invoke an existing extracted caller tool.
+Reject unsafe archive members before invocation. Record the extracted archive
+copy's digest, source/header identities, script, flags and complete target set.
+Preserve existing-output refusal and deterministic image generation.
+
+Tests extend `sandbox-guest.test.sh` and the existing `sandbox-guest-harness.c` to
+invoke production init/supervisor helpers, not copied implementations. Separate test
+builds may substitute syscalls to record setup order and inject failures; those
+substitutions are compiled out of production, with no runtime bypass. Cover all
+R15.2 cases with allowed controls beside denials: maximum report names/counts and
+writer failures; privilege ordering and final state; traversal and forbidden writes;
+filter flag combinations and advice values; fanotify initialization, first/repeated
+open and full history; read-only instruction descriptors with writable copies closed;
+and many-small-file, zero-length, boundary and invalid/overflow geometry cases.
+
+A recording synthetic compiler archive tests the real `compile` command, mandatory
+targets, source/header identities, archive digest, safe extraction, unsafe-member
+refusal before invocation, incomplete-build refusal and separate-directory
+reproducibility. Changing bundled headers while keeping compiler bytes unchanged
+must change the archive identity. Retain synthetic-image determinism and the Linux
+`-std=c11 -Wall -Wextra -Werror` compile gates for init and supervisor. Execute the
+production report path under Linux ASan/UBSan, evaluate the generated filter with
+positive and negative inputs, and exercise real descriptor modes. Privileged Linux
+setup cases use only capabilities already available in the isolated test environment;
+report unavailable capabilities explicitly, never as passes. These are contract tests;
+R13.4 still supplies the separately authorized arm64 guest and Apple VM proof.
 
 ## PR 7: probe (step 3; R13.4)
 
@@ -289,10 +349,15 @@ deletes the file and stops); `/usr/bin/ar -x` and `/usr/bin/tar -xf` of each `.d
 Python `gzip` of `boot/vmlinuz-*`, requiring the arm64 `Image` magic at offset 56;
 `qualify.py check-kernel-config`; `sw_vers`, `uname -a` and `qualify.py measure` (nine slots) on a
 draft configuration (vfkit, driver, the Virtualization VM service executable, the arm64e
-dyld shared-cache files); `tar -xJf` of Zig, two `build-guest.py compile` runs into fresh
-directories compared with `cmp`, then `build-guest.py image`. Evidence: each URL, size
-and digest, `Image` and config digests, the R2.4 result, the `host_runtime` files, both
-`sandbox_guest_build` records and the image digest. No vfkit run, VM boot or install.
+dyld shared-cache files); copy the approved Zig archive byte-for-byte into a fresh
+quarantine toolchain directory as `toolchain.tar.xz`, verify its digest, and run
+`build-guest.py compile <toolchain-dir> <out-dir>` twice into fresh output directories.
+Each build copies and extracts the archive privately under R2.5; there is no separate
+caller extraction. Compare all executables and both build records with `cmp`, require
+both `archive_sha256` values to equal the approved archive digest, then run
+`build-guest.py image`. Evidence: each URL, size and digest, `Image` and config
+digests, the R2.4 result, the `host_runtime` files, both `sandbox_guest_build` records
+and the image digest. No vfkit run, VM boot or install.
 
 **`vml-install`** (step 6; R13.2b). Quotes that evidence. Creates only
 `/usr/local/libexec/ystack-sandbox/v1/artifacts/` (root:wheel 0755, ancestors checked
@@ -370,11 +435,11 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 3 | `review_size: accepted-exception` | 1,100-1,700 | trusted configuration, ACLs, phase A, store and receipt writer |
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
-| 6 | `review_size: accepted-exception` | 1,200-1,700 | guest containment setup and build |
+| 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
 | 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
-| This plan PR | `review_size: accepted-exception` | 400-440 | one plan: the nine-PR split and four decision packages |
+| This plan PR | `review_size: accepted-exception` | 500-600 | one plan: the nine-PR split, guest repair proof and four decision packages |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
@@ -405,9 +470,14 @@ runtime is always stopped, reaped and receipted, timed-out driver reads rejected
 incomplete with the driver process tree cleaned up,
 index-stored evidence under the R10.2 layout with hex-name validation, the real-time
 default-deadline cases beside the fast overridden ones, and receipt diagnostics on
-assertion failure (#463 record). A PR outside its
-range, or PR 9 past 400, stops and returns to this plan gate, never split ad hoc. The
-plan PR measured 411 lines at its first head; #452's 579-line plan is the precedent.
+assertion failure (#463 record). PR 6's range covers the guest containment/build
+implementation plus controlled archive extraction, checked reporting and setup,
+and production-path regression harnesses. Keep readable setup and complete proof,
+including sanitizer and negative controls. Remove redundant narration without
+compressing code or trimming tests. A PR outside its range, or PR 9 past 400, stops
+and returns to this plan gate, never split ad hoc. The plan's range covers the nine-PR
+split, those proof requirements and four decision packages; #452's 579-line plan is
+the precedent.
 
 ## Risks
 
@@ -418,9 +488,8 @@ plan PR measured 411 lines at its first head; #452's 579-line plan is the preced
   structural-bound concern or an operator-accepted empirical standard; concerns 5
   and 6 may be built inactive meanwhile.
 - **R16.2 sizes.** Standard-size PRs would mean 25 or more, several shipping untested
-  halves. The spec amendment merged in #467 (R16.2, `spec.md:663-669`) makes the
-  plan's recorded ranges binding, and this plan cites that spec blob. Scope is
-  unchanged.
+  halves. R16.2 of the linked spec makes the plan's recorded ranges binding. Scope
+  is unchanged.
 - **Staged stub.** In PRs 3-4 a passing attempt gets a runtime-error receipt and never
   runs; no text calls the supervisor usable before PR 5.
 - **Socket path.** vfkit refuses a Unix path over 103 bytes, so under the
@@ -435,6 +504,14 @@ plan PR measured 411 lines at its first head; #452's 579-line plan is the preced
 ## Proof
 
 BASE is the PR's merge base with main (full OID); report it and the head.
+
+For PR 6, the guest suite must include the production-helper regressions and Linux
+sanitizer runs above. Record their command, exact head, platform and complete output;
+distinguish actual Linux operations from substituted syscalls and filter evaluation.
+Compilation alone does not satisfy behavioral proof. Report missing privileged test
+capabilities and Darwin's Linux-only limits explicitly; neither counts as a passing
+mechanism test or replaces R13.4. The build fixture proves orchestration and byte
+identity only, not real Zig reproducibility or native qualification.
 
 ```sh
 for f in intent spec plan; do git rev-parse "HEAD:work/vm-launcher-supervisor/$f.md"; done
