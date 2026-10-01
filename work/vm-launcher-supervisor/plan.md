@@ -1,5 +1,5 @@
 ---
-spec-blob: c789e5757417cfe0ae829be391112d987323b845
+spec-blob: f639cba18a8ab61e0ffd22a4f7a4a5ebb126c242
 intent-blob: dad5c3e210d3772b6cc50cb3f556db06d96a7324
 risk: high
 drafted: 2026-09-29
@@ -66,7 +66,8 @@ Host Python runs on 3.9 (Command Line Tools) to 3.12 (CI), stdlib only, canonica
 | `sandbox/v1/host-supervisor.py` | 3 (created), 4, 5 | 100755 |
 | `scripts/test/sandbox-launcher.test.sh` | 3 (created), 4, 5, 8 | 100755 |
 | `scripts/test/sandbox-fake-runtime.py` | 5 | 100755 |
-| `sandbox/v1/guest/init.c`, `supervisor.c`; `sandbox/v1/build-guest.py` | 6 | 100644; 100755 |
+| `sandbox/v1/guest/init.c`, `supervisor.c` | 6 | 100644 |
+| `sandbox/v1/build-guest.py` | 6, 7 | 100755 |
 | `sandbox/v1/guest/probe.c` | 7 | 100644 |
 | `sandbox/v1/runtime-vfkit.py`, `sandbox/v1/qualify.py` | 8 | 100755 |
 | `shadow/v1/shadow-environments.json`, `scripts/test/shadow-slice.test.sh:343-368`, `docs/components.md`, `RESTORE.md`, `ci/required-files.txt` | 9 | |
@@ -96,8 +97,8 @@ ShellCheck 0.11.0 (`:86-92`) apply.
    green CI and operator merge.
 
 None of the nine PRs closes #463, and step 9 cannot open under this spec (no
-qualification is possible, R7.2), so #463 stays open until a future concern or an
-operator decision resolves R7.2; the manager records this on the issue.
+qualification is possible, R7.2). Keep #463 open until the CPU/wall boundary and all
+required native evidence gaps are resolved; the manager records this on the issue.
 
 ## PR 1: frame format and digest (step 1; R3.2)
 
@@ -282,8 +283,193 @@ R13.4 still supplies the separately authorized arm64 guest and Apple VM proof.
 
 ## PR 7: probe (step 3; R13.4)
 
-`probe.c` reads its mode from fd 0, runs exactly one R13.4 mode and prints one result
-line. The Linux compile case adds it.
+Change only `sandbox/v1/guest/probe.c`, `scripts/test/sandbox-guest.test.sh` and
+`sandbox/v1/build-guest.py`. The probe uses the existing SHA-256 implementation and
+instruction transport. Do not change common code, the guest supervisor, a shared
+test script or the fixed verifier. Its argv, environment and final fd 0-2 remain
+exactly R6.4. Probe output is untrusted payload, never receipt or qualification
+authority. Incomplete observations retain the unfulfilled native obligations.
+
+### Instruction and result
+
+Accept one ASCII line, at most 9,216 bytes including its required final LF, read
+from fd 0. Tokens have exactly one space between them. Reject NUL, CR, extra lines,
+unknown modes, wrong field counts, trailing bytes and overflow before any action.
+The grammar is `YSPROBE1 <mode> [mode parameters]\n`. Unsigned decimal fields are
+canonical (no sign or leading zero except `0`); hex fields use lowercase digits.
+
+| Modes | Parameters after the mode |
+| --- | --- |
+| `host-sentinel`, `sibling-sentinel` | `<path-hex> <size> <sha256>` |
+| `socket-family` | `<family>` |
+| `candidate-read`, `candidate-write`, `tools-write` | none |
+| `evidence-read`, `evidence-list`, `evidence-reopen`, `evidence-truncate`, `evidence-link`, `evidence-rename` | none |
+| `scratch-free`, `scratch-fill`, `output-overflow` | none |
+| `environment`, `descriptors` | none |
+| `fork-bomb`, `thread-bomb`, `cpu-spin-32`, `memory-exhaustion`, `sleep` | none |
+| `signal-supervisor`, `namespace-escape`, `cgroup-escape` | none |
+| `forged-report-stdout`, `forged-report-evidence` | none |
+
+Sentinel mode fixes the role. Decode an absolute path of 1-4,096 bytes, with no NUL,
+empty, `.` or `..` component; size is 1-4,096 and digest exactly 64 hex digits.
+The later trusted harness checks the approved fixture root. Family is 0-65,535;
+values outside the known build domain produce an incomplete domain observation,
+not an attempted socket or denial. This numeric parser bound is not a Linux maximum.
+All parameters stay in the existing admitted instruction bytes, whose exact digest
+binds the request. Add no fd, variable, argv argument, frame record, `plan.json`
+field or post-boot channel. Do not change the real verifier's instruction grammar.
+
+Normal output is one LF-terminated ASCII line, at most 8,192 bytes:
+`YSPROBE1 <mode> <instruction-sha256> <checks> <domain> <count> <records>\n`.
+`checks` is `complete` or `incomplete` for this mode's declared subchecks, never a
+safety verdict. `domain` is `none` for other modes, `unknown` for an unavailable
+Linux build domain, or `linux-build-af-v1/<AF_MAX>` for its recorded bound. No token
+claims a verified native domain. `count` is 1-32. Each space-separated record is
+`<check>:<prerequisite>:<attempted>:<completed>:<outcome>:<errno>:<cleanup-errno>:<v1>:<v2>:<v3>`.
+Check names are a closed per-mode set in the source, at most 32 lowercase letters,
+digits or hyphens, each appearing exactly once in fixed order. The required set is
+static, not reduced after a failed or unavailable action. Prerequisite is `ok`,
+`failed` or `unknown`; attempted/completed are
+0 or 1; outcome is `success`, `refused`, `unsupported`, `incomplete` or `violation`.
+Errnos are 0-INT_MAX; values are 0-UINT64_MAX, zero when unused. Record every
+required subcheck, including those not attempted. Parsing/read failures instead
+emit `YSPROBE1 error=input\n` or `YSPROBE1 error=read\n` and exit 64; no action runs.
+Failed or partial result writes exit 74 and cannot claim a complete result.
+
+Record the prerequisite before the operation, save the primary result/errno before
+cleanup, and retain both when cleanup fails. Only an attempted, completed operation
+with a mode-appropriate permission refusal is `refused`. Setup failures, missing
+paths, unsupported calls, invalid arguments and resource errors do not become
+denials. A failed required subcheck or cleanup makes `checks` incomplete; an
+unexpected successful operation stays visible as `violation` regardless. Record
+all check meanings and the three value fields beside the mode table in source.
+The stdout-forgery mode is the explicit output exception: it writes its adversarial
+report text and uses its production completion branch, without a normal result line.
+Its write failure remains a failure; the host must never treat that text as authority.
+
+### Fixtures and actions
+
+For evidence operations, first create the permitted fresh empty-file fixture and
+check any required initial write and close. A failure there leaves the forbidden
+operation unattempted. Give each scratch-free subcheck its own checked fixture so
+unexpected truncation/unlink cannot invalidate another check. Preserve all free
+paths: `ftruncate`, `fallocate`, `MADV_REMOVE` after successful mmap, path truncate,
+unlink, directory removal after successful mkdir, and `O_TMPFILE`. Do not turn a
+failed mmap/mkdir or a compile-time unavailable operation into completed coverage.
+Resource modes retain their actual production setup and loops. Partial worker
+creation does not prove a fork/thread bomb or a 32-thread CPU run. Preserve exact
+environment checking, escape modes and both forged-output modes.
+
+Sentinel actions use only the bound path, size and digest. Check the opened file's
+type and read no more than the expected size plus one byte. Record open/read success,
+actual byte count and digest/length match; a readable mismatch is a violation too.
+`ENOENT`/`ENOTDIR` records an unreachable path in this namespace, not a refusal from
+a known-present outside fixture. Permission refusal, read failure and cleanup
+failure remain distinct. Never substitute `/host-sentinel`, `/sibling-sentinel`,
+an unrelated path, candidate copy or new host share. PR 8 must supply the trusted
+pre/post controls below; a probe line alone cannot establish the outside fixture.
+
+For descriptors, inspect fd 0-2 with `fstat` and `F_GETFL`: each is a regular file;
+0 is exactly read-only; 1 and 2 are exactly write-only with `O_APPEND`. Wrong type,
+access or append state is a violation; missing or unreadable metadata is incomplete.
+Use a diagnostic `F_GETFD` scan of 3 through 1,023 inclusive, independent of the
+current soft/hard limit. Report that exact interval, leak count and first leaked fd
+(when present), without overflowing the result bound. This remains a partial
+census: a clean interval plus correct fd 0-2 still leaves `checks`
+incomplete and the full R6.4 native obligation unresolved. No `/proc`, retained fd,
+closure pass or re-exec may hide the observed state. Shared-exec closure tests are
+separate evidence, not an independent census by this probe.
+
+For `signal-supervisor`, observe `getpid`/`getppid` first and record both. Under
+the accepted namespaces (1, 0) means the supervisor is an unaddressable ancestor;
+report an incomplete `ancestor-unaddressable` check with no signal attempted.
+Any other relationship leaves the target unestablished and incomplete. Do not
+call `kill` with a guessed, self, broadcast, zero or unrelated target. There is no
+direct supervisor signal attempt in this design, and its literal native obligation
+remains unresolved. Namespace exclusion cannot stand for a Landlock signal denial.
+
+### Linux socket domain
+
+Use the Linux build's `<sys/socket.h>` and its included target headers as the local
+source of `AF_MAX`; domain schema `linux-build-af-v1` enumerates every integer
+`0 <= family < AF_MAX`, including reserved slots and counting aliases once. The
+production archive digest, fixed `aarch64-linux-musl` target and probe source in the
+existing build record identify the exact header interpretation. Do not add build
+record fields or use Darwin's domain. Missing/invalid `AF_MAX`, a non-Linux build,
+or a bound beyond the parser's representable domain yields `domain=unknown` and an
+incomplete result without socket attempts. No selected Linux 7 maximum is assumed.
+
+For each selected family call `socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0)`;
+AF_NETLINK instead uses `SOCK_RAW | SOCK_CLOEXEC` and `NETLINK_USERSOCK`, AF_PACKET
+uses `SOCK_RAW | SOCK_CLOEXEC` and protocol 0. AF_VSOCK remains in the stream case.
+Record the three actual arguments. An unavailable special-case constant makes that
+subcheck unsupported, not a silently substituted tuple. Preserve returned errno:
+EPERM is the expected seccomp refusal; family/type/protocol not supported is
+unsupported; EINVAL, ENOSYS and resource errors are incomplete. A returned socket
+is a violation even if close then fails. This does not claim socketpair coverage.
+
+An integer interval from build headers is not proof of the selected kernel domain.
+PR 8 must bind reviewed source evidence for that exact kernel's family definitions
+(including its `include/linux/socket.h` bound and aliases) to the selected kernel
+and build archive. Check every distinct family is representable by the build
+domain and has one requested, completed case; a smaller build domain, skipped
+entry or unknown source makes native coverage incomplete. The selected kernel's
+source/domain is not established by current CI headers or these artifacts. Its
+absence remains an explicit unresolved prerequisite; no new acquisition is
+authorized. Even a known domain does not turn unsupported or unexecuted cases
+into denials or fulfilled native coverage.
+
+### Build and bounded proof
+
+Make probe unconditional in `build-guest.py`'s required target set: init, supervisor,
+probe and the unchanged verifier. Remove its presence-based skip and staged wording.
+Restore probe to the missing-source negative loop. Each missing source/header must
+fail before the synthetic compiler is invoked, with no successful output directory
+or build record. Retain four-target success, archive/header identities, private
+extraction, incomplete-build refusal, identical-input repeat builds and image proof.
+
+Use one private compile-time boundary, `YSTACK_PROBE_TEST`, entirely in `probe.c`.
+Its scripted low-level operations and test driver exist only in the test build;
+production has no test selector, runtime hook, environment override or bypass.
+The same parser, mode actions and result/forged-output handling run in both builds.
+Substitute file/descriptor operations, socket calls, PID/signal queries, allocation,
+process/thread creation, sleep and privileged operations below the action layer.
+Unscripted calls fail the test; none falls through to a real dangerous operation.
+Finite syscall scripts bound retries/partial writes. A test-only loop-step budget
+can stop pressure iterations, marking them incomplete; it is absent in production
+and cannot replace a whole action or claim the native workload completed.
+
+Tests invoke production parsing through action and final output, checking exact
+call order, arguments, attempted/completed records and saved primary/cleanup errors:
+
+- Every mode and parser bound, exact/truncated/extra input, bad hex/numbers, missing
+  sentinel binding and wrong parameter counts; no action after parse failure.
+- Paired prerequisite failure, attempted refusal, unexpected success, unsupported
+  operation and cleanup failure for each applicable action/subcheck. Failed initial
+  evidence setup and scratch mmap/mkdir must leave later checks unattempted. Cover
+  every independent scratch fixture and actual forged-stdout completion/write errors.
+- Sentinel matching readable control, permission refusal, absent path, wrong bytes
+  or length, read error and cleanup error after success, all via substituted I/O.
+- Every fd 0-2 wrong type/access/append state, missing fd and inspection error;
+  extra fd 3, fd 128 despite soft limit 64, and a modeled leak above the scan window.
+  A valid control and an invisible high leak both retain the incomplete census.
+- Expected and unexpected PID relationships, including self/orphan/visible parent;
+  assert no signal target or syscall is selected and no supervisor-denied result.
+- Every integer in independently specified synthetic Linux domains, first/last,
+  reserved and alias entries, including PACKET/VSOCK; assert exact tuples and refusal,
+  success, unsupported, invalid and close-failure results. Include absent domain,
+  out-of-range family; feed each member of a larger synthetic kernel domain to a
+  smaller build domain and require explicit incomplete results outside it. Synthetic
+  header constants use only the private test boundary, not a replacement domain
+  checker or action. These fixtures do not verify native match.
+- Bounded resource setup success/failure and partial worker creation, without actual
+  fork/thread/CPU/memory pressure, socket, signal, sleep or privileged native actions.
+
+The shell suite compiles production with Linux strict warnings and runs the test
+build and its applicable ASan/UBSan cases. Keep all existing guest, shared-exec,
+supervisor, build and host-interoperability regressions. Record platform limits;
+host compilation and substitutions do not prove the native boundary. PR 8 owns
+real fixture binding and native-domain acceptance; no extra path is added here.
 
 ## PR 8: runtime driver and qualification harness (step 4; R2.2, R13, R15.1)
 
@@ -309,6 +495,29 @@ echoes the input disk's `verifier` digest to stdout; each receipt's
 `identities.verifier`, `stdout_sha256` and `origin.store_id` match its own
 configuration, and a request carrying the other configuration's `store_id` is refused
 `E_STORE_ID` with nothing written in either store.
+
+Before each sentinel launch, the trusted harness checks the approved exact path and
+role, non-symlink regular-file identity, length and digest, and a readable control
+outside the guest. Recheck the same fixture afterwards; bind both controls to the
+instruction digest, receipt and payload. Missing, changed or substituted fixtures
+invalidate the case even if guest output says refused/unreachable. Use two distinct
+synthetic fixtures below the approved resolved quarantine sentinel root. State which
+storage resource the sibling fixture represents; a second host fixture does not
+prove isolation from a live sibling VM's memory or all its resources. Add no root
+fixture, share, extra VM or live host action to repair that limitation.
+
+Construct socket cases from reviewed build-header/domain evidence before proposing
+their instruction digests. Bind the exact selected-kernel domain evidence to that
+build, check the numeric interval and aliases, and reject missing/duplicate cases.
+The harness compares each payload's declared build domain and actual arguments with
+that evidence. Unknown/mismatched domains and unsupported/unexecuted checks remain
+incomplete. Parse the closed probe-result grammar; validate subcheck cardinality,
+state consistency and digest binding. A partial fd census or unaddressable ancestor
+never fulfills its native probe. Synthetic tests exercise missing/changed sentinel
+controls, payload/request mismatch, unknown/mismatched domains and omitted families,
+alongside valid bindings; they do not create native qualification evidence. Under
+R7.2 every receipt remains failed, and additional evidence gaps also block a
+qualified record. No fixture control or clean action result can waive another row.
 
 ## PR 9: registry entry, docs, restore, manifest (step 4; R12.1, R14.3)
 
@@ -447,14 +656,18 @@ accepted-set entry, whose slots are the union of `qualify.py measure` on each of
 two qualification configurations (so `verifier` lists the real verifier and the probe,
 `host_supervisor` both configuration composites, the other seven slots one digest
 each) and whose `verification_instructions` list is `qualify.py instruction-digest` of
-each qualification instruction (the three real-verifier cases and each probe mode),
+each complete qualification instruction (the three real-verifier cases and every
+parameterized probe case),
 plus six R7.1 mechanism ids and `scratch_bytes` 16,777,216; the two configurations'
 exact bytes and which runs use which (real verifier: match, mismatch, changed-byte
-refusal and the `HardStop` repeats; probe: every R13.4 probe mode, the mode being the
-instruction), each run with its expected verdict and reasons; the candidate, a #396
+refusal and the `HardStop` repeats; probe: every R13.4 mode and required family case,
+using the complete PR 7 instruction grammar), each run with its expected verdict
+and reasons; the candidate, a #396
 bundle from `prepare-candidate.py prepare` over the scrubbed dummy-target copy at
 `e7da8f7b8f88c2a9cb4670dc453c5223a9c2d15e` (step-7 post revision), with its arguments
-and digests; sentinels under `~/ystack-quarantine/vml/sentinels/`; the `HardStop`
+and digests; exact host/sibling fixture bindings and trusted pre/post controls under
+`~/ystack-quarantine/vml/sentinels/`; reviewed build/native family-domain evidence
+or an explicit unresolved prerequisite; the `HardStop`
 repeat count; and two qualification install directories (`…/v1/qualify-verifier/`,
 `…/v1/qualify-probe/`) whose configurations differ only in the PR 8 fields (stores
 `store.local-macos-vm.qualify-verifier.v1` and `…qualify-probe.v1` at
@@ -493,10 +706,10 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
-| 7 | `review_size: accepted-exception` | 450-700 | the probe modes |
+| 7 | `review_size: accepted-exception` | 1,600-2,400 | truthful probe actions, bounded production-path proof and mandatory build input |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
-| This plan PR | `review_size: accepted-exception` | 500-600 | one plan: the nine-PR split, guest repair proof and four decision packages |
+| This plan amendment | `review_size: standard` | under 400 | truthful probe evidence within the existing containment design |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
@@ -532,18 +745,22 @@ implementation plus controlled archive extraction, checked reporting and setup,
 and production-path regression harnesses. Keep readable setup and complete proof,
 including sanitizer and negative controls. Remove redundant narration without
 compressing code or trimming tests. A PR outside its range, or PR 9 past 400, stops
-and returns to this plan gate, never split ad hoc. The plan's range covers the nine-PR
-split, those proof requirements and four decision packages; #452's 579-line plan is
-the precedent.
+and returns to this plan gate, never split ad hoc. PR 7 needs the production parser,
+per-subcheck result records, independent action prerequisites and cleanup, plus
+scripted low-level fixtures that execute those same branches. Its range budgets
+readable C action tests and shell/build integration, including missing-source proof;
+a mode-dispatch test or compressed code cannot replace that work.
 
 ## Risks
 
 - **No qualification from this concern (R7.2, R12.3).** CPU and wall rows stay
   `enforcement: "none"`, so this concern yields only `failed` receipts and cannot
-  qualify the environment: step 8 proves the other rows, R12.3 does not land and the
-  entry stays `unproven`. Step-8 R7.1 therefore stays blocked on a future
-  structural-bound concern or an operator-accepted empirical standard; concerns 5
-  and 6 may be built inactive meanwhile.
+  qualify the environment. Complete FD observation, a direct supervisor-signal probe,
+  verified native family coverage and every other R13.4 obligation remain required;
+  unresolved, unsupported or partial evidence cannot fulfill them. R12.3 does not
+  land and the entry stays `unproven`. Step-8 R7.1 stays blocked until the CPU/wall
+  boundary and all required native proof are resolved. A weaker acceptance standard
+  remains an operator decision; concerns 5 and 6 may be built inactive meanwhile.
 - **R16.2 sizes.** Standard-size PRs would mean 25 or more, several shipping untested
   halves. R16.2 of the linked spec makes the plan's recorded ranges binding. Scope
   is unchanged.
