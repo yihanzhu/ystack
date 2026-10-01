@@ -537,10 +537,10 @@ c_digest=$("$h" digest "$tmp/cross/c-encoded.bin")
 pass 'sandbox/v1/host-supervisor.py digest and the C guest harness digest agree on the same bytes'
 
 # =============================================================================
-# PR 6 of 9: build-guest.py (image determinism, compile's existing-directory
-# refusal) and, Linux-only, the host-compiler syntax/semantics gate over
-# guest/init.c and guest/supervisor.c. See work/vm-launcher-supervisor/
-# plan.md ("PR 6") and spec.md R2.5. Never runs anything requiring root, a
+# PRs 6-7 of 9: build-guest.py (image determinism, compile's existing-directory
+# refusal), the inactive R13.4 probe dispatch, and Linux-only host-compiler
+# syntax/semantics gates over the guest sources. See work/vm-launcher-supervisor/
+# plan.md ("PR 6", "PR 7") and spec.md R2.5/R13.4. Never runs anything requiring root, a
 # VM or a hypervisor: this proves the deterministic build tooling and that
 # the guest sources parse and typecheck, nothing about their behavior in a
 # real guest (R15.4).
@@ -676,36 +676,38 @@ body_a, body_b = record_a['body'], record_b['body']
 assert record_a['kind'] == 'sandbox_guest_build'
 assert record_a['schema_version'] == 1
 assert raw_a.endswith(b'\n') and raw_a == (json.dumps(record_a, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n').encode()
-assert [item['name'] for item in body_a['executables']] == ['init', 'supervisor', 'verifier']
-for name in ('init', 'supervisor', 'verifier'):
+assert [item['name'] for item in body_a['executables']] == ['init', 'probe', 'supervisor', 'verifier']
+for name in ('init', 'probe', 'supervisor', 'verifier'):
     assert stat.S_IMODE(os.stat(os.path.join(os.path.dirname(sys.argv[1]), name)).st_mode) == 0o555
 assert body_a['archive_sha256'] == digest(sys.argv[3])
 assert body_b['archive_sha256'] == digest(sys.argv[4])
 assert body_a['archive_sha256'] != body_b['archive_sha256'], 'bundled-header change must change archive identity'
 source_paths = [item['path'] for item in body_a['sources']]
 assert 'verifiers/file-digest/v1/verifier.c' in source_paths
-assert 'sandbox/v1/guest/init.c' in source_paths and 'sandbox/v1/guest/supervisor.c' in source_paths
+assert {'sandbox/v1/guest/init.c', 'sandbox/v1/guest/probe.c',
+        'sandbox/v1/guest/supervisor.c', 'sandbox/v1/guest/common.c',
+        'verifiers/file-digest/v1/verifier.c'} == set(source_paths)
 assert [item['path'] for item in body_a['headers']] == ['sandbox/v1/guest/common.h']
 assert body_a['flags'] == ['-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', '-static', '-target', 'aarch64-linux-musl']
 for item in body_a['sources'] + body_a['headers']:
     assert item['sha256'] == digest(os.path.join(sys.argv[6], item['path']))
 assert body_a['script_sha256'] == digest(os.path.join(sys.argv[6], 'sandbox/v1/build-guest.py'))
 lines = open(sys.argv[5], encoding='utf-8').read().splitlines()
-assert len(lines) == 9, 'expected three compiler calls per build, got %d' % len(lines)
+assert len(lines) == 12, 'expected four compiler calls per build, got %d' % len(lines)
 assert all('.ystack-toolchain-' in line for line in lines), 'compiler must run from private extraction'
 assert all('/toolchain-a/' not in line and '/toolchain-b/' not in line for line in lines)
 PY
-for target in init supervisor verifier; do
+for target in init probe supervisor verifier; do
   cmp -s "$tmp/build-a/$target" "$tmp/build-b/$target" ||
     fail "synthetic compiler produced different $target bytes across separate archive builds"
 done
 cmp -s "$tmp/build-a/build-record.json" "$tmp/build-a-repeat/build-record.json" ||
   fail 'identical archives, sources and configuration must produce byte-identical complete build records'
-for target in init supervisor verifier; do
+for target in init probe supervisor verifier; do
   cmp -s "$tmp/build-a/$target" "$tmp/build-a-repeat/$target" ||
     fail "identical build inputs produced different repeat $target bytes"
 done
-pass 'the real compile command privately copies and safely extracts the archive, builds mandatory init/supervisor/verifier targets, records sources/headers and the archive digest, and produces identical target bytes in separate directories; changing bundled bytes changes archive identity'
+pass 'the real compile command privately copies and safely extracts the archive, builds all four mandatory targets, records the complete source/header/digest inventory, and reproduces every target and build record; changing bundled bytes changes archive identity'
 
 unsafe_marker="$tmp/unsafe-compiler-ran"
 /bin/mkdir -m 700 "$tmp/toolchain-unsafe"
@@ -851,7 +853,7 @@ for missing in init.c supervisor.c common.c common.h verifier.c; do
   /bin/mkdir -p "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
   /bin/chmod 700 "$case_root/sandbox/v1/guest" "$case_root/verifiers/file-digest/v1"
   /bin/cp "$build_guest" "$case_root/sandbox/v1/build-guest.py"
-  /bin/cp "$guest_dir/init.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
+  /bin/cp "$guest_dir/init.c" "$guest_dir/probe.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
     "$guest_dir/common.h" "$case_root/sandbox/v1/guest/"
   /bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
     "$case_root/verifiers/file-digest/v1/verifier.c"
@@ -869,30 +871,69 @@ for missing in init.c supervisor.c common.c common.h verifier.c; do
     [ ! -e "$tmp/build-missing-$missing" ] ||
     fail "missing mandatory $missing must be refused before compiler invocation"
 done
-pass 'compile resolves every mandatory source and header from the repository root and refuses each missing input before compiler invocation'
+pass 'compile resolves the four-target source inventory and shared header from the repository root and refuses every previously mandatory input before compiler invocation'
 
-# probe.c is the one staged target: absent in PR 6, mandatory as soon as PR 7
-# adds it. Exercise that source-discovery branch in a private repository copy.
-probe_root="$tmp/probe-repo"
-/bin/mkdir -p "$probe_root/sandbox/v1/guest" "$probe_root/verifiers/file-digest/v1"
-/bin/chmod 700 "$probe_root/sandbox/v1/guest" "$probe_root/verifiers/file-digest/v1"
-/bin/cp "$build_guest" "$probe_root/sandbox/v1/build-guest.py"
-/bin/cp "$guest_dir/init.c" "$guest_dir/supervisor.c" "$guest_dir/common.c" \
-  "$guest_dir/common.h" "$probe_root/sandbox/v1/guest/"
-/bin/cp "$root/verifiers/file-digest/v1/verifier.c" \
-  "$probe_root/verifiers/file-digest/v1/verifier.c"
-/usr/bin/printf '%s\n' 'int main(void) { return 0; }' > "$probe_root/sandbox/v1/guest/probe.c"
-"$python" "$probe_root/sandbox/v1/build-guest.py" compile "$tmp/toolchain-a" "$tmp/build-probe"
-"$python" - "$tmp/build-probe/build-record.json" <<'PY'
-import json, sys
-body = json.load(open(sys.argv[1], encoding='utf-8'))['body']
-assert [item['name'] for item in body['executables']] == ['init', 'probe', 'supervisor', 'verifier']
-assert 'sandbox/v1/guest/probe.c' in [item['path'] for item in body['sources']]
-PY
-pass 'compile keeps probe explicitly staged: it is absent from PR 6 builds and becomes a recorded mandatory target when probe.c exists'
+# The host fixture substitutes only the action body. It exercises fd-0 parsing,
+# the complete closed dispatch set and one-result-line contract without running
+# a bomb, exhaustion, privilege or native-containment probe on the development host.
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST -I"$guest_dir" \
+  "$guest_dir/probe.c" -o "$tmp/probe-dispatch-test"
+probe_index=0
+while IFS= read -r probe_mode; do
+  /usr/bin/printf '%s\n' "$probe_mode" > "$tmp/probe-mode"
+  probe_result=$("$tmp/probe-dispatch-test" < "$tmp/probe-mode")
+  [ "$probe_result" = "probe $probe_mode allowed 0 $probe_index" ] ||
+    fail "probe dispatch $probe_mode returned $probe_result"
+  probe_index=$((probe_index + 1))
+done <<'MODES'
+candidate-read
+candidate-write
+tools-write
+evidence-read
+evidence-list
+evidence-reopen
+evidence-truncate
+evidence-link
+evidence-rename
+scratch-free
+scratch-fill
+output-overflow
+socket-unix
+socket-inet
+socket-inet6
+socket-netlink
+host-sentinel
+sibling-sentinel
+environment
+descriptors
+fork-bomb
+thread-bomb
+cpu-spin-32
+memory-exhaustion
+sleep
+signal-supervisor
+namespace-escape
+cgroup-escape
+forged-report-stdout
+forged-report-evidence
+MODES
+[ "$probe_index" -eq 30 ] || fail 'probe fixture did not cover the complete closed mode set'
+for invalid_probe in empty unknown multiple overlong; do
+  case "$invalid_probe" in
+    empty) : > "$tmp/probe-mode" ;;
+    unknown) /usr/bin/printf '%s\n' unknown > "$tmp/probe-mode" ;;
+    multiple) /usr/bin/printf '%s\n' candidate-read candidate-write > "$tmp/probe-mode" ;;
+    overlong) /usr/bin/printf '%065d\n' 0 > "$tmp/probe-mode" ;;
+  esac
+  probe_status=0
+  probe_result=$("$tmp/probe-dispatch-test" < "$tmp/probe-mode") || probe_status=$?
+  [ "$probe_status" -eq 64 ] && [ "$probe_result" = 'probe invalid denied 22 0' ] ||
+    fail "probe parser $invalid_probe did not fail closed with one result line"
+done
+pass 'the bounded host fixture selects every R13.4 mode from fd 0 exactly once and rejects empty, unknown, multiple and overlong selections without executing probe actions'
 
 # --- Linux-only: the host compiler as a syntax/semantics gate over
-# guest/init.c and guest/supervisor.c. Darwin has no <linux/...> headers
+# guest/init.c, guest/supervisor.c and guest/probe.c. Darwin has no <linux/...> headers
 # (mount(2)'s MS_* flags, seccomp, Landlock, fanotify, clone3), so this case
 # is named Linux-only here and proved instead by the manager's Linux CI
 # dispatch (scripts/test/run-all.sh:66-69, the six-shard run plan.md's
@@ -903,7 +944,9 @@ if [ "$(/usr/bin/uname -s)" = Linux ]; then
     -o "$tmp/linuxcc/init.o"
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/supervisor.c" \
     -o "$tmp/linuxcc/supervisor.o"
-  pass 'guest/init.c and guest/supervisor.c each compile with -std=c11 -Wall -Wextra -Werror on Linux (the host compiler as a syntax/semantics gate; PR 6, R2.5)'
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" -c "$guest_dir/probe.c" \
+    -o "$tmp/linuxcc/probe.o"
+  pass 'guest/init.c, guest/supervisor.c and guest/probe.c each compile with -std=c11 -Wall -Wextra -Werror on Linux (the host compiler as a syntax/semantics gate; PRs 6-7, R2.5/R13.4)'
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
     -DYSTACK_INIT_TEST "$guest_dir/init.c" -o "$tmp/linuxcc/init-production-test"
   ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
@@ -927,7 +970,7 @@ assert host.validate_export(records, 'a' * 64) is not None
 PY
   pass 'a production-built canonical guest report and complete export pass the unchanged host validate_export consumer'
 else
-  /usr/bin/printf 'SKIP (Linux-only, stated reason): guest/init.c and guest/supervisor.c use Linux-only headers (mount(2) MS_* flags, seccomp, Landlock, fanotify, clone3) this Darwin host does not have. The production-helper ASan/UBSan, generated-filter and actual descriptor-mode tests require Linux and remain for dispatched CI; this Darwin run does not count them as passed.\n' >&2
+  /usr/bin/printf 'SKIP (Linux-only, stated reason): strict guest init/supervisor/probe compilation and the production helper require Linux headers and semantics this Darwin host does not have. ASan/UBSan, generated-filter and actual descriptor-mode tests remain for dispatched CI; this Darwin run does not execute or qualify any R13.4 probe action.\n' >&2
 fi
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
