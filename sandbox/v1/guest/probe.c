@@ -26,6 +26,9 @@
 #include <linux/netlink.h>
 #include <linux/if_packet.h>
 #endif
+#if defined(YSTACK_PROBE_TEST) && defined(YSTACK_TEST_DISABLE_MADV_REMOVE)
+#undef MADV_REMOVE
+#endif
 
 #define INPUT_CAP 9216U
 #define RESULT_CAP 8192U
@@ -303,6 +306,9 @@ struct fixture_step {
     mode_t stat_mode;
     struct dirent directory_entry;
     int directory_has_entry;
+    int errno_guard;
+    int expected_errno_before;
+    int preserve_errno;
 };
 
 #define FIXTURE_STEP_CAP 4096U
@@ -316,6 +322,7 @@ static unsigned char fixture_blocks[FIXTURE_OBJECTS][BLOCK_SIZE];
 static unsigned char fixture_block_live[FIXTURE_OBJECTS];
 static unsigned char fixture_mapping[4096];
 static unsigned char fixture_directory_tokens[FIXTURE_OBJECTS];
+static int fixture_modeled_fd2048_open, fixture_modeled_fd2048_queried;
 static jmp_buf fixture_jump;
 static int fixture_driver_active;
 static int fixture_escape;
@@ -391,7 +398,13 @@ static ssize_t fixture_read(int fd, void *buffer, size_t length)
 static ssize_t fixture_write(int fd, const void *buffer, size_t length)
 {
     struct fixture_step *s = fixture_next(FX_WRITE); long returned; size_t i;
-    if (fd != s->call.io.fd || length != s->call.io.length) fixture_fail("write arguments");
+    if (fd != s->call.io.fd || length != s->call.io.length) {
+        (void)fprintf(stderr,"FAIL write fd=%d/%d length=%zu/%zu\n",fd,s->call.io.fd,length,s->call.io.length);
+        if(fd==STDOUT_FILENO&&s->call.io.kind==FX_BYTES_EXACT)
+            (void)fprintf(stderr,"ACTUAL %.*sEXPECTED %.*s",(int)length,(const char*)buffer,
+                          (int)s->call.io.length,(const char*)s->call.io.bytes);
+        fixture_fail("write arguments");
+    }
     if (s->call.io.kind == FX_BYTES_NONE) fixture_fail("write expectation missing");
     if (s->call.io.kind == FX_BYTES_EXACT &&
         (s->call.io.bytes == NULL || memcmp(buffer, s->call.io.bytes, length) != 0))
@@ -424,6 +437,7 @@ static int fixture_fstat(int fd, struct stat *metadata)
 static int fixture_fcntl(int fd, int command)
 {
     struct fixture_step *s = fixture_next(FX_FCNTL);
+    if (fd == 2048) fixture_modeled_fd2048_queried = 1;
     if (fd != s->call.fcntl.fd || command != s->call.fcntl.command) fixture_fail("fcntl arguments");
     return (int)fixture_return(s);
 }
@@ -482,9 +496,11 @@ static int fixture_unlink(const char *path) { return fixture_one_path(FX_UNLINK,
 
 static DIR *fixture_opendir(const char *path)
 {
-    struct fixture_step *s = fixture_next(FX_OPENDIR); long returned;
+    struct fixture_step *s = fixture_next(FX_OPENDIR); long returned; int incoming = errno;
     if (strcmp(path, s->call.directory.path) != 0) fixture_fail("opendir path");
+    if (s->errno_guard && incoming != s->expected_errno_before) fixture_fail("opendir incoming errno");
     returned = fixture_return(s);
+    if (s->preserve_errno && errno != incoming) fixture_fail("opendir changed errno");
     if (returned < 0) return NULL;
     if (s->call.directory.object >= FIXTURE_OBJECTS) fixture_fail("directory object");
     return (DIR *)(void *)&fixture_directory_tokens[s->call.directory.object];
@@ -492,13 +508,17 @@ static DIR *fixture_opendir(const char *path)
 
 static struct dirent *fixture_readdir(DIR *directory)
 {
-    struct fixture_step *s = fixture_next(FX_READDIR);
+    struct fixture_step *s = fixture_next(FX_READDIR); int incoming = errno;
     if (s->call.object.object >= FIXTURE_OBJECTS ||
         directory != (DIR *)(void *)&fixture_directory_tokens[s->call.object.object])
         fixture_fail("readdir object");
+    if (s->errno_guard && incoming != s->expected_errno_before) fixture_fail("readdir incoming errno");
     if (s->flow == FX_STOP) fixture_stop();
     if (s->returned < 0) { errno = s->error_number; return NULL; }
-    if (!s->directory_has_entry) { errno = 0; return NULL; }
+    if (!s->directory_has_entry) {
+        if (s->preserve_errno && errno != incoming) fixture_fail("readdir changed errno");
+        return NULL;
+    }
     return &s->directory_entry;
 }
 
@@ -791,7 +811,8 @@ static int establish_empty(const char *path, int *cleanup_error)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600); ssize_t n; int saved;
     *cleanup_error = 0; if (fd < 0) return errno;
-    n = write(fd, "x", 1U); saved = n == 1 ? 0 : (errno != 0 ? errno : EIO);
+    n = write(fd, "x", 1U);
+    saved = n == 1 ? 0 : n < 0 ? errno : EIO;
     if (close(fd) != 0) *cleanup_error = errno;
     return saved;
 }
@@ -1400,6 +1421,991 @@ struct oracle_record {
     uint64_t value[3];
 };
 
+enum obligation_state { OB_RUNTIME, OB_EXTERNAL, OB_BLOCKED };
+struct obligation_binding { const char *id; unsigned char family, state, seen; };
+static struct obligation_binding obligation_registry[] = {
+    {"M01", 0U, OB_RUNTIME, 0U},
+    {"M02", 0U, OB_RUNTIME, 0U},
+    {"M03", 0U, OB_RUNTIME, 0U},
+    {"M04", 0U, OB_RUNTIME, 0U},
+    {"M05", 0U, OB_RUNTIME, 0U},
+    {"M06", 0U, OB_RUNTIME, 0U},
+    {"M07", 0U, OB_RUNTIME, 0U},
+    {"M08", 0U, OB_RUNTIME, 0U},
+    {"M09", 0U, OB_RUNTIME, 0U},
+    {"M10", 0U, OB_RUNTIME, 0U},
+    {"M11", 0U, OB_RUNTIME, 0U},
+    {"M12", 0U, OB_RUNTIME, 0U},
+    {"M13", 0U, OB_RUNTIME, 0U},
+    {"M14", 0U, OB_RUNTIME, 0U},
+    {"M15", 0U, OB_RUNTIME, 0U},
+    {"M16", 0U, OB_RUNTIME, 0U},
+    {"M17", 0U, OB_RUNTIME, 0U},
+    {"M18", 0U, OB_RUNTIME, 0U},
+    {"M19", 0U, OB_RUNTIME, 0U},
+    {"M20", 0U, OB_RUNTIME, 0U},
+    {"M21", 0U, OB_RUNTIME, 0U},
+    {"M22", 0U, OB_RUNTIME, 0U},
+    {"M23", 0U, OB_RUNTIME, 0U},
+    {"M24", 0U, OB_RUNTIME, 0U},
+    {"M25", 0U, OB_RUNTIME, 0U},
+    {"M26", 0U, OB_RUNTIME, 0U},
+    {"M27", 0U, OB_RUNTIME, 0U},
+    {"PAR-empty", 1U, OB_RUNTIME, 0U},
+    {"PAR-bad-magic", 1U, OB_RUNTIME, 0U},
+    {"PAR-unknown-mode", 1U, OB_RUNTIME, 0U},
+    {"PAR-double-space", 1U, OB_RUNTIME, 0U},
+    {"PAR-trailing-space", 1U, OB_RUNTIME, 0U},
+    {"PAR-leading-space", 1U, OB_RUNTIME, 0U},
+    {"PAR-tab-separator", 1U, OB_RUNTIME, 0U},
+    {"PAR-missing-lf", 1U, OB_RUNTIME, 0U},
+    {"PAR-crlf", 1U, OB_RUNTIME, 0U},
+    {"PAR-extra-line", 1U, OB_RUNTIME, 0U},
+    {"PAR-trailing-byte", 1U, OB_RUNTIME, 0U},
+    {"PAR-embedded-nul", 1U, OB_RUNTIME, 0U},
+    {"PAR-non-ascii", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-leading-zero", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-plus", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-negative", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-max-plus-one", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-uint-overflow", 1U, OB_RUNTIME, 0U},
+    {"PAR-socket-nondigit", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-candidate-read", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-candidate-write", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-tools-write", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-read", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-list", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-reopen", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-truncate", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-link", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-evidence-rename", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-scratch-free", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-scratch-fill", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-output-overflow", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-environment", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-descriptors", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-fork-bomb", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-thread-bomb", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-cpu-spin-32", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-memory-exhaustion", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-sleep", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-signal-supervisor", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-namespace-escape", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-cgroup-escape", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-forged-report-stdout", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-forged-report-evidence", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-socket-0", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-socket-2", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-host-sentinel-0", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-host-sentinel-1", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-host-sentinel-2", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-host-sentinel-4", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-odd-hex", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-nonhex", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-upper-path", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-relative", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-nul-path", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-root-empty-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-empty-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-trailing-slash", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-dot-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-dotdot-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-path-too-long", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-zero", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-too-large", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-leading-zero", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-plus", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-negative", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-overflow", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-size-nondigit", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-digest-short", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-digest-long", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-digest-upper", 1U, OB_RUNTIME, 0U},
+    {"PAR-host-sentinel-digest-nonhex", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-sibling-sentinel-0", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-sibling-sentinel-1", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-sibling-sentinel-2", 1U, OB_RUNTIME, 0U},
+    {"PAR-arity-sibling-sentinel-4", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-odd-hex", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-nonhex", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-upper-path", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-relative", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-nul-path", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-root-empty-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-empty-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-trailing-slash", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-dot-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-dotdot-component", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-path-too-long", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-zero", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-too-large", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-leading-zero", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-plus", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-negative", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-overflow", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-size-nondigit", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-digest-short", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-digest-long", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-digest-upper", 1U, OB_RUNTIME, 0U},
+    {"PAR-sibling-sentinel-digest-nonhex", 1U, OB_RUNTIME, 0U},
+    {"PAR-cap", 1U, OB_RUNTIME, 0U},
+    {"PAR-overflow", 1U, OB_RUNTIME, 0U},
+    {"PAR-read-error", 1U, OB_RUNTIME, 0U},
+    {"PAR-read-error-after-prefix", 1U, OB_RUNTIME, 0U},
+    {"PAR-chunk-eintr", 1U, OB_RUNTIME, 0U},
+    {"PAR-initial-eintr", 1U, OB_RUNTIME, 0U},
+    {"PAR-valid-cap-limit", 1U, OB_RUNTIME, 0U},
+    {"FIX-path", 2U, OB_RUNTIME, 0U},
+    {"FIX-missing-call", 2U, OB_RUNTIME, 0U},
+    {"FIX-order", 2U, OB_RUNTIME, 0U},
+    {"FIX-flags", 2U, OB_RUNTIME, 0U},
+    {"FIX-fd", 2U, OB_RUNTIME, 0U},
+    {"FIX-length", 2U, OB_RUNTIME, 0U},
+    {"FIX-bytes", 2U, OB_RUNTIME, 0U},
+    {"FIX-invalid-write-return", 2U, OB_RUNTIME, 0U},
+    {"FIX-bad-allocation-object", 2U, OB_RUNTIME, 0U},
+    {"FIX-leftover", 2U, OB_RUNTIME, 0U},
+    {"FIX-missing-byte-oracle", 2U, OB_RUNTIME, 0U},
+    {"FIX-duplicate-live-allocation", 2U, OB_RUNTIME, 0U},
+    {"FIX-invalid-free", 2U, OB_RUNTIME, 0U},
+    {"FIX-uninitialized-stat", 2U, OB_RUNTIME, 0U},
+    {"FIX-uninitialized-thread-token", 2U, OB_RUNTIME, 0U},
+    {"FIX-missing-id", 2U, OB_RUNTIME, 0U},
+    {"FIX-duplicate-id", 2U, OB_RUNTIME, 0U},
+    {"FIX-unknown-id", 2U, OB_RUNTIME, 0U},
+    {"FIX-late-guard", 2U, OB_RUNTIME, 0U},
+    {"FIX-returning-callback", 2U, OB_RUNTIME, 0U},
+    {"FIX-memory-final", 2U, OB_RUNTIME, 0U},
+    {"FIX-production-boundary", 2U, OB_RUNTIME, 0U},
+    {"FIX-queue-ownership", 2U, OB_RUNTIME, 0U},
+    {"OUT-full", 3U, OB_RUNTIME, 0U},
+    {"OUT-short-completes", 3U, OB_RUNTIME, 0U},
+    {"OUT-eintr", 3U, OB_RUNTIME, 0U},
+    {"OUT-zero", 3U, OB_RUNTIME, 0U},
+    {"OUT-prefix-error", 3U, OB_RUNTIME, 0U},
+    {"OUT-initial-error", 3U, OB_RUNTIME, 0U},
+    {"OUT-stop-during-write", 3U, OB_RUNTIME, 0U},
+    {"OUT-input-full", 3U, OB_RUNTIME, 0U},
+    {"OUT-input-short", 3U, OB_RUNTIME, 0U},
+    {"OUT-input-eintr", 3U, OB_RUNTIME, 0U},
+    {"OUT-input-zero", 3U, OB_RUNTIME, 0U},
+    {"OUT-input-error", 3U, OB_RUNTIME, 0U},
+    {"OUT-read-full", 3U, OB_RUNTIME, 0U},
+    {"OUT-read-short", 3U, OB_RUNTIME, 0U},
+    {"OUT-read-eintr", 3U, OB_RUNTIME, 0U},
+    {"OUT-read-zero", 3U, OB_RUNTIME, 0U},
+    {"OUT-read-error", 3U, OB_RUNTIME, 0U},
+    {"CR-open-EPERM", 4U, OB_RUNTIME, 0U},
+    {"CR-open-EACCES", 4U, OB_RUNTIME, 0U},
+    {"CR-open-EROFS", 4U, OB_RUNTIME, 0U},
+    {"CR-open-EOPNOTSUPP", 4U, OB_RUNTIME, 0U},
+    {"CR-open-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-open-ENOENT", 4U, OB_RUNTIME, 0U},
+    {"CR-read-byte-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-byte-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-eof-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-eof-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EPERM-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EPERM-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EACCES-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EACCES-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EROFS-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EROFS-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EOPNOTSUPP-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EOPNOTSUPP-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EIO-close-0", 4U, OB_RUNTIME, 0U},
+    {"CR-read-EIO-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-EPERM", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-EACCES", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-EROFS", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-EOPNOTSUPP", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-open-ENOENT", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-full-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-full-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-zero-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-zero-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-EIO-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-EIO-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-EPERM", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-EACCES", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-EROFS", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-EOPNOTSUPP", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-open-ENOENT", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-full-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-full-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-zero-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-zero-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-EIO-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-tools-write-EIO-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-EPERM", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-EACCES", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-EROFS", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-EOPNOTSUPP", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-open-ENOENT", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-full-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-full-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-zero-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-zero-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-EIO-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-EIO-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-short-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-short-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-EPERM", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-EACCES", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-EROFS", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-EOPNOTSUPP", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-open-ENOENT", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-full-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-full-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-zero-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-zero-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-EIO-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-EIO-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-short-close-0", 4U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-short-close-EIO", 4U, OB_RUNTIME, 0U},
+    {"ESET-read-open-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-open-EPERM", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-negative-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-negative-EIO-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-negative-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-negative-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-0-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-0-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-zero-prior-EACCES-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-read-setup-close-error", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-EPERM", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-EACCES", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-EROFS", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-EOPNOTSUPP", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reopen-ENOENT", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-byte-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-byte-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-eof-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-eof-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EPERM-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EPERM-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EACCES-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EROFS-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EROFS-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EOPNOTSUPP-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EOPNOTSUPP-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-read-reached-EIO-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-open-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-open-EPERM", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-negative-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-negative-EIO-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-negative-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-negative-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-0-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-0-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-zero-prior-EACCES-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-reopen-setup-close-error", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-EPERM", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-EACCES", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-EROFS", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-EOPNOTSUPP", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-ENOENT", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-success-close-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-reopen-success-close-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-open-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-open-EPERM", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-negative-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-negative-EIO-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-negative-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-negative-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-0-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-0-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-zero-prior-EACCES-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-truncate-setup-close-error", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-EPERM", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-EACCES", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-EROFS", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-EOPNOTSUPP", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-truncate-ENOENT", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-open-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-open-EPERM", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-negative-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-negative-EIO-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-negative-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-negative-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-0-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-0-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-zero-prior-EACCES-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-link-setup-close-error", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-EPERM", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-EACCES", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-EROFS", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-EOPNOTSUPP", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-link-ENOENT", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-open-EIO", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-open-EPERM", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-negative-EIO-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-negative-EIO-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-negative-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-negative-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-0-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-0-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-EINTR-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-EINTR-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-EACCES-close-0", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-zero-prior-EACCES-close-EBADF", 5U, OB_RUNTIME, 0U},
+    {"ESET-rename-setup-close-error", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-0", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-EPERM", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-EACCES", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-EROFS", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-EOPNOTSUPP", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-EIO", 5U, OB_RUNTIME, 0U},
+    {"EACT-rename-ENOENT", 5U, OB_RUNTIME, 0U},
+    {"EL-open-EPERM", 6U, OB_RUNTIME, 0U},
+    {"EL-open-EACCES", 6U, OB_RUNTIME, 0U},
+    {"EL-open-EROFS", 6U, OB_RUNTIME, 0U},
+    {"EL-open-EOPNOTSUPP", 6U, OB_RUNTIME, 0U},
+    {"EL-open-EIO", 6U, OB_RUNTIME, 0U},
+    {"EL-open-ENOENT", 6U, OB_RUNTIME, 0U},
+    {"EL-read-entry-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-entry-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-eof-prior-EIO-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-eof-prior-EIO-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EPERM-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EPERM-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EACCES-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EACCES-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EROFS-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EROFS-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EOPNOTSUPP-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EOPNOTSUPP-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EIO-close-0", 6U, OB_RUNTIME, 0U},
+    {"EL-read-EIO-close-EBADF", 6U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EPERM-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EPERM-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EACCES-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EACCES-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EROFS-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EROFS-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EOPNOTSUPP-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-candidate-write-reached-EOPNOTSUPP-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EPERM-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EPERM-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EACCES-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EACCES-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EROFS-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EROFS-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EOPNOTSUPP-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-tools-write-reached-EOPNOTSUPP-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EPERM-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EPERM-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EACCES-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EACCES-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EROFS-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EROFS-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EOPNOTSUPP-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-cgroup-escape-reached-EOPNOTSUPP-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EPERM-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EPERM-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EACCES-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EACCES-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EROFS-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EROFS-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EOPNOTSUPP-close-0", 7U, OB_RUNTIME, 0U},
+    {"FW-forged-report-evidence-reached-EOPNOTSUPP-close-EIO", 7U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-open-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-open-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-zero-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-zero-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-error-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-error-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-full-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-full-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-short-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-short-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-eintr-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-eintr-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-open-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-open-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-zero-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-zero-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-error-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-error-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-full-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-full-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-short-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-short-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-eintr-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-eintr-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-open-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-open-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-zero-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-zero-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-error-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-error-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-full-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-full-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-short-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-short-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-eintr-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-eintr-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-open-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-open-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-zero-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-zero-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-error-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-error-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-full-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-full-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-short-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-short-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-eintr-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-path-truncate-eintr-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-open-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-open-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-zero-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-zero-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-error-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-error-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-full-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-full-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-short-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-short-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-eintr-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-unlink-eintr-close-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-reopen-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-ftruncate-reopen-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-reopen-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-fallocate-reopen-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-reopen-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-reopen-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-mmap-close-0", 8U, OB_RUNTIME, 0U},
+    {"SS-madv-remove-mmap-close-EBADF", 8U, OB_RUNTIME, 0U},
+    {"SS-rmdir-mkdir-EIO", 8U, OB_RUNTIME, 0U},
+    {"SS-rmdir-mkdir-EPERM", 8U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-0-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EPERM-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EACCES-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EROFS-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EOPNOTSUPP-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-ENOSYS-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-ftruncate-EIO-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-0-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EPERM-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EACCES-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EROFS-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EOPNOTSUPP-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-ENOSYS-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-fallocate-EIO-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-0-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-0-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-0-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EPERM-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EPERM-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EPERM-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EACCES-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EACCES-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EACCES-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EROFS-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EROFS-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EROFS-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EOPNOTSUPP-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EOPNOTSUPP-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EOPNOTSUPP-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-ENOSYS-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-ENOSYS-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-ENOSYS-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EIO-unmap-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EIO-close-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-madv-remove-EIO-both-EIO-then-EBADF", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-path-truncate-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-unlink-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-rmdir-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-0-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-0-EIO", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-EPERM-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-EACCES-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-EROFS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-EOPNOTSUPP-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-ENOSYS-0", 9U, OB_RUNTIME, 0U},
+    {"SA-tmpfile-EIO-0", 9U, OB_RUNTIME, 0U},
+    {"SF-platform-fallocate", 9U, OB_RUNTIME, 0U},
+    {"SF-platform-madv-remove", 9U, OB_RUNTIME, 0U},
+    {"SF-platform-tmpfile", 9U, OB_RUNTIME, 0U},
+    {"SEN-host-open-ENOENT", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-ENOTDIR", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-EPERM", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-EACCES", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-EROFS", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-EOPNOTSUPP", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-open-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-stat-error-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-wrong-type-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-stat-error-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-wrong-type-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-short-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-short-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-long-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-long-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-wrong-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-wrong-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-empty-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-empty-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-eintr-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-eintr-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-short-chunks-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-short-chunks-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EIO-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EIO-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EACCES-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EACCES-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EOPNOTSUPP-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-EOPNOTSUPP-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-prefix-error-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-read-prefix-error-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-minimum", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-maximum", 10U, OB_RUNTIME, 0U},
+    {"SEN-host-size-only-mismatch", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-ENOENT", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-ENOTDIR", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-EPERM", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-EACCES", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-EROFS", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-EOPNOTSUPP", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-open-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-stat-error-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-wrong-type-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-stat-error-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-wrong-type-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-short-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-short-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-long-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-long-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-wrong-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-wrong-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-empty-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-empty-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-eintr-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-eintr-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-short-chunks-match-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-short-chunks-match-close-EIO", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EIO-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EIO-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EACCES-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EACCES-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EOPNOTSUPP-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-EOPNOTSUPP-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-prefix-error-close-0", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-read-prefix-error-close-EBADF", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-minimum", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-maximum", 10U, OB_RUNTIME, 0U},
+    {"SEN-sibling-size-only-mismatch", 10U, OB_RUNTIME, 0U},
+    {"SOCK-A-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-1", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-2", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-3", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-4", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-5", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-6", 11U, OB_RUNTIME, 0U},
+    {"SOCK-A-7", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EAFNOSUPPORT", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EPROTONOSUPPORT", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-ESOCKTNOSUPPORT", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EOPNOTSUPP", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EACCES", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EROFS", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EINVAL", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-ENOSYS", 11U, OB_RUNTIME, 0U},
+    {"SOCK-error-EMFILE", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-2-close-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-2-close-EIO", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-3-close-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-3-close-EIO", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-4-close-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-4-close-EIO", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-5-close-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-success-5-close-EIO", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-nonlinux", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-domain-zero", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-domain-negative", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-domain-too-large", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-missing-cloexec", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-outside-small", 11U, OB_RUNTIME, 0U},
+    {"SOCK-prereq-parser-upper-outside", 11U, OB_RUNTIME, 0U},
+    {"SOCK-missing-netlink", 11U, OB_RUNTIME, 0U},
+    {"SOCK-missing-packet", 11U, OB_RUNTIME, 0U},
+    {"SOCK-missing-usersock", 11U, OB_RUNTIME, 0U},
+    {"SOCK-domain-upper-valid", 11U, OB_RUNTIME, 0U},
+    {"SOCK-vsock-absent", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-0", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-1", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-2", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-3", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-4", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-5", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-6", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-7", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-8", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-9", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-10", 11U, OB_RUNTIME, 0U},
+    {"SOCK-kernel12-build8-11", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-domain_max", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-linux_build", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-cloexec_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-cloexec", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-netlink_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-netlink", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-usersock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-usersock", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-packet_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-packet", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-vsock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-default-vsock", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-default-0", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-default-AF_NETLINK", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-default-AF_PACKET", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-default-AF_VSOCK", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-domain_max", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-linux_build", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-cloexec_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-cloexec", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-netlink_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-netlink", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-usersock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-usersock", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-packet_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-packet", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-vsock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-no-socket-constants-vsock", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-no-socket-constants-0", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-no-socket-constants-AF_NETLINK", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-no-socket-constants-AF_PACKET", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-no-socket-constants-AF_VSOCK", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-domain_max", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-linux_build", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-cloexec_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-cloexec", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-netlink_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-netlink", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-usersock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-usersock", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-packet_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-packet", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-vsock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-netlink-vsock", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-netlink-0", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-netlink-AF_NETLINK", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-netlink-AF_PACKET", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-netlink-AF_VSOCK", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-domain_max", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-linux_build", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-cloexec_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-cloexec", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-netlink_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-netlink", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-usersock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-usersock", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-packet_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-packet", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-vsock_available", 11U, OB_RUNTIME, 0U},
+    {"FACT-mask-packet-vsock", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-packet-0", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-packet-AF_NETLINK", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-packet-AF_PACKET", 11U, OB_RUNTIME, 0U},
+    {"HENTRY-mask-packet-AF_VSOCK", 11U, OB_RUNTIME, 0U},
+    {"FD0-regular", 12U, OB_RUNTIME, 0U},
+    {"FD0-wrong-type", 12U, OB_RUNTIME, 0U},
+    {"FD0-wrong-access", 12U, OB_RUNTIME, 0U},
+    {"FD0-read-write", 12U, OB_RUNTIME, 0U},
+    {"FD0-missing", 12U, OB_RUNTIME, 0U},
+    {"FD0-stat-error", 12U, OB_RUNTIME, 0U},
+    {"FD0-fl-error", 12U, OB_RUNTIME, 0U},
+    {"FD0-append-observed", 12U, OB_RUNTIME, 0U},
+    {"FD1-regular", 12U, OB_RUNTIME, 0U},
+    {"FD1-wrong-type", 12U, OB_RUNTIME, 0U},
+    {"FD1-wrong-access", 12U, OB_RUNTIME, 0U},
+    {"FD1-read-write", 12U, OB_RUNTIME, 0U},
+    {"FD1-missing", 12U, OB_RUNTIME, 0U},
+    {"FD1-stat-error", 12U, OB_RUNTIME, 0U},
+    {"FD1-fl-error", 12U, OB_RUNTIME, 0U},
+    {"FD1-missing-append", 12U, OB_RUNTIME, 0U},
+    {"FD2-regular", 12U, OB_RUNTIME, 0U},
+    {"FD2-wrong-type", 12U, OB_RUNTIME, 0U},
+    {"FD2-wrong-access", 12U, OB_RUNTIME, 0U},
+    {"FD2-read-write", 12U, OB_RUNTIME, 0U},
+    {"FD2-missing", 12U, OB_RUNTIME, 0U},
+    {"FD2-stat-error", 12U, OB_RUNTIME, 0U},
+    {"FD2-fl-error", 12U, OB_RUNTIME, 0U},
+    {"FD2-missing-append", 12U, OB_RUNTIME, 0U},
+    {"SCAN-zero", 12U, OB_RUNTIME, 0U},
+    {"SCAN-leak3", 12U, OB_RUNTIME, 0U},
+    {"SCAN-leak128-lowlimit", 12U, OB_RUNTIME, 0U},
+    {"SCAN-two-leaks", 12U, OB_RUNTIME, 0U},
+    {"SCAN-error-before", 12U, OB_RUNTIME, 0U},
+    {"SCAN-error-after", 12U, OB_RUNTIME, 0U},
+    {"SCAN-high-leak2048", 12U, OB_RUNTIME, 0U},
+    {"ENV-exact", 13U, OB_RUNTIME, 0U},
+    {"ENV-missing", 13U, OB_RUNTIME, 0U},
+    {"ENV-extra", 13U, OB_RUNTIME, 0U},
+    {"ENV-duplicate", 13U, OB_RUNTIME, 0U},
+    {"ENV-wrong-value", 13U, OB_RUNTIME, 0U},
+    {"ENV-wrong-order", 13U, OB_RUNTIME, 0U},
+    {"ENV-empty", 13U, OB_RUNTIME, 0U},
+    {"PID-1-0", 13U, OB_RUNTIME, 0U},
+    {"PID-1-1", 13U, OB_RUNTIME, 0U},
+    {"PID-7-1", 13U, OB_RUNTIME, 0U},
+    {"PID-12-34", 13U, OB_RUNTIME, 0U},
+    {"PID-44-55", 13U, OB_RUNTIME, 0U},
+    {"NS-linux-0", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EPERM", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EACCES", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EROFS", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EOPNOTSUPP", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EIO", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-ENOSYS", 14U, OB_RUNTIME, 0U},
+    {"NS-linux-EINVAL", 14U, OB_RUNTIME, 0U},
+    {"NS-nonlinux", 14U, OB_RUNTIME, 0U},
+    {"RAW-overflow-full", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-short", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-eintr", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-allocation", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-zero", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-initial-error", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-prefix-error", 15U, OB_RUNTIME, 0U},
+    {"RAW-overflow-prefix-stop", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-full", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-short", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-eintr", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-zero", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-initial-error", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-prefix-error", 15U, OB_RUNTIME, 0U},
+    {"RAW-forged-prefix-stop", 15U, OB_RUNTIME, 0U},
+    {"FILL-open-EPERM", 16U, OB_RUNTIME, 0U},
+    {"FILL-open-EIO", 16U, OB_RUNTIME, 0U},
+    {"FILL-malloc-ENOMEM-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-malloc-ENOMEM-close-EIO", 16U, OB_RUNTIME, 0U},
+    {"FILL-malloc-0-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-malloc-0-close-EIO", 16U, OB_RUNTIME, 0U},
+    {"FILL-full-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-full-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-short-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-short-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-eintr-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-eintr-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-zero-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-zero-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-initial-error-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-initial-error-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-prefix-error-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-prefix-error-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-capacity-error-close-0", 16U, OB_RUNTIME, 0U},
+    {"FILL-capacity-error-close-EBADF", 16U, OB_RUNTIME, 0U},
+    {"FILL-before-result-stop", 16U, OB_RUNTIME, 0U},
+    {"RES-fork-zero", 17U, OB_RUNTIME, 0U},
+    {"RES-fork-partial", 17U, OB_RUNTIME, 0U},
+    {"RES-fork-child-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-fork-parent-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-thread-zero", 17U, OB_RUNTIME, 0U},
+    {"RES-thread-partial", 17U, OB_RUNTIME, 0U},
+    {"RES-thread-callback-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-thread-parent-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-cpu-zero", 17U, OB_RUNTIME, 0U},
+    {"RES-cpu-partial", 17U, OB_RUNTIME, 0U},
+    {"RES-cpu-main-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-cpu-worker-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-memory-zero", 17U, OB_RUNTIME, 0U},
+    {"RES-memory-partial", 17U, OB_RUNTIME, 0U},
+    {"RES-memory-stop", 17U, OB_RUNTIME, 0U},
+    {"RES-sleep-return", 17U, OB_RUNTIME, 0U},
+    {"RES-sleep-remainder", 17U, OB_RUNTIME, 0U},
+    {"RES-sleep-stop", 17U, OB_RUNTIME, 0U},
+    {"ROUT-scratch-fill-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-scratch-fill-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"ROUT-fork-bomb-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-fork-bomb-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"ROUT-thread-bomb-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-thread-bomb-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"ROUT-cpu-spin-32-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-cpu-spin-32-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"ROUT-memory-exhaustion-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-memory-exhaustion-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"ROUT-sleep-partial-error", 18U, OB_RUNTIME, 0U},
+    {"ROUT-sleep-partial-stop", 18U, OB_RUNTIME, 0U},
+    {"KEEP-sentinel-minimum-mismatch", 19U, OB_RUNTIME, 0U},
+    {"KEEP-sentinel-maximum-mismatch", 19U, OB_RUNTIME, 0U},
+    {"KEEP-mmap-failure-close-EIO", 19U, OB_RUNTIME, 0U},
+    {"KEEP-fill-short-first-block", 19U, OB_RUNTIME, 0U},
+    {"BUILD-missing-init-c", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-missing-supervisor-c", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-missing-probe-c", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-missing-common-c", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-missing-common-h", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-missing-verifiers-file-digest-v1-verifier-c", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-symlink-probe", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-target-init", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-target-supervisor", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-target-probe", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-target-verifier", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-change", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-source-identity", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-header-identity", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-script-identity", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-canonical-record", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-private-extraction", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-repeat", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-traversal", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-absolute-path", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-symlink", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-hardlink", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-fifo", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-duplicate-member", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-second-root", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-archive-file-parent-conflict", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-missing", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-symlink", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-corrupt", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-no-zig", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-non-executable-zig", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-no-output", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-invalid-symlink-output", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-partial-compile", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-existing-output", 20U, OB_EXTERNAL, 0U},
+    {"BUILD-clean-private", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-two-repeat-images", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-members", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-metadata", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-content", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-existing-image", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-missing-init", 20U, OB_EXTERNAL, 0U},
+    {"IMAGE-missing-supervisor", 20U, OB_EXTERNAL, 0U},
+    {"INT-FRAME-repeat", 21U, OB_EXTERNAL, 0U},
+    {"INT-FRAME-truncations", 21U, OB_EXTERNAL, 0U},
+    {"INT-FRAME-tail", 21U, OB_EXTERNAL, 0U},
+    {"INT-FRAME-damage", 21U, OB_EXTERNAL, 0U},
+    {"INT-FRAME-component-bound", 21U, OB_EXTERNAL, 0U},
+    {"INT-PLAN-canonical", 21U, OB_EXTERNAL, 0U},
+    {"INT-PLAN-invalid", 21U, OB_EXTERNAL, 0U},
+    {"INT-MATERIAL-readme", 21U, OB_EXTERNAL, 0U},
+    {"INT-MATERIAL-depth", 21U, OB_EXTERNAL, 0U},
+    {"INT-MATERIAL-owner-mode", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-argv-env", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-fd-modes", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-close", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-failure", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-exit-distinction", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-interrupt", 21U, OB_EXTERNAL, 0U},
+    {"INT-EXEC-predeath", 21U, OB_EXTERNAL, 0U},
+    {"INT-INVENTORY-links", 21U, OB_EXTERNAL, 0U},
+    {"INT-INVENTORY-readdir", 21U, OB_EXTERNAL, 0U},
+    {"INT-INTEROP-frame-digest", 21U, OB_EXTERNAL, 0U},
+    {"PHASE-private-default", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-NO_SOCKET_CONSTANTS", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-MASK_NETLINK", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-MASK_PACKET", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-no-madv-remove", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-symbols", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-sanitizers-Linux", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-private-sanitizers-Darwin", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-production-init", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-production-supervisor", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-production-probe", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-init-helper", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-supervisor-helper", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-host-consumer", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-Darwin-production-limit", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-sandbox-guest", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-sandbox-launcher", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-sandbox-receipt", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-file-digest-verifier", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-control-sandbox-policy", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-candidate-content-preparation", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-shadow-slice", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-shadow-assembler", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-shadow-self-host-evidence", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-scope-qualification", 22U, OB_EXTERNAL, 0U},
+    {"SUITE-portable-core-schema", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-static-gates", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-quick", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-1", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-2", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-3", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-4", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-5", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-shard-6", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-full-aggregate", 22U, OB_EXTERNAL, 0U},
+    {"PHASE-independent-review", 22U, OB_EXTERNAL, 0U},
+    {"NATIVE-arm64", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-domain", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-sentinel", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-fd-census", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-signal", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-limits", 23U, OB_BLOCKED, 0U},
+    {"NATIVE-qualification", 23U, OB_BLOCKED, 0U},
+};
+
 static int fixture_failures;
 static int fixture_observed_return;
 static char **fixture_saved_environment;
@@ -1407,17 +2413,28 @@ static const unsigned char *fixture_expected_output;
 static size_t fixture_expected_output_length, fixture_expected_stdout_total;
 static int fixture_expected_escape, fixture_expected_return;
 static char **fixture_case_environment;
-static char covered_obligations[256][128];
-static size_t covered_obligation_count;
+static int fixture_postcheck_kind;
+static void fixture_check(int condition, const char *message);
 
-static void cover_obligation(const char *id)
+static size_t obligation_index(const char *id)
 {
     size_t i;
-    if(strncmp(id,"obligation-",11U)!=0)return;
-    for(i=0;i<covered_obligation_count;i++)if(strcmp(id,covered_obligations[i])==0)fixture_fail("duplicate obligation id");
-    if(covered_obligation_count>=sizeof covered_obligations/sizeof covered_obligations[0])fixture_fail("obligation capacity");
-    if(strlen(id)>=sizeof covered_obligations[0])fixture_fail("obligation id length");
-    (void)strcpy(covered_obligations[covered_obligation_count++],id);
+    for (i = 0; i < sizeof obligation_registry / sizeof obligation_registry[0]; i++)
+        if (strcmp(id, obligation_registry[i].id) == 0) return i;
+    return sizeof obligation_registry / sizeof obligation_registry[0];
+}
+
+static void finish_obligation_family(unsigned family, int failures_before)
+{
+    size_t i;
+    if (fixture_failures != failures_before) return;
+    for (i = 0; i < sizeof obligation_registry / sizeof obligation_registry[0]; i++) {
+        struct obligation_binding *binding = &obligation_registry[i];
+        if (binding->state != OB_RUNTIME || binding->family != family) continue;
+        if (binding->seen != 0U) { fixture_check(0, "duplicate obligation credit"); continue; }
+        binding->seen = 1U;
+        (void)printf("obligation %s: ok\n", binding->id);
+    }
 }
 
 static void fixture_check(int condition, const char *message)
@@ -1435,9 +2452,11 @@ static void fixture_reset(void)
     fixture_expected_stdout_total = 0; fixture_expected_escape = 3;
     fixture_expected_return = 0; fixture_socket_override = NULL;
     fixture_case_environment = NULL;
+    fixture_postcheck_kind = 0;
     memset(fixture_blocks, 0xa5, sizeof fixture_blocks);
     memset(fixture_block_live, 0, sizeof fixture_block_live);
     memset(fixture_mapping, 0x5a, sizeof fixture_mapping);
+    fixture_modeled_fd2048_open = 0; fixture_modeled_fd2048_queried = 0;
 }
 
 static struct fixture_step *queue_return(enum fixture_op op, long returned, int error_number)
@@ -1568,10 +2587,18 @@ static void run_case(const char *name)
         if (fixture_escape == 3)
             fixture_check(fixture_observed_return == fixture_expected_return, "exact probe return");
     }
+    if (fixture_escape == fixture_expected_escape && fixture_escape != 1 && fixture_postcheck_kind == 1) {
+        size_t object, offset;
+        for (object = 0; object < 2U; object++)
+            for (offset = 0; offset < BLOCK_SIZE; offset++)
+                if (fixture_blocks[object][offset] != (offset % 4096U == 0U ? 0U : 0xa5U)) {
+                    fixture_check(0, "memory page and guard bytes before credit");
+                    object = 2U; break;
+                }
+    }
     if (fixture_escape == fixture_expected_escape && fixture_escape != 1 &&
         fixture_failures == failures_before) {
-        (void)printf("case %s: ok\n", name);
-        cover_obligation(name);
+        (void)printf("case %s: checked\n", name);
     }
     if(fixture_escape==1&&fixture_expected_escape==1)(void)printf("control %s: rejected\n",name);
 }
@@ -1623,40 +2650,138 @@ static void self_controls(void)
     fixture_expected_escape=1;run_case("fixture-rejects-invalid-object");
     fixture_reset();queue_instruction("bad\n");expect_output("YSPROBE1 error=input\n",21,64);queue_return(FX_CLOSE,0,0);
     fixture_expected_escape=1;run_case("fixture-rejects-leftover-step");
+
+    fixture_reset();queue_instruction("bad\n");
+    {struct fixture_step*s=queue_return(FX_WRITE,21,0);s->call.io.fd=STDOUT_FILENO;s->call.io.length=21;}
+    fixture_expected_escape=1;run_case("fixture-rejects-missing-write-byte-expectation");
+
+    fixture_reset();queue_instruction("YSPROBE1 output-overflow\n");
+    fixture_block_live[0]=1;
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    fixture_expected_escape=1;run_case("fixture-rejects-duplicate-live-allocation");
+
+    fixture_reset();
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}
+    fixture_driver_active=1;
+    if(setjmp(fixture_jump)==0)fixture_free(fixture_blocks[0]);
+    fixture_driver_active=0;
+    fixture_check(fixture_escape==1&&fixture_step_index==fixture_step_count,
+                  "fixture rejects invalid free before obligation credit");
+    (void)puts("control fixture-rejects-invalid-free: rejected");
+}
+
+static void parser_invalid_case(const char *name, const void *bytes, size_t length)
+{
+    static const char diagnostic[] = "YSPROBE1 error=input\n";
+    fixture_reset();
+    if (length != 0U) queue_read(STDIN_FILENO, INPUT_CAP + 1U, bytes, length);
+    if (length <= INPUT_CAP) queue_read(STDIN_FILENO, INPUT_CAP + 1U - length, NULL, 0);
+    expect_output(diagnostic, sizeof diagnostic - 1U, 64);
+    run_case(name);
 }
 
 static void parser_cases(void)
 {
-    static const char *const invalid[] = {
-        "", "candidate-read\n", "YSPROBE1 unknown\n", "YSPROBE1 candidate-read x\n",
-        "YSPROBE1  candidate-read\n", "YSPROBE1 candidate-read \n", "YSPROBE1 candidate-read\r\n",
-        "YSPROBE1 candidate-read\nextra", "YSPROBE1 socket-family 00\n", "YSPROBE1 socket-family +1\n",
-        "YSPROBE1 socket-family 65536\n", "YSPROBE1 host-sentinel 2f2e 1 0000000000000000000000000000000000000000000000000000000000000000\n"
-        ,"YSPROBE1 host-sentinel 2f78 0 0000000000000000000000000000000000000000000000000000000000000000\n"
-        ,"YSPROBE1 host-sentinel 2f78 4097 0000000000000000000000000000000000000000000000000000000000000000\n"
-        ,"YSPROBE1 host-sentinel 2f78 1 A000000000000000000000000000000000000000000000000000000000000000\n"
+    static const struct { const char *id, *text; } fixed[] = {
+        {"PAR-empty", ""}, {"PAR-bad-magic", "candidate-read\n"},
+        {"PAR-unknown-mode", "YSPROBE1 unknown\n"},
+        {"PAR-double-space", "YSPROBE1  candidate-read\n"},
+        {"PAR-trailing-space", "YSPROBE1 candidate-read \n"},
+        {"PAR-leading-space", " YSPROBE1 candidate-read\n"},
+        {"PAR-tab-separator", "YSPROBE1\tcandidate-read\n"},
+        {"PAR-missing-lf", "YSPROBE1 candidate-read"},
+        {"PAR-crlf", "YSPROBE1 candidate-read\r\n"},
+        {"PAR-extra-line", "YSPROBE1 candidate-read\nYSPROBE1 environment\n"},
+        {"PAR-trailing-byte", "YSPROBE1 candidate-read\nx"},
+        {"PAR-socket-leading-zero", "YSPROBE1 socket-family 00\n"},
+        {"PAR-socket-plus", "YSPROBE1 socket-family +1\n"},
+        {"PAR-socket-negative", "YSPROBE1 socket-family -1\n"},
+        {"PAR-socket-max-plus-one", "YSPROBE1 socket-family 65536\n"},
+        {"PAR-socket-uint-overflow", "YSPROBE1 socket-family 18446744073709551616\n"},
+        {"PAR-socket-nondigit", "YSPROBE1 socket-family 1x\n"},
+        {"PAR-arity-socket-0", "YSPROBE1 socket-family\n"},
+        {"PAR-arity-socket-2", "YSPROBE1 socket-family 0 1\n"},
+        {"PAR-arity-host-sentinel-0", "YSPROBE1 host-sentinel\n"},
+        {"PAR-arity-host-sentinel-1", "YSPROBE1 host-sentinel 2f78\n"},
+        {"PAR-arity-host-sentinel-2", "YSPROBE1 host-sentinel 2f78 1\n"},
+        {"PAR-arity-host-sentinel-4", "YSPROBE1 host-sentinel 2f78 1 0000000000000000000000000000000000000000000000000000000000000000 x\n"},
+        {"PAR-arity-sibling-sentinel-0", "YSPROBE1 sibling-sentinel\n"},
+        {"PAR-arity-sibling-sentinel-1", "YSPROBE1 sibling-sentinel 2f78\n"},
+        {"PAR-arity-sibling-sentinel-2", "YSPROBE1 sibling-sentinel 2f78 1\n"},
+        {"PAR-arity-sibling-sentinel-4", "YSPROBE1 sibling-sentinel 2f78 1 0000000000000000000000000000000000000000000000000000000000000000 x\n"}
     };
-    static const char diagnostic[] = "YSPROBE1 error=input\n";
-    size_t i; char name[64];
-    for (i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
-        fixture_reset(); queue_instruction(invalid[i]); expect_output(diagnostic, sizeof diagnostic - 1U, 64);
-        (void)snprintf(name, sizeof name, "input-invalid-%zu", i); run_case(name);
+    static const char *const zero_modes[] = {
+        "candidate-read","candidate-write","tools-write","evidence-read","evidence-list",
+        "evidence-reopen","evidence-truncate","evidence-link","evidence-rename","scratch-free",
+        "scratch-fill","output-overflow","environment","descriptors","fork-bomb","thread-bomb",
+        "cpu-spin-32","memory-exhaustion","sleep","signal-supervisor","namespace-escape",
+        "cgroup-escape","forged-report-stdout","forged-report-evidence"
+    };
+    static const struct { const char *suffix, *path, *size, *digest; } sentinel_bad[] = {
+        {"odd-hex","2f7","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"nonhex","2fzz","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"upper-path","2F78","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"relative","78","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"nul-path","2f7800","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"root-empty-component","2f","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"empty-component","2f2f78","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"trailing-slash","2f782f","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"dot-component","2f2e","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"dotdot-component","2f782f2e2e","1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-zero","2f78","0","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-too-large","2f78","4097","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-leading-zero","2f78","01","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-plus","2f78","+1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-negative","2f78","-1","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-overflow","2f78","18446744073709551616","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"size-nondigit","2f78","1x","0000000000000000000000000000000000000000000000000000000000000000"},
+        {"digest-short","2f78","1","000000000000000000000000000000000000000000000000000000000000000"},
+        {"digest-long","2f78","1","00000000000000000000000000000000000000000000000000000000000000000"},
+        {"digest-upper","2f78","1","A000000000000000000000000000000000000000000000000000000000000000"},
+        {"digest-nonhex","2f78","1","g000000000000000000000000000000000000000000000000000000000000000"}
+    };
+    static const unsigned char embedded_nul[] = {'Y','S',0,'P'};
+    static const unsigned char non_ascii[] = "YSPROBE1 candidate-read \200\n";
+    static unsigned char boundary[INPUT_CAP + 1U];
+    size_t i, role;
+    char instruction[INPUT_CAP + 1U], name[128];
+
+    for (i = 0; i < sizeof fixed / sizeof fixed[0]; i++)
+        parser_invalid_case(fixed[i].id, fixed[i].text, strlen(fixed[i].text));
+    parser_invalid_case("PAR-embedded-nul", embedded_nul, sizeof embedded_nul);
+    parser_invalid_case("PAR-non-ascii", non_ascii, sizeof non_ascii - 1U);
+
+    for (i = 0; i < sizeof zero_modes / sizeof zero_modes[0]; i++) {
+        (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s x\n", zero_modes[i]);
+        (void)snprintf(name, sizeof name, "PAR-arity-%s", zero_modes[i]);
+        parser_invalid_case(name, instruction, strlen(instruction));
     }
+    for (role = 0; role < 2U; role++) {
+        const char *mode = role == 0U ? "host-sentinel" : "sibling-sentinel";
+        for (i = 0; i < sizeof sentinel_bad / sizeof sentinel_bad[0]; i++) {
+            (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s %s %s %s\n", mode,
+                           sentinel_bad[i].path, sentinel_bad[i].size, sentinel_bad[i].digest);
+            (void)snprintf(name, sizeof name, "PAR-%s-%s", mode, sentinel_bad[i].suffix);
+            parser_invalid_case(name, instruction, strlen(instruction));
+        }
+        memset(instruction, 0, sizeof instruction);
+        (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s 2f", mode);
+        for (i = 0; i < 4096U; i++) (void)strcat(instruction, "61");
+        (void)snprintf(instruction + strlen(instruction), sizeof instruction - strlen(instruction),
+                       " 1 0000000000000000000000000000000000000000000000000000000000000000\n");
+        (void)snprintf(name, sizeof name, "PAR-%s-path-too-long", mode);
+        parser_invalid_case(name, instruction, strlen(instruction));
+    }
+
+    memset(boundary, 'x', sizeof boundary);
+    parser_invalid_case("PAR-cap", boundary, INPUT_CAP);
+    fixture_reset(); queue_read(STDIN_FILENO, INPUT_CAP + 1U, boundary, INPUT_CAP + 1U);
+    expect_output("YSPROBE1 error=input\n", 21U, 64); run_case("PAR-overflow");
     fixture_reset(); queue_read_error(STDIN_FILENO, INPUT_CAP + 1U, EIO);
-    expect_output("YSPROBE1 error=read\n", 20U, 64); run_case("input-read-error");
-    {
-        static unsigned char boundary[INPUT_CAP+1U];
-        memset(boundary,'x',sizeof boundary);
-        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,INPUT_CAP);
-        queue_read(STDIN_FILENO,1U,NULL,0);expect_output(diagnostic,sizeof diagnostic-1U,64);
-        run_case("input-exact-transport-cap-invalid-grammar");
-        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,INPUT_CAP+1U);
-        expect_output(diagnostic,sizeof diagnostic-1U,64);run_case("input-cap-plus-one");
-        boundary[0]='Y';boundary[1]='S';boundary[2]=0;boundary[3]='P';
-        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,4U);
-        queue_read(STDIN_FILENO,INPUT_CAP-3U,NULL,0);expect_output(diagnostic,sizeof diagnostic-1U,64);
-        run_case("input-embedded-nul");
-    }
+    expect_output("YSPROBE1 error=read\n", 20U, 64); run_case("PAR-read-error");
+    fixture_reset(); queue_read(STDIN_FILENO, INPUT_CAP + 1U, "YSPROBE", 7U);
+    queue_read_error(STDIN_FILENO, INPUT_CAP + 1U - 7U, EIO);
+    expect_output("YSPROBE1 error=read\n", 20U, 64); run_case("PAR-read-error-after-prefix");
 }
 
 static void candidate_cases(void)
@@ -1769,7 +2894,7 @@ static void socket_cases(void)
 
 static void actual_socket_facts_case(void)
 {
-    struct socket_facts facts={0};
+    struct socket_facts facts={0}, observed;
     static const char instruction[] = "YSPROBE1 socket-family 0\n";
     char output[512], domain[64]; struct oracle_record record;
 #if defined(__linux__) && !defined(YSTACK_TEST_NO_SOCKET_CONSTANTS)
@@ -1793,6 +2918,19 @@ static void actual_socket_facts_case(void)
     facts.vsock_available=1;facts.vsock=AF_VSOCK;
 #endif
 #endif
+    observed = build_socket_facts();
+    fixture_check(observed.domain_max == facts.domain_max, "socket fact domain_max");
+    fixture_check(observed.linux_build == facts.linux_build, "socket fact linux_build");
+    fixture_check(observed.cloexec_available == facts.cloexec_available, "socket fact cloexec_available");
+    fixture_check(observed.cloexec == facts.cloexec, "socket fact cloexec");
+    fixture_check(observed.netlink_available == facts.netlink_available, "socket fact netlink_available");
+    fixture_check(observed.netlink == facts.netlink, "socket fact netlink");
+    fixture_check(observed.usersock_available == facts.usersock_available, "socket fact usersock_available");
+    fixture_check(observed.usersock == facts.usersock, "socket fact usersock");
+    fixture_check(observed.packet_available == facts.packet_available, "socket fact packet_available");
+    fixture_check(observed.packet == facts.packet, "socket fact packet");
+    fixture_check(observed.vsock_available == facts.vsock_available, "socket fact vsock_available");
+    fixture_check(observed.vsock == facts.vsock, "socket fact vsock");
     int base_valid = facts.linux_build && facts.cloexec_available &&
         facts.domain_max > 0 && facts.domain_max <= 65536L;
     fixture_reset(); queue_instruction(instruction);
@@ -1896,7 +3034,7 @@ static void socket_prerequisite_cases(void)
     }
 }
 
-static void descriptor_case(const char *name, int leak3, int leak128, int error_fd)
+static void descriptor_case(const char *name, int leak3, int leak128, int error_fd, int model_fd2048)
 {
     static const char instruction[] = "YSPROBE1 descriptors\n";
     struct oracle_record records[5] = {
@@ -1909,6 +3047,7 @@ static void descriptor_case(const char *name, int leak3, int leak128, int error_
     };
     char output[1024]; int fd;
     fixture_reset(); queue_instruction(instruction);
+    fixture_modeled_fd2048_open = model_fd2048;
     for (fd = 0; fd <= 2; fd++) {
         queue_fstat(fd, S_IFREG | 0600, 0, 0);
         queue_fcntl(fd, F_GETFL, fd == 0 ? O_RDONLY : O_WRONLY | O_APPEND, 0);
@@ -1927,18 +3066,21 @@ static void descriptor_case(const char *name, int leak3, int leak128, int error_
     }
     expect_output(output, oracle_line(output, sizeof output, instruction, "incomplete", "none", records, 5U), 0);
     run_case(name);
+    if (model_fd2048) {
+        fixture_check(fixture_modeled_fd2048_open, "modeled fd2048 remains open");
+        fixture_check(!fixture_modeled_fd2048_queried, "scan never queried modeled fd2048");
+    }
 }
 
 static void descriptor_cases(void)
 {
-    descriptor_case("descriptors-zero-leaks", 0, 0, 0);
-    descriptor_case("descriptors-fd3", 1, 0, 0);
-    descriptor_case("descriptors-fd128-softlimit-model", 0, 1, 0);
-    descriptor_case("descriptors-two-leaks", 1, 1, 0);
-    descriptor_case("descriptors-error-before-leak", 0, 0, 3);
-    descriptor_case("descriptors-error-after-leak", 1, 0, 77);
-    fixture_check(2048>FD_SCAN_LAST,"modeled high descriptor lies outside declared scan");
-    descriptor_case("obligation-descriptors-modeled-fd2048-invisible",0,0,0);
+    descriptor_case("descriptors-zero-leaks", 0, 0, 0, 0);
+    descriptor_case("descriptors-fd3", 1, 0, 0, 0);
+    descriptor_case("descriptors-fd128-softlimit-model", 0, 1, 0, 0);
+    descriptor_case("descriptors-two-leaks", 1, 1, 0, 0);
+    descriptor_case("descriptors-error-before-leak", 0, 0, 3, 0);
+    descriptor_case("descriptors-error-after-leak", 1, 0, 77, 0);
+    descriptor_case("obligation-descriptors-modeled-fd2048-invisible",0,0,0,1);
 }
 
 static void descriptor_metadata_case(const char *name, int target, mode_t mode,
@@ -2041,7 +3183,7 @@ static void namespace_cases(void)
         {"success","violation",0,1},{"eperm","refused",EPERM,1},
         {"eacces","refused",EACCES,1},{"erofs","refused",EROFS,1},
         {"unsupported","unsupported",EOPNOTSUPP,0},{"eio","incomplete",EIO,0},
-        {"enosys","unsupported",ENOSYS,0}};
+        {"enosys","incomplete",ENOSYS,0}};
 #endif
     size_t i;char output[512],name[64];
 #if defined(__linux__)
@@ -2213,80 +3355,178 @@ static void queue_establish(const char *path, int fd, const void *bytes, size_t 
     queue_write_exact(fd,bytes,length,(long)length,0); queue_close(fd,0,0);
 }
 
-static void evidence_matrix(void)
+static void evidence_setup_case(size_t kind, long write_return, int write_error,
+                                int prior_errno, int close_error, const char *id)
 {
     static const char *const modes[]={"evidence-read","evidence-reopen","evidence-truncate","evidence-link","evidence-rename"};
     static const char *const records[]={"read","reopen","truncate","link","rename"};
     static const char *const paths[]={"/sandbox/evidence/read","/sandbox/evidence/reopen","/sandbox/evidence/truncate","/sandbox/evidence/link-source","/sandbox/evidence/rename-source"};
-    static const struct {const char *id,*outcome;int error,cleanup,success;} variants[]={
-        {"success","violation",0,0,1},{"success-cleanup-error","violation",0,EIO,1},
-        {"refused-eperm","refused",EPERM,0,0},{"refused-eacces","refused",EACCES,0,0},
-        {"refused-erofs","refused",EROFS,0,0},{"unsupported","unsupported",EOPNOTSUPP,0,0},
-        {"observation-error","incomplete",EIO,0,0}};
-    size_t kind,variant;char instruction[80],output[768],name[96];
+    char instruction[80], output[768];
+    int primary = write_return == 1 ? 0 : write_return < 0 ? write_error : EIO;
+    struct oracle_record r={records[kind],"failed","incomplete",0,0,primary,close_error,{0,0,0}};
+    fixture_reset();
+    (void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",modes[kind]);
+    queue_instruction(instruction);
+    queue_open(paths[kind],O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,40,0);
+    queue_write_exact(40,"x",1,write_return,write_error);
+    queue_close(40,close_error?-1:0,close_error);
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);
+    errno=prior_errno;
+    run_case(id);
+}
+
+static void evidence_action_case(size_t kind, int reopen_error, long action_return,
+                                 int action_error, int close_error, const char *id)
+{
+    static const char *const modes[]={"evidence-read","evidence-reopen","evidence-truncate","evidence-link","evidence-rename"};
+    static const char *const records[]={"read","reopen","truncate","link","rename"};
+    static const char *const paths[]={"/sandbox/evidence/read","/sandbox/evidence/reopen","/sandbox/evidence/truncate","/sandbox/evidence/link-source","/sandbox/evidence/rename-source"};
+    char instruction[80],output[768];
+    int primary = reopen_error ? reopen_error : action_return < 0 ? action_error : 0;
+    int completed = reopen_error != 0 ?
+        (reopen_error == EPERM || reopen_error == EACCES || reopen_error == EROFS) :
+        (action_return >= 0 || primary == EPERM || primary == EACCES || primary == EROFS);
+    const char *pre = reopen_error ? "ok" : "ok";
+    const char *outcome = reopen_error ? (reopen_error==EPERM||reopen_error==EACCES||reopen_error==EROFS?"refused":
+                           reopen_error==EOPNOTSUPP?"unsupported":"incomplete") :
+                          action_return >= 0 ? "violation" :
+                          primary==EPERM||primary==EACCES||primary==EROFS?"refused":
+                          primary==EOPNOTSUPP?"unsupported":"incomplete";
+    uint64_t value = reopen_error == 0 && action_return >= 0 ? 1U : 0U;
+    struct oracle_record r={records[kind],pre,outcome,1,completed,primary,close_error,{value,0,0}};
+    fixture_reset();
+    (void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",modes[kind]);
+    queue_instruction(instruction);queue_establish(paths[kind],40,"x",1);
+    if(kind<2U) {
+        int flags=(kind==0U?O_RDONLY:O_WRONLY)|O_CLOEXEC;
+        queue_open(paths[kind],flags,0,reopen_error?-1:41,reopen_error);
+        if(!reopen_error) {
+            if(kind==0U) {
+                if(action_return>0) queue_read(41,1U,"x",1U);
+                else if(action_return==0) queue_read(41,1U,NULL,0U);
+                else queue_read_error(41,1U,action_error);
+            }
+            queue_close(41,close_error?-1:0,close_error);
+        }
+    } else if(kind==2U) {
+        struct fixture_step*s=queue_return(FX_TRUNCATE,action_return,action_error);
+        s->call.truncate.path=paths[kind];s->call.truncate.length=0;
+    } else {
+        struct fixture_step*s=queue_return(kind==3U?FX_LINK:FX_RENAME,action_return,action_error);
+        s->call.paths.first=paths[kind];s->call.paths.second=kind==3U?"/sandbox/evidence/link-target":"/sandbox/evidence/rename-target";
+    }
+    expect_output(output,oracle_line(output,sizeof output,instruction,
+        completed&&!close_error?"complete":"incomplete","none",&r,1),0);
+    run_case(id);
+}
+
+static void evidence_matrix(void)
+{
+    static const char *const labels[]={"read","reopen","truncate","link","rename"};
+    static const int prior[]={0,EINTR,EACCES};
+    static const char *const prior_name[]={"0","EINTR","EACCES"};
+    static const int negative[]={EIO,EINTR};
+    static const char *const negative_name[]={"EIO","EINTR"};
+    static const int action_errors[]={EPERM,EACCES,EROFS,EOPNOTSUPP,EIO,ENOENT};
+    static const char *const action_names[]={"EPERM","EACCES","EROFS","EOPNOTSUPP","EIO","ENOENT"};
+    size_t kind,i,c;char id[128];
+    {
+        static const char instruction[]="YSPROBE1 evidence-read\n";
+        char output[768];
+        struct oracle_record r={"read","failed","incomplete",0,0,EIO,0,{0,0,0}};
+        fixture_reset();queue_read_error(STDIN_FILENO,INPUT_CAP+1U,EINTR);
+        queue_read(STDIN_FILENO,INPUT_CAP+1U,instruction,strlen(instruction));
+        queue_read(STDIN_FILENO,INPUT_CAP+1U-strlen(instruction),NULL,0);
+        queue_open("/sandbox/evidence/read",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,40,0);
+        queue_write_exact(40,"x",1,0,0);queue_close(40,0,0);
+        expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);
+        run_case("PAR-initial-eintr");
+    }
     for(kind=0;kind<5U;kind++) {
-        struct oracle_record r;
-        for(variant=0;variant<4U;variant++) {
-            int write_stage=variant!=0U,short_write=variant==2U,close_error=variant==3U;
-            fixture_reset();(void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",modes[kind]);queue_instruction(instruction);
-            queue_open(paths[kind],O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,write_stage?40:-1,write_stage?0:EIO);
-            if(write_stage){queue_write_exact(40,"x",1,short_write?0:1,0);queue_close(40,close_error?-1:0,close_error?EIO:0);}
-            r=(struct oracle_record){records[kind],"failed","incomplete",0,0,variant==0U?EIO:short_write?EIO:0,close_error?EIO:0,{0,0,0}};
-            expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);
-            (void)snprintf(name,sizeof name,"obligation-%s-setup-%s",modes[kind],variant==0U?"open-error":variant==1U?"write-success-control":variant==2U?"short-write":"close-error");
-            if(variant==1U) continue;
-            run_case(name);
+        for(i=0;i<2U;i++) {
+            (void)snprintf(id,sizeof id,"ESET-%s-open-%s",labels[kind],i?"EPERM":"EIO");
+            {
+                char instruction[80],output[768];int error=i?EPERM:EIO;
+                struct oracle_record r={labels[kind],"failed","incomplete",0,0,error,0,{0,0,0}};
+                fixture_reset();(void)snprintf(instruction,sizeof instruction,"YSPROBE1 evidence-%s\n",labels[kind]);queue_instruction(instruction);
+                queue_open(kind==0U?"/sandbox/evidence/read":kind==1U?"/sandbox/evidence/reopen":kind==2U?"/sandbox/evidence/truncate":kind==3U?"/sandbox/evidence/link-source":"/sandbox/evidence/rename-source",
+                           O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,error);
+                expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);run_case(id);
+            }
         }
-        for(variant=0;variant<sizeof variants/sizeof variants[0];variant++) {
-            const int error=variants[variant].error,success=variants[variant].success,cleanup=variants[variant].cleanup;
-            const int refused=error==EPERM||error==EACCES||error==EROFS;
-            if(kind>=2U&&cleanup!=0) continue;
-            fixture_reset();(void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",modes[kind]);queue_instruction(instruction);queue_establish(paths[kind],40,"x",1);
-            if(kind<2U) {
-                queue_open(paths[kind],(kind==0U?O_RDONLY:O_WRONLY)|O_CLOEXEC,0,error?-1:41,error);
-                if(!error&&kind==0U) queue_read(41,1U,success?"x":NULL,success?1U:0U);
-                if(!error) queue_close(41,cleanup?-1:0,cleanup);
-            } else if(kind==2U) {struct fixture_step*s=queue_return(FX_TRUNCATE,error?-1:0,error);s->call.truncate.path=paths[kind];s->call.truncate.length=0;}
-            else {struct fixture_step*s=queue_return(kind==3U?FX_LINK:FX_RENAME,error?-1:0,error);s->call.paths.first=paths[kind];s->call.paths.second=kind==3U?"/sandbox/evidence/link-target":"/sandbox/evidence/rename-target";}
-            r=(struct oracle_record){records[kind],"ok",variants[variant].outcome,1,success||refused,error,cleanup,{success?1U:0U,0,0}};
-            expect_output(output,oracle_line(output,sizeof output,instruction,(!error||refused)&&!cleanup?"complete":"incomplete","none",&r,1),0);
-            (void)snprintf(name,sizeof name,"obligation-%s-action-%s",modes[kind],variants[variant].id);run_case(name);
+        for(i=0;i<2U;i++)for(c=0;c<2U;c++) {
+            (void)snprintf(id,sizeof id,"ESET-%s-negative-%s-close-%s",labels[kind],negative_name[i],c?"EBADF":"0");
+            evidence_setup_case(kind,-1,negative[i],0,c?EBADF:0,id);
         }
+        for(i=0;i<3U;i++)for(c=0;c<2U;c++) {
+            (void)snprintf(id,sizeof id,"ESET-%s-zero-prior-%s-close-%s",labels[kind],prior_name[i],c?"EBADF":"0");
+            evidence_setup_case(kind,0,0,prior[i],c?EBADF:0,id);
+        }
+        (void)snprintf(id,sizeof id,"ESET-%s-setup-close-error",labels[kind]);
+        evidence_setup_case(kind,1,0,0,EIO,id);
+
         if(kind==0U) {
-            fixture_reset();queue_instruction(instruction);queue_establish(paths[kind],40,"x",1);queue_open(paths[kind],O_RDONLY|O_CLOEXEC,0,41,0);queue_read(41,1U,NULL,0);queue_close(41,0,0);
-            r=(struct oracle_record){records[kind],"ok","violation",1,1,0,0,{1,0,0}};
-            expect_output(output,oracle_line(output,sizeof output,instruction,"complete","none",&r,1),0);run_case("obligation-evidence-read-action-eof");
+            for(i=0;i<6U;i++) {
+                (void)snprintf(id,sizeof id,"EACT-read-reopen-%s",action_names[i]);
+                evidence_action_case(kind,action_errors[i],0,0,0,id);
+            }
+            for(i=0;i<7U;i++)for(c=0;c<2U;c++) {
+                const char *shape=i==0U?"byte":i==1U?"eof":action_names[i-2U];
+                long returned=i==0U?1:i==1U?0:-1;
+                int error=i<2U?0:action_errors[i-2U];
+                (void)snprintf(id,sizeof id,"EACT-read-reached-%s-close-%s",shape,c?"EIO":"0");
+                evidence_action_case(kind,0,returned,error,c?EIO:0,id);
+            }
+        } else if(kind==1U) {
+            for(i=0;i<6U;i++) {
+                (void)snprintf(id,sizeof id,"EACT-reopen-%s",action_names[i]);
+                evidence_action_case(kind,action_errors[i],0,0,0,id);
+            }
+            evidence_action_case(kind,0,0,0,0,"EACT-reopen-success-close-0");
+            evidence_action_case(kind,0,0,0,EIO,"EACT-reopen-success-close-EIO");
+        } else {
+            evidence_action_case(kind,0,0,0,0,kind==2U?"EACT-truncate-0":kind==3U?"EACT-link-0":"EACT-rename-0");
+            for(i=0;i<6U;i++) {
+                (void)snprintf(id,sizeof id,"EACT-%s-%s",labels[kind],action_names[i]);
+                evidence_action_case(kind,0,-1,action_errors[i],0,id);
+            }
         }
     }
 }
 
 static void evidence_list_cases(void)
 {
-    static const struct {const char*name,*outcome;int open_error,read_error,entry,close_error,completed;} cases[]={
-        {"evidence-list-open-refused","refused",EPERM,0,0,0,1},
-        {"evidence-list-entry","violation",0,0,1,0,1},
-        {"evidence-list-eof","violation",0,0,0,0,1},
-        {"evidence-list-read-error","incomplete",0,EIO,0,0,0},
-        {"evidence-list-close-error","violation",0,0,1,EIO,1},
-        {"evidence-list-primary-and-cleanup","incomplete",0,EIO,0,EBADF,0}};
+    static const struct {const char*name,*outcome;int open_error,read_error,entry,close_error,completed,prior_errno,guard_eof;} cases[]={
+        {"evidence-list-open-refused","refused",EPERM,0,0,0,1,0,0},
+        {"evidence-list-entry","violation",0,0,1,0,1,0,0},
+        {"evidence-list-eof","violation",0,0,0,0,1,0,1},
+        {"evidence-list-read-error","incomplete",0,EIO,0,0,0,0,0},
+        {"evidence-list-close-error","violation",0,0,1,EIO,1,0,0},
+        {"evidence-list-primary-and-cleanup","incomplete",0,EIO,0,EBADF,0,0,0},
+        {"EL-read-eof-prior-EIO-close-0","violation",0,0,0,0,1,EIO,1},
+        {"EL-read-eof-prior-EIO-close-EBADF","violation",0,0,0,EBADF,1,EIO,1}};
     static const char instruction[]="YSPROBE1 evidence-list\n";size_t i;char output[640];
     for(i=0;i<sizeof cases/sizeof cases[0];i++) {
         struct oracle_record r={"list","ok",cases[i].outcome,1,cases[i].completed,
             cases[i].open_error!=0?cases[i].open_error:cases[i].read_error,cases[i].close_error,{0,0,0}};
         struct fixture_step*s;fixture_reset();queue_instruction(instruction);
         s=queue_return(FX_OPENDIR,cases[i].open_error?-1:1,cases[i].open_error);s->call.directory.path="/sandbox/evidence";s->call.directory.object=0;
+        if(cases[i].guard_eof){s->errno_guard=1;s->expected_errno_before=cases[i].prior_errno;s->preserve_errno=1;}
         if(cases[i].open_error==0) {
             s=queue_return(FX_READDIR,cases[i].read_error?-1:0,cases[i].read_error);s->call.object.object=0;
             s->directory_has_entry=cases[i].entry;
+            if(cases[i].guard_eof){s->errno_guard=1;s->expected_errno_before=0;s->preserve_errno=1;}
             s=queue_return(FX_CLOSEDIR,cases[i].close_error?-1:0,cases[i].close_error);s->call.object.object=0;
         }
         expect_output(output,oracle_line(output,sizeof output,instruction,
             cases[i].close_error||(!cases[i].completed)?"incomplete":"complete","none",&r,1),0);
+        errno=cases[i].prior_errno;
         run_case(cases[i].name);
     }
 }
 
-static void scratch_case_mmap_cleanup(void)
+static void scratch_setup_case(size_t target, int stage, int primary,
+                               int close_error, const char *case_name)
 {
     static const char instruction[]="YSPROBE1 scratch-free\n";
     static const unsigned char zero[4096]={0};
@@ -2294,53 +3534,6 @@ static void scratch_case_mmap_cleanup(void)
         "/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
     struct oracle_record r[7]; char output[2048]; size_t i;
     static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    for(i=0;i<7U;i++) r[i]=(struct oracle_record){names[i],"ok","refused",1,1,EPERM,0,{0,0,0}};
-    fixture_reset(); queue_instruction(instruction);
-    for(i=0;i<7U;i++) {
-        if(i==5U){struct fixture_step*s=queue_return(FX_MKDIR,0,0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
-          s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;}
-        if(i==6U){
-#if defined(__linux__) && defined(O_TMPFILE)
-          queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,EPERM);
-#else
-          r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};
-#endif
-          continue;
-        }
-#if !defined(__linux__)
-        if(i==1U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
-#endif
-#if !defined(MADV_REMOVE)
-        if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
-#endif
-        queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-        queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
-        queue_close(20+(int)i,0,0);
-        if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,-1,EPERM);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,0,0);}
-        else if(i==1U){
-#if defined(__linux__)
-          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,31,0);s=queue_return(FX_FALLOCATE,-1,EPERM);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,0,0);
-#endif
-        } else if(i==2U){
-#if defined(MADV_REMOVE)
-          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);s=queue_return(FX_MMAP,-1,ENOMEM);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;queue_close(32,-1,EIO);
-          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,ENOMEM,EIO,{0,0,0}};
-#endif
-        } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=paths[i];s->call.truncate.length=0;}
-        else {struct fixture_step*s=queue_return(FX_UNLINK,-1,EPERM);s->call.path.path=paths[i];}
-    }
-    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,7),0);
-    run_case("scratch-mmap-enomem-close-eio");
-}
-
-static void scratch_setup_failure_case(size_t target,int stage,const char *case_name)
-{
-    static const char instruction[]="YSPROBE1 scratch-free\n";
-    static const unsigned char zero[4096]={0};
-    static const char *const paths[]={"/sandbox/scratch/probe-0","/sandbox/scratch/probe-1",
-        "/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
-    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    struct oracle_record r[7];char output[2048];size_t i;
     fixture_reset();queue_instruction(instruction);
     for(i=0;i<7U;i++) {
         r[i]=(struct oracle_record){names[i],"ok","refused",1,1,EPERM,0,{0,0,0}};
@@ -2350,28 +3543,28 @@ static void scratch_setup_failure_case(size_t target,int stage,const char *case_
 #if !defined(MADV_REMOVE)
         if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
 #endif
-        if(i==5U) {
-            struct fixture_step*s=queue_return(FX_MKDIR,i==target?-1:0,i==target?EIO:0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
-            if(i==target){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}
-            s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;
-        }
-        if(i==6U) {
+        if(i==5U){struct fixture_step*s=queue_return(FX_MKDIR,i==target&&stage==8?-1:0,i==target&&stage==8?primary:0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
+          if(i==target&&stage==8){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
+          s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;}
+        if(i==6U){
 #if defined(__linux__) && defined(O_TMPFILE)
-            queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,i==target?EIO:EPERM);
-            if(i==target)r[i]=(struct oracle_record){names[i],"ok","incomplete",1,0,EIO,0,{0,0,0}};
+          queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,EPERM);
 #endif
-            continue;
+          continue;
         }
-        if(i==target){
-            if(stage==0){queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,EIO);
-              r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}
-            queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-            queue_write_exact(20+(int)i,zero,sizeof zero,stage==1?0:stage==2?-1:(long)sizeof zero,stage==2?EIO:0);
-            queue_close(20+(int)i,stage==3?-1:0,stage==3?EIO:0);
-            r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,stage==3?0:EIO,stage==3?EIO:0,{0,0,0}};continue;
-        }
+        if(i==target&&stage==0){queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,primary);
+          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
         queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-        queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);queue_close(20+(int)i,0,0);
+        if(i==target&&stage==1)queue_write_exact(20+(int)i,zero,sizeof zero,0,0);
+        else if(i==target&&stage==2)queue_write_exact(20+(int)i,zero,sizeof zero,-1,primary);
+        else if(i==target&&stage==4){queue_write_exact(20+(int)i,zero,sizeof zero,17,0);queue_write_exact(20+(int)i,zero+17,sizeof zero-17U,(long)(sizeof zero-17U),0);}
+        else if(i==target&&stage==5){queue_write_exact(20+(int)i,zero,sizeof zero,-1,EINTR);queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);}
+        else queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
+        queue_close(20+(int)i,i==target&&close_error?-1:0,i==target?close_error:0);
+        if(i==target&&(stage==1||stage==2||close_error)){
+          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,stage==1||stage==2?EIO:0,close_error,{0,0,0}};continue;}
+        if(i==target&&stage==6){queue_open(paths[i],O_RDWR|O_CLOEXEC,0,-1,primary);
+          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
         if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,-1,EPERM);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,0,0);}
         else if(i==1U){
 #if defined(__linux__)
@@ -2379,32 +3572,54 @@ static void scratch_setup_failure_case(size_t target,int stage,const char *case_
 #endif
         } else if(i==2U){
 #if defined(MADV_REMOVE)
-          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
-          s=queue_return(FX_MADVISE,-1,EPERM);s->call.madvise.object=0;s->call.madvise.length=4096;s->call.madvise.advice=MADV_REMOVE;
-          s=queue_return(FX_MUNMAP,0,0);s->call.munmap.object=0;s->call.munmap.length=4096;queue_close(32,0,0);
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);
+          if(i==target&&stage==7){s=queue_return(FX_MMAP,-1,ENOMEM);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;queue_close(32,close_error?-1:0,close_error);r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,ENOMEM,close_error,{0,0,0}};continue;}
+          s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
+          s=queue_return(FX_MADVISE,-1,EPERM);s->call.madvise.object=0;s->call.madvise.length=4096;s->call.madvise.advice=MADV_REMOVE;s=queue_return(FX_MUNMAP,0,0);s->call.munmap.object=0;s->call.munmap.length=4096;queue_close(32,0,0);
 #endif
         } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=paths[i];s->call.truncate.length=0;}
         else {struct fixture_step*s=queue_return(FX_UNLINK,-1,EPERM);s->call.path.path=paths[i];}
     }
-    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,7),0);run_case(case_name);
+    expect_output(output,oracle_line(output,sizeof output,instruction,
+#if defined(__linux__) && defined(O_TMPFILE) && defined(MADV_REMOVE)
+      (stage==3||stage==4||stage==5)&&close_error==0?"complete":"incomplete",
+#else
+      "incomplete",
+#endif
+      "none",r,7),0);
+    run_case(case_name);
 }
 
 static void scratch_setup_failure_cases(void)
 {
-    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink"};
-    static const char *const stages[]={"open-error","zero-write","write-error","close-error"};
-    size_t i,s;char name[96];
-    for(i=0;i<5U;i++)for(s=0;s<4U;s++){
+    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
+    static const char *const kinds[]={"zero","error","full","short","eintr"};
+    size_t i,k;char name[96];
+    for(i=0;i<5U;i++){
 #if !defined(__linux__)
       if(i==1U)continue;
 #endif
-      (void)snprintf(name,sizeof name,"obligation-scratch-%s-setup-%s",names[i],stages[s]);
-      scratch_setup_failure_case(i,(int)s,name);
+      (void)snprintf(name,sizeof name,"SS-%s-open-EIO",names[i]);scratch_setup_case(i,0,EIO,0,name);
+      (void)snprintf(name,sizeof name,"SS-%s-open-EPERM",names[i]);scratch_setup_case(i,0,EPERM,0,name);
+      for(k=0;k<5U;k++){
+        int stage=(int)k+1;
+        (void)snprintf(name,sizeof name,"SS-%s-%s-close-0",names[i],kinds[k]);scratch_setup_case(i,stage,EIO,0,name);
+        (void)snprintf(name,sizeof name,"SS-%s-%s-close-%s",names[i],kinds[k],k<2U?"EBADF":"EIO");scratch_setup_case(i,stage,EIO,k<2U?EBADF:EIO,name);
+      }
+      if(i<3U){(void)snprintf(name,sizeof name,"SS-%s-reopen-EIO",names[i]);scratch_setup_case(i,6,EIO,0,name);
+        (void)snprintf(name,sizeof name,"SS-%s-reopen-EPERM",names[i]);scratch_setup_case(i,6,EPERM,0,name);}
     }
-    scratch_setup_failure_case(5,0,"scratch-rmdir-mkdir-failure");
+    scratch_setup_case(2U,7,ENOMEM,0,"SS-madv-remove-mmap-close-0");
+    scratch_setup_case(2U,7,ENOMEM,EBADF,"SS-madv-remove-mmap-close-EBADF");
+    scratch_setup_case(5U,8,EIO,0,"SS-rmdir-mkdir-EIO");
+    scratch_setup_case(5U,8,EPERM,0,"SS-rmdir-mkdir-EPERM");
 }
 
-static void scratch_action_case(size_t target,int action_error,int cleanup_error,const char *case_name)
+static void scratch_scenario_case(size_t target,int action_error,int cleanup_error,
+                                  int setup_kind,const char *case_name);
+
+static void scratch_scenario_case(size_t target,int action_error,int cleanup_error,
+                                  int setup_kind,const char *case_name)
 {
     static const char instruction[]="YSPROBE1 scratch-free\n";
     static const unsigned char zero[4096]={0};
@@ -2438,7 +3653,10 @@ static void scratch_action_case(size_t target,int action_error,int cleanup_error
           continue;
         }
         queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-        queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);queue_close(20+(int)i,0,0);
+        if(i==target&&setup_kind==1){queue_write_exact(20+(int)i,zero,sizeof zero,17,0);queue_write_exact(20+(int)i,zero+17,sizeof zero-17U,(long)(sizeof zero-17U),0);}
+        else if(i==target&&setup_kind==2){queue_write_exact(20+(int)i,zero,sizeof zero,-1,EINTR);queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);}
+        else queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
+        queue_close(20+(int)i,0,0);
         if(i==0U||i==1U||i==2U){
           queue_open(paths[i],O_RDWR|O_CLOEXEC,0,error==EBADF?-1:30+(int)i,error==EBADF?EIO:0);
           if(error==EBADF){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}}
@@ -2467,30 +3685,31 @@ static void scratch_action_case(size_t target,int action_error,int cleanup_error
     run_case(case_name);
 }
 
+static void scratch_action_case(size_t target,int action_error,int cleanup_error,const char *case_name)
+{
+    scratch_scenario_case(target,action_error,cleanup_error,0,case_name);
+}
+
 static void scratch_action_cases(void)
 {
     static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    static const struct {const char*id;int error;} variants[]={{"success",0},{"eperm",EPERM},{"eacces",EACCES},{"erofs",EROFS},{"unsupported",EOPNOTSUPP},{"error",EIO}};
-    size_t i,v;char name[96];
+    static const struct {const char*id;int error;} variants[]={{"0",0},{"EPERM",EPERM},{"EACCES",EACCES},{"EROFS",EROFS},{"EOPNOTSUPP",EOPNOTSUPP},{"ENOSYS",ENOSYS},{"EIO",EIO}};
+    size_t i,v,c;char name[96];
     for(i=0;i<7U;i++)for(v=0;v<sizeof variants/sizeof variants[0];v++) {
 #if !defined(__linux__)
       if(i==1U||i==6U)continue;
 #endif
-      (void)snprintf(name,sizeof name,"obligation-scratch-%s-action-%s",names[i],variants[v].id);
-      scratch_action_case(i,variants[v].error,0,name);
+      if(i<2U){for(c=0;c<2U;c++){
+        (void)snprintf(name,sizeof name,"SA-%s-%s-%s",names[i],variants[v].id,c?"EIO":"0");
+        scratch_action_case(i,variants[v].error,c?EIO:0,name);}}
+      else if(i==2U){static const char*const cleanup[]={"0","unmap-EIO","close-EBADF","both-EIO-then-EBADF"};
+        static const int errors[]={0,EIO,EBADF,EBUSY};for(c=0;c<4U;c++){
+          (void)snprintf(name,sizeof name,"SA-%s-%s-%s",names[i],variants[v].id,cleanup[c]);scratch_action_case(i,variants[v].error,errors[c],name);}}
+      else {
+        (void)snprintf(name,sizeof name,"SA-%s-%s-0",names[i],variants[v].id);scratch_action_case(i,variants[v].error,0,name);
+        if(i==6U&&v==0U)scratch_action_case(i,0,EIO,"SA-tmpfile-0-EIO");
+      }
     }
-    for(i=0;i<3U;i++){
-#if !defined(__linux__)
-      if(i==1U)continue;
-#endif
-      (void)snprintf(name,sizeof name,"obligation-scratch-%s-cleanup-error",names[i]);scratch_action_case(i,0,EIO,name);
-      (void)snprintf(name,sizeof name,"obligation-scratch-%s-reopen-error",names[i]);scratch_action_case(i,EBADF,0,name);
-    }
-    scratch_action_case(2U,0,EBADF,"obligation-scratch-madv-remove-close-error");
-    scratch_action_case(2U,0,EBUSY,"obligation-scratch-madv-remove-both-cleanup-errors");
-#if defined(__linux__) && defined(O_TMPFILE)
-    scratch_action_case(6U,0,EIO,"obligation-scratch-tmpfile-cleanup-error");
-#endif
 }
 
 static void raw_output_cases(void)
@@ -2718,11 +3937,8 @@ static void resource_cases(void)
     {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;
      s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=1;
      s=fixture_push(FX_MALLOC);s->flow=FX_STOP;s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=2;}
-    fixture_expected_escape=2;run_case("obligation-memory-stop-on-later-allocation-before-result");
-    fixture_check(fixture_blocks[0][0]==0&&fixture_blocks[0][4096]==0&&fixture_blocks[0][1]==0xa5,
-                  "memory first block touched pages and retained guard");
-    fixture_check(fixture_blocks[1][0]==0&&fixture_blocks[1][BLOCK_SIZE-4096]==0&&fixture_blocks[1][1]==0xa5,
-                  "memory second block touched pages and retained guard");
+    fixture_expected_escape=2;fixture_postcheck_kind=1;
+    run_case("obligation-memory-stop-on-later-allocation-before-result");
 
     fixture_reset();queue_instruction(sleep_instruction);
     {struct fixture_step*s=fixture_push(FX_SLEEP);s->flow=FX_STOP;s->call.sleep.seconds=60;}
@@ -2731,93 +3947,119 @@ static void resource_cases(void)
 
 static void resource_partial_output_cases(void)
 {
-    static const char *const modes[]={"fork-bomb","thread-bomb","cpu-spin-32","memory-exhaustion","sleep"};
-    static const char *const records[]={"fork","thread","cpu","memory","sleep"};
-    size_t i;char instruction[64],output[768],name[80];
-    for(i=0;i<5U;i++) {
-        struct oracle_record r={records[i],"ok",i==4U?"success":"incomplete",1,i==4U, i==4U?0:EAGAIN,0,
-          {0,i==2U?32U:i==4U?0U:0U,0}};
+    static const char *const modes[]={"fork-bomb","thread-bomb","cpu-spin-32","memory-exhaustion","sleep","scratch-fill"};
+    static const char *const records[]={"fork","thread","cpu","memory","sleep","fill"};
+    size_t i,variant;char instruction[64],output[768],name[96];
+    for(i=0;i<6U;i++)for(variant=0;variant<2U;variant++) {
+        struct oracle_record r={records[i],"ok",i==4U||i==5U?"success":"incomplete",1,
+          i==4U||i==5U, i==4U||i==5U?0:i==3U?ENOMEM:EAGAIN,0,
+          {i==4U?60U:i==5U?32U*BLOCK_SIZE:0U,i==2U?32U:i==5U?32U*BLOCK_SIZE:0U,0}};
         size_t length;
         fixture_reset();(void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",modes[i]);queue_instruction(instruction);
         if(i==0U)queue_return(FX_FORK,-1,EAGAIN);
         else if(i==1U||i==2U){struct fixture_step*s=queue_return(FX_PTHREAD_CREATE,EAGAIN,0);s->call.thread.entry=i==1U?paused_thread:spinning_thread;s->call.thread.argument=NULL;}
-        else if(i==3U){struct fixture_step*s=queue_return(FX_MALLOC,-1,ENOMEM);s->call.allocation.size=BLOCK_SIZE;r.error_number=ENOMEM;}
-        else {struct fixture_step*s=queue_return(FX_SLEEP,0,0);s->call.sleep.seconds=60;r.value[0]=60;}
-        length=oracle_line(output,sizeof output,instruction,i==4U?"incomplete":"incomplete","none",&r,1);
-        queue_write_exact(STDOUT_FILENO,output,length,9,0);queue_write_exact(STDOUT_FILENO,output+9,length-9,-1,EIO);
-        fixture_expected_output=(const unsigned char*)output;fixture_expected_output_length=9;fixture_expected_stdout_total=9;fixture_expected_return=74;
-        (void)snprintf(name,sizeof name,"obligation-%s-partial-result-error",modes[i]);run_case(name);
+        else if(i==3U){struct fixture_step*s=queue_return(FX_MALLOC,-1,ENOMEM);s->call.allocation.size=BLOCK_SIZE;}
+        else if(i==4U){struct fixture_step*s=queue_return(FX_SLEEP,0,0);s->call.sleep.seconds=60;}
+        else {
+            size_t block;struct fixture_step*s;
+            queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,41,0);
+            s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;
+            for(block=0;block<32U;block++)queue_write_repeat(41,'x',BLOCK_SIZE,BLOCK_SIZE,0);
+            s=queue_return(FX_FREE,0,0);s->call.object.object=0;queue_close(41,0,0);
+        }
+        length=oracle_line(output,sizeof output,instruction,i==5U?"complete":"incomplete","none",&r,1);
+        queue_write_exact(STDOUT_FILENO,output,length,9,0);
+        if(variant==0U)queue_write_exact(STDOUT_FILENO,output+9,length-9,-1,EIO);
+        else {struct fixture_step*s=fixture_push(FX_WRITE);s->flow=FX_STOP;s->call.io.fd=STDOUT_FILENO;
+              s->call.io.length=length-9;s->call.io.kind=FX_BYTES_EXACT;s->call.io.bytes=(const unsigned char*)output+9;}
+        fixture_expected_output=(const unsigned char*)output;fixture_expected_output_length=9;
+        fixture_expected_stdout_total=9;
+        if(variant==0U)fixture_expected_return=74;else fixture_expected_escape=2;
+        (void)snprintf(name,sizeof name,"ROUT-%s-%s",modes[i],variant==0U?"partial-error":"during-stop");
+        run_case(name);
     }
+}
+
+static void registry_self_controls(void)
+{
+    size_t count = sizeof obligation_registry / sizeof obligation_registry[0];
+    size_t i = obligation_index("PAR-empty"), missing = obligation_index("PAR-bad-magic");
+    int failures_before;
+    fixture_check(count == 980U, "fixed registry has 980 ids");
+    fixture_check(obligation_index("not-a-reviewed-obligation") == count,
+                  "unknown registry id rejected");
+    fixture_check(i < count && obligation_registry[i].seen == 0U,
+                  "registry starts without credit");
+    obligation_registry[i].seen = 1U;
+    fixture_check(obligation_registry[i].seen != 0U,
+                  "duplicate credit state is detectable");
+    obligation_registry[i].seen = 0U;
+    fixture_check(missing < count && obligation_registry[missing].seen == 0U,
+                  "missing required id is detectable");
+    failures_before = fixture_failures;
+    fixture_failures++;
+    finish_obligation_family(1U, failures_before);
+    fixture_failures--;
+    fixture_check(obligation_registry[missing].seen == 0U,
+                  "failed final guard cannot credit an id");
+    (void)puts("control registry-unknown-duplicate-missing-late-guard: rejected");
 }
 
 static void verify_obligation_manifest(void)
 {
-    static const char *const modes[]={"evidence-read","evidence-reopen","evidence-truncate","evidence-link","evidence-rename"};
-    static const char *const setup[]={"open-error","short-write","close-error"};
-    static const char *const action[]={"success","success-cleanup-error","refused-eperm","refused-eacces","refused-erofs","unsupported","observation-error"};
-    static const char *const scratch_names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    static const char *const scratch_action[]={"success","eperm","eacces","erofs","unsupported","error"};
-    static const char *const scratch_setup[]={"open-error","zero-write","write-error","close-error"};
-    static const char *const fixed[]={
-#if defined(__linux__)
-      "obligation-namespace-success","obligation-namespace-eperm","obligation-namespace-eacces","obligation-namespace-erofs",
-      "obligation-namespace-unsupported","obligation-namespace-eio","obligation-namespace-enosys",
-#else
-      "obligation-namespace-nonlinux-no-attempt",
-#endif
-      "obligation-cpu-create-failure-after-0","obligation-cpu-create-failure-after-2",
-      "obligation-memory-stop-on-later-allocation-before-result","obligation-evidence-read-action-eof",
-      "obligation-input-chunked-eintr-valid-entry","obligation-socket-parser-canonical-65535",
-      "obligation-socket-synthetic-alias-single-numeric",
-#if defined(__linux__) && !defined(YSTACK_TEST_NO_SOCKET_CONSTANTS) && defined(AF_NETLINK) && !defined(YSTACK_TEST_MASK_NETLINK) && defined(NETLINK_USERSOCK) && defined(AF_PACKET) && !defined(YSTACK_TEST_MASK_PACKET)
-      "obligation-socket-actual-netlink-tuple","obligation-socket-actual-packet-tuple",
-#if defined(AF_VSOCK)
-      "obligation-socket-actual-vsock-tuple",
-#endif
-#endif
-      "obligation-descriptors-modeled-fd2048-invisible","obligation-descriptor-fd0-ordwr",
-      "obligation-descriptor-fd1-ordwr","obligation-descriptor-fd2-ordwr",
-      "obligation-sentinel-minimum-path-size","obligation-sentinel-maximum-path-size",
-      "obligation-fork-bomb-partial-result-error","obligation-thread-bomb-partial-result-error",
-      "obligation-cpu-spin-32-partial-result-error","obligation-memory-exhaustion-partial-result-error",
-      "obligation-sleep-partial-result-error","obligation-scratch-fill-zero-write",
-      "obligation-scratch-fill-eintr-retry","obligation-scratch-fill-short-then-full"};
-    size_t m,v,i,j,expected=0;char id[128];
-#define REQUIRE_ID(value) do{int found=0;for(j=0;j<covered_obligation_count;j++)if(strcmp((value),covered_obligations[j])==0)found++;fixture_check(found==1,"required obligation executed exactly once");expected++;}while(0)
-    for(m=0;m<5U;m++) {
-        for(v=0;v<3U;v++){(void)snprintf(id,sizeof id,"obligation-%s-setup-%s",modes[m],setup[v]);REQUIRE_ID(id);}
-        for(v=0;v<7U;v++){if(m>=2U&&v==1U)continue;(void)snprintf(id,sizeof id,"obligation-%s-action-%s",modes[m],action[v]);REQUIRE_ID(id);}
+    size_t i, j, runtime = 0, external = 0, blocked = 0;
+    fixture_check(sizeof obligation_registry / sizeof obligation_registry[0] == 980U,
+                  "required registry count");
+    for (i = 0; i < sizeof obligation_registry / sizeof obligation_registry[0]; i++) {
+        const struct obligation_binding *binding = &obligation_registry[i];
+        fixture_check(binding->id[0] != '\0', "nonempty obligation id");
+        for (j = i + 1U; j < sizeof obligation_registry / sizeof obligation_registry[0]; j++)
+            fixture_check(strcmp(binding->id, obligation_registry[j].id) != 0,
+                          "unique obligation id");
+        if (binding->state == OB_RUNTIME) {
+            runtime++;
+            fixture_check(binding->seen == 1U, "runtime obligation completed exactly once");
+        } else if (binding->state == OB_EXTERNAL) {
+            external++;
+            fixture_check(binding->seen == 0U, "external obligation not runtime-credited");
+        } else {
+            blocked++;
+            fixture_check(binding->seen == 0U, "blocked native obligation not credited");
+        }
+        (void)printf("ledger %s: %s\n", binding->id,
+                     binding->state == OB_RUNTIME ? "executed" :
+                     binding->state == OB_EXTERNAL ? "external" : "blocked");
     }
-    for(m=0;m<7U;m++) {
-#if !defined(__linux__)
-        if(m==1U||m==6U)continue;
-#endif
-        for(v=0;v<6U;v++){(void)snprintf(id,sizeof id,"obligation-scratch-%s-action-%s",scratch_names[m],scratch_action[v]);REQUIRE_ID(id);}
-        if(m<5U)for(v=0;v<4U;v++){(void)snprintf(id,sizeof id,"obligation-scratch-%s-setup-%s",scratch_names[m],scratch_setup[v]);REQUIRE_ID(id);}
-        if(m<3U||(m==6U
-#if !defined(__linux__) || !defined(O_TMPFILE)
-          &&0
-#endif
-        )){(void)snprintf(id,sizeof id,"obligation-scratch-%s-cleanup-error",scratch_names[m]);REQUIRE_ID(id);}
-        if(m<3U){(void)snprintf(id,sizeof id,"obligation-scratch-%s-reopen-error",scratch_names[m]);REQUIRE_ID(id);}
-    }
-    REQUIRE_ID("obligation-scratch-madv-remove-close-error");
-    REQUIRE_ID("obligation-scratch-madv-remove-both-cleanup-errors");
-    for(i=0;i<sizeof fixed/sizeof fixed[0];i++)REQUIRE_ID(fixed[i]);
-    fixture_check(covered_obligation_count==expected,"no unknown obligation ids");
-#undef REQUIRE_ID
+    fixture_check(runtime == 874U && external == 99U && blocked == 7U,
+                  "closed runtime external blocked partition");
 }
 
 int main(void)
 {
+    int before, all_before = fixture_failures;
     (void)fixture_kill;
 #if !defined(MADV_REMOVE)
     (void)fixture_mmap; (void)fixture_madvise; (void)fixture_munmap;
 #endif
-    self_controls(); parser_cases(); candidate_cases(); result_emission_cases(); socket_cases(); socket_outcome_cases(); socket_prerequisite_cases(); actual_socket_facts_case();
-    descriptor_cases(); descriptor_metadata_cases(); environment_cases(); pid_cases(); namespace_cases(); sentinel_cases(); sentinel_maximum_case(); sentinel_prerequisite_cases();
-    file_write_cases(); evidence_matrix(); evidence_list_cases(); scratch_case_mmap_cleanup(); scratch_setup_failure_cases(); scratch_action_cases();
-    raw_output_cases(); scratch_fill_cases(); resource_cases(); resource_partial_output_cases();
+    before=fixture_failures;self_controls();registry_self_controls();finish_obligation_family(2U,before);
+    before=fixture_failures;parser_cases();candidate_cases();file_write_cases();evidence_matrix();
+    sentinel_cases();sentinel_maximum_case();sentinel_prerequisite_cases();
+    finish_obligation_family(1U,before);finish_obligation_family(4U,before);
+    finish_obligation_family(5U,before);finish_obligation_family(7U,before);finish_obligation_family(10U,before);
+    before=fixture_failures;result_emission_cases();finish_obligation_family(3U,before);
+    before=fixture_failures;evidence_list_cases();finish_obligation_family(6U,before);
+    before=fixture_failures;scratch_setup_failure_cases();finish_obligation_family(8U,before);
+    before=fixture_failures;scratch_action_cases();finish_obligation_family(9U,before);
+    before=fixture_failures;socket_cases();socket_outcome_cases();socket_prerequisite_cases();actual_socket_facts_case();finish_obligation_family(11U,before);
+    before=fixture_failures;descriptor_cases();descriptor_metadata_cases();finish_obligation_family(12U,before);
+    before=fixture_failures;environment_cases();pid_cases();finish_obligation_family(13U,before);
+    before=fixture_failures;namespace_cases();finish_obligation_family(14U,before);
+    before=fixture_failures;raw_output_cases();finish_obligation_family(15U,before);
+    before=fixture_failures;scratch_fill_cases();finish_obligation_family(16U,before);
+    before=fixture_failures;resource_cases();finish_obligation_family(17U,before);
+    before=fixture_failures;resource_partial_output_cases();finish_obligation_family(18U,before);
+    finish_obligation_family(19U,all_before);
+    finish_obligation_family(0U,all_before);
     verify_obligation_manifest();
     if (fixture_failures != 0) return 1;
     (void)puts("probe production entry matrix: ok"); return 0;

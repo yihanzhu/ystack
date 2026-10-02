@@ -21,6 +21,23 @@ trap cleanup EXIT
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha_file() { /usr/bin/shasum -a 256 -- "$1" | /usr/bin/awk '{print $1}'; }
+phase_root=${YSTACK_PHASE_LOG_DIR:-$tmp/probe-phases}
+/bin/mkdir -p "$phase_root"
+/bin/chmod 700 "$phase_root"
+phase_index="$phase_root/index.tsv"
+: > "$phase_index"
+phase_run() {
+  local name=$1 raw rc lines bytes digest
+  shift
+  raw="$phase_root/$name.log"
+  if "$@" >"$raw" 2>&1; then rc=0; else rc=$?; fi
+  lines=$(/usr/bin/wc -l <"$raw" | /usr/bin/tr -d ' ')
+  bytes=$(/usr/bin/wc -c <"$raw" | /usr/bin/tr -d ' ')
+  digest=$(sha_file "$raw")
+  /usr/bin/printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$rc" "$digest" "$lines" "$bytes" >>"$phase_index"
+  /bin/cat "$raw"
+  return "$rc"
+}
 cc_build() {
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" \
     "$harness_src" "$guest_dir/common.c" -o "$1"
@@ -898,9 +915,9 @@ pass 'compile rejects a symlinked mandatory probe source before compiler invocat
 # The private test build uses the production parser, action dispatcher and result
 # model. Its compile-time low-level fixture never runs pressure, socket, signal,
 # privileged, or host/sibling-sentinel operations on this development host.
-/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
+phase_run private-default-compile /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
   -DYSTACK_TEST_ENABLE_MADV_REMOVE -I"$guest_dir" -c "$guest_dir/probe.c" \
-  -o "$tmp/probe-production-test.o"
+  -o "$tmp/probe-production-test.o" || fail 'default private probe compilation failed'
 /usr/bin/nm -u "$tmp/probe-production-test.o" | /usr/bin/awk '{print $NF}' | \
   /usr/bin/sed 's/^_//' > "$tmp/probe-undefined-symbols"
 for forbidden_symbol in open close read write fstat fcntl truncate ftruncate fallocate \
@@ -910,36 +927,54 @@ for forbidden_symbol in open close read write fstat fcntl truncate ftruncate fal
     fail "private probe object retained forbidden host symbol: $forbidden_symbol"
 done
 /usr/bin/cc "$tmp/probe-production-test.o" "$guest_dir/common.c" -o "$tmp/probe-production-test"
-"$tmp/probe-production-test" > "$tmp/probe-production-test.out" ||
+phase_run private-default-run "$tmp/probe-production-test" > "$tmp/probe-production-test.out" ||
   fail 'the probe production-path fixture failed'
 /bin/cat "$tmp/probe-production-test.out"
 [ "$(/usr/bin/tail -n 1 "$tmp/probe-production-test.out")" = 'probe production entry matrix: ok' ] ||
   fail 'the probe production-path fixture did not report matrix completion'
+[ "$(/usr/bin/grep -c '^ledger ' "$tmp/probe-production-test.out")" -eq 980 ] ||
+  fail 'the probe fixed registry did not report exactly 980 ids'
+[ "$(/usr/bin/grep -c ': executed$' "$tmp/probe-production-test.out")" -eq 874 ] &&
+  [ "$(/usr/bin/grep -c ': external$' "$tmp/probe-production-test.out")" -eq 99 ] &&
+  [ "$(/usr/bin/grep -c ': blocked$' "$tmp/probe-production-test.out")" -eq 7 ] ||
+  fail 'the probe fixed registry runtime/external/blocked partition changed'
 pass 'the bounded probe fixture exercises the closed YSPROBE1 parser, request binding, action/result classification, cleanup preservation and signal target selection without native probe actions'
 
 for socket_variant in NO_SOCKET_CONSTANTS MASK_NETLINK MASK_PACKET; do
-  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
+  phase_run "private-$socket_variant-compile" /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
     -DYSTACK_TEST_ENABLE_MADV_REMOVE "-DYSTACK_TEST_$socket_variant" -I"$guest_dir" \
-    "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-$socket_variant-test"
-  "$tmp/probe-$socket_variant-test" > "$tmp/probe-$socket_variant.out" ||
+    "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-$socket_variant-test" ||
+    fail "the probe socket-header variant $socket_variant did not compile"
+  phase_run "private-$socket_variant-run" "$tmp/probe-$socket_variant-test" > "$tmp/probe-$socket_variant.out" ||
     fail "the probe socket-header variant $socket_variant failed"
-  /usr/bin/grep -Fx 'case socket-actual-header-facts: ok' "$tmp/probe-$socket_variant.out" >/dev/null ||
+  /usr/bin/grep -Fx 'case socket-actual-header-facts: checked' "$tmp/probe-$socket_variant.out" >/dev/null ||
     fail "socket-header variant $socket_variant did not exercise actual facts"
 done
 pass 'private socket-header variants execute the actual-facts entry case with all constants, no facts, missing NETLINK and missing PACKET identity'
 
+phase_run private-no-madv-remove-compile /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
+  -DYSTACK_PROBE_TEST -DYSTACK_TEST_DISABLE_MADV_REMOVE -I"$guest_dir" \
+  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-no-madv-remove-test" ||
+  fail 'the unavailable MADV_REMOVE private variant did not compile'
+phase_run private-no-madv-remove-run "$tmp/probe-no-madv-remove-test" >/dev/null ||
+  fail 'the unavailable MADV_REMOVE private variant failed'
+pass 'the private unavailable-MADV_REMOVE variant preserves the explicit unsupported record without a production selector'
+
 # Sanitizers exercise the same bounded private fixture where the host compiler
 # supports them. This remains substituted host proof, never native qualification.
-/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+phase_run private-sanitizer-compile /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
   -fsanitize=address,undefined -DYSTACK_PROBE_TEST -DYSTACK_TEST_ENABLE_MADV_REMOVE -I"$guest_dir" \
-  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-sanitized"
+  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-sanitized" ||
+  fail 'the private sanitizer fixture did not compile'
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
-  ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-    "$tmp/probe-production-sanitized" >/dev/null
+  phase_run private-sanitizer-Darwin /usr/bin/env ASAN_OPTIONS=detect_leaks=0 \
+    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >/dev/null ||
+    fail 'the Darwin private sanitizer phase failed'
   /usr/bin/printf 'SKIP (Darwin capability): leak detection is unsupported by the platform ASan runtime; the same bounded fixture ran with ASan memory checks and UBSan. Linux CI runs detect_leaks=1.\n' >&2
 else
-  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
-    "$tmp/probe-production-sanitized" >/dev/null
+  phase_run private-sanitizer-Linux /usr/bin/env ASAN_OPTIONS=detect_leaks=1 \
+    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >/dev/null ||
+    fail 'the Linux private sanitizer phase failed'
 fi
 pass 'the bounded production-path probe fixture passes ASan/UBSan without executing native qualification actions'
 
@@ -983,5 +1018,11 @@ PY
 else
   /usr/bin/printf 'SKIP (Linux-only, stated reason): strict guest init/supervisor/probe compilation and the production helper require Linux headers and semantics this Darwin host does not have. ASan/UBSan, generated-filter and actual descriptor-mode tests remain for dispatched CI; this Darwin run does not execute or qualify any R13.4 probe action.\n' >&2
 fi
+
+[ -s "$phase_index" ] || fail 'the named probe phase evidence index is empty'
+/usr/bin/awk -F '\t' 'NF != 5 || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9a-f]{64}$/ { exit 1 }' \
+  "$phase_index" || fail 'a probe phase evidence row lacks name, exit, SHA-256, lines or bytes'
+/bin/cat "$phase_index"
+pass 'named probe phases preserve exact command outcomes and raw-output hashes; platform skips remain explicit'
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
