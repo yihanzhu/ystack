@@ -36,6 +36,9 @@
 #define FD_SCAN_FIRST 3
 #define FD_SCAN_LAST 1023
 #define TEST_CLOEXEC 0x40000000
+#if defined(YSTACK_PROBE_TEST) && defined(YSTACK_TEST_ENABLE_MADV_REMOVE) && !defined(MADV_REMOVE)
+#define MADV_REMOVE 9
+#endif
 
 enum action {
     ACT_CANDIDATE_READ, ACT_CANDIDATE_WRITE, ACT_TOOLS_WRITE,
@@ -76,7 +79,8 @@ static const struct mode modes[] = {
  * mutations use successful-operation count, zero, zero. Sentinel read uses
  * bytes read, expected size, digest-match. Descriptor fd0-fd2 records use file
  * type bits, access mode, append-present; fd-scan uses first fd, last fd and
- * first leak. Socket uses family, type and protocol. Environment uses observed
+ * failed fd or zero; fd-leaks uses observed count, first leak or zero and zero.
+ * A count before a scan error is a lower bound. Socket uses family, type and protocol. Environment uses observed
  * and expected counts. Resource records use achieved bytes/workers/seconds,
  * requested target, zero. Signal uses probe pid, observed parent pid, zero.
  * Scratch records have no numeric payload. Escape and forged-evidence records
@@ -249,363 +253,413 @@ static int parse_request_bytes(const unsigned char *bytes, size_t length, struct
 }
 
 #ifdef YSTACK_PROBE_TEST
-/* This boundary replaces only low-level operations. Parser, action selection,
- * iteration, accounting, classification and result production stay unchanged. */
-enum test_scenario {
-    TEST_DEFAULT, TEST_FILE_SUCCESS, TEST_FILE_REFUSED, TEST_FILE_READ_ERROR,
-    TEST_FILE_CLEANUP_ERROR, TEST_SENTINEL_MATCH, TEST_SENTINEL_MISMATCH,
-    TEST_SENTINEL_ABSENT, TEST_SENTINEL_WRONG_TYPE, TEST_SENTINEL_METADATA_ERROR,
-    TEST_DESCRIPTOR_VALID, TEST_DESCRIPTOR_WRONG,
-    TEST_DESCRIPTOR_BAD_ACCESS, TEST_DESCRIPTOR_MISSING_APPEND,
-    TEST_DESCRIPTOR_MISSING, TEST_DESCRIPTOR_METADATA_ERROR,
-    TEST_DESCRIPTOR_LEAK3, TEST_DESCRIPTOR_LEAK128, TEST_DESCRIPTOR_LEAKS,
-    TEST_DESCRIPTOR_SCAN_ERROR, TEST_DESCRIPTOR_SCAN_AFTER_LEAK,
-    TEST_SOCKET_REFUSED, TEST_SOCKET_SUCCESS, TEST_SOCKET_UNSUPPORTED,
-    TEST_SOCKET_INVALID, TEST_SOCKET_EACCES, TEST_SOCKET_EROFS,
-    TEST_SOCKET_CLOSE_ERROR, TEST_WRITE_SHORT,
-    TEST_WRITE_EINTR, TEST_WRITE_ZERO, TEST_WRITE_ERROR, TEST_WRITE_PREFIX_ERROR,
-    TEST_ALLOC_FAIL, TEST_RESOURCE_PARTIAL, TEST_OPERATION_REFUSED, TEST_OPERATION_CLEANUP,
-    TEST_SCRATCH_MMAP_FAIL, TEST_SCRATCH_MKDIR_FAIL
+#include <setjmp.h>
+
+enum fixture_op {
+    FX_OPEN, FX_CLOSE, FX_READ, FX_WRITE, FX_FSTAT, FX_FCNTL,
+    FX_TRUNCATE, FX_FTRUNCATE, FX_FALLOCATE, FX_LINK, FX_RENAME,
+    FX_MKDIR, FX_RMDIR, FX_UNLINK, FX_OPENDIR, FX_READDIR, FX_CLOSEDIR,
+    FX_SOCKET, FX_GETPID, FX_GETPPID, FX_KILL, FX_UNSHARE,
+    FX_MALLOC, FX_FREE, FX_MMAP, FX_MADVISE, FX_MUNMAP, FX_FORK,
+    FX_PTHREAD_CREATE, FX_PTHREAD_DETACH, FX_SLEEP, FX_PAUSE, FX_LOOP
 };
 
-struct test_state {
-    enum test_scenario scenario;
-    unsigned char bytes[4097];
-    size_t byte_count, read_offset;
-    uint64_t write_requested, write_returned;
-    unsigned write_calls, open_calls, read_calls, close_calls, socket_calls;
-    unsigned fail_open_call, fail_write_call, fail_close_call;
-    int injected_error;
-    unsigned worker_calls, allocation_calls, sleep_calls;
-    int socket_family, socket_type, socket_protocol;
-    pid_t pid, parent;
-    unsigned char captured[128]; size_t captured_length;
-};
-enum script_kind { SCRIPT_READ, SCRIPT_WRITE, SCRIPT_OPEN, SCRIPT_CLOSE, SCRIPT_SOCKET,
-                   SCRIPT_MALLOC, SCRIPT_FREE };
-struct script_step {
-    enum script_kind kind;
-    int fd, flags, protocol, error_number;
-    mode_t mode;
-    size_t length;
-    ssize_t returned;
-    const char *path;
-    const unsigned char *bytes;
-};
-#define SCRIPT_CAP 64U
-static struct script_step test_script[SCRIPT_CAP];
-static size_t script_count, script_cursor;
-static int script_active;
-static struct test_state test_state;
-static unsigned char test_allocation[BLOCK_SIZE];
-static struct socket_facts test_socket_facts;
+enum fixture_flow { FX_RETURN, FX_STOP };
+enum fixture_bytes { FX_BYTES_NONE, FX_BYTES_EXACT, FX_BYTES_REPEAT };
 
-static void script_fail(const char *message)
+struct fixture_step {
+    enum fixture_op op;
+    enum fixture_flow flow;
+    long returned;
+    int error_number;
+    union {
+        struct { const char *path; int flags; mode_t mode; } open;
+        struct { int fd; } close;
+        struct { int fd; size_t length; enum fixture_bytes kind; const unsigned char *bytes; unsigned char byte; } io;
+        struct { int fd; mode_t mode; } fstat;
+        struct { int fd; int command; } fcntl;
+        struct { const char *path; off_t length; } truncate;
+        struct { int fd; off_t length; } ftruncate;
+        struct { int fd; int mode; off_t offset; off_t length; } fallocate;
+        struct { const char *first; const char *second; } paths;
+        struct { const char *path; mode_t mode; } mkdir;
+        struct { const char *path; } path;
+        struct { const char *path; unsigned object; } directory;
+        struct { unsigned object; } object;
+        struct { int family; int type; int protocol; } socket;
+        struct { pid_t pid; int signal_number; } kill;
+        struct { int flags; } unshare;
+        struct { size_t size; unsigned object; } allocation;
+        struct { void *address; size_t length; int protection; int flags; int fd; off_t offset; unsigned object; } mmap;
+        struct { unsigned object; size_t length; int advice; } madvise;
+        struct { unsigned object; size_t length; } munmap;
+        struct { pthread_t token; const pthread_attr_t *attributes; void *(*entry)(void *); void *argument; int dispatch; } thread;
+        struct { pthread_t token; } detach;
+        struct { unsigned seconds; } sleep;
+        struct { unsigned site; uintptr_t argument; uint64_t iteration; } loop;
+    } call;
+    const unsigned char *read_bytes;
+    size_t read_length;
+    mode_t stat_mode;
+    struct dirent directory_entry;
+    int directory_has_entry;
+};
+
+#define FIXTURE_STEP_CAP 4096U
+#define FIXTURE_CAPTURE_CAP (RESULT_CAP * 2U)
+#define FIXTURE_OBJECTS 4U
+static struct fixture_step fixture_steps[FIXTURE_STEP_CAP];
+static size_t fixture_step_count, fixture_step_index;
+static unsigned char fixture_capture[FIXTURE_CAPTURE_CAP];
+static size_t fixture_capture_length, fixture_stdout_total;
+static unsigned char fixture_blocks[FIXTURE_OBJECTS][BLOCK_SIZE];
+static unsigned char fixture_mapping[4096];
+static unsigned char fixture_directory_tokens[FIXTURE_OBJECTS];
+static jmp_buf fixture_jump;
+static int fixture_driver_active;
+static int fixture_escape;
+static const char *fixture_failure;
+static struct socket_facts fixture_socket_override_value;
+static const struct socket_facts *fixture_socket_override;
+
+static void fixture_escape_now(int reason, const char *message)
 {
-    (void)fprintf(stderr, "FAIL script %s at step %zu/%zu\n", message, script_cursor, script_count);
-    abort();
+    fixture_escape = reason;
+    fixture_failure = message;
+    if (!fixture_driver_active) abort();
+    longjmp(fixture_jump, 1);
 }
 
-static struct script_step *script_next(enum script_kind kind)
+static void fixture_fail(const char *message) { fixture_escape_now(1, message); }
+static void fixture_stop(void) { fixture_escape_now(2, NULL); }
+
+static struct fixture_step *fixture_push(enum fixture_op op)
 {
-    struct script_step *step;
-    if (script_cursor >= script_count) script_fail("exhausted");
-    step = &test_script[script_cursor++];
-    if (step->kind != kind) script_fail("operation order");
+    struct fixture_step *step;
+    if (fixture_step_count >= FIXTURE_STEP_CAP) fixture_fail("step capacity");
+    step = &fixture_steps[fixture_step_count++];
+    memset(step, 0, sizeof *step); step->op = op;
     return step;
 }
 
-static void script_add(enum script_kind kind, int fd, int flags, mode_t mode,
-                       int protocol, size_t length, ssize_t returned, int error_number,
-                       const char *path, const void *bytes)
+static struct fixture_step *fixture_next(enum fixture_op op)
 {
-    struct script_step *step;
-    if (script_count >= SCRIPT_CAP) script_fail("capacity");
-    step = &test_script[script_count++]; memset(step, 0, sizeof *step);
-    step->kind = kind; step->fd = fd; step->flags = flags; step->mode = mode;
-    step->protocol = protocol; step->length = length; step->returned = returned;
-    step->error_number = error_number; step->path = path; step->bytes = bytes;
+    struct fixture_step *step;
+    if (fixture_step_index >= fixture_step_count) fixture_fail("unexpected call after script end");
+    step = &fixture_steps[fixture_step_index++];
+    if (step->op != op) fixture_fail("wrong call order");
+    return step;
 }
 
-static void test_reset(enum test_scenario scenario)
+static long fixture_return(struct fixture_step *step)
 {
-    memset(&test_state, 0, sizeof test_state);
-    memset(&test_socket_facts, 0, sizeof test_socket_facts);
-    test_state.scenario = scenario;
-    test_state.pid = 1;
-    test_state.parent = 0;
-    test_socket_facts.domain_max = 8;
-    test_socket_facts.linux_build = 1;
-    test_socket_facts.cloexec_available = 1;
-    test_socket_facts.cloexec = TEST_CLOEXEC;
-    test_socket_facts.netlink_available = 1;
-    test_socket_facts.netlink = 3;
-    test_socket_facts.usersock_available = 1;
-    test_socket_facts.usersock = 7;
-    test_socket_facts.packet_available = 1;
-    test_socket_facts.packet = 4;
-    test_socket_facts.vsock_available = 1;
-    test_socket_facts.vsock = 5;
-    script_count = 0; script_cursor = 0; script_active = 0;
+    if (step->flow == FX_STOP) fixture_stop();
+    if (step->returned < 0) errno = step->error_number;
+    return step->returned;
 }
 
-static int test_open(const char *path, int flags, mode_t mode)
+static int fixture_open(const char *path, int flags, mode_t mode)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_OPEN);
-        if (strcmp(path, step->path) != 0 || flags != step->flags || mode != step->mode)
-            script_fail("open arguments");
-        if (step->returned < 0) errno = step->error_number;
-        return (int)step->returned;
-    }
-    (void)path; (void)flags; (void)mode; test_state.open_calls++;
-    if (test_state.open_calls == test_state.fail_open_call) {
-        errno = test_state.injected_error; return -1;
-    }
-    if (test_state.scenario == TEST_FILE_REFUSED) { errno = EPERM; return -1; }
-    if (test_state.scenario == TEST_SENTINEL_ABSENT) { errno = ENOENT; return -1; }
-    if (test_state.scenario == TEST_OPERATION_REFUSED && test_state.open_calls > 1U) {
-        errno = EPERM; return -1;
-    }
-    return 41;
+    struct fixture_step *s = fixture_next(FX_OPEN);
+    if (strcmp(path, s->call.open.path) != 0 || flags != s->call.open.flags || mode != s->call.open.mode)
+        fixture_fail("open arguments");
+    return (int)fixture_return(s);
 }
 
-static ssize_t test_read(int fd, void *buffer, size_t length)
+static int fixture_close(int fd)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_READ);
-        if (fd != step->fd || length != step->length) script_fail("read arguments");
-        if (step->returned < 0) errno = step->error_number;
-        else if ((size_t)step->returned > length || (step->returned > 0 && step->bytes == NULL))
-            script_fail("read result");
-        else if (step->returned > 0) memcpy(buffer, step->bytes, (size_t)step->returned);
-        return step->returned;
-    }
-    size_t left, take; (void)fd; test_state.read_calls++;
-    if (test_state.scenario == TEST_FILE_READ_ERROR) { errno = EIO; return -1; }
-    left = test_state.byte_count - test_state.read_offset;
-    if (left == 0U) return 0;
-    take = left < length ? left : length;
-    memcpy(buffer, test_state.bytes + test_state.read_offset, take); test_state.read_offset += take;
-    return (ssize_t)take;
+    struct fixture_step *s = fixture_next(FX_CLOSE);
+    if (fd != s->call.close.fd) fixture_fail("close fd");
+    return (int)fixture_return(s);
 }
 
-static ssize_t test_write(int fd, const void *buffer, size_t length)
+static ssize_t fixture_read(int fd, void *buffer, size_t length)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_WRITE);
-        if (fd != step->fd || length != step->length ||
-            (step->bytes != NULL && memcmp(buffer, step->bytes, length) != 0))
-            script_fail("write arguments");
-        if (step->returned < 0) errno = step->error_number;
-        if (step->returned > (ssize_t)length) script_fail("write result");
-        return step->returned;
+    struct fixture_step *s = fixture_next(FX_READ); long returned;
+    if (fd != s->call.io.fd || length != s->call.io.length) fixture_fail("read arguments");
+    returned = fixture_return(s);
+    if (returned > (long)length || (returned > 0 && s->read_length != (size_t)returned))
+        fixture_fail("read result length");
+    if (returned > 0) {
+        if (s->read_bytes == NULL) fixture_fail("read bytes missing");
+        memcpy(buffer, s->read_bytes, (size_t)returned);
     }
-    size_t returned = length, room, copy; (void)fd;
-    test_state.write_calls++; test_state.write_requested += length;
-    if (test_state.write_calls == test_state.fail_write_call) {
-        errno = test_state.injected_error; return -1;
-    }
-    if (test_state.scenario == TEST_WRITE_EINTR && test_state.write_calls == 1U) { errno = EINTR; return -1; }
-    if (test_state.scenario == TEST_WRITE_ZERO) return 0;
-    if (test_state.scenario == TEST_WRITE_ERROR) { errno = EIO; return -1; }
-    if (test_state.scenario == TEST_WRITE_PREFIX_ERROR) {
-        if (test_state.write_calls > 1U) { errno = EPIPE; return -1; }
-        returned = returned > 31U ? 31U : returned;
-    }
-    if (test_state.scenario == TEST_WRITE_SHORT && returned > 17U) returned = 17U;
-    room = sizeof test_state.captured - test_state.captured_length;
-    copy = returned < room ? returned : room;
-    if (copy != 0U) { memcpy(test_state.captured + test_state.captured_length, buffer, copy); test_state.captured_length += copy; }
-    test_state.write_returned += returned; return (ssize_t)returned;
+    return (ssize_t)returned;
 }
 
-static int test_close(int fd)
+static ssize_t fixture_write(int fd, const void *buffer, size_t length)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_CLOSE);
-        if (fd != step->fd) script_fail("close arguments");
-        if (step->returned < 0) errno = step->error_number;
-        return (int)step->returned;
+    struct fixture_step *s = fixture_next(FX_WRITE); long returned; size_t i;
+    if (fd != s->call.io.fd || length != s->call.io.length) fixture_fail("write arguments");
+    if (s->call.io.kind == FX_BYTES_EXACT &&
+        (s->call.io.bytes == NULL || memcmp(buffer, s->call.io.bytes, length) != 0))
+        fixture_fail("write bytes");
+    if (s->call.io.kind == FX_BYTES_REPEAT)
+        for (i = 0; i < length; i++) if (((const unsigned char *)buffer)[i] != s->call.io.byte)
+            fixture_fail("write repeated byte");
+    returned = fixture_return(s);
+    if (returned > (long)length) fixture_fail("write result length");
+    if (fd == STDOUT_FILENO && returned > 0) {
+        size_t take = (size_t)returned;
+        fixture_stdout_total += take;
+        if (fixture_capture_length + take <= FIXTURE_CAPTURE_CAP) {
+            memcpy(fixture_capture + fixture_capture_length, buffer, take);
+            fixture_capture_length += take;
+        }
     }
-    (void)fd; test_state.close_calls++;
-    if (test_state.close_calls == test_state.fail_close_call) {
-        errno = test_state.injected_error; return -1;
-    }
-    if (test_state.scenario == TEST_FILE_CLEANUP_ERROR || test_state.scenario == TEST_SOCKET_CLOSE_ERROR) {
-        errno = EIO; return -1;
-    }
-    if (test_state.scenario == TEST_OPERATION_CLEANUP && test_state.close_calls > 1U) {
-        errno = EIO; return -1;
-    }
-    return 0;
+    return (ssize_t)returned;
 }
 
-static int test_fstat(int fd, struct stat *st)
+static int fixture_fstat(int fd, struct stat *metadata)
 {
-    if (test_state.scenario == TEST_SENTINEL_METADATA_ERROR && fd == 41) {
-        errno = EIO;
-        return -1;
-    }
-    if (test_state.scenario == TEST_DESCRIPTOR_MISSING && fd == 2) { errno = EBADF; return -1; }
-    if (test_state.scenario == TEST_DESCRIPTOR_METADATA_ERROR && fd == 1) { errno = EIO; return -1; }
-    memset(st, 0, sizeof *st); st->st_mode = S_IFREG | 0600;
-    if (test_state.scenario == TEST_SENTINEL_WRONG_TYPE && fd == 41)
-        st->st_mode = S_IFDIR | 0700;
-    if (test_state.scenario == TEST_DESCRIPTOR_WRONG && fd == 0) st->st_mode = S_IFDIR | 0700;
-    return 0;
+    struct fixture_step *s = fixture_next(FX_FSTAT); long returned;
+    if (fd != s->call.fstat.fd || metadata == NULL) fixture_fail("fstat arguments");
+    returned = fixture_return(s);
+    if (returned == 0) { memset(metadata, 0, sizeof *metadata); metadata->st_mode = s->stat_mode; }
+    return (int)returned;
 }
 
-static int test_fcntl(int fd, int command)
+static int fixture_fcntl(int fd, int command)
 {
-    if (command == F_GETFL) {
-        if (fd == 0) return test_state.scenario == TEST_DESCRIPTOR_BAD_ACCESS ? O_WRONLY : O_RDONLY;
-        if (test_state.scenario == TEST_DESCRIPTOR_WRONG && fd == 1) return O_WRONLY;
-        if (test_state.scenario == TEST_DESCRIPTOR_MISSING_APPEND && fd == 2) return O_WRONLY;
-        return O_WRONLY | O_APPEND;
-    }
-    if ((test_state.scenario == TEST_DESCRIPTOR_LEAK3 || test_state.scenario == TEST_DESCRIPTOR_LEAKS ||
-         test_state.scenario == TEST_DESCRIPTOR_SCAN_AFTER_LEAK) && fd == 3) return 0;
-    if ((test_state.scenario == TEST_DESCRIPTOR_LEAK128 || test_state.scenario == TEST_DESCRIPTOR_LEAKS) && fd == 128) return 0;
-    if ((test_state.scenario == TEST_DESCRIPTOR_SCAN_ERROR || test_state.scenario == TEST_DESCRIPTOR_SCAN_AFTER_LEAK) && fd == 77) {
-        errno = EIO; return -1;
-    }
-    errno = EBADF; return -1;
+    struct fixture_step *s = fixture_next(FX_FCNTL);
+    if (fd != s->call.fcntl.fd || command != s->call.fcntl.command) fixture_fail("fcntl arguments");
+    return (int)fixture_return(s);
 }
 
-static int test_socket(int family, int type, int protocol)
+static int fixture_truncate(const char *path, off_t length)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_SOCKET);
-        if (family != step->fd || type != step->flags || protocol != step->protocol)
-            script_fail("socket arguments");
-        if (step->returned < 0) errno = step->error_number;
-        return (int)step->returned;
-    }
-    test_state.socket_calls++; test_state.socket_family = family;
-    test_state.socket_type = type; test_state.socket_protocol = protocol;
-    if (test_state.scenario == TEST_SOCKET_SUCCESS || test_state.scenario == TEST_SOCKET_CLOSE_ERROR) return 42;
-    if (test_state.scenario == TEST_SOCKET_UNSUPPORTED) errno = EAFNOSUPPORT;
-    else if (test_state.scenario == TEST_SOCKET_EACCES) errno = EACCES;
-    else if (test_state.scenario == TEST_SOCKET_EROFS) errno = EROFS;
-    else if (test_state.scenario == TEST_SOCKET_INVALID) errno = EINVAL;
-    else errno = EPERM;
-    return -1;
+    struct fixture_step *s = fixture_next(FX_TRUNCATE);
+    if (strcmp(path, s->call.truncate.path) != 0 || length != s->call.truncate.length) fixture_fail("truncate arguments");
+    return (int)fixture_return(s);
 }
 
-static int test_truncate(const char *path, off_t length) { (void)path; (void)length; errno = EPERM; return -1; }
-static int test_link(const char *oldpath, const char *newpath) { (void)oldpath; (void)newpath; errno = EPERM; return -1; }
-static int test_rename(const char *oldpath, const char *newpath) { (void)oldpath; (void)newpath; errno = EPERM; return -1; }
-static int test_mkdir(const char *path, mode_t mode)
+static int fixture_ftruncate(int fd, off_t length)
 {
-    (void)path; (void)mode;
-    if (test_state.scenario == TEST_SCRATCH_MKDIR_FAIL) { errno = ENOSPC; return -1; }
-    return 0;
+    struct fixture_step *s = fixture_next(FX_FTRUNCATE);
+    if (fd != s->call.ftruncate.fd || length != s->call.ftruncate.length) fixture_fail("ftruncate arguments");
+    return (int)fixture_return(s);
 }
-static int test_rmdir(const char *path) { (void)path; errno = EPERM; return -1; }
-static int test_unlink(const char *path) { (void)path; errno = EPERM; return -1; }
-static pid_t test_getpid(void) { return test_state.pid; }
-static pid_t test_getppid(void) { return test_state.parent; }
-static DIR *test_opendir(const char *path) { (void)path; return (DIR *)(void *)&test_state; }
-static struct dirent *test_readdir(DIR *dir) { (void)dir; errno = EPERM; return NULL; }
-static int test_closedir(DIR *dir) { (void)dir; return 0; }
+
 #if defined(__linux__)
-static int test_unshare(int flags) { (void)flags; errno = EPERM; return -1; }
-#endif
-static void *test_malloc(size_t size)
+static int fixture_fallocate(int fd, int mode, off_t offset, off_t length)
 {
-    if (script_active) {
-        struct script_step *step = script_next(SCRIPT_MALLOC);
-        if (size != step->length) script_fail("malloc arguments");
-        if (step->returned < 0) { errno = step->error_number; return NULL; }
-        return test_allocation;
-    }
-    test_state.allocation_calls++;
-    if (test_state.scenario == TEST_ALLOC_FAIL ||
-        (test_state.scenario == TEST_RESOURCE_PARTIAL && test_state.allocation_calls > 2U)) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    if (test_state.scenario == TEST_RESOURCE_PARTIAL) return test_allocation;
-    return malloc(size);
+    struct fixture_step *s = fixture_next(FX_FALLOCATE);
+    if (fd != s->call.fallocate.fd || mode != s->call.fallocate.mode ||
+        offset != s->call.fallocate.offset || length != s->call.fallocate.length)
+        fixture_fail("fallocate arguments");
+    return (int)fixture_return(s);
 }
-static void test_free(void *memory)
-{
-    if (script_active) {
-        (void)script_next(SCRIPT_FREE);
-        if (memory != test_allocation) script_fail("free arguments");
-        return;
-    }
-    if (memory != test_allocation) free(memory);
-}
-static pid_t test_fork(void)
-{
-    test_state.worker_calls++;
-    if (test_state.worker_calls > 3U) { errno = EAGAIN; return -1; }
-    return (pid_t)(100U + test_state.worker_calls);
-}
-static int test_pthread_create(pthread_t *thread, const pthread_attr_t *attributes,
-                               void *(*entry)(void *), void *argument)
-{
-    (void)thread; (void)attributes; (void)entry; (void)argument;
-    test_state.worker_calls++;
-    return test_state.worker_calls > 3U ? EAGAIN : 0;
-}
-static int test_pthread_detach(pthread_t thread) { (void)thread; return 0; }
-static unsigned test_sleep(unsigned seconds) { (void)seconds; test_state.sleep_calls++; return 0; }
-static int test_ftruncate(int fd, off_t length) { (void)fd; (void)length; errno = EPERM; return -1; }
-#if defined(__linux__)
-static int test_fallocate(int fd, int mode, off_t offset, off_t length)
-{ (void)fd; (void)mode; (void)offset; (void)length; errno = EPERM; return -1; }
-#endif
-#if defined(MADV_REMOVE)
-static void *test_mmap(void *address, size_t length, int protection, int flags, int fd, off_t offset)
-{
-    (void)address; (void)length; (void)protection; (void)flags; (void)fd; (void)offset;
-    if (test_state.scenario == TEST_SCRATCH_MMAP_FAIL) { errno = ENOMEM; return MAP_FAILED; }
-    return (void *)test_state.bytes;
-}
-static int test_madvise(void *address, size_t length, int advice)
-{ (void)address; (void)length; (void)advice; errno = EPERM; return -1; }
-static int test_munmap(void *address, size_t length) { (void)address; (void)length; return 0; }
 #endif
 
-#define open(path, flags, mode) test_open((path), (flags), (mode))
-#define read(fd, buffer, length) test_read((fd), (buffer), (length))
-#define write(fd, buffer, length) test_write((fd), (buffer), (length))
-#define close(fd) test_close((fd))
-#define fstat(fd, st) test_fstat((fd), (st))
-#define fcntl(fd, command) test_fcntl((fd), (command))
-#define socket(family, type, protocol) test_socket((family), (type), (protocol))
-#define truncate(path, length) test_truncate((path), (length))
-#define link(oldpath, newpath) test_link((oldpath), (newpath))
-#define rename(oldpath, newpath) test_rename((oldpath), (newpath))
-#define mkdir(path, mode) test_mkdir((path), (mode))
-#define rmdir(path) test_rmdir((path))
-#define unlink(path) test_unlink((path))
-#define getpid() test_getpid()
-#define getppid() test_getppid()
-#define opendir(path) test_opendir((path))
-#define readdir(dir) test_readdir((dir))
-#define closedir(dir) test_closedir((dir))
+static int fixture_two_paths(enum fixture_op op, const char *first, const char *second)
+{
+    struct fixture_step *s = fixture_next(op);
+    if (strcmp(first, s->call.paths.first) != 0 || strcmp(second, s->call.paths.second) != 0)
+        fixture_fail("two-path arguments");
+    return (int)fixture_return(s);
+}
+
+static int fixture_link(const char *first, const char *second) { return fixture_two_paths(FX_LINK, first, second); }
+static int fixture_rename(const char *first, const char *second) { return fixture_two_paths(FX_RENAME, first, second); }
+
+static int fixture_mkdir(const char *path, mode_t mode)
+{
+    struct fixture_step *s = fixture_next(FX_MKDIR);
+    if (strcmp(path, s->call.mkdir.path) != 0 || mode != s->call.mkdir.mode) fixture_fail("mkdir arguments");
+    return (int)fixture_return(s);
+}
+
+static int fixture_one_path(enum fixture_op op, const char *path)
+{
+    struct fixture_step *s = fixture_next(op);
+    if (strcmp(path, s->call.path.path) != 0) fixture_fail("path argument");
+    return (int)fixture_return(s);
+}
+static int fixture_rmdir(const char *path) { return fixture_one_path(FX_RMDIR, path); }
+static int fixture_unlink(const char *path) { return fixture_one_path(FX_UNLINK, path); }
+
+static DIR *fixture_opendir(const char *path)
+{
+    struct fixture_step *s = fixture_next(FX_OPENDIR); long returned;
+    if (strcmp(path, s->call.directory.path) != 0) fixture_fail("opendir path");
+    returned = fixture_return(s);
+    if (returned < 0) return NULL;
+    if (s->call.directory.object >= FIXTURE_OBJECTS) fixture_fail("directory object");
+    return (DIR *)(void *)&fixture_directory_tokens[s->call.directory.object];
+}
+
+static struct dirent *fixture_readdir(DIR *directory)
+{
+    struct fixture_step *s = fixture_next(FX_READDIR);
+    if (s->call.object.object >= FIXTURE_OBJECTS ||
+        directory != (DIR *)(void *)&fixture_directory_tokens[s->call.object.object])
+        fixture_fail("readdir object");
+    if (s->flow == FX_STOP) fixture_stop();
+    if (s->returned < 0) { errno = s->error_number; return NULL; }
+    if (!s->directory_has_entry) { errno = 0; return NULL; }
+    return &s->directory_entry;
+}
+
+static int fixture_closedir(DIR *directory)
+{
+    struct fixture_step *s = fixture_next(FX_CLOSEDIR);
+    if (s->call.object.object >= FIXTURE_OBJECTS ||
+        directory != (DIR *)(void *)&fixture_directory_tokens[s->call.object.object])
+        fixture_fail("closedir object");
+    return (int)fixture_return(s);
+}
+
+static int fixture_socket(int family, int type, int protocol)
+{
+    struct fixture_step *s = fixture_next(FX_SOCKET);
+    if (family != s->call.socket.family || type != s->call.socket.type || protocol != s->call.socket.protocol)
+        fixture_fail("socket arguments");
+    return (int)fixture_return(s);
+}
+
+static pid_t fixture_getpid(void) { return (pid_t)fixture_return(fixture_next(FX_GETPID)); }
+static pid_t fixture_getppid(void) { return (pid_t)fixture_return(fixture_next(FX_GETPPID)); }
+static int fixture_kill(pid_t pid, int signal_number)
+{
+    struct fixture_step *s = fixture_next(FX_KILL);
+    if (pid != s->call.kill.pid || signal_number != s->call.kill.signal_number) fixture_fail("kill arguments");
+    fixture_fail("kill is forbidden in probe cases"); return -1;
+}
+
 #if defined(__linux__)
-#define unshare(flags) test_unshare((flags))
+static int fixture_unshare(int flags)
+{
+    struct fixture_step *s = fixture_next(FX_UNSHARE);
+    if (flags != s->call.unshare.flags) fixture_fail("unshare flags");
+    return (int)fixture_return(s);
+}
 #endif
-#define malloc(size) test_malloc((size))
-#define free(memory) test_free((memory))
-#define fork() test_fork()
-#define pthread_create(thread, attributes, entry, argument) test_pthread_create((thread), (attributes), (entry), (argument))
-#define pthread_detach(thread) test_pthread_detach((thread))
-#define sleep(seconds) test_sleep((seconds))
-#define ftruncate(fd, length) test_ftruncate((fd), (length))
+
+static void *fixture_malloc(size_t size)
+{
+    struct fixture_step *s = fixture_next(FX_MALLOC); long returned;
+    if (size != s->call.allocation.size) fixture_fail("malloc size");
+    returned = fixture_return(s);
+    if (returned < 0) return NULL;
+    if (s->call.allocation.object >= FIXTURE_OBJECTS) fixture_fail("malloc object");
+    return fixture_blocks[s->call.allocation.object];
+}
+
+static void fixture_free(void *memory)
+{
+    struct fixture_step *s = fixture_next(FX_FREE);
+    if (s->call.object.object >= FIXTURE_OBJECTS || memory != fixture_blocks[s->call.object.object])
+        fixture_fail("free object");
+    (void)fixture_return(s);
+}
+
+static void *fixture_mmap(void *address, size_t length, int protection, int flags, int fd, off_t offset)
+{
+    struct fixture_step *s = fixture_next(FX_MMAP); long returned;
+    if (address != s->call.mmap.address || length != s->call.mmap.length || protection != s->call.mmap.protection ||
+        flags != s->call.mmap.flags || fd != s->call.mmap.fd || offset != s->call.mmap.offset)
+        fixture_fail("mmap arguments");
+    returned = fixture_return(s);
+    if (returned < 0) return MAP_FAILED;
+    if (s->call.mmap.object != 0U) fixture_fail("mapping object");
+    return fixture_mapping;
+}
+
+static int fixture_madvise(void *address, size_t length, int advice)
+{
+    struct fixture_step *s = fixture_next(FX_MADVISE);
+    if (s->call.madvise.object != 0U || address != fixture_mapping || length != s->call.madvise.length ||
+        advice != s->call.madvise.advice) fixture_fail("madvise arguments");
+    return (int)fixture_return(s);
+}
+
+static int fixture_munmap(void *address, size_t length)
+{
+    struct fixture_step *s = fixture_next(FX_MUNMAP);
+    if (s->call.munmap.object != 0U || address != fixture_mapping || length != s->call.munmap.length)
+        fixture_fail("munmap arguments");
+    return (int)fixture_return(s);
+}
+
+static pid_t fixture_fork(void) { return (pid_t)fixture_return(fixture_next(FX_FORK)); }
+
+static int fixture_pthread_create(pthread_t *thread, const pthread_attr_t *attributes,
+                                  void *(*entry)(void *), void *argument)
+{
+    struct fixture_step *s = fixture_next(FX_PTHREAD_CREATE); long returned;
+    if (thread == NULL || attributes != s->call.thread.attributes || entry != s->call.thread.entry ||
+        argument != s->call.thread.argument) fixture_fail("pthread_create arguments");
+    returned = fixture_return(s);
+    if (returned == 0) *thread = s->call.thread.token;
+    if (returned == 0 && s->call.thread.dispatch) {
+        (void)entry(argument);
+        fixture_fail("worker callback returned");
+    }
+    return (int)returned;
+}
+
+static int fixture_pthread_detach(pthread_t thread)
+{
+    struct fixture_step *s = fixture_next(FX_PTHREAD_DETACH);
+    if (memcmp(&thread, &s->call.detach.token, sizeof thread) != 0) fixture_fail("pthread_detach token");
+    return (int)fixture_return(s);
+}
+
+static unsigned fixture_sleep(unsigned seconds)
+{
+    struct fixture_step *s = fixture_next(FX_SLEEP);
+    if (seconds != s->call.sleep.seconds) fixture_fail("sleep seconds");
+    return (unsigned)fixture_return(s);
+}
+
+static int fixture_pause(void) { return (int)fixture_return(fixture_next(FX_PAUSE)); }
+static void fixture_loop(unsigned site, uintptr_t argument, uint64_t iteration)
+{
+    struct fixture_step *s = fixture_next(FX_LOOP);
+    if (site != s->call.loop.site || argument != s->call.loop.argument || iteration != s->call.loop.iteration)
+        fixture_fail("loop checkpoint");
+    (void)fixture_return(s);
+}
+
+#define open(path, flags, mode) fixture_open((path), (flags), (mode))
+#define close(fd) fixture_close((fd))
+#define read(fd, buffer, length) fixture_read((fd), (buffer), (length))
+#define write(fd, buffer, length) fixture_write((fd), (buffer), (length))
+#define fstat(fd, metadata) fixture_fstat((fd), (metadata))
+#define fcntl(fd, command) fixture_fcntl((fd), (command))
+#define truncate(path, length) fixture_truncate((path), (length))
+#define ftruncate(fd, length) fixture_ftruncate((fd), (length))
 #if defined(__linux__)
-#define fallocate(fd, mode, offset, length) test_fallocate((fd), (mode), (offset), (length))
+#define fallocate(fd, mode, offset, length) fixture_fallocate((fd), (mode), (offset), (length))
 #endif
-#if defined(MADV_REMOVE)
-#define mmap(address, length, protection, flags, fd, offset) test_mmap((address), (length), (protection), (flags), (fd), (offset))
-#define madvise(address, length, advice) test_madvise((address), (length), (advice))
-#define munmap(address, length) test_munmap((address), (length))
+#define link(first, second) fixture_link((first), (second))
+#define rename(first, second) fixture_rename((first), (second))
+#define mkdir(path, mode) fixture_mkdir((path), (mode))
+#define rmdir(path) fixture_rmdir((path))
+#define unlink(path) fixture_unlink((path))
+#define opendir(path) fixture_opendir((path))
+#define readdir(directory) fixture_readdir((directory))
+#define closedir(directory) fixture_closedir((directory))
+#define socket(family, type, protocol) fixture_socket((family), (type), (protocol))
+#define getpid() fixture_getpid()
+#define getppid() fixture_getppid()
+#define kill(pid, signal_number) fixture_kill((pid), (signal_number))
+#if defined(__linux__)
+#define unshare(flags) fixture_unshare((flags))
 #endif
+#define malloc(size) fixture_malloc((size))
+#define free(memory) fixture_free((memory))
+#define mmap(address, length, protection, flags, fd, offset) fixture_mmap((address), (length), (protection), (flags), (fd), (offset))
+#define madvise(address, length, advice) fixture_madvise((address), (length), (advice))
+#define munmap(address, length) fixture_munmap((address), (length))
+#define fork() fixture_fork()
+#define pthread_create(thread, attributes, entry, argument) fixture_pthread_create((thread), (attributes), (entry), (argument))
+#define pthread_detach(thread) fixture_pthread_detach((thread))
+#define sleep(seconds) fixture_sleep((seconds))
+#define pause() fixture_pause()
+#define TEST_LOOP(site, argument, iteration) fixture_loop((site), (argument), (iteration))
+#else
+#define TEST_LOOP(site, argument, iteration) ((void)0)
 #endif
 
 static int read_request(struct request *request)
@@ -720,7 +774,8 @@ static void file_action(struct result *result, const char *name, const char *pat
     if (n < 0) primary = errno;
     if (close(fd) != 0) cleanup = errno;
     add_record(result, name, PRE_OK, 1,
-               do_read ? n >= 0 : write_data != NULL ? (size_t)(n < 0 ? 0 : n) == write_length : 1,
+               do_read ? (n >= 0 || primary == EPERM || primary == EACCES || primary == EROFS) :
+               write_data != NULL ? (size_t)(n < 0 ? 0 : n) == write_length : 1,
                n >= 0 ? (success_expected ? OUT_SUCCESS : OUT_VIOLATION) :
                (!success_expected && write_data != NULL ? OUT_VIOLATION : classify_errno(primary)),
                primary, cleanup, n > 0 ? (uint64_t)n : 0U, n > 0 && do_read ? byte : 0U, 0);
@@ -862,13 +917,13 @@ static struct socket_facts build_socket_facts(void)
 #if defined(SOCK_CLOEXEC)
     facts.cloexec_available = 1; facts.cloexec = SOCK_CLOEXEC;
 #endif
-#if defined(AF_NETLINK)
+#if defined(AF_NETLINK) && !defined(YSTACK_TEST_MASK_NETLINK)
     facts.netlink_available = 1; facts.netlink = AF_NETLINK;
 #endif
 #if defined(NETLINK_USERSOCK)
     facts.usersock_available = 1; facts.usersock = NETLINK_USERSOCK;
 #endif
-#if defined(AF_PACKET)
+#if defined(AF_PACKET) && !defined(YSTACK_TEST_MASK_PACKET)
     facts.packet_available = 1; facts.packet = AF_PACKET;
 #endif
 #if defined(AF_VSOCK)
@@ -876,11 +931,9 @@ static struct socket_facts build_socket_facts(void)
 #endif
 #endif
 #ifdef YSTACK_PROBE_TEST
-    (void)facts;
-    return test_socket_facts;
-#else
-    return facts;
+    if (fixture_socket_override != NULL) return *fixture_socket_override;
 #endif
+    return facts;
 }
 
 static void socket_action(const struct request *request, struct result *result)
@@ -895,6 +948,10 @@ static void socket_action(const struct request *request, struct result *result)
     result->domain_max = (unsigned)facts.domain_max;
     if (request->family >= (unsigned long)facts.domain_max) { add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_INCOMPLETE, 0, 0,
         request->family, 0, 0); result->force_incomplete = 1; return; }
+    if (!facts.netlink_available || !facts.packet_available) {
+        add_record(result, "socket", PRE_UNKNOWN, 0, 0, OUT_UNSUPPORTED, ENOSYS, 0,
+                   request->family, 0, 0); result->force_incomplete = 1; return;
+    }
     type = SOCK_STREAM | facts.cloexec;
     if (facts.netlink_available && request->family == (unsigned)facts.netlink) {
         if (!facts.usersock_available) {
@@ -959,20 +1016,21 @@ static int stream_payload(size_t target)
 static void *paused_thread(void *unused)
 {
     (void)unused;
-#ifdef YSTACK_PROBE_TEST
+    for (;;) {
+        (void)pause();
+        TEST_LOOP(1U, 0U, 0U);
+    }
     return NULL;
-#else
-    for (;;) pause();
-#endif
 }
 static void *spinning_thread(void *unused)
 {
-#ifdef YSTACK_PROBE_TEST
-    return unused;
-#else
     volatile uint64_t value = (uintptr_t)unused + 1U;
-    for (;;) value = value * UINT64_C(6364136223846793005) + 1U;
-#endif
+    uint64_t iteration = 0;
+    for (;;) {
+        value = value * UINT64_C(6364136223846793005) + 1U;
+        TEST_LOOP(2U, (uintptr_t)unused, iteration++);
+    }
+    return NULL;
 }
 
 static void resource_action(enum action action, struct result *result)
@@ -1082,16 +1140,18 @@ static void scratch_action(struct result *result)
     size_t i;
     for (i = 0; i < sizeof names / sizeof names[0]; i++) {
         char path[96];
-        int fd = -1, setup_cleanup = 0, setup = 0, rc = -1, saved = 0, cleanup = 0;
+        int fd = -1, setup = 0, rc = -1, saved = 0, cleanup = 0, attempted = 0;
         (void)snprintf(path, sizeof path, "/sandbox/scratch/probe-%zu", i);
         if (i == 5U) {
             if (mkdir(path, 0700) != 0) setup = errno;
             if (setup == 0) {
+                attempted = 1;
                 rc = rmdir(path);
                 if (rc != 0) saved = errno;
             }
         } else if (i == 6U) {
 #if defined(__linux__) && defined(O_TMPFILE)
+            attempted = 1;
             fd = open("/sandbox/scratch", O_RDWR | O_TMPFILE | O_CLOEXEC, 0600);
             if (fd < 0) saved = errno;
             else {
@@ -1119,25 +1179,27 @@ static void scratch_action(struct result *result)
                 continue;
             }
 #endif
-            setup = establish_block(path, &setup_cleanup);
-            if (setup == 0 && setup_cleanup == 0) {
+            setup = establish_block(path, &cleanup);
+            if (setup == 0 && cleanup == 0) {
                 if (i == 0U) {
                     fd = open(path, O_RDWR | O_CLOEXEC, 0);
                     if (fd < 0) setup = errno;
                     else {
+                        attempted = 1;
                         rc = ftruncate(fd, 0);
                         if (rc != 0) saved = errno;
-                        if (close(fd) != 0) cleanup = errno;
+                        if (close(fd) != 0 && cleanup == 0) cleanup = errno;
                     }
                 } else if (i == 1U) {
 #if defined(__linux__)
                     fd = open(path, O_RDWR | O_CLOEXEC, 0);
                     if (fd < 0) setup = errno;
                     else {
+                        attempted = 1;
                         rc = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                                        0, 1);
                         if (rc != 0) saved = errno;
-                        if (close(fd) != 0) cleanup = errno;
+                        if (close(fd) != 0 && cleanup == 0) cleanup = errno;
                     }
 #endif
                 } else if (i == 2U) {
@@ -1150,6 +1212,7 @@ static void scratch_action(struct result *result)
                                     MAP_SHARED, fd, 0);
                         if (page == MAP_FAILED) setup = errno;
                         else {
+                            attempted = 1;
                             rc = madvise(page, 4096U, MADV_REMOVE);
                             if (rc != 0) saved = errno;
                             if (munmap(page, 4096U) != 0 && cleanup == 0)
@@ -1160,22 +1223,24 @@ static void scratch_action(struct result *result)
                     }
 #endif
                 } else if (i == 3U) {
+                    attempted = 1;
                     rc = truncate(path, 0);
                     if (rc != 0) saved = errno;
                 } else {
+                    attempted = 1;
                     rc = unlink(path);
                     if (rc != 0) saved = errno;
                 }
             }
         }
-        if (setup != 0 || setup_cleanup != 0) {
+        if (setup != 0 || (!attempted && cleanup != 0)) {
             add_record(result, names[i], PRE_FAILED, 0, 0, OUT_INCOMPLETE,
-                       setup, setup_cleanup, 0, 0, 0);
+                       setup, cleanup, 0, 0, 0);
         } else {
             enum outcome outcome = rc == 0 ? OUT_VIOLATION :
                 (saved == ENOSYS ? OUT_UNSUPPORTED : classify_errno(saved));
             int completed = rc == 0 || saved == EPERM || saved == EACCES || saved == EROFS;
-            add_record(result, names[i], PRE_OK, 1, completed, outcome,
+            add_record(result, names[i], PRE_OK, attempted, completed, outcome,
                        saved, cleanup, 0, 0, 0);
         }
     }
@@ -1317,734 +1382,1069 @@ static int probe_main(void)
 }
 
 #ifdef YSTACK_PROBE_TEST
-static int failures;
-static void check(int condition, const char *name) { if (!condition) { fprintf(stderr, "FAIL %s\n", name); failures++; } }
-static void make_request(const char *text, struct request *request)
-{
-    check(parse_request_bytes((const unsigned char *)text, strlen(text), request), "fixture request parses");
-}
-static void parser_tests(void)
-{
-    struct request r; char input[10000]; size_t i;
-    static const char *const good[] = {"YSPROBE1 candidate-read\n", "YSPROBE1 socket-family 0\n",
-        "YSPROBE1 socket-family 65535\n",
-        "YSPROBE1 host-sentinel 2f782f79 1 0000000000000000000000000000000000000000000000000000000000000000\n"};
-    static const char *const bad[] = {"", "candidate-read\n", "YSPROBE1 unknown\n", "YSPROBE1 candidate-read x\n",
-        "YSPROBE1  candidate-read\n", "YSPROBE1 candidate-read \n", "YSPROBE1 candidate-read\r\n",
-        "YSPROBE1 candidate-read\nextra", "YSPROBE1 socket-family 00\n", "YSPROBE1 socket-family +1\n",
-        "YSPROBE1 socket-family 65536\n", "YSPROBE1 host-sentinel 2F78 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-        "YSPROBE1 host-sentinel 2f2e 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-        "YSPROBE1 host-sentinel 2f78 0 0000000000000000000000000000000000000000000000000000000000000000\n"};
-    for (i = 0; i < sizeof good / sizeof good[0]; i++) check(parse_request_bytes((const unsigned char *)good[i], strlen(good[i]), &r), "valid parser case");
-    for (i = 0; i < sizeof bad / sizeof bad[0]; i++) check(!parse_request_bytes((const unsigned char *)bad[i], strlen(bad[i]), &r), "invalid parser case");
-    memset(input, 'a', sizeof input); memcpy(input, "YSPROBE1 candidate-read", 23); input[INPUT_CAP - 1U] = '\n';
-    check(!parse_request_bytes((const unsigned char *)input, INPUT_CAP, &r), "input cap");
-    for (i = 0; i < sizeof modes / sizeof modes[0]; i++) {
-        if (modes[i].parameters == 0U) { (void)snprintf(input, sizeof input, "YSPROBE1 %s\n", modes[i].name);
-            check(parse_request_bytes((const unsigned char *)input, strlen(input), &r) && r.mode == &modes[i], "closed mode"); }
-    }
+struct oracle_record {
+    const char *name, *pre, *outcome;
+    int attempted, completed, error_number, cleanup_error;
+    uint64_t value[3];
+};
 
-    {
-        char path[4097], hexpath[8193], request_text[INPUT_CAP + 1U];
-        static const char digits[] = "0123456789abcdef"; size_t n;
-        path[0] = '/'; memset(path + 1, 'a', 4095U); path[4096] = '\0';
-        for (n = 0; n < 4096U; n++) { unsigned char c = (unsigned char)path[n];
-            hexpath[n * 2U] = digits[c >> 4]; hexpath[n * 2U + 1U] = digits[c & 15U]; }
-        hexpath[8192] = '\0';
-        (void)snprintf(request_text, sizeof request_text,
-            "YSPROBE1 sibling-sentinel %s 4096 0000000000000000000000000000000000000000000000000000000000000000\n",
-            hexpath);
-        check(parse_request_bytes((const unsigned char *)request_text, strlen(request_text), &r) &&
-              strlen(r.path) == 4096U && r.size == 4096U, "maximum sentinel path and size");
-    }
+static int fixture_failures;
+static int fixture_observed_return;
+static char **fixture_saved_environment;
+static const unsigned char *fixture_expected_output;
+static size_t fixture_expected_output_length, fixture_expected_stdout_total;
+static int fixture_expected_escape, fixture_expected_return;
+static char **fixture_case_environment;
 
-    {
-        static const char *const path_bad[] = {
-            "YSPROBE1 host-sentinel 78 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f782f 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f782f2e2f79 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f782f2e2e2f79 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f780079 1 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f78 4097 0000000000000000000000000000000000000000000000000000000000000000\n",
-            "YSPROBE1 host-sentinel 2f78 1 fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n",
-            "YSPROBE1 host-sentinel 2f78 1 F000000000000000000000000000000000000000000000000000000000000000\n"
-        };
-        for (i = 0; i < sizeof path_bad / sizeof path_bad[0]; i++)
-            check(!parse_request_bytes((const unsigned char *)path_bad[i], strlen(path_bad[i]), &r),
-                  "invalid sentinel binding rejected");
-    }
+static void fixture_check(int condition, const char *message)
+{
+    if (!condition) { (void)fprintf(stderr, "FAIL %s\n", message); fixture_failures++; }
 }
 
-static void parser_action_boundary_tests(void)
+static void fixture_reset(void)
 {
-    static const char *const invalid[] = {
-        "YSPROBE1 candidate-read extra\n",
-        "YSPROBE1 socket-family\n",
-        "YSPROBE1 socket-family 1 extra\n",
-        "YSPROBE1 socket-family 18446744073709551615\n",
-        "YSPROBE1 host-sentinel\n",
-        "YSPROBE1 host-sentinel 2f78 1\n",
-        "YSPROBE1 host-sentinel 2f78 1 0000000000000000000000000000000000000000000000000000000000000000 extra\n",
-        "YSPROBE1 sibling-sentinel 2f78 01 0000000000000000000000000000000000000000000000000000000000000000\n"
-    };
-    struct request request;
-    size_t i;
-    for (i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
-        test_reset(TEST_DEFAULT);
-        check(!parse_request_bytes((const unsigned char *)invalid[i], strlen(invalid[i]), &request),
-              "parser rejects before action boundary");
-        check(test_state.open_calls == 0U && test_state.read_calls == 0U &&
-              test_state.write_calls == 0U && test_state.socket_calls == 0U,
-              "parse failure performs no low-level operation");
-    }
-
-    {
-        const char *instruction = "YSPROBE1 candidate-read\n";
-        char expected[65];
-        make_request(instruction, &request);
-        digest_hex(instruction, strlen(instruction), expected);
-        check(strcmp(request.instruction_digest, expected) == 0,
-              "result binding hashes exact admitted instruction including LF");
-    }
-
-    {
-        unsigned char bytes[] = "YSPROBE1 candidate-read\n";
-        size_t length = sizeof bytes - 1U;
-        bytes[2] = 0U;
-        check(!parse_request_bytes(bytes, length, &request),
-              "embedded NUL rejected before action");
-        bytes[2] = (unsigned char)'P';
-        bytes[4] = 0x7fU;
-        check(!parse_request_bytes(bytes, length, &request),
-              "non-ASCII DEL rejected before action");
-        bytes[4] = (unsigned char)'O';
-        bytes[length - 1U] = (unsigned char)'x';
-        check(!parse_request_bytes(bytes, length, &request),
-              "missing final LF rejected before action");
-    }
-
-    {
-        unsigned char bytes[] = {'Y','S','P','R','O','B','E','1',' ',
-            'c','a','n','d','i','d','a','t','e','-','r','e','a','d','\n','x','\n'};
-        check(!parse_request_bytes(bytes, sizeof bytes, &request),
-              "second input line rejected before action");
-    }
-}
-static void result_tests(void)
-{
-    struct request q; struct result r; const char *s = "YSPROBE1 signal-supervisor\n";
-    check(parse_request_bytes((const unsigned char *)s, strlen(s), &q), "signal parse");
-    memset(&r, 0, sizeof r);
-    signal_action(&r);
-    check(r.count == 2U && !r.records[1].attempted && r.force_incomplete,
-          "signal never guesses target");
-    memset(&r, 0, sizeof r); add_record(&r, "x", PRE_OK, 1, 1, OUT_VIOLATION, 0, EIO, 1, 2, 3);
-    check(!result_complete(&r) && r.records[0].outcome == OUT_VIOLATION, "cleanup does not erase primary");
-    memset(&r, 0, sizeof r); add_record(&r, "x", PRE_OK, 1, 1, OUT_UNSUPPORTED, ENOSYS, 0, 0, 0, 0);
-    check(!result_complete(&r), "unsupported observation cannot complete coverage");
-    check(classify_errno(EPERM) == OUT_REFUSED && classify_errno(EAFNOSUPPORT) == OUT_UNSUPPORTED && classify_errno(EINVAL) == OUT_INCOMPLETE, "errno classes");
-
-    {
-        char line[RESULT_CAP]; size_t length = 0;
-        memset(&r, 0, sizeof r); r.domain = "none";
-        add_record(&r, "read", PRE_OK, 1, 1, OUT_REFUSED, EPERM, 0, 4, 5, 6);
-        check(format_result(&q, &r, line, &length), "bounded result formats");
-        check(length < RESULT_CAP && line[length - 1U] == '\n' &&
-              memchr(line, '\n', length - 1U) == NULL, "result is exactly one bounded line");
-        check(strstr(line, " read:ok:1:1:refused:") != NULL, "result contains closed record fields");
-    }
-
-    {
-        char line[RESULT_CAP]; size_t length = 0, i;
-        memset(&r, 0, sizeof r); r.force_incomplete = 1; r.domain_max = 8U;
-        q.mode = find_mode("socket-family"); strcpy(q.instruction_digest,
-            "0000000000000000000000000000000000000000000000000000000000000000");
-        for (i = 0; i < RECORD_CAP; i++)
-            add_record(&r, "socket", PRE_OK, 1, 1, OUT_REFUSED, EPERM, 0, i, 1, 0);
-        check(format_result(&q, &r, line, &length) && length < RESULT_CAP,
-              "maximum static record set fits formatter bound");
-        check(strstr(line, " incomplete linux-build-af-v1/8 32 ") != NULL,
-              "domain and incomplete state are explicit");
-    }
+    memset(fixture_steps, 0, sizeof fixture_steps);
+    fixture_step_count = 0; fixture_step_index = 0;
+    fixture_capture_length = 0; fixture_stdout_total = 0;
+    fixture_escape = 0; fixture_failure = NULL;
+    fixture_expected_output = NULL; fixture_expected_output_length = 0;
+    fixture_expected_stdout_total = 0; fixture_expected_escape = 3;
+    fixture_expected_return = 0; fixture_socket_override = NULL;
+    fixture_case_environment = NULL;
+    memset(fixture_blocks, 0xa5, sizeof fixture_blocks);
+    memset(fixture_mapping, 0x5a, sizeof fixture_mapping);
 }
 
-static void file_action_tests(void)
+static struct fixture_step *queue_return(enum fixture_op op, long returned, int error_number)
 {
-    struct request q; struct result r;
-    make_request("YSPROBE1 candidate-read\n", &q);
-    test_reset(TEST_FILE_SUCCESS); test_state.bytes[0] = 'x'; test_state.byte_count = 1U;
-    run_action(&q, &r);
-    check(r.count == 1U && r.records[0].outcome == OUT_SUCCESS && r.records[0].completed,
-          "candidate readable control");
-    check(test_state.open_calls == 1U && test_state.read_calls == 1U && test_state.close_calls == 1U,
-          "candidate real action call order");
-
-    test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_REFUSED && r.records[0].error_number == EPERM,
-          "candidate read refusal preserved");
-
-    test_reset(TEST_FILE_READ_ERROR); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed && r.records[0].error_number == EIO,
-          "candidate read error incomplete");
-
-    test_reset(TEST_FILE_CLEANUP_ERROR); test_state.bytes[0] = 'x'; test_state.byte_count = 1U;
-    run_action(&q, &r);
-    check(r.records[0].outcome == OUT_SUCCESS && r.records[0].cleanup_error == EIO && !result_complete(&r),
-          "cleanup error does not replace candidate outcome");
-
-    make_request("YSPROBE1 candidate-write\n", &q);
-    test_reset(TEST_FILE_SUCCESS); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && r.records[0].value[0] == 1U,
-          "unexpected candidate write visible");
-    test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_REFUSED && r.records[0].attempted,
-          "candidate write denial is attempted refusal");
+    struct fixture_step *s = fixture_push(op);
+    s->returned = returned; s->error_number = error_number; return s;
 }
 
-static void sentinel_tests(void)
+static void queue_read(int fd, size_t requested, const void *bytes, size_t returned)
 {
-    static const unsigned char expected[] = "fixture";
-    char digest[65], instruction[512]; struct request q; struct result r;
-    digest_hex(expected, sizeof expected - 1U, digest);
-    (void)snprintf(instruction, sizeof instruction,
-        "YSPROBE1 host-sentinel 2f71756172616e74696e652f686f7374 %zu %s\n",
-        sizeof expected - 1U, digest);
-    make_request(instruction, &q);
-
-    test_reset(TEST_SENTINEL_MATCH); memcpy(test_state.bytes, expected, sizeof expected - 1U);
-    test_state.byte_count = sizeof expected - 1U; run_action(&q, &r);
-    check(r.count == 2U && r.records[0].outcome == OUT_SUCCESS &&
-          r.records[1].outcome == OUT_SUCCESS && r.records[1].value[0] == sizeof expected - 1U &&
-          r.records[1].value[2] == 1U, "sentinel path size digest match");
-
-    test_reset(TEST_SENTINEL_MISMATCH); memcpy(test_state.bytes, "wrong!!", 7U);
-    test_state.byte_count = 7U; run_action(&q, &r);
-    check(r.records[1].outcome == OUT_VIOLATION && r.records[1].value[2] == 0U,
-          "readable sentinel digest mismatch violation");
-
-    test_reset(TEST_SENTINEL_MISMATCH); memcpy(test_state.bytes, expected, sizeof expected - 1U);
-    test_state.bytes[sizeof expected - 1U] = '!'; test_state.byte_count = sizeof expected;
-    run_action(&q, &r);
-    check(r.records[1].outcome == OUT_VIOLATION && r.records[1].value[0] == sizeof expected,
-          "readable sentinel extra byte violation");
-
-    test_reset(TEST_SENTINEL_ABSENT); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && r.records[0].error_number == ENOENT,
-          "absent sentinel records namespace view only");
-
-    test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_REFUSED && r.records[0].error_number == EPERM,
-          "sentinel permission refusal distinct");
-
-    test_reset(TEST_FILE_READ_ERROR); run_action(&q, &r);
-    check(r.records[1].outcome == OUT_INCOMPLETE && !r.records[1].completed,
-          "sentinel read failure incomplete");
-
-    test_reset(TEST_FILE_CLEANUP_ERROR); memcpy(test_state.bytes, expected, sizeof expected - 1U);
-    test_state.byte_count = sizeof expected - 1U; run_action(&q, &r);
-    check(r.records[1].outcome == OUT_SUCCESS && r.records[1].cleanup_error == EIO && !result_complete(&r),
-          "sentinel primary result survives cleanup failure");
-
-    test_reset(TEST_SENTINEL_WRONG_TYPE); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && !r.records[1].attempted,
-          "non-regular sentinel is a violation and is not read");
-
-    test_reset(TEST_SENTINEL_METADATA_ERROR); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed &&
-          !r.records[1].attempted, "sentinel metadata error leaves read unattempted");
+    struct fixture_step *s = queue_return(FX_READ, (long)returned, 0);
+    s->call.io.fd = fd; s->call.io.length = requested;
+    s->read_bytes = bytes; s->read_length = returned;
 }
 
-static void descriptor_tests(void)
+static void queue_read_error(int fd, size_t requested, int error_number)
 {
-    struct request q; struct result r;
-    make_request("YSPROBE1 descriptors\n", &q);
-    test_reset(TEST_DESCRIPTOR_VALID); run_action(&q, &r);
-    check(r.count == 5U && r.records[0].outcome == OUT_SUCCESS && r.records[1].outcome == OUT_SUCCESS &&
-          r.records[2].outcome == OUT_SUCCESS && r.records[3].outcome == OUT_SUCCESS &&
-          r.records[3].value[0] == 3U && r.records[3].value[1] == 1023U &&
-          r.records[4].outcome == OUT_SUCCESS && !result_complete(&r),
-          "valid fd metadata still partial census");
-
-    test_reset(TEST_DESCRIPTOR_WRONG); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && r.records[1].outcome == OUT_VIOLATION,
-          "wrong fd type and append flag violations");
-
-    test_reset(TEST_DESCRIPTOR_BAD_ACCESS); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && r.records[0].value[1] == O_WRONLY,
-          "fd0 wrong access mode violation");
-
-    test_reset(TEST_DESCRIPTOR_MISSING_APPEND); run_action(&q, &r);
-    check(r.records[2].outcome == OUT_VIOLATION && r.records[2].value[2] == 0U,
-          "fd2 missing append violation");
-
-    test_reset(TEST_DESCRIPTOR_MISSING); run_action(&q, &r);
-    check(r.records[2].outcome == OUT_INCOMPLETE && !r.records[2].completed &&
-          r.records[2].error_number == EBADF, "missing standard descriptor incomplete");
-
-    test_reset(TEST_DESCRIPTOR_METADATA_ERROR); run_action(&q, &r);
-    check(r.records[1].outcome == OUT_INCOMPLETE && !r.records[1].completed &&
-          r.records[1].error_number == EIO, "standard descriptor inspection error incomplete");
-
-    test_reset(TEST_DESCRIPTOR_LEAK3); run_action(&q, &r);
-    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 1U && r.records[4].value[1] == 3U,
-          "extra fd3 detected");
-
-    test_reset(TEST_DESCRIPTOR_LEAK128); run_action(&q, &r);
-    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 1U && r.records[4].value[1] == 128U,
-          "high fd128 detected independently of limits");
-
-    test_reset(TEST_DESCRIPTOR_LEAKS); run_action(&q, &r);
-    check(r.records[4].outcome == OUT_VIOLATION && r.records[4].value[0] == 2U &&
-          r.records[4].value[1] == 3U, "descriptor leak count and first fd retained");
-
-    test_reset(TEST_DESCRIPTOR_SCAN_ERROR); run_action(&q, &r);
-    check(r.records[3].outcome == OUT_INCOMPLETE && !r.records[3].completed && r.records[3].error_number == EIO,
-          "descriptor inspection error incomplete");
-
-    test_reset(TEST_DESCRIPTOR_SCAN_AFTER_LEAK); run_action(&q, &r);
-    check(r.records[3].value[2] == 77U && r.records[4].outcome == OUT_VIOLATION &&
-          !r.records[4].completed && r.records[4].value[0] == 1U && r.records[4].value[1] == 3U,
-          "descriptor scan error retains the known leak lower bound");
+    struct fixture_step *s = queue_return(FX_READ, -1, error_number);
+    s->call.io.fd = fd; s->call.io.length = requested;
 }
 
-static void signal_tests(void)
-{
-    struct request q;
-    struct result r;
-    make_request("YSPROBE1 signal-supervisor\n", &q);
-
-    test_reset(TEST_DEFAULT);
-    run_action(&q, &r);
-    check(r.count == 2U && r.records[0].value[0] == 1U &&
-          r.records[0].value[1] == 0U && r.records[0].outcome == OUT_SUCCESS &&
-          !r.records[1].attempted && r.records[1].outcome == OUT_INCOMPLETE &&
-          r.records[1].value[0] == 1U,
-          "private namespace ancestor is unaddressable without signal attempt");
-
-    test_reset(TEST_DEFAULT);
-    test_state.pid = 12;
-    test_state.parent = 34;
-    run_action(&q, &r);
-    check(r.records[0].value[0] == 12U && r.records[0].value[1] == 34U &&
-          r.records[0].outcome == OUT_INCOMPLETE && !r.records[1].attempted &&
-          r.records[1].prerequisite == PRE_FAILED,
-          "visible parent relationship does not authorize guessed target");
-
-    test_reset(TEST_DEFAULT);
-    test_state.pid = 7;
-    test_state.parent = 1;
-    run_action(&q, &r);
-    check(r.records[0].value[1] == 1U && !r.records[1].attempted,
-          "orphan or host-init relationship never signals unrelated pid1");
-
-    test_reset(TEST_DEFAULT);
-    test_state.pid = 1;
-    test_state.parent = 1;
-    run_action(&q, &r);
-    check(!r.records[1].attempted,
-          "self relationship never substitutes self signal");
-}
-
-static void environment_tests(void)
-{
-    static char *correct[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", NULL};
-    static char *missing[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", NULL};
-    static char *extra[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", "X=1", NULL};
-    static char *duplicate[] = {"LANG=C", "LC_ALL=C", "PATH=/sandbox/tools", "PATH=/sandbox/tools", NULL};
-    static char *wrong[] = {"LANG=C", "LC_ALL=C", "PATH=/bin", "TMPDIR=/sandbox/scratch", NULL};
-    static char *reordered[] = {"LC_ALL=C", "LANG=C", "PATH=/sandbox/tools", "TMPDIR=/sandbox/scratch", NULL};
-    char **cases[] = {correct, missing, extra, duplicate, wrong, reordered};
-    extern char **environ;
-    char **saved = environ;
-    struct request q; struct result r; size_t i;
-    make_request("YSPROBE1 environment\n", &q);
-    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        environ = cases[i]; run_action(&q, &r); environ = saved;
-        check(r.records[0].completed && r.records[0].outcome == (i == 0U ? OUT_SUCCESS : OUT_VIOLATION),
-              "environment exact ordered inventory");
-    }
-}
-
-static void evidence_tests(void)
-{
-    static const char *const names[] = {"evidence-read", "evidence-reopen", "evidence-truncate",
-        "evidence-link", "evidence-rename"};
-    char instruction[64]; struct request q; struct result r; size_t i;
-    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
-        (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s\n", names[i]);
-        make_request(instruction, &q); test_reset(TEST_DEFAULT); run_action(&q, &r);
-        check(r.count == 1U && r.records[0].prerequisite == PRE_OK && r.records[0].attempted,
-              "evidence operation uses established fixture");
-        check(r.records[0].outcome == (i < 2U ? OUT_VIOLATION : OUT_REFUSED),
-              "evidence primary outcome classified");
-    }
-
-    make_request("YSPROBE1 evidence-read\n", &q);
-    test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
-          r.records[0].outcome == OUT_INCOMPLETE, "evidence setup failure leaves operation unattempted");
-
-    test_reset(TEST_FILE_CLEANUP_ERROR); run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
-          r.records[0].cleanup_error == EIO, "evidence setup cleanup failure kept separate");
-
-    test_reset(TEST_OPERATION_REFUSED); run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_OK && r.records[0].attempted &&
-          r.records[0].outcome == OUT_REFUSED && r.records[0].error_number == EPERM,
-          "evidence setup success followed by operation refusal");
-
-    test_reset(TEST_OPERATION_CLEANUP); run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_OK && r.records[0].outcome == OUT_VIOLATION &&
-          r.records[0].cleanup_error == EIO,
-          "evidence operation success retained across operation cleanup failure");
-}
-
-static void scratch_tests(void)
-{
-    struct request q; struct result r; size_t i;
-    make_request("YSPROBE1 scratch-free\n", &q);
-    test_reset(TEST_DEFAULT); run_action(&q, &r);
-    check(r.count == 7U, "scratch keeps every required independent subcheck");
-    for (i = 0; i < r.count; i++)
-        check(r.records[i].prerequisite != PRE_FAILED &&
-              (r.records[i].attempted || r.records[i].outcome == OUT_UNSUPPORTED),
-              "scratch fixture established independently");
-    check(strcmp(r.records[0].name, "ftruncate") == 0 && strcmp(r.records[1].name, "fallocate") == 0 &&
-          strcmp(r.records[2].name, "madv-remove") == 0 && strcmp(r.records[3].name, "path-truncate") == 0 &&
-          strcmp(r.records[4].name, "unlink") == 0 && strcmp(r.records[5].name, "rmdir") == 0 &&
-          strcmp(r.records[6].name, "tmpfile") == 0, "scratch fixed-order record inventory");
-
-    test_reset(TEST_FILE_REFUSED); run_action(&q, &r);
-    check(r.count == 7U, "scratch setup failures cannot reduce required set");
-    for (i = 0; i < 5U; i++)
-        if (i != 1U && i != 2U)
-        check(r.records[i].prerequisite == PRE_FAILED && !r.records[i].attempted,
-              "scratch failed setup leaves destructive operation unattempted");
-
-    test_reset(TEST_DEFAULT); test_state.fail_write_call = 1U; test_state.injected_error = EIO;
-    run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
-          r.records[0].error_number == EIO, "scratch initial write failure blocks named operation");
-
-    test_reset(TEST_DEFAULT); test_state.fail_close_call = 1U; test_state.injected_error = EIO;
-    run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
-          r.records[0].cleanup_error == EIO, "scratch initial close failure blocks named operation");
-
-    test_reset(TEST_DEFAULT); test_state.fail_open_call = 2U; test_state.injected_error = EACCES;
-    run_action(&q, &r);
-    check(r.records[0].prerequisite == PRE_FAILED && !r.records[0].attempted &&
-          r.records[0].error_number == EACCES, "scratch reopen failure is a prerequisite failure");
-
-#if defined(MADV_REMOVE)
-    test_reset(TEST_SCRATCH_MMAP_FAIL); run_action(&q, &r);
-    check(r.records[2].prerequisite == PRE_FAILED && r.records[2].attempted == 0 &&
-          r.records[2].completed == 0 && r.records[2].outcome == OUT_INCOMPLETE &&
-          r.records[2].error_number == ENOMEM,
-          "scratch mmap failure leaves MADV_REMOVE uncompleted");
-#endif
-
-    test_reset(TEST_SCRATCH_MKDIR_FAIL); run_action(&q, &r);
-    check(r.records[5].prerequisite == PRE_FAILED && !r.records[5].attempted &&
-          r.records[5].error_number == ENOSPC,
-          "scratch mkdir failure leaves rmdir unattempted");
-}
-
-static void socket_tests(void)
-{
-    unsigned family; struct request q; struct result r; char instruction[64];
-    for (family = 0; family < 8U; family++) {
-        (void)snprintf(instruction, sizeof instruction, "YSPROBE1 socket-family %u\n", family);
-        make_request(instruction, &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-        check(r.domain_max == 8U && test_state.socket_calls == 1U && test_state.socket_family == (int)family &&
-              r.records[0].outcome == OUT_REFUSED && r.records[0].error_number == EPERM,
-              "each synthetic build-domain family attempted once");
-        if (family != 3U && family != 4U) {
-            check(test_state.socket_type == (SOCK_STREAM | TEST_CLOEXEC) &&
-                  test_state.socket_protocol == 0,
-                  "ordinary synthetic domain member uses stream tuple");
-        }
-        check(r.records[0].value[0] == family &&
-              r.records[0].value[1] == (uint64_t)(unsigned)test_state.socket_type &&
-              r.records[0].value[2] == (uint64_t)(unsigned)test_state.socket_protocol,
-              "socket result preserves the exact requested tuple");
-        check(r.records[0].attempted && r.records[0].completed,
-              "socket refusal completion is explicit");
-    }
-    make_request("YSPROBE1 socket-family 8\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-    check(test_state.socket_calls == 0U && r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].attempted,
-          "outside build domain not attempted");
-
-    make_request("YSPROBE1 socket-family 2\n", &q);
-    test_reset(TEST_SOCKET_SUCCESS); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && r.records[0].cleanup_error == 0,
-          "socket success violation");
-    test_reset(TEST_SOCKET_UNSUPPORTED); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_UNSUPPORTED && r.records[0].error_number == EAFNOSUPPORT,
-          "socket unsupported distinct");
-    test_reset(TEST_SOCKET_INVALID); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && r.records[0].error_number == EINVAL,
-          "socket invalid incomplete");
-    test_reset(TEST_SOCKET_EACCES); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed && r.records[0].error_number == EACCES,
-          "socket EACCES is not a seccomp refusal");
-    test_reset(TEST_SOCKET_EROFS); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_INCOMPLETE && !r.records[0].completed && r.records[0].error_number == EROFS,
-          "socket EROFS is not a seccomp refusal");
-    test_reset(TEST_SOCKET_CLOSE_ERROR); run_action(&q, &r);
-    check(r.records[0].outcome == OUT_VIOLATION && r.records[0].cleanup_error == EIO,
-          "socket success retained across close failure");
-
-    make_request("YSPROBE1 socket-family 3\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-    check(test_state.socket_type == (SOCK_RAW | TEST_CLOEXEC) && test_state.socket_protocol == 7,
-          "synthetic netlink member uses raw special tuple");
-    make_request("YSPROBE1 socket-family 4\n", &q); test_reset(TEST_SOCKET_REFUSED); run_action(&q, &r);
-    check(test_state.socket_type == (SOCK_RAW | TEST_CLOEXEC) && test_state.socket_protocol == 0,
-          "synthetic packet member uses raw protocol-zero tuple");
-
-    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = 0; run_action(&q, &r);
-    check(!r.records[0].attempted && r.records[0].prerequisite == PRE_UNKNOWN && test_state.socket_calls == 0U,
-          "zero socket domain is unknown without a call");
-    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = -1; run_action(&q, &r);
-    check(!r.records[0].attempted && test_state.socket_calls == 0U,
-          "negative socket domain cannot narrow into a valid bound");
-    test_reset(TEST_DEFAULT); test_socket_facts.domain_max = 65537; run_action(&q, &r);
-    check(!r.records[0].attempted && test_state.socket_calls == 0U,
-          "oversized socket domain is unknown without a call");
-    test_reset(TEST_DEFAULT); test_socket_facts.linux_build = 0; run_action(&q, &r);
-    check(!r.records[0].attempted && strcmp(r.domain, "unknown") == 0,
-          "non-Linux socket facts remain unknown");
-    make_request("YSPROBE1 socket-family 3\n", &q);
-    test_reset(TEST_DEFAULT); test_socket_facts.usersock_available = 0; run_action(&q, &r);
-    check(!r.records[0].attempted && r.records[0].outcome == OUT_UNSUPPORTED &&
-          !result_complete(&r) && test_state.socket_calls == 0U,
-          "missing NETLINK protocol metadata is unattempted unsupported");
-}
-
-static void output_tests(void)
-{
-    static const char forged[] = "{\"kind\":\"sandbox_guest_report\",\"forged\":true}\n";
-    int rc;
-    test_reset(TEST_DEFAULT); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 0 && test_state.write_returned == OUTPUT_ATTEMPT &&
-          test_state.write_requested == OUTPUT_ATTEMPT, "full 12MiB output accounting");
-
-    test_reset(TEST_WRITE_SHORT); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 0 && test_state.write_returned == OUTPUT_ATTEMPT && test_state.write_calls > 12U,
-          "short writes do not shrink output target");
-
-    test_reset(TEST_WRITE_EINTR); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 0 && test_state.write_returned == OUTPUT_ATTEMPT && test_state.write_calls == 13U,
-          "interrupted output write retried with full accounting");
-
-    test_reset(TEST_WRITE_ZERO); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 73 && test_state.write_returned == 0U, "zero output write stops incomplete");
-    test_reset(TEST_WRITE_ERROR); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 73 && test_state.write_returned == 0U, "terminal output error stops incomplete");
-    test_reset(TEST_ALLOC_FAIL); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 73 && test_state.write_calls == 0U, "output allocation failure writes no fallback");
-
-    test_reset(TEST_WRITE_PREFIX_ERROR); rc = stream_payload(OUTPUT_ATTEMPT);
-    check(rc == 73 && test_state.write_returned == 31U && test_state.write_calls == 2U,
-          "abrupt output failure retains prefix count without invented completion");
-
-    test_reset(TEST_DEFAULT);
-    check(write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
-          test_state.captured_length == sizeof forged - 1U &&
-          memcmp(test_state.captured, forged, sizeof forged - 1U) == 0,
-          "forged stdout production payload is exact and complete");
-
-    test_reset(TEST_WRITE_SHORT);
-    check(write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
-          test_state.write_calls > 1U && test_state.write_returned == sizeof forged - 1U &&
-          memcmp(test_state.captured, forged, sizeof forged - 1U) == 0,
-          "forged stdout short writes retain exact payload");
-
-    test_reset(TEST_WRITE_ERROR);
-    check(!write_all(STDOUT_FILENO, forged, sizeof forged - 1U) &&
-          test_state.write_returned == 0U, "forged stdout write error stays incomplete");
-}
-
-static void every_action_fixture(void)
-{
-    size_t i; char instruction[512]; int rc;
-    char digest[65]; static const unsigned char one[] = "x";
-    digest_hex(one, 1U, digest);
-    for (i = 0; i < sizeof modes / sizeof modes[0]; i++) {
-        if (modes[i].action == ACT_OUTPUT_OVERFLOW || modes[i].action == ACT_FORGED_STDOUT) continue;
-        if (modes[i].action == ACT_SOCKET_FAMILY)
-            (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s 0\n", modes[i].name);
-        else if (modes[i].action == ACT_HOST_SENTINEL || modes[i].action == ACT_SIBLING_SENTINEL)
-            (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s 2f78 1 %s\n", modes[i].name, digest);
-        else (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s\n", modes[i].name);
-        test_reset(TEST_RESOURCE_PARTIAL);
-        memcpy(test_state.bytes, instruction, strlen(instruction));
-        test_state.byte_count = strlen(instruction);
-        rc = probe_main();
-        check(rc == 0 && test_state.write_calls != 0U,
-              "every returning mode runs through production entry, action and result output");
-    }
-}
-
-static void bounded_resource_tests(void)
-{
-    struct request q; struct result r;
-    make_request("YSPROBE1 fork-bomb\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 3U && r.records[0].error_number == EAGAIN &&
-          !r.records[0].completed, "partial fork creation remains incomplete");
-
-    make_request("YSPROBE1 thread-bomb\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 3U && r.records[0].error_number == EAGAIN &&
-          !r.records[0].completed, "partial thread creation remains incomplete");
-
-    make_request("YSPROBE1 cpu-spin-32\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 3U && r.records[0].value[1] == 32U &&
-          !r.records[0].completed, "partial CPU worker creation never claims 32 threads");
-
-    make_request("YSPROBE1 memory-exhaustion\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 2U * BLOCK_SIZE && r.records[0].error_number == ENOMEM,
-          "bounded memory allocations preserve partial byte count");
-
-    make_request("YSPROBE1 sleep\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 60U && test_state.sleep_calls == 1U,
-          "sleep action uses the production duration through substituted sleep");
-
-    make_request("YSPROBE1 scratch-fill\n", &q);
-    test_reset(TEST_RESOURCE_PARTIAL); run_action(&q, &r);
-    check(r.records[0].value[0] == 32U * BLOCK_SIZE &&
-          r.records[0].value[1] == 32U * BLOCK_SIZE && r.records[0].completed,
-          "scratch fill counts and discards the complete production target");
-}
-
-static void script_input(const char *instruction)
+static void queue_instruction(const char *instruction)
 {
     size_t length = strlen(instruction);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U,
-               (ssize_t)length, 0, NULL, instruction);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U - length,
-               0, 0, NULL, NULL);
+    queue_read(STDIN_FILENO, INPUT_CAP + 1U, instruction, length);
+    if (length != 0U) queue_read(STDIN_FILENO, INPUT_CAP + 1U - length, NULL, 0);
 }
 
-static void script_output(const char *line, ssize_t returned, int error_number)
+static void queue_write_exact(int fd, const void *bytes, size_t length, long returned, int error_number)
 {
-    script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, strlen(line), returned,
-               error_number, NULL, line);
+    struct fixture_step *s = queue_return(FX_WRITE, returned, error_number);
+    s->call.io.fd = fd; s->call.io.length = length;
+    s->call.io.kind = FX_BYTES_EXACT; s->call.io.bytes = bytes;
 }
 
-static int run_scripted_entry(void)
+static void queue_write_repeat(int fd, unsigned char byte, size_t length, long returned, int error_number)
 {
-    int rc;
-    script_active = 1;
-    rc = probe_main();
-    script_active = 0;
-    check(script_cursor == script_count, "entry consumes complete finite script");
-    return rc;
+    struct fixture_step *s = queue_return(FX_WRITE, returned, error_number);
+    s->call.io.fd = fd; s->call.io.length = length;
+    s->call.io.kind = FX_BYTES_REPEAT; s->call.io.byte = byte;
 }
 
-static void entry_tests(void)
+static void queue_open(const char *path, int flags, mode_t mode, int returned, int error_number)
 {
-    static const char candidate_read[] = "YSPROBE1 candidate-read\n";
-    static const char candidate_read_line[] =
-        "YSPROBE1 candidate-read 8cb4151b0b7362dd7790f616f3c5c546a4a3a5d24fe678800b37873b971f95a9 complete none 1 read:ok:1:1:success:0:0:1:120:0\n";
-    static const char candidate_write[] = "YSPROBE1 candidate-write\n";
-    static const char candidate_write_line[] =
-        "YSPROBE1 candidate-write 7647cd80a363d28fbfd2f2f6c81b4540dce2b2b56b1e9a94e64bff21b823f3be complete none 1 create:ok:1:1:refused:1:0:0:0:0\n";
-    static const char socket_request[] = "YSPROBE1 socket-family 2\n";
-    static const char input_error[] = "YSPROBE1 error=input\n";
-    static const char read_error[] = "YSPROBE1 error=read\n";
-    static const char forged_request[] = "YSPROBE1 forged-report-stdout\n";
-    static const char overflow_request[] = "YSPROBE1 output-overflow\n";
+    struct fixture_step *s = queue_return(FX_OPEN, returned, error_number);
+    s->call.open.path = path; s->call.open.flags = flags; s->call.open.mode = mode;
+}
+
+static void queue_close(int fd, int returned, int error_number)
+{
+    struct fixture_step *s = queue_return(FX_CLOSE, returned, error_number);
+    s->call.close.fd = fd;
+}
+
+static void queue_fstat(int fd, mode_t mode, int returned, int error_number)
+{
+    struct fixture_step *s = queue_return(FX_FSTAT, returned, error_number);
+    s->call.fstat.fd = fd; s->stat_mode = mode;
+}
+
+static void queue_fcntl(int fd, int command, int returned, int error_number)
+{
+    struct fixture_step *s = queue_return(FX_FCNTL, returned, error_number);
+    s->call.fcntl.fd = fd; s->call.fcntl.command = command;
+}
+
+static size_t oracle_line(char *line, size_t cap, const char *instruction,
+                          const char *checks, const char *domain,
+                          const struct oracle_record *records, size_t count)
+{
+    char digest[65]; size_t used = 0, i; int n;
+    digest_hex(instruction, strlen(instruction), digest);
+    n = snprintf(line, cap, "YSPROBE1 %.*s %s %s %s %zu", (int)(strchr(instruction + 9, ' ') != NULL ?
+        (size_t)(strchr(instruction + 9, ' ') - (instruction + 9)) : strcspn(instruction + 9, "\n")),
+        instruction + 9, digest, checks, domain, count);
+    if (n < 0 || (size_t)n >= cap) fixture_fail("oracle header"); used = (size_t)n;
+    for (i = 0; i < count; i++) {
+        const struct oracle_record *r = &records[i];
+        n = snprintf(line + used, cap - used,
+            " %s:%s:%d:%d:%s:%d:%d:%llu:%llu:%llu", r->name, r->pre,
+            r->attempted, r->completed, r->outcome, r->error_number, r->cleanup_error,
+            (unsigned long long)r->value[0], (unsigned long long)r->value[1],
+            (unsigned long long)r->value[2]);
+        if (n < 0 || (size_t)n >= cap - used) fixture_fail("oracle record"); used += (size_t)n;
+    }
+    if (used + 1U >= cap) fixture_fail("oracle newline");
+    line[used++] = '\n'; line[used] = '\0'; return used;
+}
+
+static void expect_output(const void *bytes, size_t length, int returned)
+{
+    fixture_expected_output = bytes; fixture_expected_output_length = length;
+    fixture_expected_stdout_total = length; fixture_expected_return = returned;
+    queue_write_exact(STDOUT_FILENO, bytes, length, (long)length, 0);
+}
+
+static void run_case(const char *name)
+{
+    extern char **environ;
+    fixture_saved_environment = environ;
+    if (fixture_case_environment != NULL) environ = fixture_case_environment;
+    fixture_driver_active = 1;
+    if (setjmp(fixture_jump) == 0) {
+        fixture_observed_return = probe_main();
+        fixture_escape = 3;
+    }
+    fixture_driver_active = 0;
+    environ = fixture_saved_environment;
+    fixture_socket_override = NULL;
+    if (fixture_escape != fixture_expected_escape) {
+        (void)fprintf(stderr, "FAIL %s escape=%d expected=%d detail=%s\n", name,
+                      fixture_escape, fixture_expected_escape,
+                      fixture_failure == NULL ? "none" : fixture_failure);
+        fixture_failures++;
+    } else if (fixture_escape != 1) {
+        fixture_check(fixture_step_index == fixture_step_count, "script fully consumed");
+        fixture_check(fixture_stdout_total == fixture_expected_stdout_total, "stdout total");
+        if (fixture_expected_output != NULL)
+            fixture_check(fixture_capture_length == fixture_expected_output_length &&
+                memcmp(fixture_capture, fixture_expected_output, fixture_expected_output_length) == 0,
+                "exact stdout bytes");
+        if (fixture_escape == 3)
+            fixture_check(fixture_observed_return == fixture_expected_return, "exact probe return");
+    }
+    if (fixture_escape == fixture_expected_escape && fixture_escape != 1)
+        (void)printf("case %s: ok\n", name);
+}
+
+static void set_synthetic_socket_facts(long bound)
+{
+    memset(&fixture_socket_override_value, 0, sizeof fixture_socket_override_value);
+    fixture_socket_override_value.linux_build = 1;
+    fixture_socket_override_value.domain_max = bound;
+    fixture_socket_override_value.cloexec_available = 1;
+    fixture_socket_override_value.cloexec = TEST_CLOEXEC;
+    fixture_socket_override_value.netlink_available = 1;
+    fixture_socket_override_value.netlink = 3;
+    fixture_socket_override_value.usersock_available = 1;
+    fixture_socket_override_value.usersock = 7;
+    fixture_socket_override_value.packet_available = 1;
+    fixture_socket_override_value.packet = 4;
+    fixture_socket_override_value.vsock_available = 1;
+    fixture_socket_override_value.vsock = 5;
+    fixture_socket_override = &fixture_socket_override_value;
+}
+
+static void self_controls(void)
+{
+    static const char request[] = "YSPROBE1 candidate-read\n";
+    fixture_reset(); queue_instruction(request);
+    queue_open("/wrong", O_RDONLY | O_CLOEXEC, 0, 41, 0);
+    fixture_expected_escape = 1; run_case("fixture-rejects-wrong-path");
+
+    fixture_reset(); queue_instruction(request);
+    fixture_expected_escape = 1; run_case("fixture-rejects-missing-step");
+
+    fixture_reset(); queue_instruction("bad\n");
+    queue_write_exact(STDOUT_FILENO, "YSPROBE1 error=input\n", 21U, 22, 0);
+    fixture_expected_escape = 1; run_case("fixture-rejects-invalid-write-return");
+}
+
+static void parser_cases(void)
+{
+    static const char *const invalid[] = {
+        "", "candidate-read\n", "YSPROBE1 unknown\n", "YSPROBE1 candidate-read x\n",
+        "YSPROBE1  candidate-read\n", "YSPROBE1 candidate-read \n", "YSPROBE1 candidate-read\r\n",
+        "YSPROBE1 candidate-read\nextra", "YSPROBE1 socket-family 00\n", "YSPROBE1 socket-family +1\n",
+        "YSPROBE1 socket-family 65536\n", "YSPROBE1 host-sentinel 2f2e 1 0000000000000000000000000000000000000000000000000000000000000000\n"
+    };
+    static const char diagnostic[] = "YSPROBE1 error=input\n";
+    size_t i; char name[64];
+    for (i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        fixture_reset(); queue_instruction(invalid[i]); expect_output(diagnostic, sizeof diagnostic - 1U, 64);
+        (void)snprintf(name, sizeof name, "input-invalid-%zu", i); run_case(name);
+    }
+    fixture_reset(); queue_read_error(STDIN_FILENO, INPUT_CAP + 1U, EIO);
+    expect_output("YSPROBE1 error=read\n", 20U, 64); run_case("input-read-error");
+    {
+        static unsigned char boundary[INPUT_CAP+1U];
+        memset(boundary,'x',sizeof boundary);
+        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,INPUT_CAP);
+        queue_read(STDIN_FILENO,1U,NULL,0);expect_output(diagnostic,sizeof diagnostic-1U,64);
+        run_case("input-exact-transport-cap-invalid-grammar");
+        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,INPUT_CAP+1U);
+        expect_output(diagnostic,sizeof diagnostic-1U,64);run_case("input-cap-plus-one");
+        boundary[0]='Y';boundary[1]='S';boundary[2]=0;boundary[3]='P';
+        fixture_reset();queue_read(STDIN_FILENO,INPUT_CAP+1U,boundary,4U);
+        queue_read(STDIN_FILENO,INPUT_CAP-3U,NULL,0);expect_output(diagnostic,sizeof diagnostic-1U,64);
+        run_case("input-embedded-nul");
+    }
+}
+
+static void candidate_cases(void)
+{
+    static const char instruction[] = "YSPROBE1 candidate-read\n";
+    static const struct { const char *name, *outcome, *checks; int error_number, completed, close_error; } cases[] = {
+        {"candidate-read-success", "success", "complete", 0, 1, 0},
+        {"candidate-read-eperm", "refused", "complete", EPERM, 1, 0},
+        {"candidate-read-eperm-close", "refused", "incomplete", EPERM, 1, EIO},
+        {"candidate-read-eacces", "refused", "complete", EACCES, 1, 0},
+        {"candidate-read-erofs", "refused", "complete", EROFS, 1, 0},
+        {"candidate-read-success-close-error", "success", "incomplete", 0, 1, EIO},
+        {"candidate-read-eopnotsupp", "unsupported", "incomplete", EOPNOTSUPP, 0, 0},
+        {"candidate-read-eio", "incomplete", "incomplete", EIO, 0, 0}
+    };
+    size_t i; char output[512];
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        struct oracle_record record = {"read", "ok", cases[i].outcome, 1, cases[i].completed,
+            cases[i].error_number, cases[i].close_error, {cases[i].error_number == 0 ? 1U : 0U,
+            cases[i].error_number == 0 ? (uint64_t)'x' : 0U, 0}};
+        fixture_reset(); queue_instruction(instruction);
+        queue_open("/sandbox/candidate/README.md", O_RDONLY | O_CLOEXEC, 0, 41, 0);
+        if (cases[i].error_number == 0) queue_read(41, 1U, "x", 1U);
+        else queue_read_error(41, 1U, cases[i].error_number);
+        queue_close(41, cases[i].close_error == 0 ? 0 : -1, cases[i].close_error);
+        expect_output(output, oracle_line(output, sizeof output, instruction, cases[i].checks, "none", &record, 1U), 0);
+        run_case(cases[i].name);
+    }
+    for(i=0;i<2U;i++) {
+        int error_number=i==0?ENOENT:EACCES;
+        struct oracle_record record={"read","ok",i==0?"incomplete":"refused",1,i!=0,error_number,0,{0,0,0}};
+        fixture_reset();queue_instruction(instruction);queue_open("/sandbox/candidate/README.md",O_RDONLY|O_CLOEXEC,0,-1,error_number);
+        expect_output(output,oracle_line(output,sizeof output,instruction,i==0?"incomplete":"complete","none",&record,1),0);
+        run_case(i==0?"candidate-read-open-missing":"candidate-read-open-refused");
+    }
+    {
+        struct oracle_record record={"read","ok","success",1,1,0,0,{0,0,0}};
+        fixture_reset();queue_instruction(instruction);queue_open("/sandbox/candidate/README.md",O_RDONLY|O_CLOEXEC,0,41,0);
+        queue_read(41,1,NULL,0);queue_close(41,0,0);
+        expect_output(output,oracle_line(output,sizeof output,instruction,"complete","none",&record,1),0);
+        run_case("candidate-read-eof");
+    }
+}
+
+static void result_emission_cases(void)
+{
+    static const char instruction[]="YSPROBE1 candidate-read\n";char output[512];size_t length;
+    struct oracle_record r={"read","ok","success",1,1,0,0,{1,'x',0}};
+    int kind;
+    for(kind=0;kind<4;kind++) {
+        fixture_reset();queue_instruction(instruction);queue_open("/sandbox/candidate/README.md",O_RDONLY|O_CLOEXEC,0,41,0);
+        queue_read(41,1U,"x",1U);queue_close(41,0,0);
+        length=oracle_line(output,sizeof output,instruction,"complete","none",&r,1);
+        if(kind==0){queue_write_exact(STDOUT_FILENO,output,length,7,0);queue_write_exact(STDOUT_FILENO,output+7,length-7,(long)(length-7),0);fixture_expected_output=(const unsigned char*)output;fixture_expected_output_length=length;fixture_expected_stdout_total=length;}
+        else if(kind==1){queue_write_exact(STDOUT_FILENO,output,length,-1,EINTR);expect_output(output,length,0);}
+        else if(kind==2){queue_write_exact(STDOUT_FILENO,output,length,0,0);fixture_expected_return=74;}
+        else {queue_write_exact(STDOUT_FILENO,output,length,7,0);queue_write_exact(STDOUT_FILENO,output+7,length-7,-1,EIO);fixture_expected_output=(const unsigned char*)output;fixture_expected_output_length=7;fixture_expected_stdout_total=7;fixture_expected_return=74;}
+        run_case(kind==0?"result-short-then-full":kind==1?"result-eintr-retry":kind==2?"result-zero-write":"result-prefix-error");
+    }
+    fixture_reset();queue_instruction("bad\n");queue_write_exact(STDOUT_FILENO,"YSPROBE1 error=input\n",21,7,0);
+    queue_write_exact(STDOUT_FILENO,&"YSPROBE1 error=input\n"[7],14,-1,EIO);
+    fixture_expected_output=(const unsigned char*)"YSPROBE1 error=input\n";fixture_expected_output_length=7;
+    fixture_expected_stdout_total=7;fixture_expected_return=74;run_case("diagnostic-prefix-error");
+}
+
+static void socket_cases(void)
+{
+    unsigned family; char instruction[64], output[512], name[64];
+    for (family = 0; family < 8U; family++) {
+        int type = (family == 3U || family == 4U ? SOCK_RAW : SOCK_STREAM) | TEST_CLOEXEC;
+        int protocol = family == 3U ? 7 : 0;
+        struct oracle_record record = {"socket", "ok", "refused", 1, 1, EPERM, 0,
+            {family, (uint64_t)(unsigned)type, (uint64_t)(unsigned)protocol}};
+        fixture_reset(); set_synthetic_socket_facts(8);
+        (void)snprintf(instruction, sizeof instruction, "YSPROBE1 socket-family %u\n", family);
+        queue_instruction(instruction);
+        { struct fixture_step *s = queue_return(FX_SOCKET, -1, EPERM);
+          s->call.socket.family = (int)family; s->call.socket.type = type; s->call.socket.protocol = protocol; }
+        expect_output(output, oracle_line(output, sizeof output, instruction, "complete", "linux-build-af-v1/8", &record, 1U), 0);
+        (void)snprintf(name, sizeof name, "socket-family-%u-eperm", family); run_case(name);
+    }
+
+    fixture_reset(); set_synthetic_socket_facts(8); fixture_socket_override_value.netlink_available = 0;
+    queue_instruction("YSPROBE1 socket-family 2\n");
+    { struct oracle_record r = {"socket", "unknown", "unsupported", 0, 0, ENOSYS, 0, {2,0,0}};
+      expect_output(output, oracle_line(output, sizeof output, "YSPROBE1 socket-family 2\n", "incomplete", "linux-build-af-v1/8", &r, 1U), 0); }
+    run_case("socket-missing-netlink-identity");
+
+    fixture_reset(); set_synthetic_socket_facts(8); fixture_socket_override_value.packet_available = 0;
+    queue_instruction("YSPROBE1 socket-family 2\n");
+    { struct oracle_record r = {"socket", "unknown", "unsupported", 0, 0, ENOSYS, 0, {2,0,0}};
+      expect_output(output, oracle_line(output, sizeof output, "YSPROBE1 socket-family 2\n", "incomplete", "linux-build-af-v1/8", &r, 1U), 0); }
+    run_case("socket-missing-packet-identity");
+}
+
+static void actual_socket_facts_case(void)
+{
+    const struct socket_facts facts = build_socket_facts();
+    static const char instruction[] = "YSPROBE1 socket-family 0\n";
+    char output[512], domain[64]; struct oracle_record record;
+    int base_valid = facts.linux_build && facts.cloexec_available &&
+        facts.domain_max > 0 && facts.domain_max <= 65536L;
+    fixture_reset(); queue_instruction(instruction);
+    if (!base_valid) {
+        record=(struct oracle_record){"socket","unknown","incomplete",0,0,0,0,{0,0,0}};
+        expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","unknown",&record,1),0);
+    } else if (!facts.netlink_available || !facts.packet_available) {
+        (void)snprintf(domain,sizeof domain,"linux-build-af-v1/%ld",facts.domain_max);
+        record=(struct oracle_record){"socket","unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};
+        expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete",domain,&record,1),0);
+    } else {
+        int type=SOCK_STREAM|facts.cloexec;
+        struct fixture_step *s=queue_return(FX_SOCKET,-1,EPERM);
+        s->call.socket.family=0;s->call.socket.type=type;s->call.socket.protocol=0;
+        (void)snprintf(domain,sizeof domain,"linux-build-af-v1/%ld",facts.domain_max);
+        record=(struct oracle_record){"socket","ok","refused",1,1,EPERM,0,{0,(uint64_t)(unsigned)type,0}};
+        expect_output(output,oracle_line(output,sizeof output,instruction,"complete",domain,&record,1),0);
+    }
+    run_case("socket-actual-header-facts");
+}
+
+static void socket_outcome_cases(void)
+{
+    static const struct {const char *name,*outcome;int error_number;} cases[]={
+        {"socket-eafnosupport","unsupported",EAFNOSUPPORT},
+        {"socket-eprotonosupport","unsupported",EPROTONOSUPPORT},
+        {"socket-esocktnosupport","unsupported",ESOCKTNOSUPPORT},
+        {"socket-eopnotsupp","unsupported",EOPNOTSUPP},
+        {"socket-eacces","incomplete",EACCES},{"socket-erofs","incomplete",EROFS},
+        {"socket-einval","incomplete",EINVAL},{"socket-enosys","incomplete",ENOSYS},
+        {"socket-resource-error","incomplete",EMFILE}};
+    static const char instruction[]="YSPROBE1 socket-family 2\n";
+    size_t i; char output[512];
+    for(i=0;i<sizeof cases/sizeof cases[0];i++) {
+        struct oracle_record r={"socket","ok",cases[i].outcome,1,0,cases[i].error_number,0,
+            {2,(uint64_t)(unsigned)(SOCK_STREAM|TEST_CLOEXEC),0}};
+        struct fixture_step*s;fixture_reset();set_synthetic_socket_facts(8);queue_instruction(instruction);
+        s=queue_return(FX_SOCKET,-1,cases[i].error_number);s->call.socket.family=2;
+        s->call.socket.type=SOCK_STREAM|TEST_CLOEXEC;s->call.socket.protocol=0;
+        expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","linux-build-af-v1/8",&r,1),0);
+        run_case(cases[i].name);
+    }
+    for(i=0;i<2U;i++) {
+        struct oracle_record r={"socket","ok","violation",1,1,0,i==0?0:EIO,
+            {2,(uint64_t)(unsigned)(SOCK_STREAM|TEST_CLOEXEC),0}};
+        struct fixture_step*s;fixture_reset();set_synthetic_socket_facts(8);queue_instruction(instruction);
+        s=queue_return(FX_SOCKET,42,0);s->call.socket.family=2;
+        s->call.socket.type=SOCK_STREAM|TEST_CLOEXEC;s->call.socket.protocol=0;
+        queue_close(42,i==0?0:-1,i==0?0:EIO);
+        expect_output(output,oracle_line(output,sizeof output,instruction,i==0?"complete":"incomplete","linux-build-af-v1/8",&r,1),0);
+        run_case(i==0?"socket-success":"socket-success-close-error");
+    }
+}
+
+static void socket_prerequisite_case(const char *name,struct socket_facts facts,unsigned family,
+                                     const char *pre,const char *outcome,int error_number)
+{
+    char instruction[64],output[512],domain[64];struct oracle_record r;
+    fixture_reset();fixture_socket_override_value=facts;fixture_socket_override=&fixture_socket_override_value;
+    (void)snprintf(instruction,sizeof instruction,"YSPROBE1 socket-family %u\n",family);queue_instruction(instruction);
+    if(!facts.linux_build||!facts.cloexec_available||facts.domain_max<=0||facts.domain_max>65536L)
+        (void)snprintf(domain,sizeof domain,"unknown");
+    else (void)snprintf(domain,sizeof domain,"linux-build-af-v1/%ld",facts.domain_max);
+    r=(struct oracle_record){"socket",pre,outcome,0,0,error_number,0,{family,0,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete",domain,&r,1),0);run_case(name);
+}
+
+static void socket_prerequisite_cases(void)
+{
+    struct socket_facts f;unsigned family;
+    memset(&f,0,sizeof f);socket_prerequisite_case("socket-nonlinux-facts",f,0,"unknown","incomplete",0);
+    set_synthetic_socket_facts(8);f=fixture_socket_override_value;f.domain_max=0;
+    socket_prerequisite_case("socket-domain-zero",f,0,"unknown","incomplete",0);
+    f.domain_max=-1;socket_prerequisite_case("socket-domain-negative",f,0,"unknown","incomplete",0);
+    f.domain_max=65537;socket_prerequisite_case("socket-domain-too-large",f,0,"unknown","incomplete",0);
+    set_synthetic_socket_facts(8);f=fixture_socket_override_value;f.cloexec_available=0;
+    socket_prerequisite_case("socket-missing-cloexec",f,0,"unknown","incomplete",0);
+    set_synthetic_socket_facts(8);f=fixture_socket_override_value;f.usersock_available=0;
+    socket_prerequisite_case("socket-missing-netlink-protocol",f,3,"unknown","unsupported",ENOSYS);
+    set_synthetic_socket_facts(8);f=fixture_socket_override_value;
+    socket_prerequisite_case("socket-outside-bound",f,8,"unknown","incomplete",0);
+    for(family=8;family<12U;family++) {
+        char name[64];(void)snprintf(name,sizeof name,"socket-larger-kernel-tail-%u",family);
+        socket_prerequisite_case(name,f,family,"unknown","incomplete",0);
+    }
+}
+
+static void descriptor_case(const char *name, int leak3, int leak128, int error_fd)
+{
+    static const char instruction[] = "YSPROBE1 descriptors\n";
+    struct oracle_record records[5] = {
+        {"fd0","ok","success",1,1,0,0,{S_IFREG,O_RDONLY,0}},
+        {"fd1","ok","success",1,1,0,0,{S_IFREG,O_WRONLY,1}},
+        {"fd2","ok","success",1,1,0,0,{S_IFREG,O_WRONLY,1}},
+        {"fd-scan","ok","success",1,1,0,0,{3,1023,0}},
+        {"fd-leaks","ok",leak3 || leak128 ? "violation" : "success",1,1,0,0,
+            {(uint64_t)(leak3 + leak128), leak3 ? 3U : leak128 ? 128U : 0U,0}}
+    };
+    char output[1024]; int fd;
+    fixture_reset(); queue_instruction(instruction);
+    for (fd = 0; fd <= 2; fd++) {
+        queue_fstat(fd, S_IFREG | 0600, 0, 0);
+        queue_fcntl(fd, F_GETFL, fd == 0 ? O_RDONLY : O_WRONLY | O_APPEND, 0);
+    }
+    for (fd = FD_SCAN_FIRST; fd <= FD_SCAN_LAST; fd++) {
+        int open = (fd == 3 && leak3) || (fd == 128 && leak128);
+        if (fd == error_fd) {
+            queue_fcntl(fd, F_GETFD, -1, EIO);
+            records[3].completed = 0; records[3].outcome = "incomplete";
+            records[3].error_number = EIO; records[3].value[2] = (uint64_t)fd;
+            records[4].completed = 0; records[4].error_number = EIO;
+            if (!leak3 && !leak128) records[4].outcome = "incomplete";
+            break;
+        }
+        queue_fcntl(fd, F_GETFD, open ? 0 : -1, open ? 0 : EBADF);
+    }
+    expect_output(output, oracle_line(output, sizeof output, instruction, "incomplete", "none", records, 5U), 0);
+    run_case(name);
+}
+
+static void descriptor_cases(void)
+{
+    descriptor_case("descriptors-zero-leaks", 0, 0, 0);
+    descriptor_case("descriptors-fd3", 1, 0, 0);
+    descriptor_case("descriptors-fd128-softlimit-model", 0, 1, 0);
+    descriptor_case("descriptors-two-leaks", 1, 1, 0);
+    descriptor_case("descriptors-error-before-leak", 0, 0, 3);
+    descriptor_case("descriptors-error-after-leak", 1, 0, 77);
+}
+
+static void descriptor_metadata_case(const char *name, int target, mode_t mode,
+                                     int flags, int fstat_error, int fcntl_error)
+{
+    static const char instruction[]="YSPROBE1 descriptors\n"; struct oracle_record r[5];
+    char output[1024]; int fd, saved=fstat_error!=0?fstat_error:fcntl_error;
+    fixture_reset();queue_instruction(instruction);
+    for(fd=0;fd<=2;fd++) {
+        mode_t current=fd==target?mode:S_IFREG|0600;
+        int current_flags=fd==target?flags:(fd==0?O_RDONLY:O_WRONLY|O_APPEND);
+        if(fd==target&&fstat_error!=0) queue_fstat(fd,0,-1,fstat_error);
+        else {queue_fstat(fd,current,0,0); if(fd==target&&fcntl_error!=0) queue_fcntl(fd,F_GETFL,-1,fcntl_error); else queue_fcntl(fd,F_GETFL,current_flags,0);}
+        r[fd]=(struct oracle_record){fd==0?"fd0":fd==1?"fd1":"fd2","ok",
+            saved!=0&&fd==target?"incomplete":
+            (S_ISREG(current)&&((fd==0&&(current_flags&O_ACCMODE)==O_RDONLY)||
+             (fd!=0&&(current_flags&O_ACCMODE)==O_WRONLY&&(current_flags&O_APPEND)!=0)))?"success":"violation",
+            1,saved==0||fd!=target,saved!=0&&fd==target?saved:0,0,
+            {saved!=0&&fd==target?0U:(uint64_t)(current&S_IFMT),
+             saved!=0&&fd==target?0U:(uint64_t)(current_flags&O_ACCMODE),
+             saved!=0&&fd==target?0U:(uint64_t)((current_flags&O_APPEND)!=0)}};
+    }
+    for(fd=3;fd<=1023;fd++) queue_fcntl(fd,F_GETFD,-1,EBADF);
+    r[3]=(struct oracle_record){"fd-scan","ok","success",1,1,0,0,{3,1023,0}};
+    r[4]=(struct oracle_record){"fd-leaks","ok","success",1,1,0,0,{0,0,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,5),0);
+    run_case(name);
+}
+
+static void descriptor_metadata_cases(void)
+{
+    int fd; char name[64];
+    for(fd=0;fd<=2;fd++) {
+        (void)snprintf(name,sizeof name,"descriptor-fd%d-nonregular",fd);
+        descriptor_metadata_case(name,fd,S_IFDIR|0700,fd==0?O_RDONLY:O_WRONLY|O_APPEND,0,0);
+        (void)snprintf(name,sizeof name,"descriptor-fd%d-wrong-access",fd);
+        descriptor_metadata_case(name,fd,S_IFREG|0600,fd==0?O_WRONLY:O_RDONLY,0,0);
+        (void)snprintf(name,sizeof name,"descriptor-fd%d-missing",fd);
+        descriptor_metadata_case(name,fd,0,0,EBADF,0);
+        (void)snprintf(name,sizeof name,"descriptor-fd%d-fstat-error",fd);
+        descriptor_metadata_case(name,fd,0,0,EIO,0);
+        (void)snprintf(name,sizeof name,"descriptor-fd%d-fcntl-error",fd);
+        descriptor_metadata_case(name,fd,S_IFREG|0600,0,0,EIO);
+    }
+    descriptor_metadata_case("descriptor-fd1-no-append",1,S_IFREG|0600,O_WRONLY,0,0);
+    descriptor_metadata_case("descriptor-fd2-no-append",2,S_IFREG|0600,O_WRONLY,0,0);
+}
+
+static void environment_cases(void)
+{
+    static char *correct[] = {"LANG=C","LC_ALL=C","PATH=/sandbox/tools","TMPDIR=/sandbox/scratch",NULL};
+    static char *missing[] = {"LANG=C","LC_ALL=C","PATH=/sandbox/tools",NULL};
+    static char *extra[] = {"LANG=C","LC_ALL=C","PATH=/sandbox/tools","TMPDIR=/sandbox/scratch","X=1",NULL};
+    static char *duplicate[] = {"LANG=C","LC_ALL=C","PATH=/sandbox/tools","PATH=/sandbox/tools",NULL};
+    static char *wrong[] = {"LANG=C","LC_ALL=C","PATH=/bin","TMPDIR=/sandbox/scratch",NULL};
+    static char *order[] = {"LC_ALL=C","LANG=C","PATH=/sandbox/tools","TMPDIR=/sandbox/scratch",NULL};
+    static char **const arrays[] = {correct,missing,extra,duplicate,wrong,order};
+    static const char *const names[] = {"environment-control","environment-missing","environment-extra",
+        "environment-duplicate","environment-wrong","environment-order"};
+    static const char instruction[] = "YSPROBE1 environment\n";
+    size_t i; char output[512];
+    for (i = 0; i < sizeof arrays / sizeof arrays[0]; i++) {
+        uint64_t observed = i == 1U ? 3U : i == 2U ? 5U : 4U;
+        struct oracle_record r = {"environment","ok",i == 0U ? "success" : "violation",1,1,0,0,{observed,4,0}};
+        fixture_reset(); fixture_case_environment = arrays[i]; queue_instruction(instruction);
+        expect_output(output, oracle_line(output, sizeof output, instruction, "complete", "none", &r, 1U), 0);
+        run_case(names[i]);
+    }
+}
+
+static void pid_cases(void)
+{
+    static const struct { const char *name; pid_t pid, parent; int private_relationship; } cases[] = {
+        {"pid-private",1,0,1},{"pid-self",1,1,0},{"pid-orphan",7,1,0},
+        {"pid-visible",12,34,0},{"pid-unexpected",44,55,0}
+    };
+    static const char instruction[] = "YSPROBE1 signal-supervisor\n";
+    size_t i; char output[768];
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        struct oracle_record records[2] = {
+            {"relationship","ok",cases[i].private_relationship ? "success" : "incomplete",1,1,0,0,
+                {(uint64_t)cases[i].pid,(uint64_t)cases[i].parent,cases[i].private_relationship}},
+            {"supervisor-signal",cases[i].private_relationship ? "unknown" : "failed","incomplete",0,0,0,0,
+                {cases[i].private_relationship ? 1U : 2U,0,0}}
+        };
+        fixture_reset(); queue_instruction(instruction);
+        queue_return(FX_GETPID, cases[i].pid, 0); queue_return(FX_GETPPID, cases[i].parent, 0);
+        expect_output(output, oracle_line(output, sizeof output, instruction, "incomplete", "none", records, 2U), 0);
+        run_case(cases[i].name);
+    }
+}
+
+static void sentinel_case(const char *mode, const char *name, const char *path, const char *bytes,
+                          size_t expected_size, const char *read_outcome, int read_error, int close_error)
+{
+    char digest[65], path_hex[256], instruction[512], output[1024]; size_t i, length = strlen(bytes);
+    struct oracle_record records[2]; static const char digits[] = "0123456789abcdef";
+    digest_hex("fixture", 7U, digest);
+    for (i = 0; path[i] != '\0'; i++) { unsigned c = (unsigned char)path[i]; path_hex[i*2]=digits[c>>4]; path_hex[i*2+1]=digits[c&15]; }
+    path_hex[i*2] = '\0';
+    (void)snprintf(instruction, sizeof instruction, "YSPROBE1 %s %s %zu %s\n", mode, path_hex, expected_size, digest);
+    records[0] = (struct oracle_record){"open","ok","success",1,1,0,0,{S_IFREG,expected_size,0}};
+    records[1] = (struct oracle_record){"read","ok",read_outcome,1,read_error == 0,read_error,close_error,
+        {read_error == 0 ? length : 0U,expected_size,read_error == 0 && length == expected_size && memcmp(bytes,"fixture",7U)==0}};
+    fixture_reset(); queue_instruction(instruction); queue_open(path, O_RDONLY | O_CLOEXEC, 0, 41, 0);
+    queue_fstat(41, S_IFREG | 0600, 0, 0);
+    if (read_error == 0) { queue_read(41, expected_size + 1U, bytes, length); if (length < expected_size + 1U) queue_read(41, expected_size + 1U - length, NULL, 0); }
+    else queue_read_error(41, expected_size + 1U, read_error);
+    queue_close(41, close_error == 0 ? 0 : -1, close_error);
+    expect_output(output, oracle_line(output, sizeof output, instruction, close_error == 0 && read_error == 0 ? "complete" : "incomplete", "none", records, 2U), 0);
+    run_case(name);
+}
+
+static void sentinel_cases(void)
+{
+    sentinel_case("host-sentinel","sentinel-host-match","/quarantine/host","fixture",7,"success",0,0);
+    sentinel_case("sibling-sentinel","sentinel-sibling-match","/quarantine/sibling","fixture",7,"success",0,0);
+    sentinel_case("host-sentinel","sentinel-read-error","/quarantine/host","fixture",7,"incomplete",EIO,0);
+    sentinel_case("host-sentinel","sentinel-close-error","/quarantine/host","fixture",7,"success",0,EIO);
+    sentinel_case("host-sentinel","sentinel-host-short","/quarantine/host","fix",7,"violation",0,0);
+    sentinel_case("host-sentinel","sentinel-host-long","/quarantine/host","fixtureX",7,"violation",0,0);
+    sentinel_case("host-sentinel","sentinel-host-wrong-content","/quarantine/host","xxxxxxx",7,"violation",0,0);
+    sentinel_case("sibling-sentinel","sentinel-sibling-short","/quarantine/sibling","fix",7,"violation",0,0);
+    sentinel_case("sibling-sentinel","sentinel-sibling-long","/quarantine/sibling","fixtureX",7,"violation",0,0);
+    sentinel_case("sibling-sentinel","sentinel-sibling-wrong-content","/quarantine/sibling","xxxxxxx",7,"violation",0,0);
+}
+
+static void sentinel_prerequisite_case(const char *mode,const char *name,const char *path,
+                                       int open_error,int fstat_error,mode_t file_type,int close_error)
+{
+    char digest[65],path_hex[256],instruction[512],output[1024];size_t i;
+    struct oracle_record r[2];static const char digits[]="0123456789abcdef";
+    digest_hex("fixture",7,digest);
+    for(i=0;path[i]!='\0';i++){unsigned c=(unsigned char)path[i];path_hex[i*2]=digits[c>>4];path_hex[i*2+1]=digits[c&15];}
+    path_hex[i*2]='\0';(void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s %s 7 %s\n",mode,path_hex,digest);
+    fixture_reset();queue_instruction(instruction);queue_open(path,O_RDONLY|O_CLOEXEC,0,open_error?-1:41,open_error);
+    if(open_error!=0) {
+        r[0]=(struct oracle_record){"open","ok",open_error==ENOENT||open_error==ENOTDIR?"incomplete":
+            open_error==EPERM||open_error==EACCES||open_error==EROFS?"refused":"incomplete",1,1,open_error,0,{0,7,0}};
+        r[1]=(struct oracle_record){"read","failed","incomplete",0,0,0,0,{0,7,0}};
+    } else if(fstat_error!=0) {
+        queue_fstat(41,0,-1,fstat_error);queue_close(41,close_error?-1:0,close_error);
+        r[0]=(struct oracle_record){"open","ok","incomplete",1,0,fstat_error,close_error,{0,7,0}};
+        r[1]=(struct oracle_record){"read","failed","incomplete",0,0,0,0,{0,7,0}};
+    } else {
+        queue_fstat(41,file_type|0600,0,0);queue_close(41,close_error?-1:0,close_error);
+        r[0]=(struct oracle_record){"open","ok","violation",1,1,0,close_error,{(uint64_t)file_type,7,0}};
+        r[1]=(struct oracle_record){"read","failed","incomplete",0,0,0,0,{0,7,0}};
+    }
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,2),0);
+    run_case(name);
+}
+
+static void sentinel_prerequisite_cases(void)
+{
+    sentinel_prerequisite_case("host-sentinel","sentinel-host-absent","/quarantine/host",ENOENT,0,0,0);
+    sentinel_prerequisite_case("host-sentinel","sentinel-host-permission","/quarantine/host",EACCES,0,0,0);
+    sentinel_prerequisite_case("host-sentinel","sentinel-host-fstat-error","/quarantine/host",0,EIO,0,EBADF);
+    sentinel_prerequisite_case("host-sentinel","sentinel-host-wrong-type","/quarantine/host",0,0,S_IFDIR,0);
+    sentinel_prerequisite_case("sibling-sentinel","sentinel-sibling-absent","/quarantine/sibling",ENOENT,0,0,0);
+    sentinel_prerequisite_case("sibling-sentinel","sentinel-sibling-permission","/quarantine/sibling",EPERM,0,0,0);
+    sentinel_prerequisite_case("sibling-sentinel","sentinel-sibling-fstat-error","/quarantine/sibling",0,EIO,0,EBADF);
+    sentinel_prerequisite_case("sibling-sentinel","sentinel-sibling-wrong-type","/quarantine/sibling",0,0,S_IFDIR,0);
+}
+
+static void file_write_case(const char *name, const char *instruction, const char *path,
+                            const void *payload, size_t payload_length, int open_error,
+                            long write_return, int write_error, int close_error)
+{
+    char output[768]; const char *record_name = strstr(name, "cgroup") != NULL ? "cgroup-write" :
+        strstr(name, "forged-evidence") != NULL ? "forged-evidence" : "create";
+    int forbidden = strcmp(record_name, "cgroup-write") == 0 || strcmp(record_name, "create") == 0;
+    int completed = open_error != 0 ? (open_error == EPERM || open_error == EACCES || open_error == EROFS) :
+        write_return == (long)payload_length;
+    const char *outcome = open_error != 0 ? "refused" : forbidden || strcmp(record_name,"forged-evidence") == 0 ? "violation" : "success";
+    struct oracle_record r = {record_name,"ok",outcome,1,completed,
+        open_error != 0 ? open_error : write_return < 0 ? write_error : 0,close_error,
+        {write_return > 0 ? (uint64_t)write_return : 0,0,0}};
+    int flags = strcmp(record_name,"cgroup-write") == 0 ? O_WRONLY | O_CLOEXEC :
+        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC;
+    mode_t mode = strcmp(record_name,"cgroup-write") == 0 ? 0 : 0600;
+    fixture_reset(); queue_instruction(instruction);
+    queue_open(path, flags, mode, open_error == 0 ? 41 : -1, open_error);
+    if (open_error == 0) {
+        queue_write_exact(41,payload,payload_length,write_return,write_error);
+        queue_close(41,close_error == 0 ? 0 : -1,close_error);
+    }
+    expect_output(output,oracle_line(output,sizeof output,instruction,
+        completed && close_error == 0 ? "complete" : "incomplete","none",&r,1),0);
+    run_case(name);
+}
+
+static void file_write_cases(void)
+{
     static const char forged[] = "{\"kind\":\"sandbox_guest_report\",\"forged\":true}\n";
-    char socket_line[256]; int type = SOCK_STREAM | TEST_CLOEXEC;
+    file_write_case("candidate-write-refused","YSPROBE1 candidate-write\n","/sandbox/candidate/probe-write","x",1,EPERM,0,0,0);
+    file_write_case("candidate-write-success","YSPROBE1 candidate-write\n","/sandbox/candidate/probe-write","x",1,0,1,0,0);
+    file_write_case("candidate-write-zero","YSPROBE1 candidate-write\n","/sandbox/candidate/probe-write","x",1,0,0,0,0);
+    file_write_case("candidate-write-error","YSPROBE1 candidate-write\n","/sandbox/candidate/probe-write","x",1,0,-1,EIO,0);
+    file_write_case("candidate-write-close-error","YSPROBE1 candidate-write\n","/sandbox/candidate/probe-write","x",1,0,1,0,EBADF);
+    file_write_case("tools-write-refused","YSPROBE1 tools-write\n","/sandbox/tools/probe-write","x",1,EACCES,0,0,0);
+    file_write_case("tools-write-success","YSPROBE1 tools-write\n","/sandbox/tools/probe-write","x",1,0,1,0,0);
+    file_write_case("tools-write-short","YSPROBE1 tools-write\n","/sandbox/tools/probe-write","x",1,0,0,0,0);
+    file_write_case("tools-write-error","YSPROBE1 tools-write\n","/sandbox/tools/probe-write","x",1,0,-1,EIO,0);
+    file_write_case("tools-write-close-error","YSPROBE1 tools-write\n","/sandbox/tools/probe-write","x",1,0,1,0,EIO);
+    file_write_case("cgroup-write-refused","YSPROBE1 cgroup-escape\n","/sys/fs/cgroup/cgroup.procs","0\n",2,EACCES,0,0,0);
+    file_write_case("cgroup-write-success","YSPROBE1 cgroup-escape\n","/sys/fs/cgroup/cgroup.procs","0\n",2,0,2,0,0);
+    file_write_case("cgroup-write-short","YSPROBE1 cgroup-escape\n","/sys/fs/cgroup/cgroup.procs","0\n",2,0,1,0,0);
+    file_write_case("cgroup-write-error","YSPROBE1 cgroup-escape\n","/sys/fs/cgroup/cgroup.procs","0\n",2,0,-1,EIO,0);
+    file_write_case("cgroup-write-close-error","YSPROBE1 cgroup-escape\n","/sys/fs/cgroup/cgroup.procs","0\n",2,0,2,0,EIO);
+    file_write_case("forged-evidence-refused","YSPROBE1 forged-report-evidence\n","/sandbox/evidence/forged-report.json",
+                    forged,sizeof forged-1U,EROFS,0,0,0);
+    file_write_case("forged-evidence-full","YSPROBE1 forged-report-evidence\n","/sandbox/evidence/forged-report.json",
+                    forged,sizeof forged-1U,0,sizeof forged-1U,0,0);
+    file_write_case("forged-evidence-short","YSPROBE1 forged-report-evidence\n","/sandbox/evidence/forged-report.json",
+                    forged,sizeof forged-1U,0,7,0,0);
+    file_write_case("forged-evidence-error","YSPROBE1 forged-report-evidence\n","/sandbox/evidence/forged-report.json",
+                    forged,sizeof forged-1U,0,-1,EIO,0);
+    file_write_case("forged-evidence-close-error","YSPROBE1 forged-report-evidence\n","/sandbox/evidence/forged-report.json",
+                    forged,sizeof forged-1U,0,sizeof forged-1U,0,EIO);
+}
 
-    test_reset(TEST_DEFAULT); script_input(candidate_read);
-    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
-               "/sandbox/candidate/README.md", NULL);
-    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
-    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
-    script_output(candidate_read_line, (ssize_t)strlen(candidate_read_line), 0);
-    check(run_scripted_entry() == 0, "entry candidate readable control exact output and exit");
+static void queue_establish(const char *path, int fd, const void *bytes, size_t length)
+{
+    queue_open(path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,fd,0);
+    queue_write_exact(fd,bytes,length,(long)length,0); queue_close(fd,0,0);
+}
 
-    test_reset(TEST_DEFAULT);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, -1, EINTR, NULL, NULL);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, 8, 0, NULL, candidate_read);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP - 7U,
-               (ssize_t)strlen(candidate_read) - 8, 0, NULL, candidate_read + 8);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0,
-               INPUT_CAP + 1U - strlen(candidate_read), 0, 0, NULL, NULL);
-    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
-               "/sandbox/candidate/README.md", NULL);
-    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
-    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
-    script_output(candidate_read_line, (ssize_t)strlen(candidate_read_line), 0);
-    check(run_scripted_entry() == 0, "entry retries EINTR and binds chunked input exactly");
+static void evidence_case(const char *name, const char *mode, const char *path, int kind)
+{
+    char instruction[80],output[768]; struct oracle_record r;
+    (void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",mode);
+    r=(struct oracle_record){kind==0?"read":kind==1?"reopen":kind==2?"truncate":kind==3?"link":"rename",
+        "ok","refused",1,1,EPERM,0,{0,0,0}};
+    fixture_reset(); queue_instruction(instruction); queue_establish(path,40,"x",1);
+    if(kind==0||kind==1) queue_open(path,(kind==0?O_RDONLY:O_WRONLY)|O_CLOEXEC,0,-1,EPERM);
+    else if(kind==2){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=path;s->call.truncate.length=0;}
+    else {struct fixture_step*s=queue_return(kind==3?FX_LINK:FX_RENAME,-1,EPERM);s->call.paths.first=path;
+      s->call.paths.second=kind==3?"/sandbox/evidence/link-target":"/sandbox/evidence/rename-target";}
+    expect_output(output,oracle_line(output,sizeof output,instruction,"complete","none",&r,1),0);
+    run_case(name);
+}
 
-    test_reset(TEST_DEFAULT); script_input(candidate_write);
-    script_add(SCRIPT_OPEN, 0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600,
-               0, 0, -1, EPERM, "/sandbox/candidate/probe-write", NULL);
-    script_output(candidate_write_line, (ssize_t)strlen(candidate_write_line), 0);
-    check(run_scripted_entry() == 0, "entry completed refusal exact output and exit");
+static void evidence_cases(void)
+{
+    evidence_case("evidence-read-refused","evidence-read","/sandbox/evidence/read",0);
+    evidence_case("evidence-reopen-refused","evidence-reopen","/sandbox/evidence/reopen",1);
+    evidence_case("evidence-truncate-refused","evidence-truncate","/sandbox/evidence/truncate",2);
+    evidence_case("evidence-link-refused","evidence-link","/sandbox/evidence/link-source",3);
+    evidence_case("evidence-rename-refused","evidence-rename","/sandbox/evidence/rename-source",4);
+}
 
-    test_reset(TEST_DEFAULT);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, 3, 0, NULL, "bad");
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP - 2U, 0, 0, NULL, NULL);
-    script_output(input_error, (ssize_t)strlen(input_error), 0);
-    check(run_scripted_entry() == 64, "entry invalid input diagnostic and exit");
+static void evidence_setup_failure_case(const char *name,const char *mode,const char *record_name,
+                                        const char *path,int write_stage)
+{
+    char instruction[80],output[640];struct oracle_record r={record_name,"failed","incomplete",0,0,EIO,write_stage?EBADF:0,{0,0,0}};
+    (void)snprintf(instruction,sizeof instruction,"YSPROBE1 %s\n",mode);fixture_reset();queue_instruction(instruction);
+    queue_open(path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,write_stage?40:-1,write_stage?0:EIO);
+    if(write_stage){queue_write_exact(40,"x",1,-1,EIO);queue_close(40,-1,EBADF);}
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);run_case(name);
+}
 
-    test_reset(TEST_DEFAULT);
-    script_add(SCRIPT_READ, STDIN_FILENO, 0, 0, 0, INPUT_CAP + 1U, -1, EIO, NULL, NULL);
-    script_output(read_error, (ssize_t)strlen(read_error), 0);
-    check(run_scripted_entry() == 64, "entry read failure diagnostic and exit");
+static void evidence_setup_failure_cases(void)
+{
+    static const char *const modes[]={"evidence-read","evidence-reopen","evidence-truncate","evidence-link","evidence-rename"};
+    static const char *const records[]={"read","reopen","truncate","link","rename"};
+    static const char *const paths[]={"/sandbox/evidence/read","/sandbox/evidence/reopen","/sandbox/evidence/truncate","/sandbox/evidence/link-source","/sandbox/evidence/rename-source"};
+    size_t i;char name[80];for(i=0;i<5U;i++) {
+        (void)snprintf(name,sizeof name,"%s-setup-open-error",modes[i]);evidence_setup_failure_case(name,modes[i],records[i],paths[i],0);
+        (void)snprintf(name,sizeof name,"%s-setup-write-close-error",modes[i]);evidence_setup_failure_case(name,modes[i],records[i],paths[i],1);
+    }
+}
 
-    test_reset(TEST_DEFAULT); script_input(candidate_read);
-    script_add(SCRIPT_OPEN, 41, O_RDONLY | O_CLOEXEC, 0, 0, 0, 41, 0,
-               "/sandbox/candidate/README.md", NULL);
-    script_add(SCRIPT_READ, 41, 0, 0, 0, 1, 1, 0, NULL, "x");
-    script_add(SCRIPT_CLOSE, 41, 0, 0, 0, 0, 0, 0, NULL, NULL);
-    script_output(candidate_read_line, 17, 0);
-    script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, strlen(candidate_read_line) - 17U,
-               -1, EPIPE, NULL, candidate_read_line + 17U);
-    check(run_scripted_entry() == 74, "entry partial ordinary output returns 74 without fallback");
+static void evidence_list_cases(void)
+{
+    static const struct {const char*name,*outcome;int open_error,read_error,entry,close_error,completed;} cases[]={
+        {"evidence-list-open-refused","refused",EPERM,0,0,0,1},
+        {"evidence-list-entry","violation",0,0,1,0,1},
+        {"evidence-list-eof","violation",0,0,0,0,1},
+        {"evidence-list-read-error","incomplete",0,EIO,0,0,0},
+        {"evidence-list-close-error","violation",0,0,1,EIO,1},
+        {"evidence-list-primary-and-cleanup","incomplete",0,EIO,0,EBADF,0}};
+    static const char instruction[]="YSPROBE1 evidence-list\n";size_t i;char output[640];
+    for(i=0;i<sizeof cases/sizeof cases[0];i++) {
+        struct oracle_record r={"list","ok",cases[i].outcome,1,cases[i].completed,
+            cases[i].open_error!=0?cases[i].open_error:cases[i].read_error,cases[i].close_error,{0,0,0}};
+        struct fixture_step*s;fixture_reset();queue_instruction(instruction);
+        s=queue_return(FX_OPENDIR,cases[i].open_error?-1:1,cases[i].open_error);s->call.directory.path="/sandbox/evidence";s->call.directory.object=0;
+        if(cases[i].open_error==0) {
+            s=queue_return(FX_READDIR,cases[i].read_error?-1:0,cases[i].read_error);s->call.object.object=0;
+            s->directory_has_entry=cases[i].entry;
+            s=queue_return(FX_CLOSEDIR,cases[i].close_error?-1:0,cases[i].close_error);s->call.object.object=0;
+        }
+        expect_output(output,oracle_line(output,sizeof output,instruction,
+            cases[i].close_error||(!cases[i].completed)?"incomplete":"complete","none",&r,1),0);
+        run_case(cases[i].name);
+    }
+}
 
-    (void)snprintf(socket_line, sizeof socket_line,
-        "YSPROBE1 socket-family 34ada103210da1eabf0810cc76d503924a3afc53847cf41d1ca06c906cdd9bc5 complete linux-build-af-v1/8 1 socket:ok:1:1:refused:%d:0:2:%u:0\n",
-        EPERM, (unsigned)type);
-    test_reset(TEST_DEFAULT); script_input(socket_request);
-    script_add(SCRIPT_SOCKET, 2, type, 0, 0, 0, -1, EPERM, NULL, NULL);
-    script_output(socket_line, (ssize_t)strlen(socket_line), 0);
-    check(run_scripted_entry() == 0, "entry socket EPERM is a completed refusal");
+static void scratch_case_mmap_cleanup(void)
+{
+    static const char instruction[]="YSPROBE1 scratch-free\n";
+    static const unsigned char zero[4096]={0};
+    static const char *const paths[]={"/sandbox/scratch/probe-0","/sandbox/scratch/probe-1",
+        "/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
+    struct oracle_record r[7]; char output[2048]; size_t i;
+    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
+    for(i=0;i<7U;i++) r[i]=(struct oracle_record){names[i],"ok","refused",1,1,EPERM,0,{0,0,0}};
+    fixture_reset(); queue_instruction(instruction);
+    for(i=0;i<7U;i++) {
+        if(i==5U){struct fixture_step*s=queue_return(FX_MKDIR,0,0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
+          s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;}
+        if(i==6U){
+#if defined(__linux__) && defined(O_TMPFILE)
+          queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,EPERM);
+#else
+          r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};
+#endif
+          continue;
+        }
+#if !defined(__linux__)
+        if(i==1U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
+#endif
+#if !defined(MADV_REMOVE)
+        if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
+#endif
+        queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
+        queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
+        queue_close(20+(int)i,0,0);
+        if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,-1,EPERM);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,0,0);}
+        else if(i==1U){
+#if defined(__linux__)
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,31,0);s=queue_return(FX_FALLOCATE,-1,EPERM);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,0,0);
+#endif
+        } else if(i==2U){
+#if defined(MADV_REMOVE)
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);s=queue_return(FX_MMAP,-1,ENOMEM);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;queue_close(32,-1,EIO);
+          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,ENOMEM,EIO,{0,0,0}};
+#endif
+        } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=paths[i];s->call.truncate.length=0;}
+        else {struct fixture_step*s=queue_return(FX_UNLINK,-1,EPERM);s->call.path.path=paths[i];}
+    }
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,7),0);
+    run_case("scratch-mmap-enomem-close-eio");
+}
 
-    test_reset(TEST_DEFAULT); script_input(forged_request);
-    script_output(forged, (ssize_t)strlen(forged), 0);
-    check(run_scripted_entry() == 0, "entry forged stdout exact production payload");
+static void scratch_setup_failure_case(size_t target,const char *case_name)
+{
+    static const char instruction[]="YSPROBE1 scratch-free\n";
+    static const unsigned char zero[4096]={0};
+    static const char *const paths[]={"/sandbox/scratch/probe-0","/sandbox/scratch/probe-1",
+        "/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
+    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
+    struct oracle_record r[7];char output[2048];size_t i;
+    fixture_reset();queue_instruction(instruction);
+    for(i=0;i<7U;i++) {
+        r[i]=(struct oracle_record){names[i],"ok","refused",1,1,EPERM,0,{0,0,0}};
+#if !defined(__linux__)
+        if(i==1U||i==6U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
+#endif
+#if !defined(MADV_REMOVE)
+        if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
+#endif
+        if(i==5U) {
+            struct fixture_step*s=queue_return(FX_MKDIR,i==target?-1:0,i==target?EIO:0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
+            if(i==target){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}
+            s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;
+        }
+        if(i==6U) {
+#if defined(__linux__) && defined(O_TMPFILE)
+            queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,i==target?EIO:EPERM);
+            if(i==target)r[i]=(struct oracle_record){names[i],"ok","incomplete",1,0,EIO,0,{0,0,0}};
+#endif
+            continue;
+        }
+        if(i==target){queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,EIO);
+            r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}
+        queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
+        queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);queue_close(20+(int)i,0,0);
+        if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,-1,EPERM);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,0,0);}
+        else if(i==1U){
+#if defined(__linux__)
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,31,0);s=queue_return(FX_FALLOCATE,-1,EPERM);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,0,0);
+#endif
+        } else if(i==2U){
+#if defined(MADV_REMOVE)
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
+          s=queue_return(FX_MADVISE,-1,EPERM);s->call.madvise.object=0;s->call.madvise.length=4096;s->call.madvise.advice=MADV_REMOVE;
+          s=queue_return(FX_MUNMAP,0,0);s->call.munmap.object=0;s->call.munmap.length=4096;queue_close(32,0,0);
+#endif
+        } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=paths[i];s->call.truncate.length=0;}
+        else {struct fixture_step*s=queue_return(FX_UNLINK,-1,EPERM);s->call.path.path=paths[i];}
+    }
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",r,7),0);run_case(case_name);
+}
 
-    test_reset(TEST_DEFAULT); memset(test_allocation, 'x', sizeof test_allocation);
-    script_input(overflow_request);
-    script_add(SCRIPT_MALLOC, 0, 0, 0, 0, BLOCK_SIZE, 1, 0, NULL, NULL);
-    for (type = 0; type < 12; type++)
-        script_add(SCRIPT_WRITE, STDOUT_FILENO, 0, 0, 0, BLOCK_SIZE, BLOCK_SIZE,
-                   0, NULL, test_allocation);
-    script_add(SCRIPT_FREE, 0, 0, 0, 0, 0, 0, 0, NULL, NULL);
-    check(run_scripted_entry() == 0, "entry output overflow emits exact 12MiB x payload and exits");
+static void scratch_setup_failure_cases(void)
+{
+    scratch_setup_failure_case(0,"scratch-ftruncate-create-failure");
+#if defined(__linux__)
+    scratch_setup_failure_case(1,"scratch-fallocate-create-failure");
+#endif
+    scratch_setup_failure_case(2,"scratch-madv-remove-create-failure");
+    scratch_setup_failure_case(3,"scratch-path-truncate-create-failure");
+    scratch_setup_failure_case(4,"scratch-unlink-create-failure");
+    scratch_setup_failure_case(5,"scratch-rmdir-mkdir-failure");
+#if defined(__linux__) && defined(O_TMPFILE)
+    scratch_setup_failure_case(6,"scratch-tmpfile-open-error");
+#endif
+}
+
+static void raw_output_cases(void)
+{
+    static const char overflow[] = "YSPROBE1 output-overflow\n";
+    static const char forged_request[] = "YSPROBE1 forged-report-stdout\n";
+    static const unsigned char forged[] = "{\"kind\":\"sandbox_guest_report\",\"forged\":true}\n";
+    size_t i;
+    fixture_reset(); queue_instruction(overflow);
+    { struct fixture_step *s = queue_return(FX_MALLOC, 1, 0); s->call.allocation.size = BLOCK_SIZE; s->call.allocation.object = 0; }
+    for (i = 0; i < 12U; i++) queue_write_repeat(STDOUT_FILENO, 'x', BLOCK_SIZE, BLOCK_SIZE, 0);
+    { struct fixture_step *s = queue_return(FX_FREE, 0, 0); s->call.object.object = 0; }
+    fixture_expected_stdout_total = OUTPUT_ATTEMPT; fixture_expected_return = 0;
+    run_case("overflow-full-12mib");
+
+    fixture_reset(); queue_instruction(overflow);
+    { struct fixture_step *s = queue_return(FX_MALLOC, 1, 0); s->call.allocation.size = BLOCK_SIZE; s->call.allocation.object = 0; }
+    queue_write_repeat(STDOUT_FILENO, 'x', BLOCK_SIZE, 17, 0);
+    { struct fixture_step *s = fixture_push(FX_WRITE); s->flow = FX_STOP; s->call.io.fd = STDOUT_FILENO;
+      s->call.io.length = BLOCK_SIZE; s->call.io.kind = FX_BYTES_REPEAT; s->call.io.byte = 'x'; }
+    fixture_expected_stdout_total = 17U; fixture_expected_escape = 2;
+    run_case("overflow-abrupt-prefix-stop");
+
+    fixture_reset(); queue_instruction(forged_request);
+    expect_output(forged, sizeof forged - 1U, 0); run_case("forged-stdout-full");
+
+    fixture_reset(); queue_instruction(forged_request);
+    queue_write_exact(STDOUT_FILENO, forged, sizeof forged - 1U, 7, 0);
+    queue_write_exact(STDOUT_FILENO, forged + 7U, sizeof forged - 8U, -1, EPIPE);
+    fixture_expected_output = forged; fixture_expected_output_length = 7U;
+    fixture_expected_stdout_total = 7U; fixture_expected_return = 73;
+    run_case("forged-stdout-prefix-error");
+
+    fixture_reset();queue_instruction(overflow);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,17,0);
+    for(i=0;i<11U;i++) queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,BLOCK_SIZE,0);
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE-17U,BLOCK_SIZE-17U,0);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}
+    fixture_expected_stdout_total=OUTPUT_ATTEMPT;run_case("overflow-short-then-full");
+
+    fixture_reset();queue_instruction(overflow);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,-1,EINTR);
+    for(i=0;i<12U;i++) queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,BLOCK_SIZE,0);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}
+    fixture_expected_stdout_total=OUTPUT_ATTEMPT;run_case("overflow-eintr-retry");
+
+    fixture_reset();queue_instruction(overflow);
+    {struct fixture_step*s=queue_return(FX_MALLOC,-1,ENOMEM);s->call.allocation.size=BLOCK_SIZE;}
+    fixture_expected_return=73;run_case("overflow-allocation-failure");
+
+    fixture_reset();queue_instruction(overflow);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,0,0);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}
+    fixture_expected_return=73;run_case("overflow-zero-write");
+
+    fixture_reset();queue_instruction(overflow);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,17,0);
+    queue_write_repeat(STDOUT_FILENO,'x',BLOCK_SIZE,-1,EIO);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}
+    fixture_expected_stdout_total=17U;fixture_expected_return=73;run_case("overflow-prefix-error");
+
+    fixture_reset();queue_instruction(forged_request);
+    queue_write_exact(STDOUT_FILENO,forged,sizeof forged-1U,-1,EINTR);
+    expect_output(forged,sizeof forged-1U,0);run_case("forged-stdout-eintr-retry");
+
+    fixture_reset();queue_instruction(forged_request);
+    queue_write_exact(STDOUT_FILENO,forged,sizeof forged-1U,0,0);
+    fixture_expected_return=73;run_case("forged-stdout-zero-write");
+}
+
+static void scratch_fill_cases(void)
+{
+    static const char instruction[]="YSPROBE1 scratch-fill\n";char output[640];size_t i;
+    struct oracle_record r;
+    fixture_reset();queue_instruction(instruction);queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,EPERM);
+    r=(struct oracle_record){"fill","failed","incomplete",0,0,EPERM,0,{0,32U*BLOCK_SIZE,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);run_case("scratch-fill-open-refused");
+
+    fixture_reset();queue_instruction(instruction);queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,41,0);
+    {struct fixture_step*s=queue_return(FX_MALLOC,-1,ENOMEM);s->call.allocation.size=BLOCK_SIZE;}queue_close(41,-1,EIO);
+    r=(struct oracle_record){"fill","failed","incomplete",0,0,ENOMEM,EIO,{0,32U*BLOCK_SIZE,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);run_case("scratch-fill-allocation-and-close-error");
+
+    fixture_reset();queue_instruction(instruction);queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,41,0);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    for(i=0;i<32U;i++)queue_write_repeat(41,'x',BLOCK_SIZE,BLOCK_SIZE,0);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}queue_close(41,0,0);
+    r=(struct oracle_record){"fill","ok","success",1,1,0,0,{32U*BLOCK_SIZE,32U*BLOCK_SIZE,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"complete","none",&r,1),0);run_case("scratch-fill-full-32mib");
+
+    fixture_reset();queue_instruction(instruction);queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,41,0);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;}
+    queue_write_repeat(41,'x',BLOCK_SIZE,17,0);queue_write_repeat(41,'x',BLOCK_SIZE,-1,EIO);
+    {struct fixture_step*s=queue_return(FX_FREE,0,0);s->call.object.object=0;}queue_close(41,-1,EBADF);
+    r=(struct oracle_record){"fill","ok","incomplete",1,0,EIO,EBADF,{17,32U*BLOCK_SIZE,0}};
+    expect_output(output,oracle_line(output,sizeof output,instruction,"incomplete","none",&r,1),0);run_case("scratch-fill-prefix-error-and-cleanup");
+
+    fixture_reset();queue_instruction(instruction);queue_open("/sandbox/scratch/fill",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600,41,0);
+    {struct fixture_step*s=queue_return(FX_MALLOC,1,0);s->call.allocation.size=BLOCK_SIZE;s->call.allocation.object=0;
+     s=fixture_push(FX_WRITE);s->flow=FX_STOP;s->call.io.fd=41;s->call.io.length=BLOCK_SIZE;s->call.io.kind=FX_BYTES_REPEAT;s->call.io.byte='x';}
+    fixture_expected_escape=2;run_case("scratch-fill-stop-before-result");
+}
+
+static void resource_cases(void)
+{
+    char output[768];
+    static const char fork_instruction[] = "YSPROBE1 fork-bomb\n";
+    static const char thread_instruction[] = "YSPROBE1 thread-bomb\n";
+    static const char memory_instruction[] = "YSPROBE1 memory-exhaustion\n";
+    static const char sleep_instruction[] = "YSPROBE1 sleep\n";
+    struct oracle_record record;
+
+    fixture_reset(); queue_instruction(fork_instruction);
+    queue_return(FX_FORK, 101, 0); queue_return(FX_FORK, 102, 0); queue_return(FX_FORK, -1, EAGAIN);
+    record=(struct oracle_record){"fork","ok","incomplete",1,0,EAGAIN,0,{2,0,0}};
+    expect_output(output, oracle_line(output,sizeof output,fork_instruction,"incomplete","none",&record,1),0);
+    run_case("fork-partial-return");
+
+    fixture_reset(); queue_instruction(thread_instruction);
+    { pthread_t one=(pthread_t)11, two=(pthread_t)22; struct fixture_step *s;
+      s=queue_return(FX_PTHREAD_CREATE,0,0); s->call.thread.entry=paused_thread; s->call.thread.argument=NULL; s->call.thread.token=one;
+      s=queue_return(FX_PTHREAD_DETACH,0,0); s->call.detach.token=one;
+      s=queue_return(FX_PTHREAD_CREATE,0,0); s->call.thread.entry=paused_thread; s->call.thread.argument=NULL; s->call.thread.token=two;
+      s=queue_return(FX_PTHREAD_DETACH,0,0); s->call.detach.token=two;
+      s=queue_return(FX_PTHREAD_CREATE,EAGAIN,0); s->call.thread.entry=paused_thread; s->call.thread.argument=NULL; }
+    record=(struct oracle_record){"thread","ok","incomplete",1,0,EAGAIN,0,{2,0,0}};
+    expect_output(output, oracle_line(output,sizeof output,thread_instruction,"incomplete","none",&record,1),0);
+    run_case("thread-partial-initialized-tokens");
+
+    fixture_reset(); queue_instruction(memory_instruction);
+    { struct fixture_step *s=queue_return(FX_MALLOC,1,0); s->call.allocation.size=BLOCK_SIZE; s->call.allocation.object=0;
+      s=queue_return(FX_MALLOC,1,0); s->call.allocation.size=BLOCK_SIZE; s->call.allocation.object=1;
+      s=queue_return(FX_MALLOC,-1,ENOMEM); s->call.allocation.size=BLOCK_SIZE; }
+    record=(struct oracle_record){"memory","ok","incomplete",1,0,ENOMEM,0,{2U*BLOCK_SIZE,0,0}};
+    expect_output(output, oracle_line(output,sizeof output,memory_instruction,"incomplete","none",&record,1),0);
+    run_case("memory-distinct-blocks-partial");
+
+    fixture_reset(); queue_instruction(sleep_instruction);
+    { struct fixture_step *s=queue_return(FX_SLEEP,20,0); s->call.sleep.seconds=60;
+      s=queue_return(FX_SLEEP,0,0); s->call.sleep.seconds=20; }
+    record=(struct oracle_record){"sleep","ok","success",1,1,0,0,{60,0,0}};
+    expect_output(output, oracle_line(output,sizeof output,sleep_instruction,"incomplete","none",&record,1),0);
+    run_case("sleep-remainder-loop");
+
+    fixture_reset(); queue_instruction(thread_instruction);
+    { struct fixture_step *s=queue_return(FX_PTHREAD_CREATE,0,0); s->call.thread.entry=paused_thread;
+      s->call.thread.argument=NULL; s->call.thread.token=(pthread_t)33; s->call.thread.dispatch=1;
+      s=queue_return(FX_PAUSE,-1,EINTR); s=fixture_push(FX_LOOP); s->call.loop.site=1U;
+      s=fixture_push(FX_PAUSE); s->flow=FX_STOP; }
+    fixture_expected_escape=2; run_case("thread-dispatch-real-paused-worker-stop");
+
+    fixture_reset();queue_instruction(fork_instruction);queue_return(FX_FORK,-1,EAGAIN);
+    record=(struct oracle_record){"fork","ok","incomplete",1,0,EAGAIN,0,{0,0,0}};
+    expect_output(output,oracle_line(output,sizeof output,fork_instruction,"incomplete","none",&record,1),0);
+    run_case("fork-failure-before-worker");
+
+    fixture_reset();queue_instruction(fork_instruction);queue_return(FX_FORK,0,0);
+    {struct fixture_step*s=fixture_push(FX_PAUSE);s->flow=FX_STOP;}
+    fixture_expected_escape=2;run_case("fork-child-real-pause-stop");
+
+    fixture_reset();queue_instruction(thread_instruction);
+    {struct fixture_step*s=queue_return(FX_PTHREAD_CREATE,EAGAIN,0);s->call.thread.entry=paused_thread;s->call.thread.argument=NULL;}
+    record=(struct oracle_record){"thread","ok","incomplete",1,0,EAGAIN,0,{0,0,0}};
+    expect_output(output,oracle_line(output,sizeof output,thread_instruction,"incomplete","none",&record,1),0);
+    run_case("thread-failure-before-worker");
+
+    fixture_reset();queue_instruction("YSPROBE1 cpu-spin-32\n");
+    {size_t i;for(i=0;i<31U;i++){struct fixture_step*s=queue_return(FX_PTHREAD_CREATE,0,0);
+      s->call.thread.entry=spinning_thread;s->call.thread.argument=(void*)(uintptr_t)i;s->call.thread.token=(pthread_t)(i+1U);}
+     {struct fixture_step*s=fixture_push(FX_LOOP);s->flow=FX_STOP;s->call.loop.site=2U;s->call.loop.argument=31U;s->call.loop.iteration=0;}}
+    fixture_expected_escape=2;run_case("cpu-full-31-plus-main-worker-stop");
+
+    fixture_reset();queue_instruction("YSPROBE1 cpu-spin-32\n");
+    {struct fixture_step*s=queue_return(FX_PTHREAD_CREATE,0,0);s->call.thread.entry=spinning_thread;
+      s->call.thread.argument=NULL;s->call.thread.token=(pthread_t)1;s->call.thread.dispatch=1;
+      s=fixture_push(FX_LOOP);s->flow=FX_STOP;s->call.loop.site=2U;s->call.loop.argument=0;s->call.loop.iteration=0;}
+    fixture_expected_escape=2;run_case("cpu-dispatch-real-spinning-worker-stop");
+
+    fixture_reset();queue_instruction(memory_instruction);
+    {struct fixture_step*s=queue_return(FX_MALLOC,-1,ENOMEM);s->call.allocation.size=BLOCK_SIZE;}
+    record=(struct oracle_record){"memory","ok","incomplete",1,0,ENOMEM,0,{0,0,0}};
+    expect_output(output,oracle_line(output,sizeof output,memory_instruction,"incomplete","none",&record,1),0);
+    run_case("memory-first-allocation-failure");
+
+    fixture_reset();queue_instruction(sleep_instruction);
+    {struct fixture_step*s=fixture_push(FX_SLEEP);s->flow=FX_STOP;s->call.sleep.seconds=60;}
+    fixture_expected_escape=2;run_case("sleep-before-completion-stop");
 }
 
 int main(void)
 {
-    parser_tests(); parser_action_boundary_tests(); result_tests();
-    file_action_tests(); sentinel_tests(); descriptor_tests();
-    signal_tests(); environment_tests();
-    evidence_tests(); scratch_tests(); socket_tests(); output_tests(); bounded_resource_tests();
-    every_action_fixture();
-    entry_tests();
-    if (failures == -1) return probe_main();
-    if (failures != 0) return 1;
-    puts("probe production parser/action/result fixture: ok"); return 0;
+    (void)fixture_kill;
+#if !defined(MADV_REMOVE)
+    (void)fixture_mmap; (void)fixture_madvise; (void)fixture_munmap;
+#endif
+    self_controls(); parser_cases(); candidate_cases(); result_emission_cases(); socket_cases(); socket_outcome_cases(); socket_prerequisite_cases(); actual_socket_facts_case();
+    descriptor_cases(); descriptor_metadata_cases(); environment_cases(); pid_cases(); sentinel_cases(); sentinel_prerequisite_cases();
+    file_write_cases(); evidence_cases(); evidence_setup_failure_cases(); evidence_list_cases(); scratch_case_mmap_cleanup(); scratch_setup_failure_cases();
+    raw_output_cases(); scratch_fill_cases(); resource_cases();
+    if (fixture_failures != 0) return 1;
+    (void)puts("probe production entry matrix: ok"); return 0;
 }
 #else
 int main(void) { return probe_main(); }

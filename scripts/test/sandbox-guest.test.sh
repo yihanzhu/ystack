@@ -898,26 +898,40 @@ pass 'compile rejects a symlinked mandatory probe source before compiler invocat
 # The private test build uses the production parser, action dispatcher and result
 # model. Its compile-time low-level fixture never runs pressure, socket, signal,
 # privileged, or host/sibling-sentinel operations on this development host.
-/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST -I"$guest_dir" \
-  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-test"
-probe_result=$("$tmp/probe-production-test") || fail 'the probe production-path fixture failed'
-[ "$probe_result" = 'probe production parser/action/result fixture: ok' ] ||
-  fail "unexpected probe production-path fixture output: $probe_result"
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
+  -DYSTACK_TEST_ENABLE_MADV_REMOVE -I"$guest_dir" -c "$guest_dir/probe.c" \
+  -o "$tmp/probe-production-test.o"
+/usr/bin/nm -u "$tmp/probe-production-test.o" | /usr/bin/awk '{print $NF}' | \
+  /usr/bin/sed 's/^_//' > "$tmp/probe-undefined-symbols"
+for forbidden_symbol in open close read write fstat fcntl truncate ftruncate fallocate \
+  link rename mkdir rmdir unlink opendir readdir closedir socket getpid getppid kill \
+  unshare malloc free mmap madvise munmap fork pthread_create pthread_detach sleep pause; do
+  ! /usr/bin/grep -Fx "$forbidden_symbol" "$tmp/probe-undefined-symbols" >/dev/null ||
+    fail "private probe object retained forbidden host symbol: $forbidden_symbol"
+done
+/usr/bin/cc "$tmp/probe-production-test.o" "$guest_dir/common.c" -o "$tmp/probe-production-test"
+"$tmp/probe-production-test" > "$tmp/probe-production-test.out" ||
+  fail 'the probe production-path fixture failed'
+/bin/cat "$tmp/probe-production-test.out"
+[ "$(/usr/bin/tail -n 1 "$tmp/probe-production-test.out")" = 'probe production entry matrix: ok' ] ||
+  fail 'the probe production-path fixture did not report matrix completion'
 pass 'the bounded probe fixture exercises the closed YSPROBE1 parser, request binding, action/result classification, cleanup preservation and signal target selection without native probe actions'
 
-/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
-  -DYSTACK_TEST_NO_SOCKET_CONSTANTS -I"$guest_dir" \
-  "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-missing-socket-facts-test"
-missing_facts_result=$("$tmp/probe-missing-socket-facts-test") ||
-  fail 'the probe fallback build without Linux socket constants failed'
-[ "$missing_facts_result" = 'probe production parser/action/result fixture: ok' ] ||
-  fail "unexpected missing-socket-facts fixture output: $missing_facts_result"
-pass 'the private socket-facts fallback compiles and runs with Linux header constants unavailable'
+for socket_variant in NO_SOCKET_CONSTANTS MASK_NETLINK MASK_PACKET; do
+  /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -DYSTACK_PROBE_TEST \
+    -DYSTACK_TEST_ENABLE_MADV_REMOVE "-DYSTACK_TEST_$socket_variant" -I"$guest_dir" \
+    "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-$socket_variant-test"
+  "$tmp/probe-$socket_variant-test" > "$tmp/probe-$socket_variant.out" ||
+    fail "the probe socket-header variant $socket_variant failed"
+  /usr/bin/grep -Fx 'case socket-actual-header-facts: ok' "$tmp/probe-$socket_variant.out" >/dev/null ||
+    fail "socket-header variant $socket_variant did not exercise actual facts"
+done
+pass 'private socket-header variants execute the actual-facts entry case with all constants, no facts, missing NETLINK and missing PACKET identity'
 
 # Sanitizers exercise the same bounded private fixture where the host compiler
 # supports them. This remains substituted host proof, never native qualification.
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
-  -fsanitize=address,undefined -DYSTACK_PROBE_TEST -I"$guest_dir" \
+  -fsanitize=address,undefined -DYSTACK_PROBE_TEST -DYSTACK_TEST_ENABLE_MADV_REMOVE -I"$guest_dir" \
   "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-production-sanitized"
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
