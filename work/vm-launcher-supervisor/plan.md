@@ -788,7 +788,7 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
-| 7 | `review_size: accepted-exception` | 1,600-2,400 | truthful probe actions, bounded production-path proof and mandatory build input |
+| 7 | `review_size: accepted-exception` | 1,600-3,200 | truthful probe actions, bounded production-path proof and mandatory build input |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
 | This plan amendment | `review_size: standard` | under 400 | truthful probe evidence within the existing containment design |
@@ -829,9 +829,10 @@ including sanitizer and negative controls. Remove redundant narration without
 compressing code or trimming tests. A PR outside its range, or PR 9 past 400, stops
 and returns to this plan gate, never split ad hoc. PR 7 needs the production parser,
 per-subcheck result records, independent action prerequisites and cleanup, plus
-scripted low-level fixtures that execute those same branches. Its range budgets
-readable C action tests and shell/build integration, including missing-source proof;
-a mode-dispatch test or compressed code cannot replace that work.
+a closed low-level test boundary. Its range budgets readable paired entry tests for
+prerequisites, actions, cleanup and output, with exact call and result checks, plus
+shell/build integration and missing-source proof. A mode-dispatch test or compressed
+code cannot replace that work.
 
 ## Risks
 
