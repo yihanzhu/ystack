@@ -788,10 +788,10 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 4 | `review_size: accepted-exception` | 600-1,500 | phase B admission and its binding matrix |
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
-| 7 | `review_size: accepted-exception` | 4,000-5,500 | truthful probe actions, bounded production-path proof and mandatory build input |
+| 7 | `review_size: accepted-exception` | 4,000-5,900 | truthful probe actions, bounded production-path proof and mandatory build input |
 | 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
-| This plan amendment | `review_size: standard` | under 400 | review-size floor for the existing PR 7 probe scope |
+| This plan amendment | `review_size: standard` | under 400 | review-size ceiling for the existing PR 7 probe scope |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
