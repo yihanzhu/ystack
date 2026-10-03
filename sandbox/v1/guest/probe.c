@@ -3525,114 +3525,20 @@ static void evidence_list_cases(void)
     }
 }
 
-static void scratch_setup_case(size_t target, int stage, int primary,
-                               int close_error, const char *case_name)
-{
-    static const char instruction[]="YSPROBE1 scratch-free\n";
-    static const unsigned char zero[4096]={0};
-    static const char *const paths[]={"/sandbox/scratch/probe-0","/sandbox/scratch/probe-1",
-        "/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
-    struct oracle_record r[7]; char output[2048]; size_t i;
-    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    fixture_reset();queue_instruction(instruction);
-    for(i=0;i<7U;i++) {
-        r[i]=(struct oracle_record){names[i],"ok","refused",1,1,EPERM,0,{0,0,0}};
-#if !defined(__linux__)
-        if(i==1U||i==6U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
-#endif
-#if !defined(MADV_REMOVE)
-        if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
-#endif
-        if(i==5U){struct fixture_step*s=queue_return(FX_MKDIR,i==target&&stage==8?-1:0,i==target&&stage==8?primary:0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
-          if(i==target&&stage==8){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
-          s=queue_return(FX_RMDIR,-1,EPERM);s->call.path.path="/sandbox/scratch/probe-5";continue;}
-        if(i==6U){
-#if defined(__linux__) && defined(O_TMPFILE)
-          queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,-1,EPERM);
-#endif
-          continue;
-        }
-        if(i==target&&stage==0){queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,primary);
-          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
-        queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-        if(i==target&&stage==1)queue_write_exact(20+(int)i,zero,sizeof zero,0,0);
-        else if(i==target&&stage==2)queue_write_exact(20+(int)i,zero,sizeof zero,-1,primary);
-        else if(i==target&&stage==4){queue_write_exact(20+(int)i,zero,sizeof zero,17,0);queue_write_exact(20+(int)i,zero+17,sizeof zero-17U,(long)(sizeof zero-17U),0);}
-        else if(i==target&&stage==5){queue_write_exact(20+(int)i,zero,sizeof zero,-1,EINTR);queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);}
-        else queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
-        queue_close(20+(int)i,i==target&&close_error?-1:0,i==target?close_error:0);
-        if(i==target&&(stage==1||stage==2||close_error)){
-          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,stage==1||stage==2?EIO:0,close_error,{0,0,0}};continue;}
-        if(i==target&&stage==6){queue_open(paths[i],O_RDWR|O_CLOEXEC,0,-1,primary);
-          r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,primary,0,{0,0,0}};continue;}
-        if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,-1,EPERM);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,0,0);}
-        else if(i==1U){
-#if defined(__linux__)
-          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,31,0);s=queue_return(FX_FALLOCATE,-1,EPERM);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,0,0);
-#endif
-        } else if(i==2U){
-#if defined(MADV_REMOVE)
-          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);
-          if(i==target&&stage==7){s=queue_return(FX_MMAP,-1,ENOMEM);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;queue_close(32,close_error?-1:0,close_error);r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,ENOMEM,close_error,{0,0,0}};continue;}
-          s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
-          s=queue_return(FX_MADVISE,-1,EPERM);s->call.madvise.object=0;s->call.madvise.length=4096;s->call.madvise.advice=MADV_REMOVE;s=queue_return(FX_MUNMAP,0,0);s->call.munmap.object=0;s->call.munmap.length=4096;queue_close(32,0,0);
-#endif
-        } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,-1,EPERM);s->call.truncate.path=paths[i];s->call.truncate.length=0;}
-        else {struct fixture_step*s=queue_return(FX_UNLINK,-1,EPERM);s->call.path.path=paths[i];}
-    }
-    expect_output(output,oracle_line(output,sizeof output,instruction,
-#if defined(__linux__) && defined(O_TMPFILE) && defined(MADV_REMOVE)
-      (stage==3||stage==4||stage==5)&&close_error==0?"complete":"incomplete",
-#else
-      "incomplete",
-#endif
-      "none",r,7),0);
-    run_case(case_name);
-}
-
-static void scratch_setup_failure_cases(void)
-{
-    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    static const char *const kinds[]={"zero","error","full","short","eintr"};
-    size_t i,k;char name[96];
-    for(i=0;i<5U;i++){
-#if !defined(__linux__)
-      if(i==1U)continue;
-#endif
-      (void)snprintf(name,sizeof name,"SS-%s-open-EIO",names[i]);scratch_setup_case(i,0,EIO,0,name);
-      (void)snprintf(name,sizeof name,"SS-%s-open-EPERM",names[i]);scratch_setup_case(i,0,EPERM,0,name);
-      for(k=0;k<5U;k++){
-        int stage=(int)k+1;
-        (void)snprintf(name,sizeof name,"SS-%s-%s-close-0",names[i],kinds[k]);scratch_setup_case(i,stage,EIO,0,name);
-        (void)snprintf(name,sizeof name,"SS-%s-%s-close-%s",names[i],kinds[k],k<2U?"EBADF":"EIO");scratch_setup_case(i,stage,EIO,k<2U?EBADF:EIO,name);
-      }
-      if(i<3U){(void)snprintf(name,sizeof name,"SS-%s-reopen-EIO",names[i]);scratch_setup_case(i,6,EIO,0,name);
-        (void)snprintf(name,sizeof name,"SS-%s-reopen-EPERM",names[i]);scratch_setup_case(i,6,EPERM,0,name);}
-    }
-    scratch_setup_case(2U,7,ENOMEM,0,"SS-madv-remove-mmap-close-0");
-    scratch_setup_case(2U,7,ENOMEM,EBADF,"SS-madv-remove-mmap-close-EBADF");
-    scratch_setup_case(5U,8,EIO,0,"SS-rmdir-mkdir-EIO");
-    scratch_setup_case(5U,8,EPERM,0,"SS-rmdir-mkdir-EPERM");
-}
-
-static void scratch_scenario_case(size_t target,int action_error,int cleanup_error,
-                                  int setup_kind,const char *case_name);
-
-static void scratch_scenario_case(size_t target,int action_error,int cleanup_error,
-                                  int setup_kind,const char *case_name)
+static void scratch_scenario_case(size_t target, int setup_stage,
+                                  int setup_primary, int setup_close,
+                                  int action_error, int action_cleanup,
+                                  const char *case_name)
 {
     static const char instruction[]="YSPROBE1 scratch-free\n";
     static const unsigned char zero[4096]={0};
     static const char *const paths[]={"/sandbox/scratch/probe-0","/sandbox/scratch/probe-1","/sandbox/scratch/probe-2","/sandbox/scratch/probe-3","/sandbox/scratch/probe-4"};
     static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink","rmdir","tmpfile"};
-    struct oracle_record r[7];char output[2048];size_t i;int success=action_error==0;
-    int target_cleanup=cleanup_error==EBUSY?EIO:cleanup_error;
-    (void)success;
-    (void)target_cleanup;
+    struct oracle_record r[7];char output[2048];size_t i;int complete=1;
     fixture_reset();queue_instruction(instruction);
     for(i=0;i<7U;i++) {
-        int error=i==target?action_error:EPERM,cleanup=i==target?cleanup_error:0;
-        int recorded_cleanup=cleanup==EBUSY?EIO:cleanup;
+        int selected=i==target,error=selected?action_error:EPERM;
+        int cleanup=selected?action_cleanup:0,recorded_cleanup=cleanup==EBUSY?EIO:cleanup;
         r[i]=(struct oracle_record){names[i],"ok",error==0?"violation":
             error==EPERM||error==EACCES||error==EROFS?"refused":
             error==EOPNOTSUPP||error==ENOSYS?"unsupported":"incomplete",1,
@@ -3643,31 +3549,44 @@ static void scratch_scenario_case(size_t target,int action_error,int cleanup_err
 #if !defined(MADV_REMOVE)
         if(i==2U){r[i]=(struct oracle_record){names[i],"unknown","unsupported",0,0,ENOSYS,0,{0,0,0}};continue;}
 #endif
-        if(i==5U){struct fixture_step*s=queue_return(FX_MKDIR,0,0);s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
-          s=queue_return(FX_RMDIR,error?-1:0,error);s->call.path.path="/sandbox/scratch/probe-5";r[i].cleanup_error=0;continue;}
+        if(i==5U){
+            struct fixture_step*s=queue_return(FX_MKDIR,selected&&setup_stage==9?-1:0,selected&&setup_stage==9?setup_primary:0);
+            s->call.mkdir.path="/sandbox/scratch/probe-5";s->call.mkdir.mode=0700;
+            if(selected&&setup_stage==9){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,setup_primary,0,{0,0,0}};continue;}
+            s=queue_return(FX_RMDIR,error?-1:0,error);s->call.path.path="/sandbox/scratch/probe-5";r[i].cleanup_error=0;continue;
+        }
         if(i==6U){
 #if defined(__linux__) && defined(O_TMPFILE)
-          queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,error?-1:36,error);
-          if(!error)queue_close(36,cleanup?-1:0,cleanup);
+            queue_open("/sandbox/scratch",O_RDWR|O_TMPFILE|O_CLOEXEC,0600,error?-1:36,error);
+            if(!error)queue_close(36,cleanup?-1:0,cleanup);
 #endif
-          continue;
+            continue;
+        }
+        if(selected&&setup_stage==1){
+            queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,-1,setup_primary);
+            r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,setup_primary,0,{0,0,0}};continue;
         }
         queue_open(paths[i],O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC,0600,20+(int)i,0);
-        if(i==target&&setup_kind==1){queue_write_exact(20+(int)i,zero,sizeof zero,17,0);queue_write_exact(20+(int)i,zero+17,sizeof zero-17U,(long)(sizeof zero-17U),0);}
-        else if(i==target&&setup_kind==2){queue_write_exact(20+(int)i,zero,sizeof zero,-1,EINTR);queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);}
+        if(selected&&setup_stage==2)queue_write_exact(20+(int)i,zero,sizeof zero,0,0);
+        else if(selected&&setup_stage==3)queue_write_exact(20+(int)i,zero,sizeof zero,-1,setup_primary);
+        else if(selected&&setup_stage==5){queue_write_exact(20+(int)i,zero,sizeof zero,17,0);queue_write_exact(20+(int)i,zero+17,sizeof zero-17U,(long)(sizeof zero-17U),0);}
+        else if(selected&&setup_stage==6){queue_write_exact(20+(int)i,zero,sizeof zero,-1,EINTR);queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);}
         else queue_write_exact(20+(int)i,zero,sizeof zero,(long)sizeof zero,0);
-        queue_close(20+(int)i,0,0);
-        if(i==0U||i==1U||i==2U){
-          queue_open(paths[i],O_RDWR|O_CLOEXEC,0,error==EBADF?-1:30+(int)i,error==EBADF?EIO:0);
-          if(error==EBADF){r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,EIO,0,{0,0,0}};continue;}}
-        if(i==0U){struct fixture_step*s=queue_return(FX_FTRUNCATE,error?-1:0,error);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,cleanup?-1:0,cleanup);}
+        queue_close(20+(int)i,selected&&setup_close?-1:0,selected?setup_close:0);
+        if(selected&&(setup_stage==2||setup_stage==3||setup_close)){
+            r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,setup_stage==2||setup_stage==3?EIO:0,setup_close,{0,0,0}};continue;}
+        if(selected&&setup_stage==7){queue_open(paths[i],O_RDWR|O_CLOEXEC,0,-1,setup_primary);
+            r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,setup_primary,0,{0,0,0}};continue;}
+        if(i==0U){struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,30,0);s=queue_return(FX_FTRUNCATE,error?-1:0,error);s->call.ftruncate.fd=30;s->call.ftruncate.length=0;queue_close(30,cleanup?-1:0,cleanup);}
         else if(i==1U){
 #if defined(__linux__)
-          struct fixture_step*s=queue_return(FX_FALLOCATE,error?-1:0,error);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,cleanup?-1:0,cleanup);
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,31,0);s=queue_return(FX_FALLOCATE,error?-1:0,error);s->call.fallocate.fd=31;s->call.fallocate.mode=FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE;s->call.fallocate.offset=0;s->call.fallocate.length=1;queue_close(31,cleanup?-1:0,cleanup);
 #endif
         } else if(i==2U){
 #if defined(MADV_REMOVE)
-          struct fixture_step*s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
+          struct fixture_step*s;queue_open(paths[i],O_RDWR|O_CLOEXEC,0,32,0);
+          if(selected&&setup_stage==8){s=queue_return(FX_MMAP,-1,ENOMEM);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;queue_close(32,setup_close?-1:0,setup_close);r[i]=(struct oracle_record){names[i],"failed","incomplete",0,0,ENOMEM,setup_close,{0,0,0}};continue;}
+          s=queue_return(FX_MMAP,1,0);s->call.mmap.address=NULL;s->call.mmap.length=4096;s->call.mmap.protection=PROT_READ|PROT_WRITE;s->call.mmap.flags=MAP_SHARED;s->call.mmap.fd=32;s->call.mmap.offset=0;s->call.mmap.object=0;
           s=queue_return(FX_MADVISE,error?-1:0,error);s->call.madvise.object=0;s->call.madvise.length=4096;s->call.madvise.advice=MADV_REMOVE;
           s=queue_return(FX_MUNMAP,cleanup==EIO||cleanup==EBUSY?-1:0,cleanup==EIO||cleanup==EBUSY?EIO:0);s->call.munmap.object=0;s->call.munmap.length=4096;
           queue_close(32,cleanup==EBADF||cleanup==EBUSY?-1:0,cleanup==EBADF||cleanup==EBUSY?EBADF:0);
@@ -3675,19 +3594,39 @@ static void scratch_scenario_case(size_t target,int action_error,int cleanup_err
         } else if(i==3U){struct fixture_step*s=queue_return(FX_TRUNCATE,error?-1:0,error);s->call.truncate.path=paths[i];s->call.truncate.length=0;r[i].cleanup_error=0;}
         else {struct fixture_step*s=queue_return(FX_UNLINK,error?-1:0,error);s->call.path.path=paths[i];r[i].cleanup_error=0;}
     }
-    expect_output(output,oracle_line(output,sizeof output,instruction,
-#if defined(__linux__) && defined(O_TMPFILE)
-      (success||action_error==EPERM||action_error==EACCES||action_error==EROFS)&&!target_cleanup?"complete":"incomplete",
-#else
-      "incomplete",
-#endif
-      "none",r,7),0);
+    for(i=0;i<7U;i++)if(!r[i].completed||r[i].cleanup_error)complete=0;
+    expect_output(output,oracle_line(output,sizeof output,instruction,complete?"complete":"incomplete","none",r,7),0);
     run_case(case_name);
+}
+
+static void scratch_setup_failure_cases(void)
+{
+    static const char *const names[]={"ftruncate","fallocate","madv-remove","path-truncate","unlink"};
+    static const char *const kinds[]={"zero","error","full","short","eintr"};
+    size_t i,k;char name[96];
+    for(i=0;i<5U;i++){
+#if !defined(__linux__)
+      if(i==1U)continue;
+#endif
+      (void)snprintf(name,sizeof name,"SS-%s-open-EIO",names[i]);scratch_scenario_case(i,1,EIO,0,EPERM,0,name);
+      (void)snprintf(name,sizeof name,"SS-%s-open-EPERM",names[i]);scratch_scenario_case(i,1,EPERM,0,EPERM,0,name);
+      for(k=0;k<5U;k++){
+        int stage=(int)k+2;
+        (void)snprintf(name,sizeof name,"SS-%s-%s-close-0",names[i],kinds[k]);scratch_scenario_case(i,stage,EIO,0,EPERM,0,name);
+        (void)snprintf(name,sizeof name,"SS-%s-%s-close-%s",names[i],kinds[k],k<2U?"EBADF":"EIO");scratch_scenario_case(i,stage,EIO,k<2U?EBADF:EIO,EPERM,0,name);
+      }
+      if(i<3U){(void)snprintf(name,sizeof name,"SS-%s-reopen-EIO",names[i]);scratch_scenario_case(i,7,EIO,0,EPERM,0,name);
+        (void)snprintf(name,sizeof name,"SS-%s-reopen-EPERM",names[i]);scratch_scenario_case(i,7,EPERM,0,EPERM,0,name);}
+    }
+    scratch_scenario_case(2U,8,ENOMEM,0,EPERM,0,"SS-madv-remove-mmap-close-0");
+    scratch_scenario_case(2U,8,ENOMEM,EBADF,EPERM,0,"SS-madv-remove-mmap-close-EBADF");
+    scratch_scenario_case(5U,9,EIO,0,EPERM,0,"SS-rmdir-mkdir-EIO");
+    scratch_scenario_case(5U,9,EPERM,0,EPERM,0,"SS-rmdir-mkdir-EPERM");
 }
 
 static void scratch_action_case(size_t target,int action_error,int cleanup_error,const char *case_name)
 {
-    scratch_scenario_case(target,action_error,cleanup_error,0,case_name);
+    scratch_scenario_case(target,0,0,0,action_error,cleanup_error,case_name);
 }
 
 static void scratch_action_cases(void)
