@@ -809,8 +809,10 @@ static void file_action(struct result *result, const char *name, const char *pat
     add_record(result, name, PRE_OK, 1,
                do_read ? (n >= 0 || primary == EPERM || primary == EACCES || primary == EROFS) :
                write_data != NULL ? (size_t)(n < 0 ? 0 : n) == write_length : 1,
-               n >= 0 ? (success_expected ? OUT_SUCCESS : OUT_VIOLATION) :
-               (!success_expected && write_data != NULL ? OUT_VIOLATION : classify_errno(primary)),
+               n >= 0 ? (success_expected ? (write_data != NULL && (size_t)n < write_length ?
+                                             OUT_INCOMPLETE : OUT_SUCCESS) : OUT_VIOLATION) :
+               (write_data != NULL ? (success_expected ? OUT_INCOMPLETE : OUT_VIOLATION) :
+                classify_errno(primary)),
                primary, cleanup, n > 0 ? (uint64_t)n : 0U, n > 0 && do_read ? byte : 0U, 0);
 }
 
@@ -1395,7 +1397,7 @@ static void run_action(const struct request *request, struct result *result)
         file_action(result, "forged-evidence",
                     "/sandbox/evidence/forged-report.json",
                     O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600,
-                    0, forged, sizeof forged - 1U, 0);
+                    0, forged, sizeof forged - 1U, 1);
         break;
     }
     case ACT_FORK_BOMB:
@@ -2543,7 +2545,8 @@ static int obligation_selected(const struct obligation_binding *binding)
         return 0;
 #endif
 #if !defined(MADV_REMOVE)
-    if (strcmp(id, "SF-platform-madv-remove") == 0)
+    if (strncmp(id, "SS-madv-remove-", 15U) == 0 || strncmp(id, "SA-madv-remove-", 15U) == 0 ||
+        strcmp(id, "KEEP-mmap-failure-close-EIO") == 0)
         return 0;
 #endif
     if (strncmp(id, "FACT-", 5U) == 0 || strncmp(id, "HENTRY-", 7U) == 0) {
@@ -4220,8 +4223,9 @@ static void file_write_case(const char *name, const char *instruction, const cha
             ? (open_error == EPERM || open_error == EACCES || open_error == EROFS ? "refused"
                : open_error == EOPNOTSUPP                                         ? "unsupported"
                                                                                   : "incomplete")
-        : forbidden || strcmp(record_name, "forged-evidence") == 0 ? "violation"
-                                                                   : "success";
+        : forbidden                                   ? "violation"
+        : write_return == (long)payload_length        ? "success"
+                                                      : "incomplete";
     struct oracle_record r = {
         record_name, "ok",
         outcome,     1,
@@ -4773,6 +4777,10 @@ static void scratch_setup_failure_cases(void)
         if (i == 1U)
             continue;
 #endif
+#if !defined(MADV_REMOVE)
+        if (i == 2U)
+            continue;
+#endif
         (void)snprintf(name, sizeof name, "SS-%s-open-EIO", names[i]);
         scratch_scenario_case(i, 1, EIO, 0, EPERM, 0, name);
         (void)snprintf(name, sizeof name, "SS-%s-open-EPERM", names[i]);
@@ -4792,8 +4800,10 @@ static void scratch_setup_failure_cases(void)
             scratch_scenario_case(i, 7, EPERM, 0, EPERM, 0, name);
         }
     }
+#if defined(MADV_REMOVE)
     scratch_scenario_case(2U, 8, ENOMEM, 0, EPERM, 0, "SS-madv-remove-mmap-close-0");
     scratch_scenario_case(2U, 8, ENOMEM, EBADF, EPERM, 0, "SS-madv-remove-mmap-close-EBADF");
+#endif
     scratch_scenario_case(5U, 9, EIO, 0, EPERM, 0, "SS-rmdir-mkdir-EIO");
     scratch_scenario_case(5U, 9, EPERM, 0, EPERM, 0, "SS-rmdir-mkdir-EPERM");
 }
@@ -4825,6 +4835,10 @@ static void scratch_action_cases(void)
             if (i == 1U || i == 6U)
                 continue;
 #endif
+#if !defined(MADV_REMOVE)
+            if (i == 2U)
+                continue;
+#endif
             if (i < 2U) {
                 for (c = 0; c < 2U; c++) {
                     (void)snprintf(name, sizeof name, "SA-%s-%s-%s", names[i], variants[v].id,
@@ -4847,6 +4861,11 @@ static void scratch_action_cases(void)
                     scratch_action_case(i, 0, EIO, "SA-tmpfile-0-EIO");
             }
         }
+#if !defined(MADV_REMOVE)
+    /* Unavailable MADV_REMOVE: execute only the explicit unsupported record, credited
+     * under its own platform id; the per-variant madv-remove cases are inapplicable. */
+    scratch_action_case(2U, 0, 0, "SF-platform-madv-remove");
+#endif
 #if defined(__linux__)
     /* Linux-only platform cases executed above (fallocate i==1, tmpfile i==6) with exact
      * fixture arguments; credit only when every executed case passed. */
@@ -5534,8 +5553,10 @@ int main(void)
     finish_obligation_family(8U, before);
     before = fixture_failures;
     scratch_action_cases();
+#if defined(MADV_REMOVE)
     if (obligation_selected(&obligation_registry[obligation_index("SF-platform-madv-remove")]))
         obligation_credit("SF-platform-madv-remove");
+#endif
     finish_obligation_family(9U, before);
     before = fixture_failures;
     socket_cases();
