@@ -537,13 +537,14 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
 
    Qualification is batched, because each accepted-set slot holds 1-8 digests
    (R5.2, `work/enforcement-evidence-binding/spec.md:173-177`) and the cases need
-   more. One complete case list is declared once with a fixed partition into batches
-   of at most 8 instruction digests, each case in exactly one batch. The batch
-   accepted sets differ only in `verification_instructions`, exactly that batch's
-   digests. Each batch runs exactly once against its set. Every batch validates the
-   whole case list, both configurations, the sentinel fixtures and the kernel-bound
-   domain evidence. Aggregation yields one `sandbox_qualification_record`, complete
-   only if every declared case is covered exactly once, every batch ran exactly once,
+   more. One complete case list with unique case ids is declared once with a fixed
+   partition, each case in exactly one batch; digests may repeat across cases (each
+   repetition is its own case). The batch accepted sets differ only in
+   `verification_instructions`, the distinct digests of that batch's cases (at most
+   8). Each batch runs exactly once against its set. Every batch validates the whole
+   case list, both configurations, the sentinel fixtures and the kernel-bound domain
+   evidence. Aggregation yields one `sandbox_qualification_record`, complete only if
+   every declared case id is covered exactly once, every batch ran exactly once,
    the measured identities other than `verification_instructions`, both
    configurations and the domain evidence are identical across batches, and each
    batch's accepted-set digest matches its receipts. A missing, duplicated, rerun or
