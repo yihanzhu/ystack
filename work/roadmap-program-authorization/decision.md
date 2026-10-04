@@ -398,3 +398,64 @@ without fresh raw independent review at the applicable exact head/base. Frozen
 attempt, remain excluded without an explicit disposition.
 
 Prepared against base `a00777c34e648d347cfb1eb4ca1f2e01b2a5bbc1`.
+
+## Manager succession — 2026-10-04
+
+Operator yihanzhu directly handed the manager role back to Claude Code desktop
+session `dd83267a-8ae2-4699-9afa-a8ca0bf3421c` in that session's chat on
+2026-10-04: “继续接管roadmap implementation”. The handback is recorded on
+https://github.com/yihanzhu/ystack/issues/463 (comment `5981059003`).
+
+That direct handback ends the 2026-10-01 delegation to Codex session
+`01a09ae7-9bd4-77f3-8c15-966143bebff4`. No manager authority remains with it.
+
+- Succeeding manager: yshifu running as Claude — Claude Code desktop session
+  `dd83267a-8ae2-4699-9afa-a8ca0bf3421c`, model Claude Opus 5.5.
+- Date: 2026-10-04.
+- Review lane: the operator's Codex default model (gpt-6-astra) through
+  `scripts/codex-review.sh`. The coder ceiling stays `YSTACK_CODER_MODEL=sonnet`.
+  The historical Codex GPT routing in the 2026-10-01 section does not select a
+  Claude model.
+
+The same bounded program now applies to that named Claude session, and to no other
+session. The earlier succession sections remain historical: each applied until the
+handback that followed it. Nothing else changes. RC-1, OD-1, the working sequence
+(7, then 8, 9 and 10; step 11 dropped and step 12 deferred on the recorded
+conditions), the reserved operator decisions, the one-manager invariant, one concern
+and exact allowed paths per PR, substantive independent review with no unresolved
+Important finding, fresh exact head/base evidence, all required CI green before
+merge, read-only reviewers, the rounds cap, claims, recovery and restoration, and
+the exclusion of frozen #183 and unresolved dirty attempts all stand unchanged.
+ROADMAP.md and the accepted source blobs remain unchanged. This appendix records
+succession only, under the direct handback and RC-1's record-only scope; it changes
+no governance policy, product scope, code or acceptance standard.
+
+OD-1's protected publishing path remains
+`gh pr merge --squash --match-head-commit <reviewed head>`, under the conditions and
+with the weaker subagent boundary stated in the 2026-09-27 succession section, which
+apply to this session unchanged. No protection bypass, direct main push or
+published-history rewrite is allowed.
+
+The manager's handback reconciliation preserves the vm-launcher-supervisor PR 7
+attempt (a planned slice):
+
+- Repository: `yihanzhu/ystack`; branch: `ystack/impl/vm-launcher-supervisor`.
+- PR #490: open, draft, head `9b760d5e65c672f9d9ca8e4f60be9ca658deea3e`, base
+  `b007df89f1dd4f5c263197edb559f0db35f7c43f`.
+- Claim: `codex-vm7-option-b-continuation-20261003-9b760d5e`, with its one
+  remaining formal candidate unconsumed.
+- Local worktree: the original author's uncommitted tracked edits to
+  `sandbox/v1/guest/probe.c` and `scripts/test/sandbox-guest.test.sh`, preserved
+  untouched.
+- Plan-only amendment PR #496: open.
+
+Preserve and reverify that same attempt before resuming. Do not reset, discard or
+replace it. No review acceptance carries forward without fresh independent review
+at the exact head/base.
+
+The manager verified its own session identity from its scratchpad path, which the
+Claude Code harness derives from the session id. That is identity evidence, not
+authority. This direct handback, not this record, supplies the successor authority;
+a further successor needs another explicit operator handoff recorded here.
+
+Prepared against base `b007df89f1dd4f5c263197edb559f0db35f7c43f`.
