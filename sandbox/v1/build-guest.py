@@ -8,8 +8,7 @@ fixed inode numbers). Host code is stdlib Python 3.9-3.12 (R1.2). Inactive:
 `compile` invokes no toolchain unless the caller names one, and neither
 subcommand installs anything, uses the network or runs a built executable.
 
-  compile <toolchain-dir> <out-dir>   builds init, supervisor and (once
-                                       guest/probe.c exists, PR 7) probe
+  compile <toolchain-dir> <out-dir>   builds init, supervisor and probe
                                        from this checkout's own sources plus
                                        the unchanged file-digest verifier,
                                        and writes <out-dir>/build-record.json.
@@ -53,17 +52,15 @@ def sha256_file(path):
 _GUEST_TARGETS = [
     ("init", ["init.c"], True),
     ("supervisor", ["supervisor.c"], True),
-    ("probe", ["probe.c"], True),  # only built once PR 7 adds guest/probe.c
+    ("probe", ["probe.c"], True),
 ]
 
 
 def _targets():
-    """Return the mandatory targets and the explicitly staged optional probe."""
+    """Return the closed set of mandatory guest and verifier targets."""
     out = []
     for name, extra, needs_common in _GUEST_TARGETS:
         src = os.path.join(GUEST_DIR, extra[0])
-        if name == "probe" and not os.path.exists(src):
-            continue
         sources = [src] + ([os.path.join(GUEST_DIR, "common.c")] if needs_common else [])
         headers = [os.path.join(GUEST_DIR, "common.h")] if needs_common else []
         out.append((name, sources, headers))
