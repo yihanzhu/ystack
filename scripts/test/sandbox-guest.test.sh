@@ -38,6 +38,17 @@ phase_run() {
   /bin/cat "$raw"
   return "$rc"
 }
+# Fixture stdout is redirected to a file by the callers, so on failure print the
+# captured output (phase_run merges stderr into the same log) and exit status.
+phase_failed() {
+  local name=$1 out=${2:-} rc
+  rc=$(/usr/bin/awk -F '\t' -v n="$name" '$1 == n {print $2}' "$phase_index" | /usr/bin/tail -n 1)
+  /usr/bin/printf '=== phase %s failed: exit status %s ===\n' "$name" "${rc:-unknown}" >&2
+  [ -z "$out" ] || { /usr/bin/printf -- '--- captured stdout (%s) ---\n' "$out" >&2; /bin/cat "$out" >&2 || :; }
+  /usr/bin/printf -- '--- phase log (stdout+stderr) ---\n' >&2
+  /bin/cat "$phase_root/$name.log" >&2 || :
+  /usr/bin/printf '=== end phase %s ===\n' "$name" >&2
+}
 cc_build() {
   /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 -I"$guest_dir" \
     "$harness_src" "$guest_dir/common.c" -o "$1"
@@ -928,7 +939,7 @@ for forbidden_symbol in open close read write fstat fcntl truncate ftruncate fal
 done
 /usr/bin/cc "$tmp/probe-production-test.o" "$guest_dir/common.c" -o "$tmp/probe-production-test"
 phase_run private-default-run "$tmp/probe-production-test" > "$tmp/probe-production-test.out" ||
-  fail 'the probe production-path fixture failed'
+  { phase_failed private-default-run "$tmp/probe-production-test.out"; fail 'the probe production-path fixture failed'; }
 /bin/cat "$tmp/probe-production-test.out"
 [ "$(/usr/bin/tail -n 1 "$tmp/probe-production-test.out")" = 'probe production entry matrix: ok' ] ||
   fail 'the probe production-path fixture did not report matrix completion'
@@ -948,7 +959,7 @@ for socket_variant in NO_SOCKET_CONSTANTS MASK_NETLINK MASK_PACKET; do
     "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-$socket_variant-test" ||
     fail "the probe socket-header variant $socket_variant did not compile"
   phase_run "private-$socket_variant-run" "$tmp/probe-$socket_variant-test" > "$tmp/probe-$socket_variant.out" ||
-    fail "the probe socket-header variant $socket_variant failed"
+    { phase_failed "private-$socket_variant-run" "$tmp/probe-$socket_variant.out"; fail "the probe socket-header variant $socket_variant failed"; }
   /usr/bin/grep -Fx 'case socket-actual-header-facts: checked' "$tmp/probe-$socket_variant.out" >/dev/null ||
     fail "socket-header variant $socket_variant did not exercise actual facts"
   /bin/cat "$tmp/probe-$socket_variant.out"
@@ -960,7 +971,7 @@ phase_run private-no-madv-remove-compile /usr/bin/cc -std=c11 -Wall -Wextra -Wer
   "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-no-madv-remove-test" ||
   fail 'the unavailable MADV_REMOVE private variant did not compile'
 phase_run private-no-madv-remove-run "$tmp/probe-no-madv-remove-test" >"$tmp/probe-no-madv-remove.out" ||
-  fail 'the unavailable MADV_REMOVE private variant failed'
+  { phase_failed private-no-madv-remove-run "$tmp/probe-no-madv-remove.out"; fail 'the unavailable MADV_REMOVE private variant failed'; }
 /bin/cat "$tmp/probe-no-madv-remove.out"
 pass 'the private unavailable-MADV_REMOVE variant preserves the explicit unsupported record without a production selector'
 
