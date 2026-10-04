@@ -1,5 +1,5 @@
 ---
-spec-blob: f639cba18a8ab61e0ffd22a4f7a4a5ebb126c242
+spec-blob: 31f534a29c320f62caef9ba00736be4eb06b8756
 intent-blob: dad5c3e210d3772b6cc50cb3f556db06d96a7324
 risk: high
 drafted: 2026-09-29
@@ -518,9 +518,11 @@ failing for a socket path over 103 bytes, which vfkit refuses (`pkg/rest/rest.go
 `verification_instructions`, which R10.1 keeps out of the configuration),
 `instruction-digest <file>` (the SHA-256 of one instruction's bytes, the
 `verification_instructions` value its launch package will carry, R2.3, R4.2),
-`check-kernel-config <file>` (the host R2.4 function), `dry-run` (the probe list
-against the fake runtime) and `run <dir>` (a canonical `sandbox_qualification_record`).
-`run` and `dry-run` take two trusted host configurations, `verifier` and `probe`, that
+`check-kernel-config <file>` (the host R2.4 function), `dry-run` (every batch of the
+case list against the fake runtime), `run <dir> --batch <k>` (one canonical
+`sandbox_qualification_batch` record) and `aggregate <dir> <batch-record>...` (the one
+canonical `sandbox_qualification_record`). `run` and `dry-run` take two trusted host
+configurations, `verifier` and `probe`, that
 differ in exactly `identity_paths.verifier` (the real verifier or the probe),
 `store_id`, `store_root` and `work_root` (plus, outside the configuration, each one's
 sudoers rule); every other field is identical. The host supervisor puts the executable
@@ -534,6 +536,38 @@ echoes the input disk's `verifier` digest to stdout; each receipt's
 `identities.verifier`, `stdout_sha256` and `origin.store_id` match its own
 configuration, and a request carrying the other configuration's `store_id` is refused
 `E_STORE_ID` with nothing written in either store.
+
+**Batch plan** (spec R13.4; each accepted-set slot holds 1-8 digests).
+`<dir>/batches.json` is canonical kind `sandbox_qualification_batches`, `body` exactly
+`cases` (the complete declared case list in fixed order,
+`[{case_id,configuration,instruction_sha256}]`, `configuration` `verifier` or `probe`,
+case ids unique; a digest may repeat across cases, as the repeated `HardStop` runs do,
+and each repetition is its own case) and `batches` (run order; each a sorted unique
+array of `case_id`s whose distinct digests number 1-8; together every case exactly
+once). Its SHA-256 is the `case_list_sha256`. `run --batch <k>` validates the whole
+plan, both configurations, every sentinel binding and the domain evidence as above
+(`E_CASES` on a missing or duplicated case, not only batch k's), requires the installed
+qualification accepted set to equal the common entry with `verification_instructions`
+exactly the sorted distinct digests of batch k's cases, launches each of batch k's cases
+once, and refuses a k whose record already exists. The batch record binds
+`case_list_sha256`, `k`, the nine measured slots of both configurations, the
+domain-evidence digest, the accepted set's SHA-256 (equal to every receipt's
+`origin.accepted_set_sha256` and to the checker tree's copy), and per case id its
+receipt and payload digests and classification. `aggregate` counts coverage per case id,
+never per digest, and yields a complete record only if every batch of the plan has
+exactly one record, every declared case id is covered exactly once, the slots,
+configurations and domain evidence are identical across records, each record's
+accepted-set digest matches its receipts, and each qualification store holds no receipt
+that no batch record names (a repetition has its own case id and named receipt, so it is
+never a rerun); otherwise it is incomplete with `qualification.batch-missing`,
+`-batch-duplicate`, `-batch-rerun`, `-binding-mismatch` or `-accepted-set-mismatch`.
+Under R7.2 it is never `qualified`. Tests, each beside a paired positive control that
+differs only in the defect: a complete partition aggregated from a multi-batch dry run
+that includes a repeated digest, and plans with a duplicated case id, a batch of more
+than 8 distinct digests, a case in two batches or none; a missing, duplicated or rerun
+batch (a second record, or an unnamed store receipt); one record with a different slot,
+configuration or domain-evidence digest; and a record whose accepted-set digest differs
+from its receipts' or from the installed set.
 
 Before each sentinel launch, the trusted harness checks the approved exact path and
 role, non-symlink regular-file identity, length and digest, and a readable control
@@ -734,13 +768,16 @@ of every path and ancestor, `sudo -l -U yihanzhu`, and one smoke run through the
 with empty stdin giving `E_PACKAGE` (no VM). Rollback: delete those paths, user and groups.
 
 **`vml-qualify`** (step 8; R13.4). The R12.1 entry and digest above; the proposed
-accepted-set entry, whose slots are the union of `qualify.py measure` on each of the
-two qualification configurations (so `verifier` lists the real verifier and the probe,
-`host_supervisor` both configuration composites, the other seven slots one digest
-each) and whose `verification_instructions` list is `qualify.py instruction-digest` of
-each complete qualification instruction (the three real-verifier cases and every
-parameterized probe case),
-plus six R7.1 mechanism ids and `scratch_bytes` 16,777,216; the two configurations'
+production accepted-set entry, whose slots are `qualify.py measure` of the real-verifier
+configuration and whose `verification_instructions` are `qualify.py instruction-digest`
+of 1-8 production instructions quoted in the package (the probe is never a production
+verifier), plus six R7.1 mechanism ids and `scratch_bytes` 16,777,216; `batches.json`
+with its digest and one qualification accepted-set file per batch, exact bytes and
+digest each, identical except `verification_instructions`: slots the union of
+`qualify.py measure` on both qualification configurations (`verifier` the real verifier
+and the probe, `host_supervisor` both composites, the other seven one digest each), that
+batch's sorted distinct instruction digests (1-8), the six ids and `scratch_bytes`;
+the two configurations'
 exact bytes and which runs use which (real verifier: match, mismatch, changed-byte
 refusal and the `HardStop` repeats; probe: every R13.4 mode and required family case,
 using the complete PR 7 instruction grammar), each run with its expected verdict
@@ -754,15 +791,20 @@ repeat count; and two qualification install directories (`…/v1/qualify-verifie
 `…/v1/qualify-probe/`) whose configurations differ only in the PR 8 fields (stores
 `store.local-macos-vm.qualify-verifier.v1` and `…qualify-probe.v1` at
 `/private/var/db/ystack-sandbox-q/store-verifier` and `…/store-probe`, work roots
-`…/w-v` and `…/w-p`), each with its own sudoers rule of the same shape and one shared
-qualification accepted set, all installed, measured and later removed by the operator.
-The manager runs `qualify.py run <dir>` as `yihanzhu`, launching through those rules
-and reading each receipt as the consumer (R2.3). Evidence: receipt digests and verdicts,
-stop latencies (information only), supervisor resource use, the record's SHA-256 and
-bytes (kept outside git).
+`…/w-v` and `…/w-p`), each with its own sudoers rule of the same shape, all installed,
+measured and later removed by the operator. In `batches.json` order, for each batch k
+the operator installs that batch's set as the root-owned accepted-set copy in both
+directories (`sudo /usr/bin/install -o root -g wheel -m 0444`, one listed command per
+batch and directory, then `shasum -a 256`), the manager swaps the checker tree's copy
+to the same bytes and runs `qualify.py run <dir> --batch <k>` once as `yihanzhu`,
+launching through those rules and reading each receipt as the consumer (R2.3); after
+the last batch it runs `qualify.py aggregate`. Evidence: per batch, the installed set's
+digest, receipt digests and verdicts and the batch record's SHA-256; stop latencies
+(information only), supervisor resource use, the record's SHA-256 and bytes (kept
+outside git).
 
 **Step 9** (R12.3) opens only on a `qualified` record: the record file, the `proof_state`
-change and its `shadow-slice.test.sh` pin, and the accepted-set entry.
+change and its `shadow-slice.test.sh` pin, and the production accepted-set entry.
 
 ## What does not change
 
@@ -789,9 +831,9 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
 | 7 | `review_size: accepted-exception` | 4,000-5,900 | truthful probe actions, bounded production-path proof and mandatory build input |
-| 8 | `review_size: accepted-exception` | 850-1,200 | runtime driver and qualification harness |
+| 8 | `review_size: accepted-exception` | 1,300-1,500 | runtime driver and batched qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
-| This plan amendment | `review_size: standard` | under 400 | review-size ceiling for the existing PR 7 probe scope |
+| This plan amendment | `review_size: standard` | under 400 | batched native qualification (spec R13.4) |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
@@ -822,7 +864,10 @@ runtime is always stopped, reaped and receipted, timed-out driver reads rejected
 incomplete with the driver process tree cleaned up,
 index-stored evidence under the R10.2 layout with hex-name validation, the real-time
 default-deadline cases beside the fast overridden ones, and receipt diagnostics on
-assertion failure (#463 record). PR 6's range covers the guest containment/build
+assertion failure (#463 record). PR 8 as built in #499 measures about 1,180 before
+batching; the batch plan, per-batch accepted-set binding, `aggregate` and their paired
+missing, duplicate, rerun and mismatch tests add about 150-250 (#463 record). PR 6's
+range covers the guest containment/build
 implementation plus controlled archive extraction, checked reporting and setup,
 and production-path regression harnesses. Keep readable setup and complete proof,
 including sanitizer and negative controls. Remove redundant narration without
