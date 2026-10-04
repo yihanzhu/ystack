@@ -3944,13 +3944,14 @@ static void namespace_cases(void)
     static const struct {
         const char *id, *outcome;
         int error, completed;
-    } cases[] = {{"success", "violation", 0, 1},
-                 {"eperm", "refused", EPERM, 1},
-                 {"eacces", "refused", EACCES, 1},
-                 {"erofs", "refused", EROFS, 1},
-                 {"unsupported", "unsupported", EOPNOTSUPP, 0},
-                 {"eio", "incomplete", EIO, 0},
-                 {"enosys", "incomplete", ENOSYS, 0}};
+    } cases[] = {{"0", "violation", 0, 1},
+                 {"EPERM", "refused", EPERM, 1},
+                 {"EACCES", "refused", EACCES, 1},
+                 {"EROFS", "refused", EROFS, 1},
+                 {"EOPNOTSUPP", "unsupported", EOPNOTSUPP, 0},
+                 {"EIO", "incomplete", EIO, 0},
+                 {"ENOSYS", "incomplete", ENOSYS, 0},
+                 {"EINVAL", "incomplete", EINVAL, 0}};
 #endif
     size_t i;
     char output[512], name[64];
@@ -3967,7 +3968,7 @@ static void namespace_cases(void)
                       oracle_line(output, sizeof output, instruction,
                                   cases[i].completed ? "complete" : "incomplete", "none", &r, 1),
                       0);
-        (void)snprintf(name, sizeof name, "obligation-namespace-%s", cases[i].id);
+        (void)snprintf(name, sizeof name, "NS-linux-%s", cases[i].id);
         run_case(name);
     }
 #else
@@ -4814,6 +4815,9 @@ static void scratch_action_cases(void)
                     {"EROFS", EROFS}, {"EOPNOTSUPP", EOPNOTSUPP}, {"ENOSYS", ENOSYS},
                     {"EIO", EIO}};
     size_t i, v, c;
+#if defined(__linux__)
+    int failures_before = fixture_failures;
+#endif
     char name[96];
     for (i = 0; i < 7U; i++)
         for (v = 0; v < sizeof variants / sizeof variants[0]; v++) {
@@ -4843,6 +4847,14 @@ static void scratch_action_cases(void)
                     scratch_action_case(i, 0, EIO, "SA-tmpfile-0-EIO");
             }
         }
+#if defined(__linux__)
+    /* Linux-only platform cases executed above (fallocate i==1, tmpfile i==6) with exact
+     * fixture arguments; credit only when every executed case passed. */
+    if (fixture_failures == failures_before) {
+        obligation_credit("SF-platform-fallocate");
+        obligation_credit("SF-platform-tmpfile");
+    }
+#endif
 }
 
 static void raw_output_cases(void)
