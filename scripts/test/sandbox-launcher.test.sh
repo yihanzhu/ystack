@@ -3256,7 +3256,7 @@ for role in ("host", "sibling"):
     data = (role + "-sentinel-content\n").encode()
     put(sroot + "/" + role + ".txt", data, 0o444)
     fixtures[role] = {"path": sroot + "/" + role + ".txt", "size_bytes": len(data), "sha256": sha(data)}
-ev = {"archive_sha256": measured["probe"]["toolchain"], "build_domain_max": 1, "kernel_domain_max": 1,
+ev = {"archive_sha256": measured["probe"]["toolchain"], "kernel_sha256": measured["probe"]["guest_kernel"], "build_domain_max": 1, "kernel_domain_max": 1,
       "families": [{"family": 0, "aliases": ["AF_TEST0"]}]}
 FORGED = q.FORGED.decode()
 def rec(name, pre="unknown", att=0, comp=0, out="incomplete", err=0, v=(0, 0, 0)):
@@ -3449,6 +3449,8 @@ qbad E_CASES 'p["fixtures"]["host"]["sha256"] = "0" * 64'
 qbad E_CASES 'p["cases"][0]["config"] = "probe"'
 qbad E_DOMAIN 'p["domain_evidence"]["archive_sha256"] = "1" * 64'
 qbad E_DOMAIN 'p["domain_evidence"]["families"][0]["family"] = 1'
+qbad E_DOMAIN 'p["domain_evidence"]["kernel_sha256"] = "2" * 64'   # evidence reused after the kernel changed
+qbad E_DOMAIN 'del p["domain_evidence"]["kernel_sha256"]'
 qbad E_FIXTURES 'p["fixtures"]["sibling"] = dict(p["fixtures"]["host"])'
 qbad E_CONFIGS 'p["configs"]["probe"] = dict(p["configs"]["verifier"])'
 qbad E_CHECKER 'pass' run
@@ -3565,7 +3567,7 @@ pass 'raw modes keep only available bytes: output-overflow accepts an x prefix u
 
 # --- socket cases: domain evidence bound to the build -------------------------------------------
 qpy <<'PY'
-ev = {"archive_sha256": "a" * 64, "build_domain_max": 41, "kernel_domain_max": 41,
+ev = {"archive_sha256": "a" * 64, "kernel_sha256": "b" * 64, "build_domain_max": 41, "kernel_domain_max": 41,
       "families": [{"family": n, "aliases": ["AF_%d" % n] + (["PF_%d" % n] if n == 2 else [])} for n in range(41)]}
 assert q.domain_evidence_ok(ev)
 for label, bad in (("gap", dict(ev, families=ev["families"][:5] + ev["families"][6:])), ("short", dict(ev, kernel_domain_max=40)),
@@ -3660,6 +3662,16 @@ body = json.load(open(tmp + "/expectation.json"))["body"]
 assert body == {"attempt": dict(req["attempt"], launch_request_sha256="ab" * 32), "control": {"c": 1}, "store_id": "s", "subject": {"x": 2}}
 for text, status in (('{"body":{"check_verdict":"refused"}}', 0), ('{"body":{"check_verdict":"valid"}}', 1), ("not json", 0), ("", 0)):
     fake(text, status); assert check() in ("refused", "error") and check() != "valid", text
+PY
+QDIR=$qdir PATH="$jq_dir:$PATH" qpy <<'PY'
+# the REAL, unchanged checker (read-only use) under the default temp dir (a symlinked /var/folders on macOS)
+meta = json.load(open(os.environ["QDIR"] + "/meta.json")); plan = json.load(open(os.environ["QDIR"] + "/cases.json"))
+entry = next(e for e in plan["cases"] if e["id"] == "v-echo"); named = q.hs.parse_package(open(os.environ["QDIR"] + "/" + entry["package"], "rb").read())
+req = json.loads(named["request.json"])["body"]; store = q.read_config(meta["configs"]["verifier"] + "/host-config.json")[0]["store_root"]
+receipt = "%s/%s/receipt.json" % (store, req["attempt"]["attempt_id"]); real = sys.argv[2].rsplit("/sandbox/v1/", 1)[0] + "/enforcement/v1/check-sandbox-receipt.sh"
+def run(path): return q.consumer_check(real, path, req, sha(named["request.json"]), named["evaluation.json"])
+assert run(receipt) == "refused"          # the shipped (empty) accepted set refuses; it is a verdict, not E_RUNTIME
+assert run(store + "/absent.json") == "error"
 PY
 host_fixture=$("$jq_bin" -r .fixtures.host.path "$qdir/cases.json")
 fixture_case() { # fixture_case <expected "class reason-prefix">

@@ -122,13 +122,13 @@ def run_facts_problem(receipt):
 
 # --- socket-family domain evidence (R13.4: build header domain bound to the selected kernel) --
 def domain_evidence_ok(ev):
-    """{archive_sha256, build_domain_max, kernel_domain_max, families:[{family,aliases}]}: the
+    """{archive_sha256, kernel_sha256, build_domain_max, kernel_domain_max, families:[{family,aliases}]}: the
     families are exactly 0..kernel_domain_max-1, each once, an alias counted under one family."""
     try:
         fams = ev["families"]
         aliases = [a for f in fams for a in f["aliases"]]
-        return (set(ev) == {"archive_sha256", "build_domain_max", "families", "kernel_domain_max"}
-                and re.fullmatch(r"[0-9a-f]{64}", ev["archive_sha256"]) is not None
+        return (set(ev) == {"archive_sha256", "build_domain_max", "families", "kernel_domain_max", "kernel_sha256"}
+                and all(re.fullmatch(r"[0-9a-f]{64}", ev[k]) for k in ("archive_sha256", "kernel_sha256"))
                 and all(hs.is_int(ev[k]) and 1 <= ev[k] <= 65536 for k in ("build_domain_max", "kernel_domain_max"))
                 and [f["family"] for f in fams] == list(range(ev["kernel_domain_max"]))
                 and all(isinstance(a, str) and a for a in aliases) and len(set(aliases)) == len(aliases))
@@ -343,10 +343,11 @@ def consumer_check(checker, receipt_path, request, launch_sha, evaluation_raw):
                         "id": "sandbox.expectation.qualify", "kind": "sandbox_receipt_expectation",
                         "schema_version": 1})
     with tempfile.TemporaryDirectory() as tmp:
+        tmp = os.path.realpath(tmp)  # the unchanged checker accepts only physical paths
         for name, data in (("expectation.json", exp), ("evaluation.json", evaluation_raw)):
             with open(os.path.join(tmp, name), "wb") as handle:
                 handle.write(data)
-        proc = subprocess.run([checker, "check", receipt_path, os.path.join(tmp, "expectation.json"),
+        proc = subprocess.run([os.path.realpath(checker), "check", os.path.realpath(receipt_path), os.path.join(tmp, "expectation.json"),
                                os.path.join(tmp, "evaluation.json")], capture_output=True, timeout=120)
     try:
         return json.loads(proc.stdout)["body"]["check_verdict"] if proc.returncode == 0 else "error"
@@ -386,7 +387,8 @@ def run_cases(dirpath, dry):
     if fixtures["host"]["path"] == fixtures["sibling"]["path"] or fixtures["host"]["sha256"] == fixtures["sibling"]["sha256"]:
         raise Invalid("E_FIXTURES")
     ev = plan.get("domain_evidence")
-    if ev is not None and (not domain_evidence_ok(ev) or ev["archive_sha256"] != cfgs["probe"]["slots"]["toolchain"]):
+    if ev is not None and (not domain_evidence_ok(ev) or ev["archive_sha256"] != cfgs["probe"]["slots"]["toolchain"]
+                           or ev["kernel_sha256"] != cfgs["probe"]["slots"]["guest_kernel"]):
         raise Invalid("E_DOMAIN")
     env = {k: v for k, v in os.environ.items() if not k.startswith("DYLD_")}
     prepared, socket_instructions, ids = [], [], set()
