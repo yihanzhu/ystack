@@ -3127,6 +3127,555 @@ status=$?
 [ "$status" -eq 0 ] || fail "finding r16-2: expected exit 0 (rc is None, out is empty, and the forked helper is gone), got $status: $(cat "$base/out") $(cat "$base/err")"
 pass 'finding r16-2: run_driver()'"'"'s overflow-rejection branch (>65,536 bytes) now kills the whole driver process GROUP too, not just the incomplete-read branch -- a forked helper still holding the pipe open past the driver'"'"'s own oversized write and exit is confirmed gone after the call, never left running for a teardown elsewhere that can never reach it'
 
+# =============================================================================
+# PR 8 of 9: runtime-vfkit.py and qualify.py (plan.md "PR 8"). Contract tests only:
+# a test-local fake vfkit, the fake runtime and synthetic fixtures; no real vfkit.
+# =============================================================================
+q_src="$root/sandbox/v1/qualify.py"
+vf="$base/vf"
+/bin/mkdir -m 0755 "$vf"
+vfrun=$(/usr/bin/mktemp -d "/tmp/ysvfk.XXXXXX")
+/bin/cp "$root/sandbox/v1/runtime-vfkit.py" "$vf/driver"
+printf '{"body":{"runtime":{"driver":"%s/driver","vfkit":"%s/vfkit"}}}\n' "$vf" "$vf" >"$vf/host-config.json"
+cat >"$vf/vfkit" <<'PY'
+#!/usr/bin/python3
+# test-local fake vfkit: records its argv and each REST request, serves /vm/state on --restful-uri
+import http.server, json, os, socketserver, sys
+args = sys.argv[1:]
+path = args[args.index("--restful-uri") + 1][len("unix://"):]
+state = {"s": "VirtualMachineStateRunning"}
+class H(http.server.BaseHTTPRequestHandler):
+    def reply(self, code):
+        body = json.dumps({"state": state["s"]}).encode()
+        self.send_response(code); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+    def note(self, body):
+        with open(path + ".log", "a") as fh: fh.write(json.dumps([self.command, self.path, body.decode()]) + "\n")
+    def do_GET(self):
+        self.note(b""); self.reply(200)
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"])); self.note(body)
+        code = int(os.environ.get("FAKE_VFKIT_STOP_STATUS", "200"))
+        if code == 200 and json.loads(body) == {"state": "HardStop"}: state["s"] = "VirtualMachineStateStopped"
+        self.reply(code)
+    def log_message(self, *a): pass
+socketserver.UnixStreamServer(path, H).serve_forever()
+PY
+/bin/chmod 0755 "$vf/vfkit" "$vf/driver"
+"$python" - "$vf" "$vfrun" <<'PY'
+import json, os, subprocess, sys, time
+vf, run = sys.argv[1:]
+def drive(*args):
+    p = subprocess.run([vf + "/driver"] + list(args), env={}, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    return p.returncode, p.stdout.decode()
+def start(sock, **over):
+    body = {"command_line": "console= quiet lsm=landlock rdinit=/init", "cpu_count": 1, "export_disk": "/w/a/export.img",
+            "initramfs": "/i/initramfs.cpio", "input_disk": "/w/a/input.img", "kernel": "/k/Image",
+            "memory_bytes": 536870912, "rest_socket": sock}
+    body.update(over)
+    with open(run + "/start.json", "w") as fh:
+        json.dump({"body": body, "kind": "sandbox_runtime_start", "schema_version": 1}, fh)
+    return run + "/start.json"
+def spawn(argv, **env):
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, env=dict(os.environ, **env))
+    sock = argv[-1][len("unix://"):]
+    for _ in range(200):
+        if os.path.exists(sock): return proc
+        time.sleep(0.05)
+    raise SystemExit("fake vfkit never listened")
+sock = run + "/rest.sock"
+rc, out = drive("argv", start(sock))
+argv = ["%s/vfkit" % vf, "--cpus", "1", "--memory", "512", "--bootloader",
+        'linux,kernel=/k/Image,initrd=/i/initramfs.cpio,cmdline="console= quiet lsm=landlock rdinit=/init"',
+        "--device", "virtio-blk,path=/w/a/input.img,readonly", "--device", "virtio-blk,path=/w/a/export.img",
+        "--restful-uri", "unix://" + sock]
+assert (rc, out) == (0, json.dumps({"argv": argv, "stopped_exit_status": 0}, sort_keys=True, separators=(",", ":")) + "\n"), out
+for bad in ({"cpu_count": 2}, {"memory_bytes": 1048576}, {"command_line": "console=ttyS0"}, {"kernel": "/k,x/Image"}, {"kernel": "k/Image"}):
+    assert drive("argv", start(sock, **bad)) == (1, ""), bad
+long_sock = run + "/" + "s" * (102 - len(run) - 1)
+assert len(long_sock) == 102 and drive("argv", start(long_sock + "s"))[0] == 0   # 103 bytes: accepted
+assert drive("argv", start(long_sock + "ss")) == (1, "")                        # 104 bytes: refused
+proc = spawn(argv)
+assert drive("state", sock) == (0, "running\n")
+assert drive("stop", sock)[0] == 0 and drive("state", sock) == (0, "stopped\n")
+assert [json.loads(l) for l in open(sock + ".log")] == [
+    ["GET", "/vm/state", ""], ["POST", "/vm/state", '{"state":"HardStop"}'], ["GET", "/vm/state", ""]]
+assert drive("state", run + "/absent.sock") == (0, "error\n") and drive("stop", run + "/absent.sock")[0] == 1
+sock2 = run + "/rest2.sock"
+refusing = spawn(json.loads(drive("argv", start(sock2))[1])["argv"], FAKE_VFKIT_STOP_STATUS="500")
+assert drive("stop", sock2)[0] == 1 and drive("state", sock2) == (0, "running\n")  # a rejected stop never reads as accepted
+proc.kill(); refusing.kill()
+PY
+/bin/rm -rf -- "$vfrun"
+pass 'runtime-vfkit.py builds exactly the plan'"'"'s vfkit argv and speaks REST over AF_UNIX against a fake vfkit (GET /vm/state, POST /vm/state HardStop; stopped after the accepted stop, exit 1 for a rejected one or no endpoint); argv is refused for a socket path of 104 bytes and for any start body off the R5.4 values, with the 103-byte path and the exact values as controls'
+
+# --- two trusted configurations: verifier and probe, a test-local echoing fake runtime -----
+build_tree 0
+qdir="$base/qual"
+q_work_v=$(/usr/bin/mktemp -d /tmp/ysvml.XXXXXX)
+q_work_p=$(/usr/bin/mktemp -d /tmp/ysvml.XXXXXX)
+/bin/mkdir -m 0755 "$qdir"
+cat >"$base/build_qual.py" <<'PY'
+import copy, importlib.util, json, os, shutil, subprocess, sys
+config_path, hs_src, q_src, build_pkg, fake_src, qdir, work_v, work_p, python = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("q", q_src); q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+sha = q.sha
+canon = q.hs.canonical
+body0 = json.load(open(config_path))["body"]
+root = os.path.dirname(os.path.dirname(config_path))
+def put(path, data, mode):
+    open(path, "wb").write(data); os.chmod(path, mode)
+# The echoing fake: a test-local copy of the fake runtime whose guest stdout is, unless a
+# scenario scripts one, the digest of the input disk's own verifier record.
+echo = root + "/echo"; os.makedirs(echo, 0o755)
+src = open(fake_src).read()
+old = 'stdout_bytes = scenario.get("stdout", "").encode()'
+assert old in src
+src = src.replace(old, 'stdout_bytes = (scenario["stdout"] if "stdout" in scenario else hs.sha256_hex(input_records[b"verifier"])).encode()')
+for name in ("driver", "vfkit"):
+    put(echo + "/" + name, ("#!" + sys.executable + "\n" + src.partition("\n")[2]).encode(), 0o555)
+put(echo + "/scenario.json", b"{}\n", 0o644)
+ids = root + "/identities"
+put(ids + "/verifier-real", b"synthetic-verifier-real", 0o444)
+put(ids + "/verifier-probe", b"synthetic-verifier-probe", 0o444)
+configs, stores, measured = {}, {}, {}
+for name, verifier, work in (("verifier", ids + "/verifier-real", work_v), ("probe", ids + "/verifier-probe", work_p)):
+    inst = root + "/install-" + name; os.makedirs(inst, 0o755)
+    put(inst + "/host-supervisor.py", open(hs_src, "rb").read(), 0o555)
+    store = root + "/store-" + name; os.makedirs(store, 0o750); os.chmod(store, 0o750); os.chown(store, os.getuid(), os.getgid())
+    body = copy.deepcopy(body0)
+    body["identity_paths"]["verifier"] = verifier
+    body.update(store_id="store.fixture.qualify-%s.v1" % name, store_root=store, work_root=work)
+    body["runtime"] = {"driver": echo + "/driver", "vfkit": echo + "/vfkit"}
+    put(inst + "/host-config.json", canon({"body": body, "id": "sandbox.host-config.v1", "kind": "sandbox_host_config", "schema_version": 1}), 0o444)
+    configs[name], stores[name] = inst, body["store_id"]
+    measured[name] = json.loads(subprocess.run([python, q_src, "measure", inst + "/host-config.json"], capture_output=True, check=True).stdout)
+sroot = root + "/sentinels"; os.makedirs(sroot, 0o755)
+fixtures = {}
+for role in ("host", "sibling"):
+    data = (role + "-sentinel-content\n").encode()
+    put(sroot + "/" + role + ".txt", data, 0o444)
+    fixtures[role] = {"path": sroot + "/" + role + ".txt", "size_bytes": len(data), "sha256": sha(data)}
+ev = {"archive_sha256": measured["probe"]["toolchain"], "build_domain_max": 1, "kernel_domain_max": 1,
+      "families": [{"family": 0, "aliases": ["AF_TEST0"]}]}
+FORGED = q.FORGED.decode()
+def rec(name, pre="unknown", att=0, comp=0, out="incomplete", err=0, v=(0, 0, 0)):
+    return "%s:%s:%d:%d:%s:%d:0:%d:%d:%d" % ((name, pre, att, comp, out, err) + v)
+# The accepted set holds at most 8 instruction digests per environment (digest_list_ok), so one
+# dry run launches 8 distinct instructions; classification of every mode is proved below.
+cases = [("v-echo", "verifier", b"verify one\n", None, "verifier-run"), ("p-echo", "probe", b"YSPROBE1 sleep\n", None, "invalid-result")]
+for mode in ("candidate-read", "forged-report-evidence", "output-overflow"):
+    cases.append((mode, "probe", ("YSPROBE1 %s\n" % mode).encode(), mode, None))
+for role in ("host", "sibling"):
+    cases.append((role + "-sentinel", "probe", q.sentinel_instruction(dict(fixtures[role], role=role)), role + "-sentinel", None))
+cases.append(("socket-0", "probe", q.socket_instruction(0), "socket-family", None))
+digests = sorted({sha(c[2]) for c in cases})
+accepted_path = body0["installed_files"]["accepted_set"]
+doc = json.load(open(accepted_path))
+for slot in measured["probe"]:
+    doc["body"]["environments"][0]["identities"][slot] = sorted({measured[n][slot] for n in measured})
+doc["body"]["environments"][0]["identities"]["verification_instructions"] = digests
+os.chmod(accepted_path, 0o644); put(accepted_path, canon(doc), 0o444)
+plan_cases, expected = [], {}
+for n, (cid, cfg, instruction, mode, klass) in enumerate(cases):
+    scenario = {"limit_overrides": {"output_bytes": {"observed": 64}}}   # the echoed 64-character digest
+    if mode:
+        text, extra, klass = None, [], "result-incomplete"
+        if mode == "output-overflow": text, klass = "x" * 4096, "output-prefix"
+        elif mode == "forged-report-stdout": text, klass = FORGED, "forged-complete"
+        else:
+            names = q.CHECKS[mode]
+            recs, checks, domain = [rec(x) for x in names], "incomplete", "none"
+            if mode == "candidate-read": recs, checks = [rec("read", "ok", 1, 1, "refused", 13)], "complete"
+            if mode == "socket-family":
+                recs, checks, domain, klass = [rec("socket", "ok", 1, 1, "refused", 1, (0, 524289, 0))], "complete", "linux-build-af-v1/1", "result-complete"
+            if mode == "candidate-read": klass = "result-complete"
+            text = "YSPROBE1 %s %s %s %s %d %s\n" % (instruction.decode().split(" ")[1].strip(), sha(instruction), checks, domain, len(recs), " ".join(recs))
+            if mode == "forged-report-evidence": extra = [{"index": 0, "name": "forged-report.json", "content": FORGED}]
+        scenario = {"stdout": text, "evidence": extra, "limit_overrides": {"output_bytes": {"observed": len(text) + sum(len(e["content"]) for e in extra)}}}
+    expected[cid] = klass
+    pkg = "pkg-%s.json" % cid
+    patch = {"attempt_id": "attempt.q-%03d" % n, "nonce": "%064x" % (n + 1), "store_id": stores[cfg], "instruction": instruction.decode()}
+    subprocess.run([python, build_pkg, hs_src, qdir + "/" + pkg], input=json.dumps(patch).encode(), check=True)
+    plan_cases.append(dict({"id": cid, "config": cfg, "package": pkg}, **({"scenario": scenario} if scenario else {})))
+plan = {"configs": {n: {"install_dir": configs[n], "launch": [python, "host-supervisor.py", "launch"]} for n in configs},
+        "checker": None, "domain_evidence": ev, "fixtures": fixtures, "sentinel_root": sroot, "cases": plan_cases}
+json.dump(plan, open(qdir + "/cases.json", "w"))
+json.dump({"expected": expected, "stores": stores, "configs": configs, "measured": measured}, open(qdir + "/meta.json", "w"))
+PY
+"$python" "$base/build_qual.py" "$config_path" "$supervisor_src" "$q_src" "$base/build_pkg.py" \
+  "$root/scripts/test/sandbox-fake-runtime.py" "$qdir" "$q_work_v" "$q_work_p" "$python"
+pass 'two trusted configurations (verifier and probe: distinct verifier files, stores, store ids and work roots, identical otherwise) are built over one echoing fake runtime, with one shared accepted set made from the union of qualify.py measure for each'
+
+cat >"$base/qprelude.py" <<'PY'
+import importlib.util, json, os, shutil, sys, tempfile
+spec = importlib.util.spec_from_file_location("q", sys.argv[2]); q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+sha = q.sha
+def facts(stdout=b"", stderr=b"", evidence=(), admission="admitted", runtime="completed", deadline="met",
+          state="exited", code=0, teardown="confirmed"):
+    return {"receipt": {"lifecycle": {"admission": admission, "runtime": runtime, "control_deadline": deadline},
+                        "payload": {"exit_state": state, "exit_code": code}, "teardown": {"state": teardown}},
+            "stdout": stdout, "stderr": stderr, "evidence": list(evidence)}
+def case(mode, text=None, **more):
+    ins = (text or "YSPROBE1 %s\n" % mode).encode()
+    return dict({"mode": mode, "instruction": ins, "instruction_sha256": sha(ins)}, **more)
+def rec(name, pre="ok", att=1, comp=1, out="success", err=0, clean=0, v=(0, 0, 0)):
+    return "%s:%s:%d:%d:%s:%d:%d:%d:%d:%d" % ((name, pre, att, comp, out, err, clean) + tuple(v))
+def line(c, checks, records, domain="none", digest=None, mode=None):
+    return ("YSPROBE1 %s %s %s %s %d %s\n" % (mode or c["mode"], digest or c["instruction_sha256"], checks, domain,
+                                              len(records), " ".join(records))).encode()
+def verdict(c, **kw):
+    out = q.classify(c, facts(**kw)); return out["class"], out["reason"]
+def raises(fn, text):
+    try: fn()
+    except q.Invalid as exc: assert str(exc) == text, str(exc); return
+    raise AssertionError("expected " + text)
+PY
+qpy() { "$python" -c 'import sys; exec(open(sys.argv[1]).read()); exec(sys.stdin.read())' "$base/qprelude.py" "$q_src"; }
+
+# --- dry-run: the probe list against the fake runtime through host-supervisor.py launch ------
+unset YSTACK_FAKE_SCENARIO
+"$python" "$q_src" dry-run "$qdir" >"$base/qrec.json" 2>"$base/err" || fail "dry-run: exit $? ($(cat "$base/err"))"
+qv_install=$("$jq_bin" -r .configs.verifier "$qdir/meta.json")
+qp_install=$("$jq_bin" -r .configs.probe "$qdir/meta.json")
+qroot=${qv_install%/*}
+QDIR=$qdir QREC=$base/qrec.json qpy <<'PY'
+raw = open(os.environ["QREC"], "rb").read(); rec = json.loads(raw); body = rec["body"]
+meta = json.load(open(os.environ["QDIR"] + "/meta.json")); plan = json.load(open(os.environ["QDIR"] + "/cases.json"))
+assert raw == q.hs.canonical(rec) and rec["kind"] == "sandbox_qualification_record" and body["dry_run"] is True
+got = {c["id"]: c["class"] for c in body["cases"]}
+assert got == meta["expected"], {k: (got.get(k), v) for k, v in meta["expected"].items() if got.get(k) != v}
+assert all(c["verdict"] == "failed" and c["native_fulfilled"] is False for c in body["cases"])
+vfile = {n: q.read_config(meta["configs"][n] + "/host-config.json")[0]["identity_paths"]["verifier"] for n in meta["configs"]}
+digest = {n: sha(open(vfile[n], "rb").read()) for n in vfile}
+assert digest["verifier"] != digest["probe"]
+for entry in plan["cases"]:
+    cfg = entry["config"]; named = q.hs.parse_package(open(os.environ["QDIR"] + "/" + entry["package"], "rb").read())
+    attempt = json.loads(named["request.json"])["body"]["attempt"]["attempt_id"]
+    store = q.read_config(meta["configs"][cfg] + "/host-config.json")[0]["store_root"]
+    receipt = json.load(open("%s/%s/receipt.json" % (store, attempt)))["body"]
+    assert receipt["identities"]["verifier"]["sha256"] == digest[cfg] and receipt["origin"]["store_id"] == meta["stores"][cfg], entry["id"]
+    assert receipt["identities"]["verification_instructions"]["sha256"] == sha(named["instruction"])
+    if entry["id"] in ("v-echo", "p-echo"):
+        assert receipt["payload"]["stdout_sha256"] == sha(digest[cfg].encode()), entry["id"]
+    assert not os.path.exists("%s/%s/receipt.json" % (q.read_config(meta["configs"]["probe" if cfg == "verifier" else "verifier"] + "/host-config.json")[0]["store_root"], attempt))
+sentinels = [c for c in body["cases"] if c["mode"].endswith("-sentinel")]
+assert len(sentinels) == 2 and all(c["controls"]["pre"] == c["controls"]["post"] and c["controls"]["pre"]["represents"] for c in sentinels)
+assert sentinels[0]["controls"]["pre"]["path"] != sentinels[1]["controls"]["pre"]["path"]
+ev = next(c for c in body["cases"] if c["id"] == "forged-report-evidence")
+assert len(ev["evidence"]) == 1 and ev["class"] == "result-incomplete" and ev["native_fulfilled"] is False
+PY
+pass 'the dry run launches a real-verifier case, an echo case, both sentinels, a socket family and raw, evidence and ordinary probe modes through each case'"'"'s own configuration: every receipt'"'"'s identities.verifier, stdout_sha256 and origin.store_id match its own configuration and appear in no other store, and each case is classified (complete and incomplete lines, raw prefix, forged text, sentinel controls, evidence) with native_fulfilled false and every verdict failed'
+
+# --- a request carrying the other configuration's store_id is refused E_STORE_ID ------------
+launch_cfg() { ( CDPATH='' cd -- "$1" && "$python" host-supervisor.py launch ) <"$2" >"$base/out" 2>"$base/err"; }
+stores_state() { # both stores and both work roots, every path, mode and size
+  "$python" -c "
+import os, sys
+for root in sys.argv[1:]:
+    for dp, dn, fn in os.walk(root):
+        for n in sorted(dn + fn): p = os.path.join(dp, n); st = os.lstat(p); print(p, oct(st.st_mode), st.st_size)
+" "$qroot/store-verifier" "$qroot/store-probe" "$q_work_v" "$q_work_p" | /usr/bin/sort
+}
+for pair in "verifier:probe" "probe:verifier"; do
+  via=${pair%%:*}; carried=${pair#*:}; install_via=$qv_install; [ "$via" = verifier ] || install_via=$qp_install
+  build_pkg "$base/pkg-cross.json" '{"attempt_id":"attempt.cross-'"$via"'","nonce":"'"$(printf '%064d' $((9000 + ${#via})))"'","store_id":"store.fixture.qualify-'"$carried"'.v1","instruction":"YSPROBE1 sleep\n"}'
+  before=$(stores_state); status=0
+  launch_cfg "$install_via" "$base/pkg-cross.json" || status=$?
+  [ "$status" -eq 65 ] && [ "$(cat "$base/err")" = E_STORE_ID ] || fail "cross-configuration store_id via $via: expected E_STORE_ID, got $status $(cat "$base/err")"
+  [ "$before" = "$(stores_state)" ] || fail "cross-configuration store_id via $via: something was written"
+  build_pkg "$base/pkg-own.json" '{"attempt_id":"attempt.own-'"$via"'","nonce":"'"$(printf '%064d' $((9100 + ${#via})))"'","store_id":"store.fixture.qualify-'"$via"'.v1","instruction":"YSPROBE1 sleep\n"}'
+  launch_cfg "$install_via" "$base/pkg-own.json" || fail "own store_id via $via: expected a receipt, got $(cat "$base/err")"
+  [ -f "$qroot/store-$via/attempt.own-$via/receipt.json" ] || fail "own store_id via $via: no receipt in its own store"
+done
+pass 'a request carrying the other configuration'"'"'s store_id is refused E_STORE_ID by each configuration with nothing written in either store or work root, paired with the same request under its own store_id writing exactly one receipt into its own store'
+
+# --- instruction-digest, measure, check-kernel-config ----------------------------------------
+printf 'YSPROBE1 sleep\n' >"$base/instr.txt"; printf 'YSPROBE1 sleeq\n' >"$base/instr2.txt"
+[ "$("$python" "$q_src" instruction-digest "$base/instr.txt")" = "$(sha_file "$base/instr.txt")" ] || fail 'instruction-digest: digest'
+[ "$("$python" "$q_src" instruction-digest "$base/instr2.txt")" != "$(sha_file "$base/instr.txt")" ] || fail 'instruction-digest: one byte changed'
+status=0; "$python" "$q_src" instruction-digest "$base/absent.txt" >/dev/null 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "instruction-digest: a missing file must fail, got $status"
+QDIR=$qdir INSTR=$base/instr.txt qpy <<'PY'
+import subprocess
+meta = json.load(open(os.environ["QDIR"] + "/meta.json")); plan = json.load(open(os.environ["QDIR"] + "/cases.json"))
+def cli(*a): return subprocess.run([sys.executable, sys.argv[2]] + list(a), capture_output=True)
+m = {n: json.loads(cli("measure", meta["configs"][n] + "/host-config.json").stdout) for n in meta["configs"]}
+nine = {"host_runtime", "guest_kernel", "guest_kernel_config", "guest_init", "image", "host_supervisor", "guest_supervisor", "verifier", "toolchain"}
+assert all(set(v) == nine for v in m.values()) and m == meta["measured"]
+differing = {s for s in nine if m["verifier"][s] != m["probe"][s]}
+assert differing == {"verifier", "host_supervisor"}, differing
+for n, cid in (("verifier", "v-echo"), ("probe", "p-echo")):
+    entry = next(e for e in plan["cases"] if e["id"] == cid); named = q.hs.parse_package(open(os.environ["QDIR"] + "/" + entry["package"], "rb").read())
+    store = q.read_config(meta["configs"][n] + "/host-config.json")[0]["store_root"]
+    receipt = json.load(open("%s/%s/receipt.json" % (store, json.loads(named["request.json"])["body"]["attempt"]["attempt_id"])))["body"]
+    assert all(receipt["identities"][s]["sha256"] == m[n][s] for s in nine)   # what the supervisor itself measured
+assert cli("instruction-digest", os.environ["INSTR"]).stdout.decode().strip() == sha(open(os.environ["INSTR"], "rb").read())
+tmp = tempfile.mkdtemp(); shutil.copytree(meta["configs"]["verifier"], tmp + "/i")
+body = q.read_config(tmp + "/i/host-config.json")[0]; body["identity_paths"]["image"] = tmp + "/absent"
+os.chmod(tmp + "/i/host-config.json", 0o644)
+open(tmp + "/i/host-config.json", "wb").write(q.hs.canonical({"body": body, "id": "sandbox.host-config.v1", "kind": "sandbox_host_config", "schema_version": 1}))
+bad = cli("measure", tmp + "/i/host-config.json")
+assert bad.returncode == 1 and bad.stdout == b"" and cli("measure", meta["configs"]["verifier"] + "/host-config.json").returncode == 0
+PY
+pass 'measure prints exactly the nine installed slots (no verification_instructions), equal to the digests each launch itself recorded and differing between the two configurations in exactly verifier and host_supervisor; instruction-digest is the SHA-256 of the file and equals a receipt'"'"'s verification_instructions; an unreadable slot fails'
+kc="$base/kc.config"
+"$python" "$q_src" check-kernel-config "$guest_kernel_config_path" || fail 'check-kernel-config: the fixture kernel config is complete'
+status=0; /usr/bin/sed 's/^CONFIG_SECCOMP=y$/CONFIG_SECCOMP=m/' "$guest_kernel_config_path" >"$kc"
+"$python" "$q_src" check-kernel-config "$kc" 2>"$base/err" || status=$?
+[ "$status" -eq 1 ] || fail 'check-kernel-config: =m must fail'
+/usr/bin/grep -q CONFIG_SECCOMP "$base/err" || fail 'check-kernel-config: =m must name the option'
+status=0; /usr/bin/grep -v '^CONFIG_FANOTIFY=y$' "$guest_kernel_config_path" >"$kc"
+"$python" "$q_src" check-kernel-config "$kc" 2>/dev/null || status=$?
+[ "$status" -eq 1 ] || fail 'check-kernel-config: an absent option must fail'
+status=0; { cat "$guest_kernel_config_path"; printf 'CONFIG_HZ_300=y\n'; } >"$kc"
+"$python" "$q_src" check-kernel-config "$kc" 2>/dev/null || status=$?
+[ "$status" -eq 1 ] || fail 'check-kernel-config: two HZ options must fail'
+pass 'check-kernel-config is the host R2.4 function: the complete fixture config passes; one option =m, one absent and two HZ options each fail'
+
+# --- the cases are checked before anything launches -------------------------------------------
+before=$(stores_state)
+qbad() { # qbad <expected-code> <python statements editing the plan `p`> [subcommand]
+  /bin/rm -rf -- "$base/qbad"; /bin/cp -R "$qdir" "$base/qbad"
+  PLAN=$base/qbad/cases.json EDIT=$2 "$python" -c 'import json, os; p = json.load(open(os.environ["PLAN"])); exec(os.environ["EDIT"]); json.dump(p, open(os.environ["PLAN"], "w"))'
+  local status=0
+  "$python" "$q_src" "${3:-dry-run}" "$base/qbad" >"$base/out" 2>"$base/err" || status=$?
+  [ "$status" -eq 1 ] && [ "$(cat "$base/err")" = "$1" ] && [ ! -s "$base/out" ] || fail "qualify.py ${3:-dry-run} ($2): expected $1, got $status $(cat "$base/err")"
+}
+qbad E_CASES 'p["domain_evidence"]["kernel_domain_max"] = p["domain_evidence"]["build_domain_max"] = 2; p["domain_evidence"]["families"].append({"family": 1, "aliases": ["AF_TEST1"]})'
+qbad E_CASES 'p["cases"].append(dict(p["cases"][-1], id="socket-dup"))'
+qbad E_CASES 'p["cases"] = [c for c in p["cases"] if not c["id"].startswith("socket")]'
+qbad E_CASES 'p["fixtures"]["host"]["sha256"] = "0" * 64'
+qbad E_CASES 'p["cases"][0]["config"] = "probe"'
+qbad E_DOMAIN 'p["domain_evidence"]["archive_sha256"] = "1" * 64'
+qbad E_DOMAIN 'p["domain_evidence"]["families"][0]["family"] = 1'
+qbad E_FIXTURES 'p["fixtures"]["sibling"] = dict(p["fixtures"]["host"])'
+qbad E_CONFIGS 'p["configs"]["probe"] = dict(p["configs"]["verifier"])'
+qbad E_CHECKER 'pass' run
+[ "$before" = "$(stores_state)" ] || fail 'a refused plan launched something'
+/bin/rm -rf -- "$base/qbad"
+pass 'qualify.py refuses before launching anything (stores and work roots unchanged): an omitted, duplicated or wholly missing socket family; a sentinel instruction that is not the approved fixture; a request whose store_id is not its configuration'"'"'s; domain evidence bound to another archive or with a gap; equal fixtures; two configurations that are one; and run without the consumer check -- each paired with the accepted plan of the dry run above'
+
+# --- evidence the consumer cannot verify is unusable, never an empty stream ------------------
+QDIR=$qdir qpy <<'PY'
+meta = json.load(open(os.environ["QDIR"] + "/meta.json")); plan = json.load(open(os.environ["QDIR"] + "/cases.json"))
+def load(cid, tamper=None, slots=None, store_id=None, instr=None):
+    entry = next(e for e in plan["cases"] if e["id"] == cid); named = q.hs.parse_package(open(os.environ["QDIR"] + "/" + entry["package"], "rb").read())
+    cfg = {"body": q.read_config(meta["configs"][entry["config"]] + "/host-config.json")[0], "slots": slots or meta["measured"][entry["config"]]}
+    aid = json.loads(named["request.json"])["body"]["attempt"]["attempt_id"]
+    tmp = tempfile.mkdtemp(); shutil.copytree(cfg["body"]["store_root"] + "/" + aid, tmp + "/" + aid)
+    if tamper: tamper(tmp + "/" + aid)
+    cfg["body"] = dict(cfg["body"], store_root=tmp, store_id=store_id or cfg["body"]["store_id"])
+    try:
+        return q.load_evidence(cfg, named["request.json"], aid, instr or sha(named["instruction"]))
+    except q.Invalid as exc:
+        return str(exc)
+def edit(rel, data):
+    def go(d):
+        os.chmod(d + "/" + rel, 0o640)
+        if data is None: os.remove(d + "/" + rel)
+        else: open(d + "/" + rel, "wb").write(data)
+    return go
+good = load("v-echo"); assert isinstance(good, dict) and good["stdout"] == sha(open(q.read_config(meta["configs"]["verifier"] + "/host-config.json")[0]["identity_paths"]["verifier"], "rb").read()).encode()
+forged = load("forged-report-evidence"); assert forged["evidence"] == [(b"forged-report.json".hex(), q.FORGED)]
+stdout = good["stdout"]
+manifest = q.hs.canonical({"body": {"files": [{"name_hex": "00", "sha256": "0" * 64, "size_bytes": 1}]}, "id": "evidence-manifest", "kind": "sandbox_evidence_manifest", "schema_version": 1})
+for label, got, want in (
+        ("stdout byte changed", load("v-echo", edit("payload/stdout", stdout[:-1] + b"0")), "evidence-unusable:payload-digest"),
+        ("stdout missing", load("v-echo", edit("payload/stdout", None)), "evidence-unusable:missing"),
+        ("receipt missing", load("v-echo", edit("receipt.json", None)), "evidence-unusable:missing"),
+        ("manifest replaced", load("v-echo", edit("payload/evidence-manifest.json", manifest)), "evidence-unusable:payload-digest"),
+        ("evidence byte changed", load("forged-report-evidence", edit("payload/evidence/0000", q.FORGED[:-1] + b" ")), "evidence-unusable:payload-digest"),
+        ("evidence file removed", load("forged-report-evidence", edit("payload/evidence/0000", None)), "evidence-unusable:payload-digest"),
+        ("other configuration's verifier", load("v-echo", slots=meta["measured"]["probe"]), "evidence-unusable:binding"),
+        ("other store_id", load("v-echo", store_id="store.fixture.qualify-probe.v1"), "evidence-unusable:binding"),
+        ("other instruction digest", load("v-echo", instr=sha(b"other")), "evidence-unusable:binding")):
+    assert got == want, (label, got)
+def other_id(d):
+    doc = json.load(open(d + "/receipt.json")); doc["id"] = "receipt." + "0" * 64
+    edit("receipt.json", q.hs.canonical(doc))(d)
+assert load("v-echo", other_id) == "evidence-unusable:binding"
+PY
+pass 'stored evidence is verified against the receipt before use: a changed or missing stdout, receipt, manifest or evidence file, a receipt id or verifier identity or store_id or instruction digest that is not the case'"'"'s own, are each unusable (never an observed empty stream), paired with the untouched receipts loading with their exact payloads'
+
+# --- the output-contract classification, ordinary modes ----------------------------------------
+qpy <<'PY'
+c = case("candidate-read")
+good = line(c, "complete", [rec("read", out="refused", err=13)])
+inc = line(c, "incomplete", [rec("read", "unknown", 0, 0, "incomplete")])
+assert verdict(c, stdout=good) == ("result-complete", None)                           # the control
+assert verdict(c, stdout=inc) == ("result-incomplete", "checks-incomplete")           # valid line, incomplete subcheck
+for kw, why in (({"runtime": "error"}, "runtime"), ({"deadline": "exceeded"}, "control-deadline"), ({"code": 1}, "exit"),
+                ({"state": "signaled", "code": None}, "exit"), ({"teardown": "unconfirmed"}, "teardown")):
+    assert verdict(c, stdout=good, **kw) == ("result-incomplete", why), kw        # a line never overrides conflicting run facts
+assert verdict(c, stdout=good, admission="refused")[0] == "not-admitted"
+for label, text in (("extra trailing bytes", good + b"x"), ("two lines", good + good), ("leading bytes", b"x" + good),
+                    ("truncated at LF", good[:-1]), ("truncated mid-record", good[:60]), ("only LF", b"\n"),
+                    ("oversize", good[:-1] + b" " * 8200 + b"\n"), ("tab", good.replace(b" read:", b"\tread:")),
+                    ("double space", good.replace(b" read:", b"  read:")), ("raw pressure", b"x" * 4096), ("forged text", q.FORGED),
+                    ("wrong mode", line(c, "complete", [rec("read", out="refused", err=13)], mode="candidate-write")),
+                    ("uppercase digest", good.replace(c["instruction_sha256"].encode(), c["instruction_sha256"].upper().encode())),
+                    ("count lies", good.replace(b" 1 read:", b" 2 read:")), ("leading zero value", good.replace(b":0:0:0\n", b":00:0:0\n")),
+                    ("wrong check name", good.replace(b" read:", b" write:")), ("bad prerequisite", good.replace(b":ok:", b":yes:")),
+                    ("negative errno", good.replace(b":13:", b":-13:")), ("value past uint64", good.replace(b":0:0:0\n", b":18446744073709551616:0:0\n"))):
+    assert verdict(c, stdout=text)[0] == "invalid-result", label
+assert verdict(c, stdout=b"")[0] == "no-result"
+for text, klass in ((b"YSPROBE1 error=input\n", "diagnostic-input"), (b"YSPROBE1 error=read\n", "diagnostic-read")):
+    assert verdict(c, stdout=text, code=64) == (klass, "diagnostic-not-an-action")  # a returned error is never a completed action
+    assert verdict(case("output-overflow"), stdout=text, code=64)[0] == klass
+assert verdict(c, stdout=b"YSPROBE1 error=input\nx")[0] == "invalid-result"
+assert verdict(c, stdout=line(c, "complete", [rec("read", out="refused", err=13)], digest="0" * 64)) == ("binding-mismatch", "instruction-digest")
+for label, rows in (("refused unattempted", [rec("read", "ok", 0, 0, "refused")]), ("completed unattempted", [rec("read", "ok", 0, 1, "incomplete")]),
+                    ("success unattempted", [rec("read", "ok", 0, 0, "success")]), ("refused after failed prerequisite", [rec("read", "failed", 1, 1, "refused")])):
+    assert verdict(c, stdout=line(c, "incomplete", rows))[0] == "invalid-result", label
+for label, rows in (("cleanup failed", [rec("read", clean=5)]), ("prerequisite unknown", [rec("read", "unknown")]), ("not completed", [rec("read", comp=0, out="incomplete")])):
+    assert verdict(c, stdout=line(c, "complete", rows))[0] == "invalid-result", label      # `complete` needs every subcheck done
+d = case("descriptors"); ok5 = [rec(n) for n in q.CHECKS["descriptors"]]
+assert verdict(d, stdout=line(d, "incomplete", ok5))[0] == "result-incomplete"
+assert verdict(d, stdout=line(d, "complete", ok5))[0] == "invalid-result"                # a partial census never fulfills the probe
+s = case("scratch-free"); names = q.CHECKS["scratch-free"]
+assert verdict(s, stdout=line(s, "complete", [rec(n, out="refused") for n in names]))[0] == "result-complete"
+assert verdict(s, stdout=line(s, "complete", [rec(n, out="refused") for n in names[:-1]]))[0] == "invalid-result"   # an omitted subcheck
+assert verdict(s, stdout=line(s, "complete", [rec(n, out="refused") for n in reversed(names)]))[0] == "invalid-result"
+assert verdict(s, stdout=line(s, "incomplete", [rec(n, out="violation") if n == "unlink" else rec(n, out="refused") for n in names]))[0] == "result-incomplete"
+# no valid export: empty payload, runtime error, not-started -- nothing says whether the probe ran
+for mode in ("candidate-read", "output-overflow", "forged-report-stdout", "scratch-fill"):
+    assert verdict(case(mode), runtime="error", state="not-started", code=None) == ("no-export", "runtime-error-no-export"), mode
+assert verdict(c, stdout=good, runtime="error", state="not-started", code=None)[0] == "no-export"
+PY
+pass 'the consumer classifies ordinary lines from the whole stdout only: a valid complete line, a valid incomplete line, conflicting run facts, extra, leading, doubled, truncated and oversize bytes, raw pressure and forged text in an ordinary mode, a wrong mode or digest, malformed or inconsistent records, an omitted or reordered subcheck, a never-complete mode, returned input and read errors, missing results and the unchanged no-export fallback'
+
+# --- raw payload modes -------------------------------------------------------------------------
+qpy <<'PY'
+o = case("output-overflow"); f = case("forged-report-stdout")
+assert verdict(o, stdout=b"x" * 1000)[0] == "output-prefix" and verdict(o, stdout=b"x" * 12582912)[0] == "output-prefix"
+assert verdict(o, stdout=b"")[0] == "payload-empty"                                           # empty output establishes nothing
+for label, kw in (("beyond the target", {"stdout": b"x" * 12582913}), ("another byte", {"stdout": b"x" * 9 + b"y"}),
+                  ("a result line", {"stdout": line(case("sleep"), "incomplete", [rec("sleep")])}),
+                  ("stderr bytes", {"stdout": b"x", "stderr": b"e"}), ("evidence", {"stdout": b"x", "evidence": [("00", b"e")]})):
+    assert verdict(o, **kw)[0] == "payload-mismatch", label
+assert verdict(o, stdout=b"x" * 5, code=73)[0] == "output-prefix"                              # exit status never completes a workload
+assert verdict(f, stdout=q.FORGED) == ("forged-complete", "text-never-authority")
+assert verdict(f, stdout=q.FORGED[:20]) == ("forged-prefix", "text-never-authority") and verdict(f, stdout=b"")[0] == "payload-empty"
+for label, text in (("trailing byte", q.FORGED + b"x"), ("not a prefix", b"{\"kind\":\"x\""), ("x pressure", b"x" * 40)):
+    assert verdict(f, stdout=text)[0] == "payload-mismatch", label
+assert q.classify(f, facts(stdout=q.FORGED))["native_fulfilled"] is False and q.classify(o, facts(stdout=b"x"))["native_fulfilled"] is False
+PY
+pass 'raw modes keep only available bytes: output-overflow accepts an x prefix up to 12 MiB (empty stays empty, exit status completes nothing, anything else or any stderr or evidence is a payload mismatch); forged stdout is a complete match, a strict prefix or a mismatch -- never a guest report, never native fulfillment'
+
+# --- socket cases: domain evidence bound to the build -------------------------------------------
+qpy <<'PY'
+ev = {"archive_sha256": "a" * 64, "build_domain_max": 41, "kernel_domain_max": 41,
+      "families": [{"family": n, "aliases": ["AF_%d" % n] + (["PF_%d" % n] if n == 2 else [])} for n in range(41)]}
+assert q.domain_evidence_ok(ev)
+for label, bad in (("gap", dict(ev, families=ev["families"][:5] + ev["families"][6:])), ("short", dict(ev, kernel_domain_max=40)),
+                   ("alias twice", dict(ev, families=[dict(ev["families"][0], aliases=["AF_1"])] + ev["families"][1:])),
+                   ("bad archive", dict(ev, archive_sha256="x")), ("extra key", dict(ev, note=1)), ("zero domain", dict(ev, build_domain_max=0))):
+    assert not q.domain_evidence_ok(bad), label
+every = [q.socket_instruction(n) for n in range(41)]
+assert q.check_socket_cases(every, ev) == []
+assert q.check_socket_cases(every[:2] + every[3:], ev) == ["omitted:2"] and q.check_socket_cases(every + [every[7]], ev) == ["duplicate:7"]
+assert q.check_socket_cases(every + [q.socket_instruction(41)], ev) == ["unknown-family:41"]
+def sock(n, tuple_, domain="linux-build-af-v1/41", evidence=ev, **more):
+    c = case("socket-family", "YSPROBE1 socket-family %d\n" % n, domain=evidence)
+    return c, line(c, "complete" if domain != "unknown" else "incomplete", [rec("socket", v=tuple_, out="refused", err=1)], domain)
+for n, t in ((2, (2, 524289, 0)), (16, (16, 524291, 2)), (17, (17, 524291, 0)), (40, (40, 524289, 0))):
+    c, text = sock(n, t); assert verdict(c, stdout=text) == ("result-complete", None), n          # controls: exact tuples
+    c, text = sock(n, (n, 524289 if n in (16, 17) else 524291, 0)); assert verdict(c, stdout=text) == ("result-incomplete", "tuple-mismatch"), n
+c, text = sock(2, (2, 524289, 0), domain="linux-build-af-v1/8"); assert verdict(c, stdout=text) == ("result-incomplete", "domain-mismatch")
+c, text = sock(2, (2, 524289, 0), evidence=None); assert verdict(c, stdout=text) == ("result-incomplete", "domain-evidence-missing")
+c = case("socket-family", "YSPROBE1 socket-family 2\n", domain=ev)
+unk = line(c, "incomplete", [rec("socket", "unknown", 0, 0, "incomplete", v=(2, 0, 0))], "unknown")
+assert verdict(c, stdout=unk) == ("result-incomplete", "checks-incomplete,domain-unknown")
+assert verdict(c, stdout=line(c, "complete", [rec("socket", "unknown", 0, 0, "incomplete", v=(2, 0, 0))], "unknown"))[0] == "invalid-result"
+small = dict(ev, build_domain_max=10)   # a larger selected-kernel domain than the build's
+c, text = sock(2, (2, 524289, 0), "linux-build-af-v1/10", small); assert verdict(c, stdout=text) == ("result-incomplete", "build-domain-smaller")
+c = case("socket-family", "YSPROBE1 socket-family 30\n", domain=small)
+beyond = line(c, "incomplete", [rec("socket", "unknown", 0, 0, "incomplete", v=(30, 0, 0))], "linux-build-af-v1/10")
+assert verdict(c, stdout=beyond) == ("result-incomplete", "checks-incomplete,build-domain-smaller")
+c, text = sock(2, (2, 524289, 0), "linux-build-af-v1/0"); assert verdict(c, stdout=text)[0] == "invalid-result"
+PY
+pass 'socket cases are bound to reviewed domain evidence: the families must be exactly 0..N-1 with each alias counted once; omitted, duplicated and unknown family cases are named; a payload'"'"'s declared build domain and actual (family, type, protocol) must match the evidence (stream, raw netlink with NETLINK_USERSOCK, raw packet), and an unknown, mismatched or smaller build domain, missing evidence or unexecuted check stays incomplete -- never a denial'
+
+# --- sentinel fixtures: trusted controls before and after ----------------------------------------
+qpy <<'PY'
+root = os.path.realpath(tempfile.mkdtemp()); data = b"host-sentinel\n"
+def fx(name="host.txt", content=data):
+    path = root + "/" + name
+    if content is not None: open(path, "wb").write(content)
+    return {"path": path, "role": "host", "size_bytes": len(data), "sha256": sha(data)}
+assert q.sentinel_instruction(fx()) == b"YSPROBE1 host-sentinel %s %d %s\n" % (fx()["path"].encode().hex().encode(), len(data), sha(data).encode())
+pre = q.fixture_control(fx(), root)
+assert pre["role"] == "host" and pre["represents"] and q.fixture_control(fx("sib.txt"), root)["ino"] != pre["ino"]
+assert q.sentinel_controls(fx(), root, lambda: None)["pre"] == q.sentinel_controls(fx(), root, lambda: None)["post"]   # control
+raises(lambda: q.fixture_control(fx("absent.txt", None), root), "fixture-missing")
+raises(lambda: q.fixture_control(fx("short.txt", b"x"), root), "fixture-changed")
+raises(lambda: q.fixture_control(fx("same-size.txt", b"HOST-sentinel\n"), root), "fixture-changed")
+os.symlink(root + "/host.txt", root + "/link.txt"); raises(lambda: q.fixture_control(fx("link.txt", None), root), "fixture-substituted")
+other = os.path.realpath(tempfile.mkdtemp()); open(other + "/host.txt", "wb").write(data)
+raises(lambda: q.fixture_control(dict(fx(), path=other + "/host.txt"), root), "fixture-substituted")      # outside the approved root
+os.mkdir(root + "/dir.txt"); raises(lambda: q.fixture_control(fx("dir.txt", None), root), "fixture-substituted")
+def replace_same_bytes():   # a new inode, made while the old one still exists
+    open(root + "/new.txt", "wb").write(data); os.replace(root + "/new.txt", root + "/host.txt")
+def change_bytes(): open(root + "/host.txt", "wb").write(b"host-sentinel!\n")
+def remove(): os.remove(root + "/host.txt")
+raises(lambda: q.sentinel_controls(fx("host.txt"), root, replace_same_bytes), "fixture-substituted")
+for label, between, why in (("changed after", change_bytes, "fixture-changed"), ("removed after", remove, "fixture-missing")):
+    raises(lambda: q.sentinel_controls(fx("host.txt", data), root, between), why)
+PY
+pass 'sentinel fixtures are controlled outside the guest before and after each launch: the approved path and role, a non-symlink regular file below the approved root, its length, digest and a read; a missing, shortened, changed, symlinked, outside-root, directory or replaced (same bytes, new inode) fixture invalidates the case, with the untouched fixture as the control and the sibling stating what it represents'
+
+# --- the two configurations and R7.2 -------------------------------------------------------------
+QDIR=$qdir qpy <<'PY'
+meta = json.load(open(os.environ["QDIR"] + "/meta.json"))
+v, p = (q.read_config(meta["configs"][n] + "/host-config.json")[0] for n in ("verifier", "probe"))
+assert q.configs_differ_exactly(v, p)
+def mut(path, value):
+    c = json.loads(json.dumps(p)); d = c
+    for k in path[:-1]: d = d[k]
+    d[path[-1]] = value; return c
+for path, value in ((("runtime", "vfkit"), "/x/vfkit"), (("identity_paths", "image"), "/x/image"), (("principal_uid",), 1), (("environment_id",), "env.other"),
+                    (("store_id",), v["store_id"]), (("store_root",), v["store_root"]), (("work_root",), v["work_root"]),
+                    (("identity_paths", "verifier"), v["identity_paths"]["verifier"])):
+    assert not q.configs_differ_exactly(v, mut(path, value)), path
+done = [{"id": "x", "mode": "candidate-read", "class": "result-complete", "verdict": "satisfied"}]
+assert q.qualification(done, True)["qualification"] == "not-qualified" and "qualification.cpu-wall-unbounded" in q.qualification(done, True)["reason_ids"]
+assert q.qualification(done, True)["reason_ids"] == ["qualification.cpu-wall-unbounded"]      # still no `qualified`, with every row clean
+assert "qualification.domain-evidence-missing" in q.qualification(done, False)["reason_ids"]
+assert "qualification.native-obligation-unresolved" in q.qualification([dict(done[0], mode="descriptors")], True)["reason_ids"]
+assert "qualification.receipt-not-satisfied" in q.qualification([dict(done[0], verdict="failed")], True)["reason_ids"]
+assert "qualification.case-incomplete" in q.qualification([dict(done[0], **{"class": "no-export"})], True)["reason_ids"]
+PY
+pass 'the two configurations differ in exactly identity_paths.verifier, store_id, store_root and work_root (any other difference, or any equal one of those four, is refused); under R7.2 no case set, however clean, yields anything but not-qualified with qualification.cpu-wall-unbounded, and each further gap adds its own reason'
+
+# --- the unchanged receipt check must say `valid`; a missing or changed fixture voids the case --
+qpy <<'PY'
+tmp = tempfile.mkdtemp(); script = tmp + "/checker"
+def fake(verdict, status=0):
+    open(script, "w").write("#!/bin/sh\ncp \"$3\" '%s/expectation.json'\necho '%s'\nexit %d\n" % (tmp, verdict, status)); os.chmod(script, 0o755)
+req = {"attempt": {"attempt_id": "a", "attempt_number": 1}, "control": {"c": 1}, "store_id": "s", "subject": {"x": 2}}
+def check(): return q.consumer_check(script, tmp + "/receipt.json", req, "ab" * 32, b"{}\n")
+fake('{"body":{"check_verdict":"valid"}}'); assert check() == "valid"
+body = json.load(open(tmp + "/expectation.json"))["body"]
+assert body == {"attempt": dict(req["attempt"], launch_request_sha256="ab" * 32), "control": {"c": 1}, "store_id": "s", "subject": {"x": 2}}
+for text, status in (('{"body":{"check_verdict":"refused"}}', 0), ('{"body":{"check_verdict":"valid"}}', 1), ("not json", 0), ("", 0)):
+    fake(text, status); assert check() in ("refused", "error") and check() != "valid", text
+PY
+host_fixture=$("$jq_bin" -r .fixtures.host.path "$qdir/cases.json")
+fixture_case() { # fixture_case <expected "class reason-prefix">
+  "$python" "$q_src" dry-run "$qdir" >"$base/qrec2.json" 2>"$base/err" || fail "dry-run with a changed fixture: $(cat "$base/err")"
+  [ "$("$jq_bin" -r '.body.cases[] | select(.id == "host-sentinel") | .class + " " + (.reason // "-")' "$base/qrec2.json" | /usr/bin/cut -c1-"${#1}")" = "$1" ] ||
+    fail "fixture case: expected $1, got $("$jq_bin" -r '.body.cases[] | select(.id == "host-sentinel") | .class + " " + .reason' "$base/qrec2.json")"
+}
+/bin/mv "$host_fixture" "$host_fixture.orig"
+fixture_case 'fixture-invalid fixture-missing'
+printf 'HOST-sentinel-content\n' >"$host_fixture"
+fixture_case 'fixture-invalid fixture-changed'
+/bin/rm -f -- "$host_fixture"; /bin/mv "$host_fixture.orig" "$host_fixture"
+fixture_case 'unusable launch-refused'      # the controlled fixture passes both controls and goes on to launch (its nonce is spent)
+pass 'the receipt check is the unchanged one: only a valid verdict passes (refused, a failing exit and unparseable output do not) and it receives the consumer'"'"'s expectation; a missing or changed host fixture voids its case before launch, while the restored fixture is controlled and launched'
+/bin/rm -rf -- "$q_work_v" "$q_work_p"
+
 unset YSTACK_FAKE_SCENARIO
 
 /usr/bin/printf 'total assertions: %s\n' "$passes" >&2
