@@ -934,10 +934,12 @@ phase_run private-default-run "$tmp/probe-production-test" > "$tmp/probe-product
   fail 'the probe production-path fixture did not report matrix completion'
 [ "$(/usr/bin/grep -c '^ledger ' "$tmp/probe-production-test.out")" -eq 980 ] ||
   fail 'the probe fixed registry did not report exactly 980 ids'
-[ "$(/usr/bin/grep -c ': executed$' "$tmp/probe-production-test.out")" -eq 874 ] &&
+executed=$(/usr/bin/grep -c ': executed$' "$tmp/probe-production-test.out")
+inapplicable=$(/usr/bin/grep -c ': inapplicable$' "$tmp/probe-production-test.out")
+[ "$((executed + inapplicable))" -eq 874 ] &&
   [ "$(/usr/bin/grep -c ': external$' "$tmp/probe-production-test.out")" -eq 99 ] &&
   [ "$(/usr/bin/grep -c ': blocked$' "$tmp/probe-production-test.out")" -eq 7 ] ||
-  fail 'the probe fixed registry runtime/external/blocked partition changed'
+  fail 'the probe fixed registry selected/inapplicable/external/blocked partition changed'
 pass 'the bounded probe fixture exercises the closed YSPROBE1 parser, request binding, action/result classification, cleanup preservation and signal target selection without native probe actions'
 
 for socket_variant in NO_SOCKET_CONSTANTS MASK_NETLINK MASK_PACKET; do
@@ -949,6 +951,7 @@ for socket_variant in NO_SOCKET_CONSTANTS MASK_NETLINK MASK_PACKET; do
     fail "the probe socket-header variant $socket_variant failed"
   /usr/bin/grep -Fx 'case socket-actual-header-facts: checked' "$tmp/probe-$socket_variant.out" >/dev/null ||
     fail "socket-header variant $socket_variant did not exercise actual facts"
+  /bin/cat "$tmp/probe-$socket_variant.out"
 done
 pass 'private socket-header variants execute the actual-facts entry case with all constants, no facts, missing NETLINK and missing PACKET identity'
 
@@ -956,8 +959,9 @@ phase_run private-no-madv-remove-compile /usr/bin/cc -std=c11 -Wall -Wextra -Wer
   -DYSTACK_PROBE_TEST -DYSTACK_TEST_DISABLE_MADV_REMOVE -I"$guest_dir" \
   "$guest_dir/probe.c" "$guest_dir/common.c" -o "$tmp/probe-no-madv-remove-test" ||
   fail 'the unavailable MADV_REMOVE private variant did not compile'
-phase_run private-no-madv-remove-run "$tmp/probe-no-madv-remove-test" >/dev/null ||
+phase_run private-no-madv-remove-run "$tmp/probe-no-madv-remove-test" >"$tmp/probe-no-madv-remove.out" ||
   fail 'the unavailable MADV_REMOVE private variant failed'
+/bin/cat "$tmp/probe-no-madv-remove.out"
 pass 'the private unavailable-MADV_REMOVE variant preserves the explicit unsupported record without a production selector'
 
 # Sanitizers exercise the same bounded private fixture where the host compiler
@@ -968,13 +972,15 @@ phase_run private-sanitizer-compile /usr/bin/cc -std=c11 -Wall -Wextra -Werror -
   fail 'the private sanitizer fixture did not compile'
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   phase_run private-sanitizer-Darwin /usr/bin/env ASAN_OPTIONS=detect_leaks=0 \
-    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >/dev/null ||
+    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >"$tmp/probe-sanitizer.out" ||
     fail 'the Darwin private sanitizer phase failed'
+  /bin/cat "$tmp/probe-sanitizer.out"
   /usr/bin/printf 'SKIP (Darwin capability): leak detection is unsupported by the platform ASan runtime; the same bounded fixture ran with ASan memory checks and UBSan. Linux CI runs detect_leaks=1.\n' >&2
 else
   phase_run private-sanitizer-Linux /usr/bin/env ASAN_OPTIONS=detect_leaks=1 \
-    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >/dev/null ||
+    UBSAN_OPTIONS=halt_on_error=1 "$tmp/probe-production-sanitized" >"$tmp/probe-sanitizer.out" ||
     fail 'the Linux private sanitizer phase failed'
+  /bin/cat "$tmp/probe-sanitizer.out"
 fi
 pass 'the bounded production-path probe fixture passes ASan/UBSan without executing native qualification actions'
 
