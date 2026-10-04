@@ -3319,7 +3319,8 @@ def facts(stdout=b"", stderr=b"", evidence=(), admission="admitted", runtime="co
 def case(mode, text=None, **more):
     ins = (text or "YSPROBE1 %s\n" % mode).encode()
     return dict({"mode": mode, "instruction": ins, "instruction_sha256": sha(ins)}, **more)
-def rec(name, pre="ok", att=1, comp=1, out="success", err=0, clean=0, v=(0, 0, 0)):
+def rec(name, pre="ok", att=1, comp=1, out="success", err=None, clean=0, v=(0, 0, 0)):
+    err = (13 if out == "refused" else 0) if err is None else err
     return "%s:%s:%d:%d:%s:%d:%d:%d:%d:%d" % ((name, pre, att, comp, out, err, clean) + tuple(v))
 def line(c, checks, records, domain="none", digest=None, mode=None):
     return ("YSPROBE1 %s %s %s %s %d %s\n" % (mode or c["mode"], digest or c["instruction_sha256"], checks, domain,
@@ -3382,7 +3383,25 @@ assert good["qualification"] == "not-qualified" and "qualification.cpu-wall-unbo
 assert q.aggregate(qd, raws) == open(os.environ["QREC"], "rb").read() == subprocess.run([sys.executable, sys.argv[2], "aggregate", qd] + ["%s/batch-%d.json" % (qd, k) for k in range(3)], capture_output=True).stdout
 assert "qualification.batch-missing" in named(raws[:1] + raws[2:]) and named(raws + [raws[1]]) == {"qualification.batch-duplicate"}
 assert named(raws + [edit(raws[1], lambda b: b["cases"][0].update(receipt_sha256="0" * 64))]) == {"qualification.batch-rerun"}
-vs = q.read_config(json.load(open(qd + "/cases.json"))["configs"]["verifier"]["install_dir"] + "/host-config.json")[0]["store_root"]
+def store(n): return q.read_config(json.load(open(qd + "/cases.json"))["configs"][n]["install_dir"] + "/host-config.json")[0]["store_root"]
+def tamper(path, new):   # aggregate against a changed or missing store file; restored afterwards
+    old = open(path, "rb").read(); os.chmod(path, 0o640)
+    if new is None: os.remove(path)
+    else: open(path, "wb").write(new)
+    try: return agg(raws)
+    finally: open(path, "wb").write(old); os.chmod(path, 0o440)
+for label, cid, cfg, rel, new in (("receipt deleted", "candidate-read", "probe", "receipt.json", None), ("stdout modified", "candidate-read", "probe", "payload/stdout", b"x"),
+                                  ("receipt modified after the record", "v-echo", "verifier", "receipt.json", b'{"x":1}\n')):
+    attempt = next(c["attempt_id"] for c in good["cases"] if c["id"] == cid)
+    r = tamper("%s/%s/%s" % (store(cfg), attempt, rel), new)
+    assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == cid)["class"] == "unusable" and "qualification.binding-mismatch" in r["reason_ids"], label
+assert agg(raws)["complete"] is True                                                    # control: everything restored
+def claim_complete(b):
+    for c in b["cases"]:
+        if c["id"] == "environment": c["class"] = "result-complete"
+cached = agg([raws[0], raws[1], edit(raws[2], claim_complete)])
+assert cached["complete"] and next(c for c in cached["cases"] if c["id"] == "environment")["class"] == "result-incomplete"   # re-classified, not trusted
+vs = store("verifier")
 pa = next(c["attempt_id"] for c in good["cases"] if c["config"] == "probe")
 os.mkdir(vs + "/" + pa); assert "qualification.batch-rerun" in named(raws); os.rmdir(vs + "/" + pa)   # a verifier-store receipt under a probe attempt id
 assert named(raws) == set()                                                                           # control: the clean stores
@@ -3395,6 +3414,7 @@ for label, f, want in (
         ("case dropped", lambda b: b["cases"].pop(), "binding-mismatch"),
         ("case in two batches", lambda b: b["cases"].append(json.loads(raws[1])["body"]["cases"][0]), "binding-mismatch"),
         ("case digest", lambda b: b["cases"][0].update(instruction_sha256="0" * 64), "binding-mismatch"),
+        ("accepted content", lambda b: b.update(accepted_content_sha256="0" * 64), "accepted-set-mismatch"),
         ("accepted digests", lambda b: b["accepted_identities"].update(verification_instructions=["0" * 64]), "accepted-set-mismatch"),
         ("accepted set of another batch", lambda b: b.update(accepted_identities=json.loads(raws[0])["body"]["accepted_identities"]), "accepted-set-mismatch"),
         ("receipt accepted-set digest", lambda b: b["cases"][0].update(accepted_set_sha256="0" * 64), "accepted-set-mismatch")):
@@ -3506,6 +3526,11 @@ qbad E_BATCH_EXISTS "$with_checker" run --batch 2                # control: the 
 printf 'other\n' >"$chk/accepted-identities.json"
 qbad E_ACCEPTED "$with_checker" run --batch 2                    # the checker tree's copy differs
 /bin/cp "$installed_set" "$chk/accepted-identities.json"
+/bin/cp "$installed_set" "$base/set.orig"
+"$python" -c 'import json, os, sys; p = sys.argv[1]; d = json.load(open(p)); d["body"]["environments"][0]["mechanisms"]["cpu_time_ms"].append("mechanism.zz"); os.chmod(p, 0o644); open(p, "w").write(json.dumps(d, sort_keys=True, separators=(",", ":")) + "\n")' "$installed_set"
+qbad E_ACCEPTED "$with_checker" run --batch 2                    # the identities match, but a mechanism id was added
+/bin/cp -f "$base/set.orig" "$installed_set"; /bin/chmod 444 "$installed_set"
+qbad E_BATCH_EXISTS "$with_checker" run --batch 2                # control: the set restored
 [ "$before" = "$(stores_state)" ] || fail 'a refused plan launched something'
 /bin/rm -rf -- "$base/qbad"
 pass 'run refuses a batch whose installed accepted set (or the checker tree'"'"'s copy) is not exactly that batch'"'"'s, or whose record exists, and a plan with a duplicated case id, a batch of more than 8 distinct digests, an empty batch, a case in two batches or in none is E_CASES, each paired with the accepted plan or the matching set'
@@ -3563,6 +3588,9 @@ c = case("candidate-read")
 good = line(c, "complete", [rec("read", out="refused", err=13)])
 inc = line(c, "incomplete", [rec("read", "unknown", 0, 0, "incomplete")])
 assert verdict(c, stdout=good) == ("result-complete", None)                           # the control
+for err, want in ((1, "result-complete"), (13, "result-complete"), (30, "result-complete"), (2, "invalid-result"), (0, "invalid-result"), (95, "invalid-result")):
+    assert verdict(c, stdout=line(c, "complete", [rec("read", out="refused", err=err)]))[0] == want, err   # only a permission errno is a refusal
+assert verdict(c, stdout=line(c, "complete", [rec("read", err=2)]))[0] == "invalid-result"                # nor does a success carry an errno
 assert verdict(c, stdout=inc) == ("result-incomplete", "checks-incomplete")           # valid line, incomplete subcheck
 for kw, why in (({"runtime": "error"}, "runtime"), ({"deadline": "exceeded"}, "control-deadline"), ({"code": 1}, "exit"),
                 ({"state": "signaled", "code": None}, "exit"), ({"teardown": "unconfirmed"}, "teardown")):
@@ -3644,6 +3672,7 @@ def sock(n, tuple_, domain="linux-build-af-v1/41", evidence=ev, **more):
 for n, t in ((2, (2, 524289, 0)), (16, (16, 524291, 2)), (17, (17, 524291, 0)), (40, (40, 524289, 0))):
     c, text = sock(n, t); assert verdict(c, stdout=text) == ("result-complete", None), n          # controls: exact tuples
     c, text = sock(n, (n, 524289 if n in (16, 17) else 524291, 0)); assert verdict(c, stdout=text) == ("result-incomplete", "tuple-mismatch"), n
+c, text = sock(2, (2, 524289, 0)); assert verdict(c, stdout=text.replace(b":refused:1:", b":refused:13:"))[0] == "invalid-result"   # socket(): EPERM only
 c, text = sock(2, (2, 524289, 0), domain="linux-build-af-v1/8"); assert verdict(c, stdout=text) == ("result-incomplete", "domain-mismatch")
 c, text = sock(2, (2, 524289, 0), evidence=None); assert verdict(c, stdout=text) == ("result-incomplete", "domain-evidence-missing")
 c, text = sock(2, (2, 524289, 0), "linux-build-af-v1/" + "1" * 5000); assert verdict(c, stdout=text)[0] == "invalid-result"

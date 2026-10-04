@@ -58,6 +58,8 @@ FORGED = b'{"kind":"sandbox_guest_report","forged":true}\n'
 OUTPUT_TARGET = 12582912
 NEVER_COMPLETE = ("descriptors", "signal-supervisor")  # a partial census / an unaddressable ancestor
 INPUT_ERRORS = {b"YSPROBE1 error=input\n": "diagnostic-input", b"YSPROBE1 error=read\n": "diagnostic-read"}
+# probe.c classify_errno: a permission refusal is EPERM, EACCES or EROFS (Linux 1, 13, 30); socket() only EPERM (seccomp)
+REFUSAL_ERRNOS = {"socket-family": (1,)}
 PRE, OUTCOMES = ("ok", "failed", "unknown"), ("success", "refused", "unsupported", "incomplete", "violation")
 # Linux UAPI, aarch64: SOCK_STREAM 1, SOCK_RAW 3, SOCK_CLOEXEC 02000000, AF_NETLINK 16, AF_PACKET 17.
 SOCK_STREAM, SOCK_RAW, SOCK_CLOEXEC, AF_NETLINK, AF_PACKET, NETLINK_USERSOCK = 1, 3, 0x80000, 16, 17, 2
@@ -97,11 +99,13 @@ def parse_result(mode, stdout):
                 or not all(uint(x, 2 ** 64 - 1) for x in f[7:])):
             raise Invalid("malformed")
         records.append({"check": name, "prerequisite": f[1], "attempted": f[2] == "1",
-                        "completed": f[3] == "1", "outcome": f[4], "cleanup_errno": int(f[6]),
+                        "completed": f[3] == "1", "outcome": f[4], "errno": int(f[5]), "cleanup_errno": int(f[6]),
                         "values": [int(x) for x in f[7:]]})
     for r in records:  # state consistency
         if (r["completed"] and not r["attempted"]) or (not r["attempted"] and r["outcome"] not in ("incomplete", "unsupported")) \
-                or (r["outcome"] == "refused" and not (r["prerequisite"] == "ok" and r["completed"])):
+                or (r["outcome"] == "refused" and not (r["prerequisite"] == "ok" and r["completed"]
+                                                       and r["errno"] in REFUSAL_ERRNOS.get(mode, (1, 13, 30)))) \
+                or (r["outcome"] == "success" and r["errno"] != 0):
             raise Invalid("inconsistent-record")
     all_done = all(r["prerequisite"] == "ok" and r["completed"] and r["cleanup_errno"] == 0
                    and r["outcome"] in ("success", "refused", "violation") for r in records)
@@ -406,8 +410,15 @@ def expected_identities(configs, digests):
     return dict({s: sorted({m[s] for m in slots}) for s in slots[0]}, verification_instructions=digests)
 
 
+def accepted_content(env_id, identities):
+    """The batch-independent accepted-set content (everything but verification_instructions), as it must be."""
+    return {"environment_id": env_id, "identities": {k: v for k, v in identities.items() if k != "verification_instructions"},
+            "mechanisms": {r: [i] for r, i in hs.LIMIT_MECHANISM_IDS.items()}, "scratch_bytes": 16777216}
+
+
 def accepted_check(cfgs, expected, checker):
-    """Both installed accepted sets (and the checker tree's copy) must hold exactly `expected`."""
+    """Both installed accepted sets (and the checker tree's copy) must hold exactly `expected` and the fixed content;
+    returns (file sha256, content sha256)."""
     shas = set()
     for cfg in cfgs.values():
         fd = -1
@@ -417,7 +428,8 @@ def accepted_check(cfgs, expected, checker):
         except (OSError, hs.Refusal):
             raise Invalid("E_ACCEPTED")
         entry = next((e for e in envs if e["environment_id"] == cfg["body"]["environment_id"]), None)
-        if entry is None or entry["identities"] != expected:
+        if (entry is None or len(envs) != 1 or entry["identities"] != expected or entry["scratch_bytes"] != 16777216
+                or entry["mechanisms"] != accepted_content("", {})["mechanisms"]):
             raise Invalid("E_ACCEPTED")
         shas.add(digest)
     if checker:
@@ -428,7 +440,7 @@ def accepted_check(cfgs, expected, checker):
             raise Invalid("E_ACCEPTED")
     if len(shas) != 1:
         raise Invalid("E_ACCEPTED")
-    return shas.pop()
+    return shas.pop(), sha(hs.canonical(accepted_content(cfgs["probe"]["body"]["environment_id"], expected)))
 
 
 # --- dry-run / run / aggregate ---------------------------------------------------------------
@@ -497,7 +509,7 @@ def run_batch(st, k, dry):
     """Launches each case of batch k once; one canonical sandbox_qualification_batch record."""
     plan, cfgs, ev, dirpath = st["plan"], st["cfgs"], st["ev"], st["dir"]
     expected = expected_identities(cfgs, batch_digests(st["bplan"], k))
-    accepted_sha = accepted_check(cfgs, expected, plan.get("checker"))
+    accepted_sha, content_sha = accepted_check(cfgs, expected, plan.get("checker"))
     env = {key: v for key, v in os.environ.items() if not key.startswith("DYLD_")}
     records = []
     for cid in st["bplan"]["batches"][k]:
@@ -549,7 +561,7 @@ def run_batch(st, k, dry):
             klass = "fixture-invalid" if str(exc).startswith("fixture-") else "unusable"
             record.update({"class": klass, "reason": str(exc)})
         records.append(record)
-    return batch_record({"accepted_identities": expected, "accepted_set_sha256": accepted_sha, "cases": records,
+    return batch_record({"accepted_identities": expected, "accepted_set_sha256": accepted_sha, "accepted_content_sha256": content_sha, "cases": records,
                          "case_list_sha256": st["plan_sha"], "dry_run": dry, "k": k,
                          "domain_evidence_sha256": sha(hs.canonical(ev)) if ev is not None else None,
                          "environment_id": cfgs["probe"]["body"]["environment_id"],
@@ -562,7 +574,7 @@ def install_accepted(st, k):
     for path in {c["body"]["installed_files"]["accepted_set"] for c in st["cfgs"].values()}:
         doc = json.load(open(path))
         for env in doc["body"]["environments"]:
-            env["identities"] = expected
+            env.update(identities=expected, mechanisms=accepted_content("", {})["mechanisms"], scratch_bytes=16777216)
         os.chmod(path, 0o644)
         with open(path, "wb") as handle:
             handle.write(hs.canonical(doc))
@@ -630,9 +642,28 @@ def aggregate(dirpath, raws):
                 or any(c["config"] != declared[c["id"]]["configuration"] or c["instruction_sha256"] != declared[c["id"]]["instruction_sha256"]
                        for c in body["cases"] if c["id"] in declared):
             reasons.add("qualification.binding-mismatch")
-        if body["accepted_identities"] != expected_identities(ref["configurations"], batch_digests(bplan, k)) \
+        want = expected_identities(ref["configurations"], batch_digests(bplan, k))
+        if body["accepted_identities"] != want or body["accepted_content_sha256"] != sha(hs.canonical(accepted_content(ref["environment_id"], want))) \
                 or any(c.get("accepted_set_sha256", body["accepted_set_sha256"]) != body["accepted_set_sha256"] for c in body["cases"]):
             reasons.add("qualification.accepted-set-mismatch")
+    entries, ev = {e["id"]: e for e in plan["cases"]}, plan.get("domain_evidence")
+    cfgs = {n: {"body": read_config(os.path.join(plan["configs"][n]["install_dir"], "host-config.json"))[0],
+                "slots": ref["configurations"][n]["slots"]} for n in ("verifier", "probe")}
+    for body in firsts:   # never trust a cached classification: re-verify each named receipt and payload, then re-classify
+        for c in body["cases"]:
+            if "receipt_sha256" not in c or c["class"] == "unusable":
+                continue
+            try:
+                named = hs.parse_package(open(os.path.join(dirpath, entries[c["id"]]["package"]), "rb").read())
+                facts = load_evidence(cfgs[c["config"]], named["request.json"], c["attempt_id"], c["instruction_sha256"])
+                if facts["receipt_sha256"] != c["receipt_sha256"] or facts["receipt"]["origin"]["accepted_set_sha256"] != c["accepted_set_sha256"]:
+                    raise Invalid("evidence-unusable:recorded-digest")
+                if c["mode"] != "verifier":
+                    c.update(classify({"mode": c["mode"], "instruction": named["instruction"], "instruction_sha256": c["instruction_sha256"],
+                                       "domain": ev}, facts))
+            except (Invalid, KeyError, TypeError, OSError, hs.Refusal) as exc:
+                c.update({"class": "unusable", "reason": str(exc)})
+                reasons.add("qualification.binding-mismatch")
     for name in ("verifier", "probe"):   # each store against its own configuration's named attempts only
         named = {c["attempt_id"] for body in firsts for c in body["cases"] if c["config"] == name}
         store = read_config(os.path.join(plan["configs"][name]["install_dir"], "host-config.json"))[0]["store_root"]
