@@ -3382,6 +3382,10 @@ assert good["qualification"] == "not-qualified" and "qualification.cpu-wall-unbo
 assert q.aggregate(qd, raws) == open(os.environ["QREC"], "rb").read() == subprocess.run([sys.executable, sys.argv[2], "aggregate", qd] + ["%s/batch-%d.json" % (qd, k) for k in range(3)], capture_output=True).stdout
 assert "qualification.batch-missing" in named(raws[:1] + raws[2:]) and named(raws + [raws[1]]) == {"qualification.batch-duplicate"}
 assert named(raws + [edit(raws[1], lambda b: b["cases"][0].update(receipt_sha256="0" * 64))]) == {"qualification.batch-rerun"}
+vs = q.read_config(json.load(open(qd + "/cases.json"))["configs"]["verifier"]["install_dir"] + "/host-config.json")[0]["store_root"]
+pa = next(c["attempt_id"] for c in good["cases"] if c["config"] == "probe")
+os.mkdir(vs + "/" + pa); assert "qualification.batch-rerun" in named(raws); os.rmdir(vs + "/" + pa)   # a verifier-store receipt under a probe attempt id
+assert named(raws) == set()                                                                           # control: the clean stores
 assert named([edit(r, lambda b: None) for r in raws]) == set()                                                # control: re-encoded, unchanged
 for label, f, want in (
         ("configuration", lambda b: b["configurations"]["probe"]["slots"].update(image="0" * 64), "binding-mismatch"),
@@ -3575,6 +3579,9 @@ for label, text in (("extra trailing bytes", good + b"x"), ("two lines", good + 
                     ("negative errno", good.replace(b":13:", b":-13:")), ("value past uint64", good.replace(b":0:0:0\n", b":18446744073709551616:0:0\n"))):
     assert verdict(c, stdout=text)[0] == "invalid-result", label
 assert verdict(c, stdout=b"")[0] == "no-result"
+for label, text in (("count", good.replace(b" 1 read:", b" " + b"1" * 5000 + b" read:")), ("value", good.replace(b":0:0:0\n", b":" + b"9" * 5000 + b":0:0\n")),
+                    ("errno", good.replace(b":13:", b":" + b"1" * 5000 + b":"))):
+    assert verdict(c, stdout=text)[0] == "invalid-result", label       # an oversized number is invalid, never an exception (the batch goes on)
 for text, klass in ((b"YSPROBE1 error=input\n", "diagnostic-input"), (b"YSPROBE1 error=read\n", "diagnostic-read")):
     assert verdict(c, stdout=text, code=64) == (klass, "diagnostic-not-an-action")  # a returned error is never a completed action
     assert verdict(case("output-overflow"), stdout=text, code=64)[0] == klass
@@ -3639,6 +3646,7 @@ for n, t in ((2, (2, 524289, 0)), (16, (16, 524291, 2)), (17, (17, 524291, 0)), 
     c, text = sock(n, (n, 524289 if n in (16, 17) else 524291, 0)); assert verdict(c, stdout=text) == ("result-incomplete", "tuple-mismatch"), n
 c, text = sock(2, (2, 524289, 0), domain="linux-build-af-v1/8"); assert verdict(c, stdout=text) == ("result-incomplete", "domain-mismatch")
 c, text = sock(2, (2, 524289, 0), evidence=None); assert verdict(c, stdout=text) == ("result-incomplete", "domain-evidence-missing")
+c, text = sock(2, (2, 524289, 0), "linux-build-af-v1/" + "1" * 5000); assert verdict(c, stdout=text)[0] == "invalid-result"
 c = case("socket-family", "YSPROBE1 socket-family 2\n", domain=ev)
 unk = line(c, "incomplete", [rec("socket", "unknown", 0, 0, "incomplete", v=(2, 0, 0))], "unknown")
 assert verdict(c, stdout=unk) == ("result-incomplete", "checks-incomplete,domain-unknown")

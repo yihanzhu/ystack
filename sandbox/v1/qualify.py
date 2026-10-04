@@ -68,7 +68,7 @@ SENTINEL_MEANING = {
 
 
 def uint(text, maximum):
-    return re.fullmatch(r"0|[1-9][0-9]*", text) is not None and int(text) <= maximum
+    return re.fullmatch(r"0|[1-9][0-9]{0,19}", text) is not None and int(text) <= maximum   # at most 20 digits
 
 
 def parse_result(mode, stdout):
@@ -83,7 +83,7 @@ def parse_result(mode, stdout):
         raise Invalid("malformed")
     digest, checks, domain, count, raw_records = parts[2], parts[3], parts[4], parts[5], parts[6:]
     names = CHECKS[mode]
-    domain_ok = (re.fullmatch(r"linux-build-af-v1/([1-9][0-9]*)", domain) is not None
+    domain_ok = (re.fullmatch(r"linux-build-af-v1/([1-9][0-9]{0,4})", domain) is not None
                  and int(domain.rsplit("/", 1)[1]) <= 65536 or domain == "unknown") \
         if mode == "socket-family" else domain == "none"
     if (not re.fullmatch(r"[0-9a-f]{64}", digest) or checks not in ("complete", "incomplete") or not domain_ok
@@ -203,7 +203,7 @@ def classify(case, facts):
         return done("no-result")
     try:
         parsed = parse_result(mode, out)
-    except Invalid as exc:
+    except (Invalid, ValueError) as exc:   # ValueError: no conversion of untrusted text may abort the batch
         return done("invalid-result", str(exc))
     if parsed["digest"] != case["instruction_sha256"]:
         return done("binding-mismatch", "instruction-digest")
@@ -477,6 +477,8 @@ def prepare(dirpath, dry):
                 raise Invalid("E_CASES")
         fx = fixtures.get(mode[:-9]) if mode.endswith("-sentinel") else None
         if mode == "socket-family":
+            if re.fullmatch(rb"YSPROBE1 socket-family (0|[1-9][0-9]{0,4})\n", instruction) is None:
+                raise Invalid("E_CASES")
             socket_instructions.append(instruction)
         if mode.endswith("-sentinel") and instruction != sentinel_instruction(fx):
             raise Invalid("E_CASES")
@@ -631,8 +633,8 @@ def aggregate(dirpath, raws):
         if body["accepted_identities"] != expected_identities(ref["configurations"], batch_digests(bplan, k)) \
                 or any(c.get("accepted_set_sha256", body["accepted_set_sha256"]) != body["accepted_set_sha256"] for c in body["cases"]):
             reasons.add("qualification.accepted-set-mismatch")
-    named = {c["attempt_id"] for body in firsts for c in body["cases"]}
-    for name in ("verifier", "probe"):
+    for name in ("verifier", "probe"):   # each store against its own configuration's named attempts only
+        named = {c["attempt_id"] for body in firsts for c in body["cases"] if c["config"] == name}
         store = read_config(os.path.join(plan["configs"][name]["install_dir"], "host-config.json"))[0]["store_root"]
         if set(os.listdir(store)) - named:
             reasons.add("qualification.batch-rerun")   # a receipt no batch record names
@@ -663,7 +665,7 @@ def main(argv):
                 raise Invalid("E_KERNEL_CONFIG " + " ".join(missing))
         elif cmd == "dry-run" and len(rest) == 1:
             sys.stdout.buffer.write(run_dry(rest[0]))
-        elif cmd == "run" and len(rest) == 3 and rest[1] == "--batch" and rest[2].isdigit():
+        elif cmd == "run" and len(rest) == 3 and rest[1] == "--batch" and re.fullmatch("[0-9]{1,4}", rest[2]):
             sys.stdout.buffer.write(run_one(rest[0], int(rest[2])))
         elif cmd == "aggregate" and len(rest) >= 2:
             sys.stdout.buffer.write(aggregate(rest[0], [open(f, "rb").read() for f in rest[1:]]))
