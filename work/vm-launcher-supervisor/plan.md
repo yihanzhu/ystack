@@ -831,9 +831,9 @@ A structural CPU and wall bound, or an operator decision on an empirical standar
 | 5 | `review_size: accepted-exception` | 1,400-3,500 | the launch lifecycle against the fake runtime |
 | 6 | `review_size: accepted-exception` | 2,800-4,200 | guest containment setup, build provenance and production-path regression proof |
 | 7 | `review_size: accepted-exception` | 4,000-5,900 | truthful probe actions, bounded production-path proof and mandatory build input |
-| 8 | `review_size: accepted-exception` | 1,300-1,500 | runtime driver and batched qualification harness |
+| 8 | `review_size: accepted-exception` | 1,300-1,750 | runtime driver and batched qualification harness |
 | 9 | `review_size: standard` | 70-110 | registry entry, docs, restore, manifest |
-| This plan amendment | `review_size: standard` | under 400 | batched native qualification (spec R13.4) |
+| This plan amendment | `review_size: standard` | under 400 | review-size ceiling for PR 8 |
 
 Evidence: #460 measured 1,694 (an 831-line C verifier with SHA-256, a 771-line test);
 #454 3,530 (a 1,556-line stdlib Python store and test); #455 641 and #457 599;
@@ -864,9 +864,11 @@ runtime is always stopped, reaped and receipted, timed-out driver reads rejected
 incomplete with the driver process tree cleaned up,
 index-stored evidence under the R10.2 layout with hex-name validation, the real-time
 default-deadline cases beside the fast overridden ones, and receipt diagnostics on
-assertion failure (#463 record). PR 8 as built in #499 measures about 1,180 before
-batching; the batch plan, per-batch accepted-set binding, `aggregate` and their paired
-missing, duplicate, rerun and mismatch tests add about 150-250 (#463 record). PR 6's
+assertion failure (#463 record). PR 8 as built in #499 measures about 1,450-1,750:
+kernel-bound domain evidence, physical checker paths, the batched run and `aggregate`,
+per-store stray-receipt checks, bounded numeric parsing, errno-checked refusals,
+stored evidence re-verified during aggregation, and the common accepted-set content
+compared across batches (#463 record). PR 6's
 range covers the guest containment/build
 implementation plus controlled archive extraction, checked reporting and setup,
 and production-path regression harnesses. Keep readable setup and complete proof,
