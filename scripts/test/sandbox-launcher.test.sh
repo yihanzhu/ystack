@@ -3263,19 +3263,19 @@ def rec(name, pre="unknown", att=0, comp=0, out="incomplete", err=0, v=(0, 0, 0)
     return "%s:%s:%d:%d:%s:%d:0:%d:%d:%d" % ((name, pre, att, comp, out, err) + v)
 # The accepted set holds at most 8 instruction digests per environment (digest_list_ok), so one
 # dry run launches 8 distinct instructions; classification of every mode is proved below.
-cases = [("v-echo", "verifier", b"verify one\n", None, "verifier-run"), ("p-echo", "probe", b"YSPROBE1 sleep\n", None, "invalid-result")]
-for mode in ("candidate-read", "forged-report-evidence", "output-overflow"):
+cases = [("v-echo", "verifier", b"verify one\n", None, "verifier-run"), ("v-echo-2", "verifier", b"verify one\n", None, "verifier-run"),
+         ("p-echo", "probe", b"YSPROBE1 sleep\n", None, "invalid-result"), ("p-echo-2", "probe", b"YSPROBE1 sleep\n", None, "invalid-result")]
+for mode in ("candidate-read", "forged-report-evidence", "output-overflow", "tools-write", "scratch-fill", "environment", "forged-report-stdout"):
     cases.append((mode, "probe", ("YSPROBE1 %s\n" % mode).encode(), mode, None))
 for role in ("host", "sibling"):
     cases.append((role + "-sentinel", "probe", q.sentinel_instruction(dict(fixtures[role], role=role)), role + "-sentinel", None))
 cases.append(("socket-0", "probe", q.socket_instruction(0), "socket-family", None))
-digests = sorted({sha(c[2]) for c in cases})
-accepted_path = body0["installed_files"]["accepted_set"]
-doc = json.load(open(accepted_path))
-for slot in measured["probe"]:
-    doc["body"]["environments"][0]["identities"][slot] = sorted({measured[n][slot] for n in measured})
-doc["body"]["environments"][0]["identities"]["verification_instructions"] = digests
-os.chmod(accepted_path, 0o644); put(accepted_path, canon(doc), 0o444)
+# 12 distinct digests (a repeated one in two verifier cases and across batches) over three batches of at most 8
+batches = [sorted(b) for b in (["v-echo", "v-echo-2", "p-echo", "candidate-read", "forged-report-evidence"],
+           ["output-overflow", "host-sentinel", "sibling-sentinel", "socket-0", "tools-write"],
+           ["environment", "forged-report-stdout", "p-echo-2", "scratch-fill"])]
+open(qdir + "/batches.json", "wb").write(canon({"body": {"batches": batches, "cases": [{"case_id": c[0], "configuration": c[1], "instruction_sha256": sha(c[2])} for c in cases]},
+          "id": "sandbox.qualification-batches", "kind": "sandbox_qualification_batches", "schema_version": 1}))
 plan_cases, expected = [], {}
 for n, (cid, cfg, instruction, mode, klass) in enumerate(cases):
     scenario = {"limit_overrides": {"output_bytes": {"observed": 64}}}   # the echoed 64-character digest
@@ -3356,7 +3356,7 @@ for entry in plan["cases"]:
     receipt = json.load(open("%s/%s/receipt.json" % (store, attempt)))["body"]
     assert receipt["identities"]["verifier"]["sha256"] == digest[cfg] and receipt["origin"]["store_id"] == meta["stores"][cfg], entry["id"]
     assert receipt["identities"]["verification_instructions"]["sha256"] == sha(named["instruction"])
-    if entry["id"] in ("v-echo", "p-echo"):
+    if entry["id"] in ("v-echo", "v-echo-2", "p-echo", "p-echo-2"):
         assert receipt["payload"]["stdout_sha256"] == sha(digest[cfg].encode()), entry["id"]
     assert not os.path.exists("%s/%s/receipt.json" % (q.read_config(meta["configs"]["probe" if cfg == "verifier" else "verifier"] + "/host-config.json")[0]["store_root"], attempt))
 sentinels = [c for c in body["cases"] if c["mode"].endswith("-sentinel")]
@@ -3366,6 +3366,38 @@ ev = next(c for c in body["cases"] if c["id"] == "forged-report-evidence")
 assert len(ev["evidence"]) == 1 and ev["class"] == "result-incomplete" and ev["native_fulfilled"] is False
 PY
 pass 'the dry run launches a real-verifier case, an echo case, both sentinels, a socket family and raw, evidence and ordinary probe modes through each case'"'"'s own configuration: every receipt'"'"'s identities.verifier, stdout_sha256 and origin.store_id match its own configuration and appear in no other store, and each case is classified (complete and incomplete lines, raw prefix, forged text, sentinel controls, evidence) with native_fulfilled false and every verdict failed'
+
+# --- aggregation: complete only if every batch ran once and every case id is covered once -----
+QDIR=$qdir QREC=$base/qrec.json qpy <<'PY'
+import subprocess
+qd = os.environ["QDIR"]; raws = [open("%s/batch-%d.json" % (qd, k), "rb").read() for k in range(3)]
+BATCH = {"qualification." + n for n in ("batch-missing", "batch-duplicate", "batch-rerun", "binding-mismatch", "accepted-set-mismatch")}
+def agg(rs): return json.loads(q.aggregate(qd, rs))["body"]
+def edit(raw, f):
+    doc = json.loads(raw); f(doc["body"]); return q.hs.canonical(doc)
+def named(rs): return BATCH & set(agg(rs)["reason_ids"])
+good = agg(raws)
+assert good["complete"] is True and not BATCH & set(good["reason_ids"]) and len(good["cases"]) == 14 and good["batches"] == 3
+assert good["qualification"] == "not-qualified" and "qualification.cpu-wall-unbounded" in good["reason_ids"]   # still never qualified
+assert q.aggregate(qd, raws) == open(os.environ["QREC"], "rb").read() == subprocess.run([sys.executable, sys.argv[2], "aggregate", qd] + ["%s/batch-%d.json" % (qd, k) for k in range(3)], capture_output=True).stdout
+assert "qualification.batch-missing" in named(raws[:1] + raws[2:]) and named(raws + [raws[1]]) == {"qualification.batch-duplicate"}
+assert named(raws + [edit(raws[1], lambda b: b["cases"][0].update(receipt_sha256="0" * 64))]) == {"qualification.batch-rerun"}
+assert named([edit(r, lambda b: None) for r in raws]) == set()                                                # control: re-encoded, unchanged
+for label, f, want in (
+        ("configuration", lambda b: b["configurations"]["probe"]["slots"].update(image="0" * 64), "binding-mismatch"),
+        ("domain evidence", lambda b: b.update(domain_evidence_sha256="0" * 64), "binding-mismatch"),
+        ("case list", lambda b: b.update(case_list_sha256="0" * 64), "binding-mismatch"),
+        ("dry flag", lambda b: b.update(dry_run=False), "binding-mismatch"),
+        ("case dropped", lambda b: b["cases"].pop(), "binding-mismatch"),
+        ("case in two batches", lambda b: b["cases"].append(json.loads(raws[1])["body"]["cases"][0]), "binding-mismatch"),
+        ("case digest", lambda b: b["cases"][0].update(instruction_sha256="0" * 64), "binding-mismatch"),
+        ("accepted digests", lambda b: b["accepted_identities"].update(verification_instructions=["0" * 64]), "accepted-set-mismatch"),
+        ("accepted set of another batch", lambda b: b.update(accepted_identities=json.loads(raws[0])["body"]["accepted_identities"]), "accepted-set-mismatch"),
+        ("receipt accepted-set digest", lambda b: b["cases"][0].update(accepted_set_sha256="0" * 64), "accepted-set-mismatch")):
+    assert "qualification." + want in named([raws[0], edit(raws[1], f), raws[2]]), label
+    assert agg([raws[0], edit(raws[1], f), raws[2]])["complete"] is False
+PY
+pass 'aggregate rebuilds each batch'"'"'s accepted set from batches.json and is complete only when every batch ran exactly once, every case id is covered exactly once and slots, configurations, domain evidence and case list agree: a missing, duplicated or rerun batch, a changed configuration, domain evidence, case list or case, a case in two batches or none, and an accepted set that differs from the rebuilt one or from its receipts each give their named reason, beside the unchanged complete aggregate (equal to the dry run and never qualified)'
 
 # --- a request carrying the other configuration's store_id is refused E_STORE_ID ------------
 launch_cfg() { ( CDPATH='' cd -- "$1" && "$python" host-supervisor.py launch ) <"$2" >"$base/out" 2>"$base/err"; }
@@ -3437,9 +3469,9 @@ pass 'check-kernel-config is the host R2.4 function: the complete fixture config
 before=$(stores_state)
 qbad() { # qbad <expected-code> <python statements editing the plan `p`> [subcommand]
   /bin/rm -rf -- "$base/qbad"; /bin/cp -R "$qdir" "$base/qbad"
-  PLAN=$base/qbad/cases.json EDIT=$2 "$python" -c 'import json, os; p = json.load(open(os.environ["PLAN"])); exec(os.environ["EDIT"]); json.dump(p, open(os.environ["PLAN"], "w"))'
+  PLAN=$base/qbad/${QBAD_FILE:-cases.json} EDIT=$2 "$python" -c 'import json, os; p = json.load(open(os.environ["PLAN"])); exec(os.environ["EDIT"]); open(os.environ["PLAN"], "w").write(json.dumps(p, sort_keys=True, separators=(",", ":")) + "\n")'
   local status=0
-  "$python" "$q_src" "${3:-dry-run}" "$base/qbad" >"$base/out" 2>"$base/err" || status=$?
+  "$python" "$q_src" "${3:-dry-run}" "$base/qbad" "${@:4}" >"$base/out" 2>"$base/err" || status=$?
   [ "$status" -eq 1 ] && [ "$(cat "$base/err")" = "$1" ] && [ ! -s "$base/out" ] || fail "qualify.py ${3:-dry-run} ($2): expected $1, got $status $(cat "$base/err")"
 }
 qbad E_CASES 'p["domain_evidence"]["kernel_domain_max"] = p["domain_evidence"]["build_domain_max"] = 2; p["domain_evidence"]["families"].append({"family": 1, "aliases": ["AF_TEST1"]})'
@@ -3453,9 +3485,26 @@ qbad E_DOMAIN 'p["domain_evidence"]["kernel_sha256"] = "2" * 64'   # evidence re
 qbad E_DOMAIN 'del p["domain_evidence"]["kernel_sha256"]'
 qbad E_FIXTURES 'p["fixtures"]["sibling"] = dict(p["fixtures"]["host"])'
 qbad E_CONFIGS 'p["configs"]["probe"] = dict(p["configs"]["verifier"])'
-qbad E_CHECKER 'pass' run
+qbad E_CHECKER 'pass' run --batch 0
+export QBAD_FILE=batches.json
+qbad E_CASES 'p["body"]["cases"].append(dict(p["body"]["cases"][0]))'
+qbad E_CASES 'p["body"]["batches"] = [sorted(c["case_id"] for c in p["body"]["cases"])]'
+qbad E_CASES 'p["body"]["batches"][0] = sorted(p["body"]["batches"][0] + ["socket-0"])'
+qbad E_CASES 'p["body"]["batches"][1].remove("socket-0")'
+qbad E_CASES 'p["body"]["batches"].append([])'
+unset QBAD_FILE
+chk="$base/chk/enforcement/v1"; /bin/mkdir -p "$chk"; printf '#!/bin/sh\n' >"$chk/check-sandbox-receipt.sh"; /bin/chmod 755 "$chk/check-sandbox-receipt.sh"
+installed_set=$("$jq_bin" -r .body.installed_files.accepted_set "$qv_install/host-config.json")
+/bin/cp "$installed_set" "$chk/accepted-identities.json"; /bin/chmod 644 "$chk/accepted-identities.json"
+with_checker='p["checker"] = "'$chk'/check-sandbox-receipt.sh"'
+qbad E_ACCEPTED "$with_checker" run --batch 0                    # the installed set is batch 2's
+qbad E_BATCH_EXISTS "$with_checker" run --batch 2                # control: the installed set matches; the record exists
+printf 'other\n' >"$chk/accepted-identities.json"
+qbad E_ACCEPTED "$with_checker" run --batch 2                    # the checker tree's copy differs
+/bin/cp "$installed_set" "$chk/accepted-identities.json"
 [ "$before" = "$(stores_state)" ] || fail 'a refused plan launched something'
 /bin/rm -rf -- "$base/qbad"
+pass 'run refuses a batch whose installed accepted set (or the checker tree'"'"'s copy) is not exactly that batch'"'"'s, or whose record exists, and a plan with a duplicated case id, a batch of more than 8 distinct digests, an empty batch, a case in two batches or in none is E_CASES, each paired with the accepted plan or the matching set'
 pass 'qualify.py refuses before launching anything (stores and work roots unchanged): an omitted, duplicated or wholly missing socket family; a sentinel instruction that is not the approved fixture; a request whose store_id is not its configuration'"'"'s; domain evidence bound to another archive or with a gap; equal fixtures; two configurations that are one; and run without the consumer check -- each paired with the accepted plan of the dry run above'
 
 # --- evidence the consumer cannot verify is unusable, never an empty stream ------------------
@@ -3497,8 +3546,12 @@ def other_id(d):
     doc = json.load(open(d + "/receipt.json")); doc["id"] = "receipt." + "0" * 64
     edit("receipt.json", q.hs.canonical(doc))(d)
 assert load("v-echo", other_id) == "evidence-unusable:binding"
+raws = [open("%s/batch-%d.json" % (os.environ["QDIR"], k), "rb").read() for k in range(3)]
+stray = json.loads(q.aggregate(os.environ["QDIR"], raws))["body"]   # the cross-configuration receipts above are in no batch record
+assert stray["complete"] is False and "qualification.batch-rerun" in stray["reason_ids"]
 PY
 pass 'stored evidence is verified against the receipt before use: a changed or missing stdout, receipt, manifest or evidence file, a receipt id or verifier identity or store_id or instruction digest that is not the case'"'"'s own, are each unusable (never an observed empty stream), paired with the untouched receipts loading with their exact payloads'
+pass 'a store receipt that no batch record names makes the aggregate incomplete (batch-rerun), beside the same aggregate complete before the cross-configuration launches wrote theirs'
 
 # --- the output-contract classification, ordinary modes ----------------------------------------
 qpy <<'PY'
