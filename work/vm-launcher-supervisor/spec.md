@@ -519,7 +519,9 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    and the question of `work/enforcement-evidence-binding/spec.md:88-92` verbatim. A
    signing credential instead returns this spec to G2, since the store rule changes.
 4. **`vml-qualify`** (intent decision 2): the R12.1 entry bytes; the proposed
-   accepted-set entry bytes (ten slots, six mechanism ids, `scratch_bytes`); the probe
+   production accepted-set entry bytes (the real-verifier configuration's ten slots
+   with its own 1-8 production instruction digests, six mechanism ids,
+   `scratch_bytes`; the probe is never a production verifier); the probe
    list with expected receipt outcomes: the real verifier on match, mismatch and one
    changed-byte refusal, the forced-stop latency over repeated `HardStop`s (recorded
    information only, not a bound, R7.2), and `probe` modes for candidate reads under the
@@ -529,9 +531,24 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    bombs, a 32-thread CPU spin, memory exhaustion, sleep, signalling the supervisor,
    namespace and cgroup escape, and forged report text on stdout and evidence; the
    candidate source (the scrubbed dummy-target copy at its step-7 commit); synthetic
-   sentinel locations; the separate qualification install directory and accepted set,
-   removed afterwards; supervisor resource measurements. Approval authorizes only that
-   run and its qualification record.
+   sentinel locations; the batch plan below with each batch's accepted set, and the
+   separate qualification install directories, removed afterwards; supervisor resource
+   measurements. Approval authorizes only those batch runs and their one record.
+
+   Qualification is batched, because each accepted-set slot holds 1-8 digests
+   (R5.2, `work/enforcement-evidence-binding/spec.md:173-177`) and the cases need
+   more. One complete case list is declared once with a fixed partition into batches
+   of at most 8 instruction digests, each case in exactly one batch. The batch
+   accepted sets differ only in `verification_instructions`, exactly that batch's
+   digests. Each batch runs exactly once against its set. Every batch validates the
+   whole case list, both configurations, the sentinel fixtures and the kernel-bound
+   domain evidence. Aggregation yields one `sandbox_qualification_record`, complete
+   only if every declared case is covered exactly once, every batch ran exactly once,
+   the measured identities other than `verification_instructions`, both
+   configurations and the domain evidence are identical across batches, and each
+   batch's accepted-set digest matches its receipts. A missing, duplicated, rerun or
+   inconsistent batch makes the record incomplete. Batching waives no obligation
+   below; a rerun needs a new request.
 
    Probe evidence distinguishes prerequisites, the operation actually attempted,
    its result and cleanup. Preserve the operation's result when cleanup fails.
@@ -625,8 +642,8 @@ or not, in R13.4; their exclusion from the tree is not unbounded use.
    fake runtime; 3 guest init, supervisor, probe and `build-guest.py`; 4 runtime driver,
    `qualify.py`, the R12.1 append, docs, restore and manifest; 5 R13.2a's acquisition
    and quarantine builds; 6 R13.2b's installation (5 and 6 make no repository change);
-   7 R13.3's host setup (no repository change); 8 the qualification run; 9 the R12.3
-   qualification PR.
+   7 R13.3's host setup (no repository change); 8 the batched qualification runs; 9 the
+   R12.3 qualification PR.
 
 ### R15. Tests
 
