@@ -352,6 +352,21 @@ test fetches only the pinned jq 1.6 release, as the other suites do. Restoring
 these records installs nothing, runs no verifier in a sandbox, accepts no digest,
 and performs no model, credential, publish or target operation.
 
+### Restore the inactive VM launcher and supervisor
+
+Restore the paths listed under "Inactive VM launcher and supervisor" in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/sandbox-guest.test.sh
+bash scripts/test/sandbox-launcher.test.sh
+```
+
+They prove the guest frame, plan and wiring code with the host compiler, and the
+host supervisor against a fake runtime, fixture store and test-only accepted set.
+Restoring installs no runtime, account, sudo rule or store, boots no VM, accepts no
+identity and uses no network beyond the pinned jq 1.6 release.
+
 ### Restore the inactive maintenance loop
 
 Restore the seven paths listed under “Inactive maintenance loop” in

@@ -335,6 +335,19 @@ check is inactive, grants no authority or qualification, changes no gate, and
 runs no candidate, supervisor or network action. Declaration-only sandbox
 evaluations keep their meaning.
 
+## Inactive VM launcher and supervisor
+
+`sandbox/v1/host-supervisor.py` is the only producer of sandbox enforcement
+receipts ([spec](../work/vm-launcher-supervisor/spec.md)). It refuses before launch
+unless every byte identity, binding and candidate file matches, freezes the
+candidate by copy, boots one offline guest through `sandbox/v1/runtime-vfkit.py`,
+runs the fixed verifier under the guest supervisor, tears down and writes one
+receipt into its own store. Nothing runs it outside its tests: no host
+configuration, account or store exists, and the shipped accepted set is empty, so
+every receipt is refused. CPU and wall time are `enforcement: "none"`, so no receipt
+can be `satisfied`. The tests use a fake runtime and prove contracts, not the Apple
+VM boundary.
+
 ## Inactive credential-policy evaluator
 
 `control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
@@ -1446,11 +1459,13 @@ text in a regular, non-symlink file inside a fixed size. Validating a record
 creates no issue, no change request, and no deploy authority.
 
 `shadow/v1/shadow-environments.json` is the committed list of execution
-environments a shadow run may use. It lists three entries today:
+environments a shadow run may use. It lists four entries today:
 `env.local-macos-fixture` (`fixtures-only`, `unproven`),
-`env.local-macos-ystack-self` (`self-host`, `unproven`) and
+`env.local-macos-ystack-self` (`self-host`, `unproven`),
 `env.local-macos-dummy-target` (`external-target`, `unproven`), which binds the
-external dummy target `repo.ystack-dummy-target` by its root commit. Each entry
+external dummy target `repo.ystack-dummy-target` by its root commit, and
+`env.local-macos-vm-dummy-target` (`external-target`, `unproven`), the VM guest
+environment, which inherits nothing from the checkout entry. Each entry
 binds one target repository id and one source repository, named by that
 repository's own root commit. Adding an environment is a reviewed change to
 that file; no run may add one.

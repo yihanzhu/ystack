@@ -349,6 +349,8 @@ fixture_root=$(git_clean --git-dir="$tmp/source.git" rev-list --max-parents=0 "$
     "Operator's local macOS checkout, ystack's own scrubbed bare source repository." \
   --arg dummy_description \
     "Operator's local macOS checkout, a scrubbed bare copy of the external dummy target repository." \
+  --arg vm_description \
+    "Operator's Apple silicon macOS host, Apple Virtualization framework Linux guest VM, scrubbed bare copy of the external dummy target repository." \
   '{schema_version:1,kind:"shadow_environment_registry",id:"shadow.environments.v1",
     body:{activation_state:"inactive",registry_version:"v1",
       environments:[
@@ -362,10 +364,14 @@ fixture_root=$(git_clean --git-dir="$tmp/source.git" rev-list --max-parents=0 "$
         {description:$dummy_description,environment_id:"env.local-macos-dummy-target",
          evidence_scope:"external-target",proof_state:"unproven",
          source_root_commit:"c1cacf5a1dbcc5030d66ecd300bf0b115c792e99",
+         target_repository_id:"repo.ystack-dummy-target"},
+        {description:$vm_description,environment_id:"env.local-macos-vm-dummy-target",
+         evidence_scope:"external-target",proof_state:"unproven",
+         source_root_commit:"c1cacf5a1dbcc5030d66ecd300bf0b115c792e99",
          target_repository_id:"repo.ystack-dummy-target"}]}}' \
   > "$tmp/expected-registry.json"
 /usr/bin/cmp -s "$registry" "$tmp/expected-registry.json" || fail registry-contents
-pass 'the environment registry lists three environments, each bound to a target repository and a source root commit'
+pass 'the environment registry lists four environments, each bound to a target repository and a source root commit'
 
 run_case() {
   local name=$1 incident_input=$2 materialization=$3
