@@ -3396,11 +3396,39 @@ for label, cid, cfg, rel, new in (("receipt deleted", "candidate-read", "probe",
     r = tamper("%s/%s/%s" % (store(cfg), attempt, rel), new)
     assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == cid)["class"] == "unusable" and "qualification.binding-mismatch" in r["reason_ids"], label
 assert agg(raws)["complete"] is True                                                    # control: everything restored
-def altered(path, f):   # aggregate after the file the batches ran against was changed; restored afterwards
+def altered(path, f, rs=None):   # aggregate after the file the batches ran against was changed; restored afterwards
     old = open(path, "rb").read(); d = json.loads(old); f(d)
     open(path, "wb").write(json.dumps(d, sort_keys=True, separators=(",", ":")).encode() + b"\n")
-    try: return agg(raws)
+    try: return agg(rs or raws)
     finally: open(path, "wb").write(old)
+def forge(cid, cfg, f, body_claim=None, case_claim=None):   # a receipt changed by f, and a batch-0 record that names it
+    path = "%s/%s/receipt.json" % (store(cfg), next(c["attempt_id"] for c in good["cases"] if c["id"] == cid))
+    old = open(path, "rb").read(); doc = json.loads(old); f(doc["body"]); new = q.hs.canonical(doc)
+    def name(b):
+        b.update(body_claim or {})
+        for c in b["cases"]:
+            if c["id"] == cid: c.update(dict(receipt_sha256=q.sha(new), **(case_claim or {})))
+    os.chmod(path, 0o640); open(path, "wb").write(new)
+    try:
+        r = agg([edit(raws[0], name)] + raws[1:]); return r, next(c for c in r["cases"] if c["id"] == cid)
+    finally: open(path, "wb").write(old); os.chmod(path, 0o440)
+assert forge("v-echo", "verifier", lambda b: None)[0]["complete"] is True                                    # control: a receipt the record names, unchanged
+for slot in ("guest_kernel", "host_runtime", "host_supervisor", "image", "toolchain", "verification_instructions"):
+    r, c = forge("candidate-read", "probe", lambda b: b["identities"][slot].update(sha256="0" * 64))
+    assert r["complete"] is False and c["class"] == "unusable", slot       # every measured identity is compared, whatever the record claims
+b0 = json.loads(raws[0])["body"]; env = b0["environment_id"]
+broad = q.sha(q.accepted_doc(env, dict(b0["accepted_identities"], verification_instructions=sorted(b0["accepted_identities"]["verification_instructions"] + ["0" * 64]))))
+r, c = forge("v-echo", "verifier", lambda b: b["origin"].update(accepted_set_sha256=broad), {"accepted_set_sha256": broad}, {"accepted_set_sha256": broad})
+assert r["complete"] is False and "qualification.accepted-set-mismatch" in r["reason_ids"]                      # produced under a broader set
+r, c = forge("v-echo", "verifier", lambda b: b["origin"].update(accepted_set_sha256=b0["accepted_set_sha256"]))
+assert r["complete"] is True and q.sha(q.accepted_doc(env, b0["accepted_identities"])) == b0["accepted_set_sha256"]   # control: the exact set
+def share_package(d):
+    e = {x["id"]: x for x in d["cases"]}; e["v-echo-2"]["package"] = e["v-echo"]["package"]
+def same_execution(b):
+    a, t = (next(c for c in b["cases"] if c["id"] == i) for i in ("v-echo", "v-echo-2"))
+    t.update({k: a[k] for k in ("attempt_id", "launch_request_sha256", "receipt_sha256")})
+r = altered(qd + "/cases.json", share_package, [edit(raws[0], same_execution), raws[1], raws[2]])
+assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == "v-echo-2")["reason"] == "duplicate-attempt"   # one execution counted twice
 def bad_env(b):
     for c in b["cases"]:
         if c["id"] == "environment": f(c)
@@ -3519,6 +3547,7 @@ qbad() { # qbad <expected-code> <python statements editing the plan `p`> [subcom
 }
 qbad E_CASES 'p["domain_evidence"]["kernel_domain_max"] = p["domain_evidence"]["build_domain_max"] = 2; p["domain_evidence"]["families"].append({"family": 1, "aliases": ["AF_TEST1"]})'
 qbad E_CASES 'p["cases"].append(dict(p["cases"][-1], id="socket-dup"))'
+qbad E_CASES 'e = {x["id"]: x for x in p["cases"]}; e["v-echo-2"]["package"] = e["v-echo"]["package"]'
 qbad E_CASES 'p["cases"] = [c for c in p["cases"] if not c["id"].startswith("socket")]'
 qbad E_CASES 'p["fixtures"]["host"]["sha256"] = "0" * 64'
 qbad E_CASES 'p["cases"][0]["config"] = "probe"'
