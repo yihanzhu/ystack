@@ -104,7 +104,8 @@ def parse_result(mode, stdout):
                         "values": [int(x) for x in f[7:]]})
     for r in records:  # state consistency
         if (r["completed"] and not r["attempted"]) or (not r["attempted"] and r["outcome"] not in ("incomplete", "unsupported")) \
-                or (r["outcome"] == "refused" and not (r["prerequisite"] == "ok" and r["completed"]
+                or (r["outcome"] == "refused" and not (r["prerequisite"] == "ok" and r["attempted"]
+                                                       and (r["completed"] or (mode.endswith("-sentinel") and r["check"] == "read"))   # probe.c: open ok, read refused
                                                        and r["errno"] in REFUSAL_ERRNOS.get(mode, (1, 13, 30)))) \
                 or (r["outcome"] == "success" and r["errno"] != 0):
             raise Invalid("inconsistent-record")
@@ -271,17 +272,23 @@ def read_config(path):
 def measure(config_path):
     body, raw = read_config(config_path)
     ids, rt = body["identity_paths"], body["runtime"]
-    fds = {k: os.open(v, os.O_RDONLY) for k, v in ids.items() if k != "dyld_cache_files"}
-    fds["dyld_cache_files"] = [os.open(p, os.O_RDONLY) for p in ids["dyld_cache_files"]]
-    fds["runtime_vfkit"], fds["runtime_driver"] = os.open(rt["vfkit"], os.O_RDONLY), os.open(rt["driver"], os.O_RDONLY)
-    with open(os.path.join(os.path.dirname(os.path.realpath(config_path)), "host-supervisor.py"), "rb") as handle:
-        supervisor_raw = handle.read()
-    with open(os.path.realpath(sys.executable), "rb") as handle:
-        python_raw = handle.read()
-    slots = hs.measure_identities(fds, b"", raw, supervisor_raw, python_raw)[0]
-    for fd in fds.values():
-        for one in (fd if isinstance(fd, list) else [fd]):
-            os.close(one)
+    opened = []   # every descriptor is closed, on every path
+
+    def op(path):
+        opened.append(os.open(path, os.O_RDONLY))
+        return opened[-1]
+    try:
+        fds = {k: op(v) for k, v in ids.items() if k != "dyld_cache_files"}
+        fds["dyld_cache_files"] = [op(p) for p in ids["dyld_cache_files"]]
+        fds["runtime_vfkit"], fds["runtime_driver"] = op(rt["vfkit"]), op(rt["driver"])
+        with open(os.path.join(os.path.dirname(os.path.realpath(config_path)), "host-supervisor.py"), "rb") as handle:
+            supervisor_raw = handle.read()
+        with open(os.path.realpath(sys.executable), "rb") as handle:
+            python_raw = handle.read()
+        slots = hs.measure_identities(fds, b"", raw, supervisor_raw, python_raw)[0]
+    finally:
+        for fd in opened:
+            os.close(fd)
     del slots["verification_instructions"]
     if any(state != "observed" for state, _ in slots.values()) or len(slots) != 9:
         raise Invalid("E_MEASURE")
@@ -430,10 +437,12 @@ def accepted_check(cfgs, expected, checker):
     env_id = cfgs["probe"]["body"]["environment_id"]
     want, got = sha(accepted_doc(env_id, expected)), set()
     for cfg in cfgs.values():
-        fd = -1
         try:
             fd = os.open(cfg["body"]["installed_files"]["accepted_set"], os.O_RDONLY)
-            got.add(hs.check_accepted_set(fd)[0])
+            try:
+                got.add(hs.check_accepted_set(os.dup(fd))[0])   # check_accepted_set closes the descriptor it is given
+            finally:
+                os.close(fd)
         except (OSError, hs.Refusal):
             raise Invalid("E_ACCEPTED")
     if checker:

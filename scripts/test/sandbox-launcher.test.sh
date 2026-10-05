@@ -3709,6 +3709,20 @@ for label, rows in (("refused unattempted", [rec("read", "ok", 0, 0, "refused")]
     assert verdict(c, stdout=line(c, "incomplete", rows))[0] == "invalid-result", label
 for label, rows in (("cleanup failed", [rec("read", clean=5)]), ("prerequisite unknown", [rec("read", "unknown")]), ("not completed", [rec("read", comp=0, out="incomplete")])):
     assert verdict(c, stdout=line(c, "complete", rows))[0] == "invalid-result", label      # `complete` needs every subcheck done
+for role in ("host", "sibling"):   # probe.c's sentinel_action: every way it can end
+    sc = case(role + "-sentinel", "YSPROBE1 %s-sentinel 2f78 1 %s\n" % (role, "0" * 64)); opened = rec("open", v=(0o100000, 1, 0))
+    for label, rows, checks, want in (
+            ("open refused", [rec("open", out="refused", v=(0, 1, 0)), rec("read", "failed", 0, 0, "incomplete")], "complete", "invalid-result"),
+            ("open refused, incomplete", [rec("open", out="refused", err=13, v=(0, 1, 0)), rec("read", "failed", 0, 0, "incomplete")], "incomplete", "result-incomplete"),
+            ("open ENOENT", [rec("open", out="incomplete", err=2, v=(0, 1, 0)), rec("read", "failed", 0, 0, "incomplete")], "incomplete", "result-incomplete"),
+            ("read EACCES", [opened, rec("read", comp=0, out="refused", err=13, v=(0, 1, 0))], "incomplete", "result-incomplete"),
+            ("read EPERM", [opened, rec("read", comp=0, out="refused", err=1, v=(0, 1, 0))], "incomplete", "result-incomplete"),
+            ("read EROFS", [opened, rec("read", comp=0, out="refused", err=30, v=(0, 1, 0))], "incomplete", "result-incomplete"),
+            ("read ENOENT refused", [opened, rec("read", comp=0, out="refused", err=2, v=(0, 1, 0))], "incomplete", "invalid-result"),
+            ("read refused claimed complete", [opened, rec("read", comp=0, out="refused", err=13, v=(0, 1, 0))], "complete", "invalid-result"),
+            ("read refused completed", [opened, rec("read", out="refused", err=13, v=(0, 1, 0))], "complete", "result-complete")):
+        assert verdict(sc, stdout=line(sc, checks, rows))[0] == want, (role, label)
+    assert verdict(c, stdout=line(c, "incomplete", [rec("read", comp=0, out="refused", err=13)]))[0] == "invalid-result"   # only the sentinel read may be refused uncompleted
 d = case("descriptors"); ok5 = [rec(n) for n in q.CHECKS["descriptors"]]
 assert verdict(d, stdout=line(d, "incomplete", ok5))[0] == "result-incomplete"
 assert verdict(d, stdout=line(d, "complete", ok5))[0] == "invalid-result"                # a partial census never fulfills the probe
@@ -3865,6 +3879,26 @@ fixture_case 'fixture-invalid fixture-changed'
 /bin/rm -f -- "$host_fixture"; /bin/mv "$host_fixture.orig" "$host_fixture"
 fixture_case 'unusable launch-refused'      # the controlled fixture passes both controls and goes on to launch (its nonce is spent)
 pass 'the receipt check is the unchanged one: only a valid verdict passes (refused, a failing exit and unparseable output do not) and it receives the consumer'"'"'s expectation; a missing or changed host fixture voids its case before launch, while the restored fixture is controlled and launched'
+# --- no descriptor leaks, on success or failure ---------------------------------------------------
+QDIR=$qdir qpy <<'PY'
+import resource
+meta = json.load(open(os.environ["QDIR"] + "/meta.json")); b2 = json.loads(open(os.environ["QDIR"] + "/batch-2.json", "rb").read())["body"]
+cfgs = {n: {"body": q.read_config(meta["configs"][n] + "/host-config.json")[0]} for n in ("verifier", "probe")}
+resource.setrlimit(resource.RLIMIT_NOFILE, (40, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))   # far fewer than the calls below
+for _ in range(300):
+    assert q.accepted_check(cfgs, b2["accepted_identities"], None)[0] == b2["accepted_set_sha256"]      # control: the installed set
+    raises(lambda: q.accepted_check(cfgs, dict(b2["accepted_identities"], verification_instructions=["0" * 64]), None), "E_ACCEPTED")
+tmp = tempfile.mkdtemp(); shutil.copytree(meta["configs"]["verifier"], tmp + "/i")
+body = q.read_config(tmp + "/i/host-config.json")[0]; body["identity_paths"]["toolchain"] = tmp + "/absent"
+os.chmod(tmp + "/i/host-config.json", 0o644)
+open(tmp + "/i/host-config.json", "wb").write(q.hs.canonical({"body": body, "id": "sandbox.host-config.v1", "kind": "sandbox_host_config", "schema_version": 1}))
+for _ in range(300):
+    try: q.measure(tmp + "/i/host-config.json")
+    except OSError: pass
+    else: raise AssertionError("an absent slot must fail")
+assert len(q.measure(meta["configs"]["verifier"] + "/host-config.json")) == 9                                   # still working afterwards
+PY
+pass 'accepted_check and measure close every descriptor they open, on success and on failure: hundreds of calls under a soft RLIMIT_NOFILE of 40 neither exhaust descriptors nor change a result'
 /bin/rm -rf -- "$q_work_v" "$q_work_p"
 
 unset YSTACK_FAKE_SCENARIO
