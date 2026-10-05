@@ -230,6 +230,24 @@ work/enforcement-evidence-binding/intent.md
 work/enforcement-evidence-binding/spec.md
 work/enforcement-evidence-binding/plan.md
 
+# Inactive VM launcher and supervisor
+sandbox/v1/host-supervisor.py
+sandbox/v1/runtime-vfkit.py
+sandbox/v1/build-guest.py
+sandbox/v1/qualify.py
+sandbox/v1/guest/common.h
+sandbox/v1/guest/common.c
+sandbox/v1/guest/init.c
+sandbox/v1/guest/supervisor.c
+sandbox/v1/guest/probe.c
+scripts/test/sandbox-launcher.test.sh
+scripts/test/sandbox-guest.test.sh
+scripts/test/sandbox-fake-runtime.py
+scripts/test/sandbox-guest-harness.c
+work/vm-launcher-supervisor/intent.md
+work/vm-launcher-supervisor/spec.md
+work/vm-launcher-supervisor/plan.md
+
 # Inactive credential policy and evaluator
 control/v1/credential-policy.json
 control/v1/credential-policy-decision.json
