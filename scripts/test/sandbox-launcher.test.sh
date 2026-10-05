@@ -3396,6 +3396,25 @@ for label, cid, cfg, rel, new in (("receipt deleted", "candidate-read", "probe",
     r = tamper("%s/%s/%s" % (store(cfg), attempt, rel), new)
     assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == cid)["class"] == "unusable" and "qualification.binding-mismatch" in r["reason_ids"], label
 assert agg(raws)["complete"] is True                                                    # control: everything restored
+def altered(path, f):   # aggregate after the file the batches ran against was changed; restored afterwards
+    old = open(path, "rb").read(); d = json.loads(old); f(d)
+    open(path, "wb").write(json.dumps(d, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+    try: return agg(raws)
+    finally: open(path, "wb").write(old)
+def bad_env(b):
+    for c in b["cases"]:
+        if c["id"] == "environment": f(c)
+def flip_mode(c): c["mode"] = "verifier"
+def drop_receipt(c): del c["receipt_sha256"]
+for label, f in (("cached mode flipped to verifier", flip_mode), ("receipt digest removed", drop_receipt), ("attempt id removed", lambda c: c.pop("attempt_id"))):
+    r = agg([raws[0], raws[1], edit(raws[2], bad_env)])
+    env = next(c for c in r["cases"] if c["id"] == "environment")
+    assert r["complete"] is False and env["class"] == "unusable" if f is not flip_mode else env["class"] == "result-incomplete" and env["mode"] == "environment", label
+r = altered(qd + "/cases.json", lambda d: d["domain_evidence"].update(build_domain_max=2))
+assert r["complete"] is False and "qualification.binding-mismatch" in r["reason_ids"]                       # domain evidence changed after the batches ran
+r = altered(qd + "/batches.json", lambda d: d["body"]["cases"].reverse())
+assert r["complete"] is False and "qualification.binding-mismatch" in r["reason_ids"]                       # batches.json changed after running
+assert agg(raws)["complete"] is True                                                                          # control: both files restored
 def claim_complete(b):
     for c in b["cases"]:
         if c["id"] == "environment": c["class"] = "result-complete"

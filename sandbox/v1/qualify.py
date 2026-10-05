@@ -606,6 +606,50 @@ def run_one(dirpath, k):
     return raw
 
 
+def verify_case(plan, decl, c, body, cfg, ev, named):
+    """One case rebuilt from batches.json, the package and the verified stored evidence; the record's claim `c`
+    supplies nothing but bindings, all checked here (a missing or malformed one is unusable, never skipped)."""
+    request, instruction = json.loads(named["request.json"])["body"], named["instruction"]
+    attempt = request["attempt"]["attempt_id"]
+    if (not isinstance(c, dict) or sha(instruction) != decl["instruction_sha256"] or c.get("instruction_sha256") != decl["instruction_sha256"]
+            or c.get("config") != decl["configuration"] or c.get("launch_request_sha256") != sha(named["request.json"])
+            or c.get("attempt_id") != attempt):
+        raise Invalid("record-binding")
+    mode = "verifier"
+    if decl["configuration"] == "probe":
+        mode = instruction.decode("ascii").rstrip("\n").split(" ")[1]
+        if mode not in CHECKS and mode not in RAW_MODES:
+            raise Invalid("mode")
+    facts = load_evidence(cfg, named["request.json"], attempt, decl["instruction_sha256"])
+    receipt = facts["receipt"]
+    if facts["receipt_sha256"] != c.get("receipt_sha256"):
+        raise Invalid("evidence-unusable:recorded-digest")
+    if receipt["origin"]["accepted_set_sha256"] != body["accepted_set_sha256"] or c.get("accepted_set_sha256") != body["accepted_set_sha256"]:
+        raise Invalid("accepted-set")
+    if plan.get("checker") and c.get("receipt_check") != "valid":
+        raise Invalid("receipt-check-unrecorded")
+    out = {"id": decl["case_id"], "config": decl["configuration"], "mode": mode, "attempt_id": attempt, "native_fulfilled": False,
+           "instruction_sha256": decl["instruction_sha256"], "launch_request_sha256": c["launch_request_sha256"],
+           "receipt_sha256": facts["receipt_sha256"], "verdict": receipt["outcome"]["verdict"],
+           "outcome_reason_ids": receipt["outcome"]["reason_ids"], "stderr_sha256": receipt["payload"]["stderr_sha256"],
+           "evidence_manifest_sha256": receipt["payload"]["evidence_manifest_sha256"], "accepted_set_sha256": body["accepted_set_sha256"]}
+    if mode.endswith("-sentinel"):
+        fx, pre = plan["fixtures"][mode[:-9]], c.get("controls", {}).get("pre")
+        if not isinstance(pre, dict) or c["controls"].get("post") != pre or any(pre.get(a) != fx[a] for a in ("path", "size_bytes", "sha256")):
+            raise Invalid("fixture-controls")
+        out["controls"] = c["controls"]
+    if mode == "verifier":
+        out.update({"class": "verifier-run", "reason": None, "exit_state": receipt["payload"]["exit_state"],
+                    "exit_code": receipt["payload"]["exit_code"], "stdout_sha256": receipt["payload"]["stdout_sha256"]})
+    else:
+        out.update(classify({"mode": mode, "instruction": instruction, "instruction_sha256": decl["instruction_sha256"], "domain": ev}, facts))
+    return out
+
+
+BATCH_KEYS = {"accepted_content_sha256", "accepted_identities", "accepted_set_sha256", "case_list_sha256", "cases", "configurations",
+              "domain_evidence_sha256", "dry_run", "environment_id", "k"}
+
+
 def aggregate(dirpath, raws):
     """One sandbox_qualification_record, complete only if the batches cover the plan exactly once."""
     bplan, plan_sha = read_batches(dirpath)
@@ -618,6 +662,7 @@ def aggregate(dirpath, raws):
             doc = json.loads(raw)
             body = doc["body"]
             assert doc["kind"] == "sandbox_qualification_batch" and hs.canonical(doc) == raw and hs.is_int(body["k"])
+            assert set(body) == BATCH_KEYS and isinstance(body["cases"], list)
         except (ValueError, KeyError, TypeError, AssertionError):
             raise Invalid("E_RECORD")
         by_k.setdefault(body["k"], []).append((raw, body))
@@ -634,47 +679,50 @@ def aggregate(dirpath, raws):
         reasons.add("qualification.binding-mismatch")
     if not firsts:
         raise Invalid("E_RECORD")
-    ref = firsts[0]
-    for body in firsts:
+    ref, entries = firsts[0], {e["id"]: e for e in plan["cases"]}
+    cfgs = {}
+    for n in ("verifier", "probe"):   # what is on disk, not what the record says
+        path = os.path.join(plan["configs"][n]["install_dir"], "host-config.json")
+        cfgs[n] = {"body": read_config(path)[0], "slots": measure(path)}
+    live = {n: {"store_id": c["body"]["store_id"], "slots": c["slots"]} for n, c in cfgs.items()}
+    ev = plan.get("domain_evidence")
+    ev_sha = sha(hs.canonical(ev)) if ev is not None else None
+    env_id = cfgs["probe"]["body"]["environment_id"]
+    for body in firsts:   # the batch record is untrusted: each binding it states is checked against batches.json and the disk
         k = body["k"]
-        if any(body[key] != ref[key] for key in ("configurations", "domain_evidence_sha256", "dry_run", "environment_id")) \
-                or body["case_list_sha256"] != plan_sha or sorted(c["id"] for c in body["cases"]) != bplan["batches"][k] \
-                or any(c["config"] != declared[c["id"]]["configuration"] or c["instruction_sha256"] != declared[c["id"]]["instruction_sha256"]
-                       for c in body["cases"] if c["id"] in declared):
+        want = expected_identities(live, batch_digests(bplan, k))
+        if (body["configurations"] != live or body["environment_id"] != env_id or body["domain_evidence_sha256"] != ev_sha
+                or body["dry_run"] != ref["dry_run"] or body["case_list_sha256"] != plan_sha
+                or sorted(c["id"] for c in body["cases"]) != bplan["batches"][k]):
             reasons.add("qualification.binding-mismatch")
-        want = expected_identities(ref["configurations"], batch_digests(bplan, k))
-        if body["accepted_identities"] != want or body["accepted_content_sha256"] != sha(hs.canonical(accepted_content(ref["environment_id"], want))) \
-                or any(c.get("accepted_set_sha256", body["accepted_set_sha256"]) != body["accepted_set_sha256"] for c in body["cases"]):
+        if body["accepted_identities"] != want or body["accepted_content_sha256"] != sha(hs.canonical(accepted_content(env_id, want))):
             reasons.add("qualification.accepted-set-mismatch")
-    entries, ev = {e["id"]: e for e in plan["cases"]}, plan.get("domain_evidence")
-    cfgs = {n: {"body": read_config(os.path.join(plan["configs"][n]["install_dir"], "host-config.json"))[0],
-                "slots": ref["configurations"][n]["slots"]} for n in ("verifier", "probe")}
-    for body in firsts:   # never trust a cached classification: re-verify each named receipt and payload, then re-classify
-        for c in body["cases"]:
-            if "receipt_sha256" not in c or c["class"] == "unusable":
-                continue
+    if ref["domain_evidence_sha256"] != ev_sha:
+        ev = None   # evidence that is not the evidence the batches ran with is not used
+    cases, attempts = [], {"verifier": set(), "probe": set()}
+    for body in firsts:   # every case is rebuilt from the bound plan and verified stored evidence; the record's claims are only checked
+        cached = {c.get("id"): c for c in body["cases"] if isinstance(c, dict)}
+        for cid in bplan["batches"][body["k"]]:
+            decl = declared[cid]
             try:
-                named = hs.parse_package(open(os.path.join(dirpath, entries[c["id"]]["package"]), "rb").read())
-                facts = load_evidence(cfgs[c["config"]], named["request.json"], c["attempt_id"], c["instruction_sha256"])
-                if facts["receipt_sha256"] != c["receipt_sha256"] or facts["receipt"]["origin"]["accepted_set_sha256"] != c["accepted_set_sha256"]:
-                    raise Invalid("evidence-unusable:recorded-digest")
-                if c["mode"] != "verifier":
-                    c.update(classify({"mode": c["mode"], "instruction": named["instruction"], "instruction_sha256": c["instruction_sha256"],
-                                       "domain": ev}, facts))
-            except (Invalid, KeyError, TypeError, OSError, hs.Refusal) as exc:
-                c.update({"class": "unusable", "reason": str(exc)})
-                reasons.add("qualification.binding-mismatch")
+                named = hs.parse_package(open(os.path.join(dirpath, entries[cid]["package"]), "rb").read())
+                attempts[decl["configuration"]].add(json.loads(named["request.json"])["body"]["attempt"]["attempt_id"])
+                cases.append(verify_case(plan, decl, cached.get(cid), body, cfgs[decl["configuration"]], ev, named))
+            except (Invalid, KeyError, TypeError, ValueError, IndexError, AttributeError, OSError, hs.Refusal) as exc:
+                claim = cached.get(cid) if isinstance(cached.get(cid), dict) and "receipt_sha256" not in cached[cid] else {}
+                recorded = isinstance(claim.get("reason"), str)   # a launch that never produced a receipt: its recorded reason is kept (it can only invalidate)
+                cases.append({"id": cid, "config": decl["configuration"], "mode": "unknown", "native_fulfilled": False,
+                              "class": "fixture-invalid" if recorded and claim.get("class") == "fixture-invalid" else "unusable",
+                              "reason": claim["reason"] if recorded else str(exc) or type(exc).__name__})
+                reasons.add("qualification.accepted-set-mismatch" if str(exc) == "accepted-set" else "qualification.binding-mismatch")
     for name in ("verifier", "probe"):   # each store against its own configuration's named attempts only
-        named = {c["attempt_id"] for body in firsts for c in body["cases"] if c["config"] == name}
-        store = read_config(os.path.join(plan["configs"][name]["install_dir"], "host-config.json"))[0]["store_root"]
-        if set(os.listdir(store)) - named:
+        if set(os.listdir(cfgs[name]["body"]["store_root"])) - attempts[name]:
             reasons.add("qualification.batch-rerun")   # a receipt no batch record names
     order = [c["case_id"] for c in bplan["cases"]]
-    cases = sorted((c for body in firsts for c in body["cases"]), key=lambda c: order.index(c["id"]) if c["id"] in order else len(order))
-    result = qualification(cases, ref["domain_evidence_sha256"] is not None)
+    cases.sort(key=lambda c: order.index(c["id"]))
+    result = qualification(cases, ev_sha is not None)
     body = {"batches": len(bplan["batches"]), "case_list_sha256": plan_sha, "cases": cases, "complete": not reasons,
-            "configurations": ref["configurations"], "domain_evidence_sha256": ref["domain_evidence_sha256"],
-            "dry_run": ref["dry_run"], "environment_id": ref["environment_id"],
+            "configurations": live, "domain_evidence_sha256": ev_sha, "dry_run": ref["dry_run"], "environment_id": env_id,
             "qualification": result["qualification"], "reason_ids": sorted(set(result["reason_ids"]) | reasons)}
     return hs.canonical({"body": body, "id": "sandbox.qualification-record", "kind": "sandbox_qualification_record",
                          "schema_version": 1})
