@@ -3298,8 +3298,19 @@ for n, (cid, cfg, instruction, mode, klass) in enumerate(cases):
     patch = {"attempt_id": "attempt.q-%03d" % n, "nonce": "%064x" % (n + 1), "store_id": stores[cfg], "instruction": instruction.decode()}
     subprocess.run([python, build_pkg, hs_src, qdir + "/" + pkg], input=json.dumps(patch).encode(), check=True)
     plan_cases.append(dict({"id": cid, "config": cfg, "package": pkg}, **({"scenario": scenario} if scenario else {})))
+# A test-local fixture checker tree: `valid` only if the accepted set beside it is the one the receipt names
+# (as the real check does); FAKE_CHECK_REFUSE, a substring of the receipt path, makes it refuse that receipt.
+chk = root + "/chk/enforcement/v1"; os.makedirs(chk)
+put(chk + "/check-sandbox-receipt.sh", b'''#!/bin/sh
+d=$(dirname "$0"); want=$(grep -o '"accepted_set_sha256":"[0-9a-f]*"' "$2" | cut -d'"' -f4)
+have=$(/usr/bin/shasum -a 256 "$d/accepted-identities.json" | cut -d' ' -f1)
+verdict=refused; [ "$want" = "$have" ] && verdict=valid
+[ -n "$FAKE_CHECK_REFUSE" ] && case "$2" in *"$FAKE_CHECK_REFUSE"*) verdict=refused;; esac
+echo "{\\"body\\":{\\"check_verdict\\":\\"$verdict\\"}}"
+''', 0o755)
+put(chk + "/accepted-identities.json", b"{}\n", 0o644)
 plan = {"configs": {n: {"install_dir": configs[n], "launch": [python, "host-supervisor.py", "launch"]} for n in configs},
-        "checker": None, "domain_evidence": ev, "fixtures": fixtures, "sentinel_root": sroot, "cases": plan_cases}
+        "checker": chk + "/check-sandbox-receipt.sh", "domain_evidence": ev, "fixtures": fixtures, "sentinel_root": sroot, "cases": plan_cases}
 json.dump(plan, open(qdir + "/cases.json", "w"))
 json.dump({"expected": expected, "stores": stores, "configs": configs, "measured": measured}, open(qdir + "/meta.json", "w"))
 PY
@@ -3452,6 +3463,16 @@ vs = store("verifier")
 pa = next(c["attempt_id"] for c in good["cases"] if c["config"] == "probe")
 os.mkdir(vs + "/" + pa); assert "qualification.batch-rerun" in named(raws); os.rmdir(vs + "/" + pa)   # a verifier-store receipt under a probe attempt id
 assert named(raws) == set()                                                                           # control: the clean stores
+def edit_check(b):
+    for c in b["cases"]: c["receipt_check"] = "valid"
+os.environ["FAKE_CHECK_REFUSE"] = next(c["attempt_id"] for c in good["cases"] if c["id"] == "candidate-read")
+for rs in (raws, [edit(raws[0], edit_check)] + raws[1:]):   # the record's own verdict is never read
+    r = agg(rs); c = next(c for c in r["cases"] if c["id"] == "candidate-read")
+    assert r["complete"] is False and c["class"] == "unusable" and c["reason"] == "receipt-check-refused"
+del os.environ["FAKE_CHECK_REFUSE"]
+assert agg(raws)["complete"] is True                                                                          # control: the checker says valid
+r = altered(qd + "/cases.json", lambda d: d.update(checker=None))
+assert r["complete"] is False and "qualification.checker-missing" in r["reason_ids"] and all(c["class"] == "unusable" for c in r["cases"])   # fails closed
 assert named([edit(r, lambda b: None) for r in raws]) == set()                                                # control: re-encoded, unchanged
 for label, f, want in (
         ("configuration", lambda b: b["configurations"]["probe"]["slots"].update(image="0" * 64), "binding-mismatch"),
@@ -3557,7 +3578,7 @@ qbad E_DOMAIN 'p["domain_evidence"]["kernel_sha256"] = "2" * 64'   # evidence re
 qbad E_DOMAIN 'del p["domain_evidence"]["kernel_sha256"]'
 qbad E_FIXTURES 'p["fixtures"]["sibling"] = dict(p["fixtures"]["host"])'
 qbad E_CONFIGS 'p["configs"]["probe"] = dict(p["configs"]["verifier"])'
-qbad E_CHECKER 'pass' run --batch 0
+qbad E_CHECKER 'p["checker"] = None' run --batch 0
 export QBAD_FILE=batches.json
 qbad E_CASES 'p["body"]["cases"].append(dict(p["body"]["cases"][0]))'
 qbad E_CASES 'p["body"]["batches"] = [sorted(c["case_id"] for c in p["body"]["cases"])]'
@@ -3565,7 +3586,7 @@ qbad E_CASES 'p["body"]["batches"][0] = sorted(p["body"]["batches"][0] + ["socke
 qbad E_CASES 'p["body"]["batches"][1].remove("socket-0")'
 qbad E_CASES 'p["body"]["batches"].append([])'
 unset QBAD_FILE
-chk="$base/chk/enforcement/v1"; /bin/mkdir -p "$chk"; printf '#!/bin/sh\n' >"$chk/check-sandbox-receipt.sh"; /bin/chmod 755 "$chk/check-sandbox-receipt.sh"
+chk="$qroot/chk/enforcement/v1"
 installed_set=$("$jq_bin" -r .body.installed_files.accepted_set "$qv_install/host-config.json")
 /bin/cp "$installed_set" "$chk/accepted-identities.json"; /bin/chmod 644 "$chk/accepted-identities.json"
 with_checker='p["checker"] = "'$chk'/check-sandbox-receipt.sh"'

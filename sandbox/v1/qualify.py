@@ -21,6 +21,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -584,6 +585,9 @@ def install_accepted(st, k):
         with open(path, "wb") as handle:
             handle.write(hs.canonical(doc))
         os.chmod(path, 0o444)
+    if st["plan"].get("checker"):   # the fixture checker tree's copy
+        with open(os.path.join(os.path.dirname(os.path.realpath(st["plan"]["checker"])), "accepted-identities.json"), "wb") as handle:
+            handle.write(accepted_doc(st["cfgs"]["probe"]["body"]["environment_id"], expected))
 
 
 def run_dry(dirpath):
@@ -611,7 +615,21 @@ def run_one(dirpath, k):
     return raw
 
 
-def verify_case(plan, decl, c, want_sha, cfg, ev, named, seen):
+def private_checker(checker, accepted, root):
+    """A private copy of the checker's tree whose accepted-identities.json is `accepted` (the batch's rebuilt document),
+    so the unchanged check runs against exactly that set; returns the copied script."""
+    src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(checker))))
+    for rel in ("enforcement/v1/check-sandbox-receipt.sh", "enforcement/v1/sandbox-receipt.jq", "control/v1/sandbox-policy.json",
+                "control/v1/sandbox-decision.json", "control/v1/control-policy-set.json", "shadow/v1/shadow-environments.json"):
+        if os.path.exists(os.path.join(src, rel)):
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            shutil.copy2(os.path.join(src, rel), os.path.join(root, rel))
+    with open(os.path.join(root, "enforcement/v1/accepted-identities.json"), "wb") as handle:
+        handle.write(accepted)
+    return os.path.join(root, "enforcement/v1", os.path.basename(checker))
+
+
+def verify_case(plan, decl, c, want_sha, cfg, ev, named, seen, script):
     """One case rebuilt from batches.json, the package and the verified stored evidence; the record's claim `c`
     supplies nothing but bindings, all checked here (a missing or malformed one is unusable, never skipped)."""
     request, instruction = json.loads(named["request.json"])["body"], named["instruction"]
@@ -634,12 +652,16 @@ def verify_case(plan, decl, c, want_sha, cfg, ev, named, seen):
     seen.update((attempt, facts["receipt_sha256"]))
     if receipt["origin"]["accepted_set_sha256"] != want_sha or c.get("accepted_set_sha256") != want_sha:   # proved from the receipt itself
         raise Invalid("accepted-set")
-    if plan.get("checker") and c.get("receipt_check") != "valid":
-        raise Invalid("receipt-check-unrecorded")
+    if script is None:
+        raise Invalid("receipt-check-unavailable")   # no checker: nothing is usable
+    verdict = consumer_check(script, os.path.join(cfg["body"]["store_root"], attempt, "receipt.json"), request,
+                             sha(named["request.json"]), named["evaluation.json"])   # a fresh check; the record's own verdict is never read
+    if verdict != "valid":
+        raise Invalid("receipt-check-" + verdict)
     out = {"id": decl["case_id"], "config": decl["configuration"], "mode": mode, "attempt_id": attempt, "native_fulfilled": False,
            "instruction_sha256": decl["instruction_sha256"], "launch_request_sha256": c["launch_request_sha256"],
            "receipt_sha256": facts["receipt_sha256"], "verdict": receipt["outcome"]["verdict"],
-           "outcome_reason_ids": receipt["outcome"]["reason_ids"], "stderr_sha256": receipt["payload"]["stderr_sha256"],
+           "outcome_reason_ids": receipt["outcome"]["reason_ids"], "receipt_check": verdict, "stderr_sha256": receipt["payload"]["stderr_sha256"],
            "evidence_manifest_sha256": receipt["payload"]["evidence_manifest_sha256"], "accepted_set_sha256": want_sha}
     if mode.endswith("-sentinel"):
         fx, pre = plan["fixtures"][mode[:-9]], c.get("controls", {}).get("pre")
@@ -695,7 +717,11 @@ def aggregate(dirpath, raws):
     live = {n: {"store_id": c["body"]["store_id"], "slots": c["slots"]} for n, c in cfgs.items()}
     ev = plan.get("domain_evidence")
     ev_sha = sha(hs.canonical(ev)) if ev is not None else None
-    env_id, want_sha, seen = cfgs["probe"]["body"]["environment_id"], {}, set()
+    env_id, want_sha, seen, scripts = cfgs["probe"]["body"]["environment_id"], {}, set(), {}
+    scratch = tempfile.TemporaryDirectory()
+    troot = os.path.realpath(scratch.name)
+    if not plan.get("checker"):
+        reasons.add("qualification.checker-missing")   # fails closed
     for body in firsts:   # the batch record is untrusted: each binding it states is checked against batches.json and the disk
         k = body["k"]
         want = expected_identities(live, batch_digests(bplan, k))
@@ -704,6 +730,7 @@ def aggregate(dirpath, raws):
                 or sorted(c["id"] for c in body["cases"]) != bplan["batches"][k]):
             reasons.add("qualification.binding-mismatch")
         want_sha[k] = sha(accepted_doc(env_id, want))
+        scripts[k] = private_checker(plan["checker"], accepted_doc(env_id, want), os.path.join(troot, str(k))) if plan.get("checker") else None
         if (body["accepted_identities"] != want or body["accepted_content_sha256"] != sha(hs.canonical(accepted_content(env_id, want)))
                 or body["accepted_set_sha256"] != want_sha[k]):
             reasons.add("qualification.accepted-set-mismatch")
@@ -717,7 +744,8 @@ def aggregate(dirpath, raws):
             try:
                 named = hs.parse_package(open(os.path.join(dirpath, entries[cid]["package"]), "rb").read())
                 attempts[decl["configuration"]].add(json.loads(named["request.json"])["body"]["attempt"]["attempt_id"])
-                cases.append(verify_case(plan, decl, cached.get(cid), want_sha[body["k"]], cfgs[decl["configuration"]], ev, named, seen))
+                cases.append(verify_case(plan, decl, cached.get(cid), want_sha[body["k"]], cfgs[decl["configuration"]], ev, named, seen,
+                                         scripts[body["k"]]))
             except (Invalid, KeyError, TypeError, ValueError, IndexError, AttributeError, OSError, hs.Refusal) as exc:
                 claim = cached.get(cid) if isinstance(cached.get(cid), dict) and "receipt_sha256" not in cached[cid] else {}
                 recorded = isinstance(claim.get("reason"), str)   # a launch that never produced a receipt: its recorded reason is kept (it can only invalidate)
