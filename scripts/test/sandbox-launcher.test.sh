@@ -3439,7 +3439,27 @@ def same_execution(b):
     a, t = (next(c for c in b["cases"] if c["id"] == i) for i in ("v-echo", "v-echo-2"))
     t.update({k: a[k] for k in ("attempt_id", "launch_request_sha256", "receipt_sha256")})
 r = altered(qd + "/cases.json", share_package, [edit(raws[0], same_execution), raws[1], raws[2]])
-assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == "v-echo-2")["reason"] == "duplicate-attempt"   # one execution counted twice
+assert r["complete"] is False and "qualification.binding-mismatch" in r["reason_ids"]   # one execution counted twice: prepare's own refusal
+ev_plan = json.load(open(qd + "/cases.json"))["domain_evidence"]
+for key in ("kernel_sha256", "archive_sha256"):   # evidence and every batch's digest changed together to another kernel / archive
+    ev2 = dict(ev_plan, **{key: "0" * 64}); sha2 = q.sha(q.hs.canonical(ev2))
+    r = altered(qd + "/cases.json", lambda d: d["domain_evidence"].update({key: "0" * 64}), [edit(x, lambda b: b.update(domain_evidence_sha256=sha2)) for x in raws])
+    assert r["complete"] is False and "qualification.binding-mismatch" in r["reason_ids"], key
+hc, sc = (next(c for c in good["cases"] if c["id"] == i)["controls"] for i in ("host-sentinel", "sibling-sentinel"))
+as_host = {k: dict(sc[k], role="host", represents=q.SENTINEL_MEANING["host"]) for k in ("pre", "post")}   # fixture B declared, matching pre/post
+def host_case(f):
+    def go(raw):
+        def one(b):
+            for c in b["cases"]:
+                if c["id"] == "host-sentinel": f(c)
+        return edit(raw, one)
+    return go
+for label, f in (("controls of the other fixture", lambda c: c.update(controls=as_host)), ("a required field missing", lambda c: [c["controls"][k].pop("ino") for k in ("pre", "post")])):
+    r = agg([raws[0], host_case(f)(raws[1]), raws[2]])
+    assert r["complete"] is False and next(c for c in r["cases"] if c["id"] == "host-sentinel")["class"] == "unusable", label
+r = altered(qd + "/cases.json", lambda d: d["fixtures"].update(host=dict(d["fixtures"]["sibling"])), [raws[0], host_case(lambda c: c.update(controls=as_host))(raws[1]), raws[2]])
+assert r["complete"] is False and "qualification.binding-mismatch" in r["reason_ids"]       # the declaration switched while the receipt probes the other
+assert agg(raws)["complete"] is True                                                         # control: the clean run
 def bad_env(b):
     for c in b["cases"]:
         if c["id"] == "environment": f(c)

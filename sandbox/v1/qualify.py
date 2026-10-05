@@ -629,22 +629,27 @@ def private_checker(checker, accepted, root):
     return os.path.join(root, "enforcement/v1", os.path.basename(checker))
 
 
-def verify_case(plan, decl, c, want_sha, cfg, ev, named, seen, script):
-    """One case rebuilt from batches.json, the package and the verified stored evidence; the record's claim `c`
-    supplies nothing but bindings, all checked here (a missing or malformed one is unusable, never skipped)."""
-    request, instruction = json.loads(named["request.json"])["body"], named["instruction"]
+CONTROL_KEYS = {"path", "role", "size_bytes", "sha256", "dev", "ino", "represents"}
+
+
+def controls_ok(controls, role, instruction):
+    """Sentinel controls: exact shape and types, pre == post, and the very instruction the receipt is bound to,
+    reconstructed from them."""
+    pre = controls.get("pre") if isinstance(controls, dict) and set(controls) == {"pre", "post"} else None
+    return (isinstance(pre, dict) and set(pre) == CONTROL_KEYS and controls["post"] == pre
+            and all(isinstance(pre[k], int) and not isinstance(pre[k], bool) for k in ("size_bytes", "dev", "ino"))
+            and all(isinstance(pre[k], str) for k in ("path", "role", "sha256", "represents"))
+            and pre["role"] == role and pre["represents"] == SENTINEL_MEANING[role] and sentinel_instruction(pre) == instruction)
+
+
+def verify_case(st, decl, c, want_sha, ev, seen, script):
+    """One case rebuilt from the validated plan (the same prepare() as before launch), the package and the verified stored
+    evidence; the record's claim `c` supplies nothing but bindings, all checked here (missing or malformed: unusable)."""
+    entry, cfg, _, named, request, instruction, mode, fx = st["prepared"][decl["case_id"]]
     attempt = request["attempt"]["attempt_id"]
-    if attempt in seen:
-        raise Invalid("duplicate-attempt")   # one execution is one case
-    if (not isinstance(c, dict) or sha(instruction) != decl["instruction_sha256"] or c.get("instruction_sha256") != decl["instruction_sha256"]
-            or c.get("config") != decl["configuration"] or c.get("launch_request_sha256") != sha(named["request.json"])
-            or c.get("attempt_id") != attempt):
+    if (not isinstance(c, dict) or c.get("instruction_sha256") != decl["instruction_sha256"] or c.get("config") != decl["configuration"]
+            or c.get("launch_request_sha256") != sha(named["request.json"]) or c.get("attempt_id") != attempt):
         raise Invalid("record-binding")
-    mode = "verifier"
-    if decl["configuration"] == "probe":
-        mode = instruction.decode("ascii").rstrip("\n").split(" ")[1]
-        if mode not in CHECKS and mode not in RAW_MODES:
-            raise Invalid("mode")
     facts = load_evidence(cfg, named["request.json"], attempt, decl["instruction_sha256"])
     receipt = facts["receipt"]
     if facts["receipt_sha256"] != c.get("receipt_sha256") or facts["receipt_sha256"] in seen:
@@ -663,9 +668,8 @@ def verify_case(plan, decl, c, want_sha, cfg, ev, named, seen, script):
            "receipt_sha256": facts["receipt_sha256"], "verdict": receipt["outcome"]["verdict"],
            "outcome_reason_ids": receipt["outcome"]["reason_ids"], "receipt_check": verdict, "stderr_sha256": receipt["payload"]["stderr_sha256"],
            "evidence_manifest_sha256": receipt["payload"]["evidence_manifest_sha256"], "accepted_set_sha256": want_sha}
-    if mode.endswith("-sentinel"):
-        fx, pre = plan["fixtures"][mode[:-9]], c.get("controls", {}).get("pre")
-        if not isinstance(pre, dict) or c["controls"].get("post") != pre or any(pre.get(a) != fx[a] for a in ("path", "size_bytes", "sha256")):
+    if fx:
+        if not controls_ok(c.get("controls"), fx["role"], instruction):
             raise Invalid("fixture-controls")
         out["controls"] = c["controls"]
     if mode == "verifier":
@@ -680,11 +684,20 @@ BATCH_KEYS = {"accepted_content_sha256", "accepted_identities", "accepted_set_sh
               "domain_evidence_sha256", "dry_run", "environment_id", "k"}
 
 
+def record_doc(body):
+    return hs.canonical({"body": body, "id": "sandbox.qualification-record", "kind": "sandbox_qualification_record", "schema_version": 1})
+
+
 def aggregate(dirpath, raws):
     """One sandbox_qualification_record, complete only if the batches cover the plan exactly once."""
-    bplan, plan_sha = read_batches(dirpath)
-    with open(os.path.join(dirpath, "cases.json"), "rb") as handle:
-        plan = json.loads(handle.read())
+    try:   # the very validation run and dry-run apply before launching: plan, configurations, fixtures, evidence, packages
+        st = prepare(dirpath, True)
+    except Invalid:
+        r = qualification([], False)
+        return record_doc({"batches": 0, "case_list_sha256": None, "cases": [], "complete": False, "configurations": {}, "domain_evidence_sha256": None,
+                           "dry_run": None, "environment_id": None, "qualification": r["qualification"],
+                           "reason_ids": sorted(set(r["reason_ids"]) | {"qualification.binding-mismatch"})})
+    plan, bplan, plan_sha, cfgs = st["plan"], st["bplan"], st["plan_sha"], st["cfgs"]
     declared = {c["case_id"]: c for c in bplan["cases"]}
     by_k, reasons = {}, set()
     for raw in raws:
@@ -709,13 +722,9 @@ def aggregate(dirpath, raws):
         reasons.add("qualification.binding-mismatch")
     if not firsts:
         raise Invalid("E_RECORD")
-    ref, entries = firsts[0], {e["id"]: e for e in plan["cases"]}
-    cfgs = {}
-    for n in ("verifier", "probe"):   # what is on disk, not what the record says
-        path = os.path.join(plan["configs"][n]["install_dir"], "host-config.json")
-        cfgs[n] = {"body": read_config(path)[0], "slots": measure(path)}
+    ref = firsts[0]
     live = {n: {"store_id": c["body"]["store_id"], "slots": c["slots"]} for n, c in cfgs.items()}
-    ev = plan.get("domain_evidence")
+    ev = st["ev"]
     ev_sha = sha(hs.canonical(ev)) if ev is not None else None
     env_id, want_sha, seen, scripts = cfgs["probe"]["body"]["environment_id"], {}, set(), {}
     scratch = tempfile.TemporaryDirectory()
@@ -741,11 +750,9 @@ def aggregate(dirpath, raws):
         cached = {c.get("id"): c for c in body["cases"] if isinstance(c, dict)}
         for cid in bplan["batches"][body["k"]]:
             decl = declared[cid]
+            attempts[decl["configuration"]].add(st["prepared"][cid][4]["attempt"]["attempt_id"])
             try:
-                named = hs.parse_package(open(os.path.join(dirpath, entries[cid]["package"]), "rb").read())
-                attempts[decl["configuration"]].add(json.loads(named["request.json"])["body"]["attempt"]["attempt_id"])
-                cases.append(verify_case(plan, decl, cached.get(cid), want_sha[body["k"]], cfgs[decl["configuration"]], ev, named, seen,
-                                         scripts[body["k"]]))
+                cases.append(verify_case(st, decl, cached.get(cid), want_sha[body["k"]], ev, seen, scripts[body["k"]]))
             except (Invalid, KeyError, TypeError, ValueError, IndexError, AttributeError, OSError, hs.Refusal) as exc:
                 claim = cached.get(cid) if isinstance(cached.get(cid), dict) and "receipt_sha256" not in cached[cid] else {}
                 recorded = isinstance(claim.get("reason"), str)   # a launch that never produced a receipt: its recorded reason is kept (it can only invalidate)
@@ -762,8 +769,7 @@ def aggregate(dirpath, raws):
     body = {"batches": len(bplan["batches"]), "case_list_sha256": plan_sha, "cases": cases, "complete": not reasons,
             "configurations": live, "domain_evidence_sha256": ev_sha, "dry_run": ref["dry_run"], "environment_id": env_id,
             "qualification": result["qualification"], "reason_ids": sorted(set(result["reason_ids"]) | reasons)}
-    return hs.canonical({"body": body, "id": "sandbox.qualification-record", "kind": "sandbox_qualification_record",
-                         "schema_version": 1})
+    return record_doc(body)
 
 
 def main(argv):
