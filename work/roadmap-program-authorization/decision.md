@@ -459,3 +459,33 @@ authority. This direct handback, not this record, supplies the successor authori
 a further successor needs another explicit operator handoff recorded here.
 
 Prepared against base `b007df89f1dd4f5c263197edb559f0db35f7c43f`.
+
+## Manager succession — 2026-10-06
+
+Operator yihanzhu directly told Codex session
+`01a09ae7-9bd4-77f3-8c15-966143bebff4` on 2026-10-06:
+“继续完成roadmap，不要那么多弯弯绕绕。我们roadmap有这么复杂吗？”
+
+The current manager records this as the direct handback from Claude Code desktop
+session `dd83267a-8ae2-4699-9afa-a8ca0bf3421c`. That session's manager authority ends
+here. The named Codex session is again the sole manager and publisher for
+`yihanzhu/ystack` (repository ID `1270665750`). The direct instruction supplies the
+authority; this appendix cannot appoint another session, clone, live yshifu or target.
+
+The same RC-1 and OD-1 program continues. Its working sequence remains 7, then 8, 9
+and 10; step 11 stays dropped and step 12 deferred on the recorded conditions. The
+current AGENTS.md GPT routing and its author/reviewer separation apply unchanged.
+
+The vm-launcher-supervisor nine-PR sequence is complete on current main; its final
+planned slices merged as PRs #490, #499 and #504. The October 1 PR-6 tuple, October 4
+PR-7 tuple and earlier #496 raw-review publication pause are historical, not current
+state, and imply no approval. Preserve and reconcile any other existing attempt before
+work; do not discard, replace or duplicate it, or reuse stale review evidence.
+
+All accepted rules, reserved operator actions, standards and safety boundaries remain
+unchanged. Frozen #183 and unresolved dirty attempts remain excluded. The dummy target
+remains read-only. No live command, prompt or profile is installed, activated or synced.
+This record-only appendix changes no policy, scope, acceptance standard or authority,
+and requires separate independent review before publication.
+
+Prepared against base `b33ca2ed816629b7ab94481586db0d18960b21ff`.
