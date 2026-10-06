@@ -753,6 +753,18 @@ for the accepted blockers and later implementation dependencies. Restoring
 these records and the declaration evaluator does not restore a qualified
 launcher; real execution remains blocked.
 
+Restore the six paths in the manifest's bound sandbox-control block, then run:
+
+```sh
+bash scripts/test/control-sandbox-bound.test.sh
+bash scripts/test/sandbox-receipt.test.sh
+```
+
+The bound evaluator requires one measured verifier digest across its claim,
+observation and same-environment accepted set. The receipt check selects this tuple
+only through `check-bound`. The shipped accepted set is empty, CPU and wall
+enforcement remain unavailable, and neither command authenticates receipt origin.
+
 Restore the seven paths in the manifest's inactive sandbox receipt check block,
 then run:
 

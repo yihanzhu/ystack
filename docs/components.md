@@ -293,6 +293,14 @@ but that grants no authority or permission and does not cancel or run anything.
 The package stays inactive, reads no credential, activates no profile, and performs
 no candidate, network, publish, deploy, signal, or external-write action.
 
+`control/v1/evaluate-bound-sandbox.sh` is the fixed declaration path for a measured
+file verifier. It accepts only the shipped bound policy set, a satisfied duty result
+from that same set, one complete environment claim, and one verifier observation.
+The measured verifier digest must equal the claim digest and a value in that
+environment's accepted list. Its result remains declaration-only. The shipped list
+is empty, so the repository cannot produce a satisfied result without disposable
+test copies.
+
 ## Inactive sandbox-policy evaluator
 
 `control/v1/evaluate-sandbox.sh` checks one execution-environment claim against
@@ -334,6 +342,12 @@ shipped accepted identity set is empty, so no receipt can be `valid` today. The
 check is inactive, grants no authority or qualification, changes no gate, and
 runs no candidate, supervisor or network action. Declaration-only sandbox
 evaluations keep their meaning.
+
+The explicit `check-bound` verb adds the measured observation and verifies the
+bound policy, decision, set, evaluator sources, evaluation, expectation and receipt
+together. It requires the receipt's verifier digest to equal the observed digest,
+even if the accepted list contains more than one value. `check` continues to use
+the original fixed tuple. Neither verb authenticates where receipt bytes came from.
 
 ## Inactive VM launcher and supervisor
 

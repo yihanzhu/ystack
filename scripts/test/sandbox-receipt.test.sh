@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016
+# shellcheck disable=SC2015,SC2016
 set -euo pipefail
 export LC_ALL=C
 umask 077
@@ -242,6 +242,8 @@ recompute() {
 # The general form, letting a caller substitute any of the five fixed files
 # (the malformed-fixed-file cases need this; every other case uses the real
 # ones via the `run_program` wrapper below).
+empty_observation="$tmp/empty-observation.json"
+/usr/bin/printf '{}\n' >"$empty_observation"
 run_program_full() {
   local receipt=$1 expectation_in=$2 evaluation_in=$3 policy_in=$4 decision_in=$5 \
     policy_set_in=$6 registry_in=$7 accepted_in=$8 out=$9
@@ -252,6 +254,7 @@ run_program_full() {
     --slurpfile evaluation "$evaluation_in" --slurpfile policy "$policy_in" \
     --slurpfile decision "$decision_in" --slurpfile policy_set "$policy_set_in" \
     --slurpfile registry "$registry_in" --slurpfile accepted "$accepted_in" \
+    --slurpfile observation "$empty_observation" \
     --slurpfile entry_digests "$entry_digests_file" \
     --arg receipt_sha "$(sha256_path "$receipt")" \
     --arg expectation_sha "$(sha256_path "$expectation_in")" \
@@ -259,7 +262,9 @@ run_program_full() {
     --arg policy_sha "$(sha256_path "$policy_in")" \
     --arg decision_sha "$(sha256_path "$decision_in")" \
     --arg policy_set_sha "$(sha256_path "$policy_set_in")" \
-    --arg accepted_set_sha "$(sha256_path "$accepted_in")" >"$out"
+    --arg accepted_set_sha "$(sha256_path "$accepted_in")" --arg mode legacy \
+    --arg observation_sha '' --arg evaluator_driver_sha '' --arg evaluator_program_sha '' \
+    >"$out"
 }
 
 run_program() {
@@ -625,6 +630,11 @@ repo_copy="$tmp/repo-copy"
 /bin/mkdir -p "$repo_copy/enforcement/v1" "$repo_copy/control/v1" "$repo_copy/shadow/v1"
 /bin/cp "$program" "$driver" "$repo_copy/enforcement/v1/"
 /bin/cp "$policy" "$decision" "$policy_set" "$repo_copy/control/v1/"
+/bin/cp "$root/control/v1/sandbox-bound-policy.json" \
+  "$root/control/v1/sandbox-bound-decision.json" \
+  "$root/control/v1/control-policy-set-sandbox-bound.json" \
+  "$root/control/v1/evaluate-bound-sandbox.sh" "$root/control/v1/sandbox-bound.jq" \
+  "$repo_copy/control/v1/"
 /bin/cp "$registry" "$repo_copy/shadow/v1/"
 /bin/cp "$accepted" "$repo_copy/enforcement/v1/accepted-identities.json"
 /bin/chmod 0755 "$repo_copy/enforcement/v1/check-sandbox-receipt.sh"
@@ -817,5 +827,93 @@ run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/
 run_program "$receipt_satisfied" "$expectation" "$evaluation" "$accepted" "$tmp/rep2.out"
 /usr/bin/cmp -s "$tmp/rep1.out" "$tmp/rep2.out" || fail 'determinism'
 pass 'two runs give byte-identical output'
+
+# The explicit bound verb uses the separate fixed tuple and requires the
+# measured observation, evaluation binding and receipt verifier to agree.
+bound_policy="$repo_copy/control/v1/sandbox-bound-policy.json"
+bound_decision="$repo_copy/control/v1/sandbox-bound-decision.json"
+bound_set="$repo_copy/control/v1/control-policy-set-sandbox-bound.json"
+bound_driver_sha=$(sha256_path "$repo_copy/control/v1/evaluate-bound-sandbox.sh")
+bound_program_sha=$(sha256_path "$repo_copy/control/v1/sandbox-bound.jq")
+bound_policy_sha=$(sha256_path "$bound_policy")
+bound_decision_sha=$(sha256_path "$bound_decision")
+bound_set_sha=$(sha256_path "$bound_set")
+observation="$tmp/bound-observation.json"
+"$jq_bin" -nSc --arg env "$env_id" --arg entry "$entry_sha" --arg repo "$target_repo" \
+  --arg accepted "$accepted_set_sha" --arg d "$(syn identity.verifier)" '
+  {schema_version:1,kind:"sandbox_verifier_observation",id:"sandbox.observation.verifier",
+   body:{environment_id:$env,environment_entry_sha256:$entry,target_repository_id:$repo,
+     accepted_set_sha256:$accepted,verifier_sha256:$d}}
+' >"$observation"
+observation_sha=$(sha256_path "$observation")
+bound_evaluation="$tmp/bound-evaluation.json"
+"$jq_bin" -nSc --arg claim "$(syn claim.bound)" --arg duty "$(syn duty.bound)" \
+  --arg dsha "$bound_decision_sha" --arg psha "$bound_policy_sha" --arg ssha "$bound_set_sha" \
+  --arg osha "$observation_sha" --slurpfile observation "$observation" '
+  def content($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+  def doc($kind;$id;$sha): {schema_version:1,kind:$kind,id:$id,sha256:$sha};
+  {schema_version:1,kind:"sandbox_policy_evaluation",id:$observation[0].body.environment_id,
+   body:{activation_state:"inactive",authority_effect:"none",
+     claim_ref:doc("execution_environment_claim";$observation[0].body.environment_id;$claim),
+     decision_ref:content("control-decision.sandbox";
+       "application/vnd.ystack.control-decision+json";$dsha),
+     duty_evaluation_ref:doc("duty_separation_evaluation";"result.bound";$duty),
+     enforcement_proof:"declaration-only",evaluation_mode:"observation-only",
+     policy_ref:content("control-policy.sandbox";
+       "application/vnd.ystack.control-policy+json";$psha),
+     policy_set:{id:"control-policy-set.sandbox-bound.v1",sha256:$ssha},
+     qualification_effect:"none",reason_ids:["sandbox.verifier-binding-satisfied"],
+     verdict:"satisfied",verifier_binding:($observation[0].body+{observation_sha256:$osha})}}
+' >"$bound_evaluation"
+bound_evaluation_sha=$(sha256_path "$bound_evaluation")
+bound_control=$(
+  "$jq_bin" -nc --arg p "$bound_policy_sha" --arg d "$bound_decision_sha" \
+    --arg s "$bound_set_sha" --arg ed "$bound_driver_sha" --arg ep "$bound_program_sha" \
+    --arg ev "$bound_evaluation_sha" \
+    '{policy_sha256:$p,decision_sha256:$d,policy_set_sha256:$s,evaluator_driver_sha256:$ed,
+      evaluator_program_sha256:$ep,sandbox_evaluation_sha256:$ev}'
+)
+bound_receipt=$(mutate "$receipt_satisfied" bound-receipt \
+  ".body.control=$bound_control")
+bound_expectation=$(mutate "$expectation" bound-expectation \
+  ".body.control=$bound_control")
+bound_out="$tmp/bound.out" bound_err="$tmp/bound.err" bound_status=0
+PATH="$bin:/usr/bin:/bin" "$copy_driver" check-bound "$bound_receipt" "$bound_expectation" \
+  "$bound_evaluation" "$observation" >"$bound_out" 2>"$bound_err" || bound_status=$?
+[ "$bound_status" -eq 0 ] && [ ! -s "$bound_err" ] &&
+  "$jq_bin" -e '.body.check_verdict=="valid" and
+    .body.enforcement_verdict=="satisfied" and .body.origin_check=="not-performed"' \
+    "$bound_out" >/dev/null || fail 'bound positive control'
+pass 'bound positive control'
+
+legacy_mode_out="$tmp/bound-legacy-mode.out" legacy_mode_err="$tmp/bound-legacy-mode.err"
+run_driver "$copy_driver" "$bound_receipt" "$bound_expectation" "$bound_evaluation" \
+  "$legacy_mode_out" "$legacy_mode_err"
+[ "$DRIVER_STATUS" -eq 0 ] && [ ! -s "$legacy_mode_err" ] &&
+  "$jq_bin" -e '.body.check_verdict=="refused"' "$legacy_mode_out" >/dev/null ||
+  fail 'bound mode cannot be selected by documents'
+pass 'bound mode cannot be selected by documents'
+
+wrong_observation=$(mutate "$observation" bound-wrong-observation \
+  '.body.verifier_sha256=("a"*64)')
+wrong_out="$tmp/bound-wrong.out" wrong_err="$tmp/bound-wrong.err" wrong_status=0
+PATH="$bin:/usr/bin:/bin" "$copy_driver" check-bound "$bound_receipt" "$bound_expectation" \
+  "$bound_evaluation" "$wrong_observation" >"$wrong_out" 2>"$wrong_err" || wrong_status=$?
+[ "$wrong_status" -eq 0 ] && [ ! -s "$wrong_err" ] &&
+  "$jq_bin" -e '.body.check_verdict=="refused" and
+    (.body.reason_ids|index("receipt.control-mismatch")!=null)' "$wrong_out" >/dev/null ||
+  fail 'bound observation digest mismatch'
+pass 'bound observation digest mismatch'
+
+cpu_none=$(mutate "$bound_receipt" bound-cpu-none \
+  '.body.limits.cpu_time_ms.enforcement="none" |
+   .body.outcome={verdict:"failed",reason_ids:["failure.enforcement-unavailable"]}')
+cpu_out="$tmp/bound-cpu.out" cpu_err="$tmp/bound-cpu.err" cpu_status=0
+PATH="$bin:/usr/bin:/bin" "$copy_driver" check-bound "$cpu_none" "$bound_expectation" \
+  "$bound_evaluation" "$observation" >"$cpu_out" 2>"$cpu_err" || cpu_status=$?
+[ "$cpu_status" -eq 0 ] && [ ! -s "$cpu_err" ] &&
+  "$jq_bin" -e '.body.check_verdict=="valid" and .body.enforcement_verdict=="failed"' \
+    "$cpu_out" >/dev/null || fail 'bound CPU none cannot satisfy'
+pass 'bound CPU none cannot satisfy'
 
 /usr/bin/printf 'sandbox receipt: %s focused checks passed\n' "$passes"
