@@ -886,6 +886,91 @@ PATH="$bin:/usr/bin:/bin" "$copy_driver" check-bound "$bound_receipt" "$bound_ex
     "$bound_out" >/dev/null || fail 'bound positive control'
 pass 'bound positive control'
 
+expect_bound_refused() {
+  local name=$1 receipt_in=$2 expectation_in=$3 evaluation_in=$4 observation_in=$5 reason=$6
+  local out="$tmp/$name.out" err="$tmp/$name.err" status=0
+  PATH="$bin:/usr/bin:/bin" "$copy_driver" check-bound "$receipt_in" "$expectation_in" \
+    "$evaluation_in" "$observation_in" >"$out" 2>"$err" || status=$?
+  [ "$status" -eq 0 ] && [ ! -s "$err" ] &&
+    "$jq_bin" -e --arg reason "$reason" '.body.check_verdict=="refused" and
+      (.body.reason_ids|index($reason)!=null)' "$out" >/dev/null || fail "$name"
+  pass "$name"
+}
+
+for item in \
+  'missing-envelope-fields|del(.id,.body.claim_ref,.body.duty_evaluation_ref)' \
+  'authority-effect|.body.authority_effect="publish"' \
+  'cross-environment|.id="env.other"|.body.claim_ref.id="env.other"' \
+  'extra-body-field|.body.unapproved=true'; do
+  name=${item%%|*}
+  changed=$(mutate "$bound_evaluation" "bound-$name-evaluation" "${item#*|}")
+  recompute "$changed" "$bound_receipt" "$bound_expectation" "bound-$name" >/dev/null
+  expect_bound_refused "bound-$name-refused" "$tmp/bound-$name-receipt.json" \
+    "$tmp/bound-$name-expectation.json" "$changed" "$observation" \
+    receipt.evaluation-not-satisfied
+done
+
+/bin/cp "$repo_copy/shadow/v1/shadow-environments.json" "$tmp/bound-registry-original.json"
+"$jq_bin" -Sc --arg env "$env_id" \
+  '.body.environments += [.body.environments[]|select(.environment_id==$env)]' \
+  "$tmp/bound-registry-original.json" >"$repo_copy/shadow/v1/shadow-environments.json"
+expect_bound_refused bound-duplicate-registry "$bound_receipt" "$bound_expectation" \
+  "$bound_evaluation" "$observation" receipt.control-mismatch
+/bin/cp "$tmp/bound-registry-original.json" "$repo_copy/shadow/v1/shadow-environments.json"
+
+/bin/cp "$repo_copy/enforcement/v1/accepted-identities.json" "$tmp/bound-accepted-original.json"
+rebind_bound_chain() {
+  local name=$1 accepted_in=$2 observation_in=$3 accepted_sha observation_sha evaluation_sha
+  /bin/cp "$accepted_in" "$repo_copy/enforcement/v1/accepted-identities.json"
+  accepted_sha=$(sha256_path "$repo_copy/enforcement/v1/accepted-identities.json")
+  "$jq_bin" -Sc --arg sha "$accepted_sha" '.body.accepted_set_sha256=$sha' \
+    "$observation_in" >"$tmp/$name-observation.json"
+  observation_sha=$(sha256_path "$tmp/$name-observation.json")
+  "$jq_bin" -Sc --arg sha "$observation_sha" --slurpfile o "$tmp/$name-observation.json" \
+    '.body.verifier_binding=($o[0].body+{observation_sha256:$sha})' \
+    "$bound_evaluation" >"$tmp/$name-evaluation.json"
+  evaluation_sha=$(sha256_path "$tmp/$name-evaluation.json")
+  "$jq_bin" -Sc --arg accepted "$accepted_sha" --arg evaluation "$evaluation_sha" \
+    '.body.origin.accepted_set_sha256=$accepted |
+     .body.control.sandbox_evaluation_sha256=$evaluation' \
+    "$bound_receipt" >"$tmp/$name-receipt.json"
+  "$jq_bin" -Sc --arg evaluation "$evaluation_sha" \
+    '.body.control.sandbox_evaluation_sha256=$evaluation' \
+    "$bound_expectation" >"$tmp/$name-expectation.json"
+}
+
+duplicate_accepted=$(mutate "$tmp/bound-accepted-original.json" bound-duplicate-accepted \
+  '.body.environments += [.body.environments[0]]')
+rebind_bound_chain bound-duplicate-accepted "$duplicate_accepted" "$observation"
+expect_bound_refused bound-duplicate-accepted "$tmp/bound-duplicate-accepted-receipt.json" \
+  "$tmp/bound-duplicate-accepted-expectation.json" \
+  "$tmp/bound-duplicate-accepted-evaluation.json" \
+  "$tmp/bound-duplicate-accepted-observation.json" receipt.control-mismatch
+
+other_verifier=$(syn identity.verifier.other)
+two_accepted="$tmp/bound-two-accepted.json"
+"$jq_bin" -Sc --arg other "$other_verifier" \
+  '.body.environments[0].identities.verifier += [$other] |
+   .body.environments[0].identities.verifier |= sort' \
+  "$tmp/bound-accepted-original.json" >"$two_accepted"
+other_observation=$(mutate "$observation" bound-other-observation \
+  ".body.verifier_sha256=\"$other_verifier\"")
+rebind_bound_chain bound-cross-verifier "$two_accepted" "$other_observation"
+expect_bound_refused bound-cross-verifier "$tmp/bound-cross-verifier-receipt.json" \
+  "$tmp/bound-cross-verifier-expectation.json" "$tmp/bound-cross-verifier-evaluation.json" \
+  "$tmp/bound-cross-verifier-observation.json" receipt.control-mismatch
+
+malformed_observation=$(mutate "$observation" bound-malformed-observation \
+  'del(.body.target_repository_id)')
+rebind_bound_chain bound-malformed-observation "$tmp/bound-accepted-original.json" \
+  "$malformed_observation"
+expect_bound_refused bound-malformed-observation \
+  "$tmp/bound-malformed-observation-receipt.json" \
+  "$tmp/bound-malformed-observation-expectation.json" \
+  "$tmp/bound-malformed-observation-evaluation.json" \
+  "$tmp/bound-malformed-observation-observation.json" receipt.control-mismatch
+/bin/cp "$tmp/bound-accepted-original.json" "$repo_copy/enforcement/v1/accepted-identities.json"
+
 legacy_mode_out="$tmp/bound-legacy-mode.out" legacy_mode_err="$tmp/bound-legacy-mode.err"
 run_driver "$copy_driver" "$bound_receipt" "$bound_expectation" "$bound_evaluation" \
   "$legacy_mode_out" "$legacy_mode_err"

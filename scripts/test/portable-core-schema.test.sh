@@ -929,6 +929,7 @@ done < <(git -C "$schema_root" ls-files -z)
 schema_v2_corrective_expected_hits="$schema_test_tmp/v2-corrective-expected-hits"
 printf '%s\n' \
   ci/required-files.txt \
+  control/v1/control-policy-set-sandbox-bound.json \
   control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \

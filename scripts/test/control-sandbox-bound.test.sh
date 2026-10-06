@@ -64,6 +64,7 @@ entry="$tmp/entry.json"
   "$registry" >"$entry"
 entry_sha=$(sha256_path "$entry")
 target=$("$jq_bin" -r '.target_repository_id' "$entry")
+/bin/cp "$registry" "$tmp/registry-original.json"
 
 duty="$tmp/duty.json"
 "$jq_bin" -nSc --arg set_sha "$set_sha" --slurpfile set "$set" '
@@ -133,6 +134,13 @@ expect_verdict() {
   fi
   pass "$name"
 }
+expect_relation_error() {
+  local name=$1 duty_in=$2 claim_in=$3 observation_in=$4
+  run_eval "$evaluator" "$duty_in" "$claim_in" "$observation_in" "$name"
+  [ "$RUN_STATUS" -ne 0 ] && [ ! -s "$RUN_OUT" ] &&
+    [ "$(/bin/cat "$RUN_ERR")" = E_RELATION ] || fail "$name"
+  pass "$name"
+}
 mutate() {
   local source=$1 name=$2 filter=$3 target_path
   target_path="$tmp/$name.json"
@@ -155,6 +163,28 @@ for item in \
   'incomplete|.body.declaration_status="incomplete"'; do
   name=${item%%|*}
   expect_verdict "$name-refused" inconclusive "$duty" \
+    "$(mutate "$claim" "$name-claim" "${item#*|}")" "$observation"
+done
+
+for item in \
+  'activation-state|.body.activation_state=null' \
+  'registry-version|.body.registry_version=false' \
+  'description|.body.environments[0].description=0' \
+  'evidence-scope|.body.environments[0].evidence_scope=[]' \
+  'proof-state|.body.environments[0].proof_state={}'; do
+  name=${item%%|*}
+  "$jq_bin" -Sc "${item#*|}" "$tmp/registry-original.json" >"$tmp/$name-registry.json"
+  /bin/cp "$tmp/$name-registry.json" "$registry"
+  expect_relation_error "registry-$name-malformed" "$duty" "$claim" "$observation"
+done
+/bin/cp "$tmp/registry-original.json" "$registry"
+
+for item in \
+  'duty-ref|.body.duty_evaluation_ref.sha256=("f"*64)' \
+  'set-ref|.body.policy_set_ref.sha256=("f"*64)' \
+  'result-ref|.body.stage_result_ref.sha256=("f"*64)'; do
+  name=${item%%|*}
+  expect_relation_error "claim-$name-inconsistent" "$duty" \
     "$(mutate "$claim" "$name-claim" "${item#*|}")" "$observation"
 done
 

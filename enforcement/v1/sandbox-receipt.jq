@@ -286,6 +286,8 @@ def shape($s):
   else leaf_ok($s) end;
 
 def content_ref_schema($media): {content_id:"id",media_type:media($media),sha256:"hex64"};
+def document_ref_schema($kind;$version):
+  {schema_version:literal($version),kind:literal($kind),id:"id",sha256:"hex64"};
 
 # Mirrors control/v1/sandbox.jq policy_ok's `==` checks; round summary has the mapping.
 def legacy_policy_body_schema:
@@ -468,14 +470,20 @@ def fixed_files_ok:
 
 # Lookups against the fixed registry/accepted set/entry digests (read only
 # after fixed_files_ok, so shapes are already sound).
+def registry_entries_for($env_id):
+  $registry[0].body.environments | map(select(.environment_id == $env_id));
+def entry_digests_for($env_id):
+  $entry_digests[0] | map(select(.environment_id == $env_id));
+def accepted_entries_for($env_id):
+  $accepted[0].body.environments | map(select(.environment_id == $env_id));
 def registry_entry_for($env_id):
-  $registry[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+  registry_entries_for($env_id) | .[0];
 
 def entry_digest_for($env_id):
-  $entry_digests[0] | map(select(.environment_id == $env_id)) | .[0].sha256;
+  entry_digests_for($env_id) | .[0].sha256;
 
 def accepted_entry_for($env_id):
-  $accepted[0].body.environments | map(select(.environment_id == $env_id)) | .[0];
+  accepted_entries_for($env_id) | .[0];
 
 def row_observer($row):
   {cpu_time_ms:"guest-supervisor",wall_time_ms:"host-supervisor",memory_bytes:"guest-supervisor",
@@ -507,6 +515,27 @@ def is_control_mismatch:
       media_type:"text/x-jq",sha256:$evaluator_program_sha}
    else false end);
 
+def bound_evaluation_ok:
+  ($evaluation[0]) as $v |
+  ($v | exact(["body","id","kind","schema_version"])) and
+  $v.schema_version == 1 and $v.kind == "sandbox_policy_evaluation" and
+  ($v.body | shape({activation_state:literal("inactive"),authority_effect:literal("none"),
+    claim_ref:document_ref_schema("execution_environment_claim";1),
+    decision_ref:content_ref_schema("application/vnd.ystack.control-decision+json"),
+    duty_evaluation_ref:document_ref_schema("duty_separation_evaluation";1),
+    enforcement_proof:literal("declaration-only"),evaluation_mode:literal("observation-only"),
+    policy_ref:content_ref_schema("application/vnd.ystack.control-policy+json"),
+    policy_set:{id:"id",sha256:"hex64"},qualification_effect:literal("none"),
+    reason_ids:literal(["sandbox.verifier-binding-satisfied"]),verdict:literal("satisfied"),
+    verifier_binding:{accepted_set_sha256:"hex64",environment_entry_sha256:"hex64",
+      environment_id:"id",observation_sha256:"hex64",target_repository_id:"id",
+      verifier_sha256:"hex64"}})) and
+  $v.body.policy_ref == expected_policy_ref and
+  $v.body.decision_ref == expected_decision_ref and
+  $v.body.policy_set == {id:$policy_set[0].id,sha256:$policy_set_sha} and
+  $v.id == $observation[0].body.environment_id and
+  $v.body.claim_ref.id == $observation[0].body.environment_id;
+
 def bound_binding_mismatch:
   ($receipt[0].body.subject) as $subject |
   ($observation[0]) as $observed |
@@ -517,6 +546,9 @@ def bound_binding_mismatch:
   $observed.id != "sandbox.observation.verifier" or
   ($observed.body | exact(["accepted_set_sha256","environment_entry_sha256",
     "environment_id","target_repository_id","verifier_sha256"]) | not) or
+  (registry_entries_for($subject.environment_id) | length) != 1 or
+  (accepted_entries_for($subject.environment_id) | length) != 1 or
+  (entry_digests_for($subject.environment_id) | length) != 1 or
   $binding != ($observed.body + {observation_sha256:$observation_sha}) or
   $observed.body.environment_id != $subject.environment_id or
   $observed.body.environment_entry_sha256 != $subject.environment_entry_sha256 or
@@ -536,15 +568,16 @@ def is_evaluation_not_satisfied:
    (get($evaluation[0];["body","policy_ref","sha256"]) == $c.policy_sha256) and
    (get($evaluation[0];["body","decision_ref","sha256"]) == $c.decision_sha256) and
    (if $mode == "bound" then
-      get($evaluation[0];["body","reason_ids"]) == ["sandbox.verifier-binding-satisfied"] and
-      get($evaluation[0];["body","policy_set","id"]) == $policy_set[0].id and
-      get($evaluation[0];["body","policy_ref"]) == expected_policy_ref and
-      get($evaluation[0];["body","decision_ref"]) == expected_decision_ref and
-      (bound_binding_mismatch | not)
+      bound_evaluation_ok and (bound_binding_mismatch | not)
     else true end)) | not;
 
 def is_environment_unlisted:
   ($receipt[0].body.subject) as $s |
+  (if $mode == "bound" then
+    (registry_entries_for($s.environment_id) | length) != 1 or
+    (accepted_entries_for($s.environment_id) | length) != 1 or
+    (entry_digests_for($s.environment_id) | length) != 1
+   else false end) or
   (registry_entry_for($s.environment_id) == null) or
   (accepted_entry_for($s.environment_id) == null) or
   ($s.environment_entry_sha256 != entry_digest_for($s.environment_id)) or

@@ -158,9 +158,12 @@ def registry_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
   .kind == "shadow_environment_registry" and (.id | id_ok) and
   (.body | exact(["activation_state","environments","registry_version"]) and
+    (.activation_state | type == "string") and (.registry_version | type == "string") and
     (.environments | type == "array" and all(.[];
       exact(["description","environment_id","evidence_scope","proof_state",
-        "source_root_commit","target_repository_id"]) and (.environment_id | id_ok) and
+        "source_root_commit","target_repository_id"]) and
+      (.description | type == "string") and (.evidence_scope | type == "string") and
+      (.proof_state | type == "string") and (.environment_id | id_ok) and
       (.target_repository_id | id_ok) and (.source_root_commit | test("\\A[0-9a-f]{40}\\z")))));
 def digest_list_ok:
   type == "array" and length >= 1 and length <= 8 and all(.[];sha256_ok) and
@@ -185,6 +188,10 @@ def entry_digest_ok:
     (.environment_id | id_ok) and (.sha256 | sha256_ok));
 def document_ref($document; $digest):
   {schema_version:$document.schema_version,kind:$document.kind,id:$document.id,sha256:$digest};
+def claim_binding_ok($set; $set_sha; $duty_doc; $duty_digest):
+  .body.policy_set_ref == document_ref($set;$set_sha) and
+  .body.duty_evaluation_ref == document_ref($duty_doc;$duty_digest) and
+  .body.stage_result_ref == $duty_doc.body.stage.result_ref;
 
 ($policy[0]) as $p | ($decision[0]) as $decision_doc | ($policy_set[0]) as $set |
 ($duty[0]) as $duty_doc | ($claim[0]) as $claim_doc | ($observation[0]) as $observation_doc |
@@ -195,6 +202,8 @@ def document_ref($document; $digest):
     ($entry_digests[0] | entry_digest_ok)
  then true else error("invalid-input") end) |
 (if ($duty_doc | duty_binding_ok($set;$policy_set_sha)) then true else error("duty-binding") end) |
+(if ($claim_doc | claim_binding_ok($set;$policy_set_sha;$duty_doc;$duty_sha))
+ then true else error("claim-binding") end) |
 ([$set.body.sections[] | select(.section_id == "sandbox")]) as $sandbox_sections |
 (if ($sandbox_sections | length) == 1 and
     $sandbox_sections[0].policy_ref == $decision_doc.body.policy_ref and
@@ -210,9 +219,6 @@ def document_ref($document; $digest):
   (($entry_hashes | length) == 1) and $claim_doc.body.declaration_status == "complete" and
   $duty_doc.body.verdict == "satisfied" and
   $claim_doc.body.execution_identity.role == $p.body.required_role and
-  $claim_doc.body.policy_set_ref == document_ref($set;$policy_set_sha) and
-  $claim_doc.body.duty_evaluation_ref == document_ref($duty_doc;$duty_sha) and
-  $claim_doc.body.stage_result_ref == $duty_doc.body.stage.result_ref and
   $claim_doc.body.effects == {external_writes:false,target_writes:false} and
   $claim_doc.body.environment == $p.body.environment and
   $claim_doc.body.filesystem == $p.body.filesystem and
