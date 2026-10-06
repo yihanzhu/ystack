@@ -59,7 +59,16 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    contract requires. Request documents carry data, never an approval flag. Validate incident
    and qualified identity with existing validators; validate the input through the
    materializer protocol and its core/profile relations. Bind every request/profile/reference
-   digest to captured bytes before acting.
+   digest to captured bytes before acting. Before processing REQUEST, the trusted parent
+   independently provisions and accepts the helper from the reviewed committed
+   `adapters/local-git-materializer/v1/object-closure.c`, with its exact source identity,
+   reviewed build inputs and resulting executable identity. That accepted choice belongs to
+   the trusted parent's invocation context, independently of REQUEST. The consumer must
+   match the request's helper locator and captured executable bytes to that separately
+   trusted choice before every direct or indirect helper invocation, including `version`
+   inside the materializer. Missing acceptance or any mismatch refuses before execution.
+   Neither a request-supplied digest nor measurement/version output from its selected file
+   approves executable bytes. Preparation does not provision or approve this helper.
 5. Bound REQUEST to 64 KiB; apply each upstream component's tighter file, frame, JSON and
    output bounds. Snapshot with no-follow descriptor opens; reject non-regular files, links,
    duplicate JSON keys, noncanonical bytes and changed identities. WORK and OUTPUT are
@@ -69,7 +78,8 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 6. All child commands use fixed absolute programs and argument arrays, a cleared environment,
    denied Git network/prompts/hooks/config and bounded output. No shell text, candidate
    program, model, socket or forge client is invoked. Jq uses the existing pinned 1.6
-   identities; helper provenance follows the trusted preparation contract. Recheck captured
+   identities; the helper must pass R2.4 before execution. Preserve its snapshot and identity
+   rechecks across use, and reject substitution. Recheck captured
    source/tool/input identities before emitting a completed bundle. A failed recheck cannot
    leave a completion marker.
 7. Usage/input errors exit 1 with one of `E_USAGE`, `E_RUNTIME`, `E_LIMIT`, `E_SHAPE`,
@@ -306,7 +316,10 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    evaluator/candidate/payload; missing, partial, refused, timed-out and cancelled evidence;
    exact expectation-before-launch ordering; valid mismatch versus refusal; positive controls
    for each boundary. Prove no launch after precheck failure and no completion marker after
-   identity drift.
+   identity drift. With an independently accepted helper as the positive control, prove that
+   an unapproved locator or substituted executable is rejected without executing any helper
+   entry point, including `version`. A negative helper that would emit the expected version
+   and an execution marker must leave no marker. Rechecking only after execution cannot pass.
 3. Prove the two-attempt separation, exact inventory, converter provenance,
    add-only/protected/existing-path/mode/binary/oversize refusals, single parent, two-run
    determinism, no nonce/time leakage, zero producer calls, withheld-only publication and no
