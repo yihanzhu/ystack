@@ -451,10 +451,10 @@ def policy_pin:
   if $mode == "bound" then "ad1eab67be239e0f06f049bca91d51c475b3abb5917952a85c2a67f0450fbc6f"
   else "4afb62e44fd3ad055d157ee23bfcf2917811b9ec05e4923eaa989d95d53c0a5e" end;
 def decision_pin:
-  if $mode == "bound" then "c1ef076c8e9c9879ee39c46a0c0d6f6062c3e102fbbaeadbcc6453dc95b35ddc"
+  if $mode == "bound" then "c8685bc8d15bb2375ab2263b0add5c151aa7c763fa3197bbacf886606f87df47"
   else "c3e89800147d55f7c726ec66c82031915a4220d3eb7867e143f60d7026223bbd" end;
 def policy_set_pin:
-  if $mode == "bound" then "9b88e2807c736cddbe54b025af0c4aa267807f37c45f232d315f3af0b64e2edf"
+  if $mode == "bound" then "53cc568504e37bf2abf9542fab988b0f9d021ff40bf67872eb3432bcacaaf16d"
   else "3fff018a4a7cbd9d8c69339ce1cd20c7f940b7af8080b12afe36e57961757eb8" end;
 
 def pinned_files_ok:
