@@ -330,6 +330,7 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    control files; `scripts/test/shadow-enforced.test.sh`, `scripts/test/shadow-write.test.sh`,
    `scripts/test/control-sandbox-bound.test.sh`. Changed files:
    `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`,
+   `scripts/test/portable-core-schema.test.sh` (only the R10.9 expected-path addition),
    `scripts/test/sandbox-receipt.test.sh`, `scripts/test/shadow-slice.test.sh` (compatibility
    only), `docs/components.md`, `RESTORE.md`, `ci/required-files.txt`. Add new
    restore-critical entries once.
@@ -435,6 +436,12 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    and the shipped empty set to refuse. Keep old accepted-set and native qualification tests.
    Compose with generic validators; do not duplicate the entire legacy evaluator, rewrite
    claims into placeholder claims, or introduce an unapproved exception.
+   For slice 1, add exactly `control/v1/control-policy-set-sandbox-bound.json` to the
+   existing corrective-v2 generation tracked-path expected list in
+   `scripts/test/portable-core-schema.test.sh`. Preserve its exact-list comparison, all
+   other entries and checks, legacy bindings, generation identity and inactive authority.
+   No glob or broader allowlist change is permitted. Run that schema suite with the candidate
+   files present in Git's tracked index; a run with untracked new files is not guard proof.
 
 ## Design
 
