@@ -26,6 +26,12 @@ retains the receipt, checker result, evaluator bytes and recorded origin. A copi
 or caller-supplied receipt never proves authentic origin. Old declaration-only
 and no-change records keep their meaning.
 
+The policy tool-digest integration assigned by the VM spec R1.5 also belongs
+here. Its closed binding mechanism takes a verifier digest only from the already
+accepted identity set for that environment and requires the actual verifier bytes
+and receipt to agree. It refuses placeholders, unlisted or cross-environment
+digests and caller-selected tool identities. It selects no native identity now.
+
 The same concern produces R2's deterministic write-shadow record: an add-only
 candidate commit with the target revision as its only parent, exact planned paths,
 file modes and raw-byte digests, a checked would-be publisher request, publication
@@ -40,15 +46,18 @@ that two fresh runs of the same frozen tuple produce the same candidate tree,
 write set and request. Valid controls accompany refusals for forged or mismatched
 receipts, unauthenticated origin, missing or failed evidence, changed candidate or
 evaluator bytes, invalid paths or existing files, changed records without withheld
-publication, incomplete evidence and differing outputs. Old no-change behavior remains covered. The shipped
-accepted set stays empty, the environment stays unproven, and no scope becomes
+publication, incomplete evidence and differing outputs. Policy-binding tests cover
+stale policy, evaluator and decision digests, swapped verifier bytes, and unchanged
+legacy read-only behavior. The shipped accepted set stays empty, the environment
+stays unproven, and no scope becomes
 proposable. Documentation distinguishes fixture proof, native qualification and a
 real write-shadow run.
 
 ## Affected users and systems
 
 The operator and the shadow driver; the shipped verifier, preparation, launcher
-and receipt components it consumes; and later scope-gate, real-gate, eval and
+and receipt components it consumes; the narrow policy, evaluator and receipt-checker
+changes needed for verifier-byte binding; and later scope-gate, real-gate, eval and
 publisher work that reads the resulting evidence. Component documentation and the
 restore manifest must cover any new consumer files.
 
@@ -60,8 +69,12 @@ restore manifest must cover any new consumer files.
   code. The spec and plan name exact files, tests and any bounded implementation
   slices. Required CI and independent review remain mandatory.
 - Reuse the preparation, verifier and supervisor contracts without duplicating or
-  changing them. Limit new behavior to the shadow consumer and narrowly required
-  helpers. New restore-critical files receive manifest entries.
+  changing them. New behavior belongs to the shadow consumer and its helpers,
+  plus the narrow verifier-byte binding changes to the existing control policy,
+  evaluator and receipt validator and all affected byte-digest references. Preserve
+  legacy read-only behavior. Receipt fields, accounting, qualification rules and
+  accepted-set admission stay unchanged. New restore-critical files receive
+  manifest entries.
 - Preserve `scope/v1/**` behavior for child 6. Kill-register and real-gate work stay
   with children 7 and 9; durable telemetry with child 8; evals, publisher and
   enablement with children 10–12.
@@ -73,8 +86,9 @@ restore manifest must cover any new consumer files.
   Synthetic receipts and test identities prove contracts only. They cannot alter
   the shipped accepted identities or grant native qualification.
 - No config or policy authority expansion. A reserved code or policy change,
-  wider authority, weaker acceptance or change to an upstream contract returns
-  through its applicable gate instead of being absorbed into this concern.
+  wider authority, weaker acceptance or upstream change beyond the named binding
+  and its digest references returns through its applicable gate instead of being
+  absorbed into this concern.
 
 ## Open questions
 
