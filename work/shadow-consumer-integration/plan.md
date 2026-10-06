@@ -1,5 +1,5 @@
 ---
-spec-blob: f049d2999d04a1b52f9ff929db15083108b78049
+spec-blob: 740ef2bcf1b198a28ff4aab9675b3897cba6c026
 risk: high
 drafted: 2026-10-06
 ---
@@ -22,7 +22,7 @@ in the same PR. The first four track #506; only the fifth closes it.
 
 | Slice | Exact implementation paths, excluding the common documentation set |
 | --- | --- |
-| 1 — bound evaluator/checker | `control/v1/sandbox-bound-policy.json`, `control/v1/sandbox-bound-decision.json`, `control/v1/control-policy-set-sandbox-bound.json`, `control/v1/evaluate-bound-sandbox.sh`, `control/v1/sandbox-bound.jq`, `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`, `scripts/test/control-sandbox-bound.test.sh`, `scripts/test/sandbox-receipt.test.sh` |
+| 1 — bound evaluator/checker | `control/v1/sandbox-bound-policy.json`, `control/v1/sandbox-bound-decision.json`, `control/v1/control-policy-set-sandbox-bound.json`, `control/v1/evaluate-bound-sandbox.sh`, `control/v1/sandbox-bound.jq`, `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`, `scripts/test/control-sandbox-bound.test.sh`, `scripts/test/sandbox-receipt.test.sh`, `scripts/test/portable-core-schema.test.sh` (only the spec R10.9 expected-path addition) |
 | 2 — trusted dependencies and origin reader | `shadow/v1/_consumer.py`, `scripts/test/shadow-enforced.test.sh` |
 | 3 — enforced reproduction | `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh`, `scripts/test/shadow-slice.test.sh` (compatibility assertions only) |
 | 4 — add-only materialization | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-write.test.sh` |
@@ -438,6 +438,13 @@ Run the slice's new suites and affected compatibility suite before its review:
 `bash scripts/test/shadow-write.test.sh`, as each becomes available.
 Each test script must be runnable directly and discovered by the existing test
 runner without editing its bootstrap or CI workflow.
+
+For slice 1, add only `control/v1/control-policy-set-sandbox-bound.json` to the
+existing corrective-v2 generation tracked-path expected list in
+`scripts/test/portable-core-schema.test.sh`, preserving every other entry and check.
+Run `bash scripts/test/portable-core-schema.test.sh` after all candidate files are
+staged or committed. Verify the tested Git index contains their exact candidate bytes;
+untracked-file runs cannot prove this guard. Keep legacy bindings and authority unchanged.
 
 At slices 3 and 5 run the existing integration suites with `bash scripts/test/NAME`:
 `shadow-slice.test.sh`, `shadow-assembler.test.sh`, `shadow-self-host-evidence.test.sh`,
