@@ -595,6 +595,10 @@ refuses("E_LIMIT", lambda: e.frame_write([(b"x" * 256, b"")]), "oversize frame n
 refuses("E_LIMIT", lambda: e.frame_write([(b"end", b"")]), "reserved end name refused")
 old_limit = e.FRAME_LIMIT; e.FRAME_LIMIT = 30
 refuses("E_LIMIT", lambda: e.frame_write([(b"x", b"a" * 40)]), "complete frame ceiling enforced")
+exact=8+1+1+8+7+44;e.FRAME_LIMIT=exact
+ok(len(e.frame_write([(b"x",b"a"*7)]))==exact,"frame exact cap accepted")
+e.FRAME_LIMIT=exact-1
+refuses("E_LIMIT",lambda:e.frame_write([(b"x",b"a"*7)]),"frame cap-minus-one refuses before append")
 e.FRAME_LIMIT = old_limit
 
 # Bounded children get a clean explicit environment and process group. A
@@ -605,9 +609,11 @@ ok(out == b"fixed\n", "bounded child success")
 refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
     "import time;time.sleep(2)"], timeout=.05, env=env), "bounded child timeout is failure")
 refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
-    "print('x'*100)"], output_limit=8, env=env), "bounded stdout refuses instead of truncating")
+    "import sys,time;sys.stdout.write('x'*100);sys.stdout.flush();time.sleep(30)"],
+    output_limit=8, env=env), "bounded stdout refuses instead of truncating")
 refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
-    "import sys;sys.stderr.write('x'*70000)"], env=env), "bounded stderr refuses instead of truncating")
+    "import sys,time;sys.stderr.write('x'*70000);sys.stderr.flush();time.sleep(30)"], env=env),
+    "bounded stderr refuses instead of truncating")
 refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
     "raise SystemExit(3)"], env=env), "nonzero component exit refuses")
 original_popen=e.subprocess.Popen
@@ -615,14 +621,67 @@ e.subprocess.Popen=lambda *_args,**_kwargs: (_ for _ in ()).throw(AssertionError
 refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c","pass"],env=env,
         deadline=time.monotonic()-1),"expired overall deadline refuses before spawn")
 e.subprocess.Popen=original_popen
-setup_child=original_popen([sys.executable,"-c","import time;time.sleep(30)"],stdin=subprocess.PIPE,
+setup_ready=base/"setup.ready"
+setup_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(setup_ready)],stdin=subprocess.PIPE,
  stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+for _ in range(100):
+ if setup_ready.exists():break
+ time.sleep(.01)
+ok(setup_ready.exists(),"setup child reached owned process group")
 original_set_blocking=e.os.set_blocking;e.os.set_blocking=lambda *_args: (_ for _ in ()).throw(OSError("fixture"))
 try:e.communicate_bounded(setup_child,b"",8,8,1)
 except OSError:ok(True,"setup failure leaves bounded operation")
 else:raise AssertionError("setup failure accepted")
 e.os.set_blocking=original_set_blocking
+for _ in range(100):
+ if setup_child.poll() is not None:break
+ time.sleep(.01)
 ok(setup_child.poll() is not None,"setup-failed child was reaped")
+interrupt_ready=base/"interrupt.ready"
+interrupt_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(interrupt_ready)],stdin=subprocess.PIPE,
+ stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+for _ in range(100):
+ if interrupt_ready.exists():break
+ time.sleep(.01)
+ok(interrupt_ready.exists(),"interrupt child reached owned process group")
+original_selector=e.selectors.DefaultSelector
+e.selectors.DefaultSelector=lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+try:e.communicate_bounded(interrupt_child,b"",8,8,1)
+except KeyboardInterrupt:ok(True,"cancellation leaves bounded operation")
+else:raise AssertionError("cancellation accepted")
+finally:e.selectors.DefaultSelector=original_selector
+for _ in range(100):
+ if interrupt_child.poll() is not None:break
+ time.sleep(.01)
+ok(interrupt_child.poll() is not None,"cancelled child was reaped")
+pid_file=base/"descendant.pid"
+group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
+ "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
+ "(pathlib.Path(sys.argv[1]).write_text(str(pid)),time.sleep(30))")
+started=time.monotonic()
+refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c",group_program,str(pid_file)],
+        timeout=.1,env=env),"timeout stops leader and TERM-ignoring descendant")
+descendant=int(pid_file.read_text());gone=False
+for _ in range(100):
+ try:os.kill(descendant,0)
+ except ProcessLookupError:gone=True;break
+ time.sleep(.01)
+ok(gone and time.monotonic()-started<11,"owned process group is gone within one cleanup bound")
+bash=e.fixed_bash();bash.recheck();ok(True,"fixed /bin/bash alias and physical bytes recheck")
+original_lstat=e.os.lstat
+def replaced_alias(path):
+ state=original_lstat(path)
+ if pathlib.Path(path)==pathlib.Path("/bin"):
+  return types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino+1,st_mode=state.st_mode,
+   st_uid=state.st_uid,st_gid=state.st_gid,st_nlink=state.st_nlink,st_size=state.st_size,
+   st_mtime_ns=state.st_mtime_ns,st_ctime_ns=state.st_ctime_ns)
+ return state
+e.os.lstat=replaced_alias
+refuses("E_DEPENDENCY",bash.recheck,"fixed executable alias replacement refuses")
+e.os.lstat=original_lstat
+original_read=bash.physical.held.read;bash.physical.held.read=lambda _limit,_code:b"changed"
+refuses("E_DEPENDENCY",bash.recheck,"same held executable with changed bytes refuses")
+bash.physical.held.read=original_read;bash.close()
 fifo = base / "request-fifo"; os.mkfifo(fifo)
 refuses("E_SHAPE", lambda: e.read_regular(fifo, e.REQUEST_LIMIT, "E_SHAPE"),
         "request FIFO refuses without blocking")
@@ -726,6 +785,15 @@ payload_receipt={"body":{"lifecycle":{"admission":"admitted","runtime":"complete
  "evidence_manifest_sha256":sha(e.canonical(evidence_manifest))}}}
 raw, result=e.payload_result(snapshots,evidence_manifest,instruction,prep_manifest,payload_receipt)
 ok(raw==result_raw and result["outcome"]=="mismatch", "mismatch is completed comparison")
+for target,key in (("result","schema_version"),("observed","size_bytes")):
+ bad=e.parse(result_raw)
+ if target=="result":bad[key]=True
+ else:bad["body"]["observed"][key]=True
+ bad_raw=e.canonical(bad);ss=dict(snapshots);ss["payload/evidence/0000"]=bad_raw
+ mm=json.loads(json.dumps(evidence_manifest));mm["body"]["files"][0].update(sha256=sha(bad_raw),size_bytes=len(bad_raw))
+ receipt=json.loads(json.dumps(payload_receipt));receipt["body"]["payload"]["evidence_manifest_sha256"]=sha(e.canonical(mm))
+ refuses("E_RELATION",lambda ss=ss,mm=mm,receipt=receipt:e.payload_result(ss,mm,instruction,prep_manifest,receipt),
+         "boolean payload "+key+" refused")
 for mutate,message in [
  (lambda s,m: s.__setitem__("payload/stdout",b"noise"),"nonempty stdout refused"),
  (lambda s,m: m["body"]["files"][0].__setitem__("name_hex",b"other".hex()),"wrong evidence name refused"),
@@ -736,7 +804,9 @@ changed=e.parse(result_raw); changed["body"]["observed"]["sha256"]="1"*64
 changed_raw=e.canonical(changed); ss=dict(snapshots); ss["payload/evidence/0000"]=changed_raw
 mm=json.loads(json.dumps(evidence_manifest)); mm["body"]["files"][0].update(
     sha256=sha(changed_raw),size_bytes=len(changed_raw))
-refuses("E_RELATION",lambda:e.payload_result(ss,mm,instruction,prep_manifest,payload_receipt),
+changed_receipt=json.loads(json.dumps(payload_receipt))
+changed_receipt["body"]["payload"]["evidence_manifest_sha256"]=sha(e.canonical(mm))
+refuses("E_RELATION",lambda:e.payload_result(ss,mm,instruction,prep_manifest,changed_receipt),
         "rehashed wrong observed digest refused")
 for field,value,message in (("exit_code",1,"nonzero verifier exit refused"),
                             ("exit_state","signaled","signaled verifier refused")):
@@ -755,7 +825,8 @@ files={name:(b"" if name.endswith(".txt") else e.canonical(doc("fixture", "fixtu
        for i,name in enumerate(e.EVIDENCE_NAMES)}
 files["incident.json"]=e.canonical(incident)
 out=base/"bundle"; out.mkdir(mode=0o700)
-bundle=e.seal(out,files,incident,"enforced-reproduction.v1")
+out_hold=e.stable_directory(out)
+bundle=e.seal(out,out_hold,files,incident,"enforced-reproduction.v1");out_hold.close()
 bundle_doc=e.parse(bundle)
 ok([row["name"] for row in bundle_doc["body"]["files"]] == sorted(e.EVIDENCE_NAMES),
    "bundle rows are sorted exact 29-file inventory")
@@ -767,10 +838,26 @@ ok(all((out/row["name"]).stat().st_size==row["size_bytes"] and
 partial=base/"partial"; partial.mkdir(mode=0o700); write(partial/"incident.json",e.canonical(incident))
 ok(not (partial/"bundle.json").exists(),"partial attempt has no completion marker")
 extra=base/"extra"; extra.mkdir(mode=0o700); write(extra/"extra",b"x")
-refuses("E_RELATION",lambda:e.seal(extra,files,incident,"enforced-reproduction.v1"),
+extra_hold=e.stable_directory(extra)
+refuses("E_RELATION",lambda:e.seal(extra,extra_hold,files,incident,"enforced-reproduction.v1"),
         "preexisting output cannot acquire marker")
+ok(not (extra/"bundle.json").exists(),"late inventory refusal leaves no marker");extra_hold.close()
+late=base/"late-fsync";late.mkdir(mode=0o700);late_hold=e.stable_directory(late)
+real_fsync=e.os.fsync;fsync_calls=[0]
+def fail_final_fsync(fd):
+ fsync_calls[0]+=1
+ if fsync_calls[0]==3:raise OSError("fixture directory fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_final_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(late,late_hold,files,incident,"enforced-reproduction.v1"),
+            "final directory fsync refuses")
+finally:e.os.fsync=real_fsync
+ok(not (late/"bundle.json").exists(),"directory fsync failure removes marker");late_hold.close()
 
-trace=e.trace_ledger(incident,"attempt.fixture","reproduced","tool.verifier")
+evaluation_fixture=e.canonical(doc("sandbox_policy_evaluation","evaluation.fixture",{}))
+checker_fixture=e.canonical(doc("sandbox_receipt_check","check.fixture",{}))
+trace=e.trace_ledger(incident,"attempt.fixture","env.fixture","reproduced","tool.verifier",
+                     evaluation_fixture,checker_fixture)
 t=e.parse(trace)
 ok(all(row["record_digest"]==sha(e.canonical({k:v for k,v in row.items() if k!="record_digest"}))
        for row in t["body"]["events"]),"trace event digests exclude their own field")
@@ -783,7 +870,8 @@ trace_receipt=e.run_bounded(["/bin/bash","-p",str(root/"telemetry/v1/validate-tr
     "validate",incident["id"],"attempt.fixture",str(trace_path)],env=trace_env)
 ok(e.parse(trace_receipt)["body"]["ledger_ref"]["sha256"]==sha(trace),
    "real trace validator binds ledger")
-trace_none=e.trace_ledger(incident,"attempt.none","inconclusive",None)
+trace_none=e.trace_ledger(incident,"attempt.none","env.fixture","inconclusive",None,
+                          evaluation_fixture,checker_fixture)
 ok(e.parse(trace_none)["body"]["events"][1]["facts"]["tool"]=={"state":"not-applicable"},
    "unexecuted tool is not named")
 
@@ -822,16 +910,22 @@ incident=doc("shadow_incident_record","incident.flow",{"deploy_authority":"none"
 revision={"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit}
 request_content=doc("stage_request","request.flow",{"target_repository_id":"fixture.target",
  "target_revision":{"state":"present","value":revision},
- "source":{"state":"present","value":{"type":"git-object","value":{"revision":revision}}}})
+ "source":{"state":"present","value":{"type":"git-object","value":{"revision":revision}}},
+ "environment_ref":{"environment_id":"env.fixture","fingerprint_sha256":"PLACEHOLDER"}})
 resolved_content=doc("resolved_profile","profile.flow",{})
 input_doc={"stage_request":{"content":request_content,"sha256":sha(e.canonical(request_content))},
- "resolved_profile":{"content":resolved_content,"sha256":sha(e.canonical(resolved_content))}}
+ "resolved_profile":{"content":resolved_content,"sha256":sha(e.canonical(resolved_content))},
+ "payloads":[{"input_id":"input.producer-patch","data":""}],
+ "trust_context":{"verified_payloads":[{"input_id":"input.producer-patch","content":{"data":""}}]}}
 instruction=e.make_instruction(incident)
 identity=doc("qualified_identity","identity.flow",{"stage_request_ref":{"schema_version":1,"kind":"stage_request",
  "id":"request.flow","sha256":input_doc["stage_request"]["sha256"]},"resolved_profile_ref":{
  "schema_version":1,"kind":"resolved_profile","id":"profile.flow","sha256":input_doc["resolved_profile"]["sha256"]},
  "verification_instructions_ref":{"content_id":"instruction.flow","media_type":"text/plain","sha256":sha(instruction)}})
 claim=doc("execution_environment_claim","env.fixture",{})
+request_content["body"]["environment_ref"]["fingerprint_sha256"]=sha(e.canonical(claim))
+input_doc["stage_request"]={"content":request_content,"sha256":sha(e.canonical(request_content))}
+identity["body"]["stage_request_ref"]["sha256"]=input_doc["stage_request"]["sha256"]
 duty=doc("duty_separation_evaluation","duty.flow",{})
 for name,value in (("incident",incident),("claim",claim),("duty",duty),("identity",identity),("input",input_doc)):
  write(base/(name+".json"),e.canonical(value))
@@ -843,6 +937,7 @@ write(base/"request.json",e.canonical(request))
 
 policy=b'{"policy":true}\n';decision=b'{"decision":true}\n';pset=b'{"set":true}\n'
 driver=b'#!/bin/bash\n';program=b'.\n';accepted=b'{"accepted":true}\n';registry_raw=b'{"registry":true}\n'
+fake_anchor=base/"anchor";fake_anchor.mkdir(mode=0o700)
 entry={"description":"fixture","environment_id":"env.fixture","evidence_scope":"fixtures-only",
  "proof_state":"unproven","source_root_commit":commit,"target_repository_id":"fixture.target"}
 installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sha(decision)),
@@ -850,10 +945,15 @@ installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sh
  "evaluator_program":(program,sha(program)),"accepted_set":(accepted,sha(accepted)),
  "registry":(registry_raw,sha(registry_raw))}
 class Anchor:
- config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":1234}
+ config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":1234,
+  "store_root":str(base/"store"),"work_root":str(base/"host-work"),"installed_files":{},
+  "identity_paths":{"dyld_cache_files":[]}}
  registry=(sha(registry_raw),[entry]);installed=installed
+ held=[types.SimpleNamespace(path=str(fake_anchor/"host-supervisor.py"),read=lambda maximum,code:b"host\n",
+  recheck=lambda code:None)]
  def recheck(self,*_args): events.append("anchor-recheck")
  def close(self): events.append("anchor-close")
+e.c.ANCHOR=str(fake_anchor)
 class Snap:
  def __init__(self,path,digest_value): self.snapshot=types.SimpleNamespace(path=str(path));self.sha256=digest_value
  def recheck(self): events.append("dependency-recheck")
@@ -870,14 +970,15 @@ e.c.verifier_observation=lambda anchor,environment,target:e.canonical(doc("sandb
 
 record={"schema_version":1,"kind":"candidate_content_preparation","status":"completed",
  "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
- "candidate":{"commit_id":candidate_commit,"tree_id":candidate_tree}}
+ "candidate":{"commit_id":commit,"tree_id":tree}}
 manifest={"schema_version":1,"kind":"candidate_content_manifest","entries":[{
  "path":"source.txt","mode":"100644","blob_oid":"f"*40,"size_bytes":6,"sha256":sha(b"fixed\n")}],
  "file_count":1,"directory_count":0,"total_file_bytes":6,"hash_algorithm":"sha256"}
 materializer_receipt={
  "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
- "candidate":{"commit_id":candidate_commit,"tree_id":candidate_tree}}
-stage=doc("stage_result","result.flow",{"outcome":{"value":"succeeded"}})
+ "candidate":{"commit_id":commit,"tree_id":tree,"parent_commit_id":commit},
+ "changed_paths":{"count":0,"sha256":"0"*64}}
+stage=doc("stage_result","result.flow",{"outcome":{"family":"change","value":"no-change"}})
 response={"schema_version":1,"kind":"adapter_response","stage_result":stage,"payloads":[{
  "content_id":"receipt.materialize","media_type":"application/json","sha256":sha(e.canonical(materializer_receipt)),
  "data":e.canonical(materializer_receipt).decode()}],"authority":"none","qualification":"unavailable","effects":[]}
@@ -951,6 +1052,15 @@ ok(events.index("check-bound")>events.index("launch"),
 ok(events.count("dependency-recheck")>=4 and events.count("anchor-recheck")>=2,
    "dependencies and anchor rechecked through completion")
 ok(not any("incident-to-eval" in row for row in events),"slice3 never enters write converter")
+changed=json.loads(json.dumps(response));changed["stage_result"]["body"]["outcome"]["value"]="changed"
+changed_receipt=json.loads(changed["payloads"][0]["data"])
+changed_receipt["candidate"].update(commit_id=candidate_commit,tree_id=candidate_tree)
+changed_receipt["changed_paths"]["count"]=1
+changed["payloads"][0]["data"]=e.canonical(changed_receipt).decode()
+changed["payloads"][0]["sha256"]=sha(e.canonical(changed_receipt))
+try:e.require_no_change(e.canonical(changed),incident)
+except e.Refusal as exc:ok(exc.code=="E_RELATION","changed materialization response cannot launch")
+else:raise AssertionError("changed materialization accepted")
 print("shadow-enforced-flow: %d checks passed"%checks)
 PY
 
@@ -1160,7 +1270,7 @@ PATH="$real/bin:/usr/bin:/bin" "$fixture/adapters/local-git-materializer/v1/mate
 /usr/bin/printf 'shadow-enforced-real-chain: materializer/protocol/duty/bound-evaluator passed\n'
 
 "$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" <<'PY'
-import dataclasses, hashlib, importlib.util, json, os, pathlib, stat, subprocess, sys, types
+import dataclasses, hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, types
 base, package, physical_python = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
 module_path=package/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("real_shadow_enforced",module_path)
@@ -1204,7 +1314,7 @@ while True:
  root_ancestors.add(str(cursor))
  if cursor==cursor.parent: break
  cursor=cursor.parent
-external_ancestors=set();cursor=base.parent
+external_ancestors=set();cursor=base.parent.parent
 while True:
  external_ancestors.add(str(cursor))
  if cursor==cursor.parent: break
@@ -1216,8 +1326,10 @@ while True:
  if cursor==cursor.parent: break
  cursor=cursor.parent
 def fd_path(fd):
- raw=c.fcntl.fcntl(fd,50,b"\0"*1024)
- return raw.split(b"\0",1)[0].decode()
+ if sys.platform=="darwin":
+  raw=c.fcntl.fcntl(fd,50,b"\0"*1024)
+  return raw.split(b"\0",1)[0].decode()
+ return os.readlink(f"/proc/self/fd/{fd}")
 def observed(state,path):
  path=os.path.realpath(path)
  if path in external_ancestors and stat.S_ISDIR(state.st_mode):
@@ -1240,14 +1352,19 @@ def observed(state,path):
 def metadata(fd): return observed(raw_metadata(fd),fd_path(fd))
 def named(name,parent_fd): return observed(raw_named(name,parent_fd),os.path.join(fd_path(parent_fd),name))
 c._metadata,c._named_metadata=metadata,named
-c._acl_state=lambda _fd:([],None)
+c._acl_state=lambda _fd:([],None) if sys.platform=="darwin" else (None,None)
 
 work=base/"consumer-work";output=base/"consumer-output";work.mkdir(mode=0o700);output.mkdir(mode=0o700)
+raw_fsync=os.fsync;fsync_paths=[]
+def recording_fsync(fd):
+ fsync_paths.append(fd_path(fd));return raw_fsync(fd)
+e.os.fsync=recording_fsync
 request=json.loads((base/"request.json").read_bytes())
 instruction=("ystack.file-digest-instruction.v1\npath source.txt\nsha256 "+
  json.loads((base/"incident.json").read_bytes())["body"]["failing_check"]["expected_sha256"]+"\n").encode()
 instruction_file=base/"verifier-instruction";write(instruction_file,instruction,0o400)
 checks=0
+scenario_mode="success";launch_count=0;scenario_output=None;scenario_work=work
 def ok(value,message):
  global checks
  if not value: raise AssertionError(message)
@@ -1266,6 +1383,16 @@ def decode(frame):
   digest.update(encoded);rows.append((name,raw))
 
 def launch(anchor_value,frame,_deadline):
+ global launch_count
+ launch_count+=1
+ durable={str(scenario_work/"launch/sandbox-request.json"),
+  str(scenario_work/"launch/sandbox-expectation.json"),str(scenario_work/"launch")}
+ ok(durable.issubset(set(fsync_paths)),"actual request, expectation, and containing directory are durable before launch")
+ if scenario_mode=="cancel": raise e.Refusal("E_RUNTIME")
+ for name in ("candidate","evidence","scratch"):
+  path=verifier_root/name
+  if path.exists(): shutil.rmtree(path)
+  path.mkdir(mode=0o700)
  rows=decode(frame);names=[name for name,_raw in rows]
  required=[b"request.json",b"evaluation.json",b"incident.json",b"record.json",b"manifest.json",b"instruction"]
  ok(names[:6]==required and all(name==f"candidate/{i:05d}".encode() for i,name in enumerate(names[6:])),
@@ -1275,7 +1402,7 @@ def launch(anchor_value,frame,_deadline):
   raw=values[f"candidate/{index:05d}".encode()]
   if len(raw)!=row["size_bytes"] or sha(raw)!=row["sha256"]: raise AssertionError("candidate binding")
   write(verifier_root/"candidate"/row["path"],raw,0o400)
- if instruction_file.read_bytes()!=values[b"instruction"]: raise AssertionError("instruction snapshot")
+ instruction_file.chmod(0o600);write(instruction_file,values[b"instruction"],0o400)
  env={"LANG":"C","LC_ALL":"C","PATH":str(verifier_root/"tools"),"TMPDIR":str(verifier_root/"scratch")}
  with instruction_file.open("rb") as stdin:
   run=subprocess.run([str(verifier),"verify","--candidate",str(verifier_root/"candidate"),
@@ -1285,10 +1412,11 @@ def launch(anchor_value,frame,_deadline):
  result=(verifier_root/"evidence/file-digest-result.json").read_bytes()
  result_doc=json.loads(result);ok(result_doc["body"]["instruction_sha256"]==sha(values[b"instruction"]),
    "actual verifier result binds framed instruction")
- launch_doc=json.loads(values[b"request.json"]);expectation=json.loads((work/"launch/sandbox-expectation.json").read_bytes())
+ launch_doc=json.loads(values[b"request.json"])
+ expectation=json.loads((scenario_work/"launch/sandbox-expectation.json").read_bytes())
  ok(expectation["body"]["attempt"]["launch_request_sha256"]==sha(values[b"request.json"]),
    "durable expectation binds actual launch bytes")
- attempt=store/request["id"];payload=attempt/"payload";evidence=payload/"evidence"
+ attempt=store/launch_doc["id"];payload=attempt/"payload";evidence=payload/"evidence"
  evidence.mkdir(parents=True,mode=0o750)
  manifest_raw=canonical({"schema_version":1,"kind":"sandbox_evidence_manifest","id":"evidence-manifest",
   "body":{"files":[{"name_hex":b"file-digest-result.json".hex(),"sha256":sha(result),"size_bytes":len(result)}]}})
@@ -1317,9 +1445,20 @@ def launch(anchor_value,frame,_deadline):
     "evidence_manifest_sha256":sha(manifest_raw),"exit_state":"exited","exit_code":0},
    "timing":{"admitted_at":"2026-08-30T00:00:05Z","terminated_at":"2026-08-30T00:00:06Z"},
    "outcome":{"verdict":"satisfied","reason_ids":["enforcement.satisfied"]}}}
- write(attempt/"receipt.json",canonical(receipt),0o440)
+ if scenario_mode=="cpu-none":
+  receipt["body"]["limits"]["cpu_time_ms"]["enforcement"]="none"
+  receipt["body"]["limits"]["wall_time_ms"]["enforcement"]="none"
+ if scenario_mode=="unconfirmed":receipt["body"]["teardown"]["state"]="unconfirmed"
+ if scenario_mode!="missing":write(attempt/"receipt.json",canonical(receipt),0o440)
+ if scenario_mode=="partial":(evidence/"0000").unlink()
  for directory in (store,attempt,payload,evidence): directory.chmod(0o750)
- return 0
+ if scenario_mode=="replace-output":
+  displaced=scenario_output.with_name(scenario_output.name+"-displaced")
+  scenario_output.rename(displaced);scenario_output.mkdir(mode=0o700)
+ if scenario_mode=="mutate-component":
+  component=package/"enforcement/v1/check-sandbox-receipt.sh"
+  component.chmod(0o700);component.write_bytes(component.read_bytes()+b"\n")
+ return 70 if scenario_mode=="incomplete" else 65 if scenario_mode=="refused" else 0
 e._launch=launch
 parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":sha(b"fixture-build"),
  "helper_executable_sha256":sha((base.parent/"object-closure").read_bytes()),
@@ -1337,6 +1476,20 @@ ok(check["body"]["check_verdict"]=="valid" and check["body"]["enforcement_verdic
 ok(json.loads((output/"file-digest-result.json").read_bytes())["body"]["reason_id"]=="file.match",
  "actual verifier payload is retained unchanged")
 ok((output/"bundle.json").exists(),"completion marker written after real chain")
+provenance=json.loads((output/"consumer-provenance.json").read_bytes())
+roles=[row["role"] for row in provenance["body"]["commands"]]
+ok(roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
+ "qualified-identity-validation","materialization","materializer-response-validation",
+ "candidate-preparation","candidate-inspection","sandbox-bound-evaluation",
+ "sandbox-launch-boundary","sandbox-receipt-check","trace-validation"] and
+ all(set(row)=={"role","argv_sha256","executable_sha256","component_sha256"}
+     for row in provenance["body"]["commands"]),
+ "frozen provenance retains every executed role without private argv")
+trace=json.loads((output/"trace-ledger.json").read_bytes())
+ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.local-macos-fixture" and
+ trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
+ trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
+ "trace binds claim environment and distinct declaration and enforcement evidence")
 checker_driver=package/"enforcement/v1/check-sandbox-receipt.sh"
 checker_env={"PATH":str(base/"bin")+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base/"checker-tmp")}
 (base/"checker-tmp").mkdir(mode=0o700)
@@ -1359,5 +1512,74 @@ wrong_subject=check_mutation("wrong-subject",lambda receipt:receipt["body"]["sub
 ok(wrong_subject["body"]["check_verdict"]=="refused" and
  any(reason.startswith("receipt.") for reason in wrong_subject["body"]["reason_ids"]),
  "otherwise valid receipt cannot substitute a candidate subject")
+
+base_request=json.loads((base/"request.json").read_bytes())
+base_q=json.loads((base/"q-input.json").read_bytes())
+base_identity=json.loads((base/"identity.json").read_bytes())
+base_incident=json.loads((base/"incident.json").read_bytes())
+def case_documents(name,mutate=None):
+ case=base/("case-"+name);case.mkdir(mode=0o700)
+ q=json.loads(json.dumps(base_q));identity=json.loads(json.dumps(base_identity))
+ incident=json.loads(json.dumps(base_incident));outer=json.loads(json.dumps(base_request))
+ if mutate is not None: mutate(outer,q,identity,incident)
+ q["stage_request"]["sha256"]=sha(canonical(q["stage_request"]["content"]))
+ identity["body"]["stage_request_ref"]["sha256"]=q["stage_request"]["sha256"]
+ identity["body"]["verification_instructions_ref"]["sha256"]=sha(e.make_instruction(incident))
+ outer["id"]=outer["body"]["attempt_id"]="attempt."+name
+ for field,value in (("incident",incident),("materialization_input",q),("qualified_identity",identity)):
+  path=case/(field+".json");write(path,canonical(value),0o400);outer["body"][field]=str(path)
+ request_path=case/"request.json";write(request_path,canonical(outer),0o400)
+ return case,request_path
+def refuse_case(name,mode="success",mutate=None,launches=0):
+ global scenario_mode,scenario_output,scenario_work
+ case,request_path=case_documents(name,mutate);case_work=case/"work";case_output=case/"output"
+ case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
+ scenario_mode=mode;scenario_output=case_output;scenario_work=case_work
+ before=launch_count
+ component=package/"enforcement/v1/check-sandbox-receipt.sh";original=component.read_bytes()
+ try:
+  try: e.reproduce(request_path,case_work,case_output,parent)
+  except (e.Refusal,c.Refusal): pass
+  else: raise AssertionError(name+" accepted")
+ finally:
+  if component.read_bytes()!=original:component.write_bytes(original);component.chmod(0o755)
+ ok(launch_count-before==launches,name+" stops at the intended boundary")
+ marker=case_output/"bundle.json"
+ displaced=case_output.with_name(case_output.name+"-displaced")/"bundle.json"
+ ok(not marker.exists() and not displaced.exists(),name+" cannot expose completion marker")
+
+def changed_patch(_outer,q,_identity,_incident):
+ changed="changed content\n";digest=sha(changed.encode())
+ for row in q["payloads"]:
+  if row["input_id"]=="input.producer-patch": row["data"]=changed
+ for row in q["trust_context"]["verified_payloads"]:
+  if row["input_id"]=="input.producer-patch": row["content"]["data"]=changed;row["sha256"]=digest
+ for row in q["stage_request"]["content"]["body"]["inputs"]:
+  if row["input_id"]=="input.producer-patch": row["value"]["value"]["value"]["sha256"]=digest
+def wrong_environment(_outer,q,_identity,_incident):
+ q["stage_request"]["content"]["body"]["environment_ref"]={"environment_id":"env.unrelated","fingerprint_sha256":"f"*64}
+def wrong_identity(_outer,_q,identity,_incident):
+ identity["body"]["stage_request_ref"]["id"]="request.unrelated"
+ identity["body"]["resolved_profile_ref"]["id"]="profile.unrelated"
+def bool_request(outer,_q,_identity,_incident):
+ outer["schema_version"]=True;outer["body"]["attempt_number"]=True
+def wrong_expected(_outer,_q,_identity,incident):
+ incident["body"]["failing_check"]["expected_sha256"]="0"*64
+
+refuse_case("changed-patch",mutate=changed_patch)
+refuse_case("wrong-environment",mutate=wrong_environment)
+refuse_case("wrong-identity",mutate=wrong_identity)
+refuse_case("boolean-request",mutate=bool_request)
+for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed","cancel",
+             "replace-output","mutate-component"):
+ refuse_case(mode,mode=mode,launches=1)
+case,request_path=case_documents("mismatch",wrong_expected)
+case_work=case/"work";case_output=case/"output";case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
+scenario_mode="success";scenario_output=case_output;scenario_work=case_work
+mismatch=json.loads(e.reproduce(request_path,case_work,case_output,parent))
+ok(mismatch["body"]["record_form"]=="enforced-reproduction.v1" and
+ json.loads((case_output/"shadow-record.json").read_bytes())["body"]["outcome"]=="reproduced",
+ "actual mismatch completes only as a reproduced result")
+scenario_mode="success";scenario_output=None
 print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY

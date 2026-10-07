@@ -8,12 +8,13 @@ import os
 import shutil
 import signal
 import selectors
+import stat
 import subprocess
 import sys
 import time
 import dataclasses
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 SOURCE = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("ystack_shadow_consumer", SOURCE / "shadow/v1/_consumer.py")
@@ -53,6 +54,10 @@ class Refusal(Exception):
 def require(value: bool, code: str = "E_RELATION") -> None:
     if not value:
         raise Refusal(code)
+
+
+def integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def canonical(value: object) -> bytes:
@@ -113,6 +118,12 @@ def disjoint(paths: list[Path]) -> None:
                     and not right.startswith(left + "/"), "E_WORKSPACE")
 
 
+def outside(workspaces: list[Path], exclusions: list[Path]) -> None:
+    for workspace in workspaces:
+        for excluded in exclusions:
+            disjoint([workspace, excluded])
+
+
 @dataclasses.dataclass
 class InputSnapshot:
     held: c.HeldPath
@@ -125,6 +136,130 @@ class InputSnapshot:
 
     def close(self) -> None:
         self.held.close()
+
+
+@dataclasses.dataclass
+class StableFile:
+    held: c.HeldPath
+    raw: bytes
+
+    @property
+    def sha256(self) -> str:
+        return sha(self.raw)
+
+    def recheck(self, code: str = "E_RELATION") -> None:
+        self.held.recheck(code)
+        require(self.held.read(len(self.raw), code) == self.raw, code)
+
+    def close(self) -> None:
+        self.held.close()
+
+
+@dataclasses.dataclass
+class StableDirectory:
+    held: c.HeldPath
+
+    def recheck(self, code: str = "E_WORKSPACE") -> None:
+        for index, component in enumerate(self.held.components):
+            current = c._metadata(component.fd)
+            named = (current if component.name is None else
+                     c._named_metadata(component.name, self.held.components[index - 1].fd))
+            if index + 1 == len(self.held.components):
+                stable = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+                                        value.st_mode & 0o170777)
+                require(stable(current) == stable(component.before)
+                        and stable(named) == stable(component.before), code)
+            else:
+                require(c._identity(current) == c._identity(component.before)
+                        and c._identity(named) == c._identity(component.before), code)
+
+    def close(self) -> None:
+        self.held.close()
+
+
+@dataclasses.dataclass
+class FixedExecutable:
+    logical: Path
+    aliases: list[tuple[Path, tuple[int, ...], str | None]]
+    physical: StableFile
+
+    def recheck(self, code: str = "E_DEPENDENCY") -> None:
+        for path, expected, target in self.aliases:
+            state = os.lstat(path)
+            require(c._identity(state) == expected and state.st_uid == 0
+                    and not state.st_mode & 0o022, code)
+            require((os.readlink(path) if target is not None else None) == target, code)
+        require(self.logical.resolve(strict=True) == Path(self.physical.held.path), code)
+        self.physical.recheck(code)
+
+    def close(self) -> None:
+        self.physical.close()
+
+
+@dataclasses.dataclass
+class FixedSudo:
+    fd: int
+    before: os.stat_result
+
+    @property
+    def sha256(self) -> str:
+        return sha(canonical(list(c._identity(self.before))))
+
+    def recheck(self, code: str = "E_DEPENDENCY") -> None:
+        current, named = os.fstat(self.fd), os.lstat("/usr/bin/sudo")
+        require(c._identity(current) == c._identity(self.before)
+                and c._identity(named) == c._identity(self.before)
+                and stat.S_ISREG(current.st_mode) and current.st_nlink == 1
+                and current.st_uid == 0 and not current.st_mode & 0o022, code)
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+def stable_file(path: Path, limit: int = c.EXECUTABLE_LIMIT,
+                code: str = "E_DEPENDENCY") -> StableFile:
+    held = c._open_held(str(path), False, lambda _fd, _state, _ancestor: True, code)
+    try:
+        raw = held.read(limit, code)
+        result = StableFile(held, raw)
+        result.recheck(code)
+        return result
+    except BaseException:
+        held.close()
+        raise
+
+
+def stable_directory(path: Path) -> StableDirectory:
+    held = c._open_held(str(path), True,
+        lambda _fd, state, ancestor: ancestor or (state.st_mode & 0o777) == 0o700,
+        "E_WORKSPACE")
+    result = StableDirectory(held)
+    result.recheck()
+    return result
+
+
+def fixed_bash() -> FixedExecutable:
+    logical = Path("/bin/bash")
+    aliases = []
+    for path in (Path("/"), Path("/bin"), logical):
+        state = os.lstat(path)
+        require(state.st_uid == 0 and not state.st_mode & 0o022, "E_DEPENDENCY")
+        target = os.readlink(path) if path.is_symlink() else None
+        aliases.append((path, c._identity(state), target))
+    physical_path = logical.resolve(strict=True)
+    result = FixedExecutable(logical, aliases, stable_file(physical_path))
+    result.recheck()
+    return result
+
+
+def fixed_sudo() -> FixedSudo:
+    flags = os.O_NOFOLLOW | getattr(os, "O_EXEC", os.O_RDONLY)
+    try:
+        fd = os.open("/usr/bin/sudo", flags)
+        result = FixedSudo(fd, os.fstat(fd)); result.recheck(); return result
+    except BaseException:
+        if "fd" in locals(): os.close(fd)
+        raise
 
 
 def snapshot_input(source: Path, target: Path, limit: int) -> InputSnapshot:
@@ -186,20 +321,39 @@ def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
 
 
 def stop_child(child: subprocess.Popen) -> None:
+    end = time.monotonic() + 10
+    for sent in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(child.pid, sent)
+        except ProcessLookupError:
+            pass
+        boundary = end if sent == signal.SIGKILL else min(end, time.monotonic() + 5)
+        while time.monotonic() < boundary:
+            child.poll()
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                if child.poll() is None:
+                    child.wait(timeout=max(0.001, end - time.monotonic()))
+                return
+            except PermissionError:
+                time.sleep(min(0.02, boundary - time.monotonic()))
+                continue
+            time.sleep(min(0.02, boundary - time.monotonic()))
     try:
-        os.killpg(child.pid, signal.SIGTERM)
-        child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
-        child.wait(timeout=10)
+        os.killpg(child.pid, 0)
     except ProcessLookupError:
-        child.wait(timeout=10)
+        if child.poll() is None:
+            child.wait(timeout=max(0.001, end - time.monotonic()))
+        return
+    raise Refusal("E_RUNTIME")
 
 
 def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit: int,
                         stderr_limit: int, timeout: float) -> tuple[bytes, bytes]:
-    selector = selectors.DefaultSelector()
+    selector = None
     try:
+        selector = selectors.DefaultSelector()
         require(child.stdin is not None and child.stdout is not None and child.stderr is not None,
                 "E_RUNTIME")
         stdout_fd, stderr_fd = child.stdout.fileno(), child.stderr.fileno()
@@ -218,9 +372,24 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
             remaining = end - time.monotonic()
             if remaining <= 0:
                 raise Refusal("E_RUNTIME")
-            ready = selector.select(remaining)
+            ready = selector.select(min(remaining, 0.1))
             if not ready:
-                raise Refusal("E_RUNTIME")
+                if child.poll() is None:
+                    continue
+                for key in list(selector.get_map().values()):
+                    stream = key.fileobj
+                    if stream is child.stdin:
+                        selector.unregister(stream); stream.close(); continue
+                    try:
+                        chunk = os.read(stream.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(stream); stream.close(); continue
+                    bucket = output[stream.fileno()]
+                    require(len(bucket) + len(chunk) <= limits[stream.fileno()], "E_LIMIT")
+                    bucket.extend(chunk)
+                continue
             for key, mask in ready:
                 stream = key.fileobj
                 if stream is child.stdin and mask & selectors.EVENT_WRITE:
@@ -246,27 +415,29 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
         except subprocess.TimeoutExpired:
             raise Refusal("E_RUNTIME") from None
         return bytes(output[stdout_fd]), bytes(output[stderr_fd])
-    except (OSError, ValueError, Refusal):
+    except BaseException:
         stop_child(child)
         raise
     finally:
-        selector.close()
+        if selector is not None:
+            selector.close()
         for stream in (child.stdin, child.stdout, child.stderr):
             if stream is not None and not stream.closed:
                 stream.close()
 
 
-def frame_write(records: list[tuple[bytes, bytes]]) -> bytes:
+def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
     import hashlib
     out = bytearray(b"YSFRAME1")
     measured = hashlib.sha256(b"YSFRAME1")
     for name, content in records:
         require(0 < len(name) <= 255 and name != b"end", "E_LIMIT")
         header = bytes((len(name),)) + name + len(content).to_bytes(8, "big")
+        require(len(out) + len(header) + len(content) + 44 <= FRAME_LIMIT, "E_LIMIT")
         out.extend(header); out.extend(content); measured.update(header); measured.update(content)
-        require(len(out) <= FRAME_LIMIT, "E_LIMIT")
-    out.extend(b"\x03end" + (32).to_bytes(8, "big") + measured.digest())
-    require(len(out) <= FRAME_LIMIT, "E_LIMIT")
+    end = b"\x03end" + (32).to_bytes(8, "big") + measured.digest()
+    require(len(out) + len(end) <= FRAME_LIMIT, "E_LIMIT")
+    out.extend(end)
     return bytes(out)
 
 
@@ -293,19 +464,8 @@ def make_instruction(incident: dict) -> bytes:
             + check["expected_sha256"] + "\n").encode()
 
 
-def validate_identity(jq: Path, core: Path, raw: bytes, incident: dict,
-                      env: dict[str, str], deadline: float) -> None:
-    revision = incident["body"]["git_revision_ref"]
-    output = run_bounded([str(jq), "-L", str(core), "-r", "--arg", "repository_id",
-        incident["body"]["target_repository_id"], "--arg", "hash_algorithm",
-        revision["hash_algorithm"], "--arg", "commit_id", revision["commit_id"], "-f",
-        str(SOURCE / "shadow/v1/qualified-identity.jq")], stdin=raw, env=env, deadline=deadline)
-    require(output == b"", "E_RELATION")
-
-
-def core_modules() -> Path:
-    registry = parse_value(read_regular(SOURCE / "core/v2/generation-registry.json", OUTPUT_LIMIT),
-                           OUTPUT_LIMIT)
+def core_modules(registry_raw: bytes) -> Path:
+    registry = parse_value(registry_raw, OUTPUT_LIMIT)
     require(isinstance(registry, list) and registry, "E_RUNTIME")
     generation = registry[-1]["generation_id"]
     path = SOURCE / "core/v2/generations" / generation / "modules"
@@ -326,6 +486,57 @@ def response_check(input_doc: dict, response_raw: bytes) -> bytes:
     return canonical({"input": input_doc, "response": response,
         "verified_receipt": {"content": receipt, "sha256": sha(receipt_raw)},
         "receipt_utf8": receipt_text, "stage_result_sha256": sha(stage_raw)})
+
+
+def pair_ref(pair: dict) -> dict:
+    content = pair.get("content")
+    require(isinstance(content, dict) and set(pair) == {"content", "sha256"}
+            and pair["sha256"] == sha(canonical(content)), "E_RELATION")
+    return {"schema_version": content.get("schema_version"), "kind": content.get("kind"),
+            "id": content.get("id"), "sha256": pair["sha256"]}
+
+
+def validate_input_relations(input_doc: dict, incident: dict, claim: dict,
+                             identity: dict, instruction: bytes) -> None:
+    body = input_doc["stage_request"]["content"]["body"]
+    revision = incident["body"]["git_revision_ref"]
+    require(body.get("target_repository_id") == incident["body"]["target_repository_id"]
+            and body.get("target_revision") == {"state": "present", "value": revision}
+            and body.get("source", {}).get("value", {}).get("value", {}).get("revision") == revision,
+            "E_RELATION")
+    require(body.get("environment_ref") == {
+        "environment_id": claim.get("id"), "fingerprint_sha256": sha(canonical(claim))},
+        "E_RELATION")
+    identity_body = identity.get("body")
+    require(isinstance(identity_body, dict)
+            and identity_body.get("stage_request_ref") == pair_ref(input_doc["stage_request"])
+            and identity_body.get("resolved_profile_ref") == pair_ref(input_doc["resolved_profile"])
+            and identity_body.get("verification_instructions_ref", {}).get("sha256") == sha(instruction),
+            "E_RELATION")
+    patch = [row for row in input_doc.get("payloads", [])
+             if row.get("input_id") == "input.producer-patch"]
+    verified = [row for row in input_doc.get("trust_context", {}).get("verified_payloads", [])
+                if row.get("input_id") == "input.producer-patch"]
+    require(len(patch) == 1 and len(verified) == 1 and patch[0].get("data") == ""
+            and verified[0].get("content", {}).get("data") == "", "E_RELATION")
+
+
+def require_no_change(response_raw: bytes, incident: dict) -> dict:
+    response = parse(response_raw)
+    result = response.get("stage_result", {}).get("body", {})
+    receipt = parse(response["payloads"][0]["data"].encode())
+    revision = incident["body"]["git_revision_ref"]
+    source = receipt.get("source")
+    candidate = receipt.get("candidate")
+    require(isinstance(source, dict) and isinstance(candidate, dict)
+            and result.get("outcome") == {"family": "change", "value": "no-change"}
+            and receipt.get("changed_paths", {}).get("count") == 0
+            and source == {"repository_id": incident["body"]["target_repository_id"],
+                           "hash_algorithm": revision["hash_algorithm"],
+                           "commit_id": revision["commit_id"], "tree_id": candidate.get("tree_id")}
+            and candidate.get("commit_id") == revision["commit_id"]
+            and candidate.get("parent_commit_id") == revision["commit_id"], "E_RELATION")
+    return receipt
 
 
 def make_launch(anchor: c.Anchor, request: dict, incident_raw: bytes, evaluation_raw: bytes,
@@ -359,7 +570,8 @@ def _native_launch(anchor: c.Anchor, frame: bytes, deadline: float) -> int:
     argv = ["/usr/bin/sudo", "-n", "-u", f"#{anchor.config['principal_uid']}", "--",
             sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-    remaining = min(180, max(0.001, deadline - time.monotonic()))
+    require(deadline > time.monotonic(), "E_RUNTIME")
+    remaining = min(180, deadline - time.monotonic())
     try:
         child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
@@ -384,7 +596,9 @@ def payload_result(snapshots: dict[str, bytes], manifest: dict, instruction: byt
             "E_RELATION")
     raw = snapshots["payload/evidence/0000"]
     result = parse(raw, 16 * 1024)
-    require(rows[0]["size_bytes"] == len(raw) and rows[0]["sha256"] == sha(raw), "E_RELATION")
+    require(set(rows[0]) == {"name_hex", "size_bytes", "sha256"}
+            and integer(rows[0]["size_bytes"]) and rows[0]["size_bytes"] == len(raw)
+            and rows[0]["sha256"] == sha(raw), "E_RELATION")
     body = receipt.get("body")
     require(isinstance(body, dict) and body.get("lifecycle", {}).get("admission") == "admitted"
             and body.get("lifecycle", {}).get("runtime") == "completed"
@@ -397,7 +611,7 @@ def payload_result(snapshots: dict[str, bytes], manifest: dict, instruction: byt
             and body.get("payload", {}).get("evidence_manifest_sha256") == sha(canonical(manifest)),
             "E_RELATION")
     require(set(result) == {"schema_version", "kind", "id", "body"}
-            and result["schema_version"] == 1
+            and integer(result["schema_version"]) and result["schema_version"] == 1
             and result["kind"] == "file_digest_verifier_payload"
             and result["id"] == "file-digest-payload", "E_RELATION")
     check = result["body"]
@@ -409,7 +623,8 @@ def payload_result(snapshots: dict[str, bytes], manifest: dict, instruction: byt
             and expected_path in entries
             and check.get("check") == {"path": expected_path, "expected_sha256": expected_sha}
             and check.get("instruction_sha256") == sha(instruction)
-            and isinstance(observed, dict)
+            and isinstance(observed, dict) and set(observed) == {"sha256", "size_bytes"}
+            and integer(observed["size_bytes"])
             and observed == {"sha256": entries[expected_path]["sha256"],
                              "size_bytes": entries[expected_path]["size_bytes"]}, "E_RELATION")
     require((check.get("outcome"), check.get("reason_id")) in
@@ -419,16 +634,26 @@ def payload_result(snapshots: dict[str, bytes], manifest: dict, instruction: byt
     return raw, check
 
 
-def trace_ledger(incident: dict, attempt_id: str, outcome: str, tool: str | None) -> bytes:
+def trace_ledger(incident: dict, attempt_id: str, environment_id: str, outcome: str,
+                 tool: str | None, evaluation_raw: bytes, checker_raw: bytes) -> bytes:
     incident_ref = {"content_id": "shadow-incident-record",
         "media_type": "application/vnd.ystack.shadow-incident-record+json",
         "sha256": sha(canonical(incident))}
     unavailable = lambda reason: {"state": "unavailable", "reason_id": reason}
-    recorded = lambda value: {"state": "recorded", "value": value, "source_ref": incident_ref}
+    evaluation_ref = {"content_id": "shadow-sandbox-evaluation",
+        "media_type": "application/vnd.ystack.control-evaluation+json",
+        "sha256": sha(evaluation_raw)}
+    checker_ref = {"content_id": "shadow-sandbox-check", "media_type": "application/json",
+        "sha256": sha(checker_raw)}
+    recorded = lambda value, source=incident_ref: {
+        "state": "recorded", "value": value, "source_ref": source}
     not_applicable = {"state": "not-applicable"}
     def facts(stage: str, result: str, tool_id: str | None) -> dict:
+        source = evaluation_ref if stage == "stage.shadow-environment" else checker_ref
         return {"adapter": not_applicable, "cost_microunits": unavailable("cost.not-measured"),
-            "execution_environment": recorded("environment.enforced"), "gate": recorded("gate.sandbox"),
+            "execution_environment": recorded(environment_id, evaluation_ref),
+            "gate": recorded("gate.sandbox-declaration" if source is evaluation_ref
+                             else "gate.sandbox-enforcement", source),
             "identity": recorded(incident["body"]["reporter_actor_ref"]),
             "initiative": recorded(incident["id"]), "latency_ms": unavailable("latency.not-measured"),
             "result": recorded(result), "stage": recorded(stage), "status": recorded("status.completed"),
@@ -455,10 +680,14 @@ def trace_ledger(incident: dict, attempt_id: str, outcome: str, tool: str | None
                  "final_digest": events[-1]["record_digest"]}}})
 
 
-def seal(output: Path, files: dict[str, bytes], incident: dict, record_form: str) -> bytes:
+def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
+         incident: dict, record_form: str) -> bytes:
     require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
     for name in sorted(files):
+        held_output.recheck("E_RELATION")
         write_exclusive(output / name, files[name])
+    held_output.recheck("E_RELATION")
+    require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES), "E_RELATION")
     rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
             for name in sorted(files)]
     bundle = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
@@ -466,12 +695,26 @@ def seal(output: Path, files: dict[str, bytes], incident: dict, record_form: str
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
-    write_exclusive(output / "bundle.json", bundle, sync=True)
-    directory = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
-    try: os.fsync(directory)
-    finally: os.close(directory)
-    require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES) | {"bundle.json"},
-            "E_RELATION")
+    marker = output / "bundle.json"
+    directory = os.dup(held_output.held.fd)
+    try:
+        os.fsync(directory)
+        write_exclusive(marker, bundle, sync=True)
+        held_output.recheck("E_RELATION")
+        require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES) | {"bundle.json"},
+                "E_RELATION")
+        os.fsync(directory)
+    except BaseException as exc:
+        try:
+            marker.unlink(missing_ok=True)
+            os.fsync(directory)
+        except OSError:
+            pass
+        if isinstance(exc, OSError):
+            raise Refusal("E_RUNTIME") from None
+        raise
+    finally:
+        os.close(directory)
     return bundle
 
 
@@ -483,9 +726,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
     request_raw = read_regular(request_path, REQUEST_LIMIT, "E_SHAPE")
     request = parse(request_raw, REQUEST_LIMIT)
     require(set(request) == {"schema_version", "kind", "id", "body"}
-            and request["schema_version"] == 1 and request["kind"] == "shadow_enforced_request"
+            and integer(request["schema_version"]) and request["schema_version"] == 1
+            and request["kind"] == "shadow_enforced_request"
             and c._id(request["id"]) and isinstance(request["body"], dict)
             and set(request["body"]) == REQUEST_BODY_KEYS
+            and integer(request["body"]["attempt_number"])
             and request["body"]["attempt_number"] == 1
             and request["body"]["attempt_id"] == request["id"] and c._id(request["id"]), "E_SHAPE")
     paths = {key: Path(request["body"][key]) for key in REQUEST_BODY_KEYS - {"attempt_id", "attempt_number"}}
@@ -503,15 +748,36 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
     for name in (REQUEST_BODY_KEYS - {"attempt_id", "attempt_number", "source_git_dir", "jq",
                                      "closure_helper"}):
         (work / "inputs" / name).mkdir(mode=0o700)
-    helper = jq = anchor = None
+    work_hold = output_hold = None
+    helper = jq = anchor = bash = python_file = sudo_file = None
     inputs: list[InputSnapshot] = []
+    sources: list[StableFile] = []
     try:
+        output_hold = stable_directory(output)
+        work_hold = stable_directory(work)
         helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
             context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
         jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
-        c.verify_helper_source(); c.probe_dependency(helper, ["version"], b"ystack-object-closure-v1\n")
-        c.probe_dependency(jq, ["--version"], b"jq-1.6\n")
         anchor = c.load_anchor()
+        exclusions = [SOURCE, Path(c.ANCHOR), Path(anchor.config["store_root"]),
+                      Path(anchor.config["work_root"]), paths["source_git_dir"]]
+        exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())
+        exclusions.extend(Path(value) for key, value in anchor.config["identity_paths"].items()
+                          if key != "dyld_cache_files")
+        exclusions.extend(Path(value) for value in anchor.config["identity_paths"]["dyld_cache_files"])
+        outside([work, output], exclusions)
+        bash = fixed_bash(); python_file = stable_file(Path(sys.executable))
+        sudo_file = fixed_sudo()
+        commands: list[dict] = []
+        def record_command(role: str, argv: list[str], executable_sha256: str,
+                           component_sha256: str) -> None:
+            commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
+                "executable_sha256": executable_sha256, "component_sha256": component_sha256})
+        c.verify_helper_source(); helper.recheck(); record_command("helper-version", [helper.snapshot.path, "version"],
+            helper.sha256, context["helper_source_sha256"])
+        c.probe_dependency(helper, ["version"], b"ystack-object-closure-v1\n")
+        jq.recheck(); record_command("jq-version", [jq.snapshot.path, "--version"], jq.sha256, jq.sha256)
+        c.probe_dependency(jq, ["--version"], b"jq-1.6\n")
         captured = work / "inputs"
         limits = {"incident": OUTPUT_LIMIT, "claim": OUTPUT_LIMIT, "duty_evaluation": OUTPUT_LIMIT,
                   "qualified_identity": OUTPUT_LIMIT, "materialization_input": 8 * OUTPUT_LIMIT}
@@ -520,38 +786,60 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             item = snapshot_input(paths[role], captured / role / (role + ".json"), limit)
             inputs.append(item); mapped[role] = item.path
         incident_raw = inputs[0].raw; incident = parse(incident_raw)
-        claim_raw = inputs[1].raw; duty_raw = inputs[2].raw
+        claim_raw = inputs[1].raw; claim = parse(claim_raw); duty_raw = inputs[2].raw
         identity_raw = inputs[3].raw; input_raw = inputs[4].raw
         input_doc = parse(input_raw, 8 * OUTPUT_LIMIT)
         env = clean_env(Path(jq.snapshot.path), work / "runtime")
-        modules = core_modules()
+        registry_source = stable_file(SOURCE / "core/v2/generation-registry.json")
+        sources.append(registry_source)
+        modules = core_modules(registry_source.raw)
         protocol = SOURCE / "adapters/local-git-materializer/v1/protocol.jq"
-        commands: list[dict] = []
+        component_paths = {SOURCE / path for path in (
+            "shadow/v1/validate-incident.sh", "shadow/v1/qualified-identity.jq",
+            "adapters/local-git-materializer/v1/materialize.sh",
+            "adapters/local-git-materializer/v1/protocol.jq",
+            "preparation/v1/prepare-candidate.py", "control/v1/evaluate-bound-sandbox.sh",
+            "enforcement/v1/check-sandbox-receipt.sh", "telemetry/v1/validate-trace-ledger.sh")}
+        component_paths.add(Path(__file__))
+        component_paths.update(modules.glob("*.jq"))
+        component_files = {path: stable_file(path) for path in component_paths}
+        sources.extend(component_files.values())
         def execute(role: str, argv: list[str], component: Path, **options: object) -> bytes:
-            commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
-                "executable_sha256": sha(read_regular(Path(argv[0]), c.EXECUTABLE_LIMIT)),
-                "component_sha256": sha(read_regular(component, c.EXECUTABLE_LIMIT))})
-            return run_bounded(argv, **options)
+            work_hold.recheck(); output_hold.recheck(); anchor.recheck(); helper.recheck(); jq.recheck()
+            for item in inputs: item.recheck()
+            source = component_files[component]; source.recheck()
+            if argv[0] == "/bin/bash":
+                bash.recheck(); executable_sha = bash.physical.sha256; executable = bash
+            elif argv[0] == jq.snapshot.path:
+                executable_sha = jq.sha256; executable = jq
+            elif argv[0] == sys.executable:
+                python_file.recheck(); executable_sha = python_file.sha256; executable = python_file
+            else:
+                raise Refusal("E_DEPENDENCY")
+            record_command(role, argv, executable_sha, source.sha256)
+            result = run_bounded(argv, **options)
+            executable.recheck(); source.recheck(); helper.recheck(); jq.recheck()
+            for item in inputs: item.recheck()
+            work_hold.recheck(); output_hold.recheck()
+            return result
         incident_validator = SOURCE / "shadow/v1/validate-incident.sh"
         execute("incident-validation", ["/bin/bash", "-p", str(incident_validator), "validate",
             str(mapped["incident"])], incident_validator, env=env, deadline=deadline)
-        request_body = input_doc.get("stage_request", {}).get("content", {}).get("body", {})
-        incident_revision = incident.get("body", {}).get("git_revision_ref")
-        require(request_body.get("target_repository_id") == incident["body"]["target_repository_id"]
-                and request_body.get("target_revision") == {"state": "present", "value": incident_revision}
-                and request_body.get("source", {}).get("value", {}).get("value", {}).get("revision")
-                == incident_revision, "E_RELATION")
         valid = execute("materializer-input-validation", [jq.snapshot.path, "-L", str(modules),
             "-e", "--arg", "command", "validate-input", "-f", str(protocol),
             str(mapped["materialization_input"])], protocol, env=env, deadline=deadline)
         require(valid.strip() == b"true", "E_RELATION")
         instruction = make_instruction(incident)
-        validate_identity(Path(jq.snapshot.path), modules, identity_raw, incident, env, deadline)
+        revision = incident["body"]["git_revision_ref"]
+        identity_source = SOURCE / "shadow/v1/qualified-identity.jq"
+        identity_valid = execute("qualified-identity-validation", [jq.snapshot.path, "-L", str(modules),
+            "-r", "--arg", "repository_id", incident["body"]["target_repository_id"],
+            "--arg", "hash_algorithm", revision["hash_algorithm"], "--arg", "commit_id",
+            revision["commit_id"], "-f", str(identity_source)], identity_source, stdin=identity_raw,
+            env=env, deadline=deadline)
+        require(identity_valid == b"", "E_RELATION")
         identity = parse(identity_raw)
-        require(identity["body"]["stage_request_ref"]["sha256"] == input_doc["stage_request"]["sha256"]
-                and identity["body"]["resolved_profile_ref"]["sha256"] == input_doc["resolved_profile"]["sha256"]
-                and identity["body"]["verification_instructions_ref"]["sha256"] == sha(instruction),
-                "E_RELATION")
+        validate_input_relations(input_doc, incident, claim, identity, instruction)
         candidate = work / "candidate"; materializer_scratch = work / "materializer"
         target = incident["body"]["target_repository_id"]
         materializer = SOURCE / "adapters/local-git-materializer/v1/materialize.sh"
@@ -566,6 +854,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "validate-response", "-f", str(protocol), str(check_path)], protocol,
             env=env, deadline=deadline)
         require(checked.strip() == b"true", "E_RELATION")
+        materializer_receipt = require_no_change(response_raw, incident)
         prep = work / "preparation-parent/preparation"; prep_scratch = work / "preparation-scratch"
         preparation_source = SOURCE / "preparation/v1/prepare-candidate.py"
         prepare = [sys.executable, "-I", "-S", "-B", str(preparation_source)]
@@ -600,17 +889,26 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         directory = os.open(launch_path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try: os.fsync(directory)
         finally: os.close(directory)
-        records = [(b"request.json", launch_raw), (b"evaluation.json", evaluation_raw),
-            (b"incident.json", incident_raw), (b"record.json", record_raw),
-            (b"manifest.json", manifest_raw), (b"instruction", instruction)]
-        for index, row in enumerate(manifest["entries"]):
-            raw = read_regular(prep / "candidate" / row["path"], row["size_bytes"], "E_RELATION")
-            require(len(raw) == row["size_bytes"] and sha(raw) == row["sha256"], "E_RELATION")
-            records.append((f"candidate/{index:05d}".encode(), raw))
-        frame = frame_write(records)
-        anchor.recheck(); helper.recheck(); jq.recheck()
+        def records() -> Iterable[tuple[bytes, bytes]]:
+            yield from ((b"request.json", launch_raw), (b"evaluation.json", evaluation_raw),
+                (b"incident.json", incident_raw), (b"record.json", record_raw),
+                (b"manifest.json", manifest_raw), (b"instruction", instruction))
+            for index, row in enumerate(manifest["entries"]):
+                require(integer(row.get("size_bytes")) and row["size_bytes"] >= 0, "E_RELATION")
+                raw = read_regular(prep / "candidate" / row["path"], row["size_bytes"], "E_RELATION")
+                require(len(raw) == row["size_bytes"] and sha(raw) == row["sha256"], "E_RELATION")
+                yield f"candidate/{index:05d}".encode(), raw
+        frame = frame_write(records())
+        anchor.recheck(); helper.recheck(); jq.recheck(); sudo_file.recheck(); python_file.recheck()
+        native_argv = ["/usr/bin/sudo", "-n", "-u", f"#{anchor.config['principal_uid']}", "--",
+            sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
+        supervisor = next(item for item in anchor.held if item.path == str(Path(c.ANCHOR) / "host-supervisor.py"))
+        supervisor.recheck("E_RELATION")
+        record_command("sandbox-launch-boundary", native_argv, sudo_file.sha256,
+                       sha(supervisor.read(c.EXECUTABLE_LIMIT, "E_RELATION")))
         launch_status = _launch(anchor, frame, deadline)
-        require(launch_status in (0, 65, 70), "E_RUNTIME")
+        sudo_file.recheck(); python_file.recheck(); supervisor.recheck("E_RELATION")
+        require(launch_status == 0, "E_RUNTIME")
         snapshots, origin_raw = c.read_store_attempt(anchor, request["id"])
         receipt_raw = snapshots["receipt.json"]
         receipt_path = work / "receipt/sandbox-receipt.json"; write_exclusive(receipt_path, receipt_raw)
@@ -629,7 +927,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         result_raw, result = payload_result(snapshots, evidence_manifest, instruction, manifest,
                                             parse(receipt_raw))
         outcome = "no-change" if result["outcome"] == "match" else "reproduced"
-        materializer_receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
+        trace_raw = trace_ledger(incident, request["id"], claim["id"], outcome,
+                                 "tool.verifier", evaluation_raw, checker_raw)
+        trace_path = work / "trace/trace-ledger.json"; write_exclusive(trace_path, trace_raw)
+        trace_validator = SOURCE / "telemetry/v1/validate-trace-ledger.sh"
+        trace_receipt_raw = execute("trace-validation", ["/bin/bash", "-p",
+            str(trace_validator), "validate", incident["id"], request["id"], str(trace_path)],
+            trace_validator, env=env, deadline=deadline)
         provenance = canonical({"schema_version": 1, "kind": "shadow_consumer_provenance",
             "id": request["id"], "body": {"activation_state": "inactive", "authority": "none",
             "instruction_utf8": instruction.decode(), "instruction_sha256": sha(instruction),
@@ -637,15 +941,9 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "helper_source_sha256": context["helper_source_sha256"],
             "helper_build_record_sha256": context["helper_build_record_sha256"],
             "helper_executable_sha256": context["helper_executable_sha256"],
-            "consumer_source_sha256": sha(read_regular(Path(__file__), c.EXECUTABLE_LIMIT)),
-            "python_sha256": sha(read_regular(Path(sys.executable), c.EXECUTABLE_LIMIT)),
+            "consumer_source_sha256": component_files[Path(__file__)].sha256,
+            "python_sha256": python_file.sha256,
             "jq_sha256": jq.sha256, "commands": commands}})
-        trace_raw = trace_ledger(incident, request["id"], outcome, "tool.verifier")
-        trace_path = work / "trace/trace-ledger.json"; write_exclusive(trace_path, trace_raw)
-        trace_validator = SOURCE / "telemetry/v1/validate-trace-ledger.sh"
-        trace_receipt_raw = execute("trace-validation", ["/bin/bash", "-p",
-            str(trace_validator), "validate", incident["id"], request["id"], str(trace_path)],
-            trace_validator, env=env, deadline=deadline)
         identity_ref = {"content_id": "shadow-qualified-identity",
             "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(identity_raw)}
         evaluation_section = {"state": "present", "value": {
@@ -716,14 +1014,23 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "registry.json": anchor.installed["registry"][0], "consumer-provenance.json": provenance,
             "shadow-record.json": record, "trace-ledger.json": trace_raw,
             "trace-receipt.json": trace_receipt_raw}
-        anchor.recheck(); helper.recheck(); jq.recheck()
+        anchor.recheck(); helper.recheck(); jq.recheck(); bash.recheck(); python_file.recheck()
+        sudo_file.recheck()
+        work_hold.recheck(); output_hold.recheck()
+        for source in sources: source.recheck()
         for item in inputs: item.recheck()
-        return seal(output, files, incident, "enforced-reproduction.v1")
+        return seal(output, output_hold, files, incident, "enforced-reproduction.v1")
     finally:
         for item in reversed(inputs): item.close()
+        for source in reversed(sources): source.close()
+        if python_file is not None: python_file.close()
+        if sudo_file is not None: sudo_file.close()
+        if bash is not None: bash.close()
         if anchor is not None: anchor.close()
         if jq is not None: jq.close()
         if helper is not None: helper.close()
+        if work_hold is not None: work_hold.close()
+        if output_hold is not None: output_hold.close()
 
 
 def main(argv: list[str]) -> int:
