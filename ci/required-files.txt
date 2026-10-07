@@ -216,6 +216,14 @@ control/v1/sandbox.jq
 control/v1/evaluate-sandbox.sh
 scripts/test/control-sandbox-policy.test.sh
 
+# Bound sandbox verifier declaration
+control/v1/sandbox-bound-policy.json
+control/v1/sandbox-bound-decision.json
+control/v1/control-policy-set-sandbox-bound.json
+control/v1/sandbox-bound.jq
+control/v1/evaluate-bound-sandbox.sh
+scripts/test/control-sandbox-bound.test.sh
+
 # Sandbox boundary decision records
 work/real-sandbox-boundary/intent.md
 work/real-sandbox-boundary/spec.md

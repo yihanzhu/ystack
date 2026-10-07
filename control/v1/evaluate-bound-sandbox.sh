@@ -6,7 +6,7 @@ umask 077
 
 emit_error() {
   case "${1:-}" in
-    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION)
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_POLICY_SET|E_RELATION)
       /usr/bin/printf '%s\n' "$1" >&2
       ;;
     *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
@@ -14,11 +14,7 @@ emit_error() {
   exit 1
 }
 
-case "${1:-}:$#" in
-  check:4) mode=legacy ;;
-  check-bound:5) mode=bound ;;
-  *) emit_error E_USAGE ;;
-esac
+[ "$#" -eq 4 ] && [ "$1" = evaluate ] || emit_error E_USAGE
 shift
 source_path=${BASH_SOURCE[0]}
 case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
@@ -26,28 +22,17 @@ case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
 source_dir=$(CDPATH='' cd -P -- "${source_path%/*}" 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
 source_path="$source_dir/${source_path##*/}"
-[ "$source_path" = "$source_dir/check-sandbox-receipt.sh" ] || emit_error E_RUNTIME
+[ "$source_path" = "$source_dir/evaluate-bound-sandbox.sh" ] || emit_error E_RUNTIME
 root_dir=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
-program="$source_dir/sandbox-receipt.jq"
-case "$mode" in
-  legacy)
-    policy="$root_dir/control/v1/sandbox-policy.json"
-    decision="$root_dir/control/v1/sandbox-decision.json"
-    policy_set="$root_dir/control/v1/control-policy-set.json"
-    evaluator_driver=
-    evaluator_program=
-    ;;
-  bound)
-    policy="$root_dir/control/v1/sandbox-bound-policy.json"
-    decision="$root_dir/control/v1/sandbox-bound-decision.json"
-    policy_set="$root_dir/control/v1/control-policy-set-sandbox-bound.json"
-    evaluator_driver="$root_dir/control/v1/evaluate-bound-sandbox.sh"
-    evaluator_program="$root_dir/control/v1/sandbox-bound.jq"
-    ;;
-esac
-registry="$root_dir/shadow/v1/shadow-environments.json"
+policy="$source_dir/sandbox-bound-policy.json"
+decision="$source_dir/sandbox-bound-decision.json"
+policy_set="$source_dir/control-policy-set-sandbox-bound.json"
+program="$source_dir/sandbox-bound.jq"
+policy_validator="$source_dir/validate.sh"
+validator_program="$source_dir/policy-set.jq"
 accepted="$root_dir/enforcement/v1/accepted-identities.json"
+registry="$root_dir/shadow/v1/shadow-environments.json"
 
 physical_regular() {
   local candidate=$1 parent physical
@@ -59,10 +44,8 @@ physical_regular() {
   [ "$candidate" = "$physical/${candidate##*/}" ]
 }
 
-required_paths=("$source_path" "$program" "$policy" "$decision" "$policy_set"
-  "$registry" "$accepted" "$@")
-[ "$mode" = legacy ] || required_paths+=("$evaluator_driver" "$evaluator_program")
-for required in "${required_paths[@]}"; do
+for required in "$source_path" "$policy" "$decision" "$policy_set" "$program" \
+  "$policy_validator" "$validator_program" "$accepted" "$registry" "$@"; do
   physical_regular "$required" || emit_error E_RUNTIME
 done
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
@@ -78,7 +61,7 @@ esac
 [ "$(/usr/bin/shasum -a 256 "$live_jq" | /usr/bin/awk '{print $1}')" = "$jq_sha" ] ||
   emit_error E_RUNTIME
 
-scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-sandbox-receipt.XXXXXX" 2>/dev/null) ||
+scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-sandbox-bound.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
@@ -89,15 +72,13 @@ trap signal_exit HUP INT TERM
 
 snapshot_fixed() {
   local source=$1 target=$2 size
-  /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null ||
-    emit_error E_RUNTIME
+  /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null || emit_error E_RUNTIME
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 1048576 ] || emit_error E_LIMIT
 }
 snapshot_executable() {
   local source=$1 target=$2 size
-  /bin/dd if="$source" of="$target" bs=16777217 count=1 2>/dev/null ||
-    emit_error E_RUNTIME
+  /bin/dd if="$source" of="$target" bs=16777217 count=1 2>/dev/null || emit_error E_RUNTIME
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 16777216 ] || emit_error E_LIMIT
   /bin/chmod 0500 "$target" || emit_error E_RUNTIME
@@ -140,51 +121,77 @@ canonical_json() {
 unchanged() { physical_regular "$1" && /usr/bin/cmp -s "$1" "$2"; }
 
 snapshot_fixed "$source_path" "$scratch/driver.sh"
-snapshot_fixed "$program" "$scratch/program.jq"
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
 snapshot_fixed "$policy_set" "$scratch/policy-set.json"
-snapshot_fixed "$registry" "$scratch/registry.json"
+snapshot_fixed "$program" "$scratch/program.jq"
 snapshot_fixed "$accepted" "$scratch/accepted.json"
-[ "$mode" = legacy ] || {
-  snapshot_fixed "$evaluator_driver" "$scratch/evaluator-driver.sh"
-  snapshot_fixed "$evaluator_program" "$scratch/evaluator-program.jq"
-}
+snapshot_fixed "$registry" "$scratch/registry.json"
+/bin/mkdir -p "$scratch/policy-validator/control/v1" || emit_error E_RUNTIME
+mirror_validator="$scratch/policy-validator/control/v1/validate.sh"
+mirror_validator_program="$scratch/policy-validator/control/v1/policy-set.jq"
+snapshot_fixed "$policy_validator" "$mirror_validator"
+snapshot_fixed "$validator_program" "$mirror_validator_program"
+/bin/chmod 0500 "$mirror_validator" || emit_error E_RUNTIME
 
-names=(receipt expectation evaluation)
-if [ "$mode" = bound ]; then
-  names+=(observation)
-else
-  /usr/bin/printf '{}\n' >"$scratch/observation.json" || emit_error E_RUNTIME
-fi
+names=(duty claim observation)
 inputs=("$@")
 index=0
-while [ "$index" -lt "${#inputs[@]}" ]; do
+while [ "$index" -lt 3 ]; do
   snapshot_fixed "${inputs[$index]}" "$scratch/${names[$index]}.json"
   index=$((index + 1))
 done
-for static_name in policy decision policy-set registry accepted receipt expectation evaluation observation; do
-  canonical_json "$scratch/$static_name.json" "$scratch/$static_name.canonical"
+for name in policy decision policy-set accepted registry duty claim observation; do
+  canonical_json "$scratch/$name.json" "$scratch/$name.canonical"
 done
 
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 decision_sha=$(sha256_path "$scratch/decision.json") || emit_error E_RUNTIME
 policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
+program_sha=$(sha256_path "$scratch/program.jq") || emit_error E_RUNTIME
+driver_sha=$(sha256_path "$scratch/driver.sh") || emit_error E_RUNTIME
+validator_driver_sha=$(sha256_path "$mirror_validator") || emit_error E_RUNTIME
+validator_program_sha=$(sha256_path "$mirror_validator_program") || emit_error E_RUNTIME
 accepted_sha=$(sha256_path "$scratch/accepted.json") || emit_error E_RUNTIME
-receipt_sha=$(sha256_path "$scratch/receipt.json") || emit_error E_RUNTIME
-expectation_sha=$(sha256_path "$scratch/expectation.json") || emit_error E_RUNTIME
-evaluation_sha=$(sha256_path "$scratch/evaluation.json") || emit_error E_RUNTIME
-observation_sha=
-evaluator_driver_sha=
-evaluator_program_sha=
-if [ "$mode" = bound ]; then
-  observation_sha=$(sha256_path "$scratch/observation.json") || emit_error E_RUNTIME
-  evaluator_driver_sha=$(sha256_path "$scratch/evaluator-driver.sh") || emit_error E_RUNTIME
-  evaluator_program_sha=$(sha256_path "$scratch/evaluator-program.jq") || emit_error E_RUNTIME
-fi
+duty_sha=$(sha256_path "$scratch/duty.json") || emit_error E_RUNTIME
+claim_sha=$(sha256_path "$scratch/claim.json") || emit_error E_RUNTIME
+observation_sha=$(sha256_path "$scratch/observation.json") || emit_error E_RUNTIME
 
-entry_count=$("$jq_bin" -r '.body.environments | length' "$scratch/registry.json" \
-  2>/dev/null) || emit_error E_RELATION
+"$jq_bin" -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha" \
+  --arg program_sha "$program_sha" --arg validator_driver_sha "$validator_driver_sha" \
+  --arg validator_program_sha "$validator_program_sha" '
+  def exact($fields): type=="object" and (keys|sort)==($fields|sort);
+  def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+  exact(["body","id","kind","schema_version"]) and .schema_version==1 and
+  .kind=="sandbox_decision" and .id=="control-decision.sandbox" and
+  (.body | exact(["activation_state","decision","evaluator","fail_mode","policy_ref",
+    "semantics"]) and .activation_state=="inactive" and
+    .decision=="allow-observation-only-evaluation" and .fail_mode=="closed" and
+    .policy_ref==ref("control-policy.sandbox";
+      "application/vnd.ystack.control-policy+json";$policy_sha) and
+    .evaluator=={driver_ref:ref("control-evaluator-driver.sandbox-bound.v1";
+      "text/x-shellscript";$driver_sha),policy_set_validator:{
+      driver_ref:ref("control-policy-set-validator-driver.v1";"text/x-shellscript";
+        $validator_driver_sha),program_ref:ref("control-policy-set-validator-program.v1";
+        "text/x-jq";$validator_program_sha)},program_ref:ref(
+      "control-evaluator-program.sandbox-bound.v1";"text/x-jq";$program_sha)} and
+    .semantics=={authority_effect:"none",enforcement_proof:"declaration-only",
+      input_contract:("control-policy-set+duty-evaluation+execution-environment-claim+"+
+        "verifier-observation.v1"),output_kind:"sandbox_policy_evaluation",
+      output_schema_version:1,qualification_effect:"none",
+      reference_semantics:"identity-only",verdicts:["inconclusive","satisfied","violated"]})
+  ' "$scratch/decision.json" >/dev/null 2>&1 || emit_error E_RELATION
+
+jq_dir=${jq_bin%/*}
+validator_status=0
+/usr/bin/env -i LC_ALL=C PATH="$jq_dir:/usr/bin:/bin" TMPDIR="$scratch" \
+  /bin/bash "$mirror_validator" validate "$scratch/policy-set.json" \
+  >"$scratch/validator.out" 2>"$scratch/validator.err" || validator_status=$?
+[ "$validator_status" -eq 0 ] && [ ! -s "$scratch/validator.out" ] &&
+  [ ! -s "$scratch/validator.err" ] || emit_error E_POLICY_SET
+
+entry_count=$("$jq_bin" -r '.body.environments | length' "$scratch/registry.json" 2>/dev/null) ||
+  emit_error E_RELATION
 : >"$scratch/entry-digests.jsonl"
 index=0
 while [ "$index" -lt "$entry_count" ]; do
@@ -194,50 +201,34 @@ while [ "$index" -lt "$entry_count" ]; do
   entry_env=$("$jq_bin" -r --argjson i "$index" '.body.environments[$i].environment_id' \
     "$scratch/registry.json" 2>/dev/null) || emit_error E_RELATION
   "$jq_bin" -n -c --arg e "$entry_env" --arg s "$entry_sha" \
-    '{environment_id:$e,sha256:$s}' >>"$scratch/entry-digests.jsonl" 2>/dev/null ||
-    emit_error E_RUNTIME
+    '{environment_id:$e,sha256:$s}' >>"$scratch/entry-digests.jsonl" || emit_error E_RUNTIME
   index=$((index + 1))
 done
-"$jq_bin" -s -c '.' "$scratch/entry-digests.jsonl" >"$scratch/entry-digests.json" 2>/dev/null ||
+"$jq_bin" -s -c . "$scratch/entry-digests.jsonl" >"$scratch/entry-digests.json" ||
   emit_error E_RUNTIME
 
 "$jq_bin" -n -S -c -f "$scratch/program.jq" \
-  --slurpfile receipt "$scratch/receipt.json" --slurpfile expectation "$scratch/expectation.json" \
-  --slurpfile evaluation "$scratch/evaluation.json" --slurpfile policy "$scratch/policy.json" \
-  --slurpfile decision "$scratch/decision.json" --slurpfile policy_set "$scratch/policy-set.json" \
+  --slurpfile policy "$scratch/policy.json" --slurpfile decision "$scratch/decision.json" \
+  --slurpfile policy_set "$scratch/policy-set.json" --slurpfile duty "$scratch/duty.json" \
+  --slurpfile claim "$scratch/claim.json" --slurpfile observation "$scratch/observation.json" \
   --slurpfile registry "$scratch/registry.json" --slurpfile accepted "$scratch/accepted.json" \
-  --slurpfile observation "$scratch/observation.json" \
-  --slurpfile entry_digests "$scratch/entry-digests.json" \
-  --arg receipt_sha "$receipt_sha" --arg expectation_sha "$expectation_sha" \
-  --arg evaluation_sha "$evaluation_sha" --arg policy_sha "$policy_sha" \
-  --arg decision_sha "$decision_sha" --arg policy_set_sha "$policy_set_sha" \
-  --arg accepted_set_sha "$accepted_sha" --arg mode "$mode" \
-  --arg observation_sha "$observation_sha" --arg evaluator_driver_sha "$evaluator_driver_sha" \
-  --arg evaluator_program_sha "$evaluator_program_sha" \
+  --slurpfile entry_digests "$scratch/entry-digests.json" --arg policy_set_sha "$policy_set_sha" \
+  --arg duty_sha "$duty_sha" --arg claim_sha "$claim_sha" --arg decision_sha "$decision_sha" \
+  --arg observation_sha "$observation_sha" --arg accepted_set_sha "$accepted_sha" \
   >"$scratch/output.json" 2>/dev/null || emit_error E_RELATION
-output_size=$(/usr/bin/wc -c <"$scratch/output.json" | /usr/bin/tr -d ' ') ||
-  emit_error E_RUNTIME
-[ "$output_size" -le 1048576 ] || emit_error E_LIMIT
+[ "$(/usr/bin/wc -c <"$scratch/output.json" | /usr/bin/tr -d ' ')" -le 1048576 ] ||
+  emit_error E_LIMIT
 
-if ! unchanged "$source_path" "$scratch/driver.sh" ||
-   ! unchanged "$program" "$scratch/program.jq" ||
-   ! unchanged "$policy" "$scratch/policy.json" ||
-   ! unchanged "$decision" "$scratch/decision.json" ||
-   ! unchanged "$policy_set" "$scratch/policy-set.json" ||
-   ! unchanged "$registry" "$scratch/registry.json" ||
-   ! unchanged "$accepted" "$scratch/accepted.json"; then
-  emit_error E_RELATION
-fi
-if [ "$mode" = bound ] &&
-   { ! unchanged "$evaluator_driver" "$scratch/evaluator-driver.sh" ||
-     ! unchanged "$evaluator_program" "$scratch/evaluator-program.jq"; }; then
-  emit_error E_RELATION
-fi
-physical_regular "$jq_bin" && [ -x "$jq_bin" ] &&
-  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
+for fixed in "$source_path:driver.sh" "$policy:policy.json" "$decision:decision.json" \
+  "$policy_set:policy-set.json" "$program:program.jq" "$accepted:accepted.json" \
+  "$registry:registry.json" "$policy_validator:policy-validator/control/v1/validate.sh" \
+  "$validator_program:policy-validator/control/v1/policy-set.jq"; do
+  unchanged "${fixed%%:*}" "$scratch/${fixed#*:}" || emit_error E_RELATION
+done
+physical_regular "$jq_bin" && [ -x "$jq_bin" ] && [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
   [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RELATION
 index=0
-while [ "$index" -lt "${#inputs[@]}" ]; do
+while [ "$index" -lt 3 ]; do
   unchanged "${inputs[$index]}" "$scratch/${names[$index]}.json" || emit_error E_RELATION
   index=$((index + 1))
 done
