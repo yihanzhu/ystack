@@ -65,8 +65,10 @@ def _sha(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 def _id(value: object) -> bool:
-    return (isinstance(value, str) and 1 <= len(value) <= 128 and value[0].isalnum()
-            and all(c.isalnum() or c in "._-" for c in value))
+    first = "abcdefghijklmnopqrstuvwxyz0123456789"
+    rest = first + "._:-"
+    return (isinstance(value, str) and 1 <= len(value) <= 128 and value[0] in first
+            and all(char in rest for char in value))
 
 def _physical(path: object) -> bool:
     return isinstance(path, str) and path.startswith("/") and os.path.normpath(path) == path
@@ -148,6 +150,21 @@ class HeldPath:
                 chunks.append(chunk)
                 total += len(chunk)
                 _require(total <= maximum, code)
+        except (OSError, ValueError):
+            raise Refusal(code) from None
+        self.recheck(code)
+        return b"".join(chunks)
+
+    def read_exact(self, length: int, code: str) -> bytes:
+        self.recheck(code)
+        chunks, remaining = [], length
+        try:
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            while remaining:
+                chunk = os.read(self.fd, min(65536, remaining))
+                _require(bool(chunk), code)
+                chunks.append(chunk)
+                remaining -= len(chunk)
         except (OSError, ValueError):
             raise Refusal(code) from None
         self.recheck(code)
@@ -272,19 +289,30 @@ def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
                 raise OSError(ctypes.get_errno(), "acl_get_tag_type")
             if lib.acl_get_permset(entry, ctypes.byref(perms)) != 0:
                 raise OSError(ctypes.get_errno(), "acl_get_permset")
-            bits = sum(1 << n for n in range(1, 14) if lib.acl_get_perm_np(perms, 1 << n))
-            identifier = None
+            bits = 0
+            for shift in range(1, 14):
+                ctypes.set_errno(0)
+                present = lib.acl_get_perm_np(perms, 1 << shift)
+                if present not in (0, 1):
+                    raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_perm_np")
+                if present:
+                    bits |= 1 << shift
+            ctypes.set_errno(0)
             qualifier = lib.acl_get_qualifier(entry)
-            if qualifier:
-                value, kind = ctypes.c_uint32(), ctypes.c_int()
-                uuid = ctypes.string_at(qualifier, 16)
-                if lib.mbr_uuid_to_id(uuid, ctypes.byref(value), ctypes.byref(kind)) == 0 and kind.value == 0:
-                    identifier = value.value
-                lib.acl_free(qualifier)
+            if not qualifier:
+                raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_qualifier")
+            identifier = None
+            value, kind = ctypes.c_uint32(), ctypes.c_int()
+            uuid = ctypes.string_at(qualifier, 16)
+            if lib.mbr_uuid_to_id(uuid, ctypes.byref(value), ctypes.byref(kind)) == 0 and kind.value == 0:
+                identifier = value.value
+            if lib.acl_free(qualifier) != 0:
+                raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
             rows.append((tag.value, identifier, bits))
             _require(len(rows) <= 128, "E_ACL")
     finally:
-        lib.acl_free(acl)
+        if lib.acl_free(acl) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
     return rows
 
 def _acl_state(fd: int) -> tuple[object, object | None]:
@@ -530,7 +558,8 @@ def _parse_registry(raw: bytes) -> tuple[str, list[dict]]:
     doc = _json(raw, DOCUMENT_LIMIT, "E_INSTALL")
     body = doc.get("body")
     _require(set(doc) == {"schema_version", "kind", "id", "body"}
-             and doc["schema_version"] == 1 and doc["kind"] == "shadow_environment_registry"
+             and _integer(doc["schema_version"]) and doc["schema_version"] == 1
+             and doc["kind"] == "shadow_environment_registry"
              and doc["id"] == "shadow.environments.v1" and isinstance(body, dict)
              and set(body) == {"activation_state", "environments", "registry_version"}
              and body["activation_state"] == "inactive" and body["registry_version"] == "v1"
@@ -551,7 +580,8 @@ def _parse_accepted(raw: bytes) -> tuple[str, list[dict]]:
     doc = _json(raw, DOCUMENT_LIMIT, "E_INSTALL")
     body = doc.get("body")
     _require(set(doc) == {"schema_version", "kind", "id", "body"}
-             and doc["schema_version"] == 1 and doc["kind"] == "sandbox_accepted_identity_set"
+             and _integer(doc["schema_version"]) and doc["schema_version"] == 1
+             and doc["kind"] == "sandbox_accepted_identity_set"
              and doc["id"] == "sandbox.accepted-identities.v1" and isinstance(body, dict)
              and set(body) == {"activation_state", "environments", "set_version"}
              and body["activation_state"] == "inactive" and body["set_version"] == "v1"
@@ -693,7 +723,8 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         body = manifest.get("body")
         rows = body.get("files") if isinstance(body, dict) else None
         _require(set(manifest) == {"schema_version", "kind", "id", "body"}
-                 and manifest["schema_version"] == 1 and manifest["kind"] == "sandbox_evidence_manifest"
+                 and _integer(manifest["schema_version"]) and manifest["schema_version"] == 1
+                 and manifest["kind"] == "sandbox_evidence_manifest"
                  and manifest["id"] == "evidence-manifest" and isinstance(body, dict)
                  and set(body) == {"files"} and isinstance(rows, list) and len(rows) <= 10000,
                  "E_STORE")
@@ -714,17 +745,27 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
                 item = _open_child(evidence, name, False,
                                    _store_rule(uid, gid, 0o440, False), "E_STORE")
                 opened.append(item); files.append((item, "payload/evidence/" + name))
+        output_files = [(item, name) for item, name in files
+                        if name in ("payload/stdout", "payload/stderr")
+                        or name.startswith("payload/evidence/")]
+        _require(sum(item.before.st_size for item, _name in output_files) <= OUTPUT_LIMIT, "E_STORE")
+        remaining = OUTPUT_LIMIT
         for item, name in files:
-            maximum = DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json") else OUTPUT_LIMIT
-            raw = manifest_raw if item is manifest_item else item.read(maximum, "E_STORE")
+            output_name = (name in ("payload/stdout", "payload/stderr")
+                           or name.startswith("payload/evidence/"))
+            maximum = (remaining if output_name else
+                       DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json")
+                       else OUTPUT_LIMIT)
+            _require(item.before.st_size <= maximum, "E_STORE")
+            raw = manifest_raw if item is manifest_item else item.read_exact(item.before.st_size, "E_STORE")
+            _require(len(raw) == item.before.st_size, "E_STORE")
             snapshots[name] = raw
             observations.append(_observation(item, name, raw))
-        total = len(snapshots["payload/stdout"]) + len(snapshots["payload/stderr"])
+            if output_name:
+                remaining -= len(raw)
         for index, row in enumerate(rows):
             raw = snapshots[f"payload/evidence/{index:04d}"]
             _require(len(raw) == row["size_bytes"] and digest(raw) == row["sha256"], "E_STORE")
-            total += len(raw)
-        _require(total <= OUTPUT_LIMIT, "E_STORE")
         _require(set(os.listdir(attempt.fd)) == attempt_names
                  and set(os.listdir(payload.fd)) == payload_names, "E_STORE")
         if rows:

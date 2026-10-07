@@ -54,13 +54,19 @@ def parent_doc(path, raw):
 # fixture; every object at or below the owned fixture root keeps real OS observations.
 raw_metadata, raw_named = c._metadata, c._named_metadata
 external = {}
+external_ancestors = set()
+cursor = base.parent
+while True:
+    external_ancestors.add(str(cursor))
+    if cursor == cursor.parent: break
+    cursor = cursor.parent
 def fd_path(fd):
     if sys.platform == "darwin":
         raw = c.fcntl.fcntl(fd, 50, b"\0" * 1024)
         return raw.split(b"\0", 1)[0].decode()
     return os.path.realpath("/proc/self/fd/" + str(fd))
 def stable_external(value, path):
-    if path == str(base) or path.startswith(str(base) + "/"):
+    if path not in external_ancestors or not stat.S_ISDIR(value.st_mode):
         return value
     key = (value.st_dev, value.st_ino)
     first = external.setdefault(key, (value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns))
@@ -79,6 +85,9 @@ ok(c.isolated_python_argv()[1:4] == ["-I", "-S", "-B"], "isolated Python argv")
 context = base / "context"; helper_raw = helper.read_bytes(); write(context, parent_doc(helper, helper_raw), 0o400)
 body = c.capture_parent_context(os.open(context, os.O_RDONLY))
 ok(body["helper_executable_sha256"] == sha(helper_raw), "trusted parent context")
+absent_effect = base / "absent-context-effect"
+refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(-1))
+ok(not absent_effect.exists(), "absent parent context has no later effect")
 context.chmod(0o600); refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(os.open(context, os.O_RDWR)))
 write(context, parent_doc(helper, helper_raw).replace(b'"shadow.parent"', b'"changed"'), 0o400)
 refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(os.open(context, os.O_RDONLY)))
@@ -155,46 +164,73 @@ refuses("E_DEPENDENCY", lambda: c._open_held(str(fifo), False, lambda *_: True, 
 parent = c._open_held(str(base), True, lambda *_: True, "E_DEPENDENCY")
 refuses("E_DEPENDENCY", lambda: c._open_child(parent, "fifo", False, lambda *_: True, "E_DEPENDENCY")); parent.close()
 
-fd = os.open(base, os.O_RDONLY); state = os.fstat(fd); real_acl, real_platform = c._acl_state, c.sys.platform
+fd = os.open(base, os.O_RDONLY); real_acl, real_platform = c._acl_state, c.sys.platform
+root_state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
+installed_state = types.SimpleNamespace(st_uid=123, st_mode=stat.S_IFDIR | 0o555)
+acl_calls = [0]
+def acl_value(value):
+    def observe(_fd): acl_calls[0] += 1; return value
+    return observe
 c.sys.platform = "linux"
-c._acl_state = lambda _fd: ([(0x02, 4, 123)], None)
-ok(not c._installed_rule(123)(fd, state, False), "Linux named-user ACL refused")
-c._acl_state = lambda _fd: (None, [(0x10, 2, 0)])
-ok(not c._root_rule(fd, state, False), "Linux default write ACL refused")
-c.sys.platform = "darwin"; c._acl_state = lambda _fd: (_ for _ in ()).throw(OSError(13, "acl"))
-ok(not c._root_rule(fd, state, False), "ACL observation error refused")
-c._acl_state = lambda _fd: ([(1, 0, 1 << 2)], None)
-darwin_state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
-ok(c._installed_rule(123)(fd, darwin_state, False), "Darwin root write grant remains trusted")
-c._acl_state = lambda _fd: ([(1, 456, 1 << 2)], None)
-ok(not c._installed_rule(123)(fd, state, False), "Darwin other-principal write ACL refused")
+c._acl_state = acl_value(([(0x02, 4, 123)], None))
+ok(not c._installed_rule(123)(fd, installed_state, False) and acl_calls[0] == 1,
+   "Linux named-user ACL reached and refused")
+acl_calls[0] = 0; c._acl_state = acl_value((None, [(0x10, 2, 0)]))
+ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+   "Linux default write ACL reached and refused")
 
-# Exercise the Darwin API error branch itself, rather than only the rule wrapper.
 class Call:
-    def __init__(self, result): self.result = result
-    def __call__(self, *args):
-        if self.result == "entry-error":
-            c.ctypes.set_errno(13)
-            return -1
-        return self.result
-class BrokenAclLib:
-    def __init__(self):
-        self.acl_get_fd_np = Call(1)
-        self.acl_get_entry = Call("entry-error")
-        self.acl_get_tag_type = Call(0)
-        self.acl_get_qualifier = Call(0)
-        self.acl_get_permset = Call(0)
-        self.acl_get_perm_np = Call(0)
-        self.mbr_uuid_to_id = Call(-1)
-        self.acl_free = Call(0)
+    def __init__(self, function): self.function = function
+    def __call__(self, *args): return self.function(*args)
+class FakeAclLib:
+    def __init__(self, failure=None):
+        self.failure, self.entries = failure, 0
+        self.calls = {"entry": 0, "permission": 0, "qualifier": 0}
+        self.guid = c.ctypes.create_string_buffer(16)
+        self.acl_get_fd_np = Call(lambda *_args: 1)
+        self.acl_get_entry = Call(self.get_entry)
+        self.acl_get_tag_type = Call(self.get_tag)
+        self.acl_get_qualifier = Call(self.get_qualifier)
+        self.acl_get_permset = Call(self.get_permset)
+        self.acl_get_perm_np = Call(self.get_perm)
+        self.mbr_uuid_to_id = Call(self.resolve)
+        self.acl_free = Call(lambda _value: 0)
+    def get_entry(self, _acl, _selector, _entry):
+        self.calls["entry"] += 1
+        if self.failure == "entry": c.ctypes.set_errno(13); return -1
+        self.entries += 1
+        if self.entries == 1: return 0
+        c.ctypes.set_errno(0); return -1
+    def get_tag(self, _entry, output): output._obj.value = 1; return 0
+    def get_permset(self, _entry, output): output._obj.value = 1; return 0
+    def get_perm(self, _perms, bit):
+        self.calls["permission"] += 1
+        if self.failure == "permission": c.ctypes.set_errno(5); return -1
+        return int(bit == 1 << 1)
+    def get_qualifier(self, _entry):
+        self.calls["qualifier"] += 1
+        if self.failure == "qualifier": c.ctypes.set_errno(5); return 0
+        return c.ctypes.addressof(self.guid)
+    def resolve(self, _uuid, value, kind):
+        value._obj.value = 0; kind._obj.value = 0; return 0
 real_cdll = c.ctypes.CDLL
-c.ctypes.CDLL = lambda *_args, **_kwargs: BrokenAclLib()
-try:
-    try: c._darwin_acl(fd)
-    except OSError: ok(True, "Darwin entry API error is not empty ACL")
-    else: raise AssertionError("Darwin ACL API error accepted")
-finally:
-    c.ctypes.CDLL = real_cdll
+c.sys.platform = "darwin"; c._acl_state = real_acl
+def darwin_rule(failure, installed=False):
+    fake = FakeAclLib(failure)
+    c.ctypes.CDLL = lambda *_args, **_kwargs: fake
+    rule = c._installed_rule(123) if installed else c._root_rule
+    state = installed_state if installed else root_state
+    return rule(fd, state, False), fake
+for installed in (False, True):
+    accepted_acl, fake = darwin_rule(None, installed)
+    ok(accepted_acl and fake.entries == 2, "Darwin read-only ACL control reached")
+    for failure in ("entry", "permission", "qualifier"):
+        accepted_acl, fake = darwin_rule(failure, installed)
+        ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
+c.ctypes.CDLL = real_cdll
+c._acl_state = acl_value(([(1, 456, 1 << 2)], None)); acl_calls[0] = 0
+ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+   "Darwin other-principal ACL reached and refused")
 
 c.sys.platform = "linux"
 c._acl_state = lambda _fd: (None, None)
@@ -228,6 +264,12 @@ accepted = document("sandbox_accepted_identity_set", "sandbox.accepted-identitie
         "environment_id": env_id, "identities": identity,
         "mechanisms": {name: ["mechanism." + name] for name in c.MECHANISMS},
         "scratch_bytes": 16777216}]})
+ok(c._id("attempt:valid") and not c._id("Attempt") and not c._id("é"),
+   "identifier domain is lowercase ASCII with colon")
+registry_bool = json.loads(registry); registry_bool["schema_version"] = True
+refuses("E_INSTALL", lambda: c._parse_registry(c.canonical(registry_bool)))
+accepted_bool = json.loads(accepted); accepted_bool["schema_version"] = True
+refuses("E_INSTALL", lambda: c._parse_accepted(c.canonical(accepted_bool)))
 write(source / c.INSTALLED_SOURCES["registry"], registry)
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted)
 installed = {}
@@ -386,6 +428,36 @@ def make_attempt(attempt_id="attempt.fixture", evidence_raw=b"proof", name_hex="
         write(payload / name, raw)
     write(attempt / "receipt.json", document("fixture_receipt", attempt_id, {})); remember_store()
     return attempt, payload
+
+aggregate_attempt = store / "attempt.aggregate"
+aggregate_payload = aggregate_attempt / "payload"
+aggregate_evidence = aggregate_payload / "evidence"
+aggregate_evidence.mkdir(parents=True, mode=0o750)
+for directory in (aggregate_attempt, aggregate_payload, aggregate_evidence): directory.chmod(0o750)
+aggregate_rows, aggregate_nodes = [], set()
+for index in range(3):
+    raw = bytes([index]) * (4 * 1024 * 1024)
+    path = aggregate_evidence / ("%04d" % index); write(path, raw)
+    aggregate_rows.append({"name_hex": "%02x" % index, "sha256": sha(raw), "size_bytes": len(raw)})
+for name, raw in (("stdout", b""), ("stderr", b""),
+                  ("evidence-manifest.json", document("sandbox_evidence_manifest",
+                   "evidence-manifest", {"files": aggregate_rows}))):
+    write(aggregate_payload / name, raw)
+write(aggregate_attempt / "receipt.json", document("fixture_receipt", "attempt.aggregate", {}))
+for path in [aggregate_payload / "stdout", aggregate_payload / "stderr",
+             *[aggregate_evidence / ("%04d" % index) for index in range(3)]]:
+    value = path.stat(); aggregate_nodes.add((value.st_dev, value.st_ino))
+remember_store(); real_output_read, aggregate_bytes = c.os.read, [0]
+def count_output_read(fd, count):
+    raw = real_output_read(fd, count)
+    value = os.fstat(fd)
+    if (value.st_dev, value.st_ino) in aggregate_nodes: aggregate_bytes[0] += len(raw)
+    return raw
+c.os.read = count_output_read
+try: refuses("E_STORE", lambda: c.read_store_attempt(anchor, "attempt.aggregate"))
+finally: c.os.read = real_output_read
+ok(aggregate_bytes[0] == 0, "aggregate limit refuses before output allocation")
+
 attempt, payload = make_attempt()
 snapshots, origin = c.read_store_attempt(anchor, "attempt.fixture")
 entries = json.loads(origin)["body"]["entries"]
@@ -399,6 +471,14 @@ ok(c._hex_name("2f") and c._hex_name("00") and c._hex_name("ab" * 255),
 ok(not c._hex_name("") and not c._hex_name("a")
    and not c._hex_name("AB") and not c._hex_name("ab" * 256),
    "evidence name length and encoding are closed")
+colon_attempt, _colon_payload = make_attempt("attempt:valid", None)
+colon_snapshots, _colon_origin = c.read_store_attempt(anchor, "attempt:valid")
+ok("receipt.json" in colon_snapshots, "colon attempt id reaches controlled store")
+manifest_path = payload / "evidence-manifest.json"
+manifest_original = manifest_path.read_bytes(); manifest_bool = json.loads(manifest_original)
+manifest_bool["schema_version"] = True; write(manifest_path, c.canonical(manifest_bool)); remember_store()
+refuses("E_STORE", lambda: c.read_store_attempt(anchor, "attempt.fixture"))
+write(manifest_path, manifest_original); remember_store()
 write(attempt / "extra", b"x"); remember_store(); refuses("E_STORE", lambda: c.read_store_attempt(anchor, "attempt.fixture")); (attempt / "extra").unlink()
 manifest_path = payload / "evidence-manifest.json"; malformed = json.loads(manifest_path.read_bytes())
 malformed["body"]["files"][0]["name_hex"] = "not-hex"; write(manifest_path, c.canonical(malformed)); remember_store()
