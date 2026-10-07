@@ -606,6 +606,15 @@ e.FRAME_LIMIT = old_limit
 env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
 out = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", "print('fixed')"], env=env)
 ok(out == b"fixed\n", "bounded child success")
+mask_code = "import signal;print(bool(signal.pthread_sigmask(signal.SIG_BLOCK,set())&{signal.SIGTERM,signal.SIGHUP,signal.SIGINT}))"
+ok(e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env) == b"False\n",
+   "bounded child inherits the caller's unblocked termination mask")
+prior_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+try:
+    inherited = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env)
+finally:
+    signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)
+ok(inherited == b"True\n", "bounded child preserves a caller-blocked termination signal")
 refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
     "import time;time.sleep(2)"], timeout=.05, env=env), "bounded child timeout is failure")
 refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
@@ -655,10 +664,113 @@ for _ in range(100):
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
 signal_wrapper=base/"signal-wrapper.py"
-signal_wrapper.write_text('''import importlib.util,pathlib,signal,sys,os\nroot=pathlib.Path(sys.argv[1]);pid=pathlib.Path(sys.argv[2]);done=pathlib.Path(sys.argv[3]);cleanup=pathlib.Path(sys.argv[4])\ns=importlib.util.spec_from_file_location("signaled",root/"shadow/v1/enforced-reproduction.py")\ne=importlib.util.module_from_spec(s);sys.modules[s.name]=e;s.loader.exec_module(e)\nsignals=(signal.SIGTERM,signal.SIGHUP,signal.SIGINT);before={x:signal.getsignal(x) for x in signals};original_mask=signal.pthread_sigmask;mask=original_mask(signal.SIG_BLOCK,set())\ndef observed_mask(how,values):\n if how==signal.SIG_BLOCK and signal.SIGTERM in values and sys.argv[6]=="guard" and not cleanup.exists():cleanup.touch();os.kill(os.getpid(),signal.SIGTERM)\n result=original_mask(how,values)\n if how==signal.SIG_BLOCK and signal.SIGTERM in values:cleanup.touch()\n return result\ne.signal.pthread_sigmask=observed_mask\noriginal_stop=e.stop_child\ndef observed_stop(child):\n cleanup.touch()\n if sys.argv[6]=="stop":os.kill(os.getpid(),signal.SIGTERM)\n return original_stop(child)\ne.stop_child=observed_stop\ndef reproduce(*_args):\n e.run_bounded([sys.executable,"-I","-S","-B","-c","import os,pathlib,signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)",str(pid)],timeout=float(sys.argv[5]),env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})\ne.reproduce=reproduce\nrc=e.main(["driver","reproduce","request","work","output"]);after=original_mask(signal.SIG_BLOCK,set())\ndone.write_text(str(rc)+":"+str(all(signal.getsignal(x)==before[x] for x in before))+":"+str(after==mask))\n''')
+signal_wrapper.write_text("""import importlib.util
+import inspect
+import os
+import pathlib
+import signal
+import sys
+
+root = pathlib.Path(sys.argv[1])
+pid_path = pathlib.Path(sys.argv[2])
+done_path = pathlib.Path(sys.argv[3])
+cleanup_path = pathlib.Path(sys.argv[4])
+mode = sys.argv[6]
+spec = importlib.util.spec_from_file_location(
+    "signaled", root / "shadow/v1/enforced-reproduction.py")
+driver = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = driver
+spec.loader.exec_module(driver)
+
+watched = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+before = {sent: signal.getsignal(sent) for sent in watched}
+original_mask = signal.pthread_sigmask
+initial_mask = original_mask(signal.SIG_BLOCK, set())
+delivered = False
+blocking_active = False
+continued = False
+
+def observed_mask(how, values):
+    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
+            and mode == "guard" and not cleanup_path.exists()):
+        cleanup_path.touch()
+        os.kill(os.getpid(), signal.SIGTERM)
+    result = original_mask(how, values)
+    if how == signal.SIG_BLOCK and signal.SIGTERM in values:
+        cleanup_path.touch()
+    return result
+
+driver.signal.pthread_sigmask = observed_mask
+original_stop = driver.stop_child
+
+def observed_stop(child):
+    cleanup_path.touch()
+    if mode == "stop":
+        os.kill(os.getpid(), signal.SIGTERM)
+    return original_stop(child)
+
+driver.stop_child = observed_stop
+real_read = driver.os.read
+
+def recover(fd, size):
+    global delivered, blocking_active
+    caller = sys._getframe(1)
+    output_fds = caller.f_locals.get("output", {})
+    if (mode == "recover" and not delivered
+            and caller.f_code is driver.communicate_bounded.__code__
+            and fd in output_fds):
+        try:
+            raise BlockingIOError()
+        except BlockingIOError:
+            blocking_active = isinstance(sys.exception(), BlockingIOError)
+            delivered = True
+            os.kill(os.getpid(), signal.SIGTERM)
+            raise
+    return real_read(fd, size)
+
+driver.os.read = recover
+lines, start = inspect.getsourcelines(driver.spawn_bounded)
+handoff_line = start + next(
+    index for index, line in reversed(list(enumerate(lines)))
+    if "CancellationSignals.checkpoint()" in line)
+
+def trace(frame, event, _arg):
+    global delivered
+    if (mode == "handoff" and not delivered
+            and frame.f_code is driver.spawn_bounded.__code__
+            and event == "line" and frame.f_lineno == handoff_line):
+        delivered = True
+        pid_path.write_text(str(frame.f_locals["child"].pid))
+        os.kill(os.getpid(), signal.SIGTERM)
+    return trace
+
+sys.settrace(trace)
+
+def reproduce(*_args):
+    global continued
+    child_code = (
+        "import os,pathlib,signal,sys,time;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
+        "print('ready',flush=True);time.sleep(30)")
+    driver.run_bounded(
+        [sys.executable, "-I", "-S", "-B", "-c", child_code, str(pid_path)],
+        timeout=float(sys.argv[5]),
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+    continued = True
+
+driver.reproduce = reproduce
+return_code = driver.main(["driver", "reproduce", "request", "work", "output"])
+after_mask = original_mask(signal.SIG_BLOCK, set())
+restored = all(signal.getsignal(sent) == before[sent] for sent in before)
+done_path.write_text(
+    f"{return_code}:{restored}:{after_mask == initial_mask}:"
+    f"{delivered}:{blocking_active}:{continued}")
+""")
 for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("repeated",signal.SIGTERM,
  (signal.SIGHUP,signal.SIGINT),30,"none"),("timeout-stop-entry",None,(),1,"stop"),
- ("timeout-guard-entry",None,(),1,"guard"),("timeout-post-mask",None,(signal.SIGTERM,),1,"none")):
+ ("timeout-guard-entry",None,(),1,"guard"),("timeout-post-mask",None,(signal.SIGTERM,),1,"none"),
+ ("spawn-handoff",None,(),30,"handoff"),("recoverable-read",None,(),30,"recover")):
  child_pid=base/(name+".pid");done=base/(name+".done");cleanup=base/(name+".cleanup")
  wrapper=subprocess.Popen([sys.executable,"-I","-S","-B",str(signal_wrapper),str(root),
   str(child_pid),str(done),str(cleanup),str(timeout),entry],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -675,8 +787,13 @@ for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("
  ok(cleanup.exists(),name+" entered production owned-group cleanup")
  for sent in later:wrapper.send_signal(sent)
  stdout,stderr=wrapper.communicate(timeout=15)
- ok(wrapper.returncode==0 and done.read_text()=="1:True:True" and stderr==b"E_RUNTIME\n",
+ result=done.read_text().split(":")
+ ok(wrapper.returncode==0 and result[:3]==["1","True","True"] and stderr==b"E_RUNTIME\n",
     name+" cleanup is idempotent and restores handlers and mask")
+ if entry in {"handoff","recover"}:
+  ok(result[3]=="True" and result[5]=="False",name+" consumes the delivered signal before continuation")
+ if entry=="recover":
+  ok(result[4]=="True",name+" delivers TERM with BlockingIOError active in the production read")
  gone=False
  for _ in range(500):
   try:os.killpg(owned,0)
@@ -961,12 +1078,59 @@ def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
 e.write_exclusive_at=cancel_after_marker
 try:
  with e.CancellationSignals():
-  try:e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
-  except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
-  else:raise AssertionError("marker cancellation accepted")
+  e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
+except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
+else:raise AssertionError("marker cancellation accepted")
 finally:e.write_exclusive_at=real_write_at
 ok(not (cancelmark/"bundle.json").exists(),"cancelled marker is removed through held output")
 cancelmark_hold.close()
+latecancel=base/"late-cancel";latecancel.mkdir(mode=0o700);latecancel_hold=e.stable_directory(latecancel)
+try:
+ with e.CancellationSignals():e.seal(latecancel,latecancel_hold,files,incident,"enforced-reproduction.v1");os.kill(os.getpid(),signal.SIGTERM)
+except e.Cancelled:ok(not (latecancel/"bundle.json").exists(),"latched cancellation rolls back retained completion")
+latecancel_hold.close()
+pendingcancel=base/"pending-exit-cancel";pendingcancel.mkdir(mode=0o700)
+pendingcancel_hold=e.stable_directory(pendingcancel);pending_guard=e.CancellationSignals();pending_sent=[False]
+real_mask=e.signal.pthread_sigmask
+def signal_after_exit_mask(how,values):
+ result=real_mask(how,values)
+ if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.completion is not None
+     and not pending_sent[0]):pending_sent[0]=True;os.kill(os.getpid(),signal.SIGTERM)
+ return result
+e.signal.pthread_sigmask=signal_after_exit_mask
+try:
+ with pending_guard:e.seal(pendingcancel,pendingcancel_hold,files,incident,"enforced-reproduction.v1")
+except e.Cancelled:ok(pending_sent[0] and not (pendingcancel/"bundle.json").exists(),
+                      "pending exit signal rolls back before handler ownership transfers")
+else:raise AssertionError("pending exit cancellation accepted")
+finally:e.signal.pthread_sigmask=real_mask
+pendingcancel_hold.close()
+outer=e.CancellationSignals()
+try:
+ with outer:
+  outer.requested=True
+  with e.CancellationSignals():pass
+except e.Cancelled:ok(e.CancellationSignals.active is None,"nested context retains outer cancellation")
+before_handlers={sent:signal.getsignal(sent) for sent in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT)}
+before_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+for failure_name in ("unlink","fsync"):
+ failure_dir=base/("completion-"+failure_name);failure_dir.mkdir(mode=0o700)
+ failure_hold=e.stable_directory(failure_dir);guard=e.CancellationSignals()
+ real_unlink,real_fsync=e.os.unlink,e.os.fsync
+ try:
+  with guard:
+   e.seal(failure_dir,failure_hold,files,incident,"enforced-reproduction.v1")
+   guard.requested=True
+   if failure_name=="unlink":e.os.unlink=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture unlink"))
+   else:e.os.fsync=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture fsync"))
+ except OSError:pass
+ else:raise AssertionError("completion "+failure_name+" failure accepted")
+ finally:e.os.unlink,e.os.fsync=real_unlink,real_fsync
+ ok(e.CancellationSignals.active is None and signal.pthread_sigmask(signal.SIG_BLOCK,set())==before_mask
+    and all(signal.getsignal(sent)==before_handlers[sent] for sent in before_handlers),
+    "completion "+failure_name+" failure restores handlers, active context and mask")
+ if (failure_dir/"bundle.json").exists():(failure_dir/"bundle.json").unlink()
+ failure_hold.close()
 
 evaluation_fixture=e.canonical(doc("sandbox_policy_evaluation","evaluation.fixture",{}))
 checker_fixture=e.canonical(doc("sandbox_receipt_check","check.fixture",{}))

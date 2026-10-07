@@ -282,6 +282,7 @@ def snapshot_input(source: Path, target: Path, limit: int) -> InputSnapshot:
 
 def write_exclusive(path: Path, raw: bytes, mode: int = 0o400, sync: bool = False) -> None:
     try:
+        CancellationSignals.checkpoint()
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
         try:
             sent = 0
@@ -303,6 +304,7 @@ def write_exclusive_at(directory: int, name: str, raw: bytes,
     require("/" not in name and name not in {"", ".", ".."}, "E_RUNTIME")
     created = False
     try:
+        CancellationSignals.checkpoint()
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      mode, dir_fd=directory)
         created = True
@@ -344,10 +346,8 @@ def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
         require(deadline > time.monotonic(), "E_RUNTIME")
     remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
     try:
-        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, env=env, close_fds=True,
-                                 start_new_session=True)
-        stdout, stderr = communicate_bounded(child, stdin, output_limit, STDERR_LIMIT, remaining)
+        child, stdout, stderr = spawn_bounded(argv, stdin, output_limit, STDERR_LIMIT,
+                                               remaining, env)
     except (OSError, subprocess.SubprocessError):
         raise Refusal("E_RUNTIME") from None
     require(len(stdout) <= output_limit and len(stderr) <= STDERR_LIMIT, "E_LIMIT")
@@ -393,8 +393,27 @@ def stop_child(child: subprocess.Popen) -> None:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
+def spawn_bounded(argv: list[str], input_raw: bytes, stdout_limit: int, stderr_limit: int,
+                  timeout: float, env: dict[str, str]) -> tuple[subprocess.Popen, bytes, bytes]:
+    CancellationSignals.checkpoint()
+    child = None
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, env=env, close_fds=True,
+                                 start_new_session=True)
+        CancellationSignals.checkpoint()
+        stdout, stderr = communicate_bounded(child, input_raw, stdout_limit, stderr_limit,
+                                              timeout, cleanup=False)
+        return child, stdout, stderr
+    except BaseException:
+        if child is not None:
+            stop_child(child)
+        raise
+
+
 def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit: int,
-                        stderr_limit: int, timeout: float) -> tuple[bytes, bytes]:
+                        stderr_limit: int, timeout: float, *,
+                        cleanup: bool = True) -> tuple[bytes, bytes]:
     selector = None
     try:
         selector = selectors.DefaultSelector()
@@ -413,6 +432,7 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
             child.stdin.close()
         sent = 0; end = time.monotonic() + timeout
         while selector.get_map():
+            CancellationSignals.checkpoint()
             remaining = end - time.monotonic()
             if remaining <= 0:
                 raise Refusal("E_RUNTIME")
@@ -427,6 +447,7 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
                     try:
                         chunk = os.read(stream.fileno(), 65536)
                     except BlockingIOError:
+                        CancellationSignals.checkpoint()
                         continue
                     if not chunk:
                         selector.unregister(stream); stream.close(); continue
@@ -440,6 +461,7 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
                     try:
                         count = os.write(stream.fileno(), input_raw[sent:sent + 65536])
                     except BlockingIOError:
+                        CancellationSignals.checkpoint()
                         continue
                     require(count > 0, "E_RUNTIME"); sent += count
                     if sent == len(input_raw):
@@ -448,24 +470,23 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
                     try:
                         chunk = os.read(stream.fileno(), 65536)
                     except BlockingIOError:
+                        CancellationSignals.checkpoint()
                         continue
                     if not chunk:
                         selector.unregister(stream); stream.close(); continue
                     bucket = output[stream.fileno()]
                     require(len(bucket) + len(chunk) <= limits[stream.fileno()], "E_LIMIT")
                     bucket.extend(chunk)
+        CancellationSignals.checkpoint()
         try:
             child.wait(timeout=max(0.001, end - time.monotonic()))
         except subprocess.TimeoutExpired:
             raise Refusal("E_RUNTIME") from None
+        CancellationSignals.checkpoint()
         return bytes(output[stdout_fd]), bytes(output[stderr_fd])
     except BaseException:
-        previous = signal.pthread_sigmask(signal.SIG_BLOCK,
-                                          {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
-        try:
+        if cleanup:
             stop_child(child)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         raise
     finally:
         if selector is not None:
@@ -476,25 +497,69 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
 
 
 class CancellationSignals:
+    active: CancellationSignals | None = None
+
     def __init__(self) -> None:
         self.previous: dict[int, object] = {}
         self.requested = False
+        self.parent: CancellationSignals | None = None
+        self.completion: int | None = None
+
+    @classmethod
+    def checkpoint(cls) -> None:
+        if cls.active is not None and cls.active.requested:
+            raise Cancelled()
+
+    @classmethod
+    def retain_completion(cls, directory: int) -> bool:
+        if cls.active is None:
+            return False
+        require(cls.active.completion is None, "E_RUNTIME")
+        cls.active.completion = directory
+        return True
 
     def __enter__(self) -> None:
         def cancel(_signum: int, _frame: object) -> None:
-            if self.requested:
-                return
             self.requested = True
-            if sys.exception() is not None:
-                return
-            raise Cancelled()
+        self.parent = CancellationSignals.active
+        CancellationSignals.active = self
         for sent in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             self.previous[sent] = signal.getsignal(sent)
             signal.signal(sent, cancel)
 
     def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
-        for sent, handler in self.previous.items():
-            signal.signal(sent, handler)
+        watched = set(self.previous)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+        exit_mask = previous_mask
+        failure = None
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            exit_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+            try:
+                if self.completion is not None and (_kind is not None or self.requested):
+                    os.unlink("bundle.json", dir_fd=self.completion)
+                    os.fsync(self.completion)
+            except BaseException as exc:
+                failure = exc
+            finally:
+                try:
+                    if self.completion is not None:
+                        os.close(self.completion)
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+                finally:
+                    try:
+                        for sent, handler in self.previous.items():
+                            signal.signal(sent, handler)
+                    finally:
+                        CancellationSignals.active = self.parent
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, exit_mask)
+        if failure is not None:
+            raise failure
+        if _kind is None and self.requested:
+            raise Cancelled()
 
 
 def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
@@ -644,9 +709,7 @@ def _native_launch(anchor: c.Anchor, frame: bytes, deadline: float) -> int:
     require(deadline > time.monotonic(), "E_RUNTIME")
     remaining = min(180, deadline - time.monotonic())
     try:
-        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
-        stdout, stderr = communicate_bounded(child, frame, 0, STDERR_LIMIT, remaining)
+        child, stdout, stderr = spawn_bounded(argv, frame, 0, STDERR_LIMIT, remaining, env)
     except Refusal:
         raise
     except (OSError, subprocess.SubprocessError):
@@ -763,8 +826,10 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
     marker_written = False
+    retained = False
     try:
         for name in sorted(files):
+            CancellationSignals.checkpoint()
             held_output.recheck("E_RELATION")
             write_exclusive_at(directory, name, files[name], sync=True)
         held_output.recheck("E_RELATION")
@@ -777,9 +842,12 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             marker_written = True
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        CancellationSignals.checkpoint()
         held_output.recheck("E_RELATION")
         require(set(os.listdir(directory)) == set(EVIDENCE_NAMES) | {"bundle.json"}, "E_RELATION")
         os.fsync(directory)
+        CancellationSignals.checkpoint()
+        retained = CancellationSignals.retain_completion(directory)
     except BaseException as exc:
         if marker_written:
             try:
@@ -791,7 +859,8 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             raise Refusal("E_RUNTIME") from None
         raise
     finally:
-        os.close(directory)
+        if not retained:
+            os.close(directory)
     return bundle
 
 
@@ -834,12 +903,14 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                  "preparation-scratch", "response", "response-check", "observation", "launch",
                  "receipt", "evaluation", "checker", "trace", "runtime"]
         for name in names:
+            CancellationSignals.checkpoint()
             (work / name).mkdir(mode=0o700)
         deps = work / "dependencies"
         for name in ("helper", "jq"):
             (deps / name).mkdir(mode=0o700)
         for name in (REQUEST_BODY_KEYS - {"attempt_id", "attempt_number", "source_git_dir", "jq",
                                          "closure_helper"}):
+            CancellationSignals.checkpoint()
             (work / "inputs" / name).mkdir(mode=0o700)
         helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
             context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
