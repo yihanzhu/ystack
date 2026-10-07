@@ -1830,3 +1830,11 @@ bash scripts/test/maintenance-loop.test.sh
 
 It builds its own fixtures, seals its own trace ledgers, and proves the happy
 paths byte for byte on a repeat run alongside every refusal above.
+
+## Inactive shadow consumer trust reader
+`shadow/v1/_consumer.py` reads descriptor-3 context, dependencies, the root-owned
+installation, and its store through stable held descriptors. It launches no sandbox.
+
+```sh
+bash scripts/test/shadow-enforced.test.sh
+```
