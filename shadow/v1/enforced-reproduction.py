@@ -51,6 +51,10 @@ class Refusal(Exception):
         self.code = code
 
 
+class Cancelled(BaseException):
+    pass
+
+
 def require(value: bool, code: str = "E_RELATION") -> None:
     if not value:
         raise Refusal(code)
@@ -186,8 +190,8 @@ class FixedExecutable:
     def recheck(self, code: str = "E_DEPENDENCY") -> None:
         for path, expected, target in self.aliases:
             state = os.lstat(path)
-            require(c._identity(state) == expected and state.st_uid == 0
-                    and not state.st_mode & 0o022, code)
+            require(c._identity(state) == expected and state.st_uid == 0, code)
+            require(target is not None or not state.st_mode & 0o022, code)
             require((os.readlink(path) if target is not None else None) == target, code)
         require(self.logical.resolve(strict=True) == Path(self.physical.held.path), code)
         self.physical.recheck(code)
@@ -243,8 +247,9 @@ def fixed_bash() -> FixedExecutable:
     aliases = []
     for path in (Path("/"), Path("/bin"), logical):
         state = os.lstat(path)
-        require(state.st_uid == 0 and not state.st_mode & 0o022, "E_DEPENDENCY")
         target = os.readlink(path) if path.is_symlink() else None
+        require(state.st_uid == 0 and (target is not None or not state.st_mode & 0o022),
+                "E_DEPENDENCY")
         aliases.append((path, c._identity(state), target))
     physical_path = logical.resolve(strict=True)
     result = FixedExecutable(logical, aliases, stable_file(physical_path))
@@ -290,6 +295,36 @@ def write_exclusive(path: Path, raw: bytes, mode: int = 0o400, sync: bool = Fals
             os.close(fd)
     except OSError:
         raise Refusal("E_RUNTIME") from None
+
+
+def write_exclusive_at(directory: int, name: str, raw: bytes,
+                       mode: int = 0o400, sync: bool = False,
+                       remove_on_failure: bool = False) -> None:
+    require("/" not in name and name not in {"", ".", ".."}, "E_RUNTIME")
+    created = False
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     mode, dir_fd=directory)
+        created = True
+        try:
+            sent = 0
+            while sent < len(raw):
+                count = os.write(fd, raw[sent:])
+                require(count > 0, "E_RUNTIME")
+                sent += count
+            if sync:
+                os.fsync(fd)
+        finally:
+            os.close(fd)
+    except BaseException as exc:
+        if created and remove_on_failure:
+            try:
+                os.unlink(name, dir_fd=directory)
+                os.fsync(directory)
+            except OSError: pass
+        if isinstance(exc, OSError):
+            raise Refusal("E_RUNTIME") from None
+        raise
 
 
 def clean_env(jq_path: Path, scratch: Path) -> dict[str, str]:
@@ -424,6 +459,22 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
         for stream in (child.stdin, child.stdout, child.stderr):
             if stream is not None and not stream.closed:
                 stream.close()
+
+
+class CancellationSignals:
+    def __init__(self) -> None:
+        self.previous: dict[int, object] = {}
+
+    def __enter__(self) -> None:
+        def cancel(_signum: int, _frame: object) -> None:
+            raise Cancelled()
+        for sent in (signal.SIGTERM, signal.SIGHUP):
+            self.previous[sent] = signal.getsignal(sent)
+            signal.signal(sent, cancel)
+
+    def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
+        for sent, handler in self.previous.items():
+            signal.signal(sent, handler)
 
 
 def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
@@ -683,11 +734,7 @@ def trace_ledger(incident: dict, attempt_id: str, environment_id: str, outcome: 
 def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
          incident: dict, record_form: str) -> bytes:
     require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
-    for name in sorted(files):
-        held_output.recheck("E_RELATION")
-        write_exclusive(output / name, files[name])
-    held_output.recheck("E_RELATION")
-    require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES), "E_RELATION")
+    directory = os.dup(held_output.held.fd)
     rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
             for name in sorted(files)]
     bundle = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
@@ -695,21 +742,31 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
-    marker = output / "bundle.json"
-    directory = os.dup(held_output.held.fd)
+    marker_written = False
     try:
-        os.fsync(directory)
-        write_exclusive(marker, bundle, sync=True)
+        for name in sorted(files):
+            held_output.recheck("E_RELATION")
+            write_exclusive_at(directory, name, files[name], sync=True)
         held_output.recheck("E_RELATION")
-        require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES) | {"bundle.json"},
-                "E_RELATION")
+        require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
+        os.fsync(directory)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                               {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
+        try:
+            write_exclusive_at(directory, "bundle.json", bundle, sync=True, remove_on_failure=True)
+            marker_written = True
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        held_output.recheck("E_RELATION")
+        require(set(os.listdir(directory)) == set(EVIDENCE_NAMES) | {"bundle.json"}, "E_RELATION")
         os.fsync(directory)
     except BaseException as exc:
-        try:
-            marker.unlink(missing_ok=True)
-            os.fsync(directory)
-        except OSError:
-            pass
+        if marker_written:
+            try:
+                os.unlink("bundle.json", dir_fd=directory)
+                os.fsync(directory)
+            except OSError:
+                pass
         if isinstance(exc, OSError):
             raise Refusal("E_RUNTIME") from None
         raise
@@ -721,59 +778,63 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
 def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None = None) -> bytes:
     started = time.monotonic(); deadline = started + OVERALL_SECONDS
     context = c.capture_parent_context() if parent is None else parent
-    private_empty(work); private_empty(output)
-    disjoint([request_path, work, output])
-    request_raw = read_regular(request_path, REQUEST_LIMIT, "E_SHAPE")
-    request = parse(request_raw, REQUEST_LIMIT)
-    require(set(request) == {"schema_version", "kind", "id", "body"}
-            and integer(request["schema_version"]) and request["schema_version"] == 1
-            and request["kind"] == "shadow_enforced_request"
-            and c._id(request["id"]) and isinstance(request["body"], dict)
-            and set(request["body"]) == REQUEST_BODY_KEYS
-            and integer(request["body"]["attempt_number"])
-            and request["body"]["attempt_number"] == 1
-            and request["body"]["attempt_id"] == request["id"] and c._id(request["id"]), "E_SHAPE")
-    paths = {key: Path(request["body"][key]) for key in REQUEST_BODY_KEYS - {"attempt_id", "attempt_number"}}
-    require(all(path.is_absolute() and path.resolve() == path for path in paths.values()), "E_SHAPE")
-    disjoint([work, output, *paths.values()])
-    require(str(paths["closure_helper"]) == context["helper_path"], "E_RELATION")
-    names = ["dependencies", "inputs", "candidate", "materializer", "preparation-parent",
-             "preparation-scratch", "response", "response-check", "observation", "launch",
-             "receipt", "evaluation", "checker", "trace", "runtime"]
-    for name in names:
-        (work / name).mkdir(mode=0o700)
-    deps = work / "dependencies"
-    for name in ("helper", "jq"):
-        (deps / name).mkdir(mode=0o700)
-    for name in (REQUEST_BODY_KEYS - {"attempt_id", "attempt_number", "source_git_dir", "jq",
-                                     "closure_helper"}):
-        (work / "inputs" / name).mkdir(mode=0o700)
     work_hold = output_hold = None
     helper = jq = anchor = bash = python_file = sudo_file = None
     inputs: list[InputSnapshot] = []
     sources: list[StableFile] = []
     try:
+        request_source = stable_file(request_path, REQUEST_LIMIT, "E_SHAPE")
+        sources.append(request_source); request_raw = request_source.raw
+        request = parse(request_raw, REQUEST_LIMIT)
+        require(set(request) == {"schema_version", "kind", "id", "body"}
+                and integer(request["schema_version"]) and request["schema_version"] == 1
+                and request["kind"] == "shadow_enforced_request"
+                and c._id(request["id"]) and isinstance(request["body"], dict)
+                and set(request["body"]) == REQUEST_BODY_KEYS
+                and integer(request["body"]["attempt_number"])
+                and request["body"]["attempt_number"] == 1
+                and request["body"]["attempt_id"] == request["id"] and c._id(request["id"]), "E_SHAPE")
+        paths = {key: Path(request["body"][key])
+                 for key in REQUEST_BODY_KEYS - {"attempt_id", "attempt_number"}}
+        require(all(path.is_absolute() and path.resolve() == path for path in paths.values()), "E_SHAPE")
+        private_empty(work); private_empty(output)
+        disjoint([request_path, work, output, *paths.values()])
+        require(str(paths["closure_helper"]) == context["helper_path"], "E_RELATION")
         output_hold = stable_directory(output)
         work_hold = stable_directory(work)
-        helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
-            context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
-        jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
         anchor = c.load_anchor()
-        exclusions = [SOURCE, Path(c.ANCHOR), Path(anchor.config["store_root"]),
-                      Path(anchor.config["work_root"]), paths["source_git_dir"]]
+        exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
+                      Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())
         exclusions.extend(Path(value) for key, value in anchor.config["identity_paths"].items()
                           if key != "dyld_cache_files")
         exclusions.extend(Path(value) for value in anchor.config["identity_paths"]["dyld_cache_files"])
         outside([work, output], exclusions)
+        names = ["dependencies", "inputs", "candidate", "materializer", "preparation-parent",
+                 "preparation-scratch", "response", "response-check", "observation", "launch",
+                 "receipt", "evaluation", "checker", "trace", "runtime"]
+        for name in names:
+            (work / name).mkdir(mode=0o700)
+        deps = work / "dependencies"
+        for name in ("helper", "jq"):
+            (deps / name).mkdir(mode=0o700)
+        for name in (REQUEST_BODY_KEYS - {"attempt_id", "attempt_number", "source_git_dir", "jq",
+                                         "closure_helper"}):
+            (work / "inputs" / name).mkdir(mode=0o700)
+        helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
+            context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
+        jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
         bash = fixed_bash(); python_file = stable_file(Path(sys.executable))
         sudo_file = fixed_sudo()
+        helper_source = stable_file(SOURCE / "adapters/local-git-materializer/v1/object-closure.c")
+        sources.append(helper_source)
+        require(helper_source.sha256 == context["helper_source_sha256"], "E_DEPENDENCY")
         commands: list[dict] = []
         def record_command(role: str, argv: list[str], executable_sha256: str,
                            component_sha256: str) -> None:
             commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
                 "executable_sha256": executable_sha256, "component_sha256": component_sha256})
-        c.verify_helper_source(); helper.recheck(); record_command("helper-version", [helper.snapshot.path, "version"],
+        helper_source.recheck(); c.verify_helper_source(); helper.recheck(); record_command("helper-version", [helper.snapshot.path, "version"],
             helper.sha256, context["helper_source_sha256"])
         c.probe_dependency(helper, ["version"], b"ystack-object-closure-v1\n")
         jq.recheck(); record_command("jq-version", [jq.snapshot.path, "--version"], jq.sha256, jq.sha256)
@@ -795,11 +856,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         modules = core_modules(registry_source.raw)
         protocol = SOURCE / "adapters/local-git-materializer/v1/protocol.jq"
         component_paths = {SOURCE / path for path in (
-            "shadow/v1/validate-incident.sh", "shadow/v1/qualified-identity.jq",
+            "shadow/v1/_consumer.py", "shadow/v1/validate-incident.sh",
+            "shadow/v1/qualified-identity.jq", "shadow/v1/incident-record.jq",
             "adapters/local-git-materializer/v1/materialize.sh",
             "adapters/local-git-materializer/v1/protocol.jq",
             "preparation/v1/prepare-candidate.py", "control/v1/evaluate-bound-sandbox.sh",
-            "enforcement/v1/check-sandbox-receipt.sh", "telemetry/v1/validate-trace-ledger.sh")}
+            "enforcement/v1/check-sandbox-receipt.sh", "telemetry/v1/validate-trace-ledger.sh",
+            "telemetry/v1/trace-ledger.jq")}
         component_paths.add(Path(__file__))
         component_paths.update(modules.glob("*.jq"))
         component_files = {path: stable_file(path) for path in component_paths}
@@ -807,7 +870,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         def execute(role: str, argv: list[str], component: Path, **options: object) -> bytes:
             work_hold.recheck(); output_hold.recheck(); anchor.recheck(); helper.recheck(); jq.recheck()
             for item in inputs: item.recheck()
-            source = component_files[component]; source.recheck()
+            for source in sources: source.recheck()
+            source = component_files[component]
             if argv[0] == "/bin/bash":
                 bash.recheck(); executable_sha = bash.physical.sha256; executable = bash
             elif argv[0] == jq.snapshot.path:
@@ -818,7 +882,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 raise Refusal("E_DEPENDENCY")
             record_command(role, argv, executable_sha, source.sha256)
             result = run_bounded(argv, **options)
-            executable.recheck(); source.recheck(); helper.recheck(); jq.recheck()
+            executable.recheck(); helper.recheck(); jq.recheck()
+            for source in sources: source.recheck()
             for item in inputs: item.recheck()
             work_hold.recheck(); output_hold.recheck()
             return result
@@ -1036,8 +1101,11 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
 def main(argv: list[str]) -> int:
     try:
         require(len(argv) == 5 and argv[1] == "reproduce", "E_USAGE")
-        reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]))
+        with CancellationSignals():
+            reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]))
         return 0
+    except Cancelled:
+        print("E_RUNTIME", file=sys.stderr); return 1
     except (Refusal, c.Refusal) as exc:
         print(exc.code if exc.code in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_SHAPE",
               "E_CANONICAL", "E_RELATION", "E_WORKSPACE"} else "E_RUNTIME", file=sys.stderr)

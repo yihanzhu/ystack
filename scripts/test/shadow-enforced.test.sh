@@ -551,7 +551,7 @@ PY
 # Slice 3 keeps launch substitution private while exercising the production
 # framing, durable-request, payload, record, inventory and bounded-child code.
 "$python_bin" -I -S -B - "$root" "$tmp/slice3" "$jq_bin" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, time, types
+import hashlib, importlib.util, json, os, pathlib, shutil, signal, stat, subprocess, sys, time, types
 root, base, jq_bin = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]); base.mkdir(mode=0o700)
 spec = importlib.util.spec_from_file_location("enforced", root / "shadow/v1/enforced-reproduction.py")
 e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
@@ -654,6 +654,27 @@ for _ in range(100):
  if interrupt_child.poll() is not None:break
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
+signal_wrapper=base/"signal-wrapper.py"
+signal_wrapper.write_text('''import importlib.util,pathlib,signal,sys\nroot=pathlib.Path(sys.argv[1]);pid=pathlib.Path(sys.argv[2]);done=pathlib.Path(sys.argv[3])\ns=importlib.util.spec_from_file_location("signaled",root/"shadow/v1/enforced-reproduction.py")\ne=importlib.util.module_from_spec(s);sys.modules[s.name]=e;s.loader.exec_module(e)\nbefore={x:signal.getsignal(x) for x in (signal.SIGTERM,signal.SIGHUP)}\ndef reproduce(*_args):\n e.run_bounded([sys.executable,"-I","-S","-B","-c","import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)",str(pid)],env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})\ne.reproduce=reproduce\nrc=e.main(["driver","reproduce","request","work","output"])\ndone.write_text(str(rc)+":"+str(all(signal.getsignal(x)==before[x] for x in before)))\n''')
+for sent in (signal.SIGTERM,signal.SIGHUP):
+ child_pid=base/(sent.name+".pid");done=base/(sent.name+".done")
+ wrapper=subprocess.Popen([sys.executable,"-I","-S","-B",str(signal_wrapper),str(root),
+  str(child_pid),str(done)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ for _ in range(500):
+  if child_pid.exists():break
+  if wrapper.poll() is not None:break
+  time.sleep(.01)
+ ok(child_pid.exists(),sent.name+" production consumer reached owned child")
+ owned=int(child_pid.read_text());wrapper.send_signal(sent);stdout,stderr=wrapper.communicate(timeout=15)
+ ok(wrapper.returncode==0 and done.read_text()=="1:True" and stderr==b"E_RUNTIME\n",
+    sent.name+" is routed through consumer cleanup and handlers are restored")
+ gone=False
+ for _ in range(500):
+  try:os.killpg(owned,0)
+  except ProcessLookupError:gone=True;break
+  except PermissionError:pass
+  time.sleep(.01)
+ ok(gone,sent.name+" leaves no owned process group")
 pid_file=base/"descendant.pid"
 group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
  "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
@@ -669,6 +690,20 @@ for _ in range(100):
 ok(gone and time.monotonic()-started<11,"owned process group is gone within one cleanup bound")
 bash=e.fixed_bash();bash.recheck();ok(True,"fixed /bin/bash alias and physical bytes recheck")
 original_lstat=e.os.lstat
+def linux_alias(path):
+ state=original_lstat(path)
+ if pathlib.Path(path)==pathlib.Path("/bin"):
+  return types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino,
+   st_mode=stat.S_IFLNK|0o777,st_uid=0,st_gid=state.st_gid,st_nlink=state.st_nlink,
+   st_size=state.st_size,st_mtime_ns=state.st_mtime_ns,st_ctime_ns=state.st_ctime_ns)
+ return state
+original_readlink=e.os.readlink
+physical_bash=pathlib.Path("/bin/bash").resolve();original_resolve=e.Path.resolve
+e.os.lstat=linux_alias;e.os.readlink=lambda path:"usr/bin" if pathlib.Path(path)==pathlib.Path("/bin") else original_readlink(path)
+e.Path.resolve=lambda self,strict=False:physical_bash if self==pathlib.Path("/bin/bash") else original_resolve(self,strict=strict)
+linux_bash=e.fixed_bash();linux_bash.recheck();linux_bash.close()
+ok(True,"root-owned Linux-mode bash alias is admitted with physical byte binding")
+e.os.lstat=original_lstat;e.os.readlink=original_readlink;e.Path.resolve=original_resolve
 def replaced_alias(path):
  state=original_lstat(path)
  if pathlib.Path(path)==pathlib.Path("/bin"):
@@ -826,7 +861,14 @@ files={name:(b"" if name.endswith(".txt") else e.canonical(doc("fixture", "fixtu
 files["incident.json"]=e.canonical(incident)
 out=base/"bundle"; out.mkdir(mode=0o700)
 out_hold=e.stable_directory(out)
-bundle=e.seal(out,out_hold,files,incident,"enforced-reproduction.v1");out_hold.close()
+sync_order=[];order_fsync=e.os.fsync;order_write=e.write_exclusive_at
+def tracked_fsync(fd):
+ sync_order.append("file" if stat.S_ISREG(os.fstat(fd).st_mode) else "directory");return order_fsync(fd)
+def tracked_write(fd,name,raw,mode=0o400,sync=False,**options):
+ sync_order.append("write:"+name);return order_write(fd,name,raw,mode,sync,**options)
+e.os.fsync=tracked_fsync;e.write_exclusive_at=tracked_write
+bundle=e.seal(out,out_hold,files,incident,"enforced-reproduction.v1")
+e.os.fsync=order_fsync;e.write_exclusive_at=order_write;out_hold.close()
 bundle_doc=e.parse(bundle)
 ok([row["name"] for row in bundle_doc["body"]["files"]] == sorted(e.EVIDENCE_NAMES),
    "bundle rows are sorted exact 29-file inventory")
@@ -835,6 +877,11 @@ ok(len(bundle_doc["body"]["files"])==29 and set(p.name for p in out.iterdir())==
 ok(all((out/row["name"]).stat().st_size==row["size_bytes"] and
        sha((out/row["name"]).read_bytes())==row["sha256"] for row in bundle_doc["body"]["files"]),
    "bundle sizes and digests bind actual bytes")
+ok(len([item for item in out.iterdir() if item.name!="bundle.json"])==29,
+   "all evidence bytes precede the completion marker")
+ok(sync_order==sum((["write:"+name,"file"] for name in sorted(e.EVIDENCE_NAMES)),[])+
+   ["directory","write:bundle.json","file","directory"],
+   "each evidence file is durable before directory and last-marker durability")
 partial=base/"partial"; partial.mkdir(mode=0o700); write(partial/"incident.json",e.canonical(incident))
 ok(not (partial/"bundle.json").exists(),"partial attempt has no completion marker")
 extra=base/"extra"; extra.mkdir(mode=0o700); write(extra/"extra",b"x")
@@ -842,17 +889,75 @@ extra_hold=e.stable_directory(extra)
 refuses("E_RELATION",lambda:e.seal(extra,extra_hold,files,incident,"enforced-reproduction.v1"),
         "preexisting output cannot acquire marker")
 ok(not (extra/"bundle.json").exists(),"late inventory refusal leaves no marker");extra_hold.close()
-late=base/"late-fsync";late.mkdir(mode=0o700);late_hold=e.stable_directory(late)
+filefail=base/"file-fsync";filefail.mkdir(mode=0o700);filefail_hold=e.stable_directory(filefail)
 real_fsync=e.os.fsync;fsync_calls=[0]
+def fail_file_fsync(fd):
+ if stat.S_ISREG(os.fstat(fd).st_mode):raise OSError("fixture file fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_file_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(filefail,filefail_hold,files,incident,"enforced-reproduction.v1"),
+            "evidence file fsync failure refuses before marker")
+finally:e.os.fsync=real_fsync
+ok(not (filefail/"bundle.json").exists(),"evidence fsync failure leaves no marker");filefail_hold.close()
+markerfail=base/"marker-fsync";markerfail.mkdir(mode=0o700);markerfail_hold=e.stable_directory(markerfail)
+fsync_calls=[0]
+def fail_marker_fsync(fd):
+ fsync_calls[0]+=1
+ if fsync_calls[0]==31:raise OSError("fixture marker fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_marker_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(markerfail,markerfail_hold,files,incident,"enforced-reproduction.v1"),
+            "marker fsync failure refuses")
+finally:e.os.fsync=real_fsync
+ok(not (markerfail/"bundle.json").exists(),"partial marker is removed through held output")
+markerfail_hold.close()
+short=base/"short-marker";short.mkdir(mode=0o700);short_fd=os.open(short,os.O_RDONLY|os.O_DIRECTORY)
+real_os_write=e.os.write;e.os.write=lambda _fd,_raw:0
+try:refuses("E_RUNTIME",lambda:e.write_exclusive_at(short_fd,"bundle.json",b"partial",
+        remove_on_failure=True),"short marker write refuses")
+finally:e.os.write=real_os_write
+os.close(short_fd);ok(not (short/"bundle.json").exists(),"non-OSError marker failure removes owned partial")
+preexisting=base/"preexisting-marker";preexisting.mkdir(mode=0o700);write(preexisting/"bundle.json",b"owned")
+pre_fd=os.open(preexisting,os.O_RDONLY|os.O_DIRECTORY)
+refuses("E_RUNTIME",lambda:e.write_exclusive_at(pre_fd,"bundle.json",b"new",sync=True,
+        remove_on_failure=True),"preexisting marker refuses exclusive creation")
+os.close(pre_fd);ok((preexisting/"bundle.json").read_bytes()==b"owned","preexisting marker is not removed")
+late=base/"late-fsync";late.mkdir(mode=0o700);late_hold=e.stable_directory(late)
+fsync_calls=[0]
 def fail_final_fsync(fd):
  fsync_calls[0]+=1
- if fsync_calls[0]==3:raise OSError("fixture directory fsync")
+ if fsync_calls[0]==32:raise OSError("fixture directory fsync")
  return real_fsync(fd)
 e.os.fsync=fail_final_fsync
 try:refuses("E_RUNTIME",lambda:e.seal(late,late_hold,files,incident,"enforced-reproduction.v1"),
             "final directory fsync refuses")
 finally:e.os.fsync=real_fsync
 ok(not (late/"bundle.json").exists(),"directory fsync failure removes marker");late_hold.close()
+renamed=base/"renamed";renamed.mkdir(mode=0o700);renamed_hold=e.stable_directory(renamed)
+real_write_at=e.write_exclusive_at
+def rename_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
+ real_write_at(fd,name,raw,mode,sync,**options)
+ if name=="bundle.json":renamed.rename(renamed.with_name("renamed-held"));renamed.mkdir(mode=0o700)
+e.write_exclusive_at=rename_after_marker
+try:refuses("E_RELATION",lambda:e.seal(renamed,renamed_hold,files,incident,"enforced-reproduction.v1"),
+            "output replacement after marker write refuses")
+finally:e.write_exclusive_at=real_write_at
+ok(not (renamed.with_name("renamed-held")/"bundle.json").exists() and
+   not (renamed/"bundle.json").exists(),"failed marker cleanup stays bound to held output")
+renamed_hold.close()
+cancelmark=base/"cancel-marker";cancelmark.mkdir(mode=0o700);cancelmark_hold=e.stable_directory(cancelmark)
+def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
+ real_write_at(fd,name,raw,mode,sync,**options)
+ if name=="bundle.json":os.kill(os.getpid(),signal.SIGTERM)
+e.write_exclusive_at=cancel_after_marker
+try:
+ with e.CancellationSignals():
+  try:e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
+  except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
+  else:raise AssertionError("marker cancellation accepted")
+finally:e.write_exclusive_at=real_write_at
+ok(not (cancelmark/"bundle.json").exists(),"cancelled marker is removed through held output")
+cancelmark_hold.close()
 
 evaluation_fixture=e.canonical(doc("sandbox_policy_evaluation","evaluation.fixture",{}))
 checker_fixture=e.canonical(doc("sandbox_receipt_check","check.fixture",{}))
@@ -937,7 +1042,7 @@ write(base/"request.json",e.canonical(request))
 
 policy=b'{"policy":true}\n';decision=b'{"decision":true}\n';pset=b'{"set":true}\n'
 driver=b'#!/bin/bash\n';program=b'.\n';accepted=b'{"accepted":true}\n';registry_raw=b'{"registry":true}\n'
-fake_anchor=base/"anchor";fake_anchor.mkdir(mode=0o700)
+fake_anchor=base.parent/"flow-installation/supervisor";fake_anchor.mkdir(parents=True,mode=0o700)
 entry={"description":"fixture","environment_id":"env.fixture","evidence_scope":"fixtures-only",
  "proof_state":"unproven","source_root_commit":commit,"target_repository_id":"fixture.target"}
 installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sha(decision)),
@@ -1364,7 +1469,7 @@ instruction=("ystack.file-digest-instruction.v1\npath source.txt\nsha256 "+
  json.loads((base/"incident.json").read_bytes())["body"]["failing_check"]["expected_sha256"]+"\n").encode()
 instruction_file=base/"verifier-instruction";write(instruction_file,instruction,0o400)
 checks=0
-scenario_mode="success";launch_count=0;scenario_output=None;scenario_work=work
+scenario_mode="success";launch_count=0;scenario_output=None;scenario_work=work;scenario_request=None
 def ok(value,message):
  global checks
  if not value: raise AssertionError(message)
@@ -1458,6 +1563,10 @@ def launch(anchor_value,frame,_deadline):
  if scenario_mode=="mutate-component":
   component=package/"enforcement/v1/check-sandbox-receipt.sh"
   component.chmod(0o700);component.write_bytes(component.read_bytes()+b"\n")
+ if scenario_mode in {"mutate-request","mutate-consumer","mutate-helper-source"}:
+  changed={"mutate-request":scenario_request,"mutate-consumer":package/"shadow/v1/_consumer.py",
+   "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c"}[scenario_mode]
+  changed.chmod(0o600);changed.write_bytes(changed.read_bytes()+b"\n")
  return 70 if scenario_mode=="incomplete" else 65 if scenario_mode=="refused" else 0
 e._launch=launch
 parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":sha(b"fixture-build"),
@@ -1530,19 +1639,47 @@ def case_documents(name,mutate=None):
   path=case/(field+".json");write(path,canonical(value),0o400);outer["body"][field]=str(path)
  request_path=case/"request.json";write(request_path,canonical(outer),0o400)
  return case,request_path
+def prewrite_refusal(name,request_change=None,parent_change=None,work_path=None,source_root=None):
+ case,request_path=case_documents(name);case_work=work_path or case/("work-"+name);case_output=case/"output"
+ if not case_work.exists():case_work.mkdir(mode=0o700)
+ case_output.mkdir(mode=0o700);before_entries=set(case_work.iterdir())
+ if request_change is not None:
+  outer=json.loads(request_path.read_bytes());request_change(outer,case_work)
+  request_path.chmod(0o600);request_path.write_bytes(canonical(outer));request_path.chmod(0o400)
+ context=dict(parent);context.update(parent_change or {})
+ before=launch_count;old_source=e.SOURCE
+ try:
+  if source_root is not None:e.SOURCE=source_root
+  try:e.reproduce(request_path,case_work,case_output,context)
+  except (e.Refusal,c.Refusal):pass
+  else:raise AssertionError(name+" accepted")
+ finally:e.SOURCE=old_source
+ ok(set(case_work.iterdir())==before_entries and not any(case_output.iterdir()) and launch_count==before,
+    name+" refuses before workspace writes or launch")
+prewrite_refusal("workspace-overlap",lambda outer,workspace:
+ outer["body"].__setitem__("incident",str(workspace/"incident.json")))
+prewrite_refusal("helper-context-mismatch",parent_change={"helper_path":str(base/"wrong-helper")})
+prewrite_refusal("source-exclusion",source_root=base/"case-source-exclusion")
+prewrite_refusal("installed-exclusion",work_path=installed/"private-work")
+prewrite_refusal("store-exclusion",work_path=store/"private-work")
 def refuse_case(name,mode="success",mutate=None,launches=0):
- global scenario_mode,scenario_output,scenario_work
+ global scenario_mode,scenario_output,scenario_work,scenario_request
  case,request_path=case_documents(name,mutate);case_work=case/"work";case_output=case/"output"
  case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
- scenario_mode=mode;scenario_output=case_output;scenario_work=case_work
+ scenario_mode=mode;scenario_output=case_output;scenario_work=case_work;scenario_request=request_path
  before=launch_count
  component=package/"enforcement/v1/check-sandbox-receipt.sh";original=component.read_bytes()
+ changed={"mutate-request":request_path,"mutate-consumer":package/"shadow/v1/_consumer.py",
+  "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c"}.get(mode)
+ changed_raw=changed.read_bytes() if changed else None
  try:
   try: e.reproduce(request_path,case_work,case_output,parent)
   except (e.Refusal,c.Refusal): pass
   else: raise AssertionError(name+" accepted")
  finally:
   if component.read_bytes()!=original:component.write_bytes(original);component.chmod(0o755)
+  if changed is not None:
+   changed.chmod(0o600);changed.write_bytes(changed_raw);changed.chmod(0o400 if changed==request_path else 0o644)
  ok(launch_count-before==launches,name+" stops at the intended boundary")
  marker=case_output/"bundle.json"
  displaced=case_output.with_name(case_output.name+"-displaced")/"bundle.json"
@@ -1571,7 +1708,8 @@ refuse_case("wrong-environment",mutate=wrong_environment)
 refuse_case("wrong-identity",mutate=wrong_identity)
 refuse_case("boolean-request",mutate=bool_request)
 for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed","cancel",
-             "replace-output","mutate-component"):
+             "replace-output","mutate-component","mutate-request","mutate-consumer",
+             "mutate-helper-source"):
  refuse_case(mode,mode=mode,launches=1)
 case,request_path=case_documents("mismatch",wrong_expected)
 case_work=case/"work";case_output=case/"output";case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
