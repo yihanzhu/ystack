@@ -39,9 +39,9 @@ completed write bundle early. No other source or accepted artifact changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 550–850 | Preparation/frame/expectation orchestration, closed records and failure tests |
-| 4 | Accepted exception | 450–750 | Exact input transformation, patch construction and real materializer controls |
-| 5 | Standard | Up to 400 | Withheld admission, complete two-attempt proof and final documentation |
+| 3 | Accepted exception | 1800–2400 | Actual component orchestration and whole-path fixture proof for framing, launch, records and the completed reproduction bundle |
+| 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
+| 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
 If the complete readable change cannot fit its accepted slice, stop before an
 unexplained overrun and return through the plan gate. Do not remove proof or create
