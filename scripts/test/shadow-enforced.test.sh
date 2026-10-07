@@ -21,7 +21,7 @@ jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${
 /bin/chmod 0555 "$tmp/object-closure"
 
 python3 -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, types
+import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, tempfile, types
 
 root, base, helper, jq = map(pathlib.Path, sys.argv[1:])
 dependency_work = base / "dependency-work"; dependency_work.mkdir()
@@ -50,6 +50,29 @@ def parent_doc(path, raw):
         "helper_executable_sha256": sha(raw), "helper_executable_size": len(raw),
         "helper_path": str(path)})
 
+# Parallel shards share TMPDIR. Stabilize only change metadata for ancestors outside this
+# fixture; every object at or below the owned fixture root keeps real OS observations.
+raw_metadata, raw_named = c._metadata, c._named_metadata
+external = {}
+def fd_path(fd):
+    if sys.platform == "darwin":
+        raw = c.fcntl.fcntl(fd, 50, b"\0" * 1024)
+        return raw.split(b"\0", 1)[0].decode()
+    return os.path.realpath("/proc/self/fd/" + str(fd))
+def stable_external(value, path):
+    if path == str(base) or path.startswith(str(base) + "/"):
+        return value
+    key = (value.st_dev, value.st_ino)
+    first = external.setdefault(key, (value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns))
+    return types.SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino, st_mode=value.st_mode,
+        st_uid=value.st_uid, st_gid=value.st_gid, st_nlink=first[0],
+        st_size=first[1], st_mtime_ns=first[2], st_ctime_ns=first[3])
+def stable_metadata(fd): return stable_external(raw_metadata(fd), fd_path(fd))
+def stable_named(name, parent_fd):
+    path = os.path.normpath(os.path.join(fd_path(parent_fd), name))
+    return stable_external(raw_named(name, parent_fd), path)
+c._metadata, c._named_metadata = stable_metadata, stable_named
+
 c.verify_helper_source()
 physical_python = os.path.realpath(c.sys.executable); c.sys.executable = physical_python
 ok(c.isolated_python_argv()[1:4] == ["-I", "-S", "-B"], "isolated Python argv")
@@ -61,7 +84,10 @@ write(context, parent_doc(helper, helper_raw).replace(b'"shadow.parent"', b'"cha
 refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(os.open(context, os.O_RDONLY)))
 
 dep = c.snapshot_dependency(str(helper), sha(helper_raw), len(helper_raw), str(dependency_work / "helper"), "helper")
+concurrent = pathlib.Path(tempfile.mkdtemp(prefix="ystack-concurrent-", dir=base.parent))
 c.probe_dependency(dep, ["version"], b"ystack-object-closure-v1\n")
+shutil.rmtree(concurrent)
+ok(True, "external temp churn does not weaken owned fixture checks")
 ok(stat.S_IMODE(os.stat(dependency_work / "helper").st_mode) == 0o500, "helper private snapshot")
 helper.chmod(0o755); helper.write_bytes(helper_raw + b"\n")
 refuses("E_DEPENDENCY", dep.recheck); dep.close(); helper.write_bytes(helper_raw); helper.chmod(0o555)
