@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""Inactive, fail-closed consumer for one enforced shadow reproduction."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import signal
+import selectors
+import subprocess
+import sys
+import time
+import dataclasses
+from pathlib import Path
+from typing import Callable
+
+SOURCE = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location("ystack_shadow_consumer", SOURCE / "shadow/v1/_consumer.py")
+if spec is None or spec.loader is None:
+    raise SystemExit("E_RUNTIME")
+c = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = c
+spec.loader.exec_module(c)
+
+REQUEST_LIMIT = 64 * 1024
+STDERR_LIMIT = 64 * 1024
+OUTPUT_LIMIT = 1024 * 1024
+FRAME_LIMIT = 88_080_384
+OVERALL_SECONDS = 1200
+EVIDENCE_NAMES = (
+    "accepted-identities.json", "claim.json", "consumer-provenance.json", "decision.json",
+    "duty-evaluation.json", "evaluator-driver.txt", "evaluator-program.txt",
+    "evidence-manifest.json", "file-digest-result.json", "incident.json",
+    "materialization-input.json", "materialization-response.json", "origin-observation.json",
+    "payload-stderr.txt", "payload-stdout.txt", "policy-set.json", "policy.json",
+    "preparation-manifest.json", "preparation-record.json", "qualified-identity.json",
+    "registry.json", "sandbox-check.json", "sandbox-evaluation.json",
+    "sandbox-expectation.json", "sandbox-receipt.json", "sandbox-request.json",
+    "shadow-record.json", "trace-ledger.json", "trace-receipt.json",
+)
+REQUEST_BODY_KEYS = {"attempt_id", "attempt_number", "incident", "claim", "duty_evaluation",
+                     "materialization_input", "qualified_identity", "source_git_dir", "jq",
+                     "closure_helper"}
+
+
+class Refusal(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def require(value: bool, code: str = "E_RELATION") -> None:
+    if not value:
+        raise Refusal(code)
+
+
+def canonical(value: object) -> bytes:
+    return c.canonical(value)
+
+
+def sha(raw: bytes) -> str:
+    return c.digest(raw)
+
+
+def parse(raw: bytes, limit: int = OUTPUT_LIMIT, code: str = "E_SHAPE") -> dict:
+    try:
+        return c._json(raw, limit, code)
+    except c.Refusal as exc:
+        raise Refusal(exc.code) from None
+
+
+def parse_value(raw: bytes, limit: int, code: str = "E_SHAPE") -> object:
+    require(len(raw) <= limit, code)
+    try:
+        value = json.loads(raw, object_pairs_hook=c._unique_object)
+        require(canonical(value) == raw, code)
+        return value
+    except (UnicodeError, ValueError, TypeError, RecursionError):
+        raise Refusal(code) from None
+
+
+def read_regular(path: Path, limit: int, code: str = "E_RUNTIME") -> bytes:
+    held = None
+    try:
+        held = c._open_held(str(path), False, lambda _fd, _state, _ancestor: True, code)
+        require(held.before.st_size <= limit, code)
+        raw = held.read(limit, code)
+        held.recheck(code)
+        return raw
+    except (OSError, ValueError, c.Refusal):
+        raise Refusal(code) from None
+    finally:
+        if held is not None:
+            held.close()
+
+
+def private_empty(path: Path) -> None:
+    try:
+        state = path.lstat()
+        require(path.is_absolute() and path.resolve() == path and path.is_dir()
+                and not path.is_symlink() and (state.st_mode & 0o777) == 0o700
+                and not any(path.iterdir()), "E_WORKSPACE")
+    except OSError:
+        raise Refusal("E_WORKSPACE") from None
+
+
+def disjoint(paths: list[Path]) -> None:
+    normalized = [str(path) for path in paths]
+    for index, left in enumerate(normalized):
+        for right in normalized[index + 1:]:
+            require(left != right and not left.startswith(right + "/")
+                    and not right.startswith(left + "/"), "E_WORKSPACE")
+
+
+@dataclasses.dataclass
+class InputSnapshot:
+    held: c.HeldPath
+    path: Path
+    raw: bytes
+
+    def recheck(self) -> None:
+        self.held.recheck("E_RELATION")
+        require(read_regular(self.path, len(self.raw), "E_RELATION") == self.raw, "E_RELATION")
+
+    def close(self) -> None:
+        self.held.close()
+
+
+def snapshot_input(source: Path, target: Path, limit: int) -> InputSnapshot:
+    held = c._open_held(str(source), False, lambda _fd, _state, _ancestor: True, "E_RELATION")
+    try:
+        raw = held.read(limit, "E_RELATION")
+        write_exclusive(target, raw)
+        result = InputSnapshot(held, target, raw)
+        result.recheck()
+        return result
+    except BaseException:
+        held.close()
+        raise
+
+
+def write_exclusive(path: Path, raw: bytes, mode: int = 0o400, sync: bool = False) -> None:
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+        try:
+            sent = 0
+            while sent < len(raw):
+                count = os.write(fd, raw[sent:])
+                require(count > 0, "E_RUNTIME")
+                sent += count
+            if sync:
+                os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        raise Refusal("E_RUNTIME") from None
+
+
+def clean_env(jq_path: Path, scratch: Path) -> dict[str, str]:
+    return {"PATH": f"{jq_path.parent}:/usr/bin:/bin", "LC_ALL": "C", "LANG": "C",
+            "HOME": str(scratch), "TMPDIR": str(scratch), "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": str(scratch / "no-hooks")}
+
+
+def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
+                output_limit: int = OUTPUT_LIMIT, env: dict[str, str],
+                deadline: float | None = None) -> bytes:
+    require(all(isinstance(item, str) and item for item in argv), "E_RUNTIME")
+    if deadline is not None:
+        require(deadline > time.monotonic(), "E_RUNTIME")
+    remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, env=env, close_fds=True,
+                                 start_new_session=True)
+        stdout, stderr = communicate_bounded(child, stdin, output_limit, STDERR_LIMIT, remaining)
+    except (OSError, subprocess.SubprocessError):
+        raise Refusal("E_RUNTIME") from None
+    require(len(stdout) <= output_limit and len(stderr) <= STDERR_LIMIT, "E_LIMIT")
+    require(child.returncode == 0 and not stderr, "E_RUNTIME")
+    return stdout
+
+
+def stop_child(child: subprocess.Popen) -> None:
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=10)
+    except ProcessLookupError:
+        child.wait(timeout=10)
+
+
+def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit: int,
+                        stderr_limit: int, timeout: float) -> tuple[bytes, bytes]:
+    selector = selectors.DefaultSelector()
+    try:
+        require(child.stdin is not None and child.stdout is not None and child.stderr is not None,
+                "E_RUNTIME")
+        stdout_fd, stderr_fd = child.stdout.fileno(), child.stderr.fileno()
+        output = {stdout_fd: bytearray(), stderr_fd: bytearray()}
+        limits = {stdout_fd: stdout_limit, stderr_fd: stderr_limit}
+        for stream in (child.stdin, child.stdout, child.stderr):
+            os.set_blocking(stream.fileno(), False)
+        selector.register(child.stdout, selectors.EVENT_READ)
+        selector.register(child.stderr, selectors.EVENT_READ)
+        if input_raw:
+            selector.register(child.stdin, selectors.EVENT_WRITE)
+        else:
+            child.stdin.close()
+        sent = 0; end = time.monotonic() + timeout
+        while selector.get_map():
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise Refusal("E_RUNTIME")
+            ready = selector.select(remaining)
+            if not ready:
+                raise Refusal("E_RUNTIME")
+            for key, mask in ready:
+                stream = key.fileobj
+                if stream is child.stdin and mask & selectors.EVENT_WRITE:
+                    try:
+                        count = os.write(stream.fileno(), input_raw[sent:sent + 65536])
+                    except BlockingIOError:
+                        continue
+                    require(count > 0, "E_RUNTIME"); sent += count
+                    if sent == len(input_raw):
+                        selector.unregister(stream); stream.close()
+                elif mask & selectors.EVENT_READ:
+                    try:
+                        chunk = os.read(stream.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(stream); stream.close(); continue
+                    bucket = output[stream.fileno()]
+                    require(len(bucket) + len(chunk) <= limits[stream.fileno()], "E_LIMIT")
+                    bucket.extend(chunk)
+        try:
+            child.wait(timeout=max(0.001, end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise Refusal("E_RUNTIME") from None
+        return bytes(output[stdout_fd]), bytes(output[stderr_fd])
+    except (OSError, ValueError, Refusal):
+        stop_child(child)
+        raise
+    finally:
+        selector.close()
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+
+def frame_write(records: list[tuple[bytes, bytes]]) -> bytes:
+    import hashlib
+    out = bytearray(b"YSFRAME1")
+    measured = hashlib.sha256(b"YSFRAME1")
+    for name, content in records:
+        require(0 < len(name) <= 255 and name != b"end", "E_LIMIT")
+        header = bytes((len(name),)) + name + len(content).to_bytes(8, "big")
+        out.extend(header); out.extend(content); measured.update(header); measured.update(content)
+        require(len(out) <= FRAME_LIMIT, "E_LIMIT")
+    out.extend(b"\x03end" + (32).to_bytes(8, "big") + measured.digest())
+    require(len(out) <= FRAME_LIMIT, "E_LIMIT")
+    return bytes(out)
+
+
+def control(anchor: c.Anchor, evaluation_raw: bytes) -> dict:
+    names = ("control_policy", "control_decision", "control_policy_set",
+             "evaluator_driver", "evaluator_program")
+    return {name.removeprefix("control_") + "_sha256": anchor.installed[name][1]
+            for name in names} | {"sandbox_evaluation_sha256": sha(evaluation_raw)}
+
+
+def document_ref(raw: bytes) -> dict:
+    doc = parse(raw)
+    return {"schema_version": doc["schema_version"], "kind": doc["kind"],
+            "id": doc["id"], "sha256": sha(raw)}
+
+
+def make_instruction(incident: dict) -> bytes:
+    check = incident.get("body", {}).get("failing_check", {})
+    require(set(check) >= {"kind", "path", "expected_sha256"}
+            and check["kind"] == "file-digest" and isinstance(check["path"], str)
+            and check["path"] and "\n" not in check["path"] and c._sha(check["expected_sha256"]),
+            "E_RELATION")
+    return ("ystack.file-digest-instruction.v1\npath " + check["path"] + "\nsha256 "
+            + check["expected_sha256"] + "\n").encode()
+
+
+def validate_identity(jq: Path, core: Path, raw: bytes, incident: dict,
+                      env: dict[str, str], deadline: float) -> None:
+    revision = incident["body"]["git_revision_ref"]
+    output = run_bounded([str(jq), "-L", str(core), "-r", "--arg", "repository_id",
+        incident["body"]["target_repository_id"], "--arg", "hash_algorithm",
+        revision["hash_algorithm"], "--arg", "commit_id", revision["commit_id"], "-f",
+        str(SOURCE / "shadow/v1/qualified-identity.jq")], stdin=raw, env=env, deadline=deadline)
+    require(output == b"", "E_RELATION")
+
+
+def core_modules() -> Path:
+    registry = parse_value(read_regular(SOURCE / "core/v2/generation-registry.json", OUTPUT_LIMIT),
+                           OUTPUT_LIMIT)
+    require(isinstance(registry, list) and registry, "E_RUNTIME")
+    generation = registry[-1]["generation_id"]
+    path = SOURCE / "core/v2/generations" / generation / "modules"
+    require(path.is_dir() and path.resolve() == path, "E_RUNTIME")
+    return path
+
+
+def response_check(input_doc: dict, response_raw: bytes) -> bytes:
+    response = parse(response_raw)
+    stage_raw = canonical(response["stage_result"])
+    payloads = response.get("payloads")
+    require(isinstance(payloads, list) and len(payloads) == 1, "E_RELATION")
+    receipt_text = payloads[0].get("data")
+    require(isinstance(receipt_text, str), "E_RELATION")
+    receipt_raw = receipt_text.encode()
+    receipt = parse(receipt_raw)
+    require(payloads[0].get("sha256") == sha(receipt_raw), "E_RELATION")
+    return canonical({"input": input_doc, "response": response,
+        "verified_receipt": {"content": receipt, "sha256": sha(receipt_raw)},
+        "receipt_utf8": receipt_text, "stage_result_sha256": sha(stage_raw)})
+
+
+def make_launch(anchor: c.Anchor, request: dict, incident_raw: bytes, evaluation_raw: bytes,
+                observation_raw: bytes, record_raw: bytes, manifest_raw: bytes,
+                instruction: bytes) -> tuple[bytes, bytes]:
+    incident = parse(incident_raw); prep = parse(record_raw)
+    selected = [row for row in anchor.registry[1]
+                if row["environment_id"] == anchor.config["environment_id"]]
+    require(len(selected) == 1, "E_RELATION")
+    source, candidate = prep["source"], prep["candidate"]
+    subject = {"environment_id": anchor.config["environment_id"],
+        "environment_entry_sha256": sha(canonical(selected[0])),
+        "target_repository_id": incident["body"]["target_repository_id"],
+        "source": source, "candidate": {"preparation_record_sha256": sha(record_raw),
+            "manifest_sha256": sha(manifest_raw), "commit_id": candidate["commit_id"],
+            "tree_id": candidate["tree_id"]}, "incident_sha256": sha(incident_raw)}
+    body = {"attempt": {"attempt_id": request["body"]["attempt_id"], "attempt_number": 1},
+        "control": control(anchor, evaluation_raw), "instruction_sha256": sha(instruction),
+        "nonce": os.urandom(32).hex(), "store_id": anchor.config["store_id"], "subject": subject}
+    launch = canonical({"schema_version": 1, "kind": "sandbox_launch_request",
+                        "id": request["body"]["attempt_id"], "body": body})
+    expectation_body = {"attempt": body["attempt"] | {"launch_request_sha256": sha(launch)},
+                        "control": body["control"], "store_id": body["store_id"],
+                        "subject": subject}
+    expectation = canonical({"schema_version": 1, "kind": "sandbox_receipt_expectation",
+        "id": request["body"]["attempt_id"], "body": expectation_body})
+    return launch, expectation
+
+
+def _native_launch(anchor: c.Anchor, frame: bytes, deadline: float) -> int:
+    argv = ["/usr/bin/sudo", "-n", "-u", f"#{anchor.config['principal_uid']}", "--",
+            sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
+    env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+    remaining = min(180, max(0.001, deadline - time.monotonic()))
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=env, close_fds=True, start_new_session=True)
+        stdout, stderr = communicate_bounded(child, frame, 0, STDERR_LIMIT, remaining)
+    except Refusal:
+        raise
+    except (OSError, subprocess.SubprocessError):
+        raise Refusal("E_RUNTIME") from None
+    require(not stdout and len(stderr) <= STDERR_LIMIT, "E_LIMIT")
+    return child.returncode
+
+
+_launch: Callable[[c.Anchor, bytes, float], int] = _native_launch
+
+
+def payload_result(snapshots: dict[str, bytes], manifest: dict, instruction: bytes,
+                   preparation: dict, receipt: dict) -> tuple[bytes, dict]:
+    require(snapshots["payload/stdout"] == b"" and snapshots["payload/stderr"] == b"",
+            "E_RELATION")
+    rows = manifest["body"]["files"]
+    require(len(rows) == 1 and bytes.fromhex(rows[0]["name_hex"]) == b"file-digest-result.json",
+            "E_RELATION")
+    raw = snapshots["payload/evidence/0000"]
+    result = parse(raw, 16 * 1024)
+    require(rows[0]["size_bytes"] == len(raw) and rows[0]["sha256"] == sha(raw), "E_RELATION")
+    body = receipt.get("body")
+    require(isinstance(body, dict) and body.get("lifecycle", {}).get("admission") == "admitted"
+            and body.get("lifecycle", {}).get("runtime") == "completed"
+            and body.get("lifecycle", {}).get("control_deadline") == "met"
+            and body.get("teardown", {}).get("state") == "confirmed"
+            and body.get("payload", {}).get("exit_state") == "exited"
+            and body.get("payload", {}).get("exit_code") == 0
+            and body.get("payload", {}).get("stdout_sha256") == sha(snapshots["payload/stdout"])
+            and body.get("payload", {}).get("stderr_sha256") == sha(snapshots["payload/stderr"])
+            and body.get("payload", {}).get("evidence_manifest_sha256") == sha(canonical(manifest)),
+            "E_RELATION")
+    require(set(result) == {"schema_version", "kind", "id", "body"}
+            and result["schema_version"] == 1
+            and result["kind"] == "file_digest_verifier_payload"
+            and result["id"] == "file-digest-payload", "E_RELATION")
+    check = result["body"]
+    lines = instruction.decode().splitlines()
+    expected_path, expected_sha = lines[1][5:], lines[2][7:]
+    entries = {row["path"]: row for row in preparation.get("entries", [])}
+    observed = check.get("observed")
+    require(set(check) == {"check", "instruction_sha256", "observed", "outcome", "reason_id"}
+            and expected_path in entries
+            and check.get("check") == {"path": expected_path, "expected_sha256": expected_sha}
+            and check.get("instruction_sha256") == sha(instruction)
+            and isinstance(observed, dict)
+            and observed == {"sha256": entries[expected_path]["sha256"],
+                             "size_bytes": entries[expected_path]["size_bytes"]}, "E_RELATION")
+    require((check.get("outcome"), check.get("reason_id")) in
+            (("match", "file.match"), ("mismatch", "file.mismatch"))
+            and (check["outcome"] == "match") == (observed["sha256"] == expected_sha),
+            "E_RELATION")
+    return raw, check
+
+
+def trace_ledger(incident: dict, attempt_id: str, outcome: str, tool: str | None) -> bytes:
+    incident_ref = {"content_id": "shadow-incident-record",
+        "media_type": "application/vnd.ystack.shadow-incident-record+json",
+        "sha256": sha(canonical(incident))}
+    unavailable = lambda reason: {"state": "unavailable", "reason_id": reason}
+    recorded = lambda value: {"state": "recorded", "value": value, "source_ref": incident_ref}
+    not_applicable = {"state": "not-applicable"}
+    def facts(stage: str, result: str, tool_id: str | None) -> dict:
+        return {"adapter": not_applicable, "cost_microunits": unavailable("cost.not-measured"),
+            "execution_environment": recorded("environment.enforced"), "gate": recorded("gate.sandbox"),
+            "identity": recorded(incident["body"]["reporter_actor_ref"]),
+            "initiative": recorded(incident["id"]), "latency_ms": unavailable("latency.not-measured"),
+            "result": recorded(result), "stage": recorded(stage), "status": recorded("status.completed"),
+            "task_class": recorded("task.shadow-incident-reproduction"),
+            "tool": recorded(tool_id) if tool_id else not_applicable,
+            "workflow": recorded("workflow.shadow-incident-reproduction")}
+    rows = [("event.shadow-environment", "shadow.environment-satisfied",
+             facts("stage.shadow-environment", "result.environment-satisfied", None)),
+            ("event.shadow-outcome", "shadow.outcome-recorded",
+             facts("stage.shadow-reproduce", "result." + outcome, tool))]
+    events, prior = [], None
+    for sequence, (identity, event_type, values) in enumerate(rows):
+        event = {"schema_version": 1, "kind": "telemetry_trace_event", "id": identity,
+            "session_id": incident["id"], "attempt_id": attempt_id,
+            "trace_id": "trace.shadow-enforced", "sequence": sequence, "prior_digest": prior,
+            "occurred_at": incident["body"]["observed_at"], "event_type": event_type,
+            "facts": values}
+        prior = sha(canonical(event)); event["record_digest"] = prior; events.append(event)
+    return canonical({"schema_version": 1, "kind": "telemetry_trace_ledger",
+        "id": "shadow-enforced-trace-ledger", "body": {"session_id": incident["id"],
+        "attempt_id": attempt_id, "trace_ids": ["trace.shadow-enforced"], "events": events,
+        "seal": {"algorithm": "sha256", "canonicalization": "jq-1.6-sort-compact-line",
+                 "event_count": len(events), "first_digest": events[0]["record_digest"],
+                 "final_digest": events[-1]["record_digest"]}}})
+
+
+def seal(output: Path, files: dict[str, bytes], incident: dict, record_form: str) -> bytes:
+    require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
+    for name in sorted(files):
+        write_exclusive(output / name, files[name])
+    rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
+            for name in sorted(files)]
+    bundle = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
+        "id": "bundle." + sha(files["incident.json"])[:32], "body": {
+            "activation_state": "inactive", "record_form": record_form,
+            "incident_sha256": sha(files["incident.json"]),
+            "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+    write_exclusive(output / "bundle.json", bundle, sync=True)
+    directory = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+    require(set(item.name for item in output.iterdir()) == set(EVIDENCE_NAMES) | {"bundle.json"},
+            "E_RELATION")
+    return bundle
+
+
+def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None = None) -> bytes:
+    started = time.monotonic(); deadline = started + OVERALL_SECONDS
+    context = c.capture_parent_context() if parent is None else parent
+    private_empty(work); private_empty(output)
+    disjoint([request_path, work, output])
+    request_raw = read_regular(request_path, REQUEST_LIMIT, "E_SHAPE")
+    request = parse(request_raw, REQUEST_LIMIT)
+    require(set(request) == {"schema_version", "kind", "id", "body"}
+            and request["schema_version"] == 1 and request["kind"] == "shadow_enforced_request"
+            and c._id(request["id"]) and isinstance(request["body"], dict)
+            and set(request["body"]) == REQUEST_BODY_KEYS
+            and request["body"]["attempt_number"] == 1
+            and request["body"]["attempt_id"] == request["id"] and c._id(request["id"]), "E_SHAPE")
+    paths = {key: Path(request["body"][key]) for key in REQUEST_BODY_KEYS - {"attempt_id", "attempt_number"}}
+    require(all(path.is_absolute() and path.resolve() == path for path in paths.values()), "E_SHAPE")
+    disjoint([work, output, *paths.values()])
+    require(str(paths["closure_helper"]) == context["helper_path"], "E_RELATION")
+    names = ["dependencies", "inputs", "candidate", "materializer", "preparation-parent",
+             "preparation-scratch", "response", "response-check", "observation", "launch",
+             "receipt", "evaluation", "checker", "trace", "runtime"]
+    for name in names:
+        (work / name).mkdir(mode=0o700)
+    deps = work / "dependencies"
+    for name in ("helper", "jq"):
+        (deps / name).mkdir(mode=0o700)
+    for name in (REQUEST_BODY_KEYS - {"attempt_id", "attempt_number", "source_git_dir", "jq",
+                                     "closure_helper"}):
+        (work / "inputs" / name).mkdir(mode=0o700)
+    helper = jq = anchor = None
+    inputs: list[InputSnapshot] = []
+    try:
+        helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
+            context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
+        jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
+        c.verify_helper_source(); c.probe_dependency(helper, ["version"], b"ystack-object-closure-v1\n")
+        c.probe_dependency(jq, ["--version"], b"jq-1.6\n")
+        anchor = c.load_anchor()
+        captured = work / "inputs"
+        limits = {"incident": OUTPUT_LIMIT, "claim": OUTPUT_LIMIT, "duty_evaluation": OUTPUT_LIMIT,
+                  "qualified_identity": OUTPUT_LIMIT, "materialization_input": 8 * OUTPUT_LIMIT}
+        mapped = {}
+        for role, limit in limits.items():
+            item = snapshot_input(paths[role], captured / role / (role + ".json"), limit)
+            inputs.append(item); mapped[role] = item.path
+        incident_raw = inputs[0].raw; incident = parse(incident_raw)
+        claim_raw = inputs[1].raw; duty_raw = inputs[2].raw
+        identity_raw = inputs[3].raw; input_raw = inputs[4].raw
+        input_doc = parse(input_raw, 8 * OUTPUT_LIMIT)
+        env = clean_env(Path(jq.snapshot.path), work / "runtime")
+        modules = core_modules()
+        protocol = SOURCE / "adapters/local-git-materializer/v1/protocol.jq"
+        commands: list[dict] = []
+        def execute(role: str, argv: list[str], component: Path, **options: object) -> bytes:
+            commands.append({"role": role, "argv_sha256": sha(canonical(argv)),
+                "executable_sha256": sha(read_regular(Path(argv[0]), c.EXECUTABLE_LIMIT)),
+                "component_sha256": sha(read_regular(component, c.EXECUTABLE_LIMIT))})
+            return run_bounded(argv, **options)
+        incident_validator = SOURCE / "shadow/v1/validate-incident.sh"
+        execute("incident-validation", ["/bin/bash", "-p", str(incident_validator), "validate",
+            str(mapped["incident"])], incident_validator, env=env, deadline=deadline)
+        request_body = input_doc.get("stage_request", {}).get("content", {}).get("body", {})
+        incident_revision = incident.get("body", {}).get("git_revision_ref")
+        require(request_body.get("target_repository_id") == incident["body"]["target_repository_id"]
+                and request_body.get("target_revision") == {"state": "present", "value": incident_revision}
+                and request_body.get("source", {}).get("value", {}).get("value", {}).get("revision")
+                == incident_revision, "E_RELATION")
+        valid = execute("materializer-input-validation", [jq.snapshot.path, "-L", str(modules),
+            "-e", "--arg", "command", "validate-input", "-f", str(protocol),
+            str(mapped["materialization_input"])], protocol, env=env, deadline=deadline)
+        require(valid.strip() == b"true", "E_RELATION")
+        instruction = make_instruction(incident)
+        validate_identity(Path(jq.snapshot.path), modules, identity_raw, incident, env, deadline)
+        identity = parse(identity_raw)
+        require(identity["body"]["stage_request_ref"]["sha256"] == input_doc["stage_request"]["sha256"]
+                and identity["body"]["resolved_profile_ref"]["sha256"] == input_doc["resolved_profile"]["sha256"]
+                and identity["body"]["verification_instructions_ref"]["sha256"] == sha(instruction),
+                "E_RELATION")
+        candidate = work / "candidate"; materializer_scratch = work / "materializer"
+        target = incident["body"]["target_repository_id"]
+        materializer = SOURCE / "adapters/local-git-materializer/v1/materialize.sh"
+        response_raw = execute("materialization", ["/bin/bash", "-p", str(materializer),
+            "materialize", str(mapped["materialization_input"]), target, str(paths["source_git_dir"]),
+            str(candidate), str(materializer_scratch), helper.snapshot.path, jq.snapshot.path],
+            materializer, timeout=120, env=env, deadline=deadline)
+        response_path = work / "response/materialization-response.json"; write_exclusive(response_path, response_raw)
+        check_raw = response_check(input_doc, response_raw); check_path = work / "response-check/response-check.json"
+        write_exclusive(check_path, check_raw)
+        checked = execute("materializer-response-validation", [jq.snapshot.path, "-L", str(modules), "-e", "--arg", "command",
+            "validate-response", "-f", str(protocol), str(check_path)], protocol,
+            env=env, deadline=deadline)
+        require(checked.strip() == b"true", "E_RELATION")
+        prep = work / "preparation-parent/preparation"; prep_scratch = work / "preparation-scratch"
+        preparation_source = SOURCE / "preparation/v1/prepare-candidate.py"
+        prepare = [sys.executable, "-I", "-S", "-B", str(preparation_source)]
+        common = ["--input", str(mapped["materialization_input"]), "--input-sha256", sha(input_raw),
+            "--response", str(response_path), "--response-sha256", sha(response_raw),
+            "--candidate-repository", str(candidate / "repository.git"), "--output", str(prep),
+            "--scratch", str(prep_scratch), "--jq", jq.snapshot.path]
+        execute("candidate-preparation", prepare + ["prepare", *common], preparation_source,
+                timeout=300, env=env, deadline=deadline)
+        for child in prep_scratch.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        execute("candidate-inspection", prepare + ["inspect", *common], preparation_source,
+                timeout=300, env=env, deadline=deadline)
+        record_raw = read_regular(prep / "record.json", 64 * 1024)
+        manifest_raw = read_regular(prep / "manifest.json", 2 * OUTPUT_LIMIT)
+        manifest = parse(manifest_raw, 2 * OUTPUT_LIMIT)
+        observation_raw = c.verifier_observation(anchor, anchor.config["environment_id"], target)
+        observation_path = work / "observation/observation.json"; write_exclusive(observation_path, observation_raw)
+        evaluator = SOURCE / "control/v1/evaluate-bound-sandbox.sh"
+        evaluation_raw = execute("sandbox-bound-evaluation", ["/bin/bash", "-p", str(evaluator),
+            "evaluate", str(mapped["duty_evaluation"]), str(mapped["claim"]), str(observation_path)],
+            evaluator, env=env, deadline=deadline)
+        evaluation = parse(evaluation_raw)
+        require(evaluation["body"]["verdict"] == "satisfied", "E_RELATION")
+        launch_raw, expectation_raw = make_launch(anchor, request, incident_raw, evaluation_raw,
+            observation_raw, record_raw, manifest_raw, instruction)
+        launch_path = work / "launch/sandbox-request.json"; expectation_path = work / "launch/sandbox-expectation.json"
+        write_exclusive(launch_path, launch_raw, sync=True); write_exclusive(expectation_path, expectation_raw, sync=True)
+        directory = os.open(launch_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        records = [(b"request.json", launch_raw), (b"evaluation.json", evaluation_raw),
+            (b"incident.json", incident_raw), (b"record.json", record_raw),
+            (b"manifest.json", manifest_raw), (b"instruction", instruction)]
+        for index, row in enumerate(manifest["entries"]):
+            raw = read_regular(prep / "candidate" / row["path"], row["size_bytes"], "E_RELATION")
+            require(len(raw) == row["size_bytes"] and sha(raw) == row["sha256"], "E_RELATION")
+            records.append((f"candidate/{index:05d}".encode(), raw))
+        frame = frame_write(records)
+        anchor.recheck(); helper.recheck(); jq.recheck()
+        launch_status = _launch(anchor, frame, deadline)
+        require(launch_status in (0, 65, 70), "E_RUNTIME")
+        snapshots, origin_raw = c.read_store_attempt(anchor, request["id"])
+        receipt_raw = snapshots["receipt.json"]
+        receipt_path = work / "receipt/sandbox-receipt.json"; write_exclusive(receipt_path, receipt_raw)
+        evaluation_path = work / "evaluation/sandbox-evaluation.json"; write_exclusive(evaluation_path, evaluation_raw)
+        checker_source = SOURCE / "enforcement/v1/check-sandbox-receipt.sh"
+        checker_raw = execute("sandbox-receipt-check", ["/bin/bash", "-p", str(checker_source),
+            "check-bound", str(receipt_path), str(expectation_path), str(evaluation_path), str(observation_path)],
+            checker_source, env=env, deadline=deadline)
+        write_exclusive(work / "checker/sandbox-check.json", checker_raw)
+        checker = parse(checker_raw)
+        require(checker["body"]["check_verdict"] == "valid"
+                and checker["body"]["enforcement_verdict"] == "satisfied",
+                "E_RELATION")
+        evidence_manifest_raw = snapshots["payload/evidence-manifest.json"]
+        evidence_manifest = parse(evidence_manifest_raw)
+        result_raw, result = payload_result(snapshots, evidence_manifest, instruction, manifest,
+                                            parse(receipt_raw))
+        outcome = "no-change" if result["outcome"] == "match" else "reproduced"
+        materializer_receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
+        provenance = canonical({"schema_version": 1, "kind": "shadow_consumer_provenance",
+            "id": request["id"], "body": {"activation_state": "inactive", "authority": "none",
+            "instruction_utf8": instruction.decode(), "instruction_sha256": sha(instruction),
+            "observation": parse(observation_raw), "observation_sha256": sha(observation_raw),
+            "helper_source_sha256": context["helper_source_sha256"],
+            "helper_build_record_sha256": context["helper_build_record_sha256"],
+            "helper_executable_sha256": context["helper_executable_sha256"],
+            "consumer_source_sha256": sha(read_regular(Path(__file__), c.EXECUTABLE_LIMIT)),
+            "python_sha256": sha(read_regular(Path(sys.executable), c.EXECUTABLE_LIMIT)),
+            "jq_sha256": jq.sha256, "commands": commands}})
+        trace_raw = trace_ledger(incident, request["id"], outcome, "tool.verifier")
+        trace_path = work / "trace/trace-ledger.json"; write_exclusive(trace_path, trace_raw)
+        trace_validator = SOURCE / "telemetry/v1/validate-trace-ledger.sh"
+        trace_receipt_raw = execute("trace-validation", ["/bin/bash", "-p",
+            str(trace_validator), "validate", incident["id"], request["id"], str(trace_path)],
+            trace_validator, env=env, deadline=deadline)
+        identity_ref = {"content_id": "shadow-qualified-identity",
+            "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(identity_raw)}
+        evaluation_section = {"state": "present", "value": {
+            "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
+            "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
+                "media_type": "application/vnd.ystack.control-evaluation+json",
+                "sha256": sha(evaluation_raw)}}}
+        stage_result = parse(response_raw)["stage_result"]
+        materialization = {"state": "present", "value": {
+            "adapter_id": "adapter.local-git-materializer.v1",
+            "outcome": stage_result["body"]["outcome"]["value"],
+            "source": materializer_receipt["source"], "candidate": materializer_receipt["candidate"],
+            "stage_result_ref": {"schema_version": 2, "kind": "stage_result",
+                "id": stage_result["id"], "sha256": sha(canonical(stage_result))}}}
+        execution = {"state": "present", "value": {"tool_id": "tool.verifier",
+            "observed_sha256": result["observed"]["sha256"],
+            "matches_expected": result["outcome"] == "match"}}
+        record = canonical({"schema_version": 1, "kind": "shadow_reproduction_record",
+            "id": incident["id"], "body": {"record_form": "enforced-reproduction.v1",
+            "activation_state": "inactive", "authority": "none", "deploy_authority": "none",
+            "effects": ["caller-disposable-candidate-repository"],
+            "evaluation_mode": "observation-only", "shadow": True,
+            "qualification": {"state": "unavailable", "reason_id": "shadow.unqualified"},
+            "outcome": outcome, "reason_id": ("check.passed-at-revision" if outcome == "no-change"
+                                                 else "check.failed-at-revision"),
+            "observed_at": incident["body"]["observed_at"],
+            "target_repository_id": incident["body"]["target_repository_id"],
+            "git_revision_ref": incident["body"]["git_revision_ref"],
+            "qualified_identity": identity["body"], "qualified_identity_ref": identity_ref,
+            "incident_ref": {"content_id": "shadow-incident-record",
+                "media_type": "application/vnd.ystack.shadow-incident-record+json",
+                "sha256": sha(incident_raw)},
+            "environment": {"environment_id": parse(claim_raw)["id"],
+                "claim_ref": {"content_id": "shadow-environment-claim",
+                    "media_type": "application/vnd.ystack.control-execution-environment-claim+json",
+                    "sha256": sha(claim_raw)},
+                "registry_ref": {"content_id": "shadow-environment-registry",
+                    "media_type": "application/vnd.ystack.shadow-environment-registry+json",
+                    "sha256": sha(anchor.installed["registry"][0])}, "evaluation": evaluation_section},
+            "materialization": materialization,
+            "check": {"failing_check": incident["body"]["failing_check"], "execution": execution},
+            "sandbox": {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
+                "launch_request_ref": document_ref(launch_raw), "expectation_ref": document_ref(expectation_raw),
+                "receipt_ref": document_ref(receipt_raw), "check_ref": document_ref(checker_raw),
+                "origin": {"state": "authenticated", "store_id": anchor.config["store_id"],
+                    "method": "controlled-storage.v1", "observation_sha256": sha(origin_raw)},
+                "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
+                                "sha256": sha(result_raw)}}, "producer_invocations": 0,
+            "consumer_provenance_ref": document_ref(provenance),
+            "trace_ledger_ref": {"content_id": "shadow-trace-ledger",
+                "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
+                "sha256": sha(trace_raw)}}})
+        files = {"incident.json": incident_raw, "claim.json": claim_raw,
+            "duty-evaluation.json": duty_raw, "materialization-input.json": input_raw,
+            "materialization-response.json": response_raw, "qualified-identity.json": identity_raw,
+            "preparation-record.json": record_raw, "preparation-manifest.json": manifest_raw,
+            "sandbox-evaluation.json": evaluation_raw, "sandbox-request.json": launch_raw,
+            "sandbox-expectation.json": expectation_raw, "sandbox-receipt.json": receipt_raw,
+            "sandbox-check.json": checker_raw, "origin-observation.json": origin_raw,
+            "payload-stdout.txt": snapshots["payload/stdout"], "payload-stderr.txt": snapshots["payload/stderr"],
+            "evidence-manifest.json": evidence_manifest_raw, "file-digest-result.json": result_raw,
+            "evaluator-driver.txt": anchor.installed["evaluator_driver"][0],
+            "evaluator-program.txt": anchor.installed["evaluator_program"][0],
+            "policy.json": anchor.installed["control_policy"][0],
+            "decision.json": anchor.installed["control_decision"][0],
+            "policy-set.json": anchor.installed["control_policy_set"][0],
+            "accepted-identities.json": anchor.installed["accepted_set"][0],
+            "registry.json": anchor.installed["registry"][0], "consumer-provenance.json": provenance,
+            "shadow-record.json": record, "trace-ledger.json": trace_raw,
+            "trace-receipt.json": trace_receipt_raw}
+        anchor.recheck(); helper.recheck(); jq.recheck()
+        for item in inputs: item.recheck()
+        return seal(output, files, incident, "enforced-reproduction.v1")
+    finally:
+        for item in reversed(inputs): item.close()
+        if anchor is not None: anchor.close()
+        if jq is not None: jq.close()
+        if helper is not None: helper.close()
+
+
+def main(argv: list[str]) -> int:
+    try:
+        require(len(argv) == 5 and argv[1] == "reproduce", "E_USAGE")
+        reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]))
+        return 0
+    except (Refusal, c.Refusal) as exc:
+        print(exc.code if exc.code in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_SHAPE",
+              "E_CANONICAL", "E_RELATION", "E_WORKSPACE"} else "E_RUNTIME", file=sys.stderr)
+        return 1
+    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+        print("E_RUNTIME", file=sys.stderr); return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

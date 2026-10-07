@@ -1833,7 +1833,17 @@ paths byte for byte on a repeat run alongside every refusal above.
 
 ## Inactive shadow consumer trust reader
 `shadow/v1/_consumer.py` reads descriptor-3 context, dependencies, the root-owned
-installation, and its store through stable held descriptors. It launches no sandbox.
+installation, and its store through stable held descriptors.
+
+`shadow/v1/enforced-reproduction.py` is the explicit inactive reproduction entry.
+It validates and materializes a no-change request, prepares and inspects the
+candidate, evaluates the fixed bound declaration, persists a nonce-bearing launch
+request and receipt expectation, and frames the prepared export. Its production
+launch path is fixed to the installed supervisor account; repository tests replace
+only that private launch boundary. A completed run reopens the controlled store,
+checks the bound receipt and fixed verifier result, validates a sealed trace, and
+writes the exact 29-file frozen bundle with `bundle.json` last. It has no write,
+publisher, activation, installation, or qualification path.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

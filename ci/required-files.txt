@@ -583,4 +583,5 @@ docs/candidate-content-preparation.md
 
 # Inactive shadow consumer trust boundary
 shadow/v1/_consumer.py
+shadow/v1/enforced-reproduction.py
 scripts/test/shadow-enforced.test.sh
