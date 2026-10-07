@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Private trust primitives for the inactive shadow consumer.
-
-This module authenticates inputs to later consumer slices.  It does not launch a
-VM, run the materializer, or publish evidence.
-"""
-
+"""Private trust primitives for the inactive shadow consumer."""
 from __future__ import annotations
-
 import ctypes
 import ctypes.util
 import dataclasses
@@ -16,33 +10,37 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 from typing import Callable
 
-
 ANCHOR = "/usr/local/libexec/ystack-sandbox/v1/supervisor"
-HELPER_SOURCE_SHA256 = "f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27"
 HELPER_SOURCE = "adapters/local-git-materializer/v1/object-closure.c"
-PARENT_LIMIT = 16 * 1024
-DOCUMENT_LIMIT = 1024 * 1024
-HELPER_LIMIT = 16 * 1024 * 1024
+HELPER_SOURCE_SHA256 = "f1616b908c97e8a091029c24b3f2e1f8827171cbdee4d47195c66afd3e961e27"
+PARENT_LIMIT, DOCUMENT_LIMIT = 16 * 1024, 1024 * 1024
+EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
 JQ_SHA256 = {"darwin": "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef",
              "linux": "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"}
 HASH_KEYS = ("helper_source_sha256", "helper_build_record_sha256", "helper_executable_sha256")
-CONFIG_KEYS = {
-    "consumer_gid", "environment_id", "identity_paths", "installed_files",
-    "principal_uid", "runtime", "store_id", "store_root", "work_root",
+CONFIG_KEYS = {"consumer_gid", "environment_id", "identity_paths", "installed_files",
+               "principal_uid", "runtime", "store_id", "store_root", "work_root"}
+IDENTITY_KEYS = {"guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
+                 "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
+                 "vm_service", "dyld_cache_files"}
+INSTALLED_SOURCES = {
+    "accepted_set": "enforcement/v1/accepted-identities.json",
+    "control_decision": "control/v1/sandbox-bound-decision.json",
+    "control_policy": "control/v1/sandbox-bound-policy.json",
+    "control_policy_set": "control/v1/control-policy-set-sandbox-bound.json",
+    "evaluator_driver": "control/v1/evaluate-bound-sandbox.sh",
+    "evaluator_program": "control/v1/sandbox-bound.jq",
+    "registry": "shadow/v1/shadow-environments.json",
 }
-IDENTITY_KEYS = {
-    "guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
-    "host_runtime", "host_supervisor", "image", "toolchain", "verifier",
-    "vm_service", "dyld_cache_files",
-}
-INSTALLED_KEYS = {
-    "accepted_set", "control_decision", "control_policy", "control_policy_set",
-    "evaluator_driver", "evaluator_program", "registry",
-}
-
+IDENTITY_SLOTS = {"host_runtime", "guest_kernel", "guest_kernel_config", "guest_init", "image",
+                  "host_supervisor", "guest_supervisor", "verifier", "toolchain",
+                  "verification_instructions"}
+MECHANISMS = {"cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
+              "scratch_bytes", "wall_time_ms"}
 
 class Refusal(Exception):
     def __init__(self, code: str):
@@ -52,25 +50,26 @@ class Refusal(Exception):
 def _require(value: bool, code: str) -> None:
     if not value:
         raise Refusal(code)
+
 def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                       allow_nan=False).encode("utf-8") + b"\n"
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
+def _integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 def _sha(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
 def _id(value: object) -> bool:
-    return isinstance(value, str) and 1 <= len(value) <= 128 and value[0].isalnum() and all(c.isalnum() or c in "._-" for c in value)
-def _json(raw: bytes, maximum: int, code: str) -> dict:
-    _require(len(raw) <= maximum, code)
-    try:
-        value = json.loads(raw, object_pairs_hook=_unique_object)
-        _require(isinstance(value, dict) and canonical(value) == raw, code)
-    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
-        raise Refusal(code) from None
-    return value
+    return (isinstance(value, str) and 1 <= len(value) <= 128 and value[0].isalnum()
+            and all(c.isalnum() or c in "._-" for c in value))
+
+def _physical(path: object) -> bool:
+    return isinstance(path, str) and path.startswith("/") and os.path.normpath(path) == path
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     result = {}
@@ -80,28 +79,68 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
         result[key] = value
     return result
 
-def _identity(st: os.stat_result) -> tuple[int, ...]:
-    return (st.st_dev, st.st_ino, stat.S_IFMT(st.st_mode), st.st_uid, st.st_gid,
-            stat.S_IMODE(st.st_mode), st.st_nlink, st.st_size,
-            st.st_mtime_ns, st.st_ctime_ns)
+def _json(raw: bytes, maximum: int, code: str) -> dict:
+    _require(len(raw) <= maximum, code)
+    try:
+        value = json.loads(raw, object_pairs_hook=_unique_object)
+        _require(isinstance(value, dict) and canonical(value) == raw, code)
+    except (UnicodeDecodeError, UnicodeEncodeError, ValueError, TypeError, RecursionError):
+        raise Refusal(code) from None
+    return value
+
+def _metadata(fd: int) -> os.stat_result:
+    """Private OS observation seam used only by in-process fixtures."""
+    return os.fstat(fd)
+
+def _named_metadata(name: str, parent_fd: int) -> os.stat_result:
+    """Private no-follow name observation seam used only by in-process fixtures."""
+    return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+
+def _identity(value: os.stat_result) -> tuple[int, ...]:
+    return (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode), value.st_uid, value.st_gid,
+            stat.S_IMODE(value.st_mode), value.st_nlink, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
+
+Rule = Callable[[int, os.stat_result, bool], bool]
 
 @dataclasses.dataclass
-class HeldFile:
-    path: str
-    fds: list[int]
-    name: str
+class HeldComponent:
+    fd: int
+    name: str | None
     before: os.stat_result
+    rule: Rule
+    ancestor: bool
+
+@dataclasses.dataclass
+class HeldPath:
+    path: str
+    components: list[HeldComponent]
 
     @property
     def fd(self) -> int:
-        return self.fds[-1]
+        return self.components[-1].fd
+
+    @property
+    def before(self) -> os.stat_result:
+        return self.components[-1].before
+
+    def recheck(self, code: str) -> None:
+        for index, component in enumerate(self.components):
+            try:
+                current = _metadata(component.fd)
+                named = (current if component.name is None else
+                         _named_metadata(component.name, self.components[index - 1].fd))
+            except (OSError, ValueError):
+                raise Refusal(code) from None
+            expected = _identity(component.before)
+            _require(_identity(current) == expected and _identity(named) == expected, code)
+            _require(component.rule(component.fd, current, component.ancestor), code)
 
     def read(self, maximum: int, code: str) -> bytes:
-        before = os.fstat(self.fd)
-        _require(_identity(before) == _identity(self.before), code)
+        self.recheck(code)
+        chunks, total = [], 0
         try:
             os.lseek(self.fd, 0, os.SEEK_SET)
-            chunks, total = [], 0
             while True:
                 chunk = os.read(self.fd, min(65536, maximum + 1 - total))
                 if not chunk:
@@ -109,87 +148,94 @@ class HeldFile:
                 chunks.append(chunk)
                 total += len(chunk)
                 _require(total <= maximum, code)
-        except OSError:
+        except (OSError, ValueError):
             raise Refusal(code) from None
         self.recheck(code)
         return b"".join(chunks)
 
-    def recheck(self, code: str) -> None:
-        try:
-            current = os.fstat(self.fd)
-            named = os.stat(self.name, dir_fd=self.fds[-2], follow_symlinks=False)
-        except OSError:
-            raise Refusal(code) from None
-        expected = _identity(self.before)
-        _require(_identity(current) == expected and _identity(named) == expected, code)
-
     def close(self) -> None:
-        for fd in reversed(self.fds):
+        for component in reversed(self.components):
             try:
-                os.close(fd)
+                os.close(component.fd)
             except OSError:
                 pass
-        self.fds.clear()
+        self.components.clear()
 
-def _open_held(path: str, directory: bool, rule: Callable[[int, os.stat_result, bool], bool],
-               code: str) -> HeldFile:
-    _require(isinstance(path, str) and path.startswith("/") and path != "/", code)
-    parts = path.split("/")[1:]
-    _require(all(p not in ("", ".", "..") for p in parts), code)
-    fds = []
+def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
+    rows = []
     try:
-        fds.append(os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-        _require(rule(fds[0], os.fstat(fds[0]), True), code)
-        for index, part in enumerate(parts):
+        parent.recheck(code)
+        for row in parent.components:
+            rows.append(HeldComponent(os.dup(row.fd), row.name, row.before, row.rule, row.ancestor))
+        return rows
+    except (OSError, Refusal):
+        for row in reversed(rows):
+            os.close(row.fd)
+        raise Refusal(code) from None
+
+def _open_held(path: str, directory: bool, rule: Rule, code: str) -> HeldPath:
+    _require(_physical(path) and path != "/", code)
+    parts = path.split("/")[1:]
+    _require(all(part not in ("", ".", "..") for part in parts), code)
+    rows: list[HeldComponent] = []
+    try:
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        state = _metadata(fd)
+        rows.append(HeldComponent(fd, None, state, rule, True))
+        _require(rule(fd, state, True), code)
+        for index, name in enumerate(parts):
             last = index == len(parts) - 1
             flags = os.O_RDONLY | os.O_NOFOLLOW
             if not last or directory:
                 flags |= os.O_DIRECTORY
-            fd = os.open(part, flags, dir_fd=fds[-1])
-            fds.append(fd)
-            st = os.fstat(fd)
-            _require(rule(fd, st, not last), code)
-        st = os.fstat(fds[-1])
-        _require((directory and stat.S_ISDIR(st.st_mode)) or
-                 (not directory and stat.S_ISREG(st.st_mode) and st.st_nlink == 1), code)
-        return HeldFile(path, fds, parts[-1], st)
+            elif hasattr(os, "O_NONBLOCK"):
+                flags |= os.O_NONBLOCK
+            fd = os.open(name, flags, dir_fd=rows[-1].fd)
+            state = _metadata(fd)
+            rows.append(HeldComponent(fd, name, state, rule, not last))
+            _require(rule(fd, state, not last), code)
+        state = rows[-1].before
+        _require((directory and stat.S_ISDIR(state.st_mode)) or
+                 (not directory and stat.S_ISREG(state.st_mode) and state.st_nlink == 1), code)
+        result = HeldPath(path, rows)
+        result.recheck(code)
+        return result
     except (OSError, ValueError, Refusal):
-        for fd in reversed(fds):
-            os.close(fd)
+        for row in reversed(rows):
+            os.close(row.fd)
         raise Refusal(code) from None
 
-def _open_child(parent: HeldFile, name: str, directory: bool,
-                rule: Callable[[int, os.stat_result, bool], bool], code: str) -> HeldFile:
-    _require(name and "/" not in name and name not in (".", ".."), code)
-    fds = []
+def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
+    _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
+    rows = _clone(parent, code)
     try:
-        parent.recheck(code)
-        parent_fd = os.dup(parent.fd)
-        fds.append(parent_fd)
         flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else 0)
-        fd = os.open(name, flags, dir_fd=parent_fd)
-        fds.append(fd)
-        st = os.fstat(fd)
-        _require(rule(fd, st, False), code)
-        _require((directory and stat.S_ISDIR(st.st_mode)) or
-                 (not directory and stat.S_ISREG(st.st_mode) and st.st_nlink == 1), code)
-        return HeldFile(parent.path + "/" + name, fds, name, st)
+        if not directory and hasattr(os, "O_NONBLOCK"):
+            flags |= os.O_NONBLOCK
+        fd = os.open(name, flags, dir_fd=rows[-1].fd)
+        state = _metadata(fd)
+        rows.append(HeldComponent(fd, name, state, rule, False))
+        _require(rule(fd, state, False), code)
+        _require((directory and stat.S_ISDIR(state.st_mode)) or
+                 (not directory and stat.S_ISREG(state.st_mode) and state.st_nlink == 1), code)
+        result = HeldPath(parent.path + "/" + name, rows)
+        result.recheck(code)
+        return result
     except (OSError, ValueError, Refusal):
-        for fd in reversed(fds):
-            os.close(fd)
+        for row in reversed(rows):
+            os.close(row.fd)
         raise Refusal(code) from None
 
-def _linux_acl(fd: int) -> list[tuple[int, int, int]]:
+def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
     try:
-        raw = os.getxattr(fd, "system.posix_acl_access")
+        raw = os.getxattr(fd, name)
     except OSError as exc:
         if exc.errno in (errno.ENODATA, getattr(errno, "ENOATTR", errno.ENODATA)):
-            return []
+            return None
         raise
     _require(len(raw) >= 4 and raw[:4] == b"\x02\x00\x00\x00" and (len(raw) - 4) % 8 == 0,
              "E_ACL")
-    return [(int.from_bytes(raw[i:i + 2], "little"),
-             int.from_bytes(raw[i + 2:i + 4], "little"),
+    return [(int.from_bytes(raw[i:i + 2], "little"), int.from_bytes(raw[i + 2:i + 4], "little"),
              int.from_bytes(raw[i + 4:i + 8], "little")) for i in range(4, len(raw), 8)]
 
 def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
@@ -205,18 +251,27 @@ def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
     lib.mbr_uuid_to_id.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
                                    ctypes.POINTER(ctypes.c_int)]
     lib.acl_free.argtypes = [ctypes.c_void_p]
+    ctypes.set_errno(0)
     acl = lib.acl_get_fd_np(fd, 0x100)
     if not acl:
         if ctypes.get_errno() == errno.ENOENT:
             return []
         raise OSError(ctypes.get_errno(), "acl_get_fd_np")
-    entries, entry = [], ctypes.c_void_p()
+    rows, entry, selector = [], ctypes.c_void_p(), 0
     try:
-        rc = lib.acl_get_entry(acl, 0, ctypes.byref(entry))
-        while rc == 0:
+        while True:
+            ctypes.set_errno(0)
+            rc = lib.acl_get_entry(acl, selector, ctypes.byref(entry))
+            if rc != 0:
+                if ctypes.get_errno() != 0:
+                    raise OSError(ctypes.get_errno(), "acl_get_entry")
+                break
+            selector = -1
             tag, perms = ctypes.c_int(), ctypes.c_void_p()
-            lib.acl_get_tag_type(entry, ctypes.byref(tag))
-            lib.acl_get_permset(entry, ctypes.byref(perms))
+            if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+                raise OSError(ctypes.get_errno(), "acl_get_tag_type")
+            if lib.acl_get_permset(entry, ctypes.byref(perms)) != 0:
+                raise OSError(ctypes.get_errno(), "acl_get_permset")
             bits = sum(1 << n for n in range(1, 14) if lib.acl_get_perm_np(perms, 1 << n))
             identifier = None
             qualifier = lib.acl_get_qualifier(entry)
@@ -226,93 +281,63 @@ def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
                 if lib.mbr_uuid_to_id(uuid, ctypes.byref(value), ctypes.byref(kind)) == 0 and kind.value == 0:
                     identifier = value.value
                 lib.acl_free(qualifier)
-            entries.append((tag.value, identifier, bits))
-            _require(len(entries) <= 128, "E_ACL")
-            rc = lib.acl_get_entry(acl, -1, ctypes.byref(entry))
+            rows.append((tag.value, identifier, bits))
+            _require(len(rows) <= 128, "E_ACL")
     finally:
         lib.acl_free(acl)
-    return entries
+    return rows
 
-def _acl(fd: int) -> list[tuple[int, int | None, int]]:
-    return _darwin_acl(fd) if sys.platform == "darwin" else _linux_acl(fd)
+def _acl_state(fd: int) -> tuple[object, object | None]:
+    """Private OS observation seam returning access and default ACLs."""
+    if sys.platform == "darwin":
+        return _darwin_acl(fd), None
+    return (_linux_acl_xattr(fd, "system.posix_acl_access"),
+            _linux_acl_xattr(fd, "system.posix_acl_default"))
 
+def _linux_install_acl_ok(entries: list[tuple[int, int, int]] | None) -> bool:
+    return entries is None or not any(tag in (0x02, 0x08) or (tag == 0x10 and perms & 2)
+                                      for tag, perms, _identifier in entries)
 
-def _root_rule(fd: int, st: os.stat_result, _ancestor: bool) -> bool:
-    if st.st_uid != 0 or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+def _root_rule(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+    if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         return False
     try:
-        entries = _acl(fd)
+        access, default = _acl_state(fd)
     except (OSError, Refusal):
         return False
-    if sys.platform == "darwin":
-        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
-        return not any(tag == 1 and identifier != 0 and bits & dangerous for tag, identifier, bits in entries)
-    return not any((tag in (0x02, 0x08)) or (tag == 0x10 and perms & 2)
-                   for tag, perms, _identifier in entries)
+    if sys.platform != "darwin":
+        return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+    dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
+    return not any(tag == 1 and identifier != 0 and bits & dangerous for tag, identifier, bits in access)
 
-
-def _installed_rule(principal_uid: int) -> Callable[[int, os.stat_result, bool], bool]:
-    def check(fd: int, st: os.stat_result, _ancestor: bool) -> bool:
-        if st.st_uid not in (0, principal_uid) or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+def _installed_rule(principal_uid: int) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid not in (0, principal_uid) or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             return False
         try:
-            return _root_rule_acl(fd, principal_uid)
+            access, default = _acl_state(fd)
         except (OSError, Refusal):
             return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
+        return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)
+                       for tag, identifier, bits in access)
     return check
 
-def _root_rule_acl(fd: int, principal_uid: int) -> bool:
-    entries = _acl(fd)
-    if sys.platform != "darwin":
-        return not any((tag == 0x08) or (tag == 0x10 and perms & 2) or
-                       (tag == 0x02 and identifier not in (0, principal_uid))
-                       for tag, perms, identifier in entries)
-    dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
-    return not any(tag == 1 and bits & dangerous and identifier not in (0, principal_uid)
-                   for tag, identifier, bits in entries)
-
-def _store_rule(uid: int, gid: int, mode: int, directory: bool) -> Callable[[int, os.stat_result, bool], bool]:
-    def check(fd: int, st: os.stat_result, ancestor: bool) -> bool:
+def _store_rule(uid: int, gid: int, mode: int, directory: bool) -> Rule:
+    def check(fd: int, state: os.stat_result, ancestor: bool) -> bool:
         if ancestor:
             return True
         try:
-            no_acl = _acl(fd) == []
+            access, default = _acl_state(fd)
         except (OSError, Refusal):
             return False
-        kind = stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)
-        return kind and st.st_uid == uid and st.st_gid == gid and stat.S_IMODE(st.st_mode) == mode and no_acl
+        kind = stat.S_ISDIR(state.st_mode) if directory else stat.S_ISREG(state.st_mode)
+        acl_absent = access == [] if sys.platform == "darwin" else access is None and default is None
+        return (kind and state.st_uid == uid and state.st_gid == gid and stat.S_IMODE(state.st_mode) == mode
+                and acl_absent)
     return check
-
-def capture_parent_context(fd: int = 3) -> dict:
-    try:
-        flags, before = fcntl.fcntl(fd, fcntl.F_GETFL), os.fstat(fd)
-        _require(flags & os.O_ACCMODE == os.O_RDONLY and stat.S_ISREG(before.st_mode), "E_PARENT_CONTEXT")
-        raw = _read_plain_fd(fd, PARENT_LIMIT)
-        after = os.fstat(fd)
-    except (OSError, ValueError, Refusal):
-        raise Refusal("E_PARENT_CONTEXT") from None
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-    _require(_identity(before) == _identity(after), "E_PARENT_CONTEXT")
-    doc = _json(raw, PARENT_LIMIT, "E_PARENT_CONTEXT")
-    _require(set(doc) == {"schema_version", "kind", "id", "body"} and doc["schema_version"] == 1
-             and doc["kind"] == "shadow_consumer_parent_context" and doc["id"] == "shadow.parent",
-             "E_PARENT_CONTEXT")
-    body = doc["body"]
-    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {"helper_executable_size", "helper_path"},
-             "E_PARENT_CONTEXT")
-    _require(all(_sha(body[k]) for k in HASH_KEYS), "E_PARENT_CONTEXT")
-    size = body["helper_executable_size"]
-    _require(isinstance(size, int) and not isinstance(size, bool) and 0 < size <= HELPER_LIMIT,
-             "E_PARENT_CONTEXT")
-    path = body["helper_path"]
-    _require(isinstance(path, str) and path.startswith("/") and os.path.normpath(path) == path,
-             "E_PARENT_CONTEXT")
-    _require(body["helper_source_sha256"] == HELPER_SOURCE_SHA256, "E_PARENT_CONTEXT")
-    return body
 
 def _read_plain_fd(fd: int, maximum: int) -> bytes:
     os.lseek(fd, 0, os.SEEK_SET)
@@ -325,38 +350,67 @@ def _read_plain_fd(fd: int, maximum: int) -> bytes:
         total += len(part)
         _require(total <= maximum, "E_LIMIT")
 
+def capture_parent_context(fd: int = 3) -> dict:
+    try:
+        flags, before = fcntl.fcntl(fd, fcntl.F_GETFL), _metadata(fd)
+        _require(flags & os.O_ACCMODE == os.O_RDONLY and stat.S_ISREG(before.st_mode), "E_PARENT_CONTEXT")
+        raw = _read_plain_fd(fd, PARENT_LIMIT)
+        after = _metadata(fd)
+    except (OSError, ValueError, Refusal):
+        raise Refusal("E_PARENT_CONTEXT") from None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _require(_identity(before) == _identity(after), "E_PARENT_CONTEXT")
+    doc = _json(raw, PARENT_LIMIT, "E_PARENT_CONTEXT")
+    _require(set(doc) == {"schema_version", "kind", "id", "body"} and _integer(doc["schema_version"])
+             and doc["schema_version"] == 1 and doc["kind"] == "shadow_consumer_parent_context"
+             and doc["id"] == "shadow.parent", "E_PARENT_CONTEXT")
+    body = doc["body"]
+    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {"helper_executable_size", "helper_path"}
+             and all(_sha(body[key]) for key in HASH_KEYS), "E_PARENT_CONTEXT")
+    _require(_integer(body["helper_executable_size"]) and 0 < body["helper_executable_size"] <= EXECUTABLE_LIMIT
+             and _physical(body["helper_path"]) and body["helper_source_sha256"] == HELPER_SOURCE_SHA256,
+             "E_PARENT_CONTEXT")
+    return body
+
 @dataclasses.dataclass
 class DependencySnapshot:
-    original: HeldFile
-    snapshot: HeldFile
+    original: HeldPath
+    snapshot: HeldPath
     sha256: str
     size: int
-
     def recheck(self) -> None:
         self.original.recheck("E_DEPENDENCY")
-        self.snapshot.recheck("E_DEPENDENCY")
-        _require(digest(self.snapshot.read(self.size, "E_DEPENDENCY")) == self.sha256,
-                 "E_DEPENDENCY")
-
+        raw = self.snapshot.read(self.size, "E_DEPENDENCY")
+        _require(len(raw) == self.size and digest(raw) == self.sha256, "E_DEPENDENCY")
     def close(self) -> None:
         self.original.close()
         self.snapshot.close()
 
 def snapshot_dependency(path: str, expected_sha256: str, expected_size: int,
                         private_dir: str, name: str) -> DependencySnapshot:
-    _require(_sha(expected_sha256) and 0 < expected_size <= HELPER_LIMIT, "E_DEPENDENCY")
-    original = _open_held(path, False, lambda _fd, _st, _a: True, "E_DEPENDENCY")
+    _require(_sha(expected_sha256) and _integer(expected_size) and 0 < expected_size <= EXECUTABLE_LIMIT,
+             "E_DEPENDENCY")
+    _require(_physical(private_dir) and name not in ("", ".", "..") and "/" not in name
+             and not path.startswith(private_dir + "/"), "E_DEPENDENCY")
+    original = parent = directory = None
     try:
+        parent_path, directory_name = os.path.split(private_dir)
+        parent = _open_held(parent_path, True, lambda _fd, _state, _ancestor: True, "E_DEPENDENCY")
+        os.mkdir(directory_name, 0o700, dir_fd=parent.fd)
+        parent.components[-1].before = _metadata(parent.fd)
+        directory = _open_child(parent, directory_name, True,
+                                lambda _fd, state, ancestor: ancestor or stat.S_IMODE(state.st_mode) == 0o700,
+                                "E_DEPENDENCY")
+        original = _open_held(path, False, lambda _fd, _state, _ancestor: True, "E_DEPENDENCY")
         raw = original.read(expected_size, "E_DEPENDENCY")
         _require(len(raw) == expected_size and digest(raw) == expected_sha256, "E_DEPENDENCY")
-        parent_path, directory_name = os.path.split(private_dir)
-        parent = _open_held(parent_path, True, lambda _fd, _st, _a: True, "E_DEPENDENCY")
         try:
-            os.mkdir(directory_name, 0o700, dir_fd=parent.fd)
-            directory_fd = os.open(directory_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                   dir_fd=parent.fd)
             out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                          0o500, dir_fd=directory_fd)
+                          0o500, dir_fd=directory.fd)
             try:
                 written = 0
                 while written < len(raw):
@@ -366,129 +420,250 @@ def snapshot_dependency(path: str, expected_sha256: str, expected_size: int,
                 os.fsync(out)
             finally:
                 os.close(out)
-            os.fchmod(directory_fd, 0o500)
-            os.fsync(directory_fd)
+            os.fchmod(directory.fd, 0o500)
+            os.fsync(directory.fd)
         finally:
-            if 'directory_fd' in locals():
-                os.close(directory_fd)
-            parent.close()
-        snap = _open_held(os.path.join(private_dir, name), False,
-                          lambda _fd, st, ancestor: ancestor or stat.S_IMODE(st.st_mode) == 0o500,
-                          "E_DEPENDENCY")
-        return DependencySnapshot(original, snap, expected_sha256, expected_size)
+            directory.close()
+            directory = None
+        snapshot = _open_held(os.path.join(private_dir, name), False,
+                              lambda _fd, state, ancestor: ancestor or stat.S_IMODE(state.st_mode) == 0o500,
+                              "E_DEPENDENCY")
+        parent.close()
+        return DependencySnapshot(original, snapshot, expected_sha256, expected_size)
     except (OSError, ValueError, Refusal):
-        original.close()
+        if directory:
+            directory.close()
+        if original:
+            original.close()
+        if parent:
+            parent.close()
         raise Refusal("E_DEPENDENCY") from None
-    except BaseException:
-        original.close()
-        raise
 
-def verify_helper_source(source_root: str) -> None:
-    source = _open_held(os.path.join(source_root, HELPER_SOURCE), False,
-                        lambda _fd, _st, _a: True, "E_DEPENDENCY")
+def probe_dependency(snapshot: DependencySnapshot, arguments: list[str], expected_stdout: bytes) -> None:
+    snapshot.recheck()
     try:
-        _require(digest(source.read(DOCUMENT_LIMIT, "E_DEPENDENCY")) == HELPER_SOURCE_SHA256,
-                 "E_DEPENDENCY")
-    finally:
-        source.close()
+        result = subprocess.run([snapshot.snapshot.path, *arguments], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+                                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+                                close_fds=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        raise Refusal("E_DEPENDENCY") from None
+    _require(result.returncode == 0 and result.stdout == expected_stdout and result.stderr == b"",
+             "E_DEPENDENCY")
+    snapshot.recheck()
 
 def snapshot_jq(path: str, private_dir: str) -> DependencySnapshot:
     expected = JQ_SHA256.get(sys.platform)
     _require(expected is not None, "E_DEPENDENCY")
-    held = _open_held(path, False, lambda _fd, _st, _a: True, "E_DEPENDENCY")
+    held = _open_held(path, False, lambda _fd, _state, _ancestor: True, "E_DEPENDENCY")
     try:
         size = held.before.st_size
     finally:
         held.close()
     return snapshot_dependency(path, expected, size, private_dir, "jq")
 
-def isolated_python_argv(source_root: str) -> list[str]:
+def _source_root() -> str:
+    module = os.path.abspath(__file__)
+    root = os.path.dirname(os.path.dirname(os.path.dirname(module)))
+    _require(os.path.realpath(module) == module and os.path.realpath(root) == root, "E_INSTALL")
+    return root
+
+def isolated_python_argv() -> list[str]:
     executable = sys.executable
-    module = os.path.join(source_root, "shadow/v1/_consumer.py")
-    _require(os.path.isabs(executable) and os.path.realpath(executable) == executable and
-             os.path.isabs(source_root) and os.path.realpath(source_root) == source_root and
-             os.path.realpath(module) == module, "E_DEPENDENCY")
-    held = _open_held(module, False, lambda _fd, _st, _a: True, "E_DEPENDENCY")
+    module = os.path.join(_source_root(), "shadow/v1/_consumer.py")
+    _require(_physical(executable) and os.path.realpath(executable) == executable, "E_DEPENDENCY")
+    held = _open_held(module, False, lambda _fd, _state, _ancestor: True, "E_DEPENDENCY")
     held.close()
     return [executable, "-I", "-S", "-B", module]
+
+def verify_helper_source() -> None:
+    source = _open_held(os.path.join(_source_root(), HELPER_SOURCE), False,
+                        lambda _fd, _state, _ancestor: True, "E_DEPENDENCY")
+    try:
+        _require(digest(source.read(DOCUMENT_LIMIT, "E_DEPENDENCY")) == HELPER_SOURCE_SHA256,
+                 "E_DEPENDENCY")
+    finally:
+        source.close()
+
+def _parse_config(raw: bytes) -> dict:
+    doc = _json(raw, DOCUMENT_LIMIT, "E_CONFIG")
+    _require(set(doc) == {"schema_version", "kind", "id", "body"}
+             and _integer(doc["schema_version"]) and doc["schema_version"] == 1
+             and doc["kind"] == "sandbox_host_config", "E_CONFIG")
+    body = doc["body"]
+    _require(isinstance(body, dict) and set(body) == CONFIG_KEYS
+             and _integer(body["principal_uid"]) and body["principal_uid"] >= 0
+             and _integer(body["consumer_gid"]) and body["consumer_gid"] >= 0
+             and isinstance(body["store_id"], str) and body["store_id"]
+             and isinstance(body["environment_id"], str) and body["environment_id"], "E_CONFIG")
+    _require(isinstance(body["runtime"], dict) and set(body["runtime"]) == {"driver", "vfkit"}
+             and all(_physical(body["runtime"][key]) for key in body["runtime"]), "E_CONFIG")
+    for key in ("store_root", "work_root"):
+        value = body[key]
+        _require(_physical(value) and value != "/sandbox" and not value.startswith("/sandbox/"),
+                 "E_CONFIG")
+    paths = body["identity_paths"]
+    installed = body["installed_files"]
+    _require(isinstance(paths, dict) and set(paths) == IDENTITY_KEYS
+             and isinstance(installed, dict) and set(installed) == set(INSTALLED_SOURCES), "E_CONFIG")
+    for key, value in paths.items():
+        if key == "dyld_cache_files":
+            _require(isinstance(value, list) and value and all(_physical(path) for path in value),
+                     "E_CONFIG")
+        else:
+            _require(_physical(value), "E_CONFIG")
+    _require(all(_physical(path) for path in installed.values()), "E_CONFIG")
+    all_paths = list(installed.values()) + [value for key, value in paths.items()
+                                            if key != "dyld_cache_files"] + paths["dyld_cache_files"]
+    _require(len(all_paths) == len(set(all_paths)), "E_CONFIG")
+    return body
+
+def _digest_list(value: object) -> bool:
+    return (isinstance(value, list) and 1 <= len(value) <= 8 and value == sorted(set(value))
+            and all(_sha(item) and item not in ("0" * 64, "1" * 64) for item in value))
+
+def _id_list(value: object) -> bool:
+    return (isinstance(value, list) and 1 <= len(value) <= 8 and value == sorted(set(value))
+            and all(_id(item) for item in value))
+
+def _parse_registry(raw: bytes) -> tuple[str, list[dict]]:
+    doc = _json(raw, DOCUMENT_LIMIT, "E_INSTALL")
+    body = doc.get("body")
+    _require(set(doc) == {"schema_version", "kind", "id", "body"}
+             and doc["schema_version"] == 1 and doc["kind"] == "shadow_environment_registry"
+             and doc["id"] == "shadow.environments.v1" and isinstance(body, dict)
+             and set(body) == {"activation_state", "environments", "registry_version"}
+             and body["activation_state"] == "inactive" and body["registry_version"] == "v1"
+             and isinstance(body["environments"], list), "E_INSTALL")
+    keys = {"description", "environment_id", "evidence_scope", "proof_state",
+            "source_root_commit", "target_repository_id"}
+    for row in body["environments"]:
+        _require(isinstance(row, dict) and set(row) == keys and _id(row["environment_id"])
+                 and _id(row["target_repository_id"])
+                 and all(isinstance(row[key], str) for key in
+                         ("description", "evidence_scope", "proof_state"))
+                 and isinstance(row["source_root_commit"], str)
+                 and len(row["source_root_commit"]) == 40
+                 and all(c in "0123456789abcdef" for c in row["source_root_commit"]), "E_INSTALL")
+    return digest(raw), body["environments"]
+
+def _parse_accepted(raw: bytes) -> tuple[str, list[dict]]:
+    doc = _json(raw, DOCUMENT_LIMIT, "E_INSTALL")
+    body = doc.get("body")
+    _require(set(doc) == {"schema_version", "kind", "id", "body"}
+             and doc["schema_version"] == 1 and doc["kind"] == "sandbox_accepted_identity_set"
+             and doc["id"] == "sandbox.accepted-identities.v1" and isinstance(body, dict)
+             and set(body) == {"activation_state", "environments", "set_version"}
+             and body["activation_state"] == "inactive" and body["set_version"] == "v1"
+             and isinstance(body["environments"], list), "E_INSTALL")
+    keys = {"environment_id", "identities", "mechanisms", "scratch_bytes"}
+    for row in body["environments"]:
+        _require(isinstance(row, dict) and set(row) == keys and _id(row["environment_id"])
+                 and _integer(row["scratch_bytes"]) and row["scratch_bytes"] > 0
+                 and isinstance(row["identities"], dict)
+                 and set(row["identities"]) == IDENTITY_SLOTS
+                 and all(_digest_list(value) for value in row["identities"].values())
+                 and isinstance(row["mechanisms"], dict) and set(row["mechanisms"]) == MECHANISMS
+                 and all(_id_list(value) for value in row["mechanisms"].values()), "E_INSTALL")
+    return digest(raw), body["environments"]
 
 @dataclasses.dataclass
 class Anchor:
     config: dict
     config_raw: bytes
-    held: list[HeldFile]
-
-    def recheck(self) -> None:
+    held: list[HeldPath]
+    installed: dict[str, tuple[bytes, str]]
+    registry: tuple[str, list[dict]]
+    accepted: tuple[str, list[dict]]
+    def recheck(self, code: str = "E_INSTALL") -> None:
         for item in self.held:
-            item.recheck("E_INSTALL")
-
+            item.recheck(code)
     def close(self) -> None:
-        for item in self.held:
+        for item in reversed(self.held):
             item.close()
 
 def load_anchor() -> Anchor:
-    anchor = _open_held(ANCHOR, True, _root_rule, "E_INSTALL")
-    config = script = None
+    held: list[HeldPath] = []
     try:
-        config = _open_held(ANCHOR + "/host-config.json", False, _root_rule, "E_CONFIG")
-        script = _open_held(ANCHOR + "/host-supervisor.py", False, _root_rule, "E_INSTALL")
-        raw = config.read(DOCUMENT_LIMIT, "E_CONFIG")
-        body = _parse_config(raw)
-        uid, gid = body["principal_uid"], body["consumer_gid"]
-        _require(uid > 0 and uid not in (os.getuid(), os.geteuid()), "E_CONFIG")
-        _require(gid in os.getgroups() or gid in (os.getgid(), os.getegid()), "E_CONFIG")
-        held = [anchor, config, script]
-        for path in list(body["installed_files"].values()) + [body["identity_paths"]["verifier"]]:
+        anchor = _open_held(ANCHOR, True, _root_rule, "E_INSTALL")
+        held.append(anchor)
+        config_file = _open_child(anchor, "host-config.json", False, _root_rule, "E_CONFIG")
+        held.append(config_file)
+        script = _open_child(anchor, "host-supervisor.py", False, _root_rule, "E_INSTALL")
+        held.append(script)
+        config_raw = config_file.read(DOCUMENT_LIMIT, "E_CONFIG")
+        config = _parse_config(config_raw)
+        uid, gid = config["principal_uid"], config["consumer_gid"]
+        _require(uid > 0 and uid not in (os.getuid(), os.geteuid())
+                 and gid in set(os.getgroups()) | {os.getgid(), os.getegid()}, "E_CONFIG")
+        installed: dict[str, tuple[bytes, str]] = {}
+        source_root = _source_root()
+        for role, source_name in INSTALLED_SOURCES.items():
+            source = _open_held(os.path.join(source_root, source_name), False,
+                                lambda _fd, _state, _ancestor: True, "E_INSTALL")
+            held.append(source)
+            target = _open_held(config["installed_files"][role], False, _installed_rule(uid), "E_INSTALL")
+            held.append(target)
+            source_raw = source.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            target_raw = target.read(EXECUTABLE_LIMIT, "E_INSTALL")
+            _require(source_raw == target_raw, "E_INSTALL")
+            installed[role] = (target_raw, digest(target_raw))
+        for path in (config["identity_paths"]["verifier"], sys.executable):
             held.append(_open_held(path, False, _installed_rule(uid), "E_INSTALL"))
-        held.append(_open_held(sys.executable, False, _installed_rule(uid), "E_INSTALL"))
-        return Anchor(body, raw, held)
+        registry = _parse_registry(installed["registry"][0])
+        accepted = _parse_accepted(installed["accepted_set"][0])
+        result = Anchor(config, config_raw, held, installed, registry, accepted)
+        result.recheck()
+        return result
     except BaseException:
-        for item in (script, config, anchor):
-            if item:
-                item.close()
+        for item in reversed(held):
+            item.close()
         raise
 
-def _parse_config(raw: bytes) -> dict:
-    doc = _json(raw, DOCUMENT_LIMIT, "E_CONFIG")
-    _require(set(doc) == {"schema_version", "kind", "id", "body"} and doc["schema_version"] == 1
-             and doc["kind"] == "sandbox_host_config", "E_CONFIG")
-    body = doc["body"]
-    _require(isinstance(body, dict) and set(body) == CONFIG_KEYS, "E_CONFIG")
-    _require(isinstance(body["principal_uid"], int) and not isinstance(body["principal_uid"], bool)
-             and isinstance(body["consumer_gid"], int) and not isinstance(body["consumer_gid"], bool),
-             "E_CONFIG")
-    _require(_id(body["store_id"]) and _id(body["environment_id"]), "E_CONFIG")
-    _require(isinstance(body["runtime"], dict) and set(body["runtime"]) == {"driver", "vfkit"}
-             and isinstance(body["identity_paths"], dict)
-             and isinstance(body["installed_files"], dict), "E_CONFIG")
-    _require(set(body["identity_paths"]) == IDENTITY_KEYS and set(body["installed_files"]) == INSTALLED_KEYS,
-             "E_CONFIG")
-    paths = [body["store_root"], body["work_root"], body["runtime"].get("driver"),
-             body["runtime"].get("vfkit")] + list(body["installed_files"].values())
-    paths += [v for k, v in body["identity_paths"].items() if k != "dyld_cache_files"]
-    _require(all(isinstance(p, str) and p.startswith("/") for p in paths), "E_CONFIG")
-    caches = body["identity_paths"]["dyld_cache_files"]
-    _require(isinstance(caches, list) and caches and all(isinstance(p, str) and p.startswith("/") for p in caches),
-             "E_CONFIG")
-    all_paths = list(body["installed_files"].values()) + [v for k, v in body["identity_paths"].items()
-                                                            if k != "dyld_cache_files"] + caches
-    _require(len(all_paths) == len(set(all_paths)), "E_CONFIG")
-    return body
+def verifier_observation(anchor: Anchor, environment_id: str, target_repository_id: str) -> bytes:
+    anchor.recheck("E_RELATION")
+    _require(anchor.config["environment_id"] == environment_id, "E_RELATION")
+    registry = [row for row in anchor.registry[1] if row["environment_id"] == environment_id]
+    accepted = [row for row in anchor.accepted[1] if row["environment_id"] == environment_id]
+    _require(len(registry) == 1 and len(accepted) == 1
+             and registry[0]["target_repository_id"] == target_repository_id, "E_RELATION")
+    verifier = next(item for item in anchor.held
+                    if item.path == anchor.config["identity_paths"]["verifier"])
+    verifier_raw = verifier.read(EXECUTABLE_LIMIT, "E_RELATION")
+    verifier_sha = digest(verifier_raw)
+    _require(verifier_sha in accepted[0]["identities"]["verifier"], "E_RELATION")
+    anchor.recheck("E_RELATION")
+    return canonical({"schema_version": 1, "kind": "sandbox_verifier_observation",
+                      "id": "sandbox.observation.verifier", "body": {
+                          "environment_id": environment_id,
+                          "environment_entry_sha256": digest(canonical(registry[0])),
+                          "accepted_set_sha256": anchor.accepted[0],
+                          "target_repository_id": target_repository_id,
+                          "verifier_sha256": verifier_sha}})
 
-def _entry(held: HeldFile, relative: str, raw: bytes) -> dict:
-    st = held.before
-    return {"name": relative, "before": list(_identity(st)), "after": list(_identity(os.fstat(held.fd))),
-            "size": len(raw), "sha256": digest(raw)}
+def _observation(item: HeldPath, relative: str, raw: bytes | None = None) -> dict:
+    state = item.before
+    row = {"name": relative, "device": state.st_dev, "inode": state.st_ino,
+           "mode": stat.S_IMODE(state.st_mode), "uid": state.st_uid, "gid": state.st_gid,
+           "kind": "directory" if stat.S_ISDIR(state.st_mode) else "file",
+           "metadata_before": list(_identity(state)),
+           "metadata_after": list(_identity(_metadata(item.fd)))}
+    if raw is not None:
+        row.update({"size": len(raw), "sha256": digest(raw)})
+    return row
+
+def _hex_name(value: object) -> bool:
+    return (isinstance(value, str) and bool(value) and len(value) % 2 == 0
+            and len(value) <= 510 and all(char in "0123456789abcdef" for char in value))
 
 def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes], bytes]:
     _require(_id(attempt_id), "E_STORE")
-    anchor.recheck()
+    anchor.recheck("E_STORE")
     uid, gid = anchor.config["principal_uid"], anchor.config["consumer_gid"]
     root = anchor.config["store_root"]
-    opened: list[HeldFile] = []
+    opened: list[HeldPath] = []
     snapshots: dict[str, bytes] = {}
-    observations = []
-    snapshot_files: list[HeldFile] = []
+    observations: list[dict] = []
     try:
         store = _open_held(root, True, _store_rule(uid, gid, 0o750, True), "E_STORE")
         opened.append(store)
@@ -496,63 +671,72 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         opened.append(attempt)
         payload = _open_child(attempt, "payload", True, _store_rule(uid, gid, 0o750, True), "E_STORE")
         opened.append(payload)
-        payload_path = root + "/" + attempt_id + "/payload"
-        expected = {"stdout", "stderr", "evidence-manifest.json"}
-        names = set(os.listdir(payload.fd))
-        _require(expected <= names and names <= expected | {"refusal.json", "evidence"}, "E_STORE")
+        observations.extend((_observation(store, "."), _observation(attempt, attempt_id),
+                             _observation(payload, "payload")))
+        attempt_names = set(os.listdir(attempt.fd))
+        _require(attempt_names == {"payload", "receipt.json"}, "E_STORE")
+        payload_names = set(os.listdir(payload.fd))
+        fixed = {"stdout", "stderr", "evidence-manifest.json"}
+        optional = ({"refusal.json"} if "refusal.json" in payload_names else set())
+        evidence_present = "evidence" in payload_names
+        _require(payload_names == fixed | optional | ({"evidence"} if evidence_present else set()),
+                 "E_STORE")
+        files: list[tuple[HeldPath, str]] = []
         receipt = _open_child(attempt, "receipt.json", False, _store_rule(uid, gid, 0o440, False), "E_STORE")
-        opened.append(receipt)
-        snapshot_files.append(receipt)
-        for name in sorted(expected | ({"refusal.json"} if "refusal.json" in names else set())):
+        opened.append(receipt); files.append((receipt, "receipt.json"))
+        for name in sorted(fixed | optional):
             item = _open_child(payload, name, False, _store_rule(uid, gid, 0o440, False), "E_STORE")
-            opened.append(item)
-            snapshot_files.append(item)
-        manifest_item = next(item for item in opened if item.path.endswith("/evidence-manifest.json"))
+            opened.append(item); files.append((item, "payload/" + name))
+        manifest_item = next(item for item, name in files if name == "payload/evidence-manifest.json")
         manifest_raw = manifest_item.read(DOCUMENT_LIMIT, "E_STORE")
         manifest = _json(manifest_raw, DOCUMENT_LIMIT, "E_STORE")
-        manifest_body = manifest.get("body")
-        files = manifest_body.get("files") if isinstance(manifest_body, dict) else None
+        body = manifest.get("body")
+        rows = body.get("files") if isinstance(body, dict) else None
         _require(set(manifest) == {"schema_version", "kind", "id", "body"}
                  and manifest["schema_version"] == 1 and manifest["kind"] == "sandbox_evidence_manifest"
-                 and manifest["id"] == "evidence-manifest" and isinstance(manifest_body, dict)
-                 and set(manifest_body) == {"files"}
-                 and isinstance(files, list) and len(files) <= 10000, "E_STORE")
-        wanted = [f"{i:04d}" for i in range(len(files))]
+                 and manifest["id"] == "evidence-manifest" and isinstance(body, dict)
+                 and set(body) == {"files"} and isinstance(rows, list) and len(rows) <= 10000,
+                 "E_STORE")
         _require(all(isinstance(row, dict) and set(row) == {"name_hex", "sha256", "size_bytes"}
-                     and _sha(row["sha256"]) and isinstance(row["name_hex"], str)
-                     and isinstance(row["size_bytes"], int) and not isinstance(row["size_bytes"], bool)
-                     and 0 <= row["size_bytes"] <= 10485760 for row in files), "E_STORE")
-        _require(files == sorted(files, key=lambda row: row["name_hex"])
-                 and len({row["name_hex"] for row in files}) == len(files), "E_STORE")
-        if wanted:
-            _require("evidence" in names, "E_STORE")
-            evidence_dir = _open_child(payload, "evidence", True,
-                                       _store_rule(uid, gid, 0o750, True), "E_STORE")
-            opened.append(evidence_dir)
-            _require(sorted(os.listdir(evidence_dir.fd)) == wanted, "E_STORE")
-            for name in wanted:
-                item = _open_child(evidence_dir, name, False,
+                     and _hex_name(row["name_hex"]) and _sha(row["sha256"])
+                     and _integer(row["size_bytes"]) and 0 <= row["size_bytes"] <= OUTPUT_LIMIT
+                     for row in rows), "E_STORE")
+        _require(rows == sorted(rows, key=lambda row: row["name_hex"])
+                 and len({row["name_hex"] for row in rows}) == len(rows), "E_STORE")
+        expected_evidence = [f"{index:04d}" for index in range(len(rows))]
+        _require(evidence_present == bool(rows), "E_STORE")
+        if rows:
+            evidence = _open_child(payload, "evidence", True,
+                                   _store_rule(uid, gid, 0o750, True), "E_STORE")
+            opened.append(evidence); observations.append(_observation(evidence, "payload/evidence"))
+            _require(sorted(os.listdir(evidence.fd)) == expected_evidence, "E_STORE")
+            for name in expected_evidence:
+                item = _open_child(evidence, name, False,
                                    _store_rule(uid, gid, 0o440, False), "E_STORE")
-                opened.append(item)
-                snapshot_files.append(item)
-        else:
-            _require("evidence" not in names, "E_STORE")
-        for item in snapshot_files:
-            relative = os.path.relpath(item.path, root + "/" + attempt_id)
-            maximum = DOCUMENT_LIMIT if relative == "receipt.json" else 16 * 1024 * 1024
+                opened.append(item); files.append((item, "payload/evidence/" + name))
+        for item, name in files:
+            maximum = DOCUMENT_LIMIT if name in ("receipt.json", "payload/evidence-manifest.json") else OUTPUT_LIMIT
             raw = manifest_raw if item is manifest_item else item.read(maximum, "E_STORE")
-            snapshots[relative] = raw
-            observations.append(_entry(item, relative, raw))
-        for index, row in enumerate(files):
-            raw = snapshots["payload/evidence/%04d" % index]
+            snapshots[name] = raw
+            observations.append(_observation(item, name, raw))
+        total = len(snapshots["payload/stdout"]) + len(snapshots["payload/stderr"])
+        for index, row in enumerate(rows):
+            raw = snapshots[f"payload/evidence/{index:04d}"]
             _require(len(raw) == row["size_bytes"] and digest(raw) == row["sha256"], "E_STORE")
+            total += len(raw)
+        _require(total <= OUTPUT_LIMIT, "E_STORE")
+        _require(set(os.listdir(attempt.fd)) == attempt_names
+                 and set(os.listdir(payload.fd)) == payload_names, "E_STORE")
+        if rows:
+            _require(sorted(os.listdir(evidence.fd)) == expected_evidence, "E_STORE")
         for item in opened:
             item.recheck("E_STORE")
-        anchor.recheck()
-        observation = {"schema_version": 1, "kind": "shadow_origin_observation",
-                       "id": attempt_id, "body": {"store_id": anchor.config["store_id"],
-                       "attempt_id": attempt_id, "entries": observations, "result": "authenticated"}}
-        return snapshots, canonical(observation)
+        anchor.recheck("E_STORE")
+        observation = canonical({"schema_version": 1, "kind": "shadow_origin_observation",
+                                 "id": attempt_id, "body": {"store_id": anchor.config["store_id"],
+                                     "attempt_id": attempt_id, "entries": observations,
+                                     "result": "authenticated"}})
+        return snapshots, observation
     finally:
         for item in reversed(opened):
             item.close()
