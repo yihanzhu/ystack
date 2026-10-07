@@ -38,7 +38,7 @@ completed write bundle early. No other source or accepted artifact changes.
 | Slice | Classification | Net-line range | Evidence for the estimate |
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
-| 2 | Accepted exception | 450–750 | Bounded dependency/store reads, platform ACL observations, race and provenance tests |
+| 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
 | 3 | Accepted exception | 550–850 | Preparation/frame/expectation orchestration, closed records and failure tests |
 | 4 | Accepted exception | 450–750 | Exact input transformation, patch construction and real materializer controls |
 | 5 | Standard | Up to 400 | Withheld admission, complete two-attempt proof and final documentation |
