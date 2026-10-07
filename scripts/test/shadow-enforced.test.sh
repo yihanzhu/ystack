@@ -655,26 +655,35 @@ for _ in range(100):
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
 signal_wrapper=base/"signal-wrapper.py"
-signal_wrapper.write_text('''import importlib.util,pathlib,signal,sys\nroot=pathlib.Path(sys.argv[1]);pid=pathlib.Path(sys.argv[2]);done=pathlib.Path(sys.argv[3])\ns=importlib.util.spec_from_file_location("signaled",root/"shadow/v1/enforced-reproduction.py")\ne=importlib.util.module_from_spec(s);sys.modules[s.name]=e;s.loader.exec_module(e)\nbefore={x:signal.getsignal(x) for x in (signal.SIGTERM,signal.SIGHUP)}\ndef reproduce(*_args):\n e.run_bounded([sys.executable,"-I","-S","-B","-c","import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)",str(pid)],env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})\ne.reproduce=reproduce\nrc=e.main(["driver","reproduce","request","work","output"])\ndone.write_text(str(rc)+":"+str(all(signal.getsignal(x)==before[x] for x in before)))\n''')
-for sent in (signal.SIGTERM,signal.SIGHUP):
- child_pid=base/(sent.name+".pid");done=base/(sent.name+".done")
+signal_wrapper.write_text('''import importlib.util,pathlib,signal,sys,os\nroot=pathlib.Path(sys.argv[1]);pid=pathlib.Path(sys.argv[2]);done=pathlib.Path(sys.argv[3]);cleanup=pathlib.Path(sys.argv[4])\ns=importlib.util.spec_from_file_location("signaled",root/"shadow/v1/enforced-reproduction.py")\ne=importlib.util.module_from_spec(s);sys.modules[s.name]=e;s.loader.exec_module(e)\nsignals=(signal.SIGTERM,signal.SIGHUP,signal.SIGINT);before={x:signal.getsignal(x) for x in signals};original_mask=signal.pthread_sigmask;mask=original_mask(signal.SIG_BLOCK,set())\ndef observed_mask(how,values):\n if how==signal.SIG_BLOCK and signal.SIGTERM in values and sys.argv[6]=="guard" and not cleanup.exists():cleanup.touch();os.kill(os.getpid(),signal.SIGTERM)\n result=original_mask(how,values)\n if how==signal.SIG_BLOCK and signal.SIGTERM in values:cleanup.touch()\n return result\ne.signal.pthread_sigmask=observed_mask\noriginal_stop=e.stop_child\ndef observed_stop(child):\n cleanup.touch()\n if sys.argv[6]=="stop":os.kill(os.getpid(),signal.SIGTERM)\n return original_stop(child)\ne.stop_child=observed_stop\ndef reproduce(*_args):\n e.run_bounded([sys.executable,"-I","-S","-B","-c","import os,pathlib,signal,sys,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)",str(pid)],timeout=float(sys.argv[5]),env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})\ne.reproduce=reproduce\nrc=e.main(["driver","reproduce","request","work","output"]);after=original_mask(signal.SIG_BLOCK,set())\ndone.write_text(str(rc)+":"+str(all(signal.getsignal(x)==before[x] for x in before))+":"+str(after==mask))\n''')
+for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("repeated",signal.SIGTERM,
+ (signal.SIGHUP,signal.SIGINT),30,"none"),("timeout-stop-entry",None,(),1,"stop"),
+ ("timeout-guard-entry",None,(),1,"guard"),("timeout-post-mask",None,(signal.SIGTERM,),1,"none")):
+ child_pid=base/(name+".pid");done=base/(name+".done");cleanup=base/(name+".cleanup")
  wrapper=subprocess.Popen([sys.executable,"-I","-S","-B",str(signal_wrapper),str(root),
-  str(child_pid),str(done)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  str(child_pid),str(done),str(cleanup),str(timeout),entry],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
  for _ in range(500):
   if child_pid.exists():break
   if wrapper.poll() is not None:break
   time.sleep(.01)
- ok(child_pid.exists(),sent.name+" production consumer reached owned child")
- owned=int(child_pid.read_text());wrapper.send_signal(sent);stdout,stderr=wrapper.communicate(timeout=15)
- ok(wrapper.returncode==0 and done.read_text()=="1:True" and stderr==b"E_RUNTIME\n",
-    sent.name+" is routed through consumer cleanup and handlers are restored")
+ ok(child_pid.exists(),name+" production consumer reached TERM-ignoring owned child")
+ owned=int(child_pid.read_text())
+ if first is not None:wrapper.send_signal(first)
+ for _ in range(500):
+  if cleanup.exists():break
+  time.sleep(.01)
+ ok(cleanup.exists(),name+" entered production owned-group cleanup")
+ for sent in later:wrapper.send_signal(sent)
+ stdout,stderr=wrapper.communicate(timeout=15)
+ ok(wrapper.returncode==0 and done.read_text()=="1:True:True" and stderr==b"E_RUNTIME\n",
+    name+" cleanup is idempotent and restores handlers and mask")
  gone=False
  for _ in range(500):
   try:os.killpg(owned,0)
   except ProcessLookupError:gone=True;break
   except PermissionError:pass
   time.sleep(.01)
- ok(gone,sent.name+" leaves no owned process group")
+ ok(gone,name+" leaves no owned process group")
 pid_file=base/"descendant.pid"
 group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
  "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
@@ -1468,6 +1477,15 @@ request=json.loads((base/"request.json").read_bytes())
 instruction=("ystack.file-digest-instruction.v1\npath source.txt\nsha256 "+
  json.loads((base/"incident.json").read_bytes())["body"]["failing_check"]["expected_sha256"]+"\n").encode()
 instruction_file=base/"verifier-instruction";write(instruction_file,instruction,0o400)
+generation=json.loads((package/"core/v2/generation-registry.json").read_bytes())[-1]["generation_id"]
+def mutation_path(mode):
+ return {"mutate-request":scenario_request,"mutate-consumer":package/"shadow/v1/_consumer.py",
+  "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c",
+  "mutate-receipt-program":package/"enforcement/v1/sandbox-receipt.jq",
+  "mutate-core-selector":package/"scripts/core-contract.sh",
+  "mutate-core-ingress":package/"core/v2/generations"/generation/"core-ingress.sh",
+  "mutate-contracts":package/"core/v2/generations"/generation/"contracts.jq",
+  "mutate-control-source":package/"control/v1/validate.sh"}.get(mode)
 checks=0
 scenario_mode="success";launch_count=0;scenario_output=None;scenario_work=work;scenario_request=None
 def ok(value,message):
@@ -1563,9 +1581,8 @@ def launch(anchor_value,frame,_deadline):
  if scenario_mode=="mutate-component":
   component=package/"enforcement/v1/check-sandbox-receipt.sh"
   component.chmod(0o700);component.write_bytes(component.read_bytes()+b"\n")
- if scenario_mode in {"mutate-request","mutate-consumer","mutate-helper-source"}:
-  changed={"mutate-request":scenario_request,"mutate-consumer":package/"shadow/v1/_consumer.py",
-   "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c"}[scenario_mode]
+ changed=mutation_path(scenario_mode)
+ if changed is not None:
   changed.chmod(0o600);changed.write_bytes(changed.read_bytes()+b"\n")
  return 70 if scenario_mode=="incomplete" else 65 if scenario_mode=="refused" else 0
 e._launch=launch
@@ -1669,9 +1686,9 @@ def refuse_case(name,mode="success",mutate=None,launches=0):
  scenario_mode=mode;scenario_output=case_output;scenario_work=case_work;scenario_request=request_path
  before=launch_count
  component=package/"enforcement/v1/check-sandbox-receipt.sh";original=component.read_bytes()
- changed={"mutate-request":request_path,"mutate-consumer":package/"shadow/v1/_consumer.py",
-  "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c"}.get(mode)
+ changed=mutation_path(mode)
  changed_raw=changed.read_bytes() if changed else None
+ changed_mode=changed.stat().st_mode&0o777 if changed else None
  try:
   try: e.reproduce(request_path,case_work,case_output,parent)
   except (e.Refusal,c.Refusal): pass
@@ -1679,7 +1696,7 @@ def refuse_case(name,mode="success",mutate=None,launches=0):
  finally:
   if component.read_bytes()!=original:component.write_bytes(original);component.chmod(0o755)
   if changed is not None:
-   changed.chmod(0o600);changed.write_bytes(changed_raw);changed.chmod(0o400 if changed==request_path else 0o644)
+   changed.chmod(0o600);changed.write_bytes(changed_raw);changed.chmod(changed_mode)
  ok(launch_count-before==launches,name+" stops at the intended boundary")
  marker=case_output/"bundle.json"
  displaced=case_output.with_name(case_output.name+"-displaced")/"bundle.json"
@@ -1709,7 +1726,8 @@ refuse_case("wrong-identity",mutate=wrong_identity)
 refuse_case("boolean-request",mutate=bool_request)
 for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed","cancel",
              "replace-output","mutate-component","mutate-request","mutate-consumer",
-             "mutate-helper-source"):
+             "mutate-helper-source","mutate-receipt-program","mutate-core-selector",
+             "mutate-core-ingress","mutate-contracts","mutate-control-source"):
  refuse_case(mode,mode=mode,launches=1)
 case,request_path=case_documents("mismatch",wrong_expected)
 case_work=case/"work";case_output=case/"output";case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)

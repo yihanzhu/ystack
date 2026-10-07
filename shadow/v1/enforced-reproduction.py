@@ -355,7 +355,7 @@ def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
     return stdout
 
 
-def stop_child(child: subprocess.Popen) -> None:
+def _stop_child(child: subprocess.Popen) -> None:
     end = time.monotonic() + 10
     for sent in (signal.SIGTERM, signal.SIGKILL):
         try:
@@ -382,6 +382,15 @@ def stop_child(child: subprocess.Popen) -> None:
             child.wait(timeout=max(0.001, end - time.monotonic()))
         return
     raise Refusal("E_RUNTIME")
+
+
+def stop_child(child: subprocess.Popen) -> None:
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                      {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
+    try:
+        _stop_child(child)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit: int,
@@ -451,7 +460,12 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
             raise Refusal("E_RUNTIME") from None
         return bytes(output[stdout_fd]), bytes(output[stderr_fd])
     except BaseException:
-        stop_child(child)
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK,
+                                          {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
+        try:
+            stop_child(child)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         raise
     finally:
         if selector is not None:
@@ -464,11 +478,17 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
 class CancellationSignals:
     def __init__(self) -> None:
         self.previous: dict[int, object] = {}
+        self.requested = False
 
     def __enter__(self) -> None:
         def cancel(_signum: int, _frame: object) -> None:
+            if self.requested:
+                return
+            self.requested = True
+            if sys.exception() is not None:
+                return
             raise Cancelled()
-        for sent in (signal.SIGTERM, signal.SIGHUP):
+        for sent in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             self.previous[sent] = signal.getsignal(sent)
             signal.signal(sent, cancel)
 
@@ -860,10 +880,15 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             "shadow/v1/qualified-identity.jq", "shadow/v1/incident-record.jq",
             "adapters/local-git-materializer/v1/materialize.sh",
             "adapters/local-git-materializer/v1/protocol.jq",
+            "scripts/core-contract.sh",
             "preparation/v1/prepare-candidate.py", "control/v1/evaluate-bound-sandbox.sh",
+            "control/v1/sandbox-bound-policy.json", "control/v1/sandbox-bound-decision.json",
+            "control/v1/control-policy-set-sandbox-bound.json", "control/v1/sandbox-bound.jq",
+            "control/v1/validate.sh", "control/v1/policy-set.jq",
             "enforcement/v1/check-sandbox-receipt.sh", "telemetry/v1/validate-trace-ledger.sh",
-            "telemetry/v1/trace-ledger.jq")}
+            "enforcement/v1/sandbox-receipt.jq", "telemetry/v1/trace-ledger.jq")}
         component_paths.add(Path(__file__))
+        component_paths.update((modules.parent / "core-ingress.sh", modules.parent / "contracts.jq"))
         component_paths.update(modules.glob("*.jq"))
         component_files = {path: stable_file(path) for path in component_paths}
         sources.extend(component_files.values())
