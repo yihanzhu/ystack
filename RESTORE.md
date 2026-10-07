@@ -1195,3 +1195,11 @@ Real lessons from setting this up:
   `scripts/codex-review.sh <PR#>` from the target repo's clone. Check the Codex CLI is
   installed and signed in (`codex` runs), and that the script is invoked by absolute path.
   Claude and Codex never talk directly — the PR is the only message bus.
+
+### Restore the inactive shadow consumer trust reader
+Restore `shadow/v1/_consumer.py` and its focused test with the sandbox bound controls.
+The private reader launches no sandbox. Verify it with:
+
+```sh
+bash scripts/test/shadow-enforced.test.sh
+```
