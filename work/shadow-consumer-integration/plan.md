@@ -39,7 +39,7 @@ completed write bundle early. No other source or accepted artifact changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 1800–2600 | Actual component orchestration and whole-path fixture proof for framing, launch, records and the completed reproduction bundle, including readable cancellation-lifecycle proof for child handoff, recoverable communication I/O, bounded cleanup and handler restoration, and late-completion rollback |
+| 3 | Accepted exception | 2700–3400 | The reviewed 2,588-line baseline already contains the complete orchestration and closed child-handoff, recoverable-I/O, durability and rollback proof. One private completion finalizer plus paired real-signal lifecycle proof across three signals, caller dispositions, original masks, pending state, nesting and release failures needs readable room without trimming those controls. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -230,7 +230,83 @@ R4.5. Do not infer teardown from wrapper termination. Tests never invoke this ar
 they substitute the private launch function while running the real remaining path.
 No plan acceptance authorizes an actual native call.
 
-### 5. Reproduction, pre-launch expectation and frozen record
+### 5. Cancellation and completion ownership
+
+Keep cancellation in the existing private `CancellationSignals` boundary. It is the
+single owner of the watched `TERM`, `HUP` and `INT` dispositions, the sticky latch,
+owned-child cleanup and the retained output-directory descriptor. The standalone
+entry point must enter this owner on the Python main thread with no other live Python
+thread, and must recheck that condition before completion. Refuse an unsupported
+threading state before effects. This enforces the existing standalone entry shape and
+gives one thread exclusive signal ownership; it does not create a new interpreter
+identity or public runtime mode. A nested cancellation scope shares the outer owner's
+latch and cleanup state. It may not retain the completion descriptor, install an
+independent completion decision or define another transfer point.
+
+Account for low-level delivery without assuming when a Python callback runs. While
+the watched set is blocked at owner entry, create a private nonblocking close-on-exec
+pipe and install its write end with `signal.set_wakeup_fd`. Require that there was no
+prior wakeup-fd owner; restore and refuse before effects if there was one. Then install
+the consumer handlers and restore the caller's exact mask. The signal module writes a
+signal-number byte to the wakeup fd when a handled signal is received, before deferred
+Python handler dispatch. The handler independently makes the latch sticky. Children
+must not inherit either pipe descriptor.
+
+At finalization, block the watched set once. Signals delivered before that block are
+represented by the sticky latch or unread watched-signal bytes in the pipe; a full
+pipe already contains an unread byte and therefore still means cancellation. Drain
+the pipe without waiting, read the latch, and take one `sigpending()` snapshot while
+the set remains blocked. The snapshot covers signals arriving after the block and
+before the decision. This latch + delivered-byte + pending-set accounting uses only
+the existing Python >=3.11 Unix signal APIs and is exercised on supported macOS and
+Linux runs. If setup, observation or restoration fails, abort. Do not add an
+implementation-name check, poll for quiet, invoke an original handler manually or
+treat a default disposition as callable.
+
+Before that final decision, finish every admitted component operation, evidence and
+identity check, marker/file/directory fsync, exact-inventory check, and ordinary
+resource close. The marker remains provisional and the owner retains descriptor-
+relative rollback authority. No semantic check, child action, durability step or
+normal resource cleanup may follow the decision.
+
+The final masked decision combines four inputs: an outstanding exception, the sticky
+latch, the watched portion of the kernel-pending snapshot and any observation or
+release-preparation failure. Any nonempty input selects abort before ownership
+transfer. Abort unlinks `bundle.json` through the retained directory descriptor and
+fsyncs that directory before restoring the caller's signal state. Failure stays
+sticky. Continue bounded best-effort close and restoration after an unlink, fsync,
+close or handler operation fails, but never convert that path to success or claim a
+marker was removed when the operating system rejected removal.
+
+Preserve signals the caller already blocked and any such pending state: they select
+abort but are never consumed or temporarily unblocked. For each signal newly blocked
+by the consumer and present in the abort snapshot, consume that observed pending
+instance once with `sigwait({signal})` while the same mask and exclusive owner remain
+in force. There are at most three bounded waits. Rollback happens first. Do not loop,
+count coalesced occurrences or consume a caller-blocked signal. A signal arriving
+after the snapshot is not part of this bounded consumption and follows the restored
+caller disposition. Exclusive main-thread ownership and the blocked watched set are
+preconditions for these waits; if either cannot be proved, refuse rather than wait.
+
+If every precondition is complete, no watched byte was delivered, the latch is clear
+and the one pending snapshot is empty, that successful snapshot is the normal
+completion handoff **L**. At L the provisional marker becomes a completed bundle and
+later signals belong to the caller. After L perform only the fixed mechanical release:
+disable and restore the exact prior wakeup-fd state, restore every exact original
+handler, restore the exact caller mask, close the private pipe and rollback descriptor,
+and restore the active parent even on failure. A release failure is still reported as
+failure and receives the existing best-effort descriptor-relative rollback while a
+usable retained descriptor remains; it never becomes success. No business work or
+second completion decision follows L.
+
+Keep the already accepted frozen-reader contract. Do not add producer status,
+terminal-result trust, a sidecar, another inventory member or another accepted
+identity. A signal after L does not retroactively change the completed bundle. A
+signal before L, including one pending in the second masked interval, must abort and
+remove the provisional marker subject to the existing explicit rollback-failure
+semantics.
+
+### 6. Reproduction, pre-launch expectation and frozen record
 
 Validate all captured input relations before materialization. Require no-change
 response and exact incident source revision for reproduction. Build the protocol's
@@ -305,7 +381,7 @@ keep evidence without a completion marker. JSON canonicalization is UTF-8 sorted
 keys, compact separators, one trailing LF, no nonfinite numbers or duplicate keys;
 prove agreement with pinned jq on all generated documents.
 
-### 6. Deterministic write materialization field map
+### 7. Deterministic write materialization field map
 
 Before preparing a write, verify the completed frozen reproduction inventory and
 reopen its original controlled-store attempt. Require identical receipt/payload
@@ -369,7 +445,7 @@ incident check. Generate the outer qualified identity from retained profile/conf
 model/prompt/skill refs, the new request ref, original target and actual instruction
 ref; validate it using the unchanged predicate. Never reuse a stale request hash.
 
-### 7. Withheld admission and completion
+### 8. Withheld admission and completion
 
 Derive write_set from verified candidate facts, sorted by path. Each row has exactly
 path, mode, raw SHA-256, git_blob_oid and add_only:true. Hash the canonical array.
@@ -412,6 +488,11 @@ tree IDs, canonical write sets, publisher request bytes and post-write digests.
   unproven registry entries, CPU/wall enforcement `none` and blocked native
   qualification stay unchanged. No native installation, sudo, real target,
   credentials, scope gate, policy widening, publisher or activation is authorized.
+- Completion depends only on the signal mask, pending set and wakeup-fd APIs available
+  under the accepted Python >=3.11 Unix entry contract. Tests must exercise the
+  supported macOS and Linux runtimes available to the project. A process that is not
+  the exclusive main-thread owner or already has a wakeup-fd owner refuses before
+  effects; no implementation-name or undocumented callback-timing assumption admits it.
 
 ## Proof
 
@@ -427,6 +508,7 @@ only private OS identity/ACL/launch observations are substituted in-process.
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Parent-context absent/writable/malformed/request-forged; helper source/result mismatch; unapproved and raced helper leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native call after precheck failure |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
+| shadow-enforced | In disposable processes, real TERM/HUP/INT before the final block, pending in the blocked interval before L, and immediately after L; benign, default and ignored original dispositions with no-signal controls; wakeup-delivered byte versus latch versus kernel-pending requests, including a delayed callback and a full-pipe condition; original blocked masks and pending signals preserved; bounded observed-pending abort consumption and repeats; child mask/descriptor inheritance; prior wakeup-fd and non-main/multiple-thread refusal before effects; nested owner cannot steal completion; all semantic/durability/ordinary cleanup work precedes L and no such work follows it; pre-L rollback, post-L caller disposition, and sticky unlink/fsync/close/handler/wakeup-fd/mask restoration failures |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
 
