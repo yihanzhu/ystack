@@ -307,11 +307,15 @@ invokes a signal. While watched signals remain blocked, unlink `bundle.json` thr
 the held directory descriptor and fsync the directory first. Then continue bounded
 best-effort release, restore the exact original handlers, known disabled wakeup state,
 active parent and caller mask, and close owned descriptors. Caller-blocked pending
-signals remain blocked and pending. A signal newly blocked by finalization follows its
-original returning, default or ignored disposition only after rollback when the mask is
-restored. Default disposition may terminate the wrapper after marker removal; returning
-or ignored controls report nonzero `E_RUNTIME`. Never relabel that pre-L abort as a
-post-L caller signal. Other failures keep their existing `E_RUNTIME` behavior.
+signals with original returning or default dispositions remain blocked and pending.
+For original `SIG_IGN`, exact disposition restoration after rollback may discard a
+pending signal while it is still blocked; that is the caller's original kernel
+semantics, not consumer consumption or replay. A signal newly blocked by finalization
+follows its original disposition after rollback as the exact disposition and mask are
+restored; ignored discard may occur at disposition restoration before unmasking.
+Default disposition may terminate the wrapper after marker removal; returning or
+ignored controls report nonzero `E_RUNTIME`. Never relabel that pre-L abort as a post-L
+caller signal. Other failures keep their existing `E_RUNTIME` behavior.
 
 After L, later signals belong to the restored caller and do not revoke the completed
 marker. An exception raised by a restored caller handler is distinct from a failure of
@@ -531,7 +535,7 @@ only private OS identity/ACL/launch observations are substituted in-process.
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
 | shadow-enforced | Linux capped `/proc/self/status` identity/`Threads: 1` and macOS preloaded fixed libproc exact-size/`pti_threadnum == 1`; entry non-one/unregistered native thread refuses before effects and final count/read/close failure rolls back; complete physical runtime/startup/dependency and initialized finite-tail evidence proves the census stays exclusive, while a mocked count, Python registry or implementation name does not |
-| shadow-enforced | Real TERM/HUP/INT before the final block, while blocked before L, and immediately after L; benign, default and ignored dispositions with no-signal controls; original blocked/pending state preserved without consumption; repeats cannot extend work; rollback/fsync precedes restoration; default pre-L termination occurs only after marker removal, returning/ignored pre-L paths report nonzero E_RUNTIME, and post-L caller-handler exceptions remain distinct from injected release failures |
+| shadow-enforced | Real TERM/HUP/INT before the final block, while blocked before L, and immediately after L; benign, default and ignored dispositions with no-signal controls; non-ignored caller-blocked pending state remains blocked/pending without consumption; for original blocked + `SIG_IGN`, observe pending and abort before restoration, prove marker absence before restoration when rollback succeeds, then exact original mask and `SIG_IGN` with no requirement that the kernel retain the pending bit; repeats cannot extend work; rollback/fsync precedes restoration; default pre-L termination occurs only after marker removal, returning/ignored pre-L paths report nonzero E_RUNTIME, and post-L caller-handler exceptions remain distinct from injected release failures |
 | shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; no such work follows it; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/handler/wakeup-fd/mask/active-parent restoration failures |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
