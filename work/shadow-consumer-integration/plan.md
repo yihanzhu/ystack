@@ -10,9 +10,10 @@ base is `95b54c142f6ad242e0a36b2a92fa51d7606255fb`; base movement is external
 context, not permission to change the artifact's meaning. The intent blob is
 `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 400–550 lines. The helper trust channel,
-fixed control references, descriptor reader and materialization field map need one
-coherent implementation brief. This changes only the soft size budget.
+Plan PR: `review_size: accepted-exception`, 550–650 lines. The helper trust channel,
+fixed control references, descriptor reader, materialization field map, and complete
+finite cancellation-owner admission and handoff need one coherent implementation
+brief. This changes only the soft size budget.
 
 ## Files that change
 
@@ -39,7 +40,7 @@ completed write bundle early. No other source or accepted artifact changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 2700–3400 | The reviewed 2,588-line baseline already contains the complete orchestration and closed child-handoff, recoverable-I/O, durability and rollback proof. One private completion finalizer plus paired real-signal lifecycle proof across three signals, caller dispositions, original masks, pending state, nesting and release failures needs readable room without trimming those controls. |
+| 3 | Accepted exception | 2700–3400 | Complete component orchestration, real child-handoff and recoverable-I/O regressions, durability and rollback proof, one private completion finalizer, and paired real-signal lifecycle proof across three signals, caller dispositions, original masks, pending state, nesting and release failures need readable room without trimming those controls. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -232,79 +233,98 @@ No plan acceptance authorizes an actual native call.
 
 ### 5. Cancellation and completion ownership
 
-Keep cancellation in the existing private `CancellationSignals` boundary. It is the
-single owner of the watched `TERM`, `HUP` and `INT` dispositions, the sticky latch,
-owned-child cleanup and the retained output-directory descriptor. The standalone
-entry point must enter this owner on the Python main thread with no other live Python
-thread, and must recheck that condition before completion. Refuse an unsupported
-threading state before effects. This enforces the existing standalone entry shape and
-gives one thread exclusive signal ownership; it does not create a new interpreter
-identity or public runtime mode. A nested cancellation scope shares the outer owner's
-latch and cleanup state. It may not retain the completion descriptor, install an
-independent completion decision or define another transfer point.
+Keep cancellation in the existing private `CancellationSignals` boundary. It owns
+the watched `TERM`, `HUP` and `INT` dispositions, sticky latch, owned-child cleanup,
+private wakeup pipe and retained output-directory descriptor. Its only outer
+acquisition path is the existing reviewed executable invocation `PYTHON -I -S -B
+SOURCE/shadow/v1/enforced-reproduction.py reproduce REQUEST WORK OUTPUT` from the
+trusted parent in spec R2.1/R2.4. An imported or library call without that private
+startup admission refuses before any signal, mask or wakeup API call. Nested scopes
+borrow the outer latch and cleanup state; they cannot acquire a lease, install a
+wakeup fd, retain completion or define another transfer point.
 
-Account for low-level delivery without assuming when a Python callback runs. While
-the watched set is blocked at owner entry, create a private nonblocking close-on-exec
-pipe and install its write end with `signal.set_wakeup_fd`. Require that there was no
-prior wakeup-fd owner; restore and refuse before effects if there was one. Then install
-the consumer handlers and restore the caller's exact mask. The signal module writes a
-signal-number byte to the wakeup fd when a handled signal is received, before deferred
-Python handler dispatch. The handler independently makes the latch sticky. Children
-must not inherit either pipe descriptor.
+Admission requires the Python main interpreter thread and a fresh closed startup
+whose reviewed physical runtime, standard/native dependency closure and exact imports
+establish that file-descriptor wakeups begin disabled with the chosen warning setting
+and no Python or native signal owner exists. This is source/runtime evidence about the
+already accepted fixed invocation, not a request field, certificate, interpreter-name
+allowlist or claim that Python >=3.11 alone proves the invariant. Place admission after
+only reviewed imports. Unknown provenance refuses without calling `set_wakeup_fd`;
+never install and restore a temporary fd to discover an arbitrary prior owner. Once
+admitted, the setter's returned disabled value is only a consistency assertion. Release
+restores the known disabled/warning pair, never a guessed former owner's state.
 
-At finalization, block the watched set once. Signals delivered before that block are
-represented by the sticky latch or unread watched-signal bytes in the pipe; a full
-pipe already contains an unread byte and therefore still means cancellation. Drain
-the pipe without waiting, read the latch, and take one `sigpending()` snapshot while
-the set remains blocked. The snapshot covers signals arriving after the block and
-before the decision. This latch + delivered-byte + pending-set accounting uses only
-the existing Python >=3.11 Unix signal APIs and is exercised on supported macOS and
-Linux runs. If setup, observation or restoration fails, abort. Do not add an
-implementation-name check, poll for quiet, invoke an original handler manually or
-treat a default disposition as callable.
+Prove one process-wide watched-signal receiver with both an OS observation and a
+closed-code invariant. On Linux, read `/proc/self/status` under a fixed byte cap and
+require one well-formed `Threads: 1` field plus matching process identity. On macOS,
+load and bind fixed system libproc before the protected tail, call
+`proc_pidinfo(PROC_PIDTASKINFO)` into the documented fixed-size `proc_taskinfo`, require
+the exact result size and `pti_threadnum == 1`. Use no helper executable, privilege,
+polling or task suspension. Observe once before product effects and again after final
+ordinary cleanup while watched signals are blocked; malformed, inaccessible, truncated,
+mismatched or non-one results refuse, and temporary observation-descriptor close failure
+also aborts.
 
-Before that final decision, finish every admitted component operation, evidence and
-identity check, marker/file/directory fsync, exact-inventory check, and ordinary
-resource close. The marker remains provisional and the owner retains descriptor-
-relative rollback authority. No semantic check, child action, durability step or
-normal resource cleanup may follow the decision.
+The census is necessary but insufficient. Evidence for each actual physical macOS and
+Linux runtime must identify its version/build and the startup, stdlib and native closure
+relevant to this path, and show that the interval after the first observation plus the
+finite final tail cannot create a native receiver or waiter, change the watched mask or
+dispositions, or replace/read the wakeup fd. The initialized tail permits only the
+private OS observation, mask/read/pending APIs, primitive bookkeeping, rollback and
+fixed release. It has no imports, components, subprocesses, arbitrary callbacks, lazy
+native loads, audit/trace callbacks or finalizers that can create or consume a receiver.
+The plan requires this truthful evidence before runtime admission; a Python thread
+registry, mocked count, implementation-name check or asserted source property is not
+proof.
 
-The final masked decision combines four inputs: an outstanding exception, the sticky
-latch, the watched portion of the kernel-pending snapshot and any observation or
-release-preparation failure. Any nonempty input selects abort before ownership
-transfer. Abort unlinks `bundle.json` through the retained directory descriptor and
-fsyncs that directory before restoring the caller's signal state. Failure stays
-sticky. Continue bounded best-effort close and restoration after an unlink, fsync,
-close or handler operation fails, but never convert that path to success or claim a
-marker was removed when the operating system rejected removal.
+After admission and while the watched set is blocked, create one private nonblocking
+close-on-exec pipe, install its write end with the known warning mode, install consumer
+handlers and restore the caller's exact mask. The signal module writes a byte when a
+handled signal is received; the handler independently makes the latch sticky. Children
+inherit neither pipe endpoint nor owner state and preserve the applicable caller mask.
 
-Preserve signals the caller already blocked and any such pending state: they select
-abort but are never consumed or temporarily unblocked. For each signal newly blocked
-by the consumer and present in the abort snapshot, consume that observed pending
-instance once with `sigwait({signal})` while the same mask and exclusive owner remain
-in force. There are at most three bounded waits. Rollback happens first. Do not loop,
-count coalesced occurrences or consume a caller-blocked signal. A signal arriving
-after the snapshot is not part of this bounded consumption and follows the restored
-caller disposition. Exclusive main-thread ownership and the blocked watched set are
-preconditions for these waits; if either cannot be proved, refuse rather than wait.
+Before the final decision, finish every admitted component action, evidence/identity
+and inventory check, marker/file/directory fsync, child cleanup and ordinary resource
+close. The marker remains provisional and descriptor-relative rollback remains held.
+Then block the watched set, complete the final native-thread observation, and make
+exactly one nonblocking one-byte pipe read. Any returned byte sets sticky
+delivered-or-uncertain, regardless of identity. EOF, uncertain descriptor state or any
+error other than the expected empty `EAGAIN`/`EWOULDBLOCK` sets the same flag; only that
+expected empty result clears this input. Never drain, retry or make a second read. An
+unrelated-byte-full pipe therefore aborts even if a later watched byte was lost, and
+concurrent replenishment cannot extend the fixed observation. Read the sticky latch and
+take one watched `sigpending()` snapshot while the set remains blocked.
 
-If every precondition is complete, no watched byte was delivered, the latch is clear
-and the one pending snapshot is empty, that successful snapshot is the normal
-completion handoff **L**. At L the provisional marker becomes a completed bundle and
-later signals belong to the caller. After L perform only the fixed mechanical release:
-disable and restore the exact prior wakeup-fd state, restore every exact original
-handler, restore the exact caller mask, close the private pipe and rollback descriptor,
-and restore the active parent even on failure. A release failure is still reported as
-failure and receives the existing best-effort descriptor-relative rollback while a
-usable retained descriptor remains; it never becomes success. No business work or
-second completion decision follows L.
+The decision inputs are: outstanding exception; sticky latch; delivered-or-uncertain;
+watched pending set; and any admission, preparation, observation or release-preparation
+failure. Every nonempty input selects abort and stays sticky. Success requires all
+preconditions complete and all five inputs clear. That successful pending-set sampling
+instant is completion handoff **L**; the later Python assignment is not L. No semantic,
+durability, child or ordinary resource work and no second completion decision follows L.
 
-Keep the already accepted frozen-reader contract. Do not add producer status,
-terminal-result trust, a sidecar, another inventory member or another accepted
-identity. A signal after L does not retroactively change the completed bundle. A
-signal before L, including one pending in the second masked interval, must abort and
-remove the provisional marker subject to the existing explicit rollback-failure
-semantics.
+Abort never calls `sigwait` and never drains, consumes, replays, counts or manually
+invokes a signal. While watched signals remain blocked, unlink `bundle.json` through
+the held directory descriptor and fsync the directory first. Then continue bounded
+best-effort release, restore the exact original handlers, known disabled wakeup state,
+active parent and caller mask, and close owned descriptors. Caller-blocked pending
+signals remain blocked and pending. A signal newly blocked by finalization follows its
+original returning, default or ignored disposition only after rollback when the mask is
+restored. Default disposition may terminate the wrapper after marker removal; returning
+or ignored controls report nonzero `E_RUNTIME`. Never relabel that pre-L abort as a
+post-L caller signal. Other failures keep their existing `E_RUNTIME` behavior.
+
+After L, later signals belong to the restored caller and do not revoke the completed
+marker. An exception raised by a restored caller handler is distinct from a failure of
+the handler/mask/wakeup/close release operations and must not be caught and relabelled
+as pre-L cancellation. Actual unlink, fsync, close or restoration failures remain
+sticky, receive the existing best-effort descriptor-relative rollback while a usable
+handle remains, and never become success or a false claim that removal succeeded.
+Restore the active parent even on failure.
+
+Keep the accepted frozen-reader contract. Add no producer status, terminal-result
+trust, sidecar, inventory member, accepted identity, helper, launcher change or public
+multithreaded cancellation API. Preserve all closed child-handoff, recoverable-I/O,
+bounded-cleanup, durability, held-descriptor rollback and late-failure behavior.
 
 ### 6. Reproduction, pre-launch expectation and frozen record
 
@@ -488,11 +508,11 @@ tree IDs, canonical write sets, publisher request bytes and post-write digests.
   unproven registry entries, CPU/wall enforcement `none` and blocked native
   qualification stay unchanged. No native installation, sudo, real target,
   credentials, scope gate, policy widening, publisher or activation is authorized.
-- Completion depends only on the signal mask, pending set and wakeup-fd APIs available
-  under the accepted Python >=3.11 Unix entry contract. Tests must exercise the
-  supported macOS and Linux runtimes available to the project. A process that is not
-  the exclusive main-thread owner or already has a wakeup-fd owner refuses before
-  effects; no implementation-name or undocumented callback-timing assumption admits it.
+- Completion additionally depends on truthful source/runtime closure evidence plus
+  the fixed Linux or macOS native-thread observation for the already accepted isolated
+  invocation. This plan does not qualify a runtime by assertion. Missing closure,
+  unknown imported provenance, unknown wakeup ownership or failed observation refuses
+  before effects; no implementation name or undocumented callback timing admits it.
 
 ## Proof
 
@@ -508,7 +528,11 @@ only private OS identity/ACL/launch observations are substituted in-process.
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Parent-context absent/writable/malformed/request-forged; helper source/result mismatch; unapproved and raced helper leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native call after precheck failure |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
-| shadow-enforced | In disposable processes, real TERM/HUP/INT before the final block, pending in the blocked interval before L, and immediately after L; benign, default and ignored original dispositions with no-signal controls; wakeup-delivered byte versus latch versus kernel-pending requests, including a delayed callback and a full-pipe condition; original blocked masks and pending signals preserved; bounded observed-pending abort consumption and repeats; child mask/descriptor inheritance; prior wakeup-fd and non-main/multiple-thread refusal before effects; nested owner cannot steal completion; all semantic/durability/ordinary cleanup work precedes L and no such work follows it; pre-L rollback, post-L caller disposition, and sticky unlink/fsync/close/handler/wakeup-fd/mask restoration failures |
+| shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
+| shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
+| shadow-enforced | Linux capped `/proc/self/status` identity/`Threads: 1` and macOS preloaded fixed libproc exact-size/`pti_threadnum == 1`; entry non-one/unregistered native thread refuses before effects and final count/read/close failure rolls back; complete physical runtime/startup/dependency and initialized finite-tail evidence proves the census stays exclusive, while a mocked count, Python registry or implementation name does not |
+| shadow-enforced | Real TERM/HUP/INT before the final block, while blocked before L, and immediately after L; benign, default and ignored dispositions with no-signal controls; original blocked/pending state preserved without consumption; repeats cannot extend work; rollback/fsync precedes restoration; default pre-L termination occurs only after marker removal, returning/ignored pre-L paths report nonzero E_RUNTIME, and post-L caller-handler exceptions remain distinct from injected release failures |
+| shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; no such work follows it; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/handler/wakeup-fd/mask/active-parent restoration failures |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
 
