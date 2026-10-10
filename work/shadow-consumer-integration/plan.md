@@ -40,7 +40,7 @@ completed write bundle early. No other source or accepted artifact changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 2700–3400 | Complete component orchestration, real child-handoff and recoverable-I/O regressions, durability and rollback proof, one private completion finalizer, and paired real-signal lifecycle proof across three signals, caller dispositions, original masks, pending state, nesting and release failures need readable room without trimming those controls. |
+| 3 | Accepted exception | 3500–4000 | Complete component orchestration, cancellation handoff and the fixed ACL resolver protocol, lifetime, metadata and native-separation proof need readable room without trimming existing controls. This remains one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -173,12 +173,46 @@ separate supervisor UID. There is no caller/test environment override of this pa
 Validate installed files and verifier path under R10.1, permitting only root or the
 already authenticated supervisor principal where that contract allows it.
 
-On macOS use the fixed system C library's descriptor ACL interface through ctypes,
-with the ACL constants/semantics used by `sandbox/v1/host-supervisor.py`. Do not
-import its runtime functions or execute it to inspect ACLs. On Linux use fd-based
-POSIX ACL xattr reads and fail on unsupported/unreadable observations. Accept no
-ACL on store objects. Root-only anchor checks reject every grant permitting another
-principal to modify it; later installed-object checks follow VM R10.1 exactly.
+On macOS use one private ACL boundary in `_consumer.py`. Before cancellation
+admission, bind the fixed descriptor ACL retrieval, iteration, qualifier-copy and
+free functions from the absolute system C library and account for that small native
+wrapper in the parent's source/runtime closure. The parent copies each entry's tag,
+permission bits and exact 16-byte UUID while the descriptor remains held, frees all
+native ACL and qualifier allocations, and performs the existing metadata checks
+around the capture. It never calls membership resolution or initializes that service,
+including for compatibility UUIDs. Keep the 128-entry maximum and original ordering.
+
+Resolve only the captured UUID bytes in one fresh fixed child per bounded ACL batch:
+`P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This is a private role
+in the existing source file, not a public CLI, helper registry or selectable command.
+The role cannot invoke the parent consumer or recurse. Its canonical JSON input is
+an exact array of at most 128 lowercase 32-hex UUIDs and at most 16 KiB. Its canonical
+JSON output is at most 32 KiB and has one positional result per input. Each result
+has exactly `{uuid,status,kind,id}`. Status is `resolved` or `unresolved`; a resolved
+row has kind `user` or `group` and an unsigned 32-bit id, while an unresolved row
+has null kind and id. Reject duplicate JSON keys, extra or missing rows,
+reordered/mismatched UUIDs, unknown fields, malformed values and trailing data. Map
+only a resolved user row to the existing identifier; group and unresolved rows keep
+the existing no-identifier semantics. A membership miss stays unresolved; transport,
+protocol or process failure refuses the ACL observation. A child result supplies
+neither permission bits nor an authorization decision.
+
+The already trusted parent fixes P and the reviewed physical S under spec R2.1/R2.4
+before the first ACL operation, using the admitted standalone invocation and retained
+source bytes rather than an ACL observation made through this resolver. Recheck those
+identities and `_consumer.py` before each launch. This breaks the bootstrap cycle:
+ACL checks do not establish the interpreter or resolver source that they invoke.
+The enforced-reproduction entry constructs one module-private resolver from the
+existing cancellation-aware runner and the fixed argv, then passes that value through
+every parent-facing held-path rule and recheck that can inspect a Darwin ACL. It is a
+fixed concrete adapter, not an arbitrary callable. A missing resolver refuses before
+the first Darwin ACL capture; the child role cannot construct or receive one. Thus
+every existing ACL caller is accounted for, with no default in-process membership
+fallback, caller-supplied callback or request-selected runner. Linux keeps fd-based
+POSIX ACL xattr reads and makes no resolver call. Fail on unsupported or unreadable
+ACL observations on either platform.
+Accept no ACL on store objects. Root-only anchor checks reject every grant permitting
+another principal to modify it; later installed-object checks follow VM R10.1 exactly.
 
 Open store_root, attempt directory, receipt and payload descendants relative to
 held descriptors. Enforce spec R3's uid/gid, 0750/0440, no-ACL and single-link rules.
@@ -212,6 +246,7 @@ scratch children. Use argument arrays and no shell command strings.
 | Check receipt | `/bin/bash -p S/enforcement/v1/check-sandbox-receipt.sh check-bound RECEIPT EXPECTATION EVALUATION OBSERVATION` |
 | Trace | `/bin/bash -p S/telemetry/v1/validate-trace-ledger.sh validate INCIDENT_ID ATTEMPT_ID LEDGER` |
 | Convert seed | `/bin/bash -p S/maintenance/v1/incident-to-eval.sh convert INCIDENT FROZEN_SHADOW EMPTY_SEED_DIRECTORY` |
+| Resolve Darwin UUIDs | `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids` |
 
 Fixed script calls receive only `PATH=DEPENDENCY_BIN:/usr/bin:/bin`, `LC_ALL=C`,
 `LANG=C`; DEPENDENCY_BIN contains the checked jq. Clear inherited Git configuration,
@@ -223,6 +258,14 @@ Preparation/inspect have 300 seconds, matching their existing operation bound.
 On expiry stop that owned child group, wait at most 10 seconds and record failure;
 never call a truncated output successful. Consumers have a 1,200-second overall
 budget; a deadline only removes opportunities for work, never relaxes admission.
+The resolver uses the same cancellation-aware child runner, fixed cleared environment,
+new process session, applicable mask, `close_fds=True`, no `pass_fds`, and declared
+stdio only. It has a 10-second batch deadline within that overall budget, a 32 KiB
+stdout cap and 64 KiB stderr cap, with no retry. Normal completion waits and reaps,
+closes every pipe and selector, and validates output before using it. Timeout,
+cancellation or failure performs the existing one bounded owned-group cleanup and
+confirms disappearance within its 10-second maximum. No resolver work or resource
+survives into the completion tail.
 
 The only future native argv is `/usr/bin/sudo -n -u #UID -- P ANCHOR/host-supervisor.py
 launch`, with stdin the complete frame and UID/config/P already checked. The
@@ -276,6 +319,15 @@ native loads, audit/trace callbacks or finalizers that can create or consume a r
 The plan requires this truthful evidence before runtime admission; a Python thread
 registry, mocked count, implementation-name check or asserted source property is not
 proof.
+
+On macOS that evidence covers the parent's prebound ACL capture/free wrapper but not
+membership internals, because all membership calls occur after exec in the resolver
+child. Process isolation plus checked child termination prevents that child's native
+threads, callbacks and service state from becoming parent receivers. This does not
+claim the membership service is thread-free. The proof must inspect the parent's
+actual admitted call graph and show no remaining membership symbol call or lazy load;
+unknown parent native closure still refuses. Linux keeps its existing independent
+runtime proof.
 
 After admission and while the watched set is blocked, create one private nonblocking
 close-on-exec pipe, install its write end with the known warning mode, install consumer
@@ -531,6 +583,8 @@ only private OS identity/ACL/launch observations are substituted in-process.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Parent-context absent/writable/malformed/request-forged; helper source/result mismatch; unapproved and raced helper leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native call after precheck failure |
+| shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
+| shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
