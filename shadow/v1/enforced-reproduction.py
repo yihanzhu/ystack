@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import ctypes
+import errno
+import gc
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +15,8 @@ import selectors
 import stat
 import subprocess
 import sys
+import sysconfig
+import threading
 import time
 import dataclasses
 from pathlib import Path
@@ -43,6 +49,8 @@ EVIDENCE_NAMES = (
 REQUEST_BODY_KEYS = {"attempt_id", "attempt_number", "incident", "claim", "duty_evaluation",
                      "materialization_input", "qualified_identity", "source_git_dir", "jq",
                      "closure_helper"}
+WATCHED_SIGNALS = frozenset((signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
+_STARTUP_KEY = object()
 
 
 class Refusal(Exception):
@@ -53,6 +61,157 @@ class Refusal(Exception):
 
 class Cancelled(BaseException):
     pass
+
+
+@dataclasses.dataclass(frozen=True)
+class _StartupAdmission:
+    key: object
+    executable: str
+    executable_sha256: str
+    version: str
+    build: tuple[int, int]
+    module_origins: tuple[str, ...]
+    census: object
+
+
+class _ProcTaskInfo(ctypes.Structure):
+    _fields_ = [
+        ("pti_virtual_size", ctypes.c_uint64),
+        ("pti_resident_size", ctypes.c_uint64),
+        ("pti_total_user", ctypes.c_uint64),
+        ("pti_total_system", ctypes.c_uint64),
+        ("pti_threads_user", ctypes.c_uint64),
+        ("pti_threads_system", ctypes.c_uint64),
+        ("pti_policy", ctypes.c_int32),
+        ("pti_faults", ctypes.c_int32),
+        ("pti_pageins", ctypes.c_int32),
+        ("pti_cow_faults", ctypes.c_int32),
+        ("pti_messages_sent", ctypes.c_int32),
+        ("pti_messages_received", ctypes.c_int32),
+        ("pti_syscalls_mach", ctypes.c_int32),
+        ("pti_syscalls_unix", ctypes.c_int32),
+        ("pti_csw", ctypes.c_int32),
+        ("pti_threadnum", ctypes.c_int32),
+        ("pti_numrunning", ctypes.c_int32),
+        ("pti_priority", ctypes.c_int32),
+    ]
+
+
+class _NativeThreadCensus:
+    _LINUX_STATUS_LIMIT = 64 * 1024
+    _PROC_PIDTASKINFO = 4
+
+    def __init__(self) -> None:
+        self._proc_pidinfo = None
+        if sys.platform == "darwin":
+            library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            function = library.proc_pidinfo
+            function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                 ctypes.c_void_p, ctypes.c_int]
+            function.restype = ctypes.c_int
+            self._proc_pidinfo = function
+        elif not sys.platform.startswith("linux"):
+            raise Refusal("E_RUNTIME")
+
+    def observe(self) -> None:
+        if self._proc_pidinfo is not None:
+            info = _ProcTaskInfo()
+            size = ctypes.sizeof(info)
+            result = self._proc_pidinfo(os.getpid(), self._PROC_PIDTASKINFO, 0,
+                                        ctypes.byref(info), size)
+            require(result == size and info.pti_threadnum == 1, "E_RUNTIME")
+            return
+        fd = None
+        failure = None
+        raw = bytearray()
+        try:
+            fd = os.open("/proc/self/status", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            while len(raw) <= self._LINUX_STATUS_LIMIT:
+                chunk = os.read(fd, min(8192, self._LINUX_STATUS_LIMIT + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw.extend(chunk)
+            require(len(raw) <= self._LINUX_STATUS_LIMIT, "E_RUNTIME")
+        except BaseException as exc:
+            failure = exc
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+        if failure is not None:
+            raise Refusal("E_RUNTIME") from failure
+        try:
+            text = raw.decode("ascii")
+            pids = [line for line in text.splitlines() if line.startswith("Pid:")]
+            threads = [line for line in text.splitlines() if line.startswith("Threads:")]
+            require(len(pids) == 1 and len(threads) == 1
+                    and pids[0].split() == ["Pid:", str(os.getpid())]
+                    and threads[0].split() == ["Threads:", "1"], "E_RUNTIME")
+        except (UnicodeError, ValueError):
+            raise Refusal("E_RUNTIME") from None
+
+
+def _path_below(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _runtime_module_origins() -> tuple[str, ...]:
+    stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
+    driver = Path(__file__).resolve(strict=True)
+    consumer = (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
+    origins = []
+    for module in tuple(sys.modules.values()):
+        if module is sys.modules.get("__main__"):
+            continue
+        origin = getattr(getattr(module, "__spec__", None), "origin", None)
+        if origin in (None, "built-in", "frozen"):
+            path_value = getattr(module, "__file__", None)
+            if path_value is None:
+                continue
+            origin = path_value
+        path = Path(origin)
+        require(path.is_absolute(), "E_RUNTIME")
+        resolved = path.resolve(strict=True)
+        require(_path_below(resolved, stdlib) or resolved in {driver, consumer}, "E_RUNTIME")
+        origins.append(str(resolved))
+    return tuple(sorted(set(origins)))
+
+
+def _runtime_callbacks_clear() -> None:
+    require(threading.current_thread() is threading.main_thread()
+            and sys.gettrace() is None and sys.getprofile() is None
+            and not gc.callbacks, "E_RUNTIME")
+    monitoring = getattr(sys, "monitoring", None)
+    if monitoring is not None:
+        require(all(monitoring.get_tool(index) is None for index in range(6)), "E_RUNTIME")
+
+
+def _standalone_startup_admission() -> _StartupAdmission:
+    require(__name__ == "__main__" and sys.flags.isolated == 1
+            and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1,
+            "E_RUNTIME")
+    executable = Path(sys.executable)
+    require(executable.is_absolute() and executable.resolve(strict=True) == executable,
+            "E_RUNTIME")
+    _runtime_callbacks_clear()
+    gc.disable()
+    held = stable_file(executable)
+    try:
+        executable_sha256 = held.sha256
+        held.recheck("E_RUNTIME")
+    finally:
+        held.close()
+    census = _NativeThreadCensus()
+    return _StartupAdmission(_STARTUP_KEY, str(executable), executable_sha256,
+                             sys.version, tuple(sys.version_info[:2]),
+                             _runtime_module_origins(), census)
 
 
 def require(value: bool, code: str = "E_RELATION") -> None:
@@ -499,11 +658,17 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
 class CancellationSignals:
     active: CancellationSignals | None = None
 
-    def __init__(self) -> None:
+    def __init__(self, admission: _StartupAdmission | None = None) -> None:
+        self.admission = admission
         self.previous: dict[int, object] = {}
         self.requested = False
         self.parent: CancellationSignals | None = None
         self.completion: int | None = None
+        self.read_fd: int | None = None
+        self.write_fd: int | None = None
+        self.borrowed = False
+        self.rollback_attempted = False
+        self.borrow_depth = 0
 
     @classmethod
     def checkpoint(cls) -> None:
@@ -514,56 +679,188 @@ class CancellationSignals:
     def retain_completion(cls, directory: int) -> bool:
         if cls.active is None:
             return False
+        require(cls.active.borrow_depth == 0, "E_RUNTIME")
         require(cls.active.completion is None, "E_RUNTIME")
         cls.active.completion = directory
         return True
 
-    def __enter__(self) -> None:
+    @staticmethod
+    def _remember(first: BaseException | None, exc: BaseException) -> BaseException:
+        return first if first is not None else exc
+
+    def _rollback(self, failure: BaseException | None) -> BaseException | None:
+        if self.completion is None or self.rollback_attempted:
+            return failure
+        self.rollback_attempted = True
+        try:
+            os.unlink("bundle.json", dir_fd=self.completion)
+        except BaseException as exc:
+            failure = self._remember(failure, exc)
+        try:
+            os.fsync(self.completion)
+        except BaseException as exc:
+            failure = self._remember(failure, exc)
+        return failure
+
+    def __enter__(self) -> CancellationSignals:
+        if CancellationSignals.active is not None:
+            self.parent = CancellationSignals.active
+            self.borrowed = True
+            self.parent.borrow_depth += 1
+            return self
+        require(isinstance(self.admission, _StartupAdmission)
+                and self.admission.key is _STARTUP_KEY
+                and self.admission.executable == sys.executable
+                and self.admission.version == sys.version
+                and self.admission.build == tuple(sys.version_info[:2])
+                and self.admission.module_origins == _runtime_module_origins(), "E_RUNTIME")
+        held_executable = stable_file(Path(self.admission.executable))
+        try:
+            require(held_executable.sha256 == self.admission.executable_sha256, "E_RUNTIME")
+            held_executable.recheck("E_RUNTIME")
+        finally:
+            held_executable.close()
+        self.admission.census.observe()
+
         def cancel(_signum: int, _frame: object) -> None:
             self.requested = True
-        self.parent = CancellationSignals.active
-        CancellationSignals.active = self
-        for sent in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-            self.previous[sent] = signal.getsignal(sent)
-            signal.signal(sent, cancel)
 
-    def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
-        watched = set(self.previous)
-        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
-        exit_mask = previous_mask
+        original_mask = None
+        installed_handlers: list[int] = []
+        wakeup_installed = False
         failure = None
         try:
-            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-            exit_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+            original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, WATCHED_SIGNALS)
+            for sent in WATCHED_SIGNALS:
+                self.previous[sent] = signal.getsignal(sent)
+            self.read_fd, self.write_fd = os.pipe()
+            for descriptor in (self.read_fd, self.write_fd):
+                os.set_blocking(descriptor, False)
+                os.set_inheritable(descriptor, False)
+            prior = signal.set_wakeup_fd(self.write_fd, warn_on_full_buffer=False)
+            wakeup_installed = True
+            require(prior == -1, "E_RUNTIME")
+            for sent in WATCHED_SIGNALS:
+                signal.signal(sent, cancel)
+                installed_handlers.append(sent)
+            self.parent = CancellationSignals.active
+            CancellationSignals.active = self
+            signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+            return self
+        except BaseException as exc:
+            failure = exc
+            for sent in reversed(installed_handlers):
+                try:
+                    signal.signal(sent, self.previous[sent])
+                except BaseException as release_exc:
+                    failure = self._remember(failure, release_exc)
+            if wakeup_installed:
+                try:
+                    signal.set_wakeup_fd(-1, warn_on_full_buffer=True)
+                except BaseException as release_exc:
+                    failure = self._remember(failure, release_exc)
+            CancellationSignals.active = self.parent
+            for descriptor in (self.write_fd, self.read_fd):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except BaseException as release_exc:
+                        failure = self._remember(failure, release_exc)
+            if original_mask is not None:
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+                except BaseException as release_exc:
+                    failure = self._remember(failure, release_exc)
+            raise failure
+
+    def __exit__(self, kind: object, _value: object, _traceback: object) -> None:
+        if self.borrowed:
+            require(self.parent is not None and self.parent.borrow_depth > 0, "E_RUNTIME")
+            self.parent.borrow_depth -= 1
+            return
+        failure = None
+        caller_mask = None
+        uncertain = False
+        pending: set[signal.Signals] = set()
+        decision_made = False
+        abort = True
+        try:
+            caller_mask = signal.pthread_sigmask(signal.SIG_BLOCK, WATCHED_SIGNALS)
             try:
-                if self.completion is not None and (_kind is not None or self.requested):
-                    os.unlink("bundle.json", dir_fd=self.completion)
-                    os.fsync(self.completion)
+                require(self.admission is not None, "E_RUNTIME")
+                self.admission.census.observe()
             except BaseException as exc:
                 failure = exc
-            finally:
-                try:
-                    if self.completion is not None:
-                        os.close(self.completion)
-                except BaseException as exc:
-                    if failure is None:
-                        failure = exc
-                finally:
-                    try:
-                        for sent, handler in self.previous.items():
-                            signal.signal(sent, handler)
-                    finally:
-                        CancellationSignals.active = self.parent
+            try:
+                require(self.read_fd is not None, "E_RUNTIME")
+                observed = os.read(self.read_fd, 1)
+                uncertain = True
+                if observed:
+                    self.requested = True
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    uncertain = True
+                    failure = self._remember(failure, exc)
+            except BaseException as exc:
+                uncertain = True
+                failure = self._remember(failure, exc)
+            try:
+                pending = set(signal.sigpending()) & WATCHED_SIGNALS
+            except BaseException as exc:
+                failure = self._remember(failure, exc)
+            abort = kind is not None or self.requested or uncertain or bool(pending) or failure is not None
+            decision_made = True
+            if abort:
+                failure = self._rollback(failure)
+        except BaseException as exc:
+            failure = self._remember(failure, exc)
+            failure = self._rollback(failure)
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, exit_mask)
+            for sent in WATCHED_SIGNALS:
+                try:
+                    signal.signal(sent, self.previous[sent])
+                except BaseException as exc:
+                    failure = self._remember(failure, exc)
+            try:
+                signal.set_wakeup_fd(-1, warn_on_full_buffer=True)
+            except BaseException as exc:
+                failure = self._remember(failure, exc)
+            CancellationSignals.active = self.parent
+            for descriptor in (self.write_fd, self.read_fd):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except BaseException as exc:
+                        failure = self._remember(failure, exc)
+            if failure is not None and decision_made and not abort:
+                failure = self._rollback(failure)
+                abort = True
+            post_l_exception = None
+            if caller_mask is not None:
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, caller_mask)
+                except OSError as exc:
+                    failure = self._remember(failure, exc)
+                    abort = True
+                    failure = self._rollback(failure)
+                except BaseException as exc:
+                    post_l_exception = exc
+            if self.completion is not None:
+                try:
+                    os.close(self.completion)
+                except BaseException as exc:
+                    failure = self._remember(failure, exc)
+                    abort = True
+                    failure = self._rollback(failure)
+            if post_l_exception is not None and failure is None:
+                raise post_l_exception
         if failure is not None:
             raise failure
-        if _kind is None and self.requested:
+        if kind is None and abort:
             raise Cancelled()
 
 
 def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
-    import hashlib
     out = bytearray(b"YSFRAME1")
     measured = hashlib.sha256(b"YSFRAME1")
     for name, content in records:
@@ -1194,10 +1491,12 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         if output_hold is not None: output_hold.close()
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
     try:
+        require(isinstance(admission, _StartupAdmission) and admission.key is _STARTUP_KEY,
+                "E_RUNTIME")
         require(len(argv) == 5 and argv[1] == "reproduce", "E_USAGE")
-        with CancellationSignals():
+        with CancellationSignals(admission):
             reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]))
         return 0
     except Cancelled:
@@ -1211,4 +1510,9 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    try:
+        startup_admission = _standalone_startup_admission()
+    except Exception:
+        print("E_RUNTIME", file=sys.stderr)
+        raise SystemExit(1) from None
+    raise SystemExit(main(sys.argv, startup_admission))

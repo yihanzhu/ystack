@@ -20,6 +20,52 @@ jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${jq_bin##*/}")
 python_bin=$(command -v python3)
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing physical python\n' >&2; exit 1 ;; esac
+python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
+case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing resolved physical python\n' >&2; exit 1 ;; esac
+"$python_bin" -I -S -B - "$root" <<'PY'
+import hashlib, importlib.machinery, importlib.util, json, os, pathlib, subprocess, sys, sysconfig
+root=pathlib.Path(sys.argv[1]);driver=root/"shadow/v1/enforced-reproduction.py"
+spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+def digest(path):
+ measured=hashlib.sha256()
+ with open(path,"rb") as source:
+  while chunk:=source.read(1024*1024):measured.update(chunk)
+ return measured.hexdigest()
+def command(argv):
+ try:
+  value=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"}).stdout
+ except (OSError,subprocess.SubprocessError):return "unavailable"
+ return value[:32768].decode("utf-8","replace")
+executable=os.path.realpath(sys.executable);suffixes=tuple(importlib.machinery.EXTENSION_SUFFIXES)
+origins=[]
+for loaded in tuple(sys.modules.values()):
+ origin=getattr(getattr(loaded,"__spec__",None),"origin",None)
+ if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
+ if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
+origins=sorted(set(origins));assert len(origins)<=256
+native=sorted({executable,*(path for path in origins if path.endswith(suffixes))})
+if sys.platform=="darwin":
+ dependency_command=["/usr/bin/otool","-L"]
+ build_command=["/usr/bin/dwarfdump","--uuid",executable]
+ parts=pathlib.Path(executable).parts
+ package={"kind":"homebrew-cellar" if "Cellar" in parts else "system",
+  "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else "system",
+  "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else "system"}
+else:
+ dependency_command=["/usr/bin/readelf","-d"]
+ build_command=["/usr/bin/readelf","-n",executable]
+ package={"kind":"dpkg","owner":command(["/usr/bin/dpkg-query","-S",executable])}
+facts={"shadow_runtime":{"build_id":command(build_command),"executable":executable,
+ "executable_sha256":digest(executable),"flags":{"isolated":sys.flags.isolated,
+ "no_site":sys.flags.no_site,"dont_write_bytecode":sys.flags.dont_write_bytecode},
+ "loaded_origins":[{"path":path,"sha256":digest(path)} for path in origins],
+ "native_dependencies":{path:command(dependency_command+[path]) for path in native},
+ "package":package,"platform":sys.platform,"soabi":sysconfig.get_config_var("SOABI"),
+ "stdlib":os.path.realpath(sysconfig.get_path("stdlib")),"version":sys.version}}
+print(json.dumps(facts,sort_keys=True,separators=(",",":")))
+PY
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
 /bin/chmod 0555 "$tmp/object-closure"
@@ -691,12 +737,14 @@ blocking_active = False
 continued = False
 
 def observed_mask(how, values):
+    result = original_mask(how, values)
     if (how == signal.SIG_BLOCK and signal.SIGTERM in values
-            and mode == "guard" and not cleanup_path.exists()):
+            and mode == "guard" and driver.CancellationSignals.active is not None
+            and not cleanup_path.exists()):
         cleanup_path.touch()
         os.kill(os.getpid(), signal.SIGTERM)
-    result = original_mask(how, values)
-    if how == signal.SIG_BLOCK and signal.SIGTERM in values:
+    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
+            and driver.CancellationSignals.active is not None):
         cleanup_path.touch()
     return result
 
@@ -760,7 +808,14 @@ def reproduce(*_args):
     continued = True
 
 driver.reproduce = reproduce
-return_code = driver.main(["driver", "reproduce", "request", "work", "output"])
+class FixtureCensus:
+    def observe(self):
+        pass
+admission = driver._StartupAdmission(
+    driver._STARTUP_KEY, driver.sys.executable,
+    driver.sha(pathlib.Path(driver.sys.executable).read_bytes()), driver.sys.version,
+    tuple(driver.sys.version_info[:2]), driver._runtime_module_origins(), FixtureCensus())
+return_code = driver.main(["driver", "reproduce", "request", "work", "output"], admission)
 after_mask = original_mask(signal.SIG_BLOCK, set())
 restored = all(signal.getsignal(sent) == before[sent] for sent in before)
 done_path.write_text(
@@ -778,6 +833,9 @@ for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("
   if child_pid.exists():break
   if wrapper.poll() is not None:break
   time.sleep(.01)
+ if wrapper.poll() is not None and not child_pid.exists():
+  early_stdout,early_stderr=wrapper.communicate()
+  raise AssertionError(name+" wrapper exited early: "+repr((wrapper.returncode,early_stdout,early_stderr)))
  ok(child_pid.exists(),name+" production consumer reached TERM-ignoring owned child")
  owned=int(child_pid.read_text())
  if first is not None:wrapper.send_signal(first)
@@ -1072,12 +1130,21 @@ ok(not (renamed.with_name("renamed-held")/"bundle.json").exists() and
    not (renamed/"bundle.json").exists(),"failed marker cleanup stays bound to held output")
 renamed_hold.close()
 cancelmark=base/"cancel-marker";cancelmark.mkdir(mode=0o700);cancelmark_hold=e.stable_directory(cancelmark)
+class FixtureCensus:
+ def observe(self):pass
+def guard(census=None):
+ executable=e.stable_file(pathlib.Path(e.sys.executable))
+ try:
+  value=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+        tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or FixtureCensus())
+ finally:executable.close()
+ return e.CancellationSignals(value)
 def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
  real_write_at(fd,name,raw,mode,sync,**options)
  if name=="bundle.json":os.kill(os.getpid(),signal.SIGTERM)
 e.write_exclusive_at=cancel_after_marker
 try:
- with e.CancellationSignals():
+ with guard():
   e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
 except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
 else:raise AssertionError("marker cancellation accepted")
@@ -1086,12 +1153,13 @@ ok(not (cancelmark/"bundle.json").exists(),"cancelled marker is removed through 
 cancelmark_hold.close()
 latecancel=base/"late-cancel";latecancel.mkdir(mode=0o700);latecancel_hold=e.stable_directory(latecancel)
 try:
- with e.CancellationSignals():e.seal(latecancel,latecancel_hold,files,incident,"enforced-reproduction.v1");os.kill(os.getpid(),signal.SIGTERM)
+ with guard():e.seal(latecancel,latecancel_hold,files,incident,"enforced-reproduction.v1");os.kill(os.getpid(),signal.SIGTERM)
 except e.Cancelled:ok(not (latecancel/"bundle.json").exists(),"latched cancellation rolls back retained completion")
 latecancel_hold.close()
 pendingcancel=base/"pending-exit-cancel";pendingcancel.mkdir(mode=0o700)
-pendingcancel_hold=e.stable_directory(pendingcancel);pending_guard=e.CancellationSignals();pending_sent=[False]
+pendingcancel_hold=e.stable_directory(pendingcancel);pending_guard=guard();pending_sent=[False]
 real_mask=e.signal.pthread_sigmask
+pending_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
 def signal_after_exit_mask(how,values):
  result=real_mask(how,values)
  if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.completion is not None
@@ -1103,9 +1171,9 @@ try:
 except e.Cancelled:ok(pending_sent[0] and not (pendingcancel/"bundle.json").exists(),
                       "pending exit signal rolls back before handler ownership transfers")
 else:raise AssertionError("pending exit cancellation accepted")
-finally:e.signal.pthread_sigmask=real_mask
+finally:e.signal.pthread_sigmask=real_mask;signal.signal(signal.SIGTERM,pending_handler)
 pendingcancel_hold.close()
-outer=e.CancellationSignals()
+outer=guard()
 try:
  with outer:
   outer.requested=True
@@ -1115,12 +1183,12 @@ before_handlers={sent:signal.getsignal(sent) for sent in (signal.SIGTERM,signal.
 before_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
 for failure_name in ("unlink","fsync"):
  failure_dir=base/("completion-"+failure_name);failure_dir.mkdir(mode=0o700)
- failure_hold=e.stable_directory(failure_dir);guard=e.CancellationSignals()
+ failure_hold=e.stable_directory(failure_dir);completion_guard=guard()
  real_unlink,real_fsync=e.os.unlink,e.os.fsync
  try:
-  with guard:
+  with completion_guard:
    e.seal(failure_dir,failure_hold,files,incident,"enforced-reproduction.v1")
-   guard.requested=True
+   completion_guard.requested=True
    if failure_name=="unlink":e.os.unlink=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture unlink"))
    else:e.os.fsync=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture fsync"))
  except OSError:pass
@@ -1155,6 +1223,389 @@ ok(e.parse(trace_none)["body"]["events"][1]["facts"]["tool"]=={"state":"not-appl
 
 print("shadow-enforced-slice3: %d checks passed" % checks)
 PY
+
+# The cancellation boundary has a separate lifecycle proof. Its substitutions are
+# private observations of the fixed owner; the shipped CLI check below uses the
+# real standalone admission.
+"$python_bin" -I -S -B - "$root" "$tmp/cancellation" <<'PY'
+import _thread, contextlib, errno, importlib.util, io, os, pathlib, signal, subprocess, sys, threading, time
+root, base = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); base.mkdir(mode=0o700)
+spec = importlib.util.spec_from_file_location("cancel_lifecycle", root / "shadow/v1/enforced-reproduction.py")
+e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
+checks = 0
+def ok(value, message):
+ global checks
+ if not value: raise AssertionError(message)
+ checks += 1; print("ok cancel-%d - %s" % (checks, message))
+class Census:
+ def __init__(self, fail=0):self.calls=0;self.fail=fail
+ def observe(self):
+  self.calls+=1
+  if self.calls==self.fail:raise e.Refusal("E_RUNTIME")
+def admission(census=None):
+ executable=e.stable_file(pathlib.Path(e.sys.executable))
+ try:
+  return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census())
+ finally:executable.close()
+def guard(census=None):return e.CancellationSignals(admission(census))
+def marker(owner, name):
+ directory=base/name;directory.mkdir(mode=0o700)
+ (directory/"bundle.json").write_bytes(b"provisional")
+ descriptor=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+ ok(e.CancellationSignals.retain_completion(descriptor),name+" retains marker owner")
+ return directory
+
+# Missing admission and an imported main refuse before all signal ownership APIs.
+api_names=("getsignal","signal","pthread_sigmask","set_wakeup_fd","sigpending")
+originals={name:getattr(e.signal,name) for name in api_names}; calls=[]
+for name in api_names:
+ setattr(e.signal,name,lambda *_args,_name=name,**_kwargs:calls.append(_name))
+try:
+ try:
+  with e.CancellationSignals():pass
+ except e.Refusal as exc:ok(exc.code=="E_RUNTIME","missing admission refuses")
+ else:raise AssertionError("missing admission accepted")
+ with contextlib.redirect_stderr(io.StringIO()) as error:
+  result=e.main(["driver","reproduce","request","work","output"])
+ ok(result==1 and error.getvalue()=="E_RUNTIME\n","imported main refuses")
+ ok(calls==[],"imported refusal makes no signal, mask or wakeup call")
+finally:
+ for name,value in originals.items():setattr(e.signal,name,value)
+
+# A pre-existing owner remains byte-for-byte functional for either warning mode.
+for warning in (False,True):
+ read_fd,write_fd=os.pipe();os.set_blocking(read_fd,False);os.set_blocking(write_fd,False)
+ prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
+ prior=signal.set_wakeup_fd(write_fd,warn_on_full_buffer=warning);ok(prior==-1,"fixture wakeup starts disabled")
+ setter_calls=[];real_setter=e.signal.set_wakeup_fd
+ e.signal.set_wakeup_fd=lambda *args,**kwargs:(setter_calls.append((args,kwargs)) or -1)
+ try:
+  with contextlib.redirect_stderr(io.StringIO()):
+   result=e.main(["driver","reproduce","request","work","output"])
+ finally:e.signal.set_wakeup_fd=real_setter
+ os.kill(os.getpid(),signal.SIGTERM);observed=os.read(read_fd,1)
+ while True:
+  try:os.write(write_fd,b"x"*4096)
+  except BlockingIOError:break
+ warning_output=io.StringIO()
+ with contextlib.redirect_stderr(warning_output):os.kill(os.getpid(),signal.SIGTERM)
+ retained=signal.set_wakeup_fd(-1,warn_on_full_buffer=True)
+ signal.signal(signal.SIGTERM,prior_handler);os.close(write_fd);os.close(read_fd)
+ ok(result==1 and not setter_calls and retained==write_fd and observed,
+    "unknown owner warning=%s remains installed and receives delivery" % warning)
+ ok(bool(warning_output.getvalue())==warning,
+    "unknown owner warning=%s preserves full-buffer behavior" % warning)
+
+# Entry census refusal happens before the first ownership API.
+entry_calls=[];real_mask=e.signal.pthread_sigmask
+e.signal.pthread_sigmask=lambda *args,**kwargs:(entry_calls.append(args) or real_mask(*args,**kwargs))
+try:
+ try:
+  with guard(Census(1)):pass
+ except e.Refusal:pass
+ else:raise AssertionError("entry census failure accepted")
+finally:e.signal.pthread_sigmask=real_mask
+ok(entry_calls==[],"entry native census refuses before signal ownership")
+
+# One final read and one pending sample decide every fixed-tail result.
+def tail_case(name, read_result=None, read_error=None, pending=(), latch=False, expect_success=False):
+ owner=guard();real_read=e.os.read;real_pending=e.signal.sigpending;reads=[];pendings=[]
+ try:
+  with owner:
+   if latch:owner.requested=True
+   def observed_read(fd,size):
+    if fd==owner.read_fd:
+     reads.append((fd,size))
+     if read_error is not None:raise read_error
+     return read_result
+    return real_read(fd,size)
+   e.os.read=observed_read
+   e.signal.sigpending=lambda:(pendings.append(True) or set(pending))
+ except (e.Cancelled,e.Refusal,OSError):
+  outcome=False
+ else:outcome=True
+ finally:e.os.read=real_read;e.signal.sigpending=real_pending
+ ok(outcome==expect_success and len(reads)==1 and reads[0][1]==1 and len(pendings)==1,name)
+tail_case("EAGAIN is the sole empty success",read_error=BlockingIOError(errno.EAGAIN,"empty"),expect_success=True)
+tail_case("one returned byte aborts",read_result=b"x")
+tail_case("EOF aborts",read_result=b"")
+tail_case("unexpected read error aborts",read_error=OSError(errno.EIO,"fixture"))
+tail_case("sticky latch alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),latch=True)
+tail_case("watched pending alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),pending=(signal.SIGTERM,))
+
+# Replenishment cannot extend the fixed read count, and nested scopes own nothing.
+owner=guard();read_calls=[];real_read=e.os.read
+try:
+ with owner:
+  def replenish(fd,size):
+   if fd==owner.read_fd:
+    read_calls.append(size);os.write(owner.write_fd,b"z");return b"x"
+   return real_read(fd,size)
+  e.os.read=replenish
+except e.Cancelled:pass
+finally:e.os.read=real_read
+ok(read_calls==[1],"concurrent replenishment cannot extend one read")
+saturated=guard();real_read=e.os.read;saturated_reads=[]
+try:
+ try:
+  with saturated:
+   while True:
+    try:os.write(saturated.write_fd,b"u"*4096)
+    except BlockingIOError:break
+   os.kill(os.getpid(),signal.SIGTERM)
+   def count_saturated(fd,size):
+    if fd==saturated.read_fd:saturated_reads.append(size)
+    return real_read(fd,size)
+   e.os.read=count_saturated
+ except e.Cancelled:pass
+ else:raise AssertionError("saturated wakeup signal accepted")
+finally:e.os.read=real_read
+ok(saturated_reads==[1],"unrelated saturation and watched delivery still take one byte")
+owner=guard();real_signal=e.signal.signal;nested_calls=[]
+try:
+ with owner:
+  try:
+   e.signal.signal=lambda *args,**kwargs:nested_calls.append(args)
+   with e.CancellationSignals():
+    nested_fd=os.dup(1)
+    try:
+     try:e.CancellationSignals.retain_completion(nested_fd)
+     except e.Refusal:pass
+     else:raise AssertionError("nested scope retained completion")
+    finally:os.close(nested_fd)
+  finally:e.signal.signal=real_signal
+finally:e.signal.signal=real_signal
+ok(not nested_calls and owner.borrow_depth==0,"nested scope borrows without ownership APIs")
+
+# Both pipe endpoints are private and a child sees the caller's applicable mask.
+owner=guard()
+with owner:
+ ok(not os.get_inheritable(owner.read_fd) and not os.get_inheritable(owner.write_fd),
+    "owner pipe endpoints are noninheritable")
+ child=os.spawnve(os.P_WAIT,sys.executable,[sys.executable,"-I","-S","-B","-c",
+  "import signal,sys;sys.exit(1 if signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()) else 0)"],
+  {"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+ ok(child==0,"child preserves the unblocked caller mask")
+
+# Every watched signal is independently recorded before L.
+for sent in e.WATCHED_SIGNALS:
+ try:
+  with guard():os.kill(os.getpid(),sent)
+ except e.Cancelled:ok(True,"%s before L aborts" % signal.Signals(sent).name)
+ else:raise AssertionError("watched signal accepted")
+
+# Caller-blocked nonignored pending state stays blocked and pending after rollback.
+prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
+prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
+try:
+ try:
+  with guard():os.kill(os.getpid(),signal.SIGTERM)
+ except e.Cancelled:pass
+ else:raise AssertionError("blocked pending signal accepted")
+ current=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ ok(signal.SIGTERM in current and signal.SIGTERM in signal.sigpending(),
+    "caller-blocked nonignored signal remains blocked and pending")
+finally:
+ signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
+ signal.signal(signal.SIGTERM,prior_handler)
+
+# Original SIG_IGN may discard pending only after rollback and disposition restoration.
+prior_handler=signal.signal(signal.SIGTERM,signal.SIG_IGN)
+prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
+ignored_owner=guard();ignored_dir=None
+try:
+ try:
+  with ignored_owner:
+   ignored_dir=marker(ignored_owner,"ignored-pending")
+   os.kill(os.getpid(),signal.SIGTERM)
+ except e.Cancelled:pass
+ else:raise AssertionError("ignored pending signal accepted")
+ ok(ignored_dir is not None and not (ignored_dir/"bundle.json").exists()
+    and signal.getsignal(signal.SIGTERM)==signal.SIG_IGN
+    and signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()),
+    "ignored pending rollback precedes exact disposition and mask restoration")
+finally:
+ signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
+ signal.signal(signal.SIGTERM,prior_handler)
+
+# A final native-count failure removes the marker; a live unregistered thread
+# makes the real entry census refuse before the body can run.
+final_census=Census(2);final_owner=guard(final_census);final_dir=None
+try:
+ with final_owner:final_dir=marker(final_owner,"final-census")
+except e.Refusal:pass
+else:raise AssertionError("final census failure accepted")
+ok(final_census.calls==2 and final_dir is not None and not (final_dir/"bundle.json").exists(),
+   "final native census failure rolls back marker")
+ready=threading.Event();release=threading.Event()
+def native_peer():ready.set();release.wait()
+_thread.start_new_thread(native_peer,());ready.wait()
+entered=False
+try:
+ try:
+  with e.CancellationSignals(admission(e._NativeThreadCensus())):entered=True
+ except e.Refusal:pass
+ else:raise AssertionError("multi-thread entry accepted")
+finally:release.set()
+ok(not entered,"real native non-one entry census refuses before effects")
+ready=threading.Event();release=threading.Event();native_final_owner=e.CancellationSignals(admission(e._NativeThreadCensus()))
+native_final_dir=None
+try:
+ try:
+  with native_final_owner:
+   native_final_dir=marker(native_final_owner,"native-final-census")
+   _thread.start_new_thread(native_peer,());ready.wait()
+ except e.Refusal:pass
+ else:raise AssertionError("real native non-one final census accepted")
+finally:release.set()
+ok(native_final_dir is not None and not (native_final_dir/"bundle.json").exists(),
+   "real native non-one final census rolls back marker")
+
+default_script=base/"default-pending.py";default_output=base/"default-pending-output"
+default_script.write_text('''import hashlib,importlib.util,os,pathlib,signal,sys
+root,output=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]);output.mkdir(mode=0o700)
+spec=importlib.util.spec_from_file_location("default_pending",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+class Census:
+ def observe(self):pass
+path=pathlib.Path(e.sys.executable);admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,
+ hashlib.sha256(path.read_bytes()).hexdigest(),e.sys.version,tuple(e.sys.version_info[:2]),
+ e._runtime_module_origins(),Census())
+owner=e.CancellationSignals(admission);real_mask=e.signal.pthread_sigmask;sent=False
+def inject(how,values):
+ global sent
+ result=real_mask(how,values)
+ if how==signal.SIG_BLOCK and owner.completion is not None and not sent:
+  sent=True;os.kill(os.getpid(),signal.SIGTERM)
+ return result
+e.signal.pthread_sigmask=inject
+with owner:
+ (output/"bundle.json").write_bytes(b"provisional")
+ e.CancellationSignals.retain_completion(os.open(output,os.O_RDONLY|os.O_DIRECTORY))
+''')
+default_result=subprocess.run([sys.executable,"-I","-S","-B",str(default_script),str(root),
+ str(default_output)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
+ok(default_result.returncode==-signal.SIGTERM and not (default_output/"bundle.json").exists(),
+   "default pending delivery occurs only after marker rollback")
+
+# A caller handler exception after L keeps the marker; an actual release failure
+# rolls it back while the held descriptor remains usable.
+class CallerSignal(Exception):pass
+for sent in e.WATCHED_SIGNALS:
+ post_owner=guard();post_dir=None;real_mask=e.signal.pthread_sigmask
+ prior_handler=signal.signal(sent,lambda _signum,_frame:(_ for _ in ()).throw(CallerSignal()))
+ def deliver_after_restore(how,values):
+  result=real_mask(how,values)
+  if how==signal.SIG_SETMASK:os.kill(os.getpid(),sent)
+  return result
+ try:
+  try:
+   with post_owner:
+    post_dir=marker(post_owner,"post-l-"+signal.Signals(sent).name.lower())
+    e.signal.pthread_sigmask=deliver_after_restore
+  except CallerSignal:pass
+  else:raise AssertionError("post-L caller exception hidden")
+ finally:e.signal.pthread_sigmask=real_mask;signal.signal(sent,prior_handler)
+ ok(post_dir is not None and (post_dir/"bundle.json").exists(),
+    signal.Signals(sent).name+" post-L caller exception does not revoke marker")
+
+release_owner=guard();release_dir=None;real_setter=e.signal.set_wakeup_fd
+try:
+ try:
+  with release_owner:
+   release_dir=marker(release_owner,"release-failure")
+   e.signal.set_wakeup_fd=lambda fd,**kwargs:(_ for _ in ()).throw(OSError("fixture release")) if fd==-1 else real_setter(fd,**kwargs)
+ except OSError:pass
+ else:raise AssertionError("release failure accepted")
+finally:
+ e.signal.set_wakeup_fd=real_setter;real_setter(-1,warn_on_full_buffer=True)
+ok(release_dir is not None and not (release_dir/"bundle.json").exists(),
+   "actual release failure rolls back while held descriptor is usable")
+
+handler_owner=guard();handler_dir=None;real_signal=e.signal.signal;handler_failed=False
+def fail_handler(sent,handler):
+ global handler_failed
+ if not handler_failed and handler is handler_owner.previous.get(sent):
+  handler_failed=True;raise OSError("fixture handler restore")
+ return real_signal(sent,handler)
+try:
+ try:
+  with handler_owner:
+   handler_dir=marker(handler_owner,"handler-release-failure")
+   e.signal.signal=fail_handler
+ except OSError:pass
+ else:raise AssertionError("handler restoration failure accepted")
+finally:
+ e.signal.signal=real_signal
+ for sent,handler in handler_owner.previous.items():real_signal(sent,handler)
+ok(handler_failed and handler_dir is not None and not (handler_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"handler restoration failure is sticky and rolls back")
+
+mask_owner=guard();mask_dir=None;real_mask=e.signal.pthread_sigmask;mask_failed=False
+def fail_mask(how,values):
+ global mask_failed
+ result=real_mask(how,values)
+ if how==signal.SIG_SETMASK and not mask_failed:mask_failed=True;raise OSError("fixture mask restore")
+ return result
+try:
+ try:
+  with mask_owner:
+   mask_dir=marker(mask_owner,"mask-release-failure")
+   e.signal.pthread_sigmask=fail_mask
+ except OSError:pass
+ else:raise AssertionError("mask restoration failure accepted")
+finally:e.signal.pthread_sigmask=real_mask
+ok(mask_failed and mask_dir is not None and not (mask_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"mask restoration failure is sticky and rolls back")
+
+pipe_owner=guard();pipe_dir=None;real_close=e.os.close;pipe_failed=False
+def fail_pipe_close(fd):
+ global pipe_failed
+ if fd==pipe_owner.write_fd and not pipe_failed:pipe_failed=True;raise OSError("fixture pipe close")
+ return real_close(fd)
+try:
+ try:
+  with pipe_owner:
+   pipe_dir=marker(pipe_owner,"pipe-release-failure")
+   e.os.close=fail_pipe_close
+ except OSError:pass
+ else:raise AssertionError("pipe close failure accepted")
+finally:
+ e.os.close=real_close
+ if pipe_failed:real_close(pipe_owner.write_fd)
+ok(pipe_failed and pipe_dir is not None and not (pipe_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"pipe close failure is sticky and rolls back")
+
+completion_owner=guard();completion_dir=None;real_close=e.os.close;completion_failed=False
+def fail_completion_close(fd):
+ global completion_failed
+ if fd==completion_owner.completion and not completion_failed:
+  completion_failed=True;raise OSError("fixture completion close")
+ return real_close(fd)
+try:
+ try:
+  with completion_owner:
+   completion_dir=marker(completion_owner,"completion-release-failure")
+   e.os.close=fail_completion_close
+ except OSError:pass
+ else:raise AssertionError("completion close failure accepted")
+finally:
+ e.os.close=real_close
+ if completion_failed:real_close(completion_owner.completion)
+ok(completion_failed and completion_dir is not None and not (completion_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"completion close failure is sticky and rolls back")
+
+print("shadow-enforced-cancellation: %d checks passed" % checks)
+PY
+
+cli_result=0
+cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" 2>&1) || cli_result=$?
+[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_USAGE ] || fail 'standalone closed startup admission'
+cli_result=0
+cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" reproduce /nonexistent /nonexistent /nonexistent 2>&1) || cli_result=$?
+[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_RUNTIME ] || fail 'standalone owner acquisition'
+/usr/bin/printf 'shadow-enforced-cli: closed startup and owner acquisition passed\n'
 
 
 # Exercise the production orchestration with only host identity, child process,
