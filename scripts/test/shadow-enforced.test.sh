@@ -115,21 +115,71 @@ else:raise AssertionError("test-only native binary received production admission
 print("shadow-enforced-native-admission: test build refused before import")
 PY
 "$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
-import hashlib, importlib.machinery, importlib.util, json, os, pathlib, subprocess, sys, sysconfig
+import hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,subprocess,sys,sysconfig
 root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+native_spec=importlib.util.spec_from_file_location("_cancel_release",native_binary)
+native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
 def digest(path):
- measured=hashlib.sha256()
+ size=os.stat(path).st_size
+ if size>256*1024*1024: return {"status":"unavailable","reason":"file-size-limit","size":size}
+ measured=hashlib.sha256();seen=0
  with open(path,"rb") as source:
-  while chunk:=source.read(1024*1024):measured.update(chunk)
- return measured.hexdigest()
-def command(argv):
+  while chunk:=source.read(1024*1024):measured.update(chunk);seen+=len(chunk)
+ return {"status":"ok","sha256":measured.hexdigest(),"size":seen}
+def command(argv,limit=32768):
  try:
-  value=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"}).stdout
- except (OSError,subprocess.SubprocessError):return "unavailable"
- return value[:32768].decode("utf-8","replace")
+  result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+ except (OSError,subprocess.SubprocessError) as error:
+  return {"status":"unavailable","reason":type(error).__name__}
+ raw=result.stdout
+ return {"status":"ok" if result.returncode==0 else "failed","exit":result.returncode,
+  "stdout":raw[:limit].decode("utf-8","replace"),"truncated":len(raw)>limit}
+def dpkg(path):
+ owner=command(["/usr/bin/dpkg-query","-S",path],4096)
+ if owner["status"]!="ok":return {"status":"unavailable","owner_query":owner,"packages":[]}
+ answer={"status":"ok","packages":[]}
+ names=sorted({line.rsplit(": ",1)[0] for line in owner["stdout"].splitlines() if ": " in line})
+ if len(names)>8:return {"owner_query":owner,"packages":[],"status":"unavailable","reason":"owner-count-limit"}
+ for name in names:
+  query=command(["/usr/bin/dpkg-query","-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\n",name],4096)
+  item={"status":"unavailable","query":query}
+  if query["status"]=="ok":
+   fields=query["stdout"].rstrip("\n").split("\t")
+   if len(fields)==4:item={"status":"ok",**dict(zip(
+    ("binary_package","binary_version","source_package","source_version"),(field or None for field in fields)))}
+  answer["packages"].append(item)
+ return answer
+def build_id(path):
+ result=command(["/usr/bin/readelf","-n",path])
+ matches=re.findall(r"Build ID: ([0-9a-fA-F]+)",result.get("stdout",""))
+ return {"status":"ok","value":matches[0].lower()} if result["status"]=="ok" and len(matches)==1 else {
+  "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def interpreter(path):
+ result=command(["/usr/bin/readelf","-l",path])
+ matches=re.findall(r"Requesting program interpreter: ([^]]+)",result.get("stdout",""))
+ return {"status":"ok","requested":matches[0],"resolved":os.path.realpath(matches[0])} \
+  if result["status"]=="ok" and len(matches)==1 else {
+   "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def soname(path):
+ result=command(["/usr/bin/readelf","-d",path])
+ matches=re.findall(r"\(SONAME\).*\[([^]]+)\]",result.get("stdout",""))
+ if result["status"]=="ok" and len(matches)==1:return {"status":"ok","value":matches[0]}
+ if result["status"]=="ok" and not matches:return {"status":"missing"}
+ return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
+def jit():
+ api=getattr(sys,"_jit",None)
+ if api is None:return {"status":"missing"}
+ answer={"status":"present"}
+ for name in ("is_available","is_enabled","is_active"):
+  call=getattr(api,name,None)
+  if call is None:answer[name]={"status":"missing"}
+  else:
+   try:answer[name]={"status":"ok","value":call()}
+   except Exception as error:answer[name]={"status":"unavailable","reason":type(error).__name__}
+ return answer
 executable=os.path.realpath(sys.executable);suffixes=tuple(importlib.machinery.EXTENSION_SUFFIXES)
 origins=[]
 for loaded in tuple(sys.modules.values()):
@@ -137,26 +187,67 @@ for loaded in tuple(sys.modules.values()):
  if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
  if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
 origins=sorted(set(origins));assert len(origins)<=256
-native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
-if sys.platform=="darwin":
- dependency_command=["/usr/bin/otool","-L"]
- build_command=["/usr/bin/dwarfdump","--uuid",executable]
- parts=pathlib.Path(executable).parts
- package={"kind":"homebrew-cellar" if "Cellar" in parts else "system",
-  "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else "system",
-  "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else "system"}
+build_jit=sysconfig.get_config_var("Py_ENABLE_JIT")
+body={"platform":sys.platform,"executable":executable,"executable_identity":digest(executable),
+ "flags":{"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,
+ "dont_write_bytecode":sys.flags.dont_write_bytecode},"jit":jit(),
+ "loaded_origins":[{"path":path,"identity":digest(path)} for path in origins],
+ "soabi":sysconfig.get_config_var("SOABI"),"stdlib":os.path.realpath(sysconfig.get_path("stdlib")),
+ "version":sys.version,"build_configuration":{"Py_ENABLE_JIT":{"status":"missing"} if build_jit is None
+  else {"status":"present","value":build_jit}}}
+if sys.platform=="linux":
+ maps=pathlib.Path("/proc/self/maps").read_bytes();assert len(maps)<=1024*1024
+ paths=[];map_gaps=[]
+ for line in maps.decode("utf-8","strict").splitlines():
+  fields=line.split(None,5)
+  if len(fields)==6 and fields[5].startswith("/"):
+   if fields[5].endswith(" (deleted)"):
+    map_gaps.append({"path":fields[5],"status":"unavailable","reason":"deleted-mapping"});continue
+   path=os.path.realpath(fields[5])
+   if not os.path.isfile(path):
+    map_gaps.append({"path":path,"status":"unavailable","reason":"missing-mapped-file"});continue
+   with open(path,"rb") as image:header=image.read(4)
+   if header==b"\x7fELF":paths.append(path)
+ paths=sorted(set(paths));assert 1<=len(paths)<=64 and len(map_gaps)<=16
+ elf_interpreter=interpreter(executable)
+ interpreter_path=elf_interpreter.get("resolved")
+ images=[]
+ for path in paths:
+  image_soname=soname(path);roles=[]
+  if path==executable:roles.append("python-executable")
+  if path==native_binary:roles.append("native-release")
+  if path==interpreter_path:roles.append("elf-interpreter")
+  if image_soname.get("value")=="libc.so.6":roles.append("libc")
+  images.append({"path":path,"roles":roles,"identity":digest(path),"build_id":build_id(path),
+   "soname":image_soname,"package":dpkg(path)})
+ body.update({"executable_build_id":build_id(executable),"elf_interpreter":elf_interpreter,
+  "elf_images":images,"mapped_file_gaps":map_gaps,
+  "required_roles":{role:sum(role in image["roles"] for image in images)
+   for role in ("python-executable","native-release","elf-interpreter","libc")}})
 else:
- dependency_command=["/usr/bin/readelf","-d"]
- build_command=["/usr/bin/readelf","-n",executable]
- package={"kind":"dpkg","owner":command(["/usr/bin/dpkg-query","-S",executable])}
-facts={"shadow_runtime":{"build_id":command(build_command),"executable":executable,
- "executable_sha256":digest(executable),"flags":{"isolated":sys.flags.isolated,
- "no_site":sys.flags.no_site,"dont_write_bytecode":sys.flags.dont_write_bytecode},
- "loaded_origins":[{"path":path,"sha256":digest(path)} for path in origins],
- "native_dependencies":{path:command(dependency_command+[path]) for path in native},
- "package":package,"platform":sys.platform,"soabi":sysconfig.get_config_var("SOABI"),
- "stdlib":os.path.realpath(sysconfig.get_path("stdlib")),"version":sys.version}}
-print(json.dumps(facts,sort_keys=True,separators=(",",":")))
+ native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
+ parts=pathlib.Path(executable).parts
+ body.update({"build_id":command(["/usr/bin/dwarfdump","--uuid",executable]),
+  "native_dependencies":{path:command(["/usr/bin/otool","-L",path]) for path in native},
+  "package":{"kind":"homebrew-cellar" if "Cellar" in parts else "system",
+   "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else None,
+   "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else None}})
+facts={"schema_version":1,"kind":"shadow_runtime_dependency_record",
+ "id":"shadow.runtime-dependency","body":body}
+encoded=(json.dumps(facts,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+assert len(encoded)<=1024*1024
+sys.stdout.buffer.write(encoded)
+PY
+"$python_bin" -I -S -B - "$native_out/build-record.json" \
+  "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib,json,pathlib,sys
+for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-release.build-evidence",sys.argv[1]),
+ ("shadow_runtime_dependency_evidence","shadow.runtime-dependency-evidence",sys.argv[2])):
+ raw=pathlib.Path(path).read_bytes();assert len(raw)<=1024*1024
+ record=json.loads(raw);assert raw==(json.dumps(record,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+ evidence={"schema_version":1,"kind":kind,"id":name,
+  "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
+ print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
 PY
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
