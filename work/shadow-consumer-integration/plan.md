@@ -1,46 +1,49 @@
 ---
-spec-blob: 740ef2bcf1b198a28ff4aab9675b3897cba6c026
+spec-blob: 1aa98f5b467bbca0ee01d45f105129737ea24422
 risk: high
 drafted: 2026-10-06
 ---
 # Plan: inactive shadow-consumer integration
 
-Tracks #506. This implements Step-8 child 5 under the accepted spec. The authoring
-base is `95b54c142f6ad242e0a36b2a92fa51d7606255fb`; base movement is external
-context, not permission to change the artifact's meaning. The intent blob is
-`6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
+Tracks #506. This implements Step-8 child 5 under the accepted spec. The authoring base
+is `c5ef9bda4a3a02153a8ebf854143de9cc56b9b8b`; base movement is external context, not
+permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 550–650 lines. The helper trust channel,
-fixed control references, descriptor reader, materialization field map, and complete
-finite cancellation-owner admission and handoff need one coherent implementation
+Plan PR: `review_size: accepted-exception`, 700–825 lines. The five-slice contract, closed
+native context, direct-result release and signal/fd proof need one coherent implementation
 brief. This changes only the soft size budget.
 
 ## Files that change
 
-Only `work/shadow-consumer-integration/plan.md` changes in the plan PR. The following
-five implementation PRs land in order. Each uses its exact set below, with tests
-in the same PR. The first four track #506; only the fifth closes it.
+Only `work/shadow-consumer-integration/plan.md` changes in the plan PR. The five
+implementation slices keep their accepted order. Slices 1, 2, 4 and 5 retain their
+landed scope. SC-CANCEL-3 repairs slice 3 on the original branch and PR only; it does
+not create another implementation attempt. The first four track #506; only the fifth
+closes it.
 
 | Slice | Exact implementation paths, excluding the common documentation set |
 | --- | --- |
 | 1 — bound evaluator/checker | `control/v1/sandbox-bound-policy.json`, `control/v1/sandbox-bound-decision.json`, `control/v1/control-policy-set-sandbox-bound.json`, `control/v1/evaluate-bound-sandbox.sh`, `control/v1/sandbox-bound.jq`, `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`, `scripts/test/control-sandbox-bound.test.sh`, `scripts/test/sandbox-receipt.test.sh`, `scripts/test/portable-core-schema.test.sh` (only the spec R10.9 expected-path addition) |
 | 2 — trusted dependencies and origin reader | `shadow/v1/_consumer.py`, `scripts/test/shadow-enforced.test.sh` |
-| 3 — enforced reproduction | `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh`, `scripts/test/shadow-slice.test.sh` (compatibility assertions only) |
+| 3 — enforced reproduction | `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh` |
 | 4 — add-only materialization | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-write.test.sh` |
 | 5 — withheld request and complete integration | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `scripts/test/shadow-write.test.sh`, `scripts/test/shadow-enforced.test.sh` |
 
 The common documentation set is exactly `docs/components.md`, `RESTORE.md`, and
-`ci/required-files.txt`. Each slice may change only its own component descriptions
-and manifest entries. Add each new shipped file and test to the restore manifest
-when it first lands. Keep shell drivers/tests executable. Intermediate entry points
-refuse operations whose remaining checks are not implemented; they cannot emit a
-completed write bundle early. No other source or accepted artifact changes.
+`ci/required-files.txt`. The SC-CANCEL-3 slice-3 repair therefore has exactly eight
+paths: its five table entries plus this three-file set. In `ci/required-files.txt` it
+only appends the two native files. `scripts/test/shadow-slice.test.sh` remains prior
+slice history and is not a repair path. Each other slice may change only its accepted
+component descriptions and manifest entries. Keep shell drivers/tests executable.
+Intermediate entry points refuse operations whose remaining checks are not implemented;
+they cannot emit a completed write bundle early. No other source or accepted artifact
+changes.
 
 | Slice | Classification | Net-line range | Evidence for the estimate |
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 3500–4000 | Complete component orchestration, cancellation handoff and the fixed ACL resolver protocol, lifetime, metadata and native-separation proof need readable room without trimming existing controls. This remains one enforced-reproduction concern. |
+| 3 | Accepted exception | 4200–5000 | The preserved 3597-line candidate plus the private C/build boundary, context/provenance and ledger repairs, and paired signal/fd/Linux regressions remains one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -48,6 +51,12 @@ If the complete readable change cannot fit its accepted slice, stop before an
 unexplained overrun and return through the plan gate. Do not remove proof or create
 extra parallel initiatives. No bootstrap, workflow, installation or policy-authority
 change is included.
+
+The slice-3 range starts from the measured 3597-line candidate. Allow 250–450 lines for the
+native source/build recipe, 150–300 for Python context, provenance, ledger and release,
+300–650 for paired regressions, and 20–60 for the three common files. Replacing the old
+exception path offsets part of that addition. The rounded 4200–5000 range leaves readable
+room without padding, compressed code or omitted proof.
 
 ## Order of work
 
@@ -103,19 +112,25 @@ The checker continues to report no origin authentication.
 ### 2. Trusted parent context and dependency snapshots
 
 Keep the spec's CLI argument lists unchanged. The trusted parent supplies the helper
-acceptance context on inherited descriptor 3, opened read-only before launching the
-consumer. It is not a REQUEST field, environment lookup, candidate file or runtime
-approval prompt. The descriptor is a channel from the already trusted caller, not
-independent authentication of an arbitrary caller. An untrusted party able to launch
+and native acceptance context on inherited descriptor 3, opened read-only before
+launching the consumer. It is not a REQUEST field, environment lookup, candidate file
+or runtime approval prompt. The descriptor is a channel from the already trusted caller,
+not independent authentication of an arbitrary caller. An untrusted party able to launch
 a different consumer or forge its parent's context is outside this invocation trust
 boundary; candidate/request data must never obtain that ability.
 
 The context is canonical JSON, at most 16 KiB, with exact envelope
-`{schema_version:1,kind:"shadow_consumer_parent_context",id:"shadow.parent",body}`.
+`{schema_version:2,kind:"shadow_consumer_parent_context",id:"shadow.parent",body}`.
 The body has exactly `helper_source_sha256`, `helper_build_record_sha256`,
-`helper_executable_sha256`, `helper_executable_size`, and `helper_path`.
-All hashes are lowercase SHA-256; size is a positive integer at most 16 MiB;
-helper_path is the physical absolute locator independently chosen by the parent.
+`helper_executable_sha256`, `helper_executable_size`, `helper_path`, and
+`native_release`. Keep the accepted helper field types and bounds exactly. The native object
+has exactly `source_sha256`, `build_script_sha256`, `build_record_sha256`, `binary_path`,
+`binary_size`, `binary_sha256`, `python_path`, `python_sha256`, `python_abi`,
+`dependency_record_sha256`, and `loader_mode`. All digests are lowercase SHA-256; `binary_size`
+is 1–16 MiB in bytes; both paths are physical and absolute; `python_abi` is 1–128 printable
+ASCII bytes; and `loader_mode` is `rtld-now-local.v1`. Missing descriptor, writable fd,
+unstable bytes, wrong schema, extra/missing/duplicate fields, noncanonical input, bad bounds
+or an unaccepted identity exits 1 with `E_PARENT_CONTEXT` before executable effects.
 
 Before starting the consumer, the trusted parent reviews the committed
 `adapters/local-git-materializer/v1/object-closure.c`, the compiler/build inputs and
@@ -135,6 +150,40 @@ Independently verify the package source equals that pin. A different build may b
 The context's result digest is an acceptance input; recomputing a request-selected
 binary digest does not create acceptance.
 
+The native recipe is private and fixed:
+`/bin/bash -p S/shadow/v1/build-cancel-release.sh build P OUT`, where S and P are
+reviewed physical paths and OUT does not exist. The script accepts no environment
+compiler or flag override. It creates OUT mode 0700, reads only sibling
+`_cancel_release.c`, queries P under `-I -S -B` for its include directories,
+`EXT_SUFFIX`, `SOABI`, implementation/version and build configuration, and invokes
+physical `/usr/bin/cc` once. The common argv is `-std=c11 -Wall -Wextra -Werror -O2
+-fvisibility=hidden -fPIC` plus the two captured Python include directories and fixed
+source/output paths. Darwin adds `-bundle -undefined dynamic_lookup`; Linux adds
+`-shared`. Any other platform or empty/nonphysical sysconfig value refuses. OUT ends
+with exactly the extension and canonical `build-record.json`; no install or import is
+performed by the recipe.
+
+The build record is at most 1 MiB and has one schema-1
+`shadow_cancel_release_build_record` envelope. Its body has exactly platform and
+architecture, source/build-script digests, compiler physical identity/digest/version
+digest, complete argv and its digest, P locator/digest/implementation/version,
+SOABI/EXT_SUFFIX/configuration, output name/size/digest and `test_build:false`. The trusted
+parent compares each value to captured bytes, separately accepts the dependency record, then
+supplies the closed context. Production never calls this script; test builds in a fresh
+private directory have no native admission authority.
+
+The dependency record is parent-retained canonical evidence, not a bundle sidecar. It
+binds the actual P/framework, extension, loader and relevant libc/system images, plus
+the source/package/build identity used for every internal-behavior assumption and the
+no-deferred-first-use call graph. Linux includes the physical ELF interpreter/loader
+and libc paths, hashes and build IDs, complete binary package version and source package
+revision. macOS includes P/framework and extension UUIDs, relevant image/install-name
+and shared-cache UUIDs, architecture and actual JIT/build facts; `Py_ENABLE_JIT=null`
+does not prove JIT disabled, and an image without separate disk bytes gets no invented
+hash. Historical Linux timestamp inference and reference Apple/GNU source versions do
+not satisfy this record. Missing actual identity or unresolved source correspondence
+refuses that runtime; no whole-OS source certification is added.
+
 After reading REQUEST, require its helper locator to equal the context locator.
 Open the helper with held no-follow ancestors and compare metadata before/after
 reading. Compare the captured bytes and size to the independently accepted tuple
@@ -153,8 +202,27 @@ Apply the same bounded-copy-before-version sequence to jq, whose expected digest
 is the existing fixed platform pin. Python is the physical trusted interpreter
 from the invocation; `/usr/bin/git` is the fixed Git. Load `_consumer.py` through
 its verified absolute sibling location under isolated Python, not user module
-search paths. Keep helper/context provenance hashes in the record; never retain
-helper_path or other local host paths in published evidence.
+search paths.
+
+Before P starts, the parent rejects every unaccepted `LD_*` or `DYLD_*` loader
+setting; clearing it after startup is not evidence. Before the first receiver census,
+the driver matches `sys.executable`, P bytes and ABI to the context, snapshots the
+private extension, and temporarily sets the interpreter's accepted flags to
+`RTLD_NOW|RTLD_LOCAL` for that one absolute load. It completes module/type/State
+initialization, symbol/method binding and the dependency record's relevant first-use
+work, restores the prior non-tail loader setting, and retains strong references to the
+module, State and bound methods through release. Unknown flags, identity or deferred
+work refuses before effects. There is no tail import, `dlopen`, `dlsym` or `dlclose`.
+
+Keep helper/context provenance in the existing record and never retain local paths.
+`consumer-provenance.json.body.native_release` has exactly `context_version:2`,
+`source_sha256`, `build_script_sha256`, `build_record_sha256`, `binary_locator_sha256`,
+`binary_size`, `binary_sha256`, `python_locator_sha256`, `python_sha256`, `python_abi`,
+`dependency_record_sha256`, and `loader_mode`. Locator hashes are over accepted UTF-8
+physical paths; every other value equals the context.
+The object adds no command row, sidecar, inventory member or authority. A frozen
+enforced bundle without this exact object or matching current context refuses as stale;
+the unchanged legacy reader alone may read a record without `record_form`.
 
 ### 3. Immutable installation and controlled store
 
@@ -274,6 +342,14 @@ R4.5. Do not infer teardown from wrapper termination. Tests never invoke this ar
 they substitute the private launch function while running the real remaining path.
 No plan acceptance authorizes an actual native call.
 
+Create the command ledger before constructing the Darwin resolver or calling
+`load_anchor`. Route every actual nonempty resolver batch through the same ordered
+`record_command` path as other children; repeated argv create repeated rows and empty
+batches create none. Complete the final resolver-backed anchor/ACL recheck before
+freezing provenance. After freeze, only child-free held/named metadata seal checks may
+run, and they still fail on identity drift. Native module methods are not child
+commands and never get invented ledger rows.
+
 ### 5. Cancellation and completion ownership
 
 Keep cancellation in the existing private `CancellationSignals` boundary. It owns
@@ -285,6 +361,36 @@ trusted parent in spec R2.1/R2.4. An imported or library call without that priva
 startup admission refuses before any signal, mask or wakeup API call. Nested scopes
 borrow the outer latch and cleanup state; they cannot acquire a lease, install a
 wakeup fd, retain completion or define another transfer point.
+
+`_cancel_release` is private to this boundary. It exports only `prepare_state()`, and
+the returned opaque non-subclassable `NativeState` has fixed methods
+`block_entry()`, `resume_consumer()`, `hold_completion(fd)`, `block_final()`,
+`rollback_marker()`, `finish_release()` and `outcome()`. Every method except
+`hold_completion` is NOARGS; that method accepts one exact built-in integer directory
+fd and duplicates it internally. There is no how/mask/path/syscall-list/callable
+argument, generic operation dispatcher, public cancellation API or REQUEST-selected
+value. Calls outside the fixed phase refuse before a native effect.
+
+State is allocated before the first census and contains only the necessary authority:
+
+- entry and final native `sigset_t` values and direct entry, resume, final and finish
+  mask-result cells, each tagged `NOT_RUN` or `RETURNED(raw_rc)`; an old mask is usable
+  only for its successful capture;
+- one completion-fd ownership value, the immediately captured dev/inode/type, and
+  fixed close/fstat/unlinkat/fsync result cells storing direct rc and errno copied in
+  the next C statement after failure;
+- one phase value (`prepared`, `entry-blocked`, `consumer`, `final-blocked`,
+  `release-running`, `sealed`), one rollback-attempted value, and `first_failure`
+  pointing to the first fixed result cell without overwriting it; and
+- preallocated outcome singletons and strong references required for the module,
+  State and every bound method to survive the protected interval.
+
+Do not add parallel valid/executed/error copies. `NOT_RUN` distinguishes a Python
+argument, recursion or dispatch failure before the C body from a native call that
+returned nonzero. State has no destructor that closes the completion fd, rolls back a
+marker or repeats release. `hold_completion` duplicates ownership and stores the owned
+fd before returning to Python, then records its fstat identity; Python never receives
+an unrecorded duplicate awaiting assignment.
 
 Admission requires the Python main interpreter thread and a fresh closed startup
 whose reviewed physical runtime, standard/native dependency closure and exact imports
@@ -329,17 +435,28 @@ actual admitted call graph and show no remaining membership symbol call or lazy 
 unknown parent native closure still refuses. Linux keeps its existing independent
 runtime proof.
 
-After admission and while the watched set is blocked, create one private nonblocking
-close-on-exec pipe, install its write end with the known warning mode, install consumer
-handlers and restore the caller's exact mask. The signal module writes a byte when a
-handled signal is received; the handler independently makes the latch sticky. Children
-inherit neither pipe endpoint nor owner state and preserve the applicable caller mask.
+After admission, call `block_entry()`. Its C body uses the hard-coded HUP/INT/TERM set,
+calls `pthread_sigmask(SIG_BLOCK,...)` once, and stores raw rc and the old mask before
+it can return. Only rc 0 installs the outer owner. If Python dispatch or assignment is
+interrupted after return, unwind consults State and restores the valid native old mask;
+it never relies on `entered = True`. `NOT_RUN` or nonzero rc never reads an
+uninitialized mask or installs an owner. Nested scopes borrow that owner and State.
+
+While the watched set is blocked, create one private nonblocking close-on-exec pipe,
+install its write end with the known warning mode, install consumer handlers, then call
+`resume_consumer()` to restore the entry old mask from State. Its real rc is stored
+before return. The signal module writes a byte when a handled signal is received; the
+handler independently makes the latch sticky. Children inherit neither pipe endpoint
+nor owner state and preserve the applicable caller mask.
 
 Before the final decision, finish every admitted component action, evidence/identity
 and inventory check, marker/file/directory fsync, child cleanup and ordinary resource
-close. The marker remains provisional and descriptor-relative rollback remains held.
-Then block the watched set, complete the final native-thread observation, and make
-exactly one nonblocking one-byte pipe read. Any returned byte sets sticky
+close. The marker remains provisional. Before L, pass its trusted held directory fd
+once to `hold_completion`; State owns the duplicate and original dev/inode/type before
+Python resumes. Close the ordinary seal fd before L. Then call `block_final()`, which
+stores the real mask rc and final old mask before return. Only its successful result
+permits the final native-thread observation and exactly one nonblocking one-byte pipe
+read. Any returned byte sets sticky
 delivered-or-uncertain, regardless of identity. EOF, uncertain descriptor state or any
 error other than the expected empty `EAGAIN`/`EWOULDBLOCK` sets the same flag; only that
 expected empty result clears this input. Never drain, retry or make a second read. An
@@ -351,14 +468,19 @@ The decision inputs are: outstanding exception; sticky latch; delivered-or-uncer
 watched pending set; and any admission, preparation, observation or release-preparation
 failure. Every nonempty input selects abort and stays sticky. Success requires all
 preconditions complete and all five inputs clear. That successful pending-set sampling
-instant is completion handoff **L**; the later Python assignment is not L. No semantic,
-durability, child or ordinary resource work and no second completion decision follows L.
+instant is completion handoff **L**; native finish and the later Python assignment are
+not L. No semantic, durability, child or ordinary resource work and no second completion
+decision follows L.
 
 Abort never calls `sigwait` and never drains, consumes, replays, counts or manually
-invokes a signal. While watched signals remain blocked, unlink `bundle.json` through
-the held directory descriptor and fsync the directory first. Then continue bounded
-best-effort release, restore the exact original handlers, known disabled wakeup state,
-active parent and caller mask, and close owned descriptors. Caller-blocked pending
+invokes a signal. While watched signals remain blocked, call `rollback_marker()` so
+State uses its owned directory duplicate for at most one descriptor-relative unlink of
+fixed `bundle.json` and one fsync, recording each direct result. A Python preparation or
+release-preparation failure that became sticky before L takes this same rollback path
+before unmask while the fd is usable. Later native success cannot erase it. Then
+continue bounded best-effort release, restore the exact original handlers, known
+disabled wakeup state, active parent and caller mask, and close ordinary owned
+descriptors. Caller-blocked pending
 signals with original returning or default dispositions remain blocked and pending.
 For original `SIG_IGN`, exact disposition restoration after rollback may discard a
 pending signal while it is still blocked; that is the caller's original kernel
@@ -369,13 +491,56 @@ Default disposition may terminate the wrapper after marker removal; returning or
 ignored controls report nonzero `E_RUNTIME`. Never relabel that pre-L abort as a post-L
 caller signal. Other failures keep their existing `E_RUNTIME` behavior.
 
-After L, later signals belong to the restored caller and do not revoke the completed
-marker. An exception raised by a restored caller handler is distinct from a failure of
-the handler/mask/wakeup/close release operations and must not be caught and relabelled
-as pre-L cancellation. Actual unlink, fsync, close or restoration failures remain
-sticky, receive the existing best-effort descriptor-relative rollback while a usable
-handle remains, and never become success or a false claim that removal succeeded.
-Restore the active parent even on failure.
+After L and while watched signals remain blocked, restore original handlers, the known
+disabled wakeup/warning pair and active parent, then close ordinary pipe fds. No caller
+handler wrapper delays the original disposition. Call `finish_release()` exactly once.
+Its native critical tail uses the valid final old mask with `pthread_sigmask`, records
+the direct return code immediately if the call returns, performs any required rollback,
+and closes the final completion duplicate before Python can dispatch a caller. It does
+not call Python, CheckSignals, release the GIL, allocate, DECREF, import, load or resolve
+a symbol, open/dup an fd, invoke a callback or create a receiver.
+
+A nonzero mask result is a true sticky failure. While the owned fd is still usable,
+perform the not-already-attempted fixed unlinkat/fsync rollback before closing it. A
+successful native mask result cannot erase an earlier sticky failure. For the final
+close, store rc and errno immediately. Success makes ownership closed and never touches
+that integer again. Failure performs exactly one fstat. EBADF, fstat error, identity
+mismatch or missing no-reuse proof marks the fd unusable and never unlinks, reopens or
+retries it. Only when the admitted process is actually single-threaded, the fixed tail
+has no fd allocator/replacement, unknown native callback or pthread-cancellation cleanup,
+and dev/inode/type still match may State treat it as the original usable directory,
+perform a not-already-attempted unlinkat/fsync, and make at most one conditional close.
+Each unlink/fsync/close result remains independent and sticky; no failed cleanup is
+reported as removal success.
+
+The final native tail has at most one mask call, two close calls, one fstat, one unlinkat
+and one fsync. A pre-L rollback already attempted is not repeated. This finite count is
+not a syscall wall-time guarantee. It makes no EINTR-state guess and has no loop, path
+reopen, replacement handle, second census or second completion decision.
+
+The critical tail ends only after State seals ownership, every direct result and
+`first_failure`. The C epilogue may only return a new reference to a preallocated,
+strongly rooted status singleton; that fixed INCREF is outside the sealed syscall tail and
+performs no allocation, DECREF or callback. `outcome()` is a read-only NOARGS getter for
+that singleton and never releases. Later diagnostic formatting has no control authority.
+An interruption before, during or after the getter, Python assignment, formatting or GC
+does not infer native failure, repeat a syscall or enter a retry loop.
+
+Every outer recoverable/refusal branch checks authoritative State before cleanup logic.
+When L occurred and native release succeeded with no earlier failure, any later caller
+exception keeps the marker and caller ownership: driver `Refusal`,
+`_consumer.Refusal("E_RUNTIME")`, `E_PARENT_CONTEXT`, identical errno/text `OSError`,
+`ValueError`, `MemoryError`, `SystemExit` and other `BaseException` controls all pair
+with the same completion result. They cannot create a new inconclusive bundle, roll
+back, run another product action or relabel the event pre-L. A true native or earlier
+failure remains sticky even if the caller also raises, and ordinary control that
+continues reports the existing `E_RUNTIME` precedence.
+
+`SIG_DFL` may terminate inside the unmask call before rc is recorded or the final close
+runs; it may also terminate after a true failure and before best-effort rollback. Do not
+delay the original disposition to obtain a report. Record only the last boundary an
+external observer actually saw, never imaginary cleanup, success or an `E_RUNTIME`
+return from a dead process. Returning or ignored dispositions follow the sealed outcome.
 
 Keep the accepted frozen-reader contract. Add no producer status, terminal-result
 trust, sidecar, inventory member, accepted identity, helper, launcher change or public
@@ -578,18 +743,34 @@ values with their dependent hashes recomputed, so rejection proves relations rat
 than merely a stale checksum. Tests use the real unchanged component interfaces;
 only private OS identity/ACL/launch observations are substituted in-process.
 
+Production `_cancel_release` contains no fault selector. Native failure proof compiles
+the same source into separately identified test-only variants with
+`YSTACK_CANCEL_RELEASE_TESTING` and one fixed `YSTACK_CANCEL_TEST_CASE` enum per binary.
+Each enum selects a closed compile-time wrapper case; there is no runtime environment,
+REQUEST, callable or operation-list switch. `build-record.json` marks those variants
+`test_build:true`, and production context validation rejects them. A case may return a
+simulated direct rc/errno, close then report the selected failure, or interrupt the
+entry handoff after its old mask is stored. Every assertion says `simulated`; only
+uninjected platform calls and real delivered signals are reported as kernel/runtime
+observations.
+
 | Suite | Required assertions |
 | --- | --- |
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
-| shadow-enforced | Parent-context absent/writable/malformed/request-forged; helper source/result mismatch; unapproved and raced helper leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native call after precheck failure |
+| shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
+| shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, complete package/source revision or dependency closure refuses; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
 | shadow-enforced | Linux capped `/proc/self/status` identity/`Threads: 1` and macOS preloaded fixed libproc exact-size/`pti_threadnum == 1`; entry non-one/unregistered native thread refuses before effects and final count/read/close failure rolls back; complete physical runtime/startup/dependency and initialized finite-tail evidence proves the census stays exclusive, while a mocked count, Python registry or implementation name does not |
-| shadow-enforced | Real TERM/HUP/INT before the final block, while blocked before L, and immediately after L; benign, default and ignored dispositions with no-signal controls; non-ignored caller-blocked pending state remains blocked/pending without consumption; for original blocked + `SIG_IGN`, observe pending and abort before restoration, prove marker absence before restoration when rollback succeeds, then exact original mask and `SIG_IGN` with no requirement that the kernel retain the pending bit; repeats cannot extend work; rollback/fsync precedes restoration; default pre-L termination occurs only after marker removal, returning/ignored pre-L paths report nonzero E_RUNTIME, and post-L caller-handler exceptions remain distinct from injected release failures |
+| shadow-enforced | Real TERM/HUP/INT on actual Mac and Linux before final block, while blocked before L and immediately after L, each paired with no-signal and caller-exception controls; original blocked, returning, `SIG_IGN` and `SIG_DFL` dispositions; pending preservation/discard semantics; default termination reports only the last observed boundary; dual real failure/caller events preserve true first failure and never invent cleanup |
+| shadow-enforced | Native `NOT_RUN` versus `RETURNED(raw_rc)` for entry/resume/final/finish; entry success interrupted before Python assignment still restores saved old mask; failed entry never reads it; nested scopes borrow one owner; direct result cells and first-failure precedence; module/State/method lifetime and fixed return epilogue have no allocation/DECREF/callback in the sealed tail |
+| shadow-enforced | Completion dup ownership is recorded before Python handoff; normal close, simulated EINTR with original fd still held, simulated already-closed/EBADF, fstat error, identity mismatch and unavailable no-reuse closure; exactly one fstat, no wrong-object unlink/reopen/EINTR guess, at most one conditional close and six bounded tail APIs; unlink/fsync failures remain distinct and sticky |
+| shadow-enforced | Earlier Python preparation/release failure rolls back before unmask through the usable held fd and survives later native success; post-L ValueError, identical errno/text OSError, MemoryError, SystemExit, driver Refusal and `_consumer.Refusal` pair with native success/failure; outer recoverable/refusal branches never repeat release or create new inconclusive output; interrupted getter/assignment/formatting/GC neither guesses failure nor retries |
+| shadow-enforced | Ledger starts before resolver/load_anchor and retains early, repeated, final-recheck, failure and cancellation batches in order; empty batches add no row; freeze precedes no child and later held/named seal still detects drift. On Linux bind the real host fd-path function before mocking Darwin platform, then run the original metadata mutation refusal and positive block without swallowing EINVAL, skipping assertions or faking fstat |
 | shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; no such work follows it; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/handler/wakeup-fd/mask/active-parent restoration failures |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
@@ -619,6 +800,7 @@ Confirm the unchanged scope evaluator refuses the new record form until child 6.
 Use the existing pinned jq 1.6 fixture cache; a system jq with a different version
 cannot substitute. No new tool installation is needed. Use shellcheck 0.11.0 with
 `-x -S style` on changed shell files and the repository’s required quick CI.
-Before dependent work treats the complete child as a runnable milestone, record
-the dispatched six-shard full matrix under the existing CI-minimum decision.
-No automatic quick-green run claims that matrix passed.
+SC-CANCEL-3 remains a repair of original PR #519. Full run `38051431041` remains failed and
+formal G3 remains NOT PASS. After this plan is independently accepted and merged, allow one
+original Sol repair; then require the actual Mac/Linux proof, all relevant shadow suites,
+the six-shard full matrix and one fresh G3 on exact head. Quick green is not that matrix.
