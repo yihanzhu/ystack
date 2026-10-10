@@ -61,13 +61,18 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    materializer protocol and its core/profile relations. Bind every request/profile/reference
    digest to captured bytes before acting. The sole executable-acceptance input is a canonical
    `shadow_consumer_parent_context` with schema 2, id `shadow.parent`, at most 16 KiB, read
-   from the caller's read-only regular descriptor 3. Its body has exactly the existing five
-   helper fields plus `native_release`. `native_release` has exactly `source_sha256`,
+   from the caller's read-only regular descriptor 3. Its body has exactly
+   `helper_source_sha256`, `helper_build_record_sha256`, `helper_executable_sha256`,
+   `helper_executable_size`, `helper_path`, and `native_release`. The three helper digests are
+   lowercase SHA-256, `helper_executable_size` is a positive integer byte count no greater
+   than 16 MiB, and `helper_path` is an absolute physical path. `native_release` has exactly
+   `source_sha256`,
    `build_script_sha256`, `build_record_sha256`, `binary_path`, `binary_size`,
    `binary_sha256`, `python_path`, `python_sha256`, `python_abi`,
-   `dependency_record_sha256`, and `loader_mode`. Digests are lowercase SHA-256; size is
-   1–16 MiB; paths are absolute physical paths; `python_abi` is 1–128 printable ASCII bytes;
-   and `loader_mode` is exactly `rtld-now-local.v1`. Extra, missing, duplicate, noncanonical,
+   `dependency_record_sha256`, and `loader_mode`. Its digests are lowercase SHA-256;
+   `binary_size` is a positive integer byte count from 1 through 16 MiB; its paths are
+   absolute physical paths; `python_abi` is 1–128 printable ASCII bytes; and `loader_mode` is
+   exactly `rtld-now-local.v1`. Extra, missing, duplicate, noncanonical,
    oversized or schema-1 context refuses with `E_PARENT_CONTEXT` before executable effects.
 5. Before starting P, the trusted parent independently accepts the helper and native release
    context. The helper source remains the reviewed committed
@@ -104,12 +109,13 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 9. All child commands use fixed absolute programs and argument arrays, a cleared environment,
    denied Git network/prompts/hooks/config and bounded output. No shell text, candidate
    program, model, socket or forge client is invoked. Jq uses the existing pinned 1.6
-   identities; the helper must pass R2.4 before execution. Preserve its snapshot and identity
-   rechecks across use, and reject substitution. Recheck captured
+   identities; the helper must pass R2.5 and R2.7 before execution. Preserve its snapshot and
+   identity rechecks across use, and reject substitution. Recheck captured
    source/tool/input identities before emitting a completed bundle. A failed recheck cannot
    leave a completion marker.
 10. Usage/input errors exit 1 with one of `E_USAGE`, `E_RUNTIME`, `E_LIMIT`, `E_SHAPE`,
-   `E_CANONICAL`, `E_RELATION`, `E_WORKSPACE`. An attempted reproduction may return an
+   `E_CANONICAL`, `E_RELATION`, `E_WORKSPACE`, `E_PARENT_CONTEXT`. Parent-context descriptor,
+   shape and acceptance errors use `E_PARENT_CONTEXT`. An attempted reproduction may return an
    inconclusive record with preserved failure evidence. A write preparation refuses incomplete
    evidence. A final canonical `bundle.json`, written exclusively and fsynced last, is the
    only bundle completion marker.
@@ -370,7 +376,8 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    source/store writes. Production-shaped tests must refuse the shipped empty accepted set and
    CPU/wall `none`. Preserve old shadow suites.
 4. New files: `shadow/v1/enforced-reproduction.py`, `shadow/v1/write-shadow.py`,
-   `shadow/v1/_consumer.py`, `shadow/v1/write-materialization-input.jq`; the five exact R10
+   `shadow/v1/_consumer.py`, `shadow/v1/write-materialization-input.jq`,
+   `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`; the five exact R10
    control files; `scripts/test/shadow-enforced.test.sh`, `scripts/test/shadow-write.test.sh`,
    `scripts/test/control-sandbox-bound.test.sh`. Changed files:
    `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`,
