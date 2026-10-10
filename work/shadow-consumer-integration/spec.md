@@ -10,8 +10,8 @@ Tracks #506. Step-8 child concern 5. The amended intent was accepted at
 not installation, a native run or qualification. The VM spec R13.4 allows this work while CPU
 and wall enforcement remain `none`.
 
-`review_size: accepted-exception`, 450–500 lines for this G2 artifact. The coherent
-origin, verifier-binding and deterministic-record contract needs this review range.
+`review_size: accepted-exception`, 500–550 lines for this G2 artifact. The coherent
+origin, verifier-binding, deterministic-record and native-dependency contract needs this range.
 The exception changes only the soft size budget; it grants no scope or proof waiver.
 
 ## Requirements
@@ -59,30 +59,56 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    contract requires. Request documents carry data, never an approval flag. Validate incident
    and qualified identity with existing validators; validate the input through the
    materializer protocol and its core/profile relations. Bind every request/profile/reference
-   digest to captured bytes before acting. Before processing REQUEST, the trusted parent
-   independently provisions and accepts the helper from the reviewed committed
-   `adapters/local-git-materializer/v1/object-closure.c`, with its exact source identity,
-   reviewed build inputs and resulting executable identity. That accepted choice belongs to
-   the trusted parent's invocation context, independently of REQUEST. The consumer must
-   match the request's helper locator and captured executable bytes to that separately
-   trusted choice before every direct or indirect helper invocation, including `version`
-   inside the materializer. Missing acceptance or any mismatch refuses before execution.
-   Neither a request-supplied digest nor measurement/version output from its selected file
-   approves executable bytes. Preparation does not provision or approve this helper.
-5. Bound REQUEST to 64 KiB; apply each upstream component's tighter file, frame, JSON and
+   digest to captured bytes before acting. The sole executable-acceptance input is a canonical
+   `shadow_consumer_parent_context` with schema 2, id `shadow.parent`, at most 16 KiB, read
+   from the caller's read-only regular descriptor 3. Its body has exactly the existing five
+   helper fields plus `native_release`. `native_release` has exactly `source_sha256`,
+   `build_script_sha256`, `build_record_sha256`, `binary_path`, `binary_size`,
+   `binary_sha256`, `python_path`, `python_sha256`, `python_abi`,
+   `dependency_record_sha256`, and `loader_mode`. Digests are lowercase SHA-256; size is
+   1–16 MiB; paths are absolute physical paths; `python_abi` is 1–128 printable ASCII bytes;
+   and `loader_mode` is exactly `rtld-now-local.v1`. Extra, missing, duplicate, noncanonical,
+   oversized or schema-1 context refuses with `E_PARENT_CONTEXT` before executable effects.
+5. Before starting P, the trusted parent independently accepts the helper and native release
+   context. The helper source remains the reviewed committed
+   `adapters/local-git-materializer/v1/object-closure.c`. Native source and build script are
+   exactly `shadow/v1/_cancel_release.c` and `shadow/v1/build-cancel-release.sh`; their bytes,
+   reviewed build record, output bytes, physical P and ABI, and relevant dependency record
+   must match R2.4. The dependency record binds the actual loader, libc/system images and
+   build/package/source identities needed by the selected Mac or Linux runtime, plus the
+   accepted no-deferred-first-use closure. Unknown or unmatched identities refuse. Context
+   creation is the acceptance event; measuring a request-selected file is not. This keeps the
+   existing same-principal malicious-modification exclusion and adds neither kernel
+   immutability nor whole-OS source certification.
+6. The parent excludes every unaccepted `LD_*` and `DYLD_*` loader setting before it starts P.
+   The consumer verifies P, ABI and private absolute extension bytes before loading with the
+   accepted `RTLD_NOW` and local mode. Module initialization, State construction, symbol and
+   method binding, dependency initialization and first-use work finish before the first
+   receiver census. Keep the module, State and bound methods alive through release; no tail
+   import, `dlopen`, `dlsym` or `dlclose` is allowed. REQUEST and candidate bytes cannot select
+   or approve these objects. Neither runtime compilation, a committed binary, installation,
+   helper process, signal consumption or replay, arbitrary callback, new public API,
+   activation nor qualification is added.
+7. Match the request's helper locator and captured executable bytes to the accepted helper
+   before every direct or indirect invocation, including materializer `version`. Match the
+   running P and captured native extension to `native_release` before import and recheck held
+   and named identities after initialization and before completion. A mismatch refuses before
+   use or completion. Source measurement, version output and post-use hash never grant
+   authority. Preparation provisions or approves neither executable.
+8. Bound REQUEST to 64 KiB; apply each upstream component's tighter file, frame, JSON and
    output bounds. Snapshot with no-follow descriptor opens; reject non-regular files, links,
    duplicate JSON keys, noncanonical bytes and changed identities. WORK and OUTPUT are
    existing empty physical 0700 directories, pairwise disjoint and outside source, trusted
    inputs, installation and store. Never overwrite an existing file. Own temporary paths only
    may be cleaned.
-6. All child commands use fixed absolute programs and argument arrays, a cleared environment,
+9. All child commands use fixed absolute programs and argument arrays, a cleared environment,
    denied Git network/prompts/hooks/config and bounded output. No shell text, candidate
    program, model, socket or forge client is invoked. Jq uses the existing pinned 1.6
    identities; the helper must pass R2.4 before execution. Preserve its snapshot and identity
    rechecks across use, and reject substitution. Recheck captured
    source/tool/input identities before emitting a completed bundle. A failed recheck cannot
    leave a completion marker.
-7. Usage/input errors exit 1 with one of `E_USAGE`, `E_RUNTIME`, `E_LIMIT`, `E_SHAPE`,
+10. Usage/input errors exit 1 with one of `E_USAGE`, `E_RUNTIME`, `E_LIMIT`, `E_SHAPE`,
    `E_CANONICAL`, `E_RELATION`, `E_WORKSPACE`. An attempted reproduction may return an
    inconclusive record with preserved failure evidence. A write preparation refuses incomplete
    evidence. A final canonical `bundle.json`, written exclusively and fsynced last, is the
@@ -195,11 +221,29 @@ The exception changes only the soft size budget; it grants no scope or proof wai
 4. Seal a trace with the existing trace-ledger shape and validator. The environment fact
    distinguishes declaration evaluation from receipt satisfaction, the tool fact names
    `tool.verifier` only when executed, and missing metrics remain unavailable. Provenance
-   records source/interpreter/jq/helper digests and every executed command’s fixed role and
-   argument digests; never local path strings. Retain the exact UTF-8 verifier instruction and
-   R10 observation inside this provenance document, with their digests, so the closed
-   inventory is sufficient.
-5. A completed reproduction bundle contains exactly the following 29 evidence files plus
+   records source/interpreter/jq/helper digests and every actual nonempty child command's fixed
+   role and argument digests; repeated argument vectors remain separate rows and empty batches
+   add none. Create the ledger before resolver construction and `load_anchor`; record early
+   resolver calls and the final resolver-backed anchor/ACL recheck before provenance bytes are
+   frozen. After freezing, only child-free held/named metadata sealing may run. Native API
+   calls are not child-command rows. Retain the exact UTF-8 verifier instruction and R10
+   observation inside this provenance document, with their digests, so the closed inventory
+   is sufficient. Never record local path strings.
+5. `shadow_consumer_provenance.body` adds exactly one `native_release` object to its existing
+   fields. It has exactly `context_version:2`, `source_sha256`, `build_script_sha256`,
+   `build_record_sha256`, `binary_locator_sha256`, `binary_size`, `binary_sha256`,
+   `python_locator_sha256`, `python_sha256`, `python_abi`, `dependency_record_sha256`, and
+   `loader_mode`. The locator values hash the UTF-8 physical paths accepted in R2.4; every
+   other value equals that accepted context. This object identifies source, build, binary, P,
+   ABI and dependencies without adding a path string, inventory member, sidecar or terminal
+   result authority. A frozen enforced bundle lacking this object, using another context
+   version, or differing from the current independently accepted context is stale and refuses;
+   it is never upgraded by inference. Records without `record_form` remain available only to
+   the unchanged legacy reader. The native result boundary preserves the original single L,
+   sticky true failures, usable-held-fd best-effort rollback, default-caller restoration and
+   post-L arbitrary-caller protection; its detailed State and syscall order belong to the
+   separately accepted high-risk plan.
+6. A completed reproduction bundle contains exactly the following 29 evidence files plus
    `bundle.json`. Each is a bounded snapshot, with an entry `{name,size_bytes,sha256}` sorted
    by name in `bundle.json.body.files`: `incident.json`, `claim.json`, `duty-evaluation.json`,
    `materialization-input.json`, `materialization-response.json`, `qualified-identity.json`,
@@ -212,7 +256,7 @@ The exception changes only the soft size budget; it grants no scope or proof wai
    `shadow-record.json`, `trace-ledger.json`, `trace-receipt.json`. All must exist for a
    completed bundle; failed attempts may retain a partial directory but cannot write this
    completion marker.
-6. `bundle.json` is kind `shadow_consumer_bundle`, id `bundle.` plus the first 32 hex digits
+7. `bundle.json` is kind `shadow_consumer_bundle`, id `bundle.` plus the first 32 hex digits
    of the incident document’s SHA-256, schema 1; body exactly `activation_state:"inactive"`,
    `record_form`, `incident_sha256`, `target_revision`, `files`. It excludes itself from
    files. A consumer verifies exact directory inventory, every digest and cross-document
