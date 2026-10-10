@@ -1845,6 +1845,12 @@ checks the bound receipt and fixed verifier result, validates a sealed trace, an
 writes the exact 29-file frozen bundle with `bundle.json` last. It has no write,
 publisher, activation, installation, or qualification path.
 
+`shadow/v1/_cancel_release.c` is the private single-thread cancellation-release
+boundary. `shadow/v1/build-cancel-release.sh` compiles it only for a reviewed Python
+runtime into a new private test or provisioning directory and records the exact source,
+compiler, arguments, ABI, and output. The consumer loads only parent-accepted bytes by
+absolute path with `RTLD_NOW|RTLD_LOCAL`; it never builds or installs them.
+
 ```sh
 bash scripts/test/shadow-enforced.test.sh
 ```

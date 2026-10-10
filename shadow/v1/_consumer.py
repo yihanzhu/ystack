@@ -21,6 +21,10 @@ EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
 JQ_SHA256 = {"darwin": "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef",
              "linux": "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"}
 HASH_KEYS = ("helper_source_sha256", "helper_build_record_sha256", "helper_executable_sha256")
+NATIVE_RELEASE_KEYS = {"source_sha256", "build_script_sha256", "build_record_sha256",
+                       "binary_path", "binary_size", "binary_sha256", "python_path",
+                       "python_sha256", "python_abi", "dependency_record_sha256",
+                       "loader_mode"}
 CONFIG_KEYS = {"consumer_gid", "environment_id", "identity_paths", "installed_files",
                "principal_uid", "runtime", "store_id", "store_root", "work_root"}
 IDENTITY_KEYS = {"guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
@@ -182,6 +186,17 @@ class HeldPath:
                 raise Refusal(code) from None
             _require(_identity(after) == expected and _identity(after_named) == expected, code)
 
+    def seal_recheck(self, code: str) -> None:
+        for index, component in enumerate(self.components):
+            try:
+                current = _metadata(component.fd)
+                named = (current if component.name is None else
+                         _named_metadata(component.name, self.components[index - 1].fd))
+            except (OSError, ValueError):
+                raise Refusal(code) from None
+            expected = _identity(component.before)
+            _require(_identity(current) == expected and _identity(named) == expected, code)
+
     def read(self, maximum: int, code: str) -> bytes:
         self.recheck(code)
         chunks, total = [], 0
@@ -234,7 +249,8 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
             os.close(row.fd)
         raise Refusal(code) from None
 
-def _open_held(path: str, directory: bool, rule: Rule, code: str) -> HeldPath:
+def _open_held(path: str, directory: bool, rule: Rule, code: str,
+               allow_hardlinks: bool = False) -> HeldPath:
     _require(_physical(path) and path != "/", code)
     parts = path.split("/")[1:]
     _require(all(part not in ("", ".", "..") for part in parts), code)
@@ -257,7 +273,8 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str) -> HeldPath:
             _require(rule(fd, state, not last), code)
         state = rows[-1].before
         _require((directory and stat.S_ISDIR(state.st_mode)) or
-                 (not directory and stat.S_ISREG(state.st_mode) and state.st_nlink == 1), code)
+                 (not directory and stat.S_ISREG(state.st_mode)
+                  and (allow_hardlinks or state.st_nlink == 1)), code)
         result = HeldPath(path, rows)
         result.recheck(code)
         return result
@@ -445,14 +462,25 @@ def capture_parent_context(fd: int = 3) -> dict:
     _require(_identity(before) == _identity(after), "E_PARENT_CONTEXT")
     doc = _json(raw, PARENT_LIMIT, "E_PARENT_CONTEXT")
     _require(set(doc) == {"schema_version", "kind", "id", "body"} and _integer(doc["schema_version"])
-             and doc["schema_version"] == 1 and doc["kind"] == "shadow_consumer_parent_context"
+             and doc["schema_version"] == 2 and doc["kind"] == "shadow_consumer_parent_context"
              and doc["id"] == "shadow.parent", "E_PARENT_CONTEXT")
     body = doc["body"]
-    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {"helper_executable_size", "helper_path"}
+    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {
+                 "helper_executable_size", "helper_path", "native_release"}
              and all(_sha(body[key]) for key in HASH_KEYS), "E_PARENT_CONTEXT")
     _require(_integer(body["helper_executable_size"]) and 0 < body["helper_executable_size"] <= EXECUTABLE_LIMIT
              and _physical(body["helper_path"]) and body["helper_source_sha256"] == HELPER_SOURCE_SHA256,
              "E_PARENT_CONTEXT")
+    native = body["native_release"]
+    _require(isinstance(native, dict) and set(native) == NATIVE_RELEASE_KEYS
+             and all(_sha(native[key]) for key in ("source_sha256", "build_script_sha256",
+                 "build_record_sha256", "binary_sha256", "python_sha256",
+                 "dependency_record_sha256"))
+             and _physical(native["binary_path"]) and _physical(native["python_path"])
+             and _integer(native["binary_size"]) and 1 <= native["binary_size"] <= EXECUTABLE_LIMIT
+             and isinstance(native["python_abi"], str) and 1 <= len(native["python_abi"]) <= 128
+             and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
+             and native["loader_mode"] == "rtld-now-local.v1", "E_PARENT_CONTEXT")
     return body
 
 @dataclasses.dataclass
@@ -660,6 +688,9 @@ class Anchor:
     def recheck(self, code: str = "E_INSTALL") -> None:
         for item in self.held:
             item.recheck(code)
+    def seal_recheck(self, code: str = "E_INSTALL") -> None:
+        for item in self.held:
+            item.seal_recheck(code)
     def close(self) -> None:
         for item in reversed(self.held):
             item.close()

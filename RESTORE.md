@@ -1197,11 +1197,14 @@ Real lessons from setting this up:
   Claude and Codex never talk directly — the PR is the only message bus.
 
 ### Restore the inactive shadow consumer trust reader
-Restore `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, and their
-focused test with the sandbox bound controls. The new entry remains inactive: a
+Restore `shadow/v1/_consumer.py`, `shadow/v1/_cancel_release.c`,
+`shadow/v1/build-cancel-release.sh`, `shadow/v1/enforced-reproduction.py`, and their
+focused test with the sandbox bound controls. The entry remains inactive: a
 real native launch still needs the separately reserved host installation and
-qualification. Verify framing, durable prelaunch state, store evidence, fixed
-verifier relations, trace sealing, and the exact completion inventory with:
+qualification. The test compiles the private extension into its temporary fixture; it
+does not install or activate it. Verify framing, native release, durable prelaunch state,
+store evidence, fixed verifier relations, trace sealing, and the exact completion
+inventory with:
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

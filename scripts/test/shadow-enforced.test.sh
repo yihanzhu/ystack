@@ -18,13 +18,105 @@ esac
 jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 [ -x "$jq_bin" ] || { /usr/bin/printf 'missing pinned jq\n' >&2; exit 1; }
 jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${jq_bin##*/}")
-python_bin=$(command -v python3)
+if [ -x /opt/homebrew/bin/python3.14 ]; then
+  python_bin=/opt/homebrew/bin/python3.14
+elif [ -x /usr/local/bin/python3.14 ]; then
+  python_bin=/usr/local/bin/python3.14
+else
+  python_bin=$(command -v python3.14 2>/dev/null || command -v python3)
+fi
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing physical python\n' >&2; exit 1 ;; esac
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing resolved physical python\n' >&2; exit 1 ;; esac
-"$python_bin" -I -S -B - "$root" <<'PY'
+native_out="$tmp/native-release"
+/bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
+native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+[ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
+for native_case in 1 2 3 4 5 6 7 8 9 10 11; do
+  /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
+    "$tmp/native-case-$native_case" "$native_case"
+done
+"$python_bin" -I -S -B - "$tmp" "$native_binary" <<'PY'
+import importlib.util,os,pathlib,signal,sys
+base=pathlib.Path(sys.argv[1]);checks=0
+def ok(value,message):
+ global checks
+ if not value:raise AssertionError(message)
+ checks+=1;print("ok native-%d - %s"%(checks,message))
+initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+for case in range(1,12):
+ directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
+ spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+ marker=directory/"bundle.json";fd=None;delivered=[]
+ prior=signal.signal(signal.SIGTERM,lambda *_:delivered.append(True))
+ try:
+  state.block_entry()
+  if case==11:
+   result=state.finish_release()
+  elif case!=1:
+   state.resume_consumer()
+   if case!=2:
+    marker.write_bytes(b"provisional");fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+    state.hold_completion(fd);os.close(fd);fd=None;state.block_final()
+    if case in (3,9,10):state.rollback_marker()
+   result=state.finish_release()
+  else:result=state.finish_release()
+ finally:
+  signal.signal(signal.SIGTERM,prior)
+  if fd is not None:os.close(fd)
+ ok(result==("native-release.success" if case==11 else "native-release.failure")
+    and state.outcome()==result,"simulated case %d stores authoritative outcome"%case)
+ observed_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ if case==4:
+  ok(all(sent in observed_mask for sent in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)),
+     "simulated finish-mask failure leaves the final watched mask blocked")
+  signal.pthread_sigmask(signal.SIG_SETMASK,initial)
+ else:
+  ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
+ if case in (3,4,5,10):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
+ if case in (6,7,8,9):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
+ if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
+actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
+spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+state.block_entry();state.resume_consumer()
+signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGHUP})
+(actual_dir/"bundle.json").write_bytes(b"complete")
+fd=os.open(actual_dir,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
+state.block_final();result=state.finish_release()
+final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ok(result=="native-release.success" and signal.SIGHUP in final_mask
+   and final_mask-{signal.SIGHUP}==initial-{signal.SIGHUP},
+   "production native release restores its distinct final-phase saved mask")
+signal.pthread_sigmask(signal.SIG_SETMASK,initial)
+print("shadow-enforced-native: %d checks passed"%checks)
+PY
+native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+"$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" <<'PY'
+import hashlib,importlib.util,os,pathlib,sys,sysconfig
+root,binary,record=map(pathlib.Path,sys.argv[1:])
+spec=importlib.util.spec_from_file_location("test_build_refusal",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+executable=e.stable_file(pathlib.Path(e.sys.executable))
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),object());executable.close()
+context={"native_release":{"source_sha256":sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(record.read_bytes()),"binary_path":str(binary),
+ "binary_size":binary.stat().st_size,"binary_sha256":sha(binary.read_bytes()),
+ "python_path":os.path.realpath(sys.executable),"python_sha256":sha(pathlib.Path(sys.executable).read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),"dependency_record_sha256":"0"*64,
+ "loader_mode":"rtld-now-local.v1"}}
+try:e._NativeRelease(context,admission)
+except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" not in sys.modules
+else:raise AssertionError("test-only native binary received production admission")
+print("shadow-enforced-native-admission: test build refused before import")
+PY
+"$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
 import hashlib, importlib.machinery, importlib.util, json, os, pathlib, subprocess, sys, sysconfig
-root=pathlib.Path(sys.argv[1]);driver=root/"shadow/v1/enforced-reproduction.py"
+root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
 def digest(path):
@@ -45,7 +137,7 @@ for loaded in tuple(sys.modules.values()):
  if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
  if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
 origins=sorted(set(origins));assert len(origins)<=256
-native=sorted({executable,*(path for path in origins if path.endswith(suffixes))})
+native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
 if sys.platform=="darwin":
  dependency_command=["/usr/bin/otool","-L"]
  build_command=["/usr/bin/dwarfdump","--uuid",executable]
@@ -70,10 +162,11 @@ PY
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
 /bin/chmod 0555 "$tmp/object-closure"
 
-python3 -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, tempfile, types
+"$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
+  "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, sysconfig, tempfile, types
 
-root, base, helper, jq = map(pathlib.Path, sys.argv[1:])
+root, base, helper, jq, native_binary, native_record, dependency_record = map(pathlib.Path, sys.argv[1:])
 dependency_work = base / "dependency-work"; dependency_work.mkdir()
 spec = importlib.util.spec_from_file_location("shadow_consumer", root / "shadow/v1/_consumer.py")
 c = importlib.util.module_from_spec(spec); sys.modules[spec.name] = c; spec.loader.exec_module(c)
@@ -92,17 +185,28 @@ def write(path, raw, mode=0o440):
     if path.exists(): path.chmod(0o640)
     path.write_bytes(raw); path.chmod(mode)
 def sha(raw): return hashlib.sha256(raw).hexdigest()
-def document(kind, identifier, body):
-    return c.canonical({"schema_version": 1, "kind": kind, "id": identifier, "body": body})
+def document(kind, identifier, body, schema=1):
+    return c.canonical({"schema_version": schema, "kind": kind, "id": identifier, "body": body})
 def parent_doc(path, raw):
     return document("shadow_consumer_parent_context", "shadow.parent", {
         "helper_source_sha256": c.HELPER_SOURCE_SHA256, "helper_build_record_sha256": "2" * 64,
         "helper_executable_sha256": sha(raw), "helper_executable_size": len(raw),
-        "helper_path": str(path)})
+        "helper_path": str(path), "native_release": {
+            "source_sha256": sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+            "build_script_sha256": sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+            "build_record_sha256": sha(native_record.read_bytes()),
+            "binary_path": str(native_binary), "binary_size": native_binary.stat().st_size,
+            "binary_sha256": sha(native_binary.read_bytes()),
+            "python_path": os.path.realpath(sys.executable),
+            "python_sha256": sha(pathlib.Path(sys.executable).read_bytes()),
+            "python_abi": sysconfig.get_config_var("SOABI"),
+            "dependency_record_sha256": sha(dependency_record.read_bytes()),
+            "loader_mode": "rtld-now-local.v1"}}, schema=2)
 
 # Parallel shards share TMPDIR. Stabilize only change metadata for ancestors outside this
 # fixture; every object at or below the owned fixture root keeps real OS observations.
 raw_metadata, raw_named = c._metadata, c._named_metadata
+host_is_darwin = sys.platform == "darwin"
 external = {}
 external_ancestors = set()
 cursor = base.parent
@@ -111,7 +215,7 @@ while True:
     if cursor == cursor.parent: break
     cursor = cursor.parent
 def fd_path(fd):
-    if sys.platform == "darwin":
+    if host_is_darwin:
         raw = c.fcntl.fcntl(fd, 50, b"\0" * 1024)
         return raw.split(b"\0", 1)[0].decode()
     return os.path.realpath("/proc/self/fd/" + str(fd))
@@ -135,6 +239,15 @@ ok(c.isolated_python_argv()[1:4] == ["-I", "-S", "-B"], "isolated Python argv")
 context = base / "context"; helper_raw = helper.read_bytes(); write(context, parent_doc(helper, helper_raw), 0o400)
 body = c.capture_parent_context(os.open(context, os.O_RDONLY))
 ok(body["helper_executable_sha256"] == sha(helper_raw), "trusted parent context")
+for boundary in (1, c.EXECUTABLE_LIMIT):
+    bounded = json.loads(parent_doc(helper, helper_raw)); bounded["body"]["native_release"]["binary_size"] = boundary
+    write(context, c.canonical(bounded), 0o400)
+    ok(c.capture_parent_context(os.open(context, os.O_RDONLY))["native_release"]["binary_size"] == boundary,
+       "native binary size accepts bounded positive endpoint %d" % boundary)
+for invalid in (0, c.EXECUTABLE_LIMIT + 1, True):
+    bounded = json.loads(parent_doc(helper, helper_raw)); bounded["body"]["native_release"]["binary_size"] = invalid
+    write(context, c.canonical(bounded), 0o400)
+    refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(os.open(context, os.O_RDONLY)))
 absent_effect = base / "absent-context-effect"
 refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(-1))
 ok(not absent_effect.exists(), "absent parent context has no later effect")
@@ -700,7 +813,11 @@ refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-
 # The ACL resolver is one concrete adapter with fixed P/S/role, environment and caps.
 python_snapshot=e.stable_file(pathlib.Path(sys.executable))
 consumer_snapshot=e.stable_file(root/"shadow/v1/_consumer.py")
-resolver=e._DarwinUUIDResolver(python_snapshot,consumer_snapshot,time.monotonic()+30)
+resolver_ledger=[]
+def resolver_record(role,argv,executable_sha256,component_sha256):
+ resolver_ledger.append({"role":role,"argv_sha256":e.sha(e.canonical(argv)),
+  "executable_sha256":executable_sha256,"component_sha256":component_sha256})
+resolver=e._DarwinUUIDResolver(python_snapshot,consumer_snapshot,time.monotonic()+30,resolver_record)
 uuid_values=["0123456789abcdef0123456789abcdef","00"*16,"00"*16]
 resolver_rows=[{"uuid":uuid_values[0],"status":"resolved","kind":"user","id":501},
  {"uuid":uuid_values[1],"status":"resolved","kind":"group","id":20},
@@ -715,6 +832,8 @@ def resolver_run(argv,**options):
  return e.c.canonical(resolver_rows)
 e.run_bounded=resolver_run
 ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
+ok([row["role"] for row in resolver_ledger]==["darwin-acl-uuid-resolution"],
+   "nonempty resolver batch appends one command-ledger row")
 argv,options=resolver_calls[0]
 ok(argv==[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_resolve-darwin-uuids"]
  and options["stdin"]==e.c.canonical(uuid_values) and options["timeout"]==10
@@ -734,6 +853,8 @@ for bad,message in [
 e.run_bounded=original_run
 resolver_refuses(lambda:resolver.resolve(["A"*32]),"noncanonical resolver UUID refused")
 resolver_refuses(lambda:resolver.resolve(["00"*16]*129),"resolver count cap enforced")
+before_empty=len(resolver_ledger);ok(resolver.resolve([])==[] and len(resolver_ledger)==before_empty,
+ "empty resolver batch appends no command-ledger row")
 boundary_uuids=[("%032x"%index) for index in range(128)]
 e.run_bounded=lambda *_args,**_options:e.c.canonical([
  {"uuid":uuid,"status":"unresolved","kind":None,"id":None} for uuid in boundary_uuids])
@@ -910,11 +1031,42 @@ driver.reproduce = reproduce
 class FixtureCensus:
     def observe(self):
         pass
+class FixtureNative:
+    def __init__(self):
+        self.phase="prepared"; self.entry=None; self.final=None
+        self.completion=None; self.status="native-release.pending"; self.rolled=False
+    def recheck(self): pass
+    def block_entry(self):
+        self.entry=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="entry"
+    def resume_consumer(self):
+        driver.signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+    def hold_completion(self,fd): self.completion=os.dup(fd)
+    def block_final(self):
+        self.final=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="final"
+    def rollback_marker(self):
+        if self.rolled or self.completion is None:return
+        self.rolled=True
+        try:os.unlink("bundle.json",dir_fd=self.completion)
+        except FileNotFoundError:pass
+        os.fsync(self.completion)
+    def finish_release(self):
+        restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
+        if restore is not None:driver.signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+        if self.completion is not None:os.close(self.completion);self.completion=None
+        self.status="native-release.success";return self.status
+    def outcome(self):return self.status
 admission = driver._StartupAdmission(
     driver._STARTUP_KEY, driver.sys.executable,
     driver.sha(pathlib.Path(driver.sys.executable).read_bytes()), driver.sys.version,
-    tuple(driver.sys.version_info[:2]), driver._runtime_module_origins(), FixtureCensus())
-return_code = driver.main(["driver", "reproduce", "request", "work", "output"], admission)
+    tuple(driver.sys.version_info[:2]), driver._runtime_module_origins(), FixtureCensus(),
+    FixtureNative())
+try:
+    with driver.CancellationSignals(admission):
+        reproduce()
+except (driver.Cancelled, driver.Refusal, OSError):
+    print("E_RUNTIME",file=sys.stderr);return_code=1
+else:
+    return_code=0
 after_mask = original_mask(signal.SIG_BLOCK, set())
 restored = all(signal.getsignal(sent) == before[sent] for sent in before)
 done_path.write_text(
@@ -1224,11 +1376,36 @@ renamed_hold.close()
 cancelmark=base/"cancel-marker";cancelmark.mkdir(mode=0o700);cancelmark_hold=e.stable_directory(cancelmark)
 class FixtureCensus:
  def observe(self):pass
+class FixtureNative:
+ def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+ def hold_completion(self,fd):self.completion=os.dup(fd)
+ def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if self.rolled or self.completion is None:return
+  self.rolled=True
+  try:os.unlink("bundle.json",dir_fd=self.completion)
+  except FileNotFoundError:pass
+  os.fsync(self.completion)
+ def finish_release(self):
+  restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
+  if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+  if self.completion is not None:
+   try:os.close(self.completion)
+   except OSError:
+    self.rollback_marker();self.status="native-release.failure"
+    os.close(self.completion);self.completion=None
+    raise
+   self.completion=None
+  self.status="native-release.success";return self.status
+ def outcome(self):return self.status
 def guard(census=None):
  executable=e.stable_file(pathlib.Path(e.sys.executable))
  try:
   value=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
-        tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or FixtureCensus())
+        tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or FixtureCensus(),FixtureNative())
  finally:executable.close()
  return e.CancellationSignals(value)
 def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
@@ -1254,7 +1431,7 @@ real_mask=e.signal.pthread_sigmask
 pending_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
 def signal_after_exit_mask(how,values):
  result=real_mask(how,values)
- if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.completion is not None
+ if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.native.completion is not None
      and not pending_sent[0]):pending_sent[0]=True;os.kill(os.getpid(),signal.SIGTERM)
  return result
 e.signal.pthread_sigmask=signal_after_exit_mask
@@ -1334,11 +1511,49 @@ class Census:
  def observe(self):
   self.calls+=1
   if self.calls==self.fail:raise e.Refusal("E_RUNTIME")
+class FixtureNative:
+ def __init__(self):
+  self.phase="prepared";self.entry_mask=None;self.final_mask=None
+  self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):
+  self.entry_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):
+  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry_mask);self.phase="consumer"
+ def hold_completion(self,fd):
+  self.completion=os.dup(fd)
+ def block_final(self):
+  self.final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if self.rolled or self.completion is None:return
+  self.rolled=True
+  try:os.unlink("bundle.json",dir_fd=self.completion)
+  except FileNotFoundError:pass
+  os.fsync(self.completion)
+ def finish_release(self):
+  restore=self.entry_mask if self.phase=="entry" else self.final_mask if self.phase=="final" else None
+  pending=None
+  try:
+   if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+  except BaseException as exc:
+   pending=exc
+   if isinstance(exc,OSError):self.rollback_marker();self.status="native-release.failure"
+  if self.completion is not None:
+   try:os.close(self.completion)
+   except OSError:
+    self.rollback_marker();self.status="native-release.failure"
+    os.close(self.completion);self.completion=None
+    raise
+   self.completion=None
+  if self.status!="native-release.failure":self.status="native-release.success"
+  if pending is not None:raise pending
+  return self.status
+ def outcome(self):return self.status
 def admission(census=None):
  executable=e.stable_file(pathlib.Path(e.sys.executable))
  try:
   return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
-   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census())
+   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census(),FixtureNative())
  finally:executable.close()
 def guard(census=None):return e.CancellationSignals(admission(census))
 def marker(owner, name):
@@ -1561,14 +1776,28 @@ spec=importlib.util.spec_from_file_location("default_pending",root/"shadow/v1/en
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
 class Census:
  def observe(self):pass
+class Native:
+ def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+ def hold_completion(self,fd):self.completion=os.dup(fd)
+ def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if not self.rolled:
+   self.rolled=True;os.unlink("bundle.json",dir_fd=self.completion);os.fsync(self.completion)
+ def finish_release(self):
+  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry if self.phase=="entry" else self.final)
+  os.close(self.completion);self.completion=None;self.status="native-release.success";return self.status
+ def outcome(self):return self.status
 path=pathlib.Path(e.sys.executable);admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,
  hashlib.sha256(path.read_bytes()).hexdigest(),e.sys.version,tuple(e.sys.version_info[:2]),
- e._runtime_module_origins(),Census())
+ e._runtime_module_origins(),Census(),Native())
 owner=e.CancellationSignals(admission);real_mask=e.signal.pthread_sigmask;sent=False
 def inject(how,values):
  global sent
  result=real_mask(how,values)
- if how==signal.SIG_BLOCK and owner.completion is not None and not sent:
+ if how==signal.SIG_BLOCK and owner.native.completion is not None and not sent:
   sent=True;os.kill(os.getpid(),signal.SIGTERM)
  return result
 e.signal.pthread_sigmask=inject
@@ -1645,7 +1874,7 @@ try:
   with mask_owner:
    mask_dir=marker(mask_owner,"mask-release-failure")
    e.signal.pthread_sigmask=fail_mask
- except OSError:pass
+ except (OSError,e.Refusal):pass
  else:raise AssertionError("mask restoration failure accepted")
 finally:e.signal.pthread_sigmask=real_mask
 ok(mask_failed and mask_dir is not None and not (mask_dir/"bundle.json").exists()
@@ -1672,7 +1901,7 @@ ok(pipe_failed and pipe_dir is not None and not (pipe_dir/"bundle.json").exists(
 completion_owner=guard();completion_dir=None;real_close=e.os.close;completion_failed=False
 def fail_completion_close(fd):
  global completion_failed
- if fd==completion_owner.completion and not completion_failed:
+ if fd==completion_owner.native.completion and not completion_failed:
   completion_failed=True;raise OSError("fixture completion close")
  return real_close(fd)
 try:
@@ -1680,11 +1909,12 @@ try:
   with completion_owner:
    completion_dir=marker(completion_owner,"completion-release-failure")
    e.os.close=fail_completion_close
- except OSError:pass
+ except (OSError,e.Refusal):pass
  else:raise AssertionError("completion close failure accepted")
 finally:
  e.os.close=real_close
- if completion_failed:real_close(completion_owner.completion)
+ if completion_failed and completion_owner.native.completion is not None:
+  real_close(completion_owner.native.completion)
 ok(completion_failed and completion_dir is not None and not (completion_dir/"bundle.json").exists()
    and e.CancellationSignals.active is None,"completion close failure is sticky and rolls back")
 
@@ -1703,9 +1933,11 @@ cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" r
 # Exercise the production orchestration with only host identity, child process,
 # and native launch boundaries substituted. The component-specific suites run
 # each unchanged child interface; this case proves their byte flow and ordering.
-"$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, sys, types
-root, base = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); base.mkdir(mode=0o700)
+"$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" "$native_binary" \
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib, importlib.util, json, os, pathlib, sys, sysconfig, types
+root, base, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
+base.mkdir(mode=0o700)
 spec=importlib.util.spec_from_file_location("enforced_flow",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
 e.sys.executable=str(pathlib.Path(sys.executable).resolve())
@@ -1773,6 +2005,7 @@ class Anchor:
  held=[types.SimpleNamespace(path=str(fake_anchor/"host-supervisor.py"),read=lambda maximum,code:b"host\n",
   recheck=lambda code:None)]
  def recheck(self,*_args): events.append("anchor-recheck")
+ def seal_recheck(self,*_args): events.append("anchor-seal-recheck")
  def close(self): events.append("anchor-close")
 e.c.ANCHOR=str(fake_anchor)
 class Snap:
@@ -1853,8 +2086,24 @@ def launch(anchor,frame,deadline):
  launch_frames.append(frame);events.append("launch");return 0
 e._launch=launch
 parent={"helper_source_sha256":e.c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":"7"*64,
- "helper_executable_sha256":sha(b"helper"),"helper_executable_size":6,"helper_path":str(helper)}
-bundle=e.reproduce(base/"request.json",work,output,parent)
+ "helper_executable_sha256":sha(b"helper"),"helper_executable_size":6,"helper_path":str(helper),
+ "native_release":{"source_sha256":sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
+ "python_path":os.path.realpath(sys.executable),"python_sha256":sha(pathlib.Path(sys.executable).read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),
+ "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+class Census:
+ def observe(self):pass
+executable=e.stable_file(pathlib.Path(e.sys.executable))
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+executable.close();native=e._NativeRelease(parent,admission)
+admission=e.dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
+try:
+ with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
+finally:native.close()
 ok(len(launch_frames)==1 and launch_frames[0].startswith(b"YSFRAME1"),"one framed launch")
 ok(events.index("launch")>events.index("prepare"),"launch follows preparation")
 ok(events.index("launch")>events.index("evaluate"),
@@ -2090,9 +2339,13 @@ PATH="$real/bin:/usr/bin:/bin" "$fixture/adapters/local-git-materializer/v1/mate
 
 /usr/bin/printf 'shadow-enforced-real-chain: materializer/protocol/duty/bound-evaluator passed\n'
 
-"$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" <<'PY'
-import dataclasses, hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, types
-base, package, physical_python = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+real_native="$real/native-release"
+/bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" build "$python_bin" "$real_native"
+real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+"$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
+  "$real_native/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import dataclasses, hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, sysconfig, types
+base, package, physical_python, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
 module_path=package/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("real_shadow_enforced",module_path)
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
@@ -2296,8 +2549,39 @@ e._launch=launch
 parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":sha(b"fixture-build"),
  "helper_executable_sha256":sha((base.parent/"object-closure").read_bytes()),
  "helper_executable_size":len((base.parent/"object-closure").read_bytes()),
- "helper_path":str(base.parent/"object-closure")}
-bundle=e.reproduce(base/"request.json",work,output,parent)
+ "helper_path":str(base.parent/"object-closure"),"native_release":{
+ "source_sha256":sha((package/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((package/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
+ "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),
+ "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+mismatch_case=base/"case-mismatch";mismatch_case.mkdir(mode=0o700)
+mismatch_q=json.loads((base/"q-input.json").read_bytes())
+mismatch_identity=json.loads((base/"identity.json").read_bytes())
+mismatch_incident=json.loads((base/"incident.json").read_bytes())
+mismatch_outer=json.loads((base/"request.json").read_bytes())
+mismatch_incident["body"]["failing_check"]["expected_sha256"]="0"*64
+mismatch_q["stage_request"]["sha256"]=sha(canonical(mismatch_q["stage_request"]["content"]))
+mismatch_identity["body"]["stage_request_ref"]["sha256"]=mismatch_q["stage_request"]["sha256"]
+mismatch_identity["body"]["verification_instructions_ref"]["sha256"]=sha(e.make_instruction(mismatch_incident))
+mismatch_outer["id"]=mismatch_outer["body"]["attempt_id"]="attempt.mismatch"
+for field,value in (("incident",mismatch_incident),("materialization_input",mismatch_q),
+                    ("qualified_identity",mismatch_identity)):
+ path=mismatch_case/(field+".json");write(path,canonical(value),0o400);mismatch_outer["body"][field]=str(path)
+mismatch_request=mismatch_case/"request.json";write(mismatch_request,canonical(mismatch_outer),0o400)
+mismatch_work=mismatch_case/"work";mismatch_output=mismatch_case/"output"
+mismatch_work.mkdir(mode=0o700);mismatch_output.mkdir(mode=0o700)
+restoration=base/"native-restoration-failure";restoration.mkdir(mode=0o700)
+class Census:
+ def observe(self):pass
+executable=e.stable_file(physical_python)
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+executable.close();native=e._NativeRelease(parent,admission)
+admission=dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
+with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
 bundle_doc=json.loads(bundle);ok(len(bundle_doc["body"]["files"])==29,"actual reproduce seals 29 evidence files")
 record=json.loads((output/"shadow-record.json").read_bytes())
 ok(record["body"]["record_form"]=="enforced-reproduction.v1" and
@@ -2311,18 +2595,54 @@ ok(json.loads((output/"file-digest-result.json").read_bytes())["body"]["reason_i
 ok((output/"bundle.json").exists(),"completion marker written after real chain")
 provenance=json.loads((output/"consumer-provenance.json").read_bytes())
 roles=[row["role"] for row in provenance["body"]["commands"]]
-ok(roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
+ordinary_roles=[role for role in roles if role!="darwin-acl-uuid-resolution"]
+ok(ordinary_roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
  "qualified-identity-validation","materialization","materializer-response-validation",
  "candidate-preparation","candidate-inspection","sandbox-bound-evaluation",
  "sandbox-launch-boundary","sandbox-receipt-check","trace-validation"] and
+ (sys.platform=="darwin" or "darwin-acl-uuid-resolution" not in roles) and
  all(set(row)=={"role","argv_sha256","executable_sha256","component_sha256"}
      for row in provenance["body"]["commands"]),
- "frozen provenance retains every executed role without private argv")
+ "frozen provenance retains every executed role without private argv: "+repr(roles))
 trace=json.loads((output/"trace-ledger.json").read_bytes())
 ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.local-macos-fixture" and
  trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
  trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
  "trace binds claim environment and distinct declaration and enforcement evidence")
+scenario_mode="success";scenario_output=mismatch_output;scenario_work=mismatch_work
+def reset_native():
+ native.state=native.module.prepare_state()
+ native.methods=tuple(getattr(native.state,name) for name in ("block_entry","resume_consumer",
+  "hold_completion","block_final","rollback_marker","finish_release","outcome"))
+ (native.block_entry,native.resume_consumer,native.hold_completion,native.block_final,
+  native.rollback_marker,native.finish_release,native.outcome)=native.methods
+reset_native();(restoration/"bundle.json").write_bytes(b"provisional")
+real_signal=e.signal.signal;failed=[False];restoration_owner=e.CancellationSignals(admission)
+def fail_restoration(sent,handler):
+ if not failed[0] and e.CancellationSignals.active.previous.get(sent) is handler:
+  failed[0]=True;raise OSError("simulated Python handler restoration failure")
+ return real_signal(sent,handler)
+try:
+ try:
+  with restoration_owner:
+   descriptor=os.open(restoration,os.O_RDONLY|os.O_DIRECTORY)
+   e.CancellationSignals.retain_completion(descriptor);os.close(descriptor)
+   e.signal.signal=fail_restoration
+ except OSError:pass
+ else:raise AssertionError("Python restoration failure accepted")
+finally:
+ e.signal.signal=real_signal
+ for sent,handler in restoration_owner.previous.items():real_signal(sent,handler)
+ok(failed[0] and not (restoration/"bundle.json").exists(),
+ "actual native owner rolls back true Python restoration failure before final close")
+reset_native();admission=dataclasses.replace(admission,native=native)
+try:
+ with e.CancellationSignals(admission):
+  mismatch=json.loads(e.reproduce(mismatch_request,mismatch_work,mismatch_output,parent))
+finally:native.close()
+ok(mismatch["body"]["record_form"]=="enforced-reproduction.v1" and
+ json.loads((mismatch_output/"shadow-record.json").read_bytes())["body"]["outcome"]=="reproduced",
+ "actual mismatch completes only as a reproduced result")
 checker_driver=package/"enforcement/v1/check-sandbox-receipt.sh"
 checker_env={"PATH":str(base/"bin")+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base/"checker-tmp")}
 (base/"checker-tmp").mkdir(mode=0o700)
@@ -2424,9 +2744,6 @@ def wrong_identity(_outer,_q,identity,_incident):
  identity["body"]["resolved_profile_ref"]["id"]="profile.unrelated"
 def bool_request(outer,_q,_identity,_incident):
  outer["schema_version"]=True;outer["body"]["attempt_number"]=True
-def wrong_expected(_outer,_q,_identity,incident):
- incident["body"]["failing_check"]["expected_sha256"]="0"*64
-
 refuse_case("changed-patch",mutate=changed_patch)
 refuse_case("wrong-environment",mutate=wrong_environment)
 refuse_case("wrong-identity",mutate=wrong_identity)
@@ -2436,13 +2753,6 @@ for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed"
              "mutate-helper-source","mutate-receipt-program","mutate-core-selector",
              "mutate-core-ingress","mutate-contracts","mutate-control-source"):
  refuse_case(mode,mode=mode,launches=1)
-case,request_path=case_documents("mismatch",wrong_expected)
-case_work=case/"work";case_output=case/"output";case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
-scenario_mode="success";scenario_output=case_output;scenario_work=case_work
-mismatch=json.loads(e.reproduce(request_path,case_work,case_output,parent))
-ok(mismatch["body"]["record_form"]=="enforced-reproduction.v1" and
- json.loads((case_output/"shadow-record.json").read_bytes())["body"]["outcome"]=="reproduced",
- "actual mismatch completes only as a reproduced result")
 scenario_mode="success";scenario_output=None
 print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY
