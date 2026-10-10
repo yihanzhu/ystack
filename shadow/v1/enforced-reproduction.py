@@ -392,6 +392,50 @@ def stable_file(path: Path, limit: int = c.EXECUTABLE_LIMIT,
         raise
 
 
+class _DarwinUUIDResolver(c._DarwinUUIDResolver):
+    def __init__(self, python: StableFile, source: StableFile, deadline: float) -> None:
+        self.python = python
+        self.source = source
+        self.deadline = deadline
+        expected_source = (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
+        require(Path(self.python.held.path) == Path(sys.executable)
+                and Path(self.source.held.path) == expected_source, "E_DEPENDENCY")
+        self.recheck()
+
+    def recheck(self) -> None:
+        self.python.recheck("E_DEPENDENCY")
+        self.source.recheck("E_DEPENDENCY")
+        require(Path(sys.executable).resolve(strict=True) == Path(self.python.held.path)
+                and (SOURCE / "shadow/v1/_consumer.py").resolve(strict=True)
+                == Path(self.source.held.path), "E_DEPENDENCY")
+
+    def resolve(self, uuids: list[str]) -> list[dict]:
+        require(len(uuids) <= c.DARWIN_UUID_COUNT_LIMIT
+                and all(c._uuid_hex(value) for value in uuids), "E_ACL")
+        if not uuids:
+            return []
+        self.recheck()
+        argv = [str(self.python.held.path), "-I", "-S", "-B", str(self.source.held.path),
+                "_resolve-darwin-uuids"]
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+        output = run_bounded(argv, stdin=c.canonical(uuids), timeout=10,
+                             output_limit=c.DARWIN_UUID_OUTPUT_LIMIT, env=env,
+                             deadline=self.deadline)
+        self.recheck()
+        rows = c._json_array(output, c.DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
+        require(len(rows) == len(uuids), "E_ACL")
+        for uuid, row in zip(uuids, rows):
+            require(isinstance(row, dict) and set(row) == {"uuid", "status", "kind", "id"}
+                    and row["uuid"] == uuid, "E_ACL")
+            if row["status"] == "resolved":
+                require(row["kind"] in ("user", "group") and integer(row["id"])
+                        and 0 <= row["id"] <= 0xffffffff, "E_ACL")
+            else:
+                require(row["status"] == "unresolved" and row["kind"] is None
+                        and row["id"] is None, "E_ACL")
+        return rows
+
+
 def stable_directory(path: Path) -> StableDirectory:
     held = c._open_held(str(path), True,
         lambda _fd, state, ancestor: ancestor or (state.st_mode & 0o777) == 0o700,
@@ -1188,7 +1232,12 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         require(str(paths["closure_helper"]) == context["helper_path"], "E_RELATION")
         output_hold = stable_directory(output)
         work_hold = stable_directory(work)
-        anchor = c.load_anchor()
+        python_file = stable_file(Path(sys.executable))
+        consumer_source = stable_file(SOURCE / "shadow/v1/_consumer.py")
+        sources.append(consumer_source)
+        resolver = (_DarwinUUIDResolver(python_file, consumer_source, deadline)
+                    if sys.platform == "darwin" else None)
+        anchor = c.load_anchor(resolver)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())
@@ -1212,7 +1261,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         helper = c.snapshot_dependency(str(paths["closure_helper"]), context["helper_executable_sha256"],
             context["helper_executable_size"], str(deps / "helper" / "object-closure"), "object-closure")
         jq = c.snapshot_jq(str(paths["jq"]), str(deps / "jq" / "jq"))
-        bash = fixed_bash(); python_file = stable_file(Path(sys.executable))
+        bash = fixed_bash()
         sudo_file = fixed_sudo()
         helper_source = stable_file(SOURCE / "adapters/local-git-materializer/v1/object-closure.c")
         sources.append(helper_source)

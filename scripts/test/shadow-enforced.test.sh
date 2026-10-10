@@ -219,14 +219,14 @@ root_state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
 installed_state = types.SimpleNamespace(st_uid=123, st_mode=stat.S_IFDIR | 0o555)
 acl_calls = [0]
 def acl_value(value):
-    def observe(_fd): acl_calls[0] += 1; return value
+    def observe(_fd, _resolver=None): acl_calls[0] += 1; return value
     return observe
 c.sys.platform = "linux"
 c._acl_state = acl_value(([(0x02, 4, 123)], None))
 ok(not c._installed_rule(123)(fd, installed_state, False) and acl_calls[0] == 1,
    "Linux named-user ACL reached and refused")
 acl_calls[0] = 0; c._acl_state = acl_value((None, [(0x10, 2, 0)]))
-ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+ok(not c._root_rule()(fd, root_state, False) and acl_calls[0] == 1,
    "Linux default write ACL reached and refused")
 
 class Call:
@@ -243,7 +243,6 @@ class FakeAclLib:
         self.acl_get_qualifier = Call(self.get_qualifier)
         self.acl_get_permset = Call(self.get_permset)
         self.acl_get_perm_np = Call(self.get_perm)
-        self.mbr_uuid_to_id = Call(self.resolve)
         self.acl_free = Call(lambda _value: 0)
     def get_entry(self, _acl, _selector, _entry):
         self.calls["entry"] += 1
@@ -261,34 +260,58 @@ class FakeAclLib:
         self.calls["qualifier"] += 1
         if self.failure == "qualifier": c.ctypes.set_errno(5); return 0
         return c.ctypes.addressof(self.guid)
-    def resolve(self, _uuid, value, kind):
-        value._obj.value = 0; kind._obj.value = 0; return 0
-real_cdll = c.ctypes.CDLL
+class FixedResolver(c._DarwinUUIDResolver):
+    def __init__(self, rows=None): self.rows, self.calls = rows, []
+    def resolve(self, uuids):
+        self.calls.append(list(uuids))
+        return self.rows if self.rows is not None else [
+            {"uuid": uuid, "status": "resolved", "kind": "user", "id": 0}
+            for uuid in uuids]
+real_functions = c._DARWIN_ACL_FUNCTIONS
 c.sys.platform = "darwin"; c._acl_state = real_acl
 def darwin_rule(failure, installed=False):
     fake = FakeAclLib(failure)
-    c.ctypes.CDLL = lambda *_args, **_kwargs: fake
-    rule = c._installed_rule(123) if installed else c._root_rule
+    c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+    resolver = FixedResolver()
+    rule = c._installed_rule(123, resolver) if installed else c._root_rule(resolver)
     state = installed_state if installed else root_state
-    return rule(fd, state, False), fake
+    return rule(fd, state, False), fake, resolver
 for installed in (False, True):
-    accepted_acl, fake = darwin_rule(None, installed)
-    ok(accepted_acl and fake.entries == 2, "Darwin read-only ACL control reached")
+    accepted_acl, fake, resolver = darwin_rule(None, installed)
+    ok(accepted_acl and fake.entries == 2 and resolver.calls == [["00" * 16]],
+       "Darwin capture sends only positional UUID bytes to fixed resolver")
     for failure in ("entry", "permission", "qualifier"):
-        accepted_acl, fake = darwin_rule(failure, installed)
+        accepted_acl, fake, resolver = darwin_rule(failure, installed)
         ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
-c.ctypes.CDLL = real_cdll
+fake = FakeAclLib(); c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+refuses("E_ACL", lambda: c._darwin_acl(fd, None))
+ok(fake.calls["entry"] == 0, "missing Darwin resolver refuses before ACL capture")
+mutation = base / "acl-resolver-mutation"; write(mutation, b"x", 0o400)
+mutation_fd = os.open(mutation, os.O_RDONLY)
+class MutatingResolver(FixedResolver):
+    def resolve(self, uuids):
+        mutation.chmod(0o600)
+        return super().resolve(uuids)
+mutating = MutatingResolver(); fake = FakeAclLib()
+c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+component = c.HeldComponent(mutation_fd, None, c._metadata(mutation_fd),
+    lambda held_fd, _state, _ancestor: bool(c._darwin_acl(held_fd, mutating)), False)
+held_mutation = c.HeldPath(str(mutation), [component])
+refuses("E_ACL", lambda: held_mutation.recheck("E_ACL"))
+ok(mutating.calls == [["00" * 16]], "metadata mutation after delayed resolver reply refuses")
+held_mutation.close()
+c._DARWIN_ACL_FUNCTIONS = real_functions
 c._acl_state = acl_value(([(1, 456, 1 << 2)], None)); acl_calls[0] = 0
-ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+ok(not c._root_rule(FixedResolver())(fd, root_state, False) and acl_calls[0] == 1,
    "Darwin other-principal ACL reached and refused")
 
 c.sys.platform = "linux"
-c._acl_state = lambda _fd: (None, None)
+c._acl_state = lambda _fd, _resolver=None: (None, None)
 store_state = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=456)
 ok(c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "Linux no-ACL store control")
-c._acl_state = lambda _fd: ([(0x10, 0, 0)], None)
+c._acl_state = lambda _fd, _resolver=None: ([(0x10, 0, 0)], None)
 ok(not c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "store rejects any ACL")
-c._acl_state = lambda _fd: (None, None)
+c._acl_state = lambda _fd, _resolver=None: (None, None)
 wrong_owner = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=124, st_gid=456)
 wrong_group = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=457)
 wrong_mode = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o770, st_uid=123, st_gid=456)
@@ -354,7 +377,9 @@ def observed_value(value):
 def observed(fd): return observed_value(real_metadata(fd))
 def observed_named(name, parent_fd): return observed_value(real_named(name, parent_fd))
 c._metadata, c._named_metadata = observed, observed_named; c._source_root = lambda: str(source)
-c._acl_state = lambda _fd: ([], None) if c.sys.platform == "darwin" else (None, None)
+c._acl_state = lambda _fd, _resolver=None: ([], None) if c.sys.platform == "darwin" else (None, None)
+def fixture_anchor():
+    return c.load_anchor(FixedResolver() if c.sys.platform == "darwin" else None)
 c.ANCHOR = str(anchor_path); c.sys.executable = identity_paths["toolchain"]
 helper_source = source / c.HELPER_SOURCE
 helper_source.parent.mkdir(parents=True, exist_ok=True)
@@ -364,7 +389,7 @@ source_bytes = helper_source.read_bytes()
 write(helper_source, source_bytes + b"\n")
 refuses("E_DEPENDENCY", c.verify_helper_source)
 write(helper_source, source_bytes)
-remember_store(); anchor = c.load_anchor()
+remember_store(); anchor = fixture_anchor()
 observation = json.loads(c.verifier_observation(anchor, env_id, target_id))
 ok(set(observation) == {"schema_version", "kind", "id", "body"}
    and observation["schema_version"] == 1
@@ -382,14 +407,14 @@ anchor.close()
 
 for role in sorted(c.INSTALLED_SOURCES):
     path = pathlib.Path(installed[role]); original = path.read_bytes(); path.chmod(0o640); path.write_bytes(original + b"x")
-    refuses("E_INSTALL", c.load_anchor); path.write_bytes(original); path.chmod(0o440)
+    refuses("E_INSTALL", fixture_anchor); path.write_bytes(original); path.chmod(0o440)
 ok(True, "every installed role is byte-bound")
 
 # A changed reviewed snapshot does not bless independently unchanged installed bytes.
 policy_source = source / c.INSTALLED_SOURCES["control_policy"]
 policy_original = policy_source.read_bytes()
 write(policy_source, policy_original + b"x")
-refuses("E_INSTALL", c.load_anchor)
+refuses("E_INSTALL", fixture_anchor)
 write(policy_source, policy_original)
 
 # Missing and ambiguous registry/accepted relationships fail closed after exact byte binding.
@@ -399,7 +424,7 @@ duplicate_registry["body"]["environments"].append(
 duplicate_registry_raw = c.canonical(duplicate_registry)
 write(source / c.INSTALLED_SOURCES["registry"], duplicate_registry_raw)
 write(pathlib.Path(installed["registry"]), duplicate_registry_raw)
-ambiguous = c.load_anchor()
+ambiguous = fixture_anchor()
 refuses("E_RELATION", lambda: c.verifier_observation(ambiguous, env_id, target_id))
 ambiguous.close()
 write(source / c.INSTALLED_SOURCES["registry"], registry)
@@ -411,7 +436,7 @@ duplicate_accepted["body"]["environments"].append(
 duplicate_accepted_raw = c.canonical(duplicate_accepted)
 write(source / c.INSTALLED_SOURCES["accepted_set"], duplicate_accepted_raw)
 write(pathlib.Path(installed["accepted_set"]), duplicate_accepted_raw)
-ambiguous = c.load_anchor()
+ambiguous = fixture_anchor()
 refuses("E_RELATION", lambda: c.verifier_observation(ambiguous, env_id, target_id))
 ambiguous.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted)
@@ -422,18 +447,18 @@ malformed_accepted["body"]["environments"][0]["identities"]["verifier"] = ["a" *
 malformed_raw = c.canonical(malformed_accepted)
 write(source / c.INSTALLED_SOURCES["accepted_set"], malformed_raw)
 write(pathlib.Path(installed["accepted_set"]), malformed_raw)
-refuses("E_INSTALL", c.load_anchor)
+refuses("E_INSTALL", fixture_anchor)
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted)
 write(pathlib.Path(installed["accepted_set"]), accepted)
 
 wrong = json.loads(accepted); wrong["body"]["environments"][0]["identities"]["verifier"] = [sha(b"wrong")]
 wrong_raw = c.canonical(wrong)
 write(source / c.INSTALLED_SOURCES["accepted_set"], wrong_raw); write(pathlib.Path(installed["accepted_set"]), wrong_raw)
-cross = c.load_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(cross, env_id, target_id)); cross.close()
+cross = fixture_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(cross, env_id, target_id)); cross.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted); write(pathlib.Path(installed["accepted_set"]), accepted)
 empty = json.loads(accepted); empty["body"]["environments"] = []; empty_raw = c.canonical(empty)
 write(source / c.INSTALLED_SOURCES["accepted_set"], empty_raw); write(pathlib.Path(installed["accepted_set"]), empty_raw)
-empty_anchor = c.load_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(empty_anchor, env_id, target_id)); empty_anchor.close()
+empty_anchor = fixture_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(empty_anchor, env_id, target_id)); empty_anchor.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted); write(pathlib.Path(installed["accepted_set"]), accepted)
 bad_config = json.loads(config); bad_config["body"]["principal_uid"] = True
 refuses("E_CONFIG", lambda: c._parse_config(c.canonical(bad_config)))
@@ -451,19 +476,19 @@ bad_config = json.loads(config)
 bad_config["body"]["installed_files"]["registry"] = bad_config["body"]["installed_files"]["accepted_set"]
 refuses("E_CONFIG", lambda: c._parse_config(c.canonical(bad_config)))
 saved = pathlib.Path(installed["registry"]); saved.rename(saved.with_suffix(".missing"))
-before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", c.load_anchor)
+before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", fixture_anchor)
 ok(len(os.listdir("/dev/fd")) == before, "partial anchor failure closes descriptors")
 saved.with_suffix(".missing").rename(saved)
 
 old_python = c.sys.executable
 c.sys.executable = str(install / "missing-interpreter")
-before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", c.load_anchor)
+before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", fixture_anchor)
 ok(len(os.listdir("/dev/fd")) == before, "late interpreter failure closes descriptors")
 c.sys.executable = old_python
 
-before = len(os.listdir("/dev/fd")); anchor = c.load_anchor(); anchor.close()
+before = len(os.listdir("/dev/fd")); anchor = fixture_anchor(); anchor.close()
 ok(len(os.listdir("/dev/fd")) == before, "successful anchor ownership closes cleanly")
-anchor = c.load_anchor()
+anchor = fixture_anchor()
 
 def make_attempt(attempt_id="attempt.fixture", evidence_raw=b"proof", name_hex="70726f6f66"):
     attempt = store / attempt_id; payload = attempt / "payload"; payload.mkdir(parents=True, mode=0o750)
@@ -671,6 +696,71 @@ refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c"
     "bounded stderr refuses instead of truncating")
 refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
     "raise SystemExit(3)"], env=env), "nonzero component exit refuses")
+
+# The ACL resolver is one concrete adapter with fixed P/S/role, environment and caps.
+python_snapshot=e.stable_file(pathlib.Path(sys.executable))
+consumer_snapshot=e.stable_file(root/"shadow/v1/_consumer.py")
+resolver=e._DarwinUUIDResolver(python_snapshot,consumer_snapshot,time.monotonic()+30)
+uuid_values=["0123456789abcdef0123456789abcdef","00"*16,"00"*16]
+resolver_rows=[{"uuid":uuid_values[0],"status":"resolved","kind":"user","id":501},
+ {"uuid":uuid_values[1],"status":"resolved","kind":"group","id":20},
+ {"uuid":uuid_values[2],"status":"unresolved","kind":None,"id":None}]
+original_run=e.run_bounded; resolver_calls=[]
+def resolver_refuses(action,message):
+ try:action()
+ except (e.Refusal,e.c.Refusal) as exc:ok(exc.code=="E_ACL",message);return
+ raise AssertionError("accepted: "+message)
+def resolver_run(argv,**options):
+ resolver_calls.append((argv,options))
+ return e.c.canonical(resolver_rows)
+e.run_bounded=resolver_run
+ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
+argv,options=resolver_calls[0]
+ok(argv==[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_resolve-darwin-uuids"]
+ and options["stdin"]==e.c.canonical(uuid_values) and options["timeout"]==10
+ and options["output_limit"]==32*1024
+ and options["env"]=={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"},
+ "resolver argv environment input and caps are fixed")
+for bad,message in [
+ (b'[{"uuid":"00"}]\n',"malformed resolver row refused"),
+ (e.c.canonical(resolver_rows[:-1]),"missing resolver row refused"),
+ (e.c.canonical(list(reversed(resolver_rows))),"reordered resolver row refused"),
+ (b'[{"id":501,"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef"}]\n',"duplicate resolver key refused"),
+ (b'[{"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef","x":1}]\n',"extra resolver field refused"),
+ (e.c.canonical(resolver_rows)+b"x","trailing resolver data refused"),
+ (b" "*(32*1024+1),"resolver output byte cap enforced")]:
+ e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ resolver_refuses(lambda:resolver.resolve(uuid_values),message)
+e.run_bounded=original_run
+resolver_refuses(lambda:resolver.resolve(["A"*32]),"noncanonical resolver UUID refused")
+resolver_refuses(lambda:resolver.resolve(["00"*16]*129),"resolver count cap enforced")
+boundary_uuids=[("%032x"%index) for index in range(128)]
+e.run_bounded=lambda *_args,**_options:e.c.canonical([
+ {"uuid":uuid,"status":"unresolved","kind":None,"id":None} for uuid in boundary_uuids])
+ok(len(resolver.resolve(boundary_uuids))==128,"resolver accepts exact 128-entry boundary")
+e.run_bounded=original_run
+resolver_refuses(lambda:e.c._json_array(b"["+b'"00",'*8192+b'"00"]\n',16*1024,"E_ACL"),
+ "resolver input byte cap enforced before parsing")
+if sys.platform=="darwin":
+ lib=e.ctypes.CDLL(e.c.DARWIN_SYSTEM_C,use_errno=True)
+ def native_uuid(name,value):
+  function=getattr(lib,name);function.argtypes=[e.ctypes.c_uint32,e.ctypes.c_char_p]
+  function.restype=e.ctypes.c_int;raw=e.ctypes.create_string_buffer(16)
+  ok(function(value,raw)==0,"native fixture obtains "+name.removeprefix("mbr_").removesuffix("_to_uuid"))
+  return bytes(raw).hex()
+ user_uuid=native_uuid("mbr_uid_to_uuid",os.getuid())
+ group_uuid=native_uuid("mbr_gid_to_uuid",os.getgid())
+ missing_uuid="f47ac10b58cc4372a5670e02b2c3d479"
+ census=e._NativeThreadCensus();census.observe()
+ native_rows=resolver.resolve([user_uuid,group_uuid,missing_uuid]);census.observe()
+ ok(native_rows==[
+  {"uuid":user_uuid,"status":"resolved","kind":"user","id":os.getuid()},
+  {"uuid":group_uuid,"status":"resolved","kind":"group","id":os.getgid()},
+  {"uuid":missing_uuid,"status":"unresolved","kind":None,"id":None}],
+  "real fixed child preserves native user group and noncompatibility miss semantics")
+ ok(e.CancellationSignals.active is None,"reaped native resolver leaves parent cancellation owner unchanged")
+consumer_snapshot.close();python_snapshot.close()
+
 original_popen=e.subprocess.Popen
 e.subprocess.Popen=lambda *_args,**_kwargs: (_ for _ in ()).throw(AssertionError("spawned"))
 refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c","pass"],env=env,
@@ -735,6 +825,7 @@ initial_mask = original_mask(signal.SIG_BLOCK, set())
 delivered = False
 blocking_active = False
 continued = False
+cleanup_disappeared = False
 
 def observed_mask(how, values):
     result = original_mask(how, values)
@@ -752,10 +843,18 @@ driver.signal.pthread_sigmask = observed_mask
 original_stop = driver.stop_child
 
 def observed_stop(child):
+    global cleanup_disappeared
     cleanup_path.touch()
     if mode == "stop":
         os.kill(os.getpid(), signal.SIGTERM)
-    return original_stop(child)
+    result = original_stop(child)
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        cleanup_disappeared = True
+    else:
+        raise AssertionError("owned process group survived cleanup")
+    return result
 
 driver.stop_child = observed_stop
 real_read = driver.os.read
@@ -820,7 +919,7 @@ after_mask = original_mask(signal.SIG_BLOCK, set())
 restored = all(signal.getsignal(sent) == before[sent] for sent in before)
 done_path.write_text(
     f"{return_code}:{restored}:{after_mask == initial_mask}:"
-    f"{delivered}:{blocking_active}:{continued}")
+    f"{delivered}:{blocking_active}:{continued}:{cleanup_disappeared}")
 """)
 for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("repeated",signal.SIGTERM,
  (signal.SIGHUP,signal.SIGINT),30,"none"),("timeout-stop-entry",None,(),1,"stop"),
@@ -837,7 +936,6 @@ for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("
   early_stdout,early_stderr=wrapper.communicate()
   raise AssertionError(name+" wrapper exited early: "+repr((wrapper.returncode,early_stdout,early_stderr)))
  ok(child_pid.exists(),name+" production consumer reached TERM-ignoring owned child")
- owned=int(child_pid.read_text())
  if first is not None:wrapper.send_signal(first)
  for _ in range(500):
   if cleanup.exists():break
@@ -852,13 +950,7 @@ for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("
   ok(result[3]=="True" and result[5]=="False",name+" consumes the delivered signal before continuation")
  if entry=="recover":
   ok(result[4]=="True",name+" delivers TERM with BlockingIOError active in the production read")
- gone=False
- for _ in range(500):
-  try:os.killpg(owned,0)
-  except ProcessLookupError:gone=True;break
-  except PermissionError:pass
-  time.sleep(.01)
- ok(gone,name+" leaves no owned process group")
+ ok(result[6]=="True",name+" confirms cleanup returned after ESRCH and leader reap")
 pid_file=base/"descendant.pid"
 group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
  "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
@@ -1692,7 +1784,7 @@ e.c.snapshot_dependency=lambda path,digest_value,size,private,name: Snap(helper,
 e.c.snapshot_jq=lambda path,private: Snap(jq,sha(b"jq"))
 e.c.verify_helper_source=lambda: events.append("helper-source")
 e.c.probe_dependency=lambda snap,args,expected: events.append("probe:"+args[0])
-e.c.load_anchor=lambda: Anchor()
+e.c.load_anchor=lambda _resolver=None: Anchor()
 e.c.verifier_observation=lambda anchor,environment,target:e.canonical(doc("sandbox_verifier_observation",
  "observation.flow",{"environment_id":environment,"environment_entry_sha256":sha(e.canonical(entry)),
  "target_repository_id":target,"accepted_set_sha256":sha(accepted),"verifier_sha256":"9"*64}))
@@ -2081,7 +2173,7 @@ def observed(state,path):
 def metadata(fd): return observed(raw_metadata(fd),fd_path(fd))
 def named(name,parent_fd): return observed(raw_named(name,parent_fd),os.path.join(fd_path(parent_fd),name))
 c._metadata,c._named_metadata=metadata,named
-c._acl_state=lambda _fd:([],None) if sys.platform=="darwin" else (None,None)
+c._acl_state=lambda _fd,_resolver=None:([],None) if sys.platform=="darwin" else (None,None)
 
 work=base/"consumer-work";output=base/"consumer-output";work.mkdir(mode=0o700);output.mkdir(mode=0o700)
 raw_fsync=os.fsync;fsync_paths=[]
