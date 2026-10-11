@@ -8,6 +8,8 @@ tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-shadow-consumer.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 cleanup() { /bin/chmod -R u+w -- "$tmp" 2>/dev/null || true; /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT
+sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
   Darwin:*) jq_asset=jq-osx-amd64 ;;
   Linux:x86_64) jq_asset=jq-linux64 ;;
@@ -16,14 +18,246 @@ esac
 jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 [ -x "$jq_bin" ] || { /usr/bin/printf 'missing pinned jq\n' >&2; exit 1; }
 jq_bin=$(CDPATH='' cd -P -- "${jq_bin%/*}" && /usr/bin/printf '%s/%s' "$PWD" "${jq_bin##*/}")
+if [ -x /opt/homebrew/bin/python3.14 ]; then
+  python_bin=/opt/homebrew/bin/python3.14
+elif [ -x /usr/local/bin/python3.14 ]; then
+  python_bin=/usr/local/bin/python3.14
+else
+  python_bin=$(command -v python3.14 2>/dev/null || command -v python3)
+fi
+case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing physical python\n' >&2; exit 1 ;; esac
+python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
+case "$python_bin" in /*) ;; *) /usr/bin/printf 'missing resolved physical python\n' >&2; exit 1 ;; esac
+native_out="$tmp/native-release"
+/bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
+native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+[ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
+for native_case in 1 2 3 4 5 6 7 8 9 10 11; do
+  /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
+    "$tmp/native-case-$native_case" "$native_case"
+done
+"$python_bin" -I -S -B - "$tmp" "$native_binary" <<'PY'
+import importlib.util,os,pathlib,signal,sys
+base=pathlib.Path(sys.argv[1]);checks=0
+def ok(value,message):
+ global checks
+ if not value:raise AssertionError(message)
+ checks+=1;print("ok native-%d - %s"%(checks,message))
+initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+for case in range(1,12):
+ directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
+ spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+ marker=directory/"bundle.json";fd=None;delivered=[]
+ prior=signal.signal(signal.SIGTERM,lambda *_:delivered.append(True))
+ try:
+  state.block_entry()
+  if case==11:
+   result=state.finish_release()
+  elif case!=1:
+   state.resume_consumer()
+   if case!=2:
+    marker.write_bytes(b"provisional");fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+    state.hold_completion(fd);os.close(fd);fd=None;state.block_final()
+    if case in (3,9,10):state.rollback_marker()
+   result=state.finish_release()
+  else:result=state.finish_release()
+ finally:
+  signal.signal(signal.SIGTERM,prior)
+  if fd is not None:os.close(fd)
+ ok(result==("native-release.success" if case==11 else "native-release.failure")
+    and state.outcome()==result,"simulated case %d stores authoritative outcome"%case)
+ observed_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ if case==4:
+  ok(all(sent in observed_mask for sent in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)),
+     "simulated finish-mask failure leaves the final watched mask blocked")
+  signal.pthread_sigmask(signal.SIG_SETMASK,initial)
+ else:
+  ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
+ if case in (3,4,5,10):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
+ if case in (6,7,8,9):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
+ if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
+actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
+spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+state.block_entry();state.resume_consumer()
+signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGHUP})
+(actual_dir/"bundle.json").write_bytes(b"complete")
+fd=os.open(actual_dir,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
+state.block_final();result=state.finish_release()
+final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ok(result=="native-release.success" and signal.SIGHUP in final_mask
+   and final_mask-{signal.SIGHUP}==initial-{signal.SIGHUP},
+   "production native release restores its distinct final-phase saved mask")
+signal.pthread_sigmask(signal.SIG_SETMASK,initial)
+print("shadow-enforced-native: %d checks passed"%checks)
+PY
+native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+"$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" <<'PY'
+import hashlib,importlib.util,os,pathlib,sys,sysconfig
+root,binary,record=map(pathlib.Path,sys.argv[1:])
+spec=importlib.util.spec_from_file_location("test_build_refusal",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+executable=e.stable_file(pathlib.Path(e.sys.executable))
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),object());executable.close()
+context={"native_release":{"source_sha256":sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(record.read_bytes()),"binary_path":str(binary),
+ "binary_size":binary.stat().st_size,"binary_sha256":sha(binary.read_bytes()),
+ "python_path":os.path.realpath(sys.executable),"python_sha256":sha(pathlib.Path(sys.executable).read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),"dependency_record_sha256":"0"*64,
+ "loader_mode":"rtld-now-local.v1"}}
+try:e._NativeRelease(context,admission)
+except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" not in sys.modules
+else:raise AssertionError("test-only native binary received production admission")
+print("shadow-enforced-native-admission: test build refused before import")
+PY
+"$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
+import hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,subprocess,sys,sysconfig
+root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
+spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+native_spec=importlib.util.spec_from_file_location("_cancel_release",native_binary)
+native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
+def digest(path):
+ size=os.stat(path).st_size
+ if size>256*1024*1024: return {"status":"unavailable","reason":"file-size-limit","size":size}
+ measured=hashlib.sha256();seen=0
+ with open(path,"rb") as source:
+  while chunk:=source.read(1024*1024):measured.update(chunk);seen+=len(chunk)
+ return {"status":"ok","sha256":measured.hexdigest(),"size":seen}
+def command(argv,limit=32768):
+ try:
+  result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+ except (OSError,subprocess.SubprocessError) as error:
+  return {"status":"unavailable","reason":type(error).__name__}
+ raw=result.stdout
+ return {"status":"ok" if result.returncode==0 else "failed","exit":result.returncode,
+  "stdout":raw[:limit].decode("utf-8","replace"),"truncated":len(raw)>limit}
+def dpkg(path):
+ owner=command(["/usr/bin/dpkg-query","-S",path],4096)
+ if owner["status"]!="ok":return {"status":"unavailable","owner_query":owner,"packages":[]}
+ answer={"status":"ok","packages":[]}
+ names=sorted({line.rsplit(": ",1)[0] for line in owner["stdout"].splitlines() if ": " in line})
+ if len(names)>8:return {"owner_query":owner,"packages":[],"status":"unavailable","reason":"owner-count-limit"}
+ for name in names:
+  query=command(["/usr/bin/dpkg-query","-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\n",name],4096)
+  item={"status":"unavailable","query":query}
+  if query["status"]=="ok":
+   fields=query["stdout"].rstrip("\n").split("\t")
+   if len(fields)==4:item={"status":"ok",**dict(zip(
+    ("binary_package","binary_version","source_package","source_version"),(field or None for field in fields)))}
+  answer["packages"].append(item)
+ return answer
+def build_id(path):
+ result=command(["/usr/bin/readelf","-n",path])
+ matches=re.findall(r"Build ID: ([0-9a-fA-F]+)",result.get("stdout",""))
+ return {"status":"ok","value":matches[0].lower()} if result["status"]=="ok" and len(matches)==1 else {
+  "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def interpreter(path):
+ result=command(["/usr/bin/readelf","-l",path])
+ matches=re.findall(r"Requesting program interpreter: ([^]]+)",result.get("stdout",""))
+ return {"status":"ok","requested":matches[0],"resolved":os.path.realpath(matches[0])} \
+  if result["status"]=="ok" and len(matches)==1 else {
+   "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def soname(path):
+ result=command(["/usr/bin/readelf","-d",path])
+ matches=re.findall(r"\(SONAME\).*\[([^]]+)\]",result.get("stdout",""))
+ if result["status"]=="ok" and len(matches)==1:return {"status":"ok","value":matches[0]}
+ if result["status"]=="ok" and not matches:return {"status":"missing"}
+ return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
+def jit():
+ api=getattr(sys,"_jit",None)
+ if api is None:return {"status":"missing"}
+ answer={"status":"present"}
+ for name in ("is_available","is_enabled","is_active"):
+  call=getattr(api,name,None)
+  if call is None:answer[name]={"status":"missing"}
+  else:
+   try:answer[name]={"status":"ok","value":call()}
+   except Exception as error:answer[name]={"status":"unavailable","reason":type(error).__name__}
+ return answer
+executable=os.path.realpath(sys.executable);suffixes=tuple(importlib.machinery.EXTENSION_SUFFIXES)
+origins=[]
+for loaded in tuple(sys.modules.values()):
+ origin=getattr(getattr(loaded,"__spec__",None),"origin",None)
+ if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
+ if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
+origins=sorted(set(origins));assert len(origins)<=256
+build_jit=sysconfig.get_config_var("Py_ENABLE_JIT")
+body={"platform":sys.platform,"executable":executable,"executable_identity":digest(executable),
+ "flags":{"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,
+ "dont_write_bytecode":sys.flags.dont_write_bytecode},"jit":jit(),
+ "loaded_origins":[{"path":path,"identity":digest(path)} for path in origins],
+ "soabi":sysconfig.get_config_var("SOABI"),"stdlib":os.path.realpath(sysconfig.get_path("stdlib")),
+ "version":sys.version,"build_configuration":{"Py_ENABLE_JIT":{"status":"missing"} if build_jit is None
+  else {"status":"present","value":build_jit}}}
+if sys.platform=="linux":
+ maps=pathlib.Path("/proc/self/maps").read_bytes();assert len(maps)<=1024*1024
+ paths=[];map_gaps=[]
+ for line in maps.decode("utf-8","strict").splitlines():
+  fields=line.split(None,5)
+  if len(fields)==6 and fields[5].startswith("/"):
+   if fields[5].endswith(" (deleted)"):
+    map_gaps.append({"path":fields[5],"status":"unavailable","reason":"deleted-mapping"});continue
+   path=os.path.realpath(fields[5])
+   if not os.path.isfile(path):
+    map_gaps.append({"path":path,"status":"unavailable","reason":"missing-mapped-file"});continue
+   with open(path,"rb") as image:header=image.read(4)
+   if header==b"\x7fELF":paths.append(path)
+ paths=sorted(set(paths));assert 1<=len(paths)<=64 and len(map_gaps)<=16
+ elf_interpreter=interpreter(executable)
+ interpreter_path=elf_interpreter.get("resolved")
+ images=[]
+ for path in paths:
+  image_soname=soname(path);roles=[]
+  if path==executable:roles.append("python-executable")
+  if path==native_binary:roles.append("native-release")
+  if path==interpreter_path:roles.append("elf-interpreter")
+  if image_soname.get("value")=="libc.so.6":roles.append("libc")
+  images.append({"path":path,"roles":roles,"identity":digest(path),"build_id":build_id(path),
+   "soname":image_soname,"package":dpkg(path)})
+ body.update({"executable_build_id":build_id(executable),"elf_interpreter":elf_interpreter,
+  "elf_images":images,"mapped_file_gaps":map_gaps,
+  "required_roles":{role:sum(role in image["roles"] for image in images)
+   for role in ("python-executable","native-release","elf-interpreter","libc")}})
+else:
+ native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
+ parts=pathlib.Path(executable).parts
+ body.update({"build_id":command(["/usr/bin/dwarfdump","--uuid",executable]),
+  "native_dependencies":{path:command(["/usr/bin/otool","-L",path]) for path in native},
+  "package":{"kind":"homebrew-cellar" if "Cellar" in parts else "system",
+   "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else None,
+   "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else None}})
+facts={"schema_version":1,"kind":"shadow_runtime_dependency_record",
+ "id":"shadow.runtime-dependency","body":body}
+encoded=(json.dumps(facts,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+assert len(encoded)<=1024*1024
+sys.stdout.buffer.write(encoded)
+PY
+"$python_bin" -I -S -B - "$native_out/build-record.json" \
+  "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib,json,pathlib,sys
+for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-release.build-evidence",sys.argv[1]),
+ ("shadow_runtime_dependency_evidence","shadow.runtime-dependency-evidence",sys.argv[2])):
+ raw=pathlib.Path(path).read_bytes();assert len(raw)<=1024*1024
+ record=json.loads(raw);assert raw==(json.dumps(record,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+ evidence={"schema_version":1,"kind":kind,"id":name,
+  "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
+ print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
+PY
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
 /bin/chmod 0555 "$tmp/object-closure"
 
-python3 -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, tempfile, types
+"$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
+  "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, sysconfig, tempfile, types
 
-root, base, helper, jq = map(pathlib.Path, sys.argv[1:])
+root, base, helper, jq, native_binary, native_record, dependency_record = map(pathlib.Path, sys.argv[1:])
 dependency_work = base / "dependency-work"; dependency_work.mkdir()
 spec = importlib.util.spec_from_file_location("shadow_consumer", root / "shadow/v1/_consumer.py")
 c = importlib.util.module_from_spec(spec); sys.modules[spec.name] = c; spec.loader.exec_module(c)
@@ -42,17 +276,28 @@ def write(path, raw, mode=0o440):
     if path.exists(): path.chmod(0o640)
     path.write_bytes(raw); path.chmod(mode)
 def sha(raw): return hashlib.sha256(raw).hexdigest()
-def document(kind, identifier, body):
-    return c.canonical({"schema_version": 1, "kind": kind, "id": identifier, "body": body})
+def document(kind, identifier, body, schema=1):
+    return c.canonical({"schema_version": schema, "kind": kind, "id": identifier, "body": body})
 def parent_doc(path, raw):
     return document("shadow_consumer_parent_context", "shadow.parent", {
         "helper_source_sha256": c.HELPER_SOURCE_SHA256, "helper_build_record_sha256": "2" * 64,
         "helper_executable_sha256": sha(raw), "helper_executable_size": len(raw),
-        "helper_path": str(path)})
+        "helper_path": str(path), "native_release": {
+            "source_sha256": sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+            "build_script_sha256": sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+            "build_record_sha256": sha(native_record.read_bytes()),
+            "binary_path": str(native_binary), "binary_size": native_binary.stat().st_size,
+            "binary_sha256": sha(native_binary.read_bytes()),
+            "python_path": os.path.realpath(sys.executable),
+            "python_sha256": sha(pathlib.Path(sys.executable).read_bytes()),
+            "python_abi": sysconfig.get_config_var("SOABI"),
+            "dependency_record_sha256": sha(dependency_record.read_bytes()),
+            "loader_mode": "rtld-now-local.v1"}}, schema=2)
 
 # Parallel shards share TMPDIR. Stabilize only change metadata for ancestors outside this
 # fixture; every object at or below the owned fixture root keeps real OS observations.
 raw_metadata, raw_named = c._metadata, c._named_metadata
+host_is_darwin = sys.platform == "darwin"
 external = {}
 external_ancestors = set()
 cursor = base.parent
@@ -61,7 +306,7 @@ while True:
     if cursor == cursor.parent: break
     cursor = cursor.parent
 def fd_path(fd):
-    if sys.platform == "darwin":
+    if host_is_darwin:
         raw = c.fcntl.fcntl(fd, 50, b"\0" * 1024)
         return raw.split(b"\0", 1)[0].decode()
     return os.path.realpath("/proc/self/fd/" + str(fd))
@@ -85,6 +330,15 @@ ok(c.isolated_python_argv()[1:4] == ["-I", "-S", "-B"], "isolated Python argv")
 context = base / "context"; helper_raw = helper.read_bytes(); write(context, parent_doc(helper, helper_raw), 0o400)
 body = c.capture_parent_context(os.open(context, os.O_RDONLY))
 ok(body["helper_executable_sha256"] == sha(helper_raw), "trusted parent context")
+for boundary in (1, c.EXECUTABLE_LIMIT):
+    bounded = json.loads(parent_doc(helper, helper_raw)); bounded["body"]["native_release"]["binary_size"] = boundary
+    write(context, c.canonical(bounded), 0o400)
+    ok(c.capture_parent_context(os.open(context, os.O_RDONLY))["native_release"]["binary_size"] == boundary,
+       "native binary size accepts bounded positive endpoint %d" % boundary)
+for invalid in (0, c.EXECUTABLE_LIMIT + 1, True):
+    bounded = json.loads(parent_doc(helper, helper_raw)); bounded["body"]["native_release"]["binary_size"] = invalid
+    write(context, c.canonical(bounded), 0o400)
+    refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(os.open(context, os.O_RDONLY)))
 absent_effect = base / "absent-context-effect"
 refuses("E_PARENT_CONTEXT", lambda: c.capture_parent_context(-1))
 ok(not absent_effect.exists(), "absent parent context has no later effect")
@@ -169,14 +423,14 @@ root_state = types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o555)
 installed_state = types.SimpleNamespace(st_uid=123, st_mode=stat.S_IFDIR | 0o555)
 acl_calls = [0]
 def acl_value(value):
-    def observe(_fd): acl_calls[0] += 1; return value
+    def observe(_fd, _resolver=None): acl_calls[0] += 1; return value
     return observe
 c.sys.platform = "linux"
 c._acl_state = acl_value(([(0x02, 4, 123)], None))
 ok(not c._installed_rule(123)(fd, installed_state, False) and acl_calls[0] == 1,
    "Linux named-user ACL reached and refused")
 acl_calls[0] = 0; c._acl_state = acl_value((None, [(0x10, 2, 0)]))
-ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+ok(not c._root_rule()(fd, root_state, False) and acl_calls[0] == 1,
    "Linux default write ACL reached and refused")
 
 class Call:
@@ -193,7 +447,6 @@ class FakeAclLib:
         self.acl_get_qualifier = Call(self.get_qualifier)
         self.acl_get_permset = Call(self.get_permset)
         self.acl_get_perm_np = Call(self.get_perm)
-        self.mbr_uuid_to_id = Call(self.resolve)
         self.acl_free = Call(lambda _value: 0)
     def get_entry(self, _acl, _selector, _entry):
         self.calls["entry"] += 1
@@ -211,34 +464,58 @@ class FakeAclLib:
         self.calls["qualifier"] += 1
         if self.failure == "qualifier": c.ctypes.set_errno(5); return 0
         return c.ctypes.addressof(self.guid)
-    def resolve(self, _uuid, value, kind):
-        value._obj.value = 0; kind._obj.value = 0; return 0
-real_cdll = c.ctypes.CDLL
+class FixedResolver(c._DarwinUUIDResolver):
+    def __init__(self, rows=None): self.rows, self.calls = rows, []
+    def resolve(self, uuids):
+        self.calls.append(list(uuids))
+        return self.rows if self.rows is not None else [
+            {"uuid": uuid, "status": "resolved", "kind": "user", "id": 0}
+            for uuid in uuids]
+real_functions = c._DARWIN_ACL_FUNCTIONS
 c.sys.platform = "darwin"; c._acl_state = real_acl
 def darwin_rule(failure, installed=False):
     fake = FakeAclLib(failure)
-    c.ctypes.CDLL = lambda *_args, **_kwargs: fake
-    rule = c._installed_rule(123) if installed else c._root_rule
+    c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+    resolver = FixedResolver()
+    rule = c._installed_rule(123, resolver) if installed else c._root_rule(resolver)
     state = installed_state if installed else root_state
-    return rule(fd, state, False), fake
+    return rule(fd, state, False), fake, resolver
 for installed in (False, True):
-    accepted_acl, fake = darwin_rule(None, installed)
-    ok(accepted_acl and fake.entries == 2, "Darwin read-only ACL control reached")
+    accepted_acl, fake, resolver = darwin_rule(None, installed)
+    ok(accepted_acl and fake.entries == 2 and resolver.calls == [["00" * 16]],
+       "Darwin capture sends only positional UUID bytes to fixed resolver")
     for failure in ("entry", "permission", "qualifier"):
-        accepted_acl, fake = darwin_rule(failure, installed)
+        accepted_acl, fake, resolver = darwin_rule(failure, installed)
         ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
-c.ctypes.CDLL = real_cdll
+fake = FakeAclLib(); c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+refuses("E_ACL", lambda: c._darwin_acl(fd, None))
+ok(fake.calls["entry"] == 0, "missing Darwin resolver refuses before ACL capture")
+mutation = base / "acl-resolver-mutation"; write(mutation, b"x", 0o400)
+mutation_fd = os.open(mutation, os.O_RDONLY)
+class MutatingResolver(FixedResolver):
+    def resolve(self, uuids):
+        mutation.chmod(0o600)
+        return super().resolve(uuids)
+mutating = MutatingResolver(); fake = FakeAclLib()
+c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+component = c.HeldComponent(mutation_fd, None, c._metadata(mutation_fd),
+    lambda held_fd, _state, _ancestor: bool(c._darwin_acl(held_fd, mutating)), False)
+held_mutation = c.HeldPath(str(mutation), [component])
+refuses("E_ACL", lambda: held_mutation.recheck("E_ACL"))
+ok(mutating.calls == [["00" * 16]], "metadata mutation after delayed resolver reply refuses")
+held_mutation.close()
+c._DARWIN_ACL_FUNCTIONS = real_functions
 c._acl_state = acl_value(([(1, 456, 1 << 2)], None)); acl_calls[0] = 0
-ok(not c._root_rule(fd, root_state, False) and acl_calls[0] == 1,
+ok(not c._root_rule(FixedResolver())(fd, root_state, False) and acl_calls[0] == 1,
    "Darwin other-principal ACL reached and refused")
 
 c.sys.platform = "linux"
-c._acl_state = lambda _fd: (None, None)
+c._acl_state = lambda _fd, _resolver=None: (None, None)
 store_state = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=456)
 ok(c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "Linux no-ACL store control")
-c._acl_state = lambda _fd: ([(0x10, 0, 0)], None)
+c._acl_state = lambda _fd, _resolver=None: ([(0x10, 0, 0)], None)
 ok(not c._store_rule(123, 456, 0o750, True)(fd, store_state, False), "store rejects any ACL")
-c._acl_state = lambda _fd: (None, None)
+c._acl_state = lambda _fd, _resolver=None: (None, None)
 wrong_owner = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=124, st_gid=456)
 wrong_group = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=123, st_gid=457)
 wrong_mode = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o770, st_uid=123, st_gid=456)
@@ -304,7 +581,9 @@ def observed_value(value):
 def observed(fd): return observed_value(real_metadata(fd))
 def observed_named(name, parent_fd): return observed_value(real_named(name, parent_fd))
 c._metadata, c._named_metadata = observed, observed_named; c._source_root = lambda: str(source)
-c._acl_state = lambda _fd: ([], None) if c.sys.platform == "darwin" else (None, None)
+c._acl_state = lambda _fd, _resolver=None: ([], None) if c.sys.platform == "darwin" else (None, None)
+def fixture_anchor():
+    return c.load_anchor(FixedResolver() if c.sys.platform == "darwin" else None)
 c.ANCHOR = str(anchor_path); c.sys.executable = identity_paths["toolchain"]
 helper_source = source / c.HELPER_SOURCE
 helper_source.parent.mkdir(parents=True, exist_ok=True)
@@ -314,7 +593,7 @@ source_bytes = helper_source.read_bytes()
 write(helper_source, source_bytes + b"\n")
 refuses("E_DEPENDENCY", c.verify_helper_source)
 write(helper_source, source_bytes)
-remember_store(); anchor = c.load_anchor()
+remember_store(); anchor = fixture_anchor()
 observation = json.loads(c.verifier_observation(anchor, env_id, target_id))
 ok(set(observation) == {"schema_version", "kind", "id", "body"}
    and observation["schema_version"] == 1
@@ -332,14 +611,14 @@ anchor.close()
 
 for role in sorted(c.INSTALLED_SOURCES):
     path = pathlib.Path(installed[role]); original = path.read_bytes(); path.chmod(0o640); path.write_bytes(original + b"x")
-    refuses("E_INSTALL", c.load_anchor); path.write_bytes(original); path.chmod(0o440)
+    refuses("E_INSTALL", fixture_anchor); path.write_bytes(original); path.chmod(0o440)
 ok(True, "every installed role is byte-bound")
 
 # A changed reviewed snapshot does not bless independently unchanged installed bytes.
 policy_source = source / c.INSTALLED_SOURCES["control_policy"]
 policy_original = policy_source.read_bytes()
 write(policy_source, policy_original + b"x")
-refuses("E_INSTALL", c.load_anchor)
+refuses("E_INSTALL", fixture_anchor)
 write(policy_source, policy_original)
 
 # Missing and ambiguous registry/accepted relationships fail closed after exact byte binding.
@@ -349,7 +628,7 @@ duplicate_registry["body"]["environments"].append(
 duplicate_registry_raw = c.canonical(duplicate_registry)
 write(source / c.INSTALLED_SOURCES["registry"], duplicate_registry_raw)
 write(pathlib.Path(installed["registry"]), duplicate_registry_raw)
-ambiguous = c.load_anchor()
+ambiguous = fixture_anchor()
 refuses("E_RELATION", lambda: c.verifier_observation(ambiguous, env_id, target_id))
 ambiguous.close()
 write(source / c.INSTALLED_SOURCES["registry"], registry)
@@ -361,7 +640,7 @@ duplicate_accepted["body"]["environments"].append(
 duplicate_accepted_raw = c.canonical(duplicate_accepted)
 write(source / c.INSTALLED_SOURCES["accepted_set"], duplicate_accepted_raw)
 write(pathlib.Path(installed["accepted_set"]), duplicate_accepted_raw)
-ambiguous = c.load_anchor()
+ambiguous = fixture_anchor()
 refuses("E_RELATION", lambda: c.verifier_observation(ambiguous, env_id, target_id))
 ambiguous.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted)
@@ -372,18 +651,18 @@ malformed_accepted["body"]["environments"][0]["identities"]["verifier"] = ["a" *
 malformed_raw = c.canonical(malformed_accepted)
 write(source / c.INSTALLED_SOURCES["accepted_set"], malformed_raw)
 write(pathlib.Path(installed["accepted_set"]), malformed_raw)
-refuses("E_INSTALL", c.load_anchor)
+refuses("E_INSTALL", fixture_anchor)
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted)
 write(pathlib.Path(installed["accepted_set"]), accepted)
 
 wrong = json.loads(accepted); wrong["body"]["environments"][0]["identities"]["verifier"] = [sha(b"wrong")]
 wrong_raw = c.canonical(wrong)
 write(source / c.INSTALLED_SOURCES["accepted_set"], wrong_raw); write(pathlib.Path(installed["accepted_set"]), wrong_raw)
-cross = c.load_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(cross, env_id, target_id)); cross.close()
+cross = fixture_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(cross, env_id, target_id)); cross.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted); write(pathlib.Path(installed["accepted_set"]), accepted)
 empty = json.loads(accepted); empty["body"]["environments"] = []; empty_raw = c.canonical(empty)
 write(source / c.INSTALLED_SOURCES["accepted_set"], empty_raw); write(pathlib.Path(installed["accepted_set"]), empty_raw)
-empty_anchor = c.load_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(empty_anchor, env_id, target_id)); empty_anchor.close()
+empty_anchor = fixture_anchor(); refuses("E_RELATION", lambda: c.verifier_observation(empty_anchor, env_id, target_id)); empty_anchor.close()
 write(source / c.INSTALLED_SOURCES["accepted_set"], accepted); write(pathlib.Path(installed["accepted_set"]), accepted)
 bad_config = json.loads(config); bad_config["body"]["principal_uid"] = True
 refuses("E_CONFIG", lambda: c._parse_config(c.canonical(bad_config)))
@@ -401,19 +680,19 @@ bad_config = json.loads(config)
 bad_config["body"]["installed_files"]["registry"] = bad_config["body"]["installed_files"]["accepted_set"]
 refuses("E_CONFIG", lambda: c._parse_config(c.canonical(bad_config)))
 saved = pathlib.Path(installed["registry"]); saved.rename(saved.with_suffix(".missing"))
-before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", c.load_anchor)
+before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", fixture_anchor)
 ok(len(os.listdir("/dev/fd")) == before, "partial anchor failure closes descriptors")
 saved.with_suffix(".missing").rename(saved)
 
 old_python = c.sys.executable
 c.sys.executable = str(install / "missing-interpreter")
-before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", c.load_anchor)
+before = len(os.listdir("/dev/fd")); refuses("E_INSTALL", fixture_anchor)
 ok(len(os.listdir("/dev/fd")) == before, "late interpreter failure closes descriptors")
 c.sys.executable = old_python
 
-before = len(os.listdir("/dev/fd")); anchor = c.load_anchor(); anchor.close()
+before = len(os.listdir("/dev/fd")); anchor = fixture_anchor(); anchor.close()
 ok(len(os.listdir("/dev/fd")) == before, "successful anchor ownership closes cleanly")
-anchor = c.load_anchor()
+anchor = fixture_anchor()
 
 def make_attempt(attempt_id="attempt.fixture", evidence_raw=b"proof", name_hex="70726f6f66"):
     attempt = store / attempt_id; payload = attempt / "payload"; payload.mkdir(parents=True, mode=0o750)
@@ -542,4 +821,2029 @@ payload.chmod(0o777); remember_store(); refuses("E_STORE", lambda: c.read_store_
 anchor.close(); c._metadata, c._named_metadata = real_metadata, real_named
 c._source_root, c._acl_state = real_source, real_acl
 print("shadow-enforced: %d checks passed" % checks)
+PY
+
+# Slice 3 keeps launch substitution private while exercising the production
+# framing, durable-request, payload, record, inventory and bounded-child code.
+"$python_bin" -I -S -B - "$root" "$tmp/slice3" "$jq_bin" <<'PY'
+import hashlib, importlib.util, json, os, pathlib, shutil, signal, stat, subprocess, sys, time, types
+root, base, jq_bin = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]); base.mkdir(mode=0o700)
+spec = importlib.util.spec_from_file_location("enforced", root / "shadow/v1/enforced-reproduction.py")
+e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
+checks = 0
+def ok(value, message):
+    global checks
+    if not value: raise AssertionError(message)
+    checks += 1; print("ok slice3-%d - %s" % (checks, message))
+def refuses(code, action, message):
+    try: action()
+    except e.Refusal as exc: ok(exc.code == code, message); return
+    raise AssertionError("accepted: " + message)
+def doc(kind, identity, body):
+    return {"schema_version": 1, "kind": kind, "id": identity, "body": body}
+def write(path, raw):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_bytes(raw); path.chmod(0o400)
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+
+# The frame proof uses an independent parser. It checks every byte in the
+# header/content digest, ordered records and the terminal digest record.
+def decode(frame):
+    ok(frame[:8] == b"YSFRAME1", "frame magic")
+    measured = hashlib.sha256(frame[:8]); at = 8; records = []
+    while True:
+        n = frame[at]; name = frame[at + 1:at + 1 + n]
+        size = int.from_bytes(frame[at + 1 + n:at + 9 + n], "big")
+        header = frame[at:at + 9 + n]; at += 9 + n
+        content = frame[at:at + size]; at += size
+        if name == b"end":
+            ok(size == 32 and content == measured.digest() and at == len(frame), "frame terminal digest")
+            return records
+        measured.update(header); measured.update(content); records.append((name, content))
+records = [(b"request.json", b"r\n"), (b"evaluation.json", b"e\n"),
+           (b"incident.json", b"i\n"), (b"record.json", b"p\n"),
+           (b"manifest.json", b"m\n"), (b"instruction", b"x\n"),
+           (b"candidate/00000", b"candidate\n")]
+frame = e.frame_write(records)
+ok(decode(frame) == records, "frame records preserve order and bytes")
+refuses("E_LIMIT", lambda: e.frame_write([(b"x" * 256, b"")]), "oversize frame name refused")
+refuses("E_LIMIT", lambda: e.frame_write([(b"end", b"")]), "reserved end name refused")
+old_limit = e.FRAME_LIMIT; e.FRAME_LIMIT = 30
+refuses("E_LIMIT", lambda: e.frame_write([(b"x", b"a" * 40)]), "complete frame ceiling enforced")
+exact=8+1+1+8+7+44;e.FRAME_LIMIT=exact
+ok(len(e.frame_write([(b"x",b"a"*7)]))==exact,"frame exact cap accepted")
+e.FRAME_LIMIT=exact-1
+refuses("E_LIMIT",lambda:e.frame_write([(b"x",b"a"*7)]),"frame cap-minus-one refuses before append")
+e.FRAME_LIMIT = old_limit
+
+# Bounded children get a clean explicit environment and process group. A
+# timeout is failure; truncated stdout/stderr can never be accepted.
+env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+out = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", "print('fixed')"], env=env)
+ok(out == b"fixed\n", "bounded child success")
+mask_code = "import signal;print(bool(signal.pthread_sigmask(signal.SIG_BLOCK,set())&{signal.SIGTERM,signal.SIGHUP,signal.SIGINT}))"
+ok(e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env) == b"False\n",
+   "bounded child inherits the caller's unblocked termination mask")
+prior_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+try:
+    inherited = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env)
+finally:
+    signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)
+ok(inherited == b"True\n", "bounded child preserves a caller-blocked termination signal")
+refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+    "import time;time.sleep(2)"], timeout=.05, env=env), "bounded child timeout is failure")
+refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+    "import sys,time;sys.stdout.write('x'*100);sys.stdout.flush();time.sleep(30)"],
+    output_limit=8, env=env), "bounded stdout refuses instead of truncating")
+refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+    "import sys,time;sys.stderr.write('x'*70000);sys.stderr.flush();time.sleep(30)"], env=env),
+    "bounded stderr refuses instead of truncating")
+refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+    "raise SystemExit(3)"], env=env), "nonzero component exit refuses")
+
+# The ACL resolver is one concrete adapter with fixed P/S/role, environment and caps.
+python_snapshot=e.stable_file(pathlib.Path(sys.executable))
+consumer_snapshot=e.stable_file(root/"shadow/v1/_consumer.py")
+resolver_ledger=[]
+def resolver_record(role,argv,executable_sha256,component_sha256):
+ resolver_ledger.append({"role":role,"argv_sha256":e.sha(e.canonical(argv)),
+  "executable_sha256":executable_sha256,"component_sha256":component_sha256})
+resolver=e._DarwinUUIDResolver(python_snapshot,consumer_snapshot,time.monotonic()+30,resolver_record)
+uuid_values=["0123456789abcdef0123456789abcdef","00"*16,"00"*16]
+resolver_rows=[{"uuid":uuid_values[0],"status":"resolved","kind":"user","id":501},
+ {"uuid":uuid_values[1],"status":"resolved","kind":"group","id":20},
+ {"uuid":uuid_values[2],"status":"unresolved","kind":None,"id":None}]
+original_run=e.run_bounded; resolver_calls=[]
+def resolver_refuses(action,message):
+ try:action()
+ except (e.Refusal,e.c.Refusal) as exc:ok(exc.code=="E_ACL",message);return
+ raise AssertionError("accepted: "+message)
+def resolver_run(argv,**options):
+ resolver_calls.append((argv,options))
+ return e.c.canonical(resolver_rows)
+e.run_bounded=resolver_run
+ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
+ok([row["role"] for row in resolver_ledger]==["darwin-acl-uuid-resolution"],
+   "nonempty resolver batch appends one command-ledger row")
+argv,options=resolver_calls[0]
+ok(argv==[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_resolve-darwin-uuids"]
+ and options["stdin"]==e.c.canonical(uuid_values) and options["timeout"]==10
+ and options["output_limit"]==32*1024
+ and options["env"]=={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"},
+ "resolver argv environment input and caps are fixed")
+for bad,message in [
+ (b'[{"uuid":"00"}]\n',"malformed resolver row refused"),
+ (e.c.canonical(resolver_rows[:-1]),"missing resolver row refused"),
+ (e.c.canonical(list(reversed(resolver_rows))),"reordered resolver row refused"),
+ (b'[{"id":501,"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef"}]\n',"duplicate resolver key refused"),
+ (b'[{"id":501,"kind":"user","status":"resolved","uuid":"0123456789abcdef0123456789abcdef","x":1}]\n',"extra resolver field refused"),
+ (e.c.canonical(resolver_rows)+b"x","trailing resolver data refused"),
+ (b" "*(32*1024+1),"resolver output byte cap enforced")]:
+ e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ resolver_refuses(lambda:resolver.resolve(uuid_values),message)
+e.run_bounded=original_run
+resolver_refuses(lambda:resolver.resolve(["A"*32]),"noncanonical resolver UUID refused")
+resolver_refuses(lambda:resolver.resolve(["00"*16]*129),"resolver count cap enforced")
+before_empty=len(resolver_ledger);ok(resolver.resolve([])==[] and len(resolver_ledger)==before_empty,
+ "empty resolver batch appends no command-ledger row")
+boundary_uuids=[("%032x"%index) for index in range(128)]
+e.run_bounded=lambda *_args,**_options:e.c.canonical([
+ {"uuid":uuid,"status":"unresolved","kind":None,"id":None} for uuid in boundary_uuids])
+ok(len(resolver.resolve(boundary_uuids))==128,"resolver accepts exact 128-entry boundary")
+e.run_bounded=original_run
+resolver_refuses(lambda:e.c._json_array(b"["+b'"00",'*8192+b'"00"]\n',16*1024,"E_ACL"),
+ "resolver input byte cap enforced before parsing")
+if sys.platform=="darwin":
+ lib=e.ctypes.CDLL(e.c.DARWIN_SYSTEM_C,use_errno=True)
+ def native_uuid(name,value):
+  function=getattr(lib,name);function.argtypes=[e.ctypes.c_uint32,e.ctypes.c_char_p]
+  function.restype=e.ctypes.c_int;raw=e.ctypes.create_string_buffer(16)
+  ok(function(value,raw)==0,"native fixture obtains "+name.removeprefix("mbr_").removesuffix("_to_uuid"))
+  return bytes(raw).hex()
+ user_uuid=native_uuid("mbr_uid_to_uuid",os.getuid())
+ group_uuid=native_uuid("mbr_gid_to_uuid",os.getgid())
+ missing_uuid="f47ac10b58cc4372a5670e02b2c3d479"
+ census=e._NativeThreadCensus();census.observe()
+ native_rows=resolver.resolve([user_uuid,group_uuid,missing_uuid]);census.observe()
+ ok(native_rows==[
+  {"uuid":user_uuid,"status":"resolved","kind":"user","id":os.getuid()},
+  {"uuid":group_uuid,"status":"resolved","kind":"group","id":os.getgid()},
+  {"uuid":missing_uuid,"status":"unresolved","kind":None,"id":None}],
+  "real fixed child preserves native user group and noncompatibility miss semantics")
+ ok(e.CancellationSignals.active is None,"reaped native resolver leaves parent cancellation owner unchanged")
+consumer_snapshot.close();python_snapshot.close()
+
+original_popen=e.subprocess.Popen
+e.subprocess.Popen=lambda *_args,**_kwargs: (_ for _ in ()).throw(AssertionError("spawned"))
+refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c","pass"],env=env,
+        deadline=time.monotonic()-1),"expired overall deadline refuses before spawn")
+e.subprocess.Popen=original_popen
+setup_ready=base/"setup.ready"
+setup_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(setup_ready)],stdin=subprocess.PIPE,
+ stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+for _ in range(100):
+ if setup_ready.exists():break
+ time.sleep(.01)
+ok(setup_ready.exists(),"setup child reached owned process group")
+original_set_blocking=e.os.set_blocking;e.os.set_blocking=lambda *_args: (_ for _ in ()).throw(OSError("fixture"))
+try:e.communicate_bounded(setup_child,b"",8,8,1)
+except OSError:ok(True,"setup failure leaves bounded operation")
+else:raise AssertionError("setup failure accepted")
+e.os.set_blocking=original_set_blocking
+for _ in range(100):
+ if setup_child.poll() is not None:break
+ time.sleep(.01)
+ok(setup_child.poll() is not None,"setup-failed child was reaped")
+interrupt_ready=base/"interrupt.ready"
+interrupt_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(interrupt_ready)],stdin=subprocess.PIPE,
+ stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+for _ in range(100):
+ if interrupt_ready.exists():break
+ time.sleep(.01)
+ok(interrupt_ready.exists(),"interrupt child reached owned process group")
+original_selector=e.selectors.DefaultSelector
+e.selectors.DefaultSelector=lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+try:e.communicate_bounded(interrupt_child,b"",8,8,1)
+except KeyboardInterrupt:ok(True,"cancellation leaves bounded operation")
+else:raise AssertionError("cancellation accepted")
+finally:e.selectors.DefaultSelector=original_selector
+for _ in range(100):
+ if interrupt_child.poll() is not None:break
+ time.sleep(.01)
+ok(interrupt_child.poll() is not None,"cancelled child was reaped")
+signal_wrapper=base/"signal-wrapper.py"
+signal_wrapper.write_text("""import importlib.util
+import inspect
+import os
+import pathlib
+import signal
+import sys
+
+root = pathlib.Path(sys.argv[1])
+pid_path = pathlib.Path(sys.argv[2])
+done_path = pathlib.Path(sys.argv[3])
+cleanup_path = pathlib.Path(sys.argv[4])
+mode = sys.argv[6]
+spec = importlib.util.spec_from_file_location(
+    "signaled", root / "shadow/v1/enforced-reproduction.py")
+driver = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = driver
+spec.loader.exec_module(driver)
+
+watched = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+before = {sent: signal.getsignal(sent) for sent in watched}
+original_mask = signal.pthread_sigmask
+initial_mask = original_mask(signal.SIG_BLOCK, set())
+delivered = False
+blocking_active = False
+continued = False
+cleanup_disappeared = False
+
+def observed_mask(how, values):
+    result = original_mask(how, values)
+    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
+            and mode == "guard" and driver.CancellationSignals.active is not None
+            and not cleanup_path.exists()):
+        cleanup_path.touch()
+        os.kill(os.getpid(), signal.SIGTERM)
+    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
+            and driver.CancellationSignals.active is not None):
+        cleanup_path.touch()
+    return result
+
+driver.signal.pthread_sigmask = observed_mask
+original_stop = driver.stop_child
+
+def observed_stop(child):
+    global cleanup_disappeared
+    cleanup_path.touch()
+    if mode == "stop":
+        os.kill(os.getpid(), signal.SIGTERM)
+    result = original_stop(child)
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        cleanup_disappeared = True
+    else:
+        raise AssertionError("owned process group survived cleanup")
+    return result
+
+driver.stop_child = observed_stop
+real_read = driver.os.read
+
+def recover(fd, size):
+    global delivered, blocking_active
+    caller = sys._getframe(1)
+    output_fds = caller.f_locals.get("output", {})
+    if (mode == "recover" and not delivered
+            and caller.f_code is driver.communicate_bounded.__code__
+            and fd in output_fds):
+        try:
+            raise BlockingIOError()
+        except BlockingIOError:
+            blocking_active = isinstance(sys.exception(), BlockingIOError)
+            delivered = True
+            os.kill(os.getpid(), signal.SIGTERM)
+            raise
+    return real_read(fd, size)
+
+driver.os.read = recover
+lines, start = inspect.getsourcelines(driver.spawn_bounded)
+handoff_line = start + next(
+    index for index, line in reversed(list(enumerate(lines)))
+    if "CancellationSignals.checkpoint()" in line)
+
+def trace(frame, event, _arg):
+    global delivered
+    if (mode == "handoff" and not delivered
+            and frame.f_code is driver.spawn_bounded.__code__
+            and event == "line" and frame.f_lineno == handoff_line):
+        delivered = True
+        pid_path.write_text(str(frame.f_locals["child"].pid))
+        os.kill(os.getpid(), signal.SIGTERM)
+    return trace
+
+sys.settrace(trace)
+
+def reproduce(*_args):
+    global continued
+    child_code = (
+        "import os,pathlib,signal,sys,time;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
+        "print('ready',flush=True);time.sleep(30)")
+    driver.run_bounded(
+        [sys.executable, "-I", "-S", "-B", "-c", child_code, str(pid_path)],
+        timeout=float(sys.argv[5]),
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+    continued = True
+
+driver.reproduce = reproduce
+class FixtureCensus:
+    def observe(self):
+        pass
+class FixtureNative:
+    def __init__(self):
+        self.phase="prepared"; self.entry=None; self.final=None
+        self.completion=None; self.status="native-release.pending"; self.rolled=False
+    def recheck(self): pass
+    def block_entry(self):
+        self.entry=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="entry"
+    def resume_consumer(self):
+        driver.signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+    def hold_completion(self,fd): self.completion=os.dup(fd)
+    def block_final(self):
+        self.final=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="final"
+    def rollback_marker(self):
+        if self.rolled or self.completion is None:return
+        self.rolled=True
+        try:os.unlink("bundle.json",dir_fd=self.completion)
+        except FileNotFoundError:pass
+        os.fsync(self.completion)
+    def finish_release(self):
+        restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
+        if restore is not None:driver.signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+        if self.completion is not None:os.close(self.completion);self.completion=None
+        self.status="native-release.success";return self.status
+    def outcome(self):return self.status
+admission = driver._StartupAdmission(
+    driver._STARTUP_KEY, driver.sys.executable,
+    driver.sha(pathlib.Path(driver.sys.executable).read_bytes()), driver.sys.version,
+    tuple(driver.sys.version_info[:2]), driver._runtime_module_origins(), FixtureCensus(),
+    FixtureNative())
+try:
+    with driver.CancellationSignals(admission):
+        reproduce()
+except (driver.Cancelled, driver.Refusal, OSError):
+    print("E_RUNTIME",file=sys.stderr);return_code=1
+else:
+    return_code=0
+after_mask = original_mask(signal.SIG_BLOCK, set())
+restored = all(signal.getsignal(sent) == before[sent] for sent in before)
+done_path.write_text(
+    f"{return_code}:{restored}:{after_mask == initial_mask}:"
+    f"{delivered}:{blocking_active}:{continued}:{cleanup_disappeared}")
+""")
+for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("repeated",signal.SIGTERM,
+ (signal.SIGHUP,signal.SIGINT),30,"none"),("timeout-stop-entry",None,(),1,"stop"),
+ ("timeout-guard-entry",None,(),1,"guard"),("timeout-post-mask",None,(signal.SIGTERM,),1,"none"),
+ ("spawn-handoff",None,(),30,"handoff"),("recoverable-read",None,(),30,"recover")):
+ child_pid=base/(name+".pid");done=base/(name+".done");cleanup=base/(name+".cleanup")
+ wrapper=subprocess.Popen([sys.executable,"-I","-S","-B",str(signal_wrapper),str(root),
+  str(child_pid),str(done),str(cleanup),str(timeout),entry],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ for _ in range(500):
+  if child_pid.exists():break
+  if wrapper.poll() is not None:break
+  time.sleep(.01)
+ if wrapper.poll() is not None and not child_pid.exists():
+  early_stdout,early_stderr=wrapper.communicate()
+  raise AssertionError(name+" wrapper exited early: "+repr((wrapper.returncode,early_stdout,early_stderr)))
+ ok(child_pid.exists(),name+" production consumer reached TERM-ignoring owned child")
+ if first is not None:wrapper.send_signal(first)
+ for _ in range(500):
+  if cleanup.exists():break
+  time.sleep(.01)
+ ok(cleanup.exists(),name+" entered production owned-group cleanup")
+ for sent in later:wrapper.send_signal(sent)
+ stdout,stderr=wrapper.communicate(timeout=15)
+ result=done.read_text().split(":")
+ ok(wrapper.returncode==0 and result[:3]==["1","True","True"] and stderr==b"E_RUNTIME\n",
+    name+" cleanup is idempotent and restores handlers and mask")
+ if entry in {"handoff","recover"}:
+  ok(result[3]=="True" and result[5]=="False",name+" consumes the delivered signal before continuation")
+ if entry=="recover":
+  ok(result[4]=="True",name+" delivers TERM with BlockingIOError active in the production read")
+ ok(result[6]=="True",name+" confirms cleanup returned after ESRCH and leader reap")
+pid_file=base/"descendant.pid"
+group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
+ "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
+ "(pathlib.Path(sys.argv[1]).write_text(str(pid)),time.sleep(30))")
+started=time.monotonic()
+refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c",group_program,str(pid_file)],
+        timeout=.1,env=env),"timeout stops leader and TERM-ignoring descendant")
+descendant=int(pid_file.read_text());gone=False
+for _ in range(100):
+ try:os.kill(descendant,0)
+ except ProcessLookupError:gone=True;break
+ time.sleep(.01)
+ok(gone and time.monotonic()-started<11,"owned process group is gone within one cleanup bound")
+bash=e.fixed_bash();bash.recheck();ok(True,"fixed /bin/bash alias and physical bytes recheck")
+original_lstat=e.os.lstat
+def linux_alias(path):
+ state=original_lstat(path)
+ if pathlib.Path(path)==pathlib.Path("/bin"):
+  return types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino,
+   st_mode=stat.S_IFLNK|0o777,st_uid=0,st_gid=state.st_gid,st_nlink=state.st_nlink,
+   st_size=state.st_size,st_mtime_ns=state.st_mtime_ns,st_ctime_ns=state.st_ctime_ns)
+ return state
+original_readlink=e.os.readlink
+physical_bash=pathlib.Path("/bin/bash").resolve();original_resolve=e.Path.resolve
+e.os.lstat=linux_alias;e.os.readlink=lambda path:"usr/bin" if pathlib.Path(path)==pathlib.Path("/bin") else original_readlink(path)
+e.Path.resolve=lambda self,strict=False:physical_bash if self==pathlib.Path("/bin/bash") else original_resolve(self,strict=strict)
+linux_bash=e.fixed_bash();linux_bash.recheck();linux_bash.close()
+ok(True,"root-owned Linux-mode bash alias is admitted with physical byte binding")
+e.os.lstat=original_lstat;e.os.readlink=original_readlink;e.Path.resolve=original_resolve
+def replaced_alias(path):
+ state=original_lstat(path)
+ if pathlib.Path(path)==pathlib.Path("/bin"):
+  return types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino+1,st_mode=state.st_mode,
+   st_uid=state.st_uid,st_gid=state.st_gid,st_nlink=state.st_nlink,st_size=state.st_size,
+   st_mtime_ns=state.st_mtime_ns,st_ctime_ns=state.st_ctime_ns)
+ return state
+e.os.lstat=replaced_alias
+refuses("E_DEPENDENCY",bash.recheck,"fixed executable alias replacement refuses")
+e.os.lstat=original_lstat
+original_read=bash.physical.held.read;bash.physical.held.read=lambda _limit,_code:b"changed"
+refuses("E_DEPENDENCY",bash.recheck,"same held executable with changed bytes refuses")
+bash.physical.held.read=original_read;bash.close()
+fifo = base / "request-fifo"; os.mkfifo(fifo)
+refuses("E_SHAPE", lambda: e.read_regular(fifo, e.REQUEST_LIMIT, "E_SHAPE"),
+        "request FIFO refuses without blocking")
+
+incident = doc("shadow_incident_record", "incident.fixture", {
+    "deploy_authority": "none", "failing_check": {"check_id": "check.fixture",
+    "kind": "file-digest", "path": "source.txt", "expected_sha256": "a" * 64},
+    "git_revision_ref": {"repository_id": "fixture.target", "hash_algorithm": "sha1",
+                         "commit_id": "b" * 40}, "observed_at": "2026-01-01T00:00:00Z",
+    "observed_symptom": "changed", "reporter_actor_ref": "actor.fixture",
+    "target_repository_id": "fixture.target"})
+instruction = e.make_instruction(incident)
+ok(instruction == (b"ystack.file-digest-instruction.v1\npath source.txt\nsha256 " + b"a" * 64 + b"\n"),
+   "fixed instruction exact bytes")
+for patch, message in [({"kind":"named-check"}, "named check refused"),
+                       ({"path":"bad\npath"}, "newline path refused"),
+                       ({"expected_sha256":"A" * 64}, "non-lowercase digest refused")]:
+    changed = json.loads(json.dumps(incident)); changed["body"]["failing_check"].update(patch)
+    refuses("E_RELATION", lambda changed=changed: e.make_instruction(changed), message)
+
+# Launch and expectation are derived from one tuple. The only varying field is
+# a fresh nonce. The expectation hashes the completed request and carries no
+# caller-supplied replacement for store, control or subject.
+policy = b'{"p":1}\n'; decision = b'{"d":1}\n'; pset = b'{"s":1}\n'
+driver = b'#!/bin/bash\n'; program = b'.\n'; accepted = b'{"a":1}\n'; registry_raw = b'{"r":1}\n'
+entry = {"description":"fixture","environment_id":"env.fixture","evidence_scope":"fixtures-only",
+         "proof_state":"unproven","source_root_commit":"b"*40,"target_repository_id":"fixture.target"}
+installed = {"control_policy":(policy,sha(policy)), "control_decision":(decision,sha(decision)),
+ "control_policy_set":(pset,sha(pset)), "evaluator_driver":(driver,sha(driver)),
+ "evaluator_program":(program,sha(program)), "accepted_set":(accepted,sha(accepted)),
+ "registry":(registry_raw,sha(registry_raw))}
+anchor = types.SimpleNamespace(config={"environment_id":"env.fixture","store_id":"store.fixture"},
+                               registry=(sha(registry_raw),[entry]), installed=installed)
+request = doc("shadow_enforced_request", "attempt.fixture", {"attempt_id":"attempt.fixture"})
+record = {"source":{"repository_id":"fixture.target","hash_algorithm":"sha1",
+ "commit_id":"b"*40,"tree_id":"c"*40}, "candidate":{"commit_id":"d"*40,"tree_id":"e"*40}}
+record_raw=e.canonical(record); manifest_raw=e.canonical({"entries":[]}); evaluation_raw=e.canonical(doc(
+ "sandbox_policy_evaluation","evaluation.fixture",{"verdict":"satisfied"}))
+observation_raw=e.canonical(doc("sandbox_verifier_observation","observation.fixture",{}))
+launch1, expectation1 = e.make_launch(anchor, request, e.canonical(incident), evaluation_raw,
+                                      observation_raw, record_raw, manifest_raw, instruction)
+launch2, expectation2 = e.make_launch(anchor, request, e.canonical(incident), evaluation_raw,
+                                      observation_raw, record_raw, manifest_raw, instruction)
+l1,l2=e.parse(launch1),e.parse(launch2); x1,x2=e.parse(expectation1),e.parse(expectation2)
+ok(l1["body"]["nonce"] != l2["body"]["nonce"], "launch nonce is fresh")
+ok(x1["body"]["attempt"]["launch_request_sha256"] == sha(launch1), "expectation binds completed launch")
+ok(x2["body"]["attempt"]["launch_request_sha256"] == sha(launch2), "second expectation binds second launch")
+for key in ("control","store_id","subject"):
+    ok(x1["body"][key] == l1["body"][key], "expectation copies launch " + key)
+ok(set(l1["body"]["control"]) == {"policy_sha256","decision_sha256","policy_set_sha256",
+   "evaluator_driver_sha256","evaluator_program_sha256","sandbox_evaluation_sha256"},
+   "launch carries all six control bindings")
+ok(l1["body"]["subject"]["environment_entry_sha256"] == sha(e.canonical(entry)),
+   "launch hashes selected registry entry")
+
+# Persist request and expectation with fsync before a substituted launch is
+# entered. This directly exercises the production exclusive writer.
+order=[]; real_write=e.write_exclusive; real_fsync=os.fsync
+def ordered_write(path, raw, mode=0o400, sync=False):
+    real_write(path,raw,mode,sync); order.append((path.name,sync))
+def ordered_launch(_anchor,_frame,_deadline):
+    ok(order == [("sandbox-request.json",True),("sandbox-expectation.json",True)],
+       "request and expectation durable before launch seam")
+    return 0
+e.write_exclusive=ordered_write
+pre=base/"prelaunch"; pre.mkdir(mode=0o700)
+e.write_exclusive(pre/"sandbox-request.json", launch1, sync=True)
+e.write_exclusive(pre/"sandbox-expectation.json", expectation1, sync=True)
+ordered_launch(anchor,frame,time.monotonic()+1)
+e.write_exclusive=real_write
+refuses("E_RUNTIME", lambda: real_write(pre/"sandbox-request.json",launch1),
+        "exclusive persistence refuses overwrite")
+
+# Every caller document is copied through a held no-follow descriptor. The
+# original and private copy are both checked again before a completion marker.
+input_source=base/"captured-source.json"; write(input_source,e.canonical(doc("fixture","fixture.capture",{})))
+captured_dir=base/"captured"; captured_dir.mkdir(mode=0o700)
+snapshot=e.snapshot_input(input_source,captured_dir/"incident.json",1024)
+ok(snapshot.raw==(captured_dir/"incident.json").read_bytes(),"input snapshot preserves exact bytes")
+snapshot.recheck(); ok(True,"unchanged input snapshot rechecks")
+(captured_dir/"incident.json").chmod(0o600); (captured_dir/"incident.json").write_bytes(b"{}\n")
+refuses("E_RELATION",snapshot.recheck,"private snapshot mutation refused")
+snapshot.close()
+e.disjoint([base/"a",base/"b"]); ok(True,"sibling workspaces are disjoint")
+refuses("E_WORKSPACE",lambda:e.disjoint([base/"a",base/"a/b"]),"nested workspace refused")
+
+# Payload admission compares the real manifest row, fixed filename, observed
+# bytes and fixed instruction. All relation mutations are otherwise complete.
+result_body={"check":{"path":"source.txt","expected_sha256":"a"*64},
+             "instruction_sha256":sha(instruction),
+             "observed":{"sha256":"f"*64,"size_bytes":7},
+             "outcome":"mismatch","reason_id":"file.mismatch"}
+result_raw=e.canonical(doc("file_digest_verifier_payload","file-digest-payload",result_body))
+evidence_manifest=doc("sandbox_evidence_manifest","evidence-manifest",{"files":[{
+    "name_hex":b"file-digest-result.json".hex(),"sha256":sha(result_raw),"size_bytes":len(result_raw)}]})
+prep_manifest={"entries":[{"path":"source.txt","sha256":"f"*64,"size_bytes":7}]}
+snapshots={"payload/stdout":b"","payload/stderr":b"","payload/evidence/0000":result_raw}
+payload_receipt={"body":{"lifecycle":{"admission":"admitted","runtime":"completed","control_deadline":"met"},
+ "teardown":{"state":"confirmed"},"payload":{"exit_state":"exited","exit_code":0,
+ "stdout_sha256":sha(b""),"stderr_sha256":sha(b""),
+ "evidence_manifest_sha256":sha(e.canonical(evidence_manifest))}}}
+raw, result=e.payload_result(snapshots,evidence_manifest,instruction,prep_manifest,payload_receipt)
+ok(raw==result_raw and result["outcome"]=="mismatch", "mismatch is completed comparison")
+for target,key in (("result","schema_version"),("observed","size_bytes")):
+ bad=e.parse(result_raw)
+ if target=="result":bad[key]=True
+ else:bad["body"]["observed"][key]=True
+ bad_raw=e.canonical(bad);ss=dict(snapshots);ss["payload/evidence/0000"]=bad_raw
+ mm=json.loads(json.dumps(evidence_manifest));mm["body"]["files"][0].update(sha256=sha(bad_raw),size_bytes=len(bad_raw))
+ receipt=json.loads(json.dumps(payload_receipt));receipt["body"]["payload"]["evidence_manifest_sha256"]=sha(e.canonical(mm))
+ refuses("E_RELATION",lambda ss=ss,mm=mm,receipt=receipt:e.payload_result(ss,mm,instruction,prep_manifest,receipt),
+         "boolean payload "+key+" refused")
+for mutate,message in [
+ (lambda s,m: s.__setitem__("payload/stdout",b"noise"),"nonempty stdout refused"),
+ (lambda s,m: m["body"]["files"][0].__setitem__("name_hex",b"other".hex()),"wrong evidence name refused"),
+ (lambda s,m: m["body"]["files"][0].__setitem__("sha256","0"*64),"wrong evidence digest refused")]:
+    ss=dict(snapshots); mm=json.loads(json.dumps(evidence_manifest)); mutate(ss,mm)
+    refuses("E_RELATION",lambda ss=ss,mm=mm:e.payload_result(ss,mm,instruction,prep_manifest,payload_receipt),message)
+changed=e.parse(result_raw); changed["body"]["observed"]["sha256"]="1"*64
+changed_raw=e.canonical(changed); ss=dict(snapshots); ss["payload/evidence/0000"]=changed_raw
+mm=json.loads(json.dumps(evidence_manifest)); mm["body"]["files"][0].update(
+    sha256=sha(changed_raw),size_bytes=len(changed_raw))
+changed_receipt=json.loads(json.dumps(payload_receipt))
+changed_receipt["body"]["payload"]["evidence_manifest_sha256"]=sha(e.canonical(mm))
+refuses("E_RELATION",lambda:e.payload_result(ss,mm,instruction,prep_manifest,changed_receipt),
+        "rehashed wrong observed digest refused")
+for field,value,message in (("exit_code",1,"nonzero verifier exit refused"),
+                            ("exit_state","signaled","signaled verifier refused")):
+    bad=json.loads(json.dumps(payload_receipt));bad["body"]["payload"][field]=value
+    refuses("E_RELATION",lambda bad=bad:e.payload_result(snapshots,evidence_manifest,instruction,prep_manifest,bad),message)
+bad=json.loads(json.dumps(payload_receipt));bad["body"]["teardown"]["state"]="unconfirmed"
+refuses("E_RELATION",lambda:e.payload_result(snapshots,evidence_manifest,instruction,prep_manifest,bad),
+        "unconfirmed teardown refused")
+bad=json.loads(json.dumps(payload_receipt));bad["body"]["lifecycle"]["control_deadline"]="exceeded"
+refuses("E_RELATION",lambda:e.payload_result(snapshots,evidence_manifest,instruction,prep_manifest,bad),
+        "expired supervisor deadline refused")
+
+# Completion is an exact 29-file inventory with the marker created last. A
+# partial write and an unexpected file cannot masquerade as completion.
+files={name:(b"" if name.endswith(".txt") else e.canonical(doc("fixture", "fixture."+str(i), {})))
+       for i,name in enumerate(e.EVIDENCE_NAMES)}
+files["incident.json"]=e.canonical(incident)
+out=base/"bundle"; out.mkdir(mode=0o700)
+out_hold=e.stable_directory(out)
+sync_order=[];order_fsync=e.os.fsync;order_write=e.write_exclusive_at
+def tracked_fsync(fd):
+ sync_order.append("file" if stat.S_ISREG(os.fstat(fd).st_mode) else "directory");return order_fsync(fd)
+def tracked_write(fd,name,raw,mode=0o400,sync=False,**options):
+ sync_order.append("write:"+name);return order_write(fd,name,raw,mode,sync,**options)
+e.os.fsync=tracked_fsync;e.write_exclusive_at=tracked_write
+bundle=e.seal(out,out_hold,files,incident,"enforced-reproduction.v1")
+e.os.fsync=order_fsync;e.write_exclusive_at=order_write;out_hold.close()
+bundle_doc=e.parse(bundle)
+ok([row["name"] for row in bundle_doc["body"]["files"]] == sorted(e.EVIDENCE_NAMES),
+   "bundle rows are sorted exact 29-file inventory")
+ok(len(bundle_doc["body"]["files"])==29 and set(p.name for p in out.iterdir())==set(e.EVIDENCE_NAMES)|{"bundle.json"},
+   "bundle marker closes exact inventory")
+ok(all((out/row["name"]).stat().st_size==row["size_bytes"] and
+       sha((out/row["name"]).read_bytes())==row["sha256"] for row in bundle_doc["body"]["files"]),
+   "bundle sizes and digests bind actual bytes")
+ok(len([item for item in out.iterdir() if item.name!="bundle.json"])==29,
+   "all evidence bytes precede the completion marker")
+ok(sync_order==sum((["write:"+name,"file"] for name in sorted(e.EVIDENCE_NAMES)),[])+
+   ["directory","write:bundle.json","file","directory"],
+   "each evidence file is durable before directory and last-marker durability")
+partial=base/"partial"; partial.mkdir(mode=0o700); write(partial/"incident.json",e.canonical(incident))
+ok(not (partial/"bundle.json").exists(),"partial attempt has no completion marker")
+extra=base/"extra"; extra.mkdir(mode=0o700); write(extra/"extra",b"x")
+extra_hold=e.stable_directory(extra)
+refuses("E_RELATION",lambda:e.seal(extra,extra_hold,files,incident,"enforced-reproduction.v1"),
+        "preexisting output cannot acquire marker")
+ok(not (extra/"bundle.json").exists(),"late inventory refusal leaves no marker");extra_hold.close()
+filefail=base/"file-fsync";filefail.mkdir(mode=0o700);filefail_hold=e.stable_directory(filefail)
+real_fsync=e.os.fsync;fsync_calls=[0]
+def fail_file_fsync(fd):
+ if stat.S_ISREG(os.fstat(fd).st_mode):raise OSError("fixture file fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_file_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(filefail,filefail_hold,files,incident,"enforced-reproduction.v1"),
+            "evidence file fsync failure refuses before marker")
+finally:e.os.fsync=real_fsync
+ok(not (filefail/"bundle.json").exists(),"evidence fsync failure leaves no marker");filefail_hold.close()
+markerfail=base/"marker-fsync";markerfail.mkdir(mode=0o700);markerfail_hold=e.stable_directory(markerfail)
+fsync_calls=[0]
+def fail_marker_fsync(fd):
+ fsync_calls[0]+=1
+ if fsync_calls[0]==31:raise OSError("fixture marker fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_marker_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(markerfail,markerfail_hold,files,incident,"enforced-reproduction.v1"),
+            "marker fsync failure refuses")
+finally:e.os.fsync=real_fsync
+ok(not (markerfail/"bundle.json").exists(),"partial marker is removed through held output")
+markerfail_hold.close()
+short=base/"short-marker";short.mkdir(mode=0o700);short_fd=os.open(short,os.O_RDONLY|os.O_DIRECTORY)
+real_os_write=e.os.write;e.os.write=lambda _fd,_raw:0
+try:refuses("E_RUNTIME",lambda:e.write_exclusive_at(short_fd,"bundle.json",b"partial",
+        remove_on_failure=True),"short marker write refuses")
+finally:e.os.write=real_os_write
+os.close(short_fd);ok(not (short/"bundle.json").exists(),"non-OSError marker failure removes owned partial")
+preexisting=base/"preexisting-marker";preexisting.mkdir(mode=0o700);write(preexisting/"bundle.json",b"owned")
+pre_fd=os.open(preexisting,os.O_RDONLY|os.O_DIRECTORY)
+refuses("E_RUNTIME",lambda:e.write_exclusive_at(pre_fd,"bundle.json",b"new",sync=True,
+        remove_on_failure=True),"preexisting marker refuses exclusive creation")
+os.close(pre_fd);ok((preexisting/"bundle.json").read_bytes()==b"owned","preexisting marker is not removed")
+late=base/"late-fsync";late.mkdir(mode=0o700);late_hold=e.stable_directory(late)
+fsync_calls=[0]
+def fail_final_fsync(fd):
+ fsync_calls[0]+=1
+ if fsync_calls[0]==32:raise OSError("fixture directory fsync")
+ return real_fsync(fd)
+e.os.fsync=fail_final_fsync
+try:refuses("E_RUNTIME",lambda:e.seal(late,late_hold,files,incident,"enforced-reproduction.v1"),
+            "final directory fsync refuses")
+finally:e.os.fsync=real_fsync
+ok(not (late/"bundle.json").exists(),"directory fsync failure removes marker");late_hold.close()
+renamed=base/"renamed";renamed.mkdir(mode=0o700);renamed_hold=e.stable_directory(renamed)
+real_write_at=e.write_exclusive_at
+def rename_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
+ real_write_at(fd,name,raw,mode,sync,**options)
+ if name=="bundle.json":renamed.rename(renamed.with_name("renamed-held"));renamed.mkdir(mode=0o700)
+e.write_exclusive_at=rename_after_marker
+try:refuses("E_RELATION",lambda:e.seal(renamed,renamed_hold,files,incident,"enforced-reproduction.v1"),
+            "output replacement after marker write refuses")
+finally:e.write_exclusive_at=real_write_at
+ok(not (renamed.with_name("renamed-held")/"bundle.json").exists() and
+   not (renamed/"bundle.json").exists(),"failed marker cleanup stays bound to held output")
+renamed_hold.close()
+cancelmark=base/"cancel-marker";cancelmark.mkdir(mode=0o700);cancelmark_hold=e.stable_directory(cancelmark)
+class FixtureCensus:
+ def observe(self):pass
+class FixtureNative:
+ def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+ def hold_completion(self,fd):self.completion=os.dup(fd)
+ def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if self.rolled or self.completion is None:return
+  self.rolled=True
+  try:os.unlink("bundle.json",dir_fd=self.completion)
+  except FileNotFoundError:pass
+  os.fsync(self.completion)
+ def finish_release(self):
+  restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
+  if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+  if self.completion is not None:
+   try:os.close(self.completion)
+   except OSError:
+    self.rollback_marker();self.status="native-release.failure"
+    os.close(self.completion);self.completion=None
+    raise
+   self.completion=None
+  self.status="native-release.success";return self.status
+ def outcome(self):return self.status
+def guard(census=None):
+ executable=e.stable_file(pathlib.Path(e.sys.executable))
+ try:
+  value=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+        tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or FixtureCensus(),FixtureNative())
+ finally:executable.close()
+ return e.CancellationSignals(value)
+def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
+ real_write_at(fd,name,raw,mode,sync,**options)
+ if name=="bundle.json":os.kill(os.getpid(),signal.SIGTERM)
+e.write_exclusive_at=cancel_after_marker
+try:
+ with guard():
+  e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
+except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
+else:raise AssertionError("marker cancellation accepted")
+finally:e.write_exclusive_at=real_write_at
+ok(not (cancelmark/"bundle.json").exists(),"cancelled marker is removed through held output")
+cancelmark_hold.close()
+latecancel=base/"late-cancel";latecancel.mkdir(mode=0o700);latecancel_hold=e.stable_directory(latecancel)
+try:
+ with guard():e.seal(latecancel,latecancel_hold,files,incident,"enforced-reproduction.v1");os.kill(os.getpid(),signal.SIGTERM)
+except e.Cancelled:ok(not (latecancel/"bundle.json").exists(),"latched cancellation rolls back retained completion")
+latecancel_hold.close()
+pendingcancel=base/"pending-exit-cancel";pendingcancel.mkdir(mode=0o700)
+pendingcancel_hold=e.stable_directory(pendingcancel);pending_guard=guard();pending_sent=[False]
+real_mask=e.signal.pthread_sigmask
+pending_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
+def signal_after_exit_mask(how,values):
+ result=real_mask(how,values)
+ if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.native.completion is not None
+     and not pending_sent[0]):pending_sent[0]=True;os.kill(os.getpid(),signal.SIGTERM)
+ return result
+e.signal.pthread_sigmask=signal_after_exit_mask
+try:
+ with pending_guard:e.seal(pendingcancel,pendingcancel_hold,files,incident,"enforced-reproduction.v1")
+except e.Cancelled:ok(pending_sent[0] and not (pendingcancel/"bundle.json").exists(),
+                      "pending exit signal rolls back before handler ownership transfers")
+else:raise AssertionError("pending exit cancellation accepted")
+finally:e.signal.pthread_sigmask=real_mask;signal.signal(signal.SIGTERM,pending_handler)
+pendingcancel_hold.close()
+outer=guard()
+try:
+ with outer:
+  outer.requested=True
+  with e.CancellationSignals():pass
+except e.Cancelled:ok(e.CancellationSignals.active is None,"nested context retains outer cancellation")
+before_handlers={sent:signal.getsignal(sent) for sent in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT)}
+before_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+for failure_name in ("unlink","fsync"):
+ failure_dir=base/("completion-"+failure_name);failure_dir.mkdir(mode=0o700)
+ failure_hold=e.stable_directory(failure_dir);completion_guard=guard()
+ real_unlink,real_fsync=e.os.unlink,e.os.fsync
+ try:
+  with completion_guard:
+   e.seal(failure_dir,failure_hold,files,incident,"enforced-reproduction.v1")
+   completion_guard.requested=True
+   if failure_name=="unlink":e.os.unlink=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture unlink"))
+   else:e.os.fsync=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture fsync"))
+ except OSError:pass
+ else:raise AssertionError("completion "+failure_name+" failure accepted")
+ finally:e.os.unlink,e.os.fsync=real_unlink,real_fsync
+ ok(e.CancellationSignals.active is None and signal.pthread_sigmask(signal.SIG_BLOCK,set())==before_mask
+    and all(signal.getsignal(sent)==before_handlers[sent] for sent in before_handlers),
+    "completion "+failure_name+" failure restores handlers, active context and mask")
+ if (failure_dir/"bundle.json").exists():(failure_dir/"bundle.json").unlink()
+ failure_hold.close()
+
+evaluation_fixture=e.canonical(doc("sandbox_policy_evaluation","evaluation.fixture",{}))
+checker_fixture=e.canonical(doc("sandbox_receipt_check","check.fixture",{}))
+trace=e.trace_ledger(incident,"attempt.fixture","env.fixture","reproduced","tool.verifier",
+                     evaluation_fixture,checker_fixture)
+t=e.parse(trace)
+ok(all(row["record_digest"]==sha(e.canonical({k:v for k,v in row.items() if k!="record_digest"}))
+       for row in t["body"]["events"]),"trace event digests exclude their own field")
+ok(t["body"]["seal"]["final_digest"]==t["body"]["events"][-1]["record_digest"],
+   "trace seal binds final event")
+trace_path=base/"trace.json"; write(trace_path,trace)
+trace_bin=base/"trace-bin"; trace_bin.mkdir(mode=0o700); shutil.copy2(jq_bin,trace_bin/"jq"); (trace_bin/"jq").chmod(0o500)
+trace_env={"PATH":str(trace_bin)+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base)}
+trace_receipt=e.run_bounded(["/bin/bash","-p",str(root/"telemetry/v1/validate-trace-ledger.sh"),
+    "validate",incident["id"],"attempt.fixture",str(trace_path)],env=trace_env)
+ok(e.parse(trace_receipt)["body"]["ledger_ref"]["sha256"]==sha(trace),
+   "real trace validator binds ledger")
+trace_none=e.trace_ledger(incident,"attempt.none","env.fixture","inconclusive",None,
+                          evaluation_fixture,checker_fixture)
+ok(e.parse(trace_none)["body"]["events"][1]["facts"]["tool"]=={"state":"not-applicable"},
+   "unexecuted tool is not named")
+
+print("shadow-enforced-slice3: %d checks passed" % checks)
+PY
+
+# The cancellation boundary has a separate lifecycle proof. Its substitutions are
+# private observations of the fixed owner; the shipped CLI check below uses the
+# real standalone admission.
+"$python_bin" -I -S -B - "$root" "$tmp/cancellation" <<'PY'
+import _thread, contextlib, errno, importlib.util, io, os, pathlib, signal, subprocess, sys, threading, time
+root, base = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); base.mkdir(mode=0o700)
+spec = importlib.util.spec_from_file_location("cancel_lifecycle", root / "shadow/v1/enforced-reproduction.py")
+e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
+checks = 0
+def ok(value, message):
+ global checks
+ if not value: raise AssertionError(message)
+ checks += 1; print("ok cancel-%d - %s" % (checks, message))
+class Census:
+ def __init__(self, fail=0):self.calls=0;self.fail=fail
+ def observe(self):
+  self.calls+=1
+  if self.calls==self.fail:raise e.Refusal("E_RUNTIME")
+class FixtureNative:
+ def __init__(self):
+  self.phase="prepared";self.entry_mask=None;self.final_mask=None
+  self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):
+  self.entry_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):
+  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry_mask);self.phase="consumer"
+ def hold_completion(self,fd):
+  self.completion=os.dup(fd)
+ def block_final(self):
+  self.final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if self.rolled or self.completion is None:return
+  self.rolled=True
+  try:os.unlink("bundle.json",dir_fd=self.completion)
+  except FileNotFoundError:pass
+  os.fsync(self.completion)
+ def finish_release(self):
+  restore=self.entry_mask if self.phase=="entry" else self.final_mask if self.phase=="final" else None
+  pending=None
+  try:
+   if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
+  except BaseException as exc:
+   pending=exc
+   if isinstance(exc,OSError):self.rollback_marker();self.status="native-release.failure"
+  if self.completion is not None:
+   try:os.close(self.completion)
+   except OSError:
+    self.rollback_marker();self.status="native-release.failure"
+    os.close(self.completion);self.completion=None
+    raise
+   self.completion=None
+  if self.status!="native-release.failure":self.status="native-release.success"
+  if pending is not None:raise pending
+  return self.status
+ def outcome(self):return self.status
+def admission(census=None):
+ executable=e.stable_file(pathlib.Path(e.sys.executable))
+ try:
+  return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census(),FixtureNative())
+ finally:executable.close()
+def guard(census=None):return e.CancellationSignals(admission(census))
+def marker(owner, name):
+ directory=base/name;directory.mkdir(mode=0o700)
+ (directory/"bundle.json").write_bytes(b"provisional")
+ descriptor=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+ ok(e.CancellationSignals.retain_completion(descriptor),name+" retains marker owner")
+ return directory
+
+# Missing admission and an imported main refuse before all signal ownership APIs.
+api_names=("getsignal","signal","pthread_sigmask","set_wakeup_fd","sigpending")
+originals={name:getattr(e.signal,name) for name in api_names}; calls=[]
+for name in api_names:
+ setattr(e.signal,name,lambda *_args,_name=name,**_kwargs:calls.append(_name))
+try:
+ try:
+  with e.CancellationSignals():pass
+ except e.Refusal as exc:ok(exc.code=="E_RUNTIME","missing admission refuses")
+ else:raise AssertionError("missing admission accepted")
+ with contextlib.redirect_stderr(io.StringIO()) as error:
+  result=e.main(["driver","reproduce","request","work","output"])
+ ok(result==1 and error.getvalue()=="E_RUNTIME\n","imported main refuses")
+ ok(calls==[],"imported refusal makes no signal, mask or wakeup call")
+finally:
+ for name,value in originals.items():setattr(e.signal,name,value)
+
+# A pre-existing owner remains byte-for-byte functional for either warning mode.
+for warning in (False,True):
+ read_fd,write_fd=os.pipe();os.set_blocking(read_fd,False);os.set_blocking(write_fd,False)
+ prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
+ prior=signal.set_wakeup_fd(write_fd,warn_on_full_buffer=warning);ok(prior==-1,"fixture wakeup starts disabled")
+ setter_calls=[];real_setter=e.signal.set_wakeup_fd
+ e.signal.set_wakeup_fd=lambda *args,**kwargs:(setter_calls.append((args,kwargs)) or -1)
+ try:
+  with contextlib.redirect_stderr(io.StringIO()):
+   result=e.main(["driver","reproduce","request","work","output"])
+ finally:e.signal.set_wakeup_fd=real_setter
+ os.kill(os.getpid(),signal.SIGTERM);observed=os.read(read_fd,1)
+ while True:
+  try:os.write(write_fd,b"x"*4096)
+  except BlockingIOError:break
+ warning_output=io.StringIO()
+ with contextlib.redirect_stderr(warning_output):os.kill(os.getpid(),signal.SIGTERM)
+ retained=signal.set_wakeup_fd(-1,warn_on_full_buffer=True)
+ signal.signal(signal.SIGTERM,prior_handler);os.close(write_fd);os.close(read_fd)
+ ok(result==1 and not setter_calls and retained==write_fd and observed,
+    "unknown owner warning=%s remains installed and receives delivery" % warning)
+ ok(bool(warning_output.getvalue())==warning,
+    "unknown owner warning=%s preserves full-buffer behavior" % warning)
+
+# Entry census refusal happens before the first ownership API.
+entry_calls=[];real_mask=e.signal.pthread_sigmask
+e.signal.pthread_sigmask=lambda *args,**kwargs:(entry_calls.append(args) or real_mask(*args,**kwargs))
+try:
+ try:
+  with guard(Census(1)):pass
+ except e.Refusal:pass
+ else:raise AssertionError("entry census failure accepted")
+finally:e.signal.pthread_sigmask=real_mask
+ok(entry_calls==[],"entry native census refuses before signal ownership")
+
+# One final read and one pending sample decide every fixed-tail result.
+def tail_case(name, read_result=None, read_error=None, pending=(), latch=False, expect_success=False):
+ owner=guard();real_read=e.os.read;real_pending=e.signal.sigpending;reads=[];pendings=[]
+ try:
+  with owner:
+   if latch:owner.requested=True
+   def observed_read(fd,size):
+    if fd==owner.read_fd:
+     reads.append((fd,size))
+     if read_error is not None:raise read_error
+     return read_result
+    return real_read(fd,size)
+   e.os.read=observed_read
+   e.signal.sigpending=lambda:(pendings.append(True) or set(pending))
+ except (e.Cancelled,e.Refusal,OSError):
+  outcome=False
+ else:outcome=True
+ finally:e.os.read=real_read;e.signal.sigpending=real_pending
+ ok(outcome==expect_success and len(reads)==1 and reads[0][1]==1 and len(pendings)==1,name)
+tail_case("EAGAIN is the sole empty success",read_error=BlockingIOError(errno.EAGAIN,"empty"),expect_success=True)
+tail_case("one returned byte aborts",read_result=b"x")
+tail_case("EOF aborts",read_result=b"")
+tail_case("unexpected read error aborts",read_error=OSError(errno.EIO,"fixture"))
+tail_case("sticky latch alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),latch=True)
+tail_case("watched pending alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),pending=(signal.SIGTERM,))
+
+# Replenishment cannot extend the fixed read count, and nested scopes own nothing.
+owner=guard();read_calls=[];real_read=e.os.read
+try:
+ with owner:
+  def replenish(fd,size):
+   if fd==owner.read_fd:
+    read_calls.append(size);os.write(owner.write_fd,b"z");return b"x"
+   return real_read(fd,size)
+  e.os.read=replenish
+except e.Cancelled:pass
+finally:e.os.read=real_read
+ok(read_calls==[1],"concurrent replenishment cannot extend one read")
+saturated=guard();real_read=e.os.read;saturated_reads=[]
+try:
+ try:
+  with saturated:
+   while True:
+    try:os.write(saturated.write_fd,b"u"*4096)
+    except BlockingIOError:break
+   os.kill(os.getpid(),signal.SIGTERM)
+   def count_saturated(fd,size):
+    if fd==saturated.read_fd:saturated_reads.append(size)
+    return real_read(fd,size)
+   e.os.read=count_saturated
+ except e.Cancelled:pass
+ else:raise AssertionError("saturated wakeup signal accepted")
+finally:e.os.read=real_read
+ok(saturated_reads==[1],"unrelated saturation and watched delivery still take one byte")
+owner=guard();real_signal=e.signal.signal;nested_calls=[]
+try:
+ with owner:
+  try:
+   e.signal.signal=lambda *args,**kwargs:nested_calls.append(args)
+   with e.CancellationSignals():
+    nested_fd=os.dup(1)
+    try:
+     try:e.CancellationSignals.retain_completion(nested_fd)
+     except e.Refusal:pass
+     else:raise AssertionError("nested scope retained completion")
+    finally:os.close(nested_fd)
+  finally:e.signal.signal=real_signal
+finally:e.signal.signal=real_signal
+ok(not nested_calls and owner.borrow_depth==0,"nested scope borrows without ownership APIs")
+
+# Both pipe endpoints are private and a child sees the caller's applicable mask.
+owner=guard()
+with owner:
+ ok(not os.get_inheritable(owner.read_fd) and not os.get_inheritable(owner.write_fd),
+    "owner pipe endpoints are noninheritable")
+ child=os.spawnve(os.P_WAIT,sys.executable,[sys.executable,"-I","-S","-B","-c",
+  "import signal,sys;sys.exit(1 if signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()) else 0)"],
+  {"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+ ok(child==0,"child preserves the unblocked caller mask")
+
+# Every watched signal is independently recorded before L.
+for sent in e.WATCHED_SIGNALS:
+ try:
+  with guard():os.kill(os.getpid(),sent)
+ except e.Cancelled:ok(True,"%s before L aborts" % signal.Signals(sent).name)
+ else:raise AssertionError("watched signal accepted")
+
+# Caller-blocked nonignored pending state stays blocked and pending after rollback.
+prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
+prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
+try:
+ try:
+  with guard():os.kill(os.getpid(),signal.SIGTERM)
+ except e.Cancelled:pass
+ else:raise AssertionError("blocked pending signal accepted")
+ current=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ ok(signal.SIGTERM in current and signal.SIGTERM in signal.sigpending(),
+    "caller-blocked nonignored signal remains blocked and pending")
+finally:
+ signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
+ signal.signal(signal.SIGTERM,prior_handler)
+
+# Original SIG_IGN may discard pending only after rollback and disposition restoration.
+prior_handler=signal.signal(signal.SIGTERM,signal.SIG_IGN)
+prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
+ignored_owner=guard();ignored_dir=None
+try:
+ try:
+  with ignored_owner:
+   ignored_dir=marker(ignored_owner,"ignored-pending")
+   os.kill(os.getpid(),signal.SIGTERM)
+ except e.Cancelled:pass
+ else:raise AssertionError("ignored pending signal accepted")
+ ok(ignored_dir is not None and not (ignored_dir/"bundle.json").exists()
+    and signal.getsignal(signal.SIGTERM)==signal.SIG_IGN
+    and signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()),
+    "ignored pending rollback precedes exact disposition and mask restoration")
+finally:
+ signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
+ signal.signal(signal.SIGTERM,prior_handler)
+
+# A final native-count failure removes the marker; a live unregistered thread
+# makes the real entry census refuse before the body can run.
+final_census=Census(2);final_owner=guard(final_census);final_dir=None
+try:
+ with final_owner:final_dir=marker(final_owner,"final-census")
+except e.Refusal:pass
+else:raise AssertionError("final census failure accepted")
+ok(final_census.calls==2 and final_dir is not None and not (final_dir/"bundle.json").exists(),
+   "final native census failure rolls back marker")
+ready=threading.Event();release=threading.Event()
+def native_peer():ready.set();release.wait()
+_thread.start_new_thread(native_peer,());ready.wait()
+entered=False
+try:
+ try:
+  with e.CancellationSignals(admission(e._NativeThreadCensus())):entered=True
+ except e.Refusal:pass
+ else:raise AssertionError("multi-thread entry accepted")
+finally:release.set()
+ok(not entered,"real native non-one entry census refuses before effects")
+ready=threading.Event();release=threading.Event();native_final_owner=e.CancellationSignals(admission(e._NativeThreadCensus()))
+native_final_dir=None
+try:
+ try:
+  with native_final_owner:
+   native_final_dir=marker(native_final_owner,"native-final-census")
+   _thread.start_new_thread(native_peer,());ready.wait()
+ except e.Refusal:pass
+ else:raise AssertionError("real native non-one final census accepted")
+finally:release.set()
+ok(native_final_dir is not None and not (native_final_dir/"bundle.json").exists(),
+   "real native non-one final census rolls back marker")
+
+default_script=base/"default-pending.py";default_output=base/"default-pending-output"
+default_script.write_text('''import hashlib,importlib.util,os,pathlib,signal,sys
+root,output=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]);output.mkdir(mode=0o700)
+spec=importlib.util.spec_from_file_location("default_pending",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+class Census:
+ def observe(self):pass
+class Native:
+ def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
+ def recheck(self):pass
+ def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
+ def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
+ def hold_completion(self,fd):self.completion=os.dup(fd)
+ def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
+ def rollback_marker(self):
+  if not self.rolled:
+   self.rolled=True;os.unlink("bundle.json",dir_fd=self.completion);os.fsync(self.completion)
+ def finish_release(self):
+  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry if self.phase=="entry" else self.final)
+  os.close(self.completion);self.completion=None;self.status="native-release.success";return self.status
+ def outcome(self):return self.status
+path=pathlib.Path(e.sys.executable);admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,
+ hashlib.sha256(path.read_bytes()).hexdigest(),e.sys.version,tuple(e.sys.version_info[:2]),
+ e._runtime_module_origins(),Census(),Native())
+owner=e.CancellationSignals(admission);real_mask=e.signal.pthread_sigmask;sent=False
+def inject(how,values):
+ global sent
+ result=real_mask(how,values)
+ if how==signal.SIG_BLOCK and owner.native.completion is not None and not sent:
+  sent=True;os.kill(os.getpid(),signal.SIGTERM)
+ return result
+e.signal.pthread_sigmask=inject
+with owner:
+ (output/"bundle.json").write_bytes(b"provisional")
+ e.CancellationSignals.retain_completion(os.open(output,os.O_RDONLY|os.O_DIRECTORY))
+''')
+default_result=subprocess.run([sys.executable,"-I","-S","-B",str(default_script),str(root),
+ str(default_output)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
+ok(default_result.returncode==-signal.SIGTERM and not (default_output/"bundle.json").exists(),
+   "default pending delivery occurs only after marker rollback")
+
+# A caller handler exception after L keeps the marker; an actual release failure
+# rolls it back while the held descriptor remains usable.
+class CallerSignal(Exception):pass
+for sent in e.WATCHED_SIGNALS:
+ post_owner=guard();post_dir=None;real_mask=e.signal.pthread_sigmask
+ prior_handler=signal.signal(sent,lambda _signum,_frame:(_ for _ in ()).throw(CallerSignal()))
+ def deliver_after_restore(how,values):
+  result=real_mask(how,values)
+  if how==signal.SIG_SETMASK:os.kill(os.getpid(),sent)
+  return result
+ try:
+  try:
+   with post_owner:
+    post_dir=marker(post_owner,"post-l-"+signal.Signals(sent).name.lower())
+    e.signal.pthread_sigmask=deliver_after_restore
+  except CallerSignal:pass
+  else:raise AssertionError("post-L caller exception hidden")
+ finally:e.signal.pthread_sigmask=real_mask;signal.signal(sent,prior_handler)
+ ok(post_dir is not None and (post_dir/"bundle.json").exists(),
+    signal.Signals(sent).name+" post-L caller exception does not revoke marker")
+
+release_owner=guard();release_dir=None;real_setter=e.signal.set_wakeup_fd
+try:
+ try:
+  with release_owner:
+   release_dir=marker(release_owner,"release-failure")
+   e.signal.set_wakeup_fd=lambda fd,**kwargs:(_ for _ in ()).throw(OSError("fixture release")) if fd==-1 else real_setter(fd,**kwargs)
+ except OSError:pass
+ else:raise AssertionError("release failure accepted")
+finally:
+ e.signal.set_wakeup_fd=real_setter;real_setter(-1,warn_on_full_buffer=True)
+ok(release_dir is not None and not (release_dir/"bundle.json").exists(),
+   "actual release failure rolls back while held descriptor is usable")
+
+handler_owner=guard();handler_dir=None;real_signal=e.signal.signal;handler_failed=False
+def fail_handler(sent,handler):
+ global handler_failed
+ if not handler_failed and handler is handler_owner.previous.get(sent):
+  handler_failed=True;raise OSError("fixture handler restore")
+ return real_signal(sent,handler)
+try:
+ try:
+  with handler_owner:
+   handler_dir=marker(handler_owner,"handler-release-failure")
+   e.signal.signal=fail_handler
+ except OSError:pass
+ else:raise AssertionError("handler restoration failure accepted")
+finally:
+ e.signal.signal=real_signal
+ for sent,handler in handler_owner.previous.items():real_signal(sent,handler)
+ok(handler_failed and handler_dir is not None and not (handler_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"handler restoration failure is sticky and rolls back")
+
+mask_owner=guard();mask_dir=None;real_mask=e.signal.pthread_sigmask;mask_failed=False
+def fail_mask(how,values):
+ global mask_failed
+ result=real_mask(how,values)
+ if how==signal.SIG_SETMASK and not mask_failed:mask_failed=True;raise OSError("fixture mask restore")
+ return result
+try:
+ try:
+  with mask_owner:
+   mask_dir=marker(mask_owner,"mask-release-failure")
+   e.signal.pthread_sigmask=fail_mask
+ except (OSError,e.Refusal):pass
+ else:raise AssertionError("mask restoration failure accepted")
+finally:e.signal.pthread_sigmask=real_mask
+ok(mask_failed and mask_dir is not None and not (mask_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"mask restoration failure is sticky and rolls back")
+
+pipe_owner=guard();pipe_dir=None;real_close=e.os.close;pipe_failed=False
+def fail_pipe_close(fd):
+ global pipe_failed
+ if fd==pipe_owner.write_fd and not pipe_failed:pipe_failed=True;raise OSError("fixture pipe close")
+ return real_close(fd)
+try:
+ try:
+  with pipe_owner:
+   pipe_dir=marker(pipe_owner,"pipe-release-failure")
+   e.os.close=fail_pipe_close
+ except OSError:pass
+ else:raise AssertionError("pipe close failure accepted")
+finally:
+ e.os.close=real_close
+ if pipe_failed:real_close(pipe_owner.write_fd)
+ok(pipe_failed and pipe_dir is not None and not (pipe_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"pipe close failure is sticky and rolls back")
+
+completion_owner=guard();completion_dir=None;real_close=e.os.close;completion_failed=False
+def fail_completion_close(fd):
+ global completion_failed
+ if fd==completion_owner.native.completion and not completion_failed:
+  completion_failed=True;raise OSError("fixture completion close")
+ return real_close(fd)
+try:
+ try:
+  with completion_owner:
+   completion_dir=marker(completion_owner,"completion-release-failure")
+   e.os.close=fail_completion_close
+ except (OSError,e.Refusal):pass
+ else:raise AssertionError("completion close failure accepted")
+finally:
+ e.os.close=real_close
+ if completion_failed and completion_owner.native.completion is not None:
+  real_close(completion_owner.native.completion)
+ok(completion_failed and completion_dir is not None and not (completion_dir/"bundle.json").exists()
+   and e.CancellationSignals.active is None,"completion close failure is sticky and rolls back")
+
+print("shadow-enforced-cancellation: %d checks passed" % checks)
+PY
+
+cli_result=0
+cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" 2>&1) || cli_result=$?
+[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_USAGE ] || fail 'standalone closed startup admission'
+cli_result=0
+cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" reproduce /nonexistent /nonexistent /nonexistent 2>&1) || cli_result=$?
+[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_RUNTIME ] || fail 'standalone owner acquisition'
+/usr/bin/printf 'shadow-enforced-cli: closed startup and owner acquisition passed\n'
+
+
+# Exercise the production orchestration with only host identity, child process,
+# and native launch boundaries substituted. The component-specific suites run
+# each unchanged child interface; this case proves their byte flow and ordering.
+"$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" "$native_binary" \
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib, importlib.util, json, os, pathlib, sys, sysconfig, types
+root, base, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
+base.mkdir(mode=0o700)
+spec=importlib.util.spec_from_file_location("enforced_flow",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+e.sys.executable=str(pathlib.Path(sys.executable).resolve())
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def doc(kind,identity,body): return {"schema_version":1,"kind":kind,"id":identity,"body":body}
+def write(path,raw,mode=0o400): path.write_bytes(raw);path.chmod(mode)
+checks=0
+def ok(value,message):
+ global checks
+ if not value: raise AssertionError(message)
+ checks+=1;print("ok flow-%d - %s"%(checks,message))
+
+source=base/"source.git";source.mkdir(mode=0o700)
+work=base/"work";output=base/"output";work.mkdir(mode=0o700);output.mkdir(mode=0o700)
+helper=base/"object-closure";jq=base/"jq";write(helper,b"helper",0o500);write(jq,b"jq",0o500)
+commit,tree,candidate_commit,candidate_tree="b"*40,"c"*40,"d"*40,"e"*40
+expected=sha(b"fixed\n")
+incident=doc("shadow_incident_record","incident.flow",{"deploy_authority":"none",
+ "failing_check":{"check_id":"check.flow","kind":"file-digest","path":"source.txt","expected_sha256":expected},
+ "git_revision_ref":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit},
+ "observed_at":"2026-01-01T00:00:00Z","observed_symptom":"changed",
+ "reporter_actor_ref":"actor.fixture","target_repository_id":"fixture.target"})
+revision={"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit}
+request_content=doc("stage_request","request.flow",{"target_repository_id":"fixture.target",
+ "target_revision":{"state":"present","value":revision},
+ "source":{"state":"present","value":{"type":"git-object","value":{"revision":revision}}},
+ "environment_ref":{"environment_id":"env.fixture","fingerprint_sha256":"PLACEHOLDER"}})
+resolved_content=doc("resolved_profile","profile.flow",{})
+input_doc={"stage_request":{"content":request_content,"sha256":sha(e.canonical(request_content))},
+ "resolved_profile":{"content":resolved_content,"sha256":sha(e.canonical(resolved_content))},
+ "payloads":[{"input_id":"input.producer-patch","data":""}],
+ "trust_context":{"verified_payloads":[{"input_id":"input.producer-patch","content":{"data":""}}]}}
+instruction=e.make_instruction(incident)
+identity=doc("qualified_identity","identity.flow",{"stage_request_ref":{"schema_version":1,"kind":"stage_request",
+ "id":"request.flow","sha256":input_doc["stage_request"]["sha256"]},"resolved_profile_ref":{
+ "schema_version":1,"kind":"resolved_profile","id":"profile.flow","sha256":input_doc["resolved_profile"]["sha256"]},
+ "verification_instructions_ref":{"content_id":"instruction.flow","media_type":"text/plain","sha256":sha(instruction)}})
+claim=doc("execution_environment_claim","env.fixture",{})
+request_content["body"]["environment_ref"]["fingerprint_sha256"]=sha(e.canonical(claim))
+input_doc["stage_request"]={"content":request_content,"sha256":sha(e.canonical(request_content))}
+identity["body"]["stage_request_ref"]["sha256"]=input_doc["stage_request"]["sha256"]
+duty=doc("duty_separation_evaluation","duty.flow",{})
+for name,value in (("incident",incident),("claim",claim),("duty",duty),("identity",identity),("input",input_doc)):
+ write(base/(name+".json"),e.canonical(value))
+request=doc("shadow_enforced_request","attempt.flow",{"attempt_id":"attempt.flow","attempt_number":1,
+ "incident":str(base/"incident.json"),"claim":str(base/"claim.json"),"duty_evaluation":str(base/"duty.json"),
+ "materialization_input":str(base/"input.json"),"qualified_identity":str(base/"identity.json"),
+ "source_git_dir":str(source),"jq":str(jq),"closure_helper":str(helper)})
+write(base/"request.json",e.canonical(request))
+
+policy=b'{"policy":true}\n';decision=b'{"decision":true}\n';pset=b'{"set":true}\n'
+driver=b'#!/bin/bash\n';program=b'.\n';accepted=b'{"accepted":true}\n';registry_raw=b'{"registry":true}\n'
+fake_anchor=base.parent/"flow-installation/supervisor";fake_anchor.mkdir(parents=True,mode=0o700)
+entry={"description":"fixture","environment_id":"env.fixture","evidence_scope":"fixtures-only",
+ "proof_state":"unproven","source_root_commit":commit,"target_repository_id":"fixture.target"}
+installed={"control_policy":(policy,sha(policy)),"control_decision":(decision,sha(decision)),
+ "control_policy_set":(pset,sha(pset)),"evaluator_driver":(driver,sha(driver)),
+ "evaluator_program":(program,sha(program)),"accepted_set":(accepted,sha(accepted)),
+ "registry":(registry_raw,sha(registry_raw))}
+class Anchor:
+ config={"environment_id":"env.fixture","store_id":"store.fixture","principal_uid":1234,
+  "store_root":str(base/"store"),"work_root":str(base/"host-work"),"installed_files":{},
+  "identity_paths":{"dyld_cache_files":[]}}
+ registry=(sha(registry_raw),[entry]);installed=installed
+ held=[types.SimpleNamespace(path=str(fake_anchor/"host-supervisor.py"),read=lambda maximum,code:b"host\n",
+  recheck=lambda code:None)]
+ def recheck(self,*_args): events.append("anchor-recheck")
+ def seal_recheck(self,*_args): events.append("anchor-seal-recheck")
+ def close(self): events.append("anchor-close")
+e.c.ANCHOR=str(fake_anchor)
+class Snap:
+ def __init__(self,path,digest_value): self.snapshot=types.SimpleNamespace(path=str(path));self.sha256=digest_value
+ def recheck(self): events.append("dependency-recheck")
+ def close(self): events.append("dependency-close")
+events=[]
+e.c.snapshot_dependency=lambda path,digest_value,size,private,name: Snap(helper,digest_value)
+e.c.snapshot_jq=lambda path,private: Snap(jq,sha(b"jq"))
+e.c.verify_helper_source=lambda: events.append("helper-source")
+e.c.probe_dependency=lambda snap,args,expected: events.append("probe:"+args[0])
+e.c.load_anchor=lambda _resolver=None: Anchor()
+e.c.verifier_observation=lambda anchor,environment,target:e.canonical(doc("sandbox_verifier_observation",
+ "observation.flow",{"environment_id":environment,"environment_entry_sha256":sha(e.canonical(entry)),
+ "target_repository_id":target,"accepted_set_sha256":sha(accepted),"verifier_sha256":"9"*64}))
+
+record={"schema_version":1,"kind":"candidate_content_preparation","status":"completed",
+ "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
+ "candidate":{"commit_id":commit,"tree_id":tree}}
+manifest={"schema_version":1,"kind":"candidate_content_manifest","entries":[{
+ "path":"source.txt","mode":"100644","blob_oid":"f"*40,"size_bytes":6,"sha256":sha(b"fixed\n")}],
+ "file_count":1,"directory_count":0,"total_file_bytes":6,"hash_algorithm":"sha256"}
+materializer_receipt={
+ "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
+ "candidate":{"commit_id":commit,"tree_id":tree,"parent_commit_id":commit},
+ "changed_paths":{"count":0,"sha256":"0"*64}}
+stage=doc("stage_result","result.flow",{"outcome":{"family":"change","value":"no-change"}})
+response={"schema_version":1,"kind":"adapter_response","stage_result":stage,"payloads":[{
+ "content_id":"receipt.materialize","media_type":"application/json","sha256":sha(e.canonical(materializer_receipt)),
+ "data":e.canonical(materializer_receipt).decode()}],"authority":"none","qualification":"unavailable","effects":[]}
+evaluation=doc("sandbox_policy_evaluation","evaluation.flow",{
+ "verdict":"satisfied","reason_ids":["sandbox.declaration-satisfied"]})
+checker=doc("sandbox_receipt_check","check.flow",{"check_verdict":"valid","enforcement_verdict":"satisfied"})
+result_body={"check":{"path":"source.txt","expected_sha256":expected},
+ "instruction_sha256":sha(instruction),"observed":{"sha256":expected,"size_bytes":6},
+ "outcome":"match","reason_id":"file.match"}
+result_raw=e.canonical(doc("file_digest_verifier_payload","file-digest-payload",result_body))
+evidence_manifest=e.canonical(doc("sandbox_evidence_manifest","evidence-manifest",{"files":[{
+ "name_hex":b"file-digest-result.json".hex(),"sha256":sha(result_raw),"size_bytes":len(result_raw)}]}))
+receipt=doc("sandbox_enforcement_receipt","attempt.flow",{
+ "lifecycle":{"admission":"admitted","runtime":"completed","control_deadline":"met"},
+ "teardown":{"state":"confirmed"},"payload":{"exit_state":"exited","exit_code":0,
+ "stdout_sha256":sha(b""),"stderr_sha256":sha(b""),
+ "evidence_manifest_sha256":sha(evidence_manifest)}})
+origin=e.canonical(doc("shadow_origin_observation","attempt.flow",{"store_id":"store.fixture",
+ "attempt_id":"attempt.flow","entries":[],"result":"authenticated"}))
+snapshots={"receipt.json":e.canonical(receipt),"payload/stdout":b"","payload/stderr":b"",
+ "payload/evidence-manifest.json":evidence_manifest,"payload/evidence/0000":result_raw}
+e.c.read_store_attempt=lambda anchor,attempt:(snapshots,origin)
+
+real_run=e.run_bounded
+def child(argv,**kwargs):
+ role=pathlib.Path(argv[0]).name+":"+" ".join(argv[1:3]);events.append(role)
+ if "validate-input" in argv or "validate-response" in argv: return b"true\n"
+ if "validate-incident.sh" in " ".join(argv): return e.canonical(doc("shadow_incident_validation",incident["id"],{}))
+ if "qualified-identity.jq" in " ".join(argv): return b""
+ if "materialize.sh" in " ".join(argv): return e.canonical(response)
+ if "prepare-candidate.py" in " ".join(argv):
+  operation=argv[5]; out=pathlib.Path(argv[argv.index("--output")+1])
+  events.append(operation)
+  if operation=="prepare":
+   out.mkdir(mode=0o700)
+   write(out/"record.json",e.canonical(record));write(out/"manifest.json",e.canonical(manifest))
+   candidate=out/"candidate";candidate.mkdir(mode=0o700);write(candidate/"source.txt",b"fixed\n")
+  return b""
+ if "evaluate-bound-sandbox.sh" in " ".join(argv): events.append("evaluate");return e.canonical(evaluation)
+ if "check-sandbox-receipt.sh" in " ".join(argv): events.append("check-bound");return e.canonical(checker)
+ if "validate-trace-ledger.sh" in " ".join(argv):
+  trace=pathlib.Path(argv[-1]).read_bytes()
+  return e.canonical(doc("telemetry_trace_ledger_validation","shadow-enforced-trace-ledger",{
+   "ledger_ref":{"sha256":sha(trace)}}))
+ raise AssertionError(argv)
+e.run_bounded=child
+launch_frames=[]
+def launch(anchor,frame,deadline):
+ ok((work/"launch/sandbox-request.json").exists() and (work/"launch/sandbox-expectation.json").exists(),
+    "durable documents exist when launch seam starts")
+ launch_frames.append(frame);events.append("launch");return 0
+e._launch=launch
+parent={"helper_source_sha256":e.c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":"7"*64,
+ "helper_executable_sha256":sha(b"helper"),"helper_executable_size":6,"helper_path":str(helper),
+ "native_release":{"source_sha256":sha((root/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((root/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
+ "python_path":os.path.realpath(sys.executable),"python_sha256":sha(pathlib.Path(sys.executable).read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),
+ "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+class Census:
+ def observe(self):pass
+executable=e.stable_file(pathlib.Path(e.sys.executable))
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+executable.close();native=e._NativeRelease(parent,admission)
+admission=e.dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
+try:
+ with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
+finally:native.close()
+ok(len(launch_frames)==1 and launch_frames[0].startswith(b"YSFRAME1"),"one framed launch")
+ok(events.index("launch")>events.index("prepare"),"launch follows preparation")
+ok(events.index("launch")>events.index("evaluate"),
+   "launch follows actual bound evaluation call")
+bundle_doc=e.parse(bundle)
+ok(bundle_doc["body"]["record_form"]=="enforced-reproduction.v1","completed bundle record form")
+ok(len(bundle_doc["body"]["files"])==29,"orchestration seals 29 evidence files")
+record_doc=e.parse((output/"shadow-record.json").read_bytes())
+ok(record_doc["body"]["outcome"]=="no-change" and record_doc["body"]["sandbox"]["state"]=="satisfied",
+   "match maps to satisfied no-change")
+ok(record_doc["body"]["producer_invocations"]==0,"consumer invokes no producer")
+ok((output/"payload-stdout.txt").read_bytes()==b"" and (output/"payload-stderr.txt").read_bytes()==b"",
+   "empty verifier streams retained")
+ok(events.index("check-bound")>events.index("launch"),
+   "receipt checker follows controlled-store launch evidence")
+ok(events.count("dependency-recheck")>=4 and events.count("anchor-recheck")>=2,
+   "dependencies and anchor rechecked through completion")
+ok(not any("incident-to-eval" in row for row in events),"slice3 never enters write converter")
+changed=json.loads(json.dumps(response));changed["stage_result"]["body"]["outcome"]["value"]="changed"
+changed_receipt=json.loads(changed["payloads"][0]["data"])
+changed_receipt["candidate"].update(commit_id=candidate_commit,tree_id=candidate_tree)
+changed_receipt["changed_paths"]["count"]=1
+changed["payloads"][0]["data"]=e.canonical(changed_receipt).decode()
+changed["payloads"][0]["sha256"]=sha(e.canonical(changed_receipt))
+try:e.require_no_change(e.canonical(changed),incident)
+except e.Refusal as exc:ok(exc.code=="E_RELATION","changed materialization response cannot launch")
+else:raise AssertionError("changed materialization accepted")
+print("shadow-enforced-flow: %d checks passed"%checks)
+PY
+
+# Real acyclic prerequisite proof. This invokes the unchanged materializer,
+# protocol, duty evaluator, bound evaluator, and receipt checker. Synthetic
+# registry/accepted bytes live only in this private fixture package.
+real="$tmp/slice3-real"
+/bin/mkdir -m 700 "$real" "$real/home" "$real/source.git" "$real/bin"
+/bin/cp "$jq_bin" "$real/bin/jq"; /bin/chmod 0500 "$real/bin/jq"; real_jq="$real/bin/jq"
+git_fixture() {
+  /usr/bin/env -i HOME="$real/home" TMPDIR="$real" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects "$@"
+}
+git_fixture init -q --bare --object-format=sha1 "$real/source.git"
+real_blob=$(/usr/bin/printf 'fixed content\n' | git_fixture --git-dir="$real/source.git" hash-object -w --stdin)
+real_tree=$(/usr/bin/printf '100644 blob %s\tsource.txt\n' "$real_blob" | git_fixture --git-dir="$real/source.git" mktree)
+real_commit=$(/usr/bin/printf 'source\n' | git_fixture --git-dir="$real/source.git" commit-tree "$real_tree")
+git_fixture --git-dir="$real/source.git" update-ref refs/heads/main "$real_commit"
+/bin/bash "$root/scripts/test/local-git-materializer-fixtures.sh" build "$real/built" \
+  "$real_jq" sha1 "$real_commit" "$real_tree"
+empty_sha=$(/usr/bin/printf '' | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+/usr/bin/printf '%s\n' '{"kind":"fixture-declaration","id":"environment.earlier"}' > "$real/declaration.json"
+declaration_sha=$(sha_file "$real/declaration.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg empty "$empty_sha" --arg declaration_sha "$declaration_sha" '
+  .payloads |= map(if .input_id=="input.producer-patch" then .data="" else . end) |
+  .trust_context.verified_payloads |= map(if .input_id=="input.producer-patch"
+    then .content.data="" | .sha256=$empty else . end) |
+  .stage_request.content.body.inputs |= map(if .input_id=="input.producer-patch"
+    then .value.value.value.sha256=$empty else . end)
+' "$real/built/input.json" > "$real/prior-stage.json"
+"$real_jq" -S -c '.stage_request.content' "$real/prior-stage.json" > "$real/prior-request.json"
+prior_request_sha=$(sha_file "$real/prior-request.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg digest "$prior_request_sha" '.stage_request.sha256=$digest' \
+  "$real/prior-stage.json" > "$real/prior-input.json"
+generation=$("$real_jq" -er '.[-1].generation_id' "$root/core/v2/generation-registry.json")
+modules="$root/core/v2/generations/$generation/modules"
+protocol="$root/adapters/local-git-materializer/v1/protocol.jq"
+"$real_jq" -L "$modules" -e --arg command validate-input -f "$protocol" "$real/prior-input.json" \
+  > "$real/prior-input.valid"
+/bin/mkdir -m 700 "$real/candidate" "$real/materializer-scratch"
+"$root/adapters/local-git-materializer/v1/materialize.sh" materialize "$real/prior-input.json" \
+  fixture.target "$real/source.git" "$real/candidate" "$real/materializer-scratch" \
+  "$tmp/object-closure" "$real_jq" > "$real/prior-response.json"
+"$real_jq" -S -c '.stage_result' "$real/prior-response.json" > "$real/prior-result.json"
+"$real_jq" -S -c '.resolved_profile.content' "$real/prior-input.json" > "$real/prior-profile.json"
+stage_sha=$(sha_file "$real/prior-result.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg stage_sha "$stage_sha" '
+ . as $response | ($response.payloads[0].data|fromjson) as $receipt |
+ {input:$input[0],response:$response,
+  verified_receipt:{content:$receipt,sha256:$response.payloads[0].sha256},
+  receipt_utf8:$response.payloads[0].data,stage_result_sha256:$stage_sha}
+' --slurpfile input "$real/prior-input.json" "$real/prior-response.json" > "$real/prior-response-check.json"
+"$real_jq" -L "$modules" -e --arg command validate-response -f "$protocol" \
+  "$real/prior-response-check.json" > "$real/prior-response.valid"
+PATH="$real/bin:/usr/bin:/bin" /bin/bash -p "$root/control/v1/evaluate-duty.sh" evaluate \
+  "$root/control/v1/control-policy-set-sandbox-bound.json" "$real/prior-request.json" \
+  "$real/prior-profile.json" "$real/prior-result.json" > "$real/duty.json"
+"$real_jq" -e '.body.verdict=="satisfied" and .body.reason_ids==["duty.satisfied"]' \
+  "$real/duty.json" > /dev/null || fail 'slice3 real bound-set duty'
+
+verifier_root="$real/verifier-root"
+/bin/mkdir -m 700 "$verifier_root" "$verifier_root/candidate" "$verifier_root/evidence" \
+  "$verifier_root/scratch" "$verifier_root/tools"
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
+  -DYSTACK_SANDBOX_ROOT="\"$verifier_root\"" "$root/verifiers/file-digest/v1/verifier.c" \
+  -o "$real/file-digest-verifier"
+/bin/chmod 0555 "$real/file-digest-verifier"
+
+fixture="$real/package"
+/bin/mkdir -p "$fixture"
+for component_dir in adapters core preparation control enforcement shadow telemetry scripts; do
+  /bin/cp -R "$root/$component_dir" "$fixture/$component_dir"
+done
+for name in evaluate-bound-sandbox.sh sandbox-bound.jq sandbox-bound-policy.json \
+  sandbox-bound-decision.json control-policy-set-sandbox-bound.json validate.sh policy-set.jq; do
+  /bin/cp "$root/control/v1/$name" "$fixture/control/v1/$name"
+done
+/bin/chmod 0755 "$fixture/control/v1/evaluate-bound-sandbox.sh" "$fixture/control/v1/validate.sh"
+env_id=env.local-macos-fixture; verifier_sha=$(sha_file "$real/file-digest-verifier")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg commit "$real_commit" '
+ .body.environments=[(.body.environments[0] | .environment_id="env.local-macos-fixture" |
+   .target_repository_id="fixture.target" | .source_root_commit=$commit | .proof_state="unproven")]
+' "$root/shadow/v1/shadow-environments.json" > "$fixture/shadow/v1/shadow-environments.json"
+registry="$fixture/shadow/v1/shadow-environments.json"
+"$real_jq" -S -c '.body.environments[0]' "$registry" > "$real/entry.json"
+entry_sha=$(sha_file "$real/entry.json")
+accepted="$fixture/enforcement/v1/accepted-identities.json"
+expected_sha=$(/usr/bin/printf 'fixed content\n' | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+instruction_sha=$(/usr/bin/printf 'ystack.file-digest-instruction.v1\npath source.txt\nsha256 %s\n' \
+  "$expected_sha" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg env "$env_id" --arg verifier "$verifier_sha" --arg verifier_two "$(sha_file "$tmp/object-closure")" \
+ --arg instruction "$instruction_sha" --arg guest_init "$(sha_file "$fixture/control/v1/sandbox-bound-policy.json")" \
+ --arg guest_kernel "$(sha_file "$fixture/control/v1/sandbox-bound-decision.json")" \
+ --arg guest_config "$(sha_file "$fixture/control/v1/control-policy-set-sandbox-bound.json")" \
+ --arg guest_supervisor "$(sha_file "$fixture/control/v1/evaluate-bound-sandbox.sh")" \
+ --arg host_runtime "$(sha_file "$python_bin")" --arg host_supervisor "$(sha_file "$fixture/shadow/v1/_consumer.py")" \
+ --arg image "$(sha_file "$registry")" --arg toolchain "$(sha_file "$real_jq")" '
+ def ids:{guest_init:[$guest_init],guest_kernel:[$guest_kernel],guest_kernel_config:[$guest_config],
+ guest_supervisor:[$guest_supervisor],host_runtime:[$host_runtime],host_supervisor:[$host_supervisor],
+ image:[$image],toolchain:[$toolchain],verification_instructions:[$instruction],verifier:([$verifier,$verifier_two]|sort|unique)};
+ def mechanisms:{cpu_time_ms:["mechanism.cpu"],memory_bytes:["mechanism.memory"],
+ output_bytes:["mechanism.output"],process_count:["mechanism.process"],
+ scratch_bytes:["mechanism.scratch"],wall_time_ms:["mechanism.wall"]};
+ {schema_version:1,kind:"sandbox_accepted_identity_set",id:"sandbox.accepted-identities.v1",
+ body:{activation_state:"inactive",environments:[{environment_id:$env,identities:ids,
+ mechanisms:mechanisms,scratch_bytes:1048576}],set_version:"v1"}}
+' > "$accepted"
+accepted_sha=$(sha_file "$accepted"); set="$fixture/control/v1/control-policy-set-sandbox-bound.json"
+set_sha=$(sha_file "$set"); policy="$fixture/control/v1/sandbox-bound-policy.json"
+duty_sha=$(sha_file "$real/duty.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg env "$env_id" --arg d "$verifier_sha" --arg duty "$duty_sha" \
+  --arg set_sha "$set_sha" --slurpfile p "$policy" --slurpfile prior "$real/duty.json" '
+ def ref($v;$kind;$id;$sha):{schema_version:$v,kind:$kind,id:$id,sha256:$sha};
+ {schema_version:1,kind:"execution_environment_claim",id:$env,body:{declaration_status:"complete",
+ duty_evaluation_ref:ref(1;"duty_separation_evaluation";$prior[0].id;$duty),
+ effects:{external_writes:false,target_writes:false},environment:$p[0].body.environment,
+ execution_identity:{adapter_instance_id:"instance.verifier",execution_boundary_id:"boundary.verifier",
+ principal_id:"principal.verifier",role:"verifier"},filesystem:$p[0].body.filesystem,
+ isolation:$p[0].body.isolation,limits:$p[0].body.limits,network:$p[0].body.network,
+ policy_set_ref:ref(1;"control_policy_set";"control-policy-set.sandbox-bound.v1";$set_sha),
+ resources:$p[0].body.resources,sensitive_material:$p[0].body.sensitive_material,
+ stage_result_ref:$prior[0].body.stage.result_ref,
+ tools:[($p[0].body.tools[0]|del(.identity_binding)+{sha256:$d})]}}
+' > "$real/claim.json"
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg env "$env_id" --arg entry "$entry_sha" --arg accepted "$accepted_sha" \
+  --arg d "$verifier_sha" '{schema_version:1,kind:"sandbox_verifier_observation",
+ id:"sandbox.observation.verifier",body:{environment_id:$env,environment_entry_sha256:$entry,
+ target_repository_id:"fixture.target",accepted_set_sha256:$accepted,verifier_sha256:$d}}' \
+  > "$real/observation.json"
+PATH="$real/bin:/usr/bin:/bin" "$fixture/control/v1/evaluate-bound-sandbox.sh" evaluate \
+  "$real/duty.json" "$real/claim.json" "$real/observation.json" > "$real/evaluation.json"
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -e --arg duty "$duty_sha" --arg d "$verifier_sha" '
+ .body.verdict=="satisfied" and .body.duty_evaluation_ref.sha256==$duty and
+ .body.verifier_binding.verifier_sha256==$d
+' "$real/evaluation.json" > /dev/null || fail 'slice3 real bound evaluation'
+
+# Q is constructed only after D and C. P and its real R/D bytes stay unchanged.
+claim_sha=$(sha_file "$real/claim.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg claim_sha "$claim_sha" '
+ .stage_request.content.body.environment_ref={environment_id:"env.local-macos-fixture",fingerprint_sha256:$claim_sha}
+' "$real/prior-input.json" > "$real/q-stage.json"
+"$real_jq" -S -c '.stage_request.content' "$real/q-stage.json" > "$real/q-request.json"
+q_sha=$(sha_file "$real/q-request.json")
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -S -c --arg q "$q_sha" '.stage_request.sha256=$q' "$real/q-stage.json" > "$real/q-input.json"
+"$real_jq" -L "$modules" -e --arg command validate-input -f "$protocol" "$real/q-input.json" \
+  > "$real/q-input.valid" || {
+    /bin/cp "$real/q-input.json" /private/tmp/ystack-shadow-slice3-q-input.failed.json
+    fail 'slice3 acyclic consumer request'
+  }
+/bin/mkdir -m 700 "$real/q-candidate" "$real/q-scratch"
+q_status=0
+PATH="$real/bin:/usr/bin:/bin" "$fixture/adapters/local-git-materializer/v1/materialize.sh" materialize \
+  "$real/q-input.json" fixture.target "$real/source.git" "$real/q-candidate" "$real/q-scratch" \
+  "$tmp/object-closure" "$real_jq" > "$real/q-response.json" 2> "$real/q-materializer.err" || q_status=$?
+[ "$q_status" -eq 0 ] || { /bin/cp "$real/q-materializer.err" /private/tmp/ystack-shadow-slice3-q-materializer.err; fail "slice3 Q materializer status $q_status"; }
+[ "$(sha_file "$real/prior-request.json")" = "$prior_request_sha" ] &&
+[ "$(sha_file "$real/duty.json")" = "$duty_sha" ] || fail 'slice3 prerequisite tuple changed'
+
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg commit "$real_commit" --arg expected "$expected_sha" '
+ {schema_version:1,kind:"shadow_incident_record",id:"incident.shadow-reproduction",
+  body:{deploy_authority:"none",target_repository_id:"fixture.target",
+   git_revision_ref:{repository_id:"fixture.target",hash_algorithm:"sha1",commit_id:$commit},
+   failing_check:{kind:"file-digest",path:"source.txt",expected_sha256:$expected},
+   observed_symptom:"fixture digest check",reporter_actor_ref:"actor.fixture-reporter",
+   observed_at:"2026-08-30T00:00:04Z"}}
+' > "$real/incident.json"
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg commit "$real_commit" --arg blob "$real_blob" \
+  --arg instruction "$instruction_sha" --slurpfile input "$real/q-input.json" '
+ def pair($p):{schema_version:$p.content.schema_version,kind:$p.content.kind,
+   id:$p.content.id,sha256:$p.sha256};
+ {schema_version:1,kind:"qualified_identity",id:"identity.shadow-reproduction",body:{
+  adapter_config_refs:[{content_id:"producer-config",media_type:"application/json",sha256:("1"*64)}],
+  model_request:{effort_id:"high",model_id:"model.fixture",provider_id:"provider.fixture"},
+  prompt_refs:[{location:{kind:"path",value:"routines/coder.md"},mode:"100644",
+   object_id:$blob,object_type:"blob",revision:{commit_id:$commit,hash_algorithm:"sha1",
+   repository_id:"fixture.target"}}],resolved_profile_ref:pair($input[0].resolved_profile),skill_refs:[],
+  stage_request_ref:pair($input[0].stage_request),target_revision:{commit_id:$commit,
+   hash_algorithm:"sha1",repository_id:"fixture.target"},verification_instructions_ref:{
+   content_id:"verification-instructions",media_type:"text/plain",sha256:$instruction}}}
+' > "$real/identity.json"
+# shellcheck disable=SC2016 # jq expressions are intentionally protected from the shell.
+"$real_jq" -nSc --arg real "$real" --arg jq "$real_jq" --arg helper "$tmp/object-closure" '
+ {schema_version:1,kind:"shadow_enforced_request",id:"attempt.shadow-reproduction",body:{
+  attempt_id:"attempt.shadow-reproduction",attempt_number:1,incident:($real+"/incident.json"),
+  claim:($real+"/claim.json"),duty_evaluation:($real+"/duty.json"),
+  materialization_input:($real+"/q-input.json"),qualified_identity:($real+"/identity.json"),
+  source_git_dir:($real+"/source.git"),jq:$jq,closure_helper:$helper}}
+' > "$real/request.json"
+
+/usr/bin/printf 'shadow-enforced-real-chain: materializer/protocol/duty/bound-evaluator passed\n'
+
+real_native="$real/native-release"
+/bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" build "$python_bin" "$real_native"
+real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+"$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
+  "$real_native/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import dataclasses, hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, sysconfig, types
+base, package, physical_python, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
+module_path=package/"shadow/v1/enforced-reproduction.py"
+spec=importlib.util.spec_from_file_location("real_shadow_enforced",module_path)
+e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+e.sys.executable=str(physical_python.resolve())
+c=e.c
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def canonical(value): return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()+b"\n"
+def write(path,raw,mode):
+ path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw);path.chmod(mode)
+principal=1234;gid=os.getgid();store=base/"store";store.mkdir(mode=0o750)
+anchor=base/"installation/supervisor";anchor.mkdir(parents=True,mode=0o755)
+installed=base/"installation/installed";installed.mkdir(mode=0o755)
+identities=base/"installation/identities";identities.mkdir(mode=0o755)
+verifier=base/"file-digest-verifier"; verifier_root=base/"verifier-root"
+identity_paths={}
+for name in sorted(c.IDENTITY_KEYS-{"dyld_cache_files"}):
+ path=verifier if name=="verifier" else identities/name
+ if path!=verifier: write(path,(name+"\n").encode(),0o555)
+ identity_paths[name]=str(path)
+dyld=identities/"dyld-cache";write(dyld,b"dyld\n",0o555);identity_paths["dyld_cache_files"]=[str(dyld)]
+installed_paths={}
+for role,relative in c.INSTALLED_SOURCES.items():
+ source=package/relative;target=installed/(role+".installed")
+ write(target,source.read_bytes(),0o444);installed_paths[role]=str(target)
+host_script=anchor/"host-supervisor.py";write(host_script,b"# fixture host supervisor\n",0o555)
+config={"schema_version":1,"kind":"sandbox_host_config","id":"sandbox.host-config.v1","body":{
+ "consumer_gid":gid,"environment_id":"env.local-macos-fixture","identity_paths":identity_paths,
+ "installed_files":installed_paths,"principal_uid":principal,
+ "runtime":{"driver":str(identities/"host_runtime"),"vfkit":str(identities/"vm_service")},
+ "store_id":"store.shadow-fixture","store_root":str(store),"work_root":str(base/"host-work")}}
+write(anchor/"host-config.json",canonical(config),0o444)
+(base/"host-work").mkdir(mode=0o750)
+c.ANCHOR=str(anchor)
+
+# Preserve real kind/device/inode/link/size/change metadata. Substitute only the fixture's
+# root/supervisor ownership and unsafe bits that cannot be created by an unprivileged test.
+raw_metadata,raw_named,raw_acl=c._metadata,c._named_metadata,c._acl_state
+root_ancestors=set();cursor=anchor
+while True:
+ root_ancestors.add(str(cursor))
+ if cursor==cursor.parent: break
+ cursor=cursor.parent
+external_ancestors=set();cursor=base.parent.parent
+while True:
+ external_ancestors.add(str(cursor))
+ if cursor==cursor.parent: break
+ cursor=cursor.parent
+external_identity={}
+cursor=physical_python.resolve()
+while True:
+ root_ancestors.add(str(cursor))
+ if cursor==cursor.parent: break
+ cursor=cursor.parent
+def fd_path(fd):
+ if sys.platform=="darwin":
+  raw=c.fcntl.fcntl(fd,50,b"\0"*1024)
+  return raw.split(b"\0",1)[0].decode()
+ return os.readlink(f"/proc/self/fd/{fd}")
+def observed(state,path):
+ path=os.path.realpath(path)
+ if path in external_ancestors and stat.S_ISDIR(state.st_mode):
+  key=(state.st_dev,state.st_ino)
+  fixed=external_identity.setdefault(key,(state.st_nlink,state.st_size,state.st_mtime_ns,state.st_ctime_ns))
+  state=types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino,st_mode=state.st_mode,
+   st_uid=state.st_uid,st_gid=state.st_gid,st_nlink=fixed[0],st_size=fixed[1],
+   st_mtime_ns=fixed[2],st_ctime_ns=fixed[3])
+ uid,gid_value,mode=state.st_uid,state.st_gid,state.st_mode
+ if path==str(store) or path.startswith(str(store)+"/"):
+  uid,gid_value=principal,gid
+ elif (path in root_ancestors or path==str(anchor) or path.startswith(str(anchor)+"/") or
+       path==str(installed) or path.startswith(str(installed)+"/") or
+       path==str(identities) or path.startswith(str(identities)+"/") or
+       path==str(verifier) or path==str(physical_python.resolve())):
+  uid=0;mode &= ~(stat.S_IWGRP|stat.S_IWOTH)
+ return types.SimpleNamespace(st_dev=state.st_dev,st_ino=state.st_ino,st_mode=mode,
+  st_uid=uid,st_gid=gid_value,st_nlink=state.st_nlink,st_size=state.st_size,
+  st_mtime_ns=state.st_mtime_ns,st_ctime_ns=state.st_ctime_ns)
+def metadata(fd): return observed(raw_metadata(fd),fd_path(fd))
+def named(name,parent_fd): return observed(raw_named(name,parent_fd),os.path.join(fd_path(parent_fd),name))
+c._metadata,c._named_metadata=metadata,named
+c._acl_state=lambda _fd,_resolver=None:([],None) if sys.platform=="darwin" else (None,None)
+
+work=base/"consumer-work";output=base/"consumer-output";work.mkdir(mode=0o700);output.mkdir(mode=0o700)
+raw_fsync=os.fsync;fsync_paths=[]
+def recording_fsync(fd):
+ fsync_paths.append(fd_path(fd));return raw_fsync(fd)
+e.os.fsync=recording_fsync
+request=json.loads((base/"request.json").read_bytes())
+instruction=("ystack.file-digest-instruction.v1\npath source.txt\nsha256 "+
+ json.loads((base/"incident.json").read_bytes())["body"]["failing_check"]["expected_sha256"]+"\n").encode()
+instruction_file=base/"verifier-instruction";write(instruction_file,instruction,0o400)
+generation=json.loads((package/"core/v2/generation-registry.json").read_bytes())[-1]["generation_id"]
+def mutation_path(mode):
+ return {"mutate-request":scenario_request,"mutate-consumer":package/"shadow/v1/_consumer.py",
+  "mutate-helper-source":package/"adapters/local-git-materializer/v1/object-closure.c",
+  "mutate-receipt-program":package/"enforcement/v1/sandbox-receipt.jq",
+  "mutate-core-selector":package/"scripts/core-contract.sh",
+  "mutate-core-ingress":package/"core/v2/generations"/generation/"core-ingress.sh",
+  "mutate-contracts":package/"core/v2/generations"/generation/"contracts.jq",
+  "mutate-control-source":package/"control/v1/validate.sh"}.get(mode)
+checks=0
+scenario_mode="success";launch_count=0;scenario_output=None;scenario_work=work;scenario_request=None
+def ok(value,message):
+ global checks
+ if not value: raise AssertionError(message)
+ checks+=1;print(f"ok real-flow-{checks} - {message}")
+
+def decode(frame):
+ cursor=8;rows=[];digest=hashlib.sha256(b"YSFRAME1")
+ if frame[:8]!=b"YSFRAME1": raise AssertionError("frame magic")
+ while True:
+  n=frame[cursor];cursor+=1;name=frame[cursor:cursor+n];cursor+=n
+  size=int.from_bytes(frame[cursor:cursor+8],"big");cursor+=8;raw=frame[cursor:cursor+size];cursor+=size
+  if name==b"end":
+   if size!=32 or raw!=digest.digest() or cursor!=len(frame): raise AssertionError("frame seal")
+   return rows
+  encoded=bytes([len(name)])+name+len(raw).to_bytes(8,"big")+raw
+  digest.update(encoded);rows.append((name,raw))
+
+def launch(anchor_value,frame,_deadline):
+ global launch_count
+ launch_count+=1
+ durable={str(scenario_work/"launch/sandbox-request.json"),
+  str(scenario_work/"launch/sandbox-expectation.json"),str(scenario_work/"launch")}
+ ok(durable.issubset(set(fsync_paths)),"actual request, expectation, and containing directory are durable before launch")
+ if scenario_mode=="cancel": raise e.Refusal("E_RUNTIME")
+ for name in ("candidate","evidence","scratch"):
+  path=verifier_root/name
+  if path.exists(): shutil.rmtree(path)
+  path.mkdir(mode=0o700)
+ rows=decode(frame);names=[name for name,_raw in rows]
+ required=[b"request.json",b"evaluation.json",b"incident.json",b"record.json",b"manifest.json",b"instruction"]
+ ok(names[:6]==required and all(name==f"candidate/{i:05d}".encode() for i,name in enumerate(names[6:])),
+    "actual frame has fixed records and ordered candidate export")
+ values=dict(rows);manifest=json.loads(values[b"manifest.json"])
+ for index,row in enumerate(manifest["entries"]):
+  raw=values[f"candidate/{index:05d}".encode()]
+  if len(raw)!=row["size_bytes"] or sha(raw)!=row["sha256"]: raise AssertionError("candidate binding")
+  write(verifier_root/"candidate"/row["path"],raw,0o400)
+ instruction_file.chmod(0o600);write(instruction_file,values[b"instruction"],0o400)
+ env={"LANG":"C","LC_ALL":"C","PATH":str(verifier_root/"tools"),"TMPDIR":str(verifier_root/"scratch")}
+ with instruction_file.open("rb") as stdin:
+  run=subprocess.run([str(verifier),"verify","--candidate",str(verifier_root/"candidate"),
+    "--evidence",str(verifier_root/"evidence")],stdin=stdin,stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,env=env,check=False,timeout=30)
+ ok(run.returncode==0 and run.stdout==b"" and run.stderr==b"","actual fixed verifier completed")
+ result=(verifier_root/"evidence/file-digest-result.json").read_bytes()
+ result_doc=json.loads(result);ok(result_doc["body"]["instruction_sha256"]==sha(values[b"instruction"]),
+   "actual verifier result binds framed instruction")
+ launch_doc=json.loads(values[b"request.json"])
+ expectation=json.loads((scenario_work/"launch/sandbox-expectation.json").read_bytes())
+ ok(expectation["body"]["attempt"]["launch_request_sha256"]==sha(values[b"request.json"]),
+   "durable expectation binds actual launch bytes")
+ attempt=store/launch_doc["id"];payload=attempt/"payload";evidence=payload/"evidence"
+ evidence.mkdir(parents=True,mode=0o750)
+ manifest_raw=canonical({"schema_version":1,"kind":"sandbox_evidence_manifest","id":"evidence-manifest",
+  "body":{"files":[{"name_hex":b"file-digest-result.json".hex(),"sha256":sha(result),"size_bytes":len(result)}]}})
+ write(payload/"stdout",run.stdout,0o440);write(payload/"stderr",run.stderr,0o440)
+ write(payload/"evidence-manifest.json",manifest_raw,0o440);write(evidence/"0000",result,0o440)
+ accepted=json.loads((package/"enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"][0]
+ identities_rows={key:{"state":"observed","sha256":value[0]} for key,value in accepted["identities"].items()}
+ identities_rows["verifier"]={"state":"observed","sha256":sha(verifier.read_bytes())}
+ def limit(bound,observed,resolution,mechanism,observer):
+  return {"bound":bound,"observed":observed,"resolution":resolution,"observation":"complete",
+   "enforcement":"hard","reached":False,"mechanism_id":mechanism,"observer":observer}
+ limits={"cpu_time_ms":limit(30000,1000,1,accepted["mechanisms"]["cpu_time_ms"][0],"guest-supervisor"),
+  "wall_time_ms":limit(60000,2000,1,accepted["mechanisms"]["wall_time_ms"][0],"host-supervisor"),
+  "memory_bytes":limit(536870912,1048576,4096,accepted["mechanisms"]["memory_bytes"][0],"guest-supervisor"),
+  "output_bytes":limit(10485760,len(result),1,accepted["mechanisms"]["output_bytes"][0],"guest-supervisor"),
+  "process_count":limit(32,1,1,accepted["mechanisms"]["process_count"][0],"guest-supervisor"),
+  "scratch_bytes":limit(accepted["scratch_bytes"],4096,4096,accepted["mechanisms"]["scratch_bytes"][0],"guest-supervisor")}
+ receipt={"schema_version":1,"kind":"sandbox_enforcement_receipt","id":"receipt."+sha(values[b"request.json"]),
+  "body":{"contract_version":"v1","origin":{"producer_role":"host-supervisor",
+   "store_id":"store.shadow-fixture","accepted_set_sha256":sha((package/"enforcement/v1/accepted-identities.json").read_bytes())},
+   "attempt":expectation["body"]["attempt"],"control":launch_doc["body"]["control"],
+   "subject":launch_doc["body"]["subject"],"identities":identities_rows,"limits":limits,
+   "teardown":{"state":"confirmed","tree_terminated":True,"storage_destroyed":True},
+   "lifecycle":{"admission":"admitted","runtime":"completed","control_deadline":"met"},
+   "payload":{"stdout_sha256":sha(run.stdout),"stderr_sha256":sha(run.stderr),
+    "evidence_manifest_sha256":sha(manifest_raw),"exit_state":"exited","exit_code":0},
+   "timing":{"admitted_at":"2026-08-30T00:00:05Z","terminated_at":"2026-08-30T00:00:06Z"},
+   "outcome":{"verdict":"satisfied","reason_ids":["enforcement.satisfied"]}}}
+ if scenario_mode=="cpu-none":
+  receipt["body"]["limits"]["cpu_time_ms"]["enforcement"]="none"
+  receipt["body"]["limits"]["wall_time_ms"]["enforcement"]="none"
+ if scenario_mode=="unconfirmed":receipt["body"]["teardown"]["state"]="unconfirmed"
+ if scenario_mode!="missing":write(attempt/"receipt.json",canonical(receipt),0o440)
+ if scenario_mode=="partial":(evidence/"0000").unlink()
+ for directory in (store,attempt,payload,evidence): directory.chmod(0o750)
+ if scenario_mode=="replace-output":
+  displaced=scenario_output.with_name(scenario_output.name+"-displaced")
+  scenario_output.rename(displaced);scenario_output.mkdir(mode=0o700)
+ if scenario_mode=="mutate-component":
+  component=package/"enforcement/v1/check-sandbox-receipt.sh"
+  component.chmod(0o700);component.write_bytes(component.read_bytes()+b"\n")
+ changed=mutation_path(scenario_mode)
+ if changed is not None:
+  changed.chmod(0o600);changed.write_bytes(changed.read_bytes()+b"\n")
+ return 70 if scenario_mode=="incomplete" else 65 if scenario_mode=="refused" else 0
+e._launch=launch
+parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha256":sha(b"fixture-build"),
+ "helper_executable_sha256":sha((base.parent/"object-closure").read_bytes()),
+ "helper_executable_size":len((base.parent/"object-closure").read_bytes()),
+ "helper_path":str(base.parent/"object-closure"),"native_release":{
+ "source_sha256":sha((package/"shadow/v1/_cancel_release.c").read_bytes()),
+ "build_script_sha256":sha((package/"shadow/v1/build-cancel-release.sh").read_bytes()),
+ "build_record_sha256":sha(native_record.read_bytes()),"binary_path":str(native_binary),
+ "binary_size":native_binary.stat().st_size,"binary_sha256":sha(native_binary.read_bytes()),
+ "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
+ "python_abi":sysconfig.get_config_var("SOABI"),
+ "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+mismatch_case=base/"case-mismatch";mismatch_case.mkdir(mode=0o700)
+mismatch_q=json.loads((base/"q-input.json").read_bytes())
+mismatch_identity=json.loads((base/"identity.json").read_bytes())
+mismatch_incident=json.loads((base/"incident.json").read_bytes())
+mismatch_outer=json.loads((base/"request.json").read_bytes())
+mismatch_incident["body"]["failing_check"]["expected_sha256"]="0"*64
+mismatch_q["stage_request"]["sha256"]=sha(canonical(mismatch_q["stage_request"]["content"]))
+mismatch_identity["body"]["stage_request_ref"]["sha256"]=mismatch_q["stage_request"]["sha256"]
+mismatch_identity["body"]["verification_instructions_ref"]["sha256"]=sha(e.make_instruction(mismatch_incident))
+mismatch_outer["id"]=mismatch_outer["body"]["attempt_id"]="attempt.mismatch"
+for field,value in (("incident",mismatch_incident),("materialization_input",mismatch_q),
+                    ("qualified_identity",mismatch_identity)):
+ path=mismatch_case/(field+".json");write(path,canonical(value),0o400);mismatch_outer["body"][field]=str(path)
+mismatch_request=mismatch_case/"request.json";write(mismatch_request,canonical(mismatch_outer),0o400)
+mismatch_work=mismatch_case/"work";mismatch_output=mismatch_case/"output"
+mismatch_work.mkdir(mode=0o700);mismatch_output.mkdir(mode=0o700)
+restoration=base/"native-restoration-failure";restoration.mkdir(mode=0o700)
+class Census:
+ def observe(self):pass
+executable=e.stable_file(physical_python)
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+executable.close();native=e._NativeRelease(parent,admission)
+admission=dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
+with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
+bundle_doc=json.loads(bundle);ok(len(bundle_doc["body"]["files"])==29,"actual reproduce seals 29 evidence files")
+record=json.loads((output/"shadow-record.json").read_bytes())
+ok(record["body"]["record_form"]=="enforced-reproduction.v1" and
+ record["body"]["outcome"]=="no-change" and record["body"]["producer_invocations"]==0,
+ "actual reproduce retains enforced no-change record")
+check=json.loads((output/"sandbox-check.json").read_bytes())
+ok(check["body"]["check_verdict"]=="valid" and check["body"]["enforcement_verdict"]=="satisfied",
+ "actual receipt checker accepts controlled-store receipt")
+ok(json.loads((output/"file-digest-result.json").read_bytes())["body"]["reason_id"]=="file.match",
+ "actual verifier payload is retained unchanged")
+ok((output/"bundle.json").exists(),"completion marker written after real chain")
+provenance=json.loads((output/"consumer-provenance.json").read_bytes())
+roles=[row["role"] for row in provenance["body"]["commands"]]
+ordinary_roles=[role for role in roles if role!="darwin-acl-uuid-resolution"]
+ok(ordinary_roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
+ "qualified-identity-validation","materialization","materializer-response-validation",
+ "candidate-preparation","candidate-inspection","sandbox-bound-evaluation",
+ "sandbox-launch-boundary","sandbox-receipt-check","trace-validation"] and
+ (sys.platform=="darwin" or "darwin-acl-uuid-resolution" not in roles) and
+ all(set(row)=={"role","argv_sha256","executable_sha256","component_sha256"}
+     for row in provenance["body"]["commands"]),
+ "frozen provenance retains every executed role without private argv: "+repr(roles))
+trace=json.loads((output/"trace-ledger.json").read_bytes())
+ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.local-macos-fixture" and
+ trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
+ trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
+ "trace binds claim environment and distinct declaration and enforcement evidence")
+scenario_mode="success";scenario_output=mismatch_output;scenario_work=mismatch_work
+def reset_native():
+ native.state=native.module.prepare_state()
+ native.methods=tuple(getattr(native.state,name) for name in ("block_entry","resume_consumer",
+  "hold_completion","block_final","rollback_marker","finish_release","outcome"))
+ (native.block_entry,native.resume_consumer,native.hold_completion,native.block_final,
+  native.rollback_marker,native.finish_release,native.outcome)=native.methods
+reset_native();(restoration/"bundle.json").write_bytes(b"provisional")
+real_signal=e.signal.signal;failed=[False];restoration_owner=e.CancellationSignals(admission)
+def fail_restoration(sent,handler):
+ if not failed[0] and e.CancellationSignals.active.previous.get(sent) is handler:
+  failed[0]=True;raise OSError("simulated Python handler restoration failure")
+ return real_signal(sent,handler)
+try:
+ try:
+  with restoration_owner:
+   descriptor=os.open(restoration,os.O_RDONLY|os.O_DIRECTORY)
+   e.CancellationSignals.retain_completion(descriptor);os.close(descriptor)
+   e.signal.signal=fail_restoration
+ except OSError:pass
+ else:raise AssertionError("Python restoration failure accepted")
+finally:
+ e.signal.signal=real_signal
+ for sent,handler in restoration_owner.previous.items():real_signal(sent,handler)
+ok(failed[0] and not (restoration/"bundle.json").exists(),
+ "actual native owner rolls back true Python restoration failure before final close")
+reset_native();admission=dataclasses.replace(admission,native=native)
+try:
+ with e.CancellationSignals(admission):
+  mismatch=json.loads(e.reproduce(mismatch_request,mismatch_work,mismatch_output,parent))
+finally:native.close()
+ok(mismatch["body"]["record_form"]=="enforced-reproduction.v1" and
+ json.loads((mismatch_output/"shadow-record.json").read_bytes())["body"]["outcome"]=="reproduced",
+ "actual mismatch completes only as a reproduced result")
+checker_driver=package/"enforcement/v1/check-sandbox-receipt.sh"
+checker_env={"PATH":str(base/"bin")+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base/"checker-tmp")}
+(base/"checker-tmp").mkdir(mode=0o700)
+accepted=json.loads((package/"enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"][0]
+def check_mutation(name,mutate):
+ receipt=json.loads((output/"sandbox-receipt.json").read_bytes());mutate(receipt)
+ path=base/(name+"-receipt.json");write(path,canonical(receipt),0o400)
+ run=subprocess.run(["/bin/bash","-p",str(checker_driver),"check-bound",str(path),
+  str(work/"launch/sandbox-expectation.json"),str(output/"sandbox-evaluation.json"),
+  str(work/"observation/observation.json")],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+  env=checker_env,check=False,timeout=30)
+ if run.returncode!=0 or run.stderr: raise AssertionError((name,run.returncode,run.stderr))
+ return json.loads(run.stdout)
+second=next(value for value in accepted["identities"]["verifier"] if value!=sha(verifier.read_bytes()))
+cross=check_mutation("cross-verifier",lambda receipt:receipt["body"]["identities"]["verifier"].update(sha256=second))
+ok(cross["body"]["check_verdict"]=="refused" and cross["body"]["enforcement_verdict"]=="none"
+ and cross["body"]["reason_ids"]==["receipt.control-mismatch","receipt.evaluation-not-satisfied"],
+ "two accepted verifier digests cannot substitute for exact measured verifier")
+wrong_subject=check_mutation("wrong-subject",lambda receipt:receipt["body"]["subject"]["candidate"].update(manifest_sha256="f"*64))
+ok(wrong_subject["body"]["check_verdict"]=="refused" and
+ any(reason.startswith("receipt.") for reason in wrong_subject["body"]["reason_ids"]),
+ "otherwise valid receipt cannot substitute a candidate subject")
+
+base_request=json.loads((base/"request.json").read_bytes())
+base_q=json.loads((base/"q-input.json").read_bytes())
+base_identity=json.loads((base/"identity.json").read_bytes())
+base_incident=json.loads((base/"incident.json").read_bytes())
+def case_documents(name,mutate=None):
+ case=base/("case-"+name);case.mkdir(mode=0o700)
+ q=json.loads(json.dumps(base_q));identity=json.loads(json.dumps(base_identity))
+ incident=json.loads(json.dumps(base_incident));outer=json.loads(json.dumps(base_request))
+ if mutate is not None: mutate(outer,q,identity,incident)
+ q["stage_request"]["sha256"]=sha(canonical(q["stage_request"]["content"]))
+ identity["body"]["stage_request_ref"]["sha256"]=q["stage_request"]["sha256"]
+ identity["body"]["verification_instructions_ref"]["sha256"]=sha(e.make_instruction(incident))
+ outer["id"]=outer["body"]["attempt_id"]="attempt."+name
+ for field,value in (("incident",incident),("materialization_input",q),("qualified_identity",identity)):
+  path=case/(field+".json");write(path,canonical(value),0o400);outer["body"][field]=str(path)
+ request_path=case/"request.json";write(request_path,canonical(outer),0o400)
+ return case,request_path
+def prewrite_refusal(name,request_change=None,parent_change=None,work_path=None,source_root=None):
+ case,request_path=case_documents(name);case_work=work_path or case/("work-"+name);case_output=case/"output"
+ if not case_work.exists():case_work.mkdir(mode=0o700)
+ case_output.mkdir(mode=0o700);before_entries=set(case_work.iterdir())
+ if request_change is not None:
+  outer=json.loads(request_path.read_bytes());request_change(outer,case_work)
+  request_path.chmod(0o600);request_path.write_bytes(canonical(outer));request_path.chmod(0o400)
+ context=dict(parent);context.update(parent_change or {})
+ before=launch_count;old_source=e.SOURCE
+ try:
+  if source_root is not None:e.SOURCE=source_root
+  try:e.reproduce(request_path,case_work,case_output,context)
+  except (e.Refusal,c.Refusal):pass
+  else:raise AssertionError(name+" accepted")
+ finally:e.SOURCE=old_source
+ ok(set(case_work.iterdir())==before_entries and not any(case_output.iterdir()) and launch_count==before,
+    name+" refuses before workspace writes or launch")
+prewrite_refusal("workspace-overlap",lambda outer,workspace:
+ outer["body"].__setitem__("incident",str(workspace/"incident.json")))
+prewrite_refusal("helper-context-mismatch",parent_change={"helper_path":str(base/"wrong-helper")})
+prewrite_refusal("source-exclusion",source_root=base/"case-source-exclusion")
+prewrite_refusal("installed-exclusion",work_path=installed/"private-work")
+prewrite_refusal("store-exclusion",work_path=store/"private-work")
+def refuse_case(name,mode="success",mutate=None,launches=0):
+ global scenario_mode,scenario_output,scenario_work,scenario_request
+ case,request_path=case_documents(name,mutate);case_work=case/"work";case_output=case/"output"
+ case_work.mkdir(mode=0o700);case_output.mkdir(mode=0o700)
+ scenario_mode=mode;scenario_output=case_output;scenario_work=case_work;scenario_request=request_path
+ before=launch_count
+ component=package/"enforcement/v1/check-sandbox-receipt.sh";original=component.read_bytes()
+ changed=mutation_path(mode)
+ changed_raw=changed.read_bytes() if changed else None
+ changed_mode=changed.stat().st_mode&0o777 if changed else None
+ try:
+  try: e.reproduce(request_path,case_work,case_output,parent)
+  except (e.Refusal,c.Refusal): pass
+  else: raise AssertionError(name+" accepted")
+ finally:
+  if component.read_bytes()!=original:component.write_bytes(original);component.chmod(0o755)
+  if changed is not None:
+   changed.chmod(0o600);changed.write_bytes(changed_raw);changed.chmod(changed_mode)
+ ok(launch_count-before==launches,name+" stops at the intended boundary")
+ marker=case_output/"bundle.json"
+ displaced=case_output.with_name(case_output.name+"-displaced")/"bundle.json"
+ ok(not marker.exists() and not displaced.exists(),name+" cannot expose completion marker")
+
+def changed_patch(_outer,q,_identity,_incident):
+ changed="changed content\n";digest=sha(changed.encode())
+ for row in q["payloads"]:
+  if row["input_id"]=="input.producer-patch": row["data"]=changed
+ for row in q["trust_context"]["verified_payloads"]:
+  if row["input_id"]=="input.producer-patch": row["content"]["data"]=changed;row["sha256"]=digest
+ for row in q["stage_request"]["content"]["body"]["inputs"]:
+  if row["input_id"]=="input.producer-patch": row["value"]["value"]["value"]["sha256"]=digest
+def wrong_environment(_outer,q,_identity,_incident):
+ q["stage_request"]["content"]["body"]["environment_ref"]={"environment_id":"env.unrelated","fingerprint_sha256":"f"*64}
+def wrong_identity(_outer,_q,identity,_incident):
+ identity["body"]["stage_request_ref"]["id"]="request.unrelated"
+ identity["body"]["resolved_profile_ref"]["id"]="profile.unrelated"
+def bool_request(outer,_q,_identity,_incident):
+ outer["schema_version"]=True;outer["body"]["attempt_number"]=True
+refuse_case("changed-patch",mutate=changed_patch)
+refuse_case("wrong-environment",mutate=wrong_environment)
+refuse_case("wrong-identity",mutate=wrong_identity)
+refuse_case("boolean-request",mutate=bool_request)
+for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed","cancel",
+             "replace-output","mutate-component","mutate-request","mutate-consumer",
+             "mutate-helper-source","mutate-receipt-program","mutate-core-selector",
+             "mutate-core-ingress","mutate-contracts","mutate-control-source"):
+ refuse_case(mode,mode=mode,launches=1)
+scenario_mode="success";scenario_output=None
+print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY
