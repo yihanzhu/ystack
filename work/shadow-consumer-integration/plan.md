@@ -54,10 +54,12 @@ change is included.
 
 The slice-3 estimate starts from the measured 3597-line candidate. Allow 250–450 lines for
 the native source/build recipe, 150–300 for Python context, provenance, ledger and release,
-and 20–60 for the three common files. Allow another 300–650 net lines for paired proof of
-completion-fd transfer, ordinary-close ordering and errors, authoritative outer outcome,
-the context-error CLI, the actual native/caller matrix and runtime identity. Replacement
-offsets some additions; the upper bound leaves room without compressed code or omitted proof.
+300–650 for the original paired regressions, and 20–60 for the three common files. The
+measured complete baseline is 4850 net lines. Complete negative/positive and actual-native
+proof of completion-fd transfer, ordinary-close ordering and errors, authoritative outer
+outcome, the context-error CLI, the native/caller matrix and runtime identity needs another
+300–650 net, yielding 5150–5500. The 5600 ceiling leaves bounded readable margin without
+compressed code or omitted proof.
 
 ## Order of work
 
