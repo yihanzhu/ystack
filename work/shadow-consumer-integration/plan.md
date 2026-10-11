@@ -9,7 +9,7 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `c5ef9bda4a3a02153a8ebf854143de9cc56b9b8b`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 700–900 lines. The five-slice contract, closed
+Plan PR: `review_size: accepted-exception`, 700–950 lines. The five-slice contract, closed
 native context, direct-result release and signal/fd proof need one coherent implementation
 brief. This changes only the soft size budget.
 
@@ -43,7 +43,7 @@ changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 4200–6600 | The preserved candidate plus the private C/build boundary, context/provenance and ledger repairs, same-process allocator admission, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
+| 3 | Accepted exception | 4200–7000 | The preserved candidate plus the private C/build boundary, context/provenance and ledger repairs, same-process allocator admission, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -482,25 +482,78 @@ width, alignment, overflow and bounds before raw loads. Reread count, zones, zon
 version, logger and slowpath and require byte-for-byte stability. Count 2 and version 16
 define this profile only; they are not general macOS rules.
 
+The same State also owns one bounded private `XzmClassSnapshot`; it does not change the
+80-byte record or add a config value, request field, public method or output. After the
+preceding identity/profile checks, read parent at zone `+0x100`, one-byte N at `+0xd2`,
+and begin/end at `+0xd8/+0xe0`. Require null parent, `0 < N <= 255`, begin equal to
+`zone+0x268`, and an overflow-safe `end-begin == 0x60*N`. One prebound complete readable
+mapping must cover the header and table. The ordinary-arm64 internal layout is 288 bytes:
+`uint8_t N@0`, seven zero pad bytes, `uint64_t zone@8/begin@16/end@24`, 255 first
+snapshot bytes at 32 and one zero tail byte; static assertions fix every offset and size.
+Store exactly N bytes, each read only at `begin+0x60*i+0x58`, and zero unused bytes. Any
+layout, mapping or identity uncertainty, or any byte equal to 1,
+refuses before census. Do not infer zone names, scan beyond the exact span, PAC-strip or
+guess bytes.
+
+`block_final()` may reread the same header, mapping identity and N bytes at its already
+allowed pre-L point without load, lookup, allocation or callback, and requires exact
+first-snapshot equality. A final mismatch is a real pre-L sticky failure after product
+effects: preserve the actual outer outcome, use the still-usable held fd for the original
+rollback, emit no success marker and never repeat release. Do not call it a pre-effect
+refusal or claim the first census did not occur. This bounded reread does not prove absence
+of an intermediate writer. The complete protected interval still needs finite closure for registry/zone
+replacement, parent/table rebuild or destruction, guard-config writes, slowpath/lite/reset
+and aliases. The table covers only this main XZM small-class RNG entrance; large-class,
+child/other-zone and every actual normal/error route remain separate closure obligations.
+Only this table guard and the following named CPython snapshot are allowed; any other
+private observation ABI returns through the plan gate.
+
+State also owns one fixed 144-byte CPython allocator snapshot derived through normal
+`Python.h` public getters. RAW, MEM and OBJ `PyMemAllocatorEx` records occupy offsets
+0/40/80, with `ctx/malloc/calloc/realloc/free` at each record's `+0/+8/+16/+24/+32`;
+the arena record at 120 has `ctx/alloc/free` at 120/128/136. Actual headers/build and
+static assertions fix the layout. Resolve and bind `PyMem_GetAllocator` at framework
+`+0xcca84` and `PyObject_GetArenaAllocator` at `+0xccc10` during the existing init window,
+and complete their first-use before census. The fixed method calls RAW, MEM, OBJ and arena
+getters once in that order and stores all four complete records in State. Each getter's
+mutex protects only its own copy; the four calls are not atomic. Exact profile matches
+bind each observed value but do not prove an unchanged interval.
+
+Normalize every callback against the bound ordinary-arm64 framework image. Require NULL
+contexts; RAW malloc/calloc/realloc/free at `+0xcbf90/+0xcbf9c/+0xcbfbc/+0xcbfd0`; both
+MEM and OBJ at `+0xcd460/+0xcd8c4/+0xcdbc0/+0xcd980`; arena alloc/free at
+`+0xcc1a0/+0xcc1d0`. Unknown, NULL, foreign, debug, mimalloc or tracemalloc callbacks,
+different context, getter/identity/header/size failure or mismatch refuses before census.
+Do not invoke callbacks to identify them, call a setter, read `__PyRuntime` private layout
+or alter allocator startup configuration. The accepted finite bodies limit this profile's
+system exits to `malloc/calloc/realloc/free` and `mmap/munmap` and contain no direct
+allocator-table, zone-registry/reinit, logger, slowpath or XZM-guard writer. Still exclude
+SetAllocator, SetArenaAllocator, SetupAllocators, debug/tracemalloc hooks and late-extension
+replacement on every actual normal/error path. Fixed JSON basic types, exact stdlib/driver/
+consumer/native origins and no plugin or callback-registration input bound the relevant
+objects; GC disabled and empty `gc.callbacks` do not exclude refcount finalizers. Prove the
+finite ctypes, exception-cleanup and relevant type paths cannot reach user `__del__`,
+weakref or foreign callbacks. Do not expand this to whole-Python certification.
+
 After this plan is accepted, implementation may add the fixed 80-byte observer, its
 pre-census wiring and its fail-closed unit and integration controls while the remaining
 evidence is prepared. That work cannot enable the actual Mac positive path: any UNKNOWN
-in (A) the complete observation-to-last-parent-ACL-free allocator writer boundary, (B/C)
+in the CPython binding/body/no-setter boundary, (A) the complete
+observation-to-last-parent-ACL-free allocator writer boundary, (B/C)
 the fixed RNG/report/provider receiver, mask, disposition and wakeup-ownership boundary,
 or actual atfork/reseed/reset applicability must refuse before the first census, ACL or
 component effect. It cannot emit a Mac success marker or claim completion.
 
 Actual Mac admission, completion and G3 still require every normal and error path in
-that full interval to satisfy the original standard. In particular, later generate
-failure can reach noreturn abort code. Its direct SIGABRT disposition operation is
-bound; a separate numeric mask-shaped edge is not yet bound and is a proof risk, not an
-observed mask effect. Either a real configuration/path invariant proves abort unreachable
-throughout the interval, or the reachable error boundary must preserve the HUP/INT/TERM
-mask, disposition, receiver and wakeup-ownership standard. A successful test, preflight,
-noreturn property, function name, different signal name, old metadata process or accepted
-observer implementation is not proof. No coder may add a third config field or cached-ABI
-fallback to obtain the invariant. The actual same-P positive and complete normal/error
-closure remain hard proof rows for admission and the sole formal G3 candidate.
+that full interval to satisfy the original standard. Later generate failure can reach
+noreturn abort code whose actual bound setter blocks the watched HUP/INT/TERM set.
+Therefore the bounded table result must be conjoined with a real configuration/path
+invariant proving abort and its watched-mask setter unreachable throughout the complete
+protected interval on every actual normal and error path. Large classes, other zones and
+unknown routes remain refusals. A successful test, preflight, noreturn property, function
+name, old metadata process or accepted observer implementation is not proof. No cached-ABI
+fallback may replace the named table guard. The actual same-P positive and complete
+normal/error closure remain hard proof rows for admission and the sole formal G3 candidate.
 
 After admission, call `block_entry()`. Its C body uses the hard-coded HUP/INT/TERM set,
 calls `pthread_sigmask(SIG_BLOCK,...)` once, and stores raw rc and the old mask before
@@ -842,7 +895,7 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
-| shadow-enforced | Same-P actual Mac preflight normal return followed by the fixed 80-byte admission record before census; exact identity/profile, two config values, four typed PAC targets and reread controls; every checkable reason refuses before census/signal/mask/wakeup/ACL/component effects, while a disposable real bad-PAC case asserts only termination and its last boundary; preflight termination/non-return has no later product effect; actual normal and injected/error paths prove the complete protected interval either cannot reach RNG abort under the accepted invariant or that its real error boundary preserves the HUP/INT/TERM mask, disposition, receiver and wakeup ownership standard; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
+| shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record, bounded XZM snapshot and one full 144-byte public-getter CPython snapshot; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; foreign/debug/mimalloc/tracemalloc or any initial profile mismatch refuses without setter and before effects; XZM initial identity/profile, null parent, `0<N<=255`, exact `0x60*N` span, complete mapping and byte 1 likewise refuse before census; final XZM drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove finite CPython types/bodies/no-setter/no-foreign-finalizer, small-table, large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
 | shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
