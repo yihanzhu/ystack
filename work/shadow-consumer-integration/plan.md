@@ -9,10 +9,11 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `c5ef9bda4a3a02153a8ebf854143de9cc56b9b8b`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 700–1020 lines. The five-slice contract, closed
-native context, direct-result release and signal/fd proof need one coherent implementation
-brief. The added normal PAC recipe, narrow gzone predicate and their paired proof need
-readable in-place rules; this changes only the soft size budget.
+Plan PR: `review_size: accepted-exception`, 1000–1125 lines. The five-slice contract, closed
+native context, direct-result release, signal/fd proof and State-owned child handoff need one
+coherent implementation brief. The normal PAC recipe, narrow gzone predicate, child
+ownership boundary and their paired proof need readable in-place rules; this changes only
+the soft size budget.
 
 ## Files that change
 
@@ -354,14 +355,46 @@ Preparation/inspect have 300 seconds, matching their existing operation bound.
 On expiry stop that owned child group, wait at most 10 seconds and record failure;
 never call a truncated output successful. Consumers have a 1,200-second overall
 budget; a deadline only removes opportunities for work, never relaxes admission.
-The resolver uses the same cancellation-aware child runner, fixed cleared environment,
-new process session, applicable mask, `close_fds=True`, no `pass_fds`, and declared
-stdio only. It has a 10-second batch deadline within that overall budget, a 32 KiB
-stdout cap and 64 KiB stderr cap, with no retry. Normal completion waits and reaps,
-closes every pipe and selector, and validates output before using it. Timeout,
-cancellation or failure performs the existing one bounded owned-group cleanup and
-confirms disappearance within its 10-second maximum. No resolver work or resource
-survives into the completion tail.
+
+The private runner no longer makes a Python `Popen` object the sole owner between
+kernel spawn and reap. It puts one serial child's authority in the existing
+`NativeState`. State is already strongly held before the first pipe, attribute,
+file-action or argv allocation. Record each of the six pipe ends and every later
+resource immediately after acquisition. A prepare failure attempts every acquired
+resource once, keeps the first error and creates no child.
+
+`prepare_child()` accepts one exact built-in tuple: a closed command-role integer,
+absolute UTF-8-bytes executable, tuple-of-bytes argv and tuple-of-bytes environment.
+It rejects path-like objects, callables, NUL, an unknown role, extra environment keys,
+nonfixed stdio actions, conflicting descriptors and the existing argument, environment,
+file and output bounds. It never accepts a REQUEST-selected program, PATH search or a
+generic syscall/action list. Before a kernel spawn it copies every byte, creates all
+pipes and file actions, and preallocates the fd tuple and return singleton.
+
+`spawn_child()` is NOARGS. The selected public `posix_spawn` writes pid directly to
+State. On return zero, the next C statement records raw pid, the platform-proven pgid,
+all fd ownership and `OWNED` before Python can allocate, dispatch, decref, run a
+callback or explicitly check signals. A nonzero return records the direct rc and
+`NO_CHILD` without reading undefined pid. An interrupted native return or Python
+assignment therefore leaves the same State as owner.
+
+Use the preallocated integer fds with the existing bounded selector I/O; no file
+object or finalizer owns them. Native fixed operations close each named parent pipe,
+poll/wait without blocking, send the TERM and KILL group stages, and check group
+absence. Each records direct rc, errno, status and ownership before returning.
+`leader_reaped` is not `group_absent` and neither proves the pipes complete. Only a
+consumed leader, confirmed absent group and completed parent-pipe obligations allow
+the record to become `COMPLETE` and a later serial child to start. Never wait an
+already consumed pid, signal through an old possibly reused pid, or retry an unknown
+fd result.
+
+The resolver uses this same cancellation-aware runner, fixed cleared environment,
+new process session, applicable mask, declared stdio only and no extra inherited fd.
+It has a 10-second batch deadline within the overall budget, a 32 KiB stdout cap and
+64 KiB stderr cap, with no retry. Normal completion records wait/reap, group absence,
+every pipe and selector close, then validates output. Timeout, cancellation, failure
+or a later Python allocation error performs the same one bounded owned-group cleanup.
+No resolver work or resource survives into the completion tail.
 
 The only future native argv is `/usr/bin/sudo -n -u #UID -- P ANCHOR/host-supervisor.py
 launch`, with stdin the complete frame and UID/config/P already checked. The
@@ -390,15 +423,21 @@ startup admission refuses before any signal, mask or wakeup API call. Nested sco
 borrow the outer latch and cleanup state; they cannot acquire a lease, install a
 wakeup fd, retain completion or define another transfer point.
 
-`_cancel_release` is private to this boundary. It exports only `prepare_state()`, and
-the returned opaque non-subclassable `NativeState` has fixed methods
+`_cancel_release` is private to this boundary and still exports only `prepare_state()`.
+The returned opaque non-subclassable `NativeState` keeps the fixed methods
 `block_entry()`, `resume_consumer()`, `hold_completion(fd)`, `block_final()`,
 `rollback_marker()`, `finish_release()`, `observe_allocator_admission()` and
-`outcome()`. Every method except
-`hold_completion` is NOARGS; that method accepts one exact built-in integer directory
-fd and duplicates it internally. There is no how/mask/path/syscall-list/callable
-argument, generic operation dispatcher, public cancellation API or REQUEST-selected
-value. Calls outside the fixed phase refuse before a native effect.
+`outcome()`. It adds only `prepare_child(spec)`, `spawn_child()`, `child_fds()`,
+`close_child_stdin()`, `close_child_stdout()`, `close_child_stderr()`,
+`poll_child()`, `term_child_group()`, `kill_child_group()`,
+`check_child_group()` and `child_status()`.
+
+Only `hold_completion` and `prepare_child` take arguments. The former keeps its one
+exact built-in directory fd. The latter takes only the exact closed tuple above;
+`child_fds` and `child_status` are read-only getters and every other method is NOARGS.
+There is no signal-number, pid, fd, how, mask, callable or operation-list argument,
+generic dispatcher, public launcher/cancellation API or REQUEST-selected value. Calls
+outside their fixed phase refuse before a native effect.
 
 State is allocated before the first census and contains only the necessary authority:
 
@@ -408,6 +447,10 @@ State is allocated before the first census and contains only the necessary autho
 - one completion-fd ownership value, the immediately captured dev/inode/type, and
   fixed close/fstat/unlinkat/fsync result cells storing direct rc and errno copied in
   the next C statement after failure;
+- one fixed serial-child record containing spawn `NOT_RUN/NO_CHILD/OWNED`, raw pid and
+  pgid, six fd owned/attempted/result cells, wait `NOT_RUN/RETURNED(raw_pid,raw_status,
+  errno)`, `leader_reaped`, TERM/KILL/group-check results, `group_absent`, pipe
+  obligations, `COMPLETE` and its first error;
 - one phase value (`prepared`, `entry-blocked`, `consumer`, `final-blocked`,
   `release-running`, `sealed`), one rollback-attempted value, and `first_failure`
   pointing to the first fixed result cell without overwriting it; and
@@ -420,6 +463,32 @@ returned nonzero. State has no destructor that closes the completion fd, rolls b
 marker or repeats release. `hold_completion` stores duplicate ownership before returning, then records fstat identity.
 Its normal `None` is not success because dup and fstat failures use it too; only a normally observed authoritative
 no-failure consumer outcome (`native-release.pending`) confirms identity, not sealed release success. A post-fstat-failure duplicate stays State-owned for one release.
+
+The child record is the only spawn-to-reap owner. Native wait stores raw consumption
+before a diagnostic status allocation; an interrupted getter cannot repeat wait or
+erase remaining group/pipe work. Repeated cleanup skips consumed operations but still
+attempts every outstanding required operation once. No parallel child, second owner,
+pid scan, destructor cleanup, Python-object pid authority, raw-fork or private-syscall
+fallback is allowed. Bind and first-use the public spawn symbols and all child methods
+before the first census; the protected interval performs no import, load or lookup.
+
+On Darwin use only the accepted public `posix_spawn`, SETSID, CLOEXEC_DEFAULT, fixed
+file actions and exact signal default/mask behavior, never `spawnp`. The actual
+libsystem filter may be installed independently of the fixed environment, and its
+default configuration may rewrite attributes or argv. Until actual initialization,
+default-config effect and the fixed function-table slots are closed, refuse before
+prepare or any child effect. On Linux do the same for the exact libc SETSID, close-all,
+parent watched-mask/cancellation and child-error contract. A route that changes the
+parent watched mask or remains unknown cannot admit. Do not change P, the arm64e
+recipe or signal standards, and do not substitute raw fork, a new runtime probe,
+context field or certificate.
+
+After this plan is accepted, inactive fail-closed State control flow and injected
+negative tests may be implemented while those actual platform facts remain open.
+That work is not a platform positive. Actual Mac and Linux normal/error pairs proving
+session/pgid, stdio and no extra fd, caller/child mask and restore-signals behavior,
+raw error/status, reap and group disappearance remain admission, completion and sole
+formal-G3 hard gates.
 
 Admission requires the Python main interpreter thread and a fresh closed startup
 whose reviewed physical runtime, standard/native dependency closure and exact imports
@@ -750,8 +819,9 @@ external observer actually saw, never imaginary cleanup, success or an `E_RUNTIM
 return from a dead process. Returning or ignored dispositions follow the sealed outcome.
 
 Keep the accepted frozen-reader contract. Add no producer status, terminal-result
-trust, sidecar, inventory member, accepted identity, helper, launcher change or public
-multithreaded cancellation API. Preserve all closed child-handoff, recoverable-I/O,
+trust, sidecar, inventory member, accepted identity, helper, upstream VM-launcher
+change or public multithreaded cancellation API. The private consumer runner changes
+only through the State-owned boundary above. Preserve all recoverable-I/O,
 bounded-cleanup, durability, held-descriptor rollback and late-failure behavior.
 
 ### 6. Reproduction, pre-launch expectation and frozen record
@@ -941,6 +1011,11 @@ tree IDs, canonical write sets, publisher request bytes and post-write digests.
   invocation. This plan does not qualify a runtime by assertion. Missing closure,
   unknown imported provenance, unknown wakeup ownership or failed observation refuses
   before effects; no implementation name or undocumented callback timing admits it.
+- The State-owned runner removes the known pid-to-Python-owner allocation window but
+  does not make a public API name proof of platform behavior. Darwin filter routing and
+  Linux parent mask/close-all behavior stay fail-closed until actual evidence binds
+  them. Do not replace that evidence with empty environment, constant presence,
+  simulated State tests or a private fork/syscall path.
 
 ## Proof
 
@@ -970,6 +1045,7 @@ observations.
 | shadow-enforced | Real production recipe on actual Mac uses exact `gnu11`/PAC-intrinsics/auth-traps argv and Linux keeps exact `c11` without PAC flags; build-record and consumer equality reject missing/extra/reordered/platform-mismatched flags before load; bounded production codegen plus valid typed control and a disposable bad-PAC subprocess prove actual SDK typed authentication and trap termination, not merely flag presence; both platforms record exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, RNG entry identity, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
+| shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; a consumed native wait followed by lost status observation never waits again; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/wait/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, raw error/status and bounded group disappearance; filter or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
