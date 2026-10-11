@@ -334,7 +334,7 @@ fi
 native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" \
   "$native_binary" "$native_out/build-record.json" "$tmp" <<'PY'
-import hashlib,importlib.util,json,os,pathlib,shutil,sys,sysconfig
+import hashlib,importlib.util,json,os,pathlib,shutil,sys,sysconfig,types
 root,binary,record,production,production_record,base=map(pathlib.Path,sys.argv[1:])
 spec=importlib.util.spec_from_file_location("test_build_refusal",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
@@ -354,6 +354,42 @@ except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" no
 else:raise AssertionError("test-only native binary received production admission")
 print("shadow-enforced-native-admission: test build refused before import")
 original=json.loads(production_record.read_bytes())
+production_native=dict(context["native_release"],
+ build_record_sha256=sha(production_record.read_bytes()),binary_path=str(production),
+ binary_size=production.stat().st_size,binary_sha256=sha(production.read_bytes()))
+def outcome_binding_case(outcome):
+ class NativeState:
+  def __init__(self):self.calls=[]
+  def __getattr__(self,name):
+   if name=="outcome":return lambda:self.calls.append("outcome") or outcome
+   if name=="child_status":return lambda:self.calls.append("child_status") or ((0,)*49)
+   return lambda:None
+ state=NativeState()
+ class Loader:
+  @staticmethod
+  def exec_module(_module):return None
+ fake_spec=types.SimpleNamespace(loader=Loader())
+ fake_module=types.SimpleNamespace(prepare_state=lambda:state)
+ original_spec=e.importlib.util.spec_from_file_location
+ original_module=e.importlib.util.module_from_spec
+ e.importlib.util.spec_from_file_location=lambda *_args,**_kwargs:fake_spec
+ e.importlib.util.module_from_spec=lambda _spec:fake_module
+ e._NATIVE_ORIGIN=None;e._ALLOCATOR_INTERVAL_EVIDENCE_READY=True
+ try:
+  try:native=e._NativeRelease({"native_release":production_native},admission)
+  except e.Refusal as exc:
+   assert outcome!="native-release.pending" and exc.code=="E_RUNTIME"
+   assert state.calls==["outcome"]
+   return "refused"
+  assert outcome=="native-release.pending" and state.calls==["outcome"]
+  native.close();return "accepted"
+ finally:
+  e.importlib.util.spec_from_file_location=original_spec
+  e.importlib.util.module_from_spec=original_module
+  e._NATIVE_ORIGIN=None;sys.modules.pop("_cancel_release",None)
+assert outcome_binding_case("native-release.pending")=="accepted"
+assert outcome_binding_case("native-release.failure")=="refused"
+print("shadow-enforced-native-outcome: simulated pending accepted and non-pending refused")
 expected=["/usr/bin/cc","-std=gnu11" if sys.platform=="darwin" else "-std=c11",
  "-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC",
  "-I"+os.path.realpath(sysconfig.get_config_var("INCLUDEPY")),

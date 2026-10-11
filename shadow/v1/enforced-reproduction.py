@@ -573,7 +573,7 @@ class _NativeRelease:
              self.term_child_group, self.kill_child_group, self.check_child_group,
              self.child_status) = self.methods
             require(type(self.state).__name__ == "NativeState"
-                    and self.methods[-1]() == "native-release.pending", "E_RUNTIME")
+                    and self.outcome() == "native-release.pending", "E_RUNTIME")
             if sys.platform == "darwin":
                 try:
                     self.observe_allocator_admission()
