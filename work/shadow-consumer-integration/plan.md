@@ -9,7 +9,7 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `c5ef9bda4a3a02153a8ebf854143de9cc56b9b8b`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 700–825 lines. The five-slice contract, closed
+Plan PR: `review_size: accepted-exception`, 700–900 lines. The five-slice contract, closed
 native context, direct-result release and signal/fd proof need one coherent implementation
 brief. This changes only the soft size budget.
 
@@ -43,7 +43,7 @@ changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 4200–5600 | The preserved 3597-line candidate plus the private C/build boundary, context/provenance and ledger repairs, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
+| 3 | Accepted exception | 4200–6600 | The preserved candidate plus the private C/build boundary, context/provenance and ledger repairs, same-process allocator admission, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -52,14 +52,11 @@ unexplained overrun and return through the plan gate. Do not remove proof or cre
 extra parallel initiatives. No bootstrap, workflow, installation or policy-authority
 change is included.
 
-The slice-3 estimate starts from the measured 3597-line candidate. Allow 250–450 lines for
-the native source/build recipe, 150–300 for Python context, provenance, ledger and release,
-300–650 for the original paired regressions, and 20–60 for the three common files. The
-measured complete baseline is 4850 net lines. Complete negative/positive and actual-native
-proof of completion-fd transfer, ordinary-close ordering and errors, authoritative outer
-outcome, the context-error CLI, the native/caller matrix and runtime identity needs another
-300–650 net, yielding 5150–5500. The 5600 ceiling leaves bounded readable margin without
-compressed code or omitted proof.
+The slice-3 estimate includes the native source/build boundary; Python context,
+provenance, ledger and release work; completion-fd and authoritative-outcome proof;
+the same-process fixed native ABI, binding, authentication and driver call; complete
+negative/positive and actual Mac/Linux paired proof; and the required docs. The range
+leaves bounded room for readable tests without compressed code or omitted proof.
 
 ## Order of work
 
@@ -368,7 +365,8 @@ wakeup fd, retain completion or define another transfer point.
 `_cancel_release` is private to this boundary. It exports only `prepare_state()`, and
 the returned opaque non-subclassable `NativeState` has fixed methods
 `block_entry()`, `resume_consumer()`, `hold_completion(fd)`, `block_final()`,
-`rollback_marker()`, `finish_release()` and `outcome()`. Every method except
+`rollback_marker()`, `finish_release()`, `observe_allocator_admission()` and
+`outcome()`. Every method except
 `hold_completion` is NOARGS; that method accepts one exact built-in integer directory
 fd and duplicates it internally. There is no how/mask/path/syscall-list/callable
 argument, generic operation dispatcher, public cancellation API or REQUEST-selected
@@ -437,6 +435,72 @@ claim the membership service is thread-free. The proof must inspect the parent's
 actual admitted call graph and show no remaining membership symbol call or lazy load;
 unknown parent native closure still refuses. Unresolved actual selected-zone selector-to-target provenance refuses admission.
 No unreviewed pointer probe, PAC guess or weaker inference replaces that gate. Any concrete existing-development evidence method must first establish its ABI, authentication, identity and accepted proof boundary. Linux keeps its independent proof.
+
+For the accepted exact macOS profile, close that gate with one private same-process
+observation in the existing `NativeState`. This addition may touch only
+`shadow/v1/_cancel_release.c`, `shadow/v1/enforced-reproduction.py`,
+`scripts/test/shadow-enforced.test.sh`, `docs/components.md` and `RESTORE.md`. It adds no
+request, response, provenance, inventory, sidecar, helper, public API or tail work. A need
+for another path returns through this plan gate.
+
+State owns one zeroed 80-byte `ObservationV1`. Its fixed offsets are six `uint32_t` fields
+at 0/4/8/12/16/20 for version, status, reason, identity bits, zone count and zone version;
+one slowpath byte at 24 and seven zero reserved bytes; then six `uint64_t` values at
+32/40/48/56/64/72 for zone0, logger and the four authenticated targets. Static assertions
+fix every offset and size. Addresses remain private to the call and never enter output.
+The fixed `observe_allocator_admission()` `METH_NOARGS` method runs only once in
+`prepared`, before the first census. Success stores the complete record and returns
+`None`; a checkable identity, ABI, selector,
+mapping, bounds, profile, config, null-target, offset or reread failure stores a fixed
+reason and raises the existing runtime refusal. A real PAC trap terminates at the
+observation boundary; do not claim a Python error, exit 1 or cleanup, and do not add a
+handler, PAC stripping or continuation.
+
+During the existing `RTLD_NOW|RTLD_LOCAL` initialization window, bind the accepted
+ordinary-arm64 P/extension ABI, the actual P/App/framework, shared-cache UUID
+`421885d7-01cc-3629-b59b-6a068db34420`, libmalloc UUID
+`797c4277-18a2-365f-8fc9-957c371a02a4`, image base, `malloc_zones`,
+`malloc_num_zones`, `malloc_logger`, exact mapping bounds and target offsets. arm64e
+describes the system-image slots and SDK typed PAC only; require ptrauth intrinsics and
+ordinary calling ABI. Complete these bindings and their first-use before restoring the
+loader flags. No load, symbol lookup or mapping query occurs in the observation or tail.
+
+Before observation, call the prebound actual `arc4random_uniform(UINT32_MAX)` once and
+discard its value. Accepted actual routing, synchronous once publication and noreturn
+abort semantics make a normal return sufficient only for first initialization; they do
+not require a successful random value or prove later generation. A termination or
+non-return never reaches observation or product effects. Do not add a cached-state ABI,
+private corecrypto call or random-output test.
+
+The observation requires this exact profile: count 2, stable zone0, version 16, null
+logger and zero slowpath. The accepted complete updater plus the no-later-write proof
+must establish `slowpath == 0` implies no lite zone; do not read another private field.
+Read zone0's SDK typed slots at `+0x88`, `+0x90`, `+0xa0` and `+0xb0`; authenticate with
+the process-independent-code key and each exact string discriminator, then require
+libmalloc-base offsets `+0x3021c`, `+0x3b67c`, `+0x3a5e8` and `+0x30328`. Check readable
+width, alignment, overflow and bounds before raw loads. Reread count, zones, zone0,
+version, logger and slowpath and require byte-for-byte stability. Count 2 and version 16
+define this profile only; they are not general macOS rules.
+
+After this plan is accepted, implementation may add the fixed 80-byte observer, its
+pre-census wiring and its fail-closed unit and integration controls while the remaining
+evidence is prepared. That work cannot enable the actual Mac positive path: any UNKNOWN
+in (A) the complete observation-to-last-parent-ACL-free allocator writer boundary, (B/C)
+the fixed RNG/report/provider receiver, mask, disposition and wakeup-ownership boundary,
+or actual atfork/reseed/reset applicability must refuse before the first census, ACL or
+component effect. It cannot emit a Mac success marker or claim completion.
+
+Actual Mac admission, completion and G3 still require every normal and error path in
+that full interval to satisfy the original standard. In particular, later generate
+failure can reach noreturn abort code. Its direct SIGABRT disposition operation is
+bound; a separate numeric mask-shaped edge is not yet bound and is a proof risk, not an
+observed mask effect. Either a real configuration/path invariant proves abort unreachable
+throughout the interval, or the reachable error boundary must preserve the HUP/INT/TERM
+mask, disposition, receiver and wakeup-ownership standard. A successful test, preflight,
+noreturn property, function name, different signal name, old metadata process or accepted
+observer implementation is not proof. No coder may add a third config field or cached-ABI
+fallback to obtain the invariant. The actual same-P positive and complete normal/error
+closure remain hard proof rows for admission and the sole formal G3 candidate.
 
 After admission, call `block_entry()`. Its C body uses the hard-coded HUP/INT/TERM set,
 calls `pthread_sigmask(SIG_BLOCK,...)` once, and stores raw rc and the old mask before
@@ -778,6 +842,7 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
+| shadow-enforced | Same-P actual Mac preflight normal return followed by the fixed 80-byte admission record before census; exact identity/profile, two config values, four typed PAC targets and reread controls; every checkable reason refuses before census/signal/mask/wakeup/ACL/component effects, while a disposable real bad-PAC case asserts only termination and its last boundary; preflight termination/non-return has no later product effect; actual normal and injected/error paths prove the complete protected interval either cannot reach RNG abort under the accepted invariant or that its real error boundary preserves the HUP/INT/TERM mask, disposition, receiver and wakeup ownership standard; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
 | shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
