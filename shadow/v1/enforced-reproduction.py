@@ -794,10 +794,29 @@ def spawn_bounded(argv: list[str], input_raw: bytes, stdout_limit: int, stderr_l
         raise
 
 
+def _close_communication(selector: selectors.BaseSelector | None,
+                         stdin: object, stdout: object, stderr: object) -> OSError | None:
+    first = None
+    attempted: set[int] = set()
+    for resource in (selector, stdin, stdout, stderr):
+        if resource is None or id(resource) in attempted:
+            continue
+        attempted.add(id(resource))
+        if resource is not selector and getattr(resource, "closed", False):
+            continue
+        try:
+            resource.close()
+        except OSError as exc:
+            if first is None:
+                first = exc
+    return first
+
+
 def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit: int,
                         stderr_limit: int, timeout: float, *,
                         cleanup: bool = True) -> tuple[bytes, bytes]:
     selector = None
+    body_failure = None
     try:
         selector = selectors.DefaultSelector()
         require(child.stdin is not None and child.stdout is not None and child.stderr is not None,
@@ -867,16 +886,15 @@ def communicate_bounded(child: subprocess.Popen, input_raw: bytes, stdout_limit:
             raise Refusal("E_RUNTIME") from None
         CancellationSignals.checkpoint()
         return bytes(output[stdout_fd]), bytes(output[stderr_fd])
-    except BaseException:
+    except BaseException as exc:
+        body_failure = exc
         if cleanup:
             stop_child(child)
         raise
     finally:
-        if selector is not None:
-            selector.close()
-        for stream in (child.stdin, child.stdout, child.stderr):
-            if stream is not None and not stream.closed:
-                stream.close()
+        close_failure = _close_communication(selector, child.stdin, child.stdout, child.stderr)
+        if body_failure is None and close_failure is not None:
+            raise close_failure
 
 
 class CancellationSignals:

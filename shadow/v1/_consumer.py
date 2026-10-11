@@ -324,14 +324,15 @@ def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int
     _require(isinstance(resolver, _DarwinUUIDResolver), "E_ACL")
     _require(_DARWIN_ACL_FUNCTIONS is not None, "E_ACL")
     lib = _DARWIN_ACL_FUNCTIONS.library
+    captured: list[tuple[int, str, int]] = []
+    entry, selector = ctypes.c_void_p(), 0
+    tag, perms = ctypes.c_int(), ctypes.c_void_p()
     ctypes.set_errno(0)
     acl = lib.acl_get_fd_np(fd, 0x100)
     if not acl:
         if ctypes.get_errno() == errno.ENOENT:
             return []
         raise OSError(ctypes.get_errno(), "acl_get_fd_np")
-    captured: list[tuple[int, str, int]] = []
-    entry, selector = ctypes.c_void_p(), 0
     try:
         while True:
             ctypes.set_errno(0)
@@ -341,7 +342,7 @@ def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int
                     raise OSError(ctypes.get_errno(), "acl_get_entry")
                 break
             selector = -1
-            tag, perms = ctypes.c_int(), ctypes.c_void_p()
+            tag.value, perms.value = 0, None
             if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
                 raise OSError(ctypes.get_errno(), "acl_get_tag_type")
             if lib.acl_get_permset(entry, ctypes.byref(perms)) != 0:
@@ -358,10 +359,12 @@ def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int
             qualifier = lib.acl_get_qualifier(entry)
             if not qualifier:
                 raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_qualifier")
-            uuid = ctypes.string_at(qualifier, 16)
-            if lib.acl_free(qualifier) != 0:
-                raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
-            captured.append((tag.value, uuid.hex(), bits))
+            try:
+                uuid = ctypes.string_at(qualifier, 16)
+                captured.append((tag.value, uuid.hex(), bits))
+            finally:
+                if lib.acl_free(qualifier) != 0:
+                    raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
             _require(len(captured) <= DARWIN_UUID_COUNT_LIMIT, "E_ACL")
     finally:
         if lib.acl_free(acl) != 0:

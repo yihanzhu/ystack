@@ -504,6 +504,39 @@ test_bad_pac_claimed(malloc_zone_t *zone, void *pointer)
     return false;
 }
 
+__attribute__((noinline)) static void *
+test_auth_claimed_correct(void *signed_value)
+{
+    return ptrauth_auth_data(signed_value,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+}
+
+#if YSTACK_CANCEL_TEST_CASE == 16
+__attribute__((noinline)) static void *
+test_auth_claimed_wrong(void *signed_value)
+{
+    return ptrauth_auth_data(signed_value,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
+}
+#endif
+
+__attribute__((noinline)) static void
+test_pac_record(const char *message, size_t length)
+{
+    if (write(STDERR_FILENO, message, length) != (ssize_t)length) {
+        _exit(92);
+    }
+}
+
+__attribute__((noinline, noreturn)) static void
+test_pac_stop(const char *message, size_t length, int status)
+{
+    test_pac_record(message, length);
+    _exit(status);
+}
+
 static int
 test_pac_pair(void **signed_value)
 {
@@ -516,10 +549,16 @@ test_pac_pair(void **signed_value)
         ptrauth_key_process_independent_code,
         ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
     void *verified;
-    if (correct == incorrect) return 0;
-    verified = ptrauth_auth_data(correct, ptrauth_key_process_independent_code,
-        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
-    if (verified != plain_value) return 0;
+    if (correct == incorrect) {
+        test_pac_stop("pac:signatures-equal\n", sizeof("pac:signatures-equal\n") - 1, 93);
+    }
+    test_pac_record("pac:signed-different\n", sizeof("pac:signed-different\n") - 1);
+    verified = test_auth_claimed_correct(correct);
+    if (verified != plain_value) {
+        test_pac_stop("pac:correct-auth-mismatch\n",
+            sizeof("pac:correct-auth-mismatch\n") - 1, 94);
+    }
+    test_pac_record("pac:correct-auth\n", sizeof("pac:correct-auth\n") - 1);
     *signed_value = correct;
     return 1;
 }
@@ -536,18 +575,23 @@ authenticate_claimed(malloc_zone_t *zone)
 #endif
     if (!test_pac_pair(&signed_value)) return 0;
 #if YSTACK_CANCEL_TEST_CASE == 16
-    return (uintptr_t)ptrauth_auth_data(signed_value,
-        ptrauth_key_process_independent_code,
-        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
+    test_pac_record("pac:before-wrong-auth\n", sizeof("pac:before-wrong-auth\n") - 1);
+    signed_value = test_auth_claimed_wrong(signed_value);
+    test_pac_record("pac:wrong-auth-returned\n", sizeof("pac:wrong-auth-returned\n") - 1);
+    return (uintptr_t)signed_value;
 #endif
 #endif
 #if !YSTACK_CANCEL_RELEASE_TESTING || YSTACK_CANCEL_TEST_CASE != 16
     {
         typeof(zone->claimed_address) value = zone->claimed_address;
         if (value == NULL) return 0;
-        return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
+        uintptr_t result = (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
             ptrauth_key_process_independent_code,
             ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+#if YSTACK_CANCEL_RELEASE_TESTING && YSTACK_CANCEL_TEST_CASE == 20
+        test_pac_record("pac:actual-auth-returned\n", sizeof("pac:actual-auth-returned\n") - 1);
+#endif
+        return result;
     }
 #else
     return 0;

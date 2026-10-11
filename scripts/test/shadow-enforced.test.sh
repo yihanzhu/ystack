@@ -115,6 +115,43 @@ if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   pac_good_codegen="$tmp/pac-good-codegen.txt"
   /usr/bin/otool -tvV "$pac_bad_binary" > "$pac_bad_codegen"
   /usr/bin/otool -tvV "$pac_good_binary" > "$pac_good_codegen"
+  /usr/bin/strings "$pac_bad_binary" > "$tmp/pac-bad-strings.txt"
+  /usr/bin/strings "$pac_good_binary" > "$tmp/pac-good-strings.txt"
+  for marker in pac:signatures-equal pac:correct-auth-mismatch pac:signed-different pac:correct-auth; do
+    /usr/bin/grep -Fxq "$marker" "$tmp/pac-bad-strings.txt" || fail 'bad PAC fixed branch marker'
+    /usr/bin/grep -Fxq "$marker" "$tmp/pac-good-strings.txt" || fail 'valid PAC fixed branch marker'
+  done
+  /usr/bin/grep -Fxq pac:before-wrong-auth "$tmp/pac-bad-strings.txt" || fail 'bad PAC last-boundary marker'
+  /usr/bin/grep -Fxq pac:actual-auth-returned "$tmp/pac-good-strings.txt" || fail 'valid PAC actual-target marker'
+  "$python_bin" -I -S -B - "$pac_good_codegen" "$pac_bad_codegen" <<'PY'
+import pathlib,sys
+good,bad=(pathlib.Path(path).read_text(encoding="utf-8") for path in sys.argv[1:])
+def body(raw,name):
+ marker="_"+name+":"
+ assert raw.count(marker)==1,(name,"label")
+ section=raw.split(marker,1)[1]
+ next_label=section.find("\n_")
+ return section if next_label<0 else section[:next_label]
+correct=body(good,"test_auth_claimed_correct")
+wrong=body(bad,"test_auth_claimed_wrong")
+record=body(good,"test_pac_record")
+stop=body(good,"test_pac_stop")
+good_claimed=body(good,"authenticate_claimed")
+bad_claimed=body(bad,"authenticate_claimed")
+assert "\tautia\t" in correct and "#0xe3bf" in correct and "\tbrk\t#0xc470" in correct
+assert "\tautia\t" in wrong and "#0xeafc" in wrong and "\tbrk\t#0xc470" in wrong
+assert "symbol stub for: _write" in record and "symbol stub for: __exit" in record
+assert "_test_pac_record" in stop and "symbol stub for: __exit" in stop
+assert "#0x5c" in record
+for claimed in (good_claimed,bad_claimed):
+ assert "#0x5d" in claimed and "#0x5e" in claimed
+for raw,label in ((good,"good"),(bad,"bad")):
+ assert raw.count("\tpacia\t")>=2,(label,"same-input signatures")
+ assert "_test_auth_claimed_correct" in raw,(label,"correct helper call")
+assert "_test_auth_claimed_wrong" in bad
+assert "_test_pac_record" in good and "_test_pac_stop" in good
+print("ok native-pac-codegen - same-input checks and both auth helpers retained")
+PY
   cat > "$tmp/pac-pair.py" <<'PY'
 import importlib.util,sys
 print("before-auth",flush=True)
@@ -175,11 +212,15 @@ for case,label in ((17,"mixed main/tc"),(18,"historical whole tc"),(19,"unknown 
  else:raise AssertionError(label+" profile admitted")
  print("ok native-profile - "+label+" profile refuses as one tuple")
 PY
+  [ "$pac_good_status" -ne 92 ] && [ "$pac_bad_status" -ne 92 ] || fail 'PAC branch marker write incomplete'
+  [ "$pac_good_status" -ne 93 ] && [ "$pac_bad_status" -ne 93 ] || fail 'PAC signatures compared equal'
+  [ "$pac_good_status" -ne 94 ] && [ "$pac_bad_status" -ne 94 ] || fail 'PAC correct authentication mismatched plain input'
   [ "$pac_good_status" -eq 0 ] || fail 'valid PAC control failed'
-  [ ! -s "$tmp/pac-good.stderr" ] || fail 'valid PAC control stderr'
+  [ "$(cat "$tmp/pac-good.stderr")" = $'pac:signed-different\npac:correct-auth\npac:actual-auth-returned' ] || fail 'valid PAC branch record'
   [ "$(cat "$tmp/pac-good.stdout")" = $'before-auth\nafter-auth' ] || fail 'valid PAC control boundary'
   [ "$pac_bad_status" -gt 128 ] || fail 'bad PAC did not terminate'
   [ "$(cat "$tmp/pac-bad.stdout")" = before-auth ] || fail 'bad PAC crossed its last boundary'
+  [ "$(cat "$tmp/pac-bad.stderr")" = $'pac:signed-different\npac:correct-auth\npac:before-wrong-auth' ] || fail 'bad PAC branch record'
 else
   ! /usr/bin/grep -q -- '-fptrauth-' "$native_out/build-record.json" || fail 'Linux PAC flags'
 fi
@@ -590,6 +631,7 @@ class FakeAclLib:
     def __init__(self, failure=None):
         self.failure, self.entries = failure, 0
         self.calls = {"entry": 0, "permission": 0, "qualifier": 0}
+        self.freed = []
         self.guid = c.ctypes.create_string_buffer(16)
         self.acl_get_fd_np = Call(lambda *_args: 1)
         self.acl_get_entry = Call(self.get_entry)
@@ -597,9 +639,10 @@ class FakeAclLib:
         self.acl_get_qualifier = Call(self.get_qualifier)
         self.acl_get_permset = Call(self.get_permset)
         self.acl_get_perm_np = Call(self.get_perm)
-        self.acl_free = Call(lambda _value: 0)
+        self.acl_free = Call(self.free)
     def get_entry(self, _acl, _selector, _entry):
         self.calls["entry"] += 1
+        if self.failure == "acl-memory": raise MemoryError("after ACL ownership")
         if self.failure == "entry": c.ctypes.set_errno(13); return -1
         self.entries += 1
         if self.entries == 1: return 0
@@ -614,6 +657,7 @@ class FakeAclLib:
         self.calls["qualifier"] += 1
         if self.failure == "qualifier": c.ctypes.set_errno(5); return 0
         return c.ctypes.addressof(self.guid)
+    def free(self, value): self.freed.append(value); return 0
 class FixedResolver(c._DarwinUUIDResolver):
     def __init__(self, rows=None): self.rows, self.calls = rows, []
     def resolve(self, uuids):
@@ -634,12 +678,32 @@ for installed in (False, True):
     accepted_acl, fake, resolver = darwin_rule(None, installed)
     ok(accepted_acl and fake.entries == 2 and resolver.calls == [["00" * 16]],
        "Darwin capture sends only positional UUID bytes to fixed resolver")
+    ok(fake.freed == [c.ctypes.addressof(fake.guid), 1],
+       "Darwin capture frees the exact qualifier then ACL once")
     for failure in ("entry", "permission", "qualifier"):
         accepted_acl, fake, resolver = darwin_rule(failure, installed)
         ok(not accepted_acl and fake.calls[failure] > 0, "Darwin %s error reached and refused" % failure)
 fake = FakeAclLib(); c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
 refuses("E_ACL", lambda: c._darwin_acl(fd, None))
 ok(fake.calls["entry"] == 0, "missing Darwin resolver refuses before ACL capture")
+fake = FakeAclLib("acl-memory"); resolver = FixedResolver()
+c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+try: c._darwin_acl(fd, resolver)
+except MemoryError: pass
+else: raise AssertionError("post-ACL MemoryError propagated")
+ok(fake.freed == [1] and resolver.calls == [],
+   "post-ACL MemoryError frees exact ACL once without resolver use")
+fake = FakeAclLib(); resolver = FixedResolver(); real_string_at = c.ctypes.string_at
+c._DARWIN_ACL_FUNCTIONS = types.SimpleNamespace(library=fake)
+def qualifier_memory(_pointer, _length): raise MemoryError("during qualifier copy")
+c.ctypes.string_at = qualifier_memory
+try:
+    try: c._darwin_acl(fd, resolver)
+    except MemoryError: pass
+    else: raise AssertionError("qualifier-copy MemoryError propagated")
+finally: c.ctypes.string_at = real_string_at
+ok(fake.freed == [c.ctypes.addressof(fake.guid), 1] and resolver.calls == [],
+   "qualifier-copy MemoryError frees exact qualifier then ACL once without resolver use")
 mutation = base / "acl-resolver-mutation"; write(mutation, b"x", 0o400)
 mutation_fd = os.open(mutation, os.O_RDONLY)
 class MutatingResolver(FixedResolver):
@@ -1124,6 +1188,64 @@ if sys.platform=="darwin":
 consumer_snapshot.close();python_snapshot.close()
 
 original_popen=e.subprocess.Popen
+class CloseResource:
+ def __init__(self,failure=None,closed=False):self.failure,self.closed,self.calls=failure,closed,0
+ def close(self):
+  self.calls+=1
+  if self.failure is not None:raise self.failure
+normal=[CloseResource() for _ in range(4)]
+ok(e._close_communication(*normal)==None and [item.calls for item in normal]==[1,1,1,1],
+ "communicate close attempts each distinct normal resource once")
+already_closed=CloseResource(closed=True)
+ok(e._close_communication(None,already_closed,None,None)==None and already_closed.calls==0,
+ "communicate close skips an already closed stream")
+first_error=OSError(errno.EIO,"first close")
+first=[CloseResource(first_error),CloseResource(),CloseResource(),CloseResource()]
+ok(e._close_communication(*first) is first_error and [item.calls for item in first]==[1,1,1,1],
+ "communicate close preserves first OSError object and attempts later resources")
+middle_error=OSError(errno.EBADF,"middle close")
+middle=[CloseResource(),CloseResource(),CloseResource(middle_error),CloseResource()]
+ok(e._close_communication(*middle) is middle_error and [item.calls for item in middle]==[1,1,1,1],
+ "communicate close preserves middle OSError object and attempts later resources")
+system_exit=[CloseResource(SystemExit(7)),CloseResource(),CloseResource(),CloseResource()]
+try:e._close_communication(*system_exit)
+except SystemExit as exc:ok(exc.code==7 and [item.calls for item in system_exit]==[1,0,0,0],
+ "communicate close does not invent attempt-all for non-OSError")
+else:raise AssertionError("communicate close swallowed non-OSError")
+primary=RuntimeError("primary sentinel");cleanup_error=OSError(errno.EIO,"cleanup")
+class PrimarySelector(CloseResource):
+ def register(self,*_args):raise primary
+class PrimaryStream(CloseResource):
+ def fileno(self):return 0
+class PrimaryChild:
+ def __init__(self):
+  self.stdin,self.stdout,self.stderr=PrimaryStream(),PrimaryStream(),PrimaryStream()
+primary_selector=PrimarySelector(cleanup_error);primary_child=PrimaryChild()
+original_selector=e.selectors.DefaultSelector;original_set_blocking=e.os.set_blocking
+e.selectors.DefaultSelector=lambda:primary_selector;e.os.set_blocking=lambda *_args:None
+try:
+ try:e.communicate_bounded(primary_child,b"",8,8,1,cleanup=False)
+ except RuntimeError as exc:ok(exc is primary and primary_selector.calls==1
+  and [primary_child.stdin.calls,primary_child.stdout.calls,primary_child.stderr.calls]==[1,1,1],
+  "communicate body sentinel survives cleanup OSError after all ordinary closes")
+ else:raise AssertionError("communicate primary sentinel accepted")
+finally:e.selectors.DefaultSelector=original_selector;e.os.set_blocking=original_set_blocking
+normal_close_error=OSError(errno.EIO,"normal cleanup")
+class CloseFailSelector:
+ def __init__(self):self.inner=original_selector()
+ def __getattr__(self,name):return getattr(self.inner,name)
+ def close(self):self.inner.close();raise normal_close_error
+close_child=original_popen([sys.executable,"-I","-S","-B","-c",
+ "import sys;data=sys.stdin.buffer.read();sys.stdout.buffer.write(data)"],stdin=subprocess.PIPE,
+ stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True,start_new_session=True)
+e.selectors.DefaultSelector=CloseFailSelector
+try:
+ try:e.communicate_bounded(close_child,b"pipe",8,8,5)
+ except OSError as exc:ok(exc is normal_close_error and close_child.returncode==0
+  and close_child.stdin.closed and close_child.stdout.closed and close_child.stderr.closed,
+  "normal communicate preserves first close OSError object after closing later streams")
+ else:raise AssertionError("normal communicate close error accepted")
+finally:e.selectors.DefaultSelector=original_selector
 e.subprocess.Popen=lambda *_args,**_kwargs: (_ for _ in ()).throw(AssertionError("spawned"))
 refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c","pass"],env=env,
         deadline=time.monotonic()-1),"expired overall deadline refuses before spawn")
