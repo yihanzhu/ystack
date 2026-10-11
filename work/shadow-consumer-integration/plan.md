@@ -43,7 +43,7 @@ changes.
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 4200–5000 | The preserved 3597-line candidate plus the private C/build boundary, context/provenance and ledger repairs, and paired signal/fd/Linux regressions remains one enforced-reproduction concern. |
+| 3 | Accepted exception | 4200–5600 | The preserved 3597-line candidate plus the private C/build boundary, context/provenance and ledger repairs, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -52,11 +52,14 @@ unexplained overrun and return through the plan gate. Do not remove proof or cre
 extra parallel initiatives. No bootstrap, workflow, installation or policy-authority
 change is included.
 
-The slice-3 range starts from the measured 3597-line candidate. Allow 250–450 lines for the
-native source/build recipe, 150–300 for Python context, provenance, ledger and release,
-300–650 for paired regressions, and 20–60 for the three common files. Replacing the old
-exception path offsets part of that addition. The rounded 4200–5000 range leaves readable
-room without padding, compressed code or omitted proof.
+The slice-3 estimate starts from the measured 3597-line candidate. Allow 250–450 lines for
+the native source/build recipe, 150–300 for Python context, provenance, ledger and release,
+300–650 for the original paired regressions, and 20–60 for the three common files. The
+measured complete baseline is 4850 net lines. Complete negative/positive and actual-native
+proof of completion-fd transfer, ordinary-close ordering and errors, authoritative outer
+outcome, the context-error CLI, the native/caller matrix and runtime identity needs another
+300–650 net, yielding 5150–5500. The 5600 ceiling leaves bounded readable margin without
+compressed code or omitted proof.
 
 ## Order of work
 
