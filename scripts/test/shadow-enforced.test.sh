@@ -43,7 +43,7 @@ record=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
 base=list(record["argv"]);temporary=pathlib.Path(sys.argv[2]);source=str(pathlib.Path(sys.argv[3]))
 if source not in base:raise SystemExit("native child test source is not in the build argv")
 index={}
-for case in range(21,34):
+for case in range(21,35):
  directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
  output=directory/record["output_name"];argv=[]
  for value in base:
@@ -198,9 +198,14 @@ elif case==33:
  prepare();state.spawn_child();close_pipes();observe();state.reap_child();state.check_child_group()
  value=status();assert value[24]==1
  print("term-leader-exit-still-kill-and-serial",first_signals,value[24])
+elif case==34:
+ prepare();state.spawn_child();close_pipes();observe();state.reap_child();before=status()
+ assert before[12:15]==(1,-1,errno.EIO) and before[17]==0 and before[23]==22
+ refuses(state.reap_child);after=status();assert after==before
+ print("unknown-reap-no-retry",before[12:15],before[23])
 else:raise AssertionError(case)
 PY
-for native_case in 21 22 23 24 25 26 27 28 29 30 31 32 33; do
+for native_case in 21 22 23 24 25 26 27 28 29 30 31 32 33 34; do
   child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 \
     -maxdepth 1 -type f -name '_cancel_release*.so' -print)
   "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"

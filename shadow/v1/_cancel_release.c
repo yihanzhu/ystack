@@ -1054,7 +1054,8 @@ state_reap_child(NativeState *state, PyObject *Py_UNUSED(ignored))
     siginfo_t info;
     int rc;
     int saved_errno;
-    if (child->state != CHILD_OWNED || child->leader_reaped || !child->exit_observed ||
+    if (child->state != CHILD_OWNED || child->leader_reaped ||
+            child->reap.tag == RETURNED || !child->exit_observed ||
             (child->term_required && child->term.tag != RETURNED) ||
             (child->kill_required && (child->kill.tag != RETURNED ||
              (child->kill.rc != 0 && child->kill.error_number != ESRCH)))) {
@@ -1062,6 +1063,15 @@ state_reap_child(NativeState *state, PyObject *Py_UNUSED(ignored))
         return NULL;
     }
     memset(&info, 0, sizeof(info));
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 34) {
+        static int test_reap_calls;
+        test_reap_calls++;
+        rc = -1;
+        errno = test_reap_calls == 1 ? EIO : EALREADY;
+    }
+    else
+#endif
     rc = waitid(P_PID, (id_t)child->pid, &info, WEXITED);
     saved_errno = rc < 0 ? errno : 0;
     record_result(&child->reap, rc, saved_errno);
