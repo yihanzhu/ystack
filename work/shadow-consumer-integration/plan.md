@@ -40,11 +40,11 @@ Intermediate entry points refuse operations whose remaining checks are not imple
 they cannot emit a completed write bundle early. No other source or accepted artifact
 changes.
 
-The current SC-CANCEL-5 repair claim is the exact six-path subset
+The current SC-CANCEL-5 repair claim is the exact seven-path subset
 `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
-`shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh`,
-`docs/components.md` and `RESTORE.md`. The build script is added only for the normal
-PAC recipe below. This amendment does not claim `_consumer.py` or `ci/required-files.txt`.
+`shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`,
+`scripts/test/shadow-enforced.test.sh`, `docs/components.md` and `RESTORE.md`.
+The build script is claimed only for the normal PAC recipe; `_consumer.py` is claimed only for the native ACL and qualifier ownership repair below. This amendment does not claim `ci/required-files.txt`.
 
 | Slice | Classification | Net-line range | Evidence for the estimate |
 | --- | --- | --- | --- |
@@ -266,11 +266,17 @@ already authenticated supervisor principal where that contract allows it.
 On macOS use one private ACL boundary in `_consumer.py`. Before cancellation
 admission, bind the fixed descriptor ACL retrieval, iteration, qualifier-copy and
 free functions from the absolute system C library and account for that small native
-wrapper in the parent's source/runtime closure. The parent copies each entry's tag,
-permission bits and exact 16-byte UUID while the descriptor remains held, frees all
-native ACL and qualifier allocations, and performs the existing metadata checks
-around the capture. It never calls membership resolution or initializes that service,
-including for compatibility UUIDs. Keep the 128-entry maximum and original ordering.
+wrapper in the parent's source/runtime closure. Prepare the captured-row container
+and ctypes entry holders before `acl_get_fd_np`. After that call returns an owned ACL,
+enter its `finally` before any further Python allocation or copy. After each successful
+`acl_get_qualifier`, enter a nested `finally` before `ctypes.string_at`, hexadecimal
+conversion, row construction or append. Attempt exactly one matching `acl_free` for
+every acquired qualifier and ACL on normal, `OSError`, `MemoryError` and other Python
+exits; never rely on freeing the ACL to free a qualifier. Do not invoke the resolver
+after capture fails. Preserve the existing metadata checks, exact tag/permission/UUID
+bytes, 128-entry maximum and original ordering.
+The parent never calls membership resolution or initializes that service,
+including for compatibility UUIDs.
 
 Resolve only the captured UUID bytes in one fresh fixed child per bounded ACL batch:
 `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This is a private role
@@ -962,7 +968,7 @@ observations.
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
 | shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record with exact whole main tuple `3021c/3b64c/3a528/30328`, bounded XZM snapshot, one full 144-byte public-getter CPython snapshot and exact 8-byte `zone0+0xf0==0` predicate; mixed/tc/unknown tuple and every initial identity/profile mismatch refuse before effects without widening per-slot allowlists or changing allocator configuration; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; XZM null parent, `0<N<=255`, exact `0x60*N` span, complete mapping, byte 1 or nonzero/unknown `+0xf0` likewise refuse before census; final XZM or `+0xf0` drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no fabricated mask rc, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove main malloc/try-free deltas and finite CPython types/bodies/no-setter/no-foreign-finalizer, `+0xf0` lifecycle/existing-object applicability, small-table, ordinary large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
 | shadow-enforced | Real production recipe on actual Mac uses exact `gnu11`/PAC-intrinsics/auth-traps argv and Linux keeps exact `c11` without PAC flags; build-record and consumer equality reject missing/extra/reordered/platform-mismatched flags before load; bounded production codegen plus valid typed control and a disposable bad-PAC subprocess prove actual SDK typed authentication and trap termination, not merely flag presence; both platforms record exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, RNG entry identity, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
-| shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
+| shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
