@@ -9,9 +9,10 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `c5ef9bda4a3a02153a8ebf854143de9cc56b9b8b`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 700–950 lines. The five-slice contract, closed
+Plan PR: `review_size: accepted-exception`, 700–1020 lines. The five-slice contract, closed
 native context, direct-result release and signal/fd proof need one coherent implementation
-brief. This changes only the soft size budget.
+brief. The added normal PAC recipe, narrow gzone predicate and their paired proof need
+readable in-place rules; this changes only the soft size budget.
 
 ## Files that change
 
@@ -38,6 +39,12 @@ component descriptions and manifest entries. Keep shell drivers/tests executable
 Intermediate entry points refuse operations whose remaining checks are not implemented;
 they cannot emit a completed write bundle early. No other source or accepted artifact
 changes.
+
+The current SC-CANCEL-5 repair claim is the exact six-path subset
+`shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
+`shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh`,
+`docs/components.md` and `RESTORE.md`. The build script is added only for the normal
+PAC recipe below. This amendment does not claim `_consumer.py` or `ci/required-files.txt`.
 
 | Slice | Classification | Net-line range | Evidence for the estimate |
 | --- | --- | --- | --- |
@@ -156,10 +163,13 @@ reviewed physical paths and OUT does not exist. The script accepts no environmen
 compiler or flag override. It creates OUT mode 0700, reads only sibling
 `_cancel_release.c`, queries P under `-I -S -B` for its include directories,
 `EXT_SUFFIX`, `SOABI`, implementation/version and build configuration, and invokes
-physical `/usr/bin/cc` once. The common argv is `-std=c11 -Wall -Wextra -Werror -O2
+physical `/usr/bin/cc` once. Both platforms use `-Wall -Wextra -Werror -O2
 -fvisibility=hidden -fPIC` plus the two captured Python include directories and fixed
-source/output paths. Darwin adds `-bundle -undefined dynamic_lookup`; Linux adds
-`-shared`. Any other platform or empty/nonphysical sysconfig value refuses. OUT ends
+source/output paths. Darwin uses `-std=gnu11`, then after the include arguments and any
+fixed test-only defines adds exactly `-fptrauth-intrinsics -fptrauth-auth-traps`, followed
+by `-bundle -undefined dynamic_lookup`. Linux keeps `-std=c11`, adds neither PAC flag and
+uses `-shared`. Production and every compile-time test build use the same platform
+recipe. Any other platform or empty/nonphysical sysconfig value refuses. OUT ends
 with exactly the extension and canonical `build-record.json`; no install or import is
 performed by the recipe.
 
@@ -171,6 +181,18 @@ SOABI/EXT_SUFFIX/configuration, output name/size/digest and `test_build:false`. 
 parent compares each value to captured bytes, separately accepts the dependency record, then
 supplies the closed context. Production never calls this script; test builds in a fresh
 private directory have no native admission authority.
+
+The consumer's existing exact-argv comparison requires the same order and rejects a
+missing, repeated, reordered, substituted or extra PAC flag, or either flag on Linux,
+with `E_DEPENDENCY` before native load. Darwin source requires ptrauth intrinsics and
+rejects ptrauth calls. It uses the reviewed SDK `ptrauth.h` typed operations, including
+`ptrauth_nop_cast` with GNU `typeof` where a typed function-pointer conversion is needed;
+an integer `memcpy`, handwritten PAC, strip/mask or fallback header is not completion.
+Bind a bounded fixed observer range in the exact production output and independently
+verify compiler-emitted authenticated operations and the auth-trap path. Pair that static
+check with a disposable same-recipe bad-PAC subprocess that really terminates at its last
+observation boundary and a valid typed-target control. Unknown code shape or termination
+refuses; do not report the trap as a Python exception, exit 1 or completed cleanup.
 
 The dependency record is parent-retained canonical evidence, not a bundle sidecar. It
 binds the actual P/framework, extension, loader and relevant libc/system images, plus
@@ -438,7 +460,8 @@ No unreviewed pointer probe, PAC guess or weaker inference replaces that gate. A
 
 For the accepted exact macOS profile, close that gate with one private same-process
 observation in the existing `NativeState`. This addition may touch only
-`shadow/v1/_cancel_release.c`, `shadow/v1/enforced-reproduction.py`,
+`shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
+`shadow/v1/enforced-reproduction.py`,
 `scripts/test/shadow-enforced.test.sh`, `docs/components.md` and `RESTORE.md`. It adds no
 request, response, provenance, inventory, sidecar, helper, public API or tail work. A need
 for another path returns through this plan gate.
@@ -454,7 +477,9 @@ The fixed `observe_allocator_admission()` `METH_NOARGS` method runs only once in
 mapping, bounds, profile, config, null-target, offset or reread failure stores a fixed
 reason and raises the existing runtime refusal. A real PAC trap terminates at the
 observation boundary; do not claim a Python error, exit 1 or cleanup, and do not add a
-handler, PAC stripping or continuation.
+handler, PAC stripping or continuation. Keep the accepted fixed reason set; four
+per-target authentication mismatch reasons or any other temporary reason values do not
+enter the contract.
 
 During the existing `RTLD_NOW|RTLD_LOCAL` initialization window, bind the accepted
 ordinary-arm64 P/extension ABI, the actual P/App/framework, shared-cache UUID
@@ -464,6 +489,8 @@ ordinary-arm64 P/extension ABI, the actual P/App/framework, shared-cache UUID
 describes the system-image slots and SDK typed PAC only; require ptrauth intrinsics and
 ordinary calling ABI. Complete these bindings and their first-use before restoring the
 loader flags. No load, symbol lookup or mapping query occurs in the observation or tail.
+Bind the actual `arc4random_uniform` entry identity as well as the shared-cache UUID; a
+linked name or image UUID alone is insufficient.
 
 Before observation, call the prebound actual `arc4random_uniform(UINT32_MAX)` once and
 discard its value. Accepted actual routing, synchronous once publication and noreturn
@@ -495,18 +522,39 @@ layout, mapping or identity uncertainty, or any byte equal to 1,
 refuses before census. Do not infer zone names, scan beyond the exact span, PAC-strip or
 guess bytes.
 
-`block_final()` may reread the same header, mapping identity and N bytes at its already
+In the same fixed method, after the existing zone identity and mapping checks, compute
+`zone0+0xf0` with overflow checks, require 8-byte alignment and complete coverage by that
+same prebound readable mapping, and raw-load exactly one `uint64_t`. It must be zero.
+This is a private predicate, not another record/config field, and it does not change the
+80-byte observation, 288-byte XZM snapshot, 144-byte CPython snapshot, request or output.
+Unknown identity, mapping, width, alignment or a nonzero value refuses before census and
+effects; never authenticate, PAC-strip, guess or write this field to manufacture passage.
+The selected constructor/helper source binds the one 16-byte `+0xf0/+0xf8` publication
+and the XZM init/destroy readers, but that is not interval closure. Actual admission and
+G3 require the store to precede registration/visibility, the selected zone and layout to
+remain the bound actual identity, no later writer/rebuild/clear/switch through the full
+normal/error interval, and every existing object freed or reallocated there either to
+share this always-NULL profile or to have a proved route that cannot enter gzone. UNKNOWN
+in any of these facts refuses; it does not block inactive fail-closed implementation and
+negative tests after this plan is accepted.
+
+`block_final()` may reread the same header, mapping identity, N bytes and the 8-byte
+`zone0+0xf0` value at its already
 allowed pre-L point without load, lookup, allocation or callback, and requires exact
-first-snapshot equality. A final mismatch is a real pre-L sticky failure after product
+first-snapshot equality and a still-zero predicate. A final mismatch is a real pre-L sticky failure after product
 effects: preserve the actual outer outcome, use the still-usable held fd for the original
 rollback, emit no success marker and never repeat release. Do not call it a pre-effect
-refusal or claim the first census did not occur. This bounded reread does not prove absence
+refusal, borrow the mask-failure cell to fabricate an rc or claim the first census did not
+occur. This bounded reread does not prove absence
 of an intermediate writer. The complete protected interval still needs finite closure for registry/zone
 replacement, parent/table rebuild or destruction, guard-config writes, slowpath/lite/reset
-and aliases. The table covers only this main XZM small-class RNG entrance; large-class,
-child/other-zone and every actual normal/error route remain separate closure obligations.
-Only this table guard and the following named CPython snapshot are allowed; any other
-private observation ABI returns through the plan gate.
+and aliases. The table covers only this main XZM small-class RNG entrance. The NULL
+predicate excludes only the bound `__xzm_malloc_large_huge` gzone branch; it does not prove
+the ordinary large/huge path, existing-object provenance or all allocator routing. Large
+classes, child/other-zone and every actual normal/error route remain separate closure
+obligations.
+Only this table guard, the named NULL predicate and the following CPython snapshot are
+allowed; any other private observation ABI returns through the plan gate.
 
 State also owns one fixed 144-byte CPython allocator snapshot derived through normal
 `Python.h` public getters. RAW, MEM and OBJ `PyMemAllocatorEx` records occupy offsets
@@ -525,9 +573,12 @@ MEM and OBJ at `+0xcd460/+0xcd8c4/+0xcdbc0/+0xcd980`; arena alloc/free at
 `+0xcc1a0/+0xcc1d0`. Unknown, NULL, foreign, debug, mimalloc or tracemalloc callbacks,
 different context, getter/identity/header/size failure or mismatch refuses before census.
 Do not invoke callbacks to identify them, call a setter, read `__PyRuntime` private layout
-or alter allocator startup configuration. The accepted finite bodies limit this profile's
-system exits to `malloc/calloc/realloc/free` and `mmap/munmap` and contain no direct
-allocator-table, zone-registry/reinit, logger, slowpath or XZM-guard writer. Still exclude
+or alter allocator startup configuration. The bound local 3.14 source correspondence
+proves the RAW context/calloc address relation and that the fixed `-I` startup ignores the
+environment configuration chain. Its selected finite bodies classify the named exits to
+`malloc/calloc/realloc/free` and `mmap/munmap`; they do not by themselves close the
+interval. The first stats-cache fill and `DebugMallocStats` timing remain the one startup
+frontier in this classification and must be bound before actual admission. Still exclude
 SetAllocator, SetArenaAllocator, SetupAllocators, debug/tracemalloc hooks and late-extension
 replacement on every actual normal/error path. Fixed JSON basic types, exact stdlib/driver/
 consumer/native origins and no plugin or callback-registration input bound the relevant
@@ -535,7 +586,8 @@ objects; GC disabled and empty `gc.callbacks` do not exclude refcount finalizers
 finite ctypes, exception-cleanup and relevant type paths cannot reach user `__del__`,
 weakref or foreign callbacks. Do not expand this to whole-Python certification.
 
-After this plan is accepted, implementation may add the fixed 80-byte observer, its
+After this plan is accepted, implementation may add the fixed observer and snapshots,
+the `+0xf0` predicate, its
 pre-census wiring and its fail-closed unit and integration controls while the remaining
 evidence is prepared. That work cannot enable the actual Mac positive path: any UNKNOWN
 in the CPython binding/body/no-setter boundary, (A) the complete
@@ -543,6 +595,9 @@ observation-to-last-parent-ACL-free allocator writer boundary, (B/C)
 the fixed RNG/report/provider receiver, mask, disposition and wakeup-ownership boundary,
 or actual atfork/reseed/reset applicability must refuse before the first census, ACL or
 component effect. It cannot emit a Mac success marker or claim completion.
+On Darwin `block_entry()` itself also requires the successful one-shot observation, so a
+direct NativeState caller cannot bypass the Python wiring. Preserve the existing Linux
+release-test contract; an inactive or permanently false Mac gate is not a positive path.
 
 Actual Mac admission, completion and G3 still require every normal and error path in
 that full interval to satisfy the original standard. Later generate failure can reach
@@ -895,8 +950,8 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
-| shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record, bounded XZM snapshot and one full 144-byte public-getter CPython snapshot; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; foreign/debug/mimalloc/tracemalloc or any initial profile mismatch refuses without setter and before effects; XZM initial identity/profile, null parent, `0<N<=255`, exact `0x60*N` span, complete mapping and byte 1 likewise refuse before census; final XZM drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove finite CPython types/bodies/no-setter/no-foreign-finalizer, small-table, large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
-| shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
+| shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record, bounded XZM snapshot, one full 144-byte public-getter CPython snapshot and exact 8-byte `zone0+0xf0==0` predicate; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; foreign/debug/mimalloc/tracemalloc or any initial profile mismatch refuses without setter and before effects; XZM initial identity/profile, null parent, `0<N<=255`, exact `0x60*N` span, complete mapping, byte 1 or nonzero/unknown `+0xf0` likewise refuse before census; final XZM or `+0xf0` drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no fabricated mask rc, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove finite CPython types/bodies/no-setter/no-foreign-finalizer, `+0xf0` lifecycle/existing-object applicability, small-table, ordinary large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
+| shadow-enforced | Real production recipe on actual Mac uses exact `gnu11`/PAC-intrinsics/auth-traps argv and Linux keeps exact `c11` without PAC flags; build-record and consumer equality reject missing/extra/reordered/platform-mismatched flags before load; bounded production codegen plus valid typed control and a disposable bad-PAC subprocess prove actual SDK typed authentication and trap termination, not merely flag presence; both platforms record exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, RNG entry identity, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
@@ -938,6 +993,14 @@ Use the existing pinned jq 1.6 fixture cache; a system jq with a different versi
 cannot substitute. No new tool installation is needed. Use shellcheck 0.11.0 with
 `-x -S style` on changed shell files and the repository’s required quick CI.
 SC-CANCEL-3 remains a repair of original PR #519. Full run `38051431041` remains failed and
-formal G3 remains NOT PASS. After this plan is independently accepted and merged, allow one
-original Sol repair; then require the actual Mac/Linux proof, all relevant shadow suites,
-the six-shard full matrix and one fresh G3 on exact head. Quick green is not that matrix.
+formal G3 remains NOT PASS. The original author has preserved the exact two-file bytes in
+one clean local checkpoint `bab3cd54283e98b94f28fb78f0eed984994391d1`, whose sole parent
+is `b75bc8abd9bb83bdd4079078f8ae0c444165adff`; its upstream remains that parent and the
+checkpoint is not pushed. After this plan is independently accepted and protected-merged,
+resume only that same worktree and branch by an ordinary merge whose first parent is the
+checkpoint and second parent is the accepted new main. Verify the checkpoint tree, clean
+state, ordered parents and unchanged implementation bytes before pushing and obtaining a
+fresh exact claim/evidence tuple. Do not reset, clean, stash, rebase, force, replay the
+patch, recreate the branch/worktree or use a dirty merge. Then allow the original Sol
+repair; require the actual Mac/Linux proof, all relevant shadow suites, the six-shard full
+matrix and one fresh G3 on exact head. Quick green is not that matrix.
