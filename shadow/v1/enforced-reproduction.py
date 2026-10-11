@@ -52,6 +52,7 @@ REQUEST_BODY_KEYS = {"attempt_id", "attempt_number", "incident", "claim", "duty_
 WATCHED_SIGNALS = frozenset((signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
 _STARTUP_KEY = object()
 _NATIVE_ORIGIN: Path | None = None
+_ALLOCATOR_INTERVAL_EVIDENCE_READY = False
 
 
 class Refusal(Exception):
@@ -538,12 +539,20 @@ class _NativeRelease:
             self.module = module
             self.state = module.prepare_state()
             self.methods = tuple(getattr(self.state, name) for name in (
-                "block_entry", "resume_consumer", "hold_completion", "block_final",
+                "observe_allocator_admission", "block_entry", "resume_consumer",
+                "hold_completion", "block_final",
                 "rollback_marker", "finish_release", "outcome"))
-            (self.block_entry, self.resume_consumer, self.hold_completion, self.block_final,
-             self.rollback_marker, self.finish_release, self.outcome) = self.methods
+            (self.observe_allocator_admission, self.block_entry, self.resume_consumer,
+             self.hold_completion, self.block_final, self.rollback_marker,
+             self.finish_release, self.outcome) = self.methods
             require(type(self.state).__name__ == "NativeState"
                     and self.methods[-1]() == "native-release.pending", "E_RUNTIME")
+            if sys.platform == "darwin":
+                try:
+                    self.observe_allocator_admission()
+                except BaseException:
+                    raise Refusal("E_RUNTIME") from None
+                require(_ALLOCATOR_INTERVAL_EVIDENCE_READY, "E_RUNTIME")
             self.recheck()
         except BaseException:
             self.close()

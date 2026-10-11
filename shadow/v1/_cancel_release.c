@@ -10,6 +10,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <malloc/malloc.h>
+#include <ptrauth.h>
+#endif
+
 #ifndef YSTACK_CANCEL_RELEASE_TESTING
 #define YSTACK_CANCEL_RELEASE_TESTING 0
 #endif
@@ -48,6 +58,211 @@ typedef struct {
 } result_cell;
 
 typedef struct {
+    uint32_t version;
+    uint32_t status;
+    uint32_t reason;
+    uint32_t identity_bits;
+    uint32_t zone_count;
+    uint32_t zone_version;
+    uint8_t slowpath;
+    uint8_t reserved[7];
+    uint64_t zone0;
+    uint64_t logger;
+    uint64_t claimed_address;
+    uint64_t try_free_default;
+    uint64_t malloc_type_malloc;
+    uint64_t malloc_type_realloc;
+} ObservationV1;
+
+typedef struct {
+    uint8_t count;
+    uint8_t reserved[7];
+    uint64_t zone;
+    uint64_t begin;
+    uint64_t end;
+    uint8_t values[255];
+    uint8_t tail;
+} XzmClassSnapshot;
+
+typedef struct {
+    PyMemAllocatorEx raw;
+    PyMemAllocatorEx mem;
+    PyMemAllocatorEx obj;
+    PyObjectArenaAllocator arena;
+} PythonAllocatorSnapshot;
+
+_Static_assert(sizeof(ObservationV1) == 80, "ObservationV1 size");
+_Static_assert(offsetof(ObservationV1, slowpath) == 24, "ObservationV1 slowpath");
+_Static_assert(offsetof(ObservationV1, zone0) == 32, "ObservationV1 addresses");
+_Static_assert(sizeof(XzmClassSnapshot) == 288, "XzmClassSnapshot size");
+_Static_assert(offsetof(XzmClassSnapshot, zone) == 8, "XzmClassSnapshot zone");
+_Static_assert(offsetof(XzmClassSnapshot, values) == 32, "XzmClassSnapshot values");
+_Static_assert(sizeof(PythonAllocatorSnapshot) == 144, "Python allocator snapshot size");
+_Static_assert(offsetof(PythonAllocatorSnapshot, mem) == 40, "MEM allocator offset");
+_Static_assert(offsetof(PythonAllocatorSnapshot, obj) == 80, "OBJ allocator offset");
+_Static_assert(offsetof(PythonAllocatorSnapshot, arena) == 120, "arena allocator offset");
+
+#if defined(__APPLE__)
+_Static_assert(offsetof(malloc_zone_t, claimed_address) == 0x88, "claimed_address layout");
+_Static_assert(offsetof(malloc_zone_t, try_free_default) == 0x90, "try_free_default layout");
+_Static_assert(offsetof(malloc_zone_t, malloc_type_malloc) == 0xa0, "typed malloc layout");
+_Static_assert(offsetof(malloc_zone_t, malloc_type_realloc) == 0xb0, "typed realloc layout");
+
+typedef struct {
+    uintptr_t begin;
+    uintptr_t end;
+} readable_range;
+
+typedef struct {
+    malloc_zone_t ***zones_storage;
+    uint32_t *count_storage;
+    void **logger_storage;
+    uint8_t *slowpath_storage;
+    uintptr_t malloc_base;
+    uintptr_t python_base;
+    readable_range zones_storage_range;
+    readable_range count_storage_range;
+    readable_range logger_storage_range;
+    readable_range slowpath_storage_range;
+    readable_range zones_range;
+    readable_range zone_range;
+    readable_range table_range;
+    int ready;
+} allocator_binding;
+
+static allocator_binding allocator;
+
+enum observation_reason {
+    OBSERVATION_OK = 0,
+    OBSERVATION_BINDING = 1,
+    OBSERVATION_IDENTITY = 2,
+    OBSERVATION_MAPPING = 3,
+    OBSERVATION_PROFILE = 4,
+    OBSERVATION_TARGET = 5,
+    OBSERVATION_LAYOUT = 6,
+    OBSERVATION_RANDOMIZED = 7,
+    OBSERVATION_PYTHON = 8,
+    OBSERVATION_DRIFT = 9
+};
+
+static int
+range_contains(const readable_range *range, const void *pointer, size_t length)
+{
+    uintptr_t address = (uintptr_t)pointer;
+    return address >= range->begin && length <= UINTPTR_MAX - address &&
+        address + length <= range->end;
+}
+
+static int
+capture_readable_range(const void *pointer, size_t length, readable_range *range)
+{
+    mach_vm_address_t query = (mach_vm_address_t)(uintptr_t)pointer;
+    mach_vm_address_t begin = query;
+    mach_vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    kern_return_t result = mach_vm_region(mach_task_self(), &begin, &size,
+        VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &object);
+    if (object != MACH_PORT_NULL) {
+        (void)mach_port_deallocate(mach_task_self(), object);
+    }
+    if (result != KERN_SUCCESS || !(info.protection & VM_PROT_READ) ||
+            begin > query || size > UINTPTR_MAX - begin ||
+            length > UINTPTR_MAX - query || query + length > begin + size) {
+        return 0;
+    }
+    range->begin = (uintptr_t)begin;
+    range->end = (uintptr_t)(begin + size);
+    return 1;
+}
+
+static int
+image_uuid(const void *base, const uint8_t expected[16])
+{
+    const struct mach_header_64 *header = base;
+    const uint8_t *cursor;
+    uint32_t index;
+    if (header == NULL || header->magic != MH_MAGIC_64 || header->cputype != CPU_TYPE_ARM64 ||
+            header->sizeofcmds > 1024 * 1024) {
+        return 0;
+    }
+    cursor = (const uint8_t *)(header + 1);
+    for (index = 0; index < header->ncmds; index++) {
+        const struct load_command *command = (const struct load_command *)cursor;
+        if (command->cmdsize < sizeof(*command) ||
+                command->cmdsize > UINTPTR_MAX - (uintptr_t)cursor ||
+                cursor + command->cmdsize > (const uint8_t *)(header + 1) + header->sizeofcmds) {
+            return 0;
+        }
+        if (command->cmd == LC_UUID && command->cmdsize >= sizeof(struct uuid_command)) {
+            const struct uuid_command *uuid = (const struct uuid_command *)command;
+            return memcmp(uuid->uuid, expected, 16) == 0;
+        }
+        cursor += command->cmdsize;
+    }
+    return 0;
+}
+
+static int
+bind_allocator(void)
+{
+    static const uint8_t malloc_uuid[16] = {
+        0x79,0x7c,0x42,0x77,0x18,0xa2,0x36,0x5f,0x8f,0xc9,0x95,0x7c,0x37,0x1a,0x02,0xa4};
+    static const uint8_t python_uuid[16] = {
+        0x3a,0x57,0xdb,0x8c,0x0f,0x45,0x3d,0x16,0x88,0xca,0x37,0xca,0x36,0xd8,0x69,0xce};
+    Dl_info malloc_info;
+    Dl_info python_info;
+    malloc_zone_t **zones;
+    malloc_zone_t *zone;
+    uintptr_t table_begin;
+    uintptr_t table_end;
+    uint8_t count;
+    memset(&allocator, 0, sizeof(allocator));
+    dlerror();
+    allocator.zones_storage = (malloc_zone_t ***)dlsym(RTLD_DEFAULT, "malloc_zones");
+    if (dlerror() != NULL) return 0;
+    allocator.count_storage = (uint32_t *)dlsym(RTLD_DEFAULT, "malloc_num_zones");
+    if (dlerror() != NULL) return 0;
+    allocator.logger_storage = (void **)dlsym(RTLD_DEFAULT, "malloc_logger");
+    if (dlerror() != NULL) return 0;
+    allocator.slowpath_storage = (uint8_t *)allocator.logger_storage + 0x20;
+    if (!dladdr(allocator.zones_storage, &malloc_info) || malloc_info.dli_fbase == NULL ||
+            !dladdr((void *)(uintptr_t)PyMem_GetAllocator, &python_info) ||
+            python_info.dli_fbase == NULL ||
+            !image_uuid(malloc_info.dli_fbase, malloc_uuid) ||
+            !image_uuid(python_info.dli_fbase, python_uuid)) return 0;
+    allocator.malloc_base = (uintptr_t)malloc_info.dli_fbase;
+    allocator.python_base = (uintptr_t)python_info.dli_fbase;
+    if ((uintptr_t)(void *)(uintptr_t)PyMem_GetAllocator != allocator.python_base + 0xcca84 ||
+            (uintptr_t)(void *)(uintptr_t)PyObject_GetArenaAllocator != allocator.python_base + 0xccc10 ||
+            !capture_readable_range(allocator.zones_storage, sizeof(*allocator.zones_storage),
+                &allocator.zones_storage_range) ||
+            !capture_readable_range(allocator.count_storage, sizeof(*allocator.count_storage),
+                &allocator.count_storage_range) ||
+            !capture_readable_range(allocator.logger_storage, sizeof(*allocator.logger_storage),
+                &allocator.logger_storage_range) ||
+            !capture_readable_range(allocator.slowpath_storage, 1,
+                &allocator.slowpath_storage_range)) return 0;
+    zones = *allocator.zones_storage;
+    if (*allocator.count_storage != 2 || zones == NULL ||
+            !capture_readable_range(zones, 2 * sizeof(*zones), &allocator.zones_range)) return 0;
+    zone = zones[0];
+    if (zone == NULL || !capture_readable_range(zone, 0x268, &allocator.zone_range)) return 0;
+    count = *((uint8_t *)zone + 0xd2);
+    memcpy(&table_begin, (uint8_t *)zone + 0xd8, sizeof(table_begin));
+    memcpy(&table_end, (uint8_t *)zone + 0xe0, sizeof(table_end));
+    if (count == 0 || table_begin != (uintptr_t)zone + 0x268 ||
+            (uintptr_t)count > (UINTPTR_MAX - table_begin) / 0x60 ||
+            table_end != table_begin + (uintptr_t)count * 0x60 ||
+            !capture_readable_range((void *)table_begin, table_end - table_begin,
+                &allocator.table_range)) return 0;
+    allocator.ready = 1;
+    return 1;
+}
+#endif
+
+typedef struct {
     PyObject_HEAD
     enum phase phase;
     enum failure_slot first_failure;
@@ -71,12 +286,16 @@ typedef struct {
     ino_t completion_ino;
     mode_t completion_type;
     int rollback_attempted;
+    int allocator_observed;
+    ObservationV1 observation;
+    XzmClassSnapshot xzm_snapshot;
+    PythonAllocatorSnapshot python_snapshot;
     PyObject *outcome_pending;
     PyObject *outcome_success;
     PyObject *outcome_failure;
     PyObject *outcome_value;
     PyObject *module_ref;
-    PyObject *method_refs[7];
+    PyObject *method_refs[8];
 } NativeState;
 
 static PyMethodDef state_methods[];
@@ -239,6 +458,240 @@ require_phase(NativeState *state, enum phase expected)
     return 1;
 }
 
+#if defined(__APPLE__)
+static uintptr_t
+authenticate_claimed(malloc_zone_t *zone)
+{
+    uintptr_t bits;
+    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, claimed_address), sizeof(bits));
+    if (bits == 0) return 0;
+    return (uintptr_t)ptrauth_auth_data((void *)bits,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+}
+
+static uintptr_t
+authenticate_try_free(malloc_zone_t *zone)
+{
+    uintptr_t bits;
+    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, try_free_default), sizeof(bits));
+    if (bits == 0) return 0;
+    return (uintptr_t)ptrauth_auth_data((void *)bits,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.try_free_default"));
+}
+
+static uintptr_t
+authenticate_typed_malloc(malloc_zone_t *zone)
+{
+    uintptr_t bits;
+    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, malloc_type_malloc), sizeof(bits));
+    if (bits == 0) return 0;
+    return (uintptr_t)ptrauth_auth_data((void *)bits,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
+}
+
+static uintptr_t
+authenticate_typed_realloc(malloc_zone_t *zone)
+{
+    uintptr_t bits;
+    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, malloc_type_realloc), sizeof(bits));
+    if (bits == 0) return 0;
+    return (uintptr_t)ptrauth_auth_data((void *)bits,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_realloc"));
+}
+
+static uintptr_t
+function_address(void (*function)(void))
+{
+    union { void (*function)(void); uintptr_t value; } bits;
+    bits.function = function;
+    return bits.value;
+}
+
+static int
+python_profile_matches(const PythonAllocatorSnapshot *snapshot)
+{
+    uintptr_t base = allocator.python_base;
+    return snapshot->raw.ctx == NULL && snapshot->mem.ctx == NULL &&
+        snapshot->obj.ctx == NULL && snapshot->arena.ctx == NULL &&
+        function_address((void (*)(void))snapshot->raw.malloc) == base + 0xcbf90 &&
+        function_address((void (*)(void))snapshot->raw.calloc) == base + 0xcbf9c &&
+        function_address((void (*)(void))snapshot->raw.realloc) == base + 0xcbfbc &&
+        function_address((void (*)(void))snapshot->raw.free) == base + 0xcbfd0 &&
+        function_address((void (*)(void))snapshot->mem.malloc) == base + 0xcd460 &&
+        function_address((void (*)(void))snapshot->mem.calloc) == base + 0xcd8c4 &&
+        function_address((void (*)(void))snapshot->mem.realloc) == base + 0xcdbc0 &&
+        function_address((void (*)(void))snapshot->mem.free) == base + 0xcd980 &&
+        function_address((void (*)(void))snapshot->obj.malloc) == base + 0xcd460 &&
+        function_address((void (*)(void))snapshot->obj.calloc) == base + 0xcd8c4 &&
+        function_address((void (*)(void))snapshot->obj.realloc) == base + 0xcdbc0 &&
+        function_address((void (*)(void))snapshot->obj.free) == base + 0xcd980 &&
+        function_address((void (*)(void))snapshot->arena.alloc) == base + 0xcc1a0 &&
+        function_address((void (*)(void))snapshot->arena.free) == base + 0xcc1d0;
+}
+
+static int
+capture_allocator_observation(NativeState *state)
+{
+    malloc_zone_t **zones;
+    malloc_zone_t *zone;
+    uintptr_t parent;
+    uintptr_t begin;
+    uintptr_t end;
+    uint8_t count;
+    uint8_t index;
+    ObservationV1 *record = &state->observation;
+    XzmClassSnapshot *snapshot = &state->xzm_snapshot;
+    memset(record, 0, sizeof(*record));
+    memset(snapshot, 0, sizeof(*snapshot));
+    memset(&state->python_snapshot, 0, sizeof(state->python_snapshot));
+    record->version = 1;
+    if (!allocator.ready) { record->reason = OBSERVATION_BINDING; return 0; }
+    (void)arc4random_uniform(UINT32_MAX);
+    if (!range_contains(&allocator.zones_storage_range, allocator.zones_storage,
+                sizeof(*allocator.zones_storage)) ||
+            !range_contains(&allocator.count_storage_range, allocator.count_storage,
+                sizeof(*allocator.count_storage)) ||
+            !range_contains(&allocator.logger_storage_range, allocator.logger_storage,
+                sizeof(*allocator.logger_storage)) ||
+            !range_contains(&allocator.slowpath_storage_range, allocator.slowpath_storage, 1)) {
+        record->reason = OBSERVATION_MAPPING; return 0;
+    }
+    zones = *allocator.zones_storage;
+    if (*allocator.count_storage != 2 || zones == NULL ||
+            !range_contains(&allocator.zones_range, zones, 2 * sizeof(*zones))) {
+        record->reason = OBSERVATION_PROFILE; return 0;
+    }
+    zone = zones[0];
+    record->zone_count = *allocator.count_storage;
+    record->zone0 = (uint64_t)(uintptr_t)zone;
+    record->logger = (uint64_t)(uintptr_t)*allocator.logger_storage;
+    record->slowpath = *allocator.slowpath_storage;
+    if (zone == NULL || !range_contains(&allocator.zone_range, zone, 0x268) ||
+            zone->version != 16 || record->logger != 0 || record->slowpath != 0) {
+        record->reason = OBSERVATION_PROFILE; return 0;
+    }
+    record->zone_version = zone->version;
+    record->claimed_address = authenticate_claimed(zone);
+    record->try_free_default = authenticate_try_free(zone);
+    record->malloc_type_malloc = authenticate_typed_malloc(zone);
+    record->malloc_type_realloc = authenticate_typed_realloc(zone);
+    if (record->claimed_address != allocator.malloc_base + 0x3021c) {
+        record->reason = 10; return 0;
+    }
+    if (record->try_free_default != allocator.malloc_base + 0x3b67c) {
+        record->reason = 11; return 0;
+    }
+    if (record->malloc_type_malloc != allocator.malloc_base + 0x3a5e8) {
+        record->reason = 12; return 0;
+    }
+    if (record->malloc_type_realloc != allocator.malloc_base + 0x30328) {
+        record->reason = 13; return 0;
+    }
+    memcpy(&parent, (uint8_t *)zone + 0x100, sizeof(parent));
+    count = *((uint8_t *)zone + 0xd2);
+    memcpy(&begin, (uint8_t *)zone + 0xd8, sizeof(begin));
+    memcpy(&end, (uint8_t *)zone + 0xe0, sizeof(end));
+    if (parent != 0 || count == 0 || begin != (uintptr_t)zone + 0x268 ||
+            (uintptr_t)count > (UINTPTR_MAX - begin) / 0x60 ||
+            end != begin + (uintptr_t)count * 0x60 ||
+            !range_contains(&allocator.table_range, (void *)begin, end - begin)) {
+        record->reason = OBSERVATION_LAYOUT; return 0;
+    }
+    snapshot->count = count;
+    snapshot->zone = (uint64_t)(uintptr_t)zone;
+    snapshot->begin = begin;
+    snapshot->end = end;
+    for (index = 0; index < count; index++) {
+        snapshot->values[index] = *((uint8_t *)begin + (size_t)index * 0x60 + 0x58);
+        if (snapshot->values[index] == 1) {
+            record->reason = OBSERVATION_RANDOMIZED; return 0;
+        }
+    }
+    PyMem_GetAllocator(PYMEM_DOMAIN_RAW, &state->python_snapshot.raw);
+    PyMem_GetAllocator(PYMEM_DOMAIN_MEM, &state->python_snapshot.mem);
+    PyMem_GetAllocator(PYMEM_DOMAIN_OBJ, &state->python_snapshot.obj);
+    PyObject_GetArenaAllocator(&state->python_snapshot.arena);
+    if (!python_profile_matches(&state->python_snapshot)) {
+        record->reason = OBSERVATION_PYTHON; return 0;
+    }
+    if (*allocator.zones_storage != zones || *allocator.count_storage != 2 ||
+            zones[0] != zone || zone->version != 16 || *allocator.logger_storage != NULL ||
+            *allocator.slowpath_storage != 0) {
+        record->reason = OBSERVATION_DRIFT; return 0;
+    }
+    record->identity_bits = 0x0f;
+    record->status = 1;
+    return 1;
+}
+
+static int
+allocator_snapshot_matches(NativeState *state)
+{
+    malloc_zone_t **zones;
+    malloc_zone_t *zone;
+    uintptr_t parent;
+    uintptr_t begin;
+    uintptr_t end;
+    uint8_t count;
+    uint8_t index;
+    if (!state->allocator_observed || !allocator.ready) return 0;
+    zones = *allocator.zones_storage;
+    if (zones == NULL || *allocator.count_storage != state->observation.zone_count ||
+            zones[0] != (malloc_zone_t *)(uintptr_t)state->observation.zone0 ||
+            *allocator.logger_storage != (void *)(uintptr_t)state->observation.logger ||
+            *allocator.slowpath_storage != state->observation.slowpath) return 0;
+    zone = zones[0];
+    memcpy(&parent, (uint8_t *)zone + 0x100, sizeof(parent));
+    count = *((uint8_t *)zone + 0xd2);
+    memcpy(&begin, (uint8_t *)zone + 0xd8, sizeof(begin));
+    memcpy(&end, (uint8_t *)zone + 0xe0, sizeof(end));
+    if (parent != 0 || count != state->xzm_snapshot.count ||
+            begin != state->xzm_snapshot.begin || end != state->xzm_snapshot.end ||
+            zone->version != state->observation.zone_version) return 0;
+    for (index = 0; index < count; index++) {
+        if (*((uint8_t *)begin + (size_t)index * 0x60 + 0x58) !=
+                state->xzm_snapshot.values[index]) return 0;
+    }
+    return 1;
+}
+#endif
+
+static PyObject *
+state_observe_allocator_admission(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    if (!require_phase(state, PHASE_PREPARED) || state->allocator_observed) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "allocator observation already ran");
+        return NULL;
+    }
+#if defined(__APPLE__)
+    if (!capture_allocator_observation(state)) {
+        static const char *reasons[] = {
+            "allocator admission refused", "allocator binding refused",
+            "allocator identity refused", "allocator mapping refused",
+            "allocator profile refused", "allocator target refused",
+            "allocator layout refused", "allocator randomization refused",
+            "python allocator refused", "allocator drift refused",
+            "claimed target refused", "try-free target refused",
+            "typed malloc target refused", "typed realloc target refused"
+        };
+        uint32_t reason = state->observation.reason;
+        PyErr_SetString(PyExc_RuntimeError,
+            reason < sizeof(reasons) / sizeof(reasons[0]) ? reasons[reason] : reasons[0]);
+        return NULL;
+    }
+#else
+    memset(&state->observation, 0, sizeof(state->observation));
+    state->observation.version = 1;
+    state->observation.status = 1;
+#endif
+    state->allocator_observed = 1;
+    Py_RETURN_NONE;
+}
+
 static PyObject *
 state_block_entry(NativeState *state, PyObject *Py_UNUSED(ignored))
 {
@@ -340,6 +793,11 @@ state_block_final(NativeState *state, PyObject *Py_UNUSED(ignored))
         PyErr_SetString(PyExc_RuntimeError, "completion ownership is unavailable");
         return NULL;
     }
+#if defined(__APPLE__)
+    if (!allocator_snapshot_matches(state)) {
+        remember_failure(state, FAILURE_FINAL_MASK);
+    }
+#endif
     rc = mask_call(3, SIG_BLOCK, &state->watched, &state->final_old);
     record_result(&state->final_mask, rc, 0);
     if (rc != 0) {
@@ -452,6 +910,8 @@ state_outcome(NativeState *state, PyObject *Py_UNUSED(ignored))
 }
 
 static PyMethodDef state_methods[] = {
+    {"observe_allocator_admission", (PyCFunction)state_observe_allocator_admission,
+        METH_NOARGS, NULL},
     {"block_entry", (PyCFunction)state_block_entry, METH_NOARGS, NULL},
     {"resume_consumer", (PyCFunction)state_resume_consumer, METH_NOARGS, NULL},
     {"hold_completion", (PyCFunction)state_hold_completion, METH_O, NULL},
@@ -469,7 +929,7 @@ prepare_state(PyObject *module, PyObject *Py_UNUSED(ignored))
     struct sigaction action;
     size_t index;
     static const char *names[] = {
-        "block_entry", "resume_consumer", "hold_completion", "block_final",
+        "observe_allocator_admission", "block_entry", "resume_consumer", "hold_completion", "block_final",
         "rollback_marker", "finish_release", "outcome"
     };
     state = PyObject_New(NativeState, &NativeStateType);
@@ -532,6 +992,9 @@ PyInit__cancel_release(void)
     if (PyType_Ready(&NativeStateType) < 0) {
         return NULL;
     }
+#if defined(__APPLE__)
+    (void)bind_allocator();
+#endif
     module = PyModule_Create(&module_definition);
     if (module == NULL) {
         return NULL;
