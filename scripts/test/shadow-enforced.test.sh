@@ -36,6 +36,32 @@ for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
+"$python_bin" -I -S -B - "$native_out/build-record.json" "$tmp" \
+  "$root/shadow/v1/_cancel_release.c" <<'PY'
+import hashlib,json,pathlib,subprocess,sys
+record=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
+base=list(record["argv"]);temporary=pathlib.Path(sys.argv[2]);source=str(pathlib.Path(sys.argv[3]))
+if source not in base:raise SystemExit("native child test source is not in the build argv")
+index={}
+for case in range(21,34):
+ directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
+ output=directory/record["output_name"];argv=[]
+ for value in base:
+  if value==source:
+   argv.extend(("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=%d"%case,value))
+  elif value.endswith(record["output_name"]):argv.append(str(output))
+  else:argv.append(value)
+ result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
+ (directory/"stdout").write_bytes(result.stdout);(directory/"stderr").write_bytes(result.stderr)
+ if result.returncode:raise SystemExit("native child test build %d failed"%case)
+ output.chmod(0o500)
+ encoded=(json.dumps(argv,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+ (directory/"argv.json").write_bytes(encoded)
+ index[str(case)]={"argv_sha256":hashlib.sha256(encoded).hexdigest(),
+  "output_sha256":hashlib.sha256(output.read_bytes()).hexdigest()}
+(temporary/"native-child-build-index.json").write_text(
+ json.dumps(index,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
+PY
 "$python_bin" -I -S -B - "$tmp" "$native_binary" <<'PY'
 import importlib.util,os,pathlib,signal,sys
 base=pathlib.Path(sys.argv[1]);checks=0
@@ -103,6 +129,82 @@ ok(result=="native-release.success" and signal.SIGHUP in final_mask
 signal.pthread_sigmask(signal.SIG_SETMASK,initial)
 print("shadow-enforced-native: %d checks passed"%checks)
 PY
+cat > "$tmp/native-child-state.py" <<'PY'
+import errno,importlib.util,os,signal,sys,time
+case=int(sys.argv[1]);binary=sys.argv[2]
+spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+state=module.prepare_state();state.observe_allocator_admission();state.block_entry();state.resume_consumer()
+environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
+def status():
+ value=state.child_status()
+ assert type(value) is tuple and len(value)==49 and all(type(item) is int for item in value)
+ return value
+def prepare(argv=(b"/usr/bin/true",)):
+ state.prepare_child((12,argv[0],argv,environment))
+def refuses(call):
+ try:call()
+ except (MemoryError,OSError,RuntimeError):return
+ raise AssertionError("operation did not refuse")
+def close_pipes():
+ state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
+def observe(lost=False):
+ deadline=time.monotonic()+3
+ while True:
+  try:state.observe_child_exit()
+  except RuntimeError:
+   if lost and status()[11]:return
+   raise
+  if status()[11]:return
+  assert time.monotonic()<deadline
+  time.sleep(.01)
+if 21<=case<=26:
+ refuses(prepare);value=status()
+ assert value[0] in (0,2) and value[1]==0 and value[19]==1 and value[23]==13
+ print("prepare-failure",case,"state",value[0],"fd-results",value[25:43])
+elif case==27:
+ prepare();state.spawn_child();value=status()
+ assert value[0]==2 and value[3]==1 and value[4]!=0 and value[19]==1 and value[23]==14
+ refuses(state.child_fds);print("spawn-nonzero",value[:6],value[19],value[23])
+elif case==28:
+ prepare();refuses(state.spawn_child);value=status()
+ assert value[0]==3 and value[1]>0 and value[3:5]==(1,0) and value[23]==0
+ close_pipes();observe();state.reap_child();state.check_child_group();value=status()
+ assert value[17:20]==(1,1,1) and value[24]==1
+ print("spawn-lost-return complete",value[24])
+elif case==29:
+ prepare();state.spawn_child();close_pipes();time.sleep(.05);observe(True);value=status()
+ assert value[11]==1;refuses(state.observe_child_exit)
+ state.reap_child();state.check_child_group();value=status();assert value[24]==1
+ print("observe-lost-return complete",value[24])
+elif case==30:
+ prepare();state.spawn_child();close_pipes();observe();refuses(state.reap_child);value=status()
+ assert value[17]==1;refuses(state.reap_child);state.check_child_group();value=status();assert value[24]==1
+ print("reap-lost-return complete",value[24])
+elif case==31:
+ prepare();state.spawn_child();close_pipes();state.observe_child_exit();value=status()
+ assert value[6:9]==(1,-1,5) and value[11]==0 and value[23]==18
+ refuses(state.observe_child_exit);print("observe-unknown-no-retry",value[6:9],value[23])
+elif case==32:
+ prepare();state.spawn_child();state.close_child_stdin();value=status()
+ assert value[28:31]==(1,-1,5) and value[23]==15
+ refuses(state.close_child_stdin);print("close-failure-retained",value[28:31],value[23])
+elif case==33:
+ prepare((b"/bin/sh",b"-c",b'trap "exit 0" TERM; while :; do :; done'))
+ state.spawn_child();close_pipes();state.term_child_group();observe();state.kill_child_group()
+ value=status();assert value[20:22]==(1,1) and value[45:47]==(-1,errno.ESRCH)
+ state.reap_child();state.check_child_group();value=status();assert value[24]==1
+ first_signals=value[20:22]
+ prepare();state.spawn_child();close_pipes();observe();state.reap_child();state.check_child_group()
+ value=status();assert value[24]==1
+ print("term-leader-exit-still-kill-and-serial",first_signals,value[24])
+else:raise AssertionError(case)
+PY
+for native_case in 21 22 23 24 25 26 27 28 29 30 31 32 33; do
+  child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 \
+    -maxdepth 1 -type f -name '_cancel_release*.so' -print)
+  "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"
+done
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   /usr/bin/otool -tvV "$native_binary" > "$tmp/native-codegen.txt"
   /usr/bin/grep -q $'\tautia\t' "$tmp/native-codegen.txt" || fail 'native typed PAC authentication codegen'
@@ -1132,15 +1234,16 @@ def resolver_refuses(action,message):
  try:action()
  except (e.Refusal,e.c.Refusal) as exc:ok(exc.code=="E_ACL",message);return
  raise AssertionError("accepted: "+message)
-def resolver_run(argv,**options):
- resolver_calls.append((argv,options))
+def resolver_run(role,argv,**options):
+ resolver_calls.append((role,argv,options))
  return e.c.canonical(resolver_rows)
 e.run_bounded=resolver_run
 ok(resolver.resolve(uuid_values)==resolver_rows,"fixed resolver preserves user/group/unresolved order")
 ok([row["role"] for row in resolver_ledger]==["darwin-acl-uuid-resolution"],
    "nonempty resolver batch appends one command-ledger row")
-argv,options=resolver_calls[0]
-ok(argv==[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_resolve-darwin-uuids"]
+role,argv,options=resolver_calls[0]
+ok(role=="darwin-acl-uuid-resolution" and
+ argv==[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_resolve-darwin-uuids"]
  and options["stdin"]==e.c.canonical(uuid_values) and options["timeout"]==10
  and options["output_limit"]==32*1024
  and options["env"]=={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"},
@@ -1247,9 +1350,66 @@ try:
  else:raise AssertionError("normal communicate close error accepted")
 finally:e.selectors.DefaultSelector=original_selector
 e.subprocess.Popen=lambda *_args,**_kwargs: (_ for _ in ()).throw(AssertionError("spawned"))
-refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c","pass"],env=env,
+refuses("E_RUNTIME",lambda:e.run_bounded("incident-validation",
+        [sys.executable,"-c","pass"],env=env,
         deadline=time.monotonic()-1),"expired overall deadline refuses before spawn")
 e.subprocess.Popen=original_popen
+
+spec=e._native_child_spec("darwin-acl-uuid-resolution",["/fixed/python","-I"],
+ {"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C"})
+ok(spec==(1,b"/fixed/python",(b"/fixed/python",b"-I"),
+ (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")),
+ "native child spec is a fixed role and canonical bytes tuple")
+refuses("E_RUNTIME",lambda:e._native_child_spec("unknown",["/fixed/python"],{}),
+ "unknown native child role refuses")
+refuses("E_RUNTIME",lambda:e._native_child_spec("incident-validation",["relative"],{}),
+ "relative native child executable refuses")
+
+class FakeNativeChild:
+ def __init__(self,state=3,fail_status_once=False):
+  self.state=state;self.fail_status_once=fail_status_once;self.exit=False
+  self.reaped=state==4;self.absent=state==4;self.pipes=state==4;self.calls=[]
+ def status(self):
+  return (self.state,321,321,1,0,0,1 if self.exit else 0,0,0,
+   getattr(os,"CLD_EXITED",1) if self.exit else 0,0,int(self.exit),1 if self.reaped else 0,
+   0,0,getattr(os,"CLD_EXITED",1) if self.reaped else 0,0,int(self.reaped),int(self.absent),
+   int(self.pipes),1 if "term" in self.calls else 0,1 if "kill" in self.calls else 0,
+   1 if "group" in self.calls else 0,0,int(self.state==4))+((0,)*24)
+ def child_status(self):
+  self.calls.append("status")
+  if self.fail_status_once:
+   self.fail_status_once=False;raise MemoryError("lost diagnostic allocation")
+  return self.status()
+ def _close(self,name):self.calls.append(name);self.pipes=all(
+  item in self.calls for item in ("close-stdin","close-stdout","close-stderr"))
+ def close_child_stdin(self):self._close("close-stdin")
+ def close_child_stdout(self):self._close("close-stdout")
+ def close_child_stderr(self):self._close("close-stderr")
+ def term_child_group(self):self.calls.append("term")
+ def observe_child_exit(self):self.calls.append("observe");self.exit=True
+ def kill_child_group(self):self.calls.append("kill")
+ def reap_child(self):self.calls.append("reap");self.reaped=True
+ def check_child_group(self):
+  self.calls.append("group");self.absent=True
+  if self.reaped and self.pipes:self.state=4
+
+fake=FakeNativeChild();e._native_child_cleanup(fake,time.monotonic()+1)
+ok(fake.state==4 and fake.calls.index("term")<fake.calls.index("observe")
+ and fake.calls.index("observe")<fake.calls.index("kill")
+ and fake.calls.index("kill")<fake.calls.index("reap")
+ and fake.calls.index("reap")<fake.calls.index("group"),
+ "State cleanup retains leader through TERM and required KILL before one reap")
+complete=FakeNativeChild(4);e._native_child_cleanup(complete,time.monotonic()+1)
+ok("term" not in complete.calls and "kill" not in complete.calls,
+ "cleanup after reap never signals the old process group")
+lost=FakeNativeChild(fail_status_once=True)
+try:e._native_child_cleanup(lost,time.monotonic()+1)
+except MemoryError as exc:
+ ok(str(exc)=="lost diagnostic allocation" and "term" in lost.calls and "kill" in lost.calls
+  and "reap" in lost.calls and "group" in lost.calls,
+  "lost child-status allocation preserves failure after required native cleanup")
+else:raise AssertionError("lost child-status allocation accepted")
+
 setup_ready=base/"setup.ready"
 setup_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(setup_ready)],stdin=subprocess.PIPE,
  stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
@@ -3163,10 +3323,13 @@ ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.l
 scenario_mode="success";scenario_output=mismatch_output;scenario_work=mismatch_work
 def reset_native():
  native.state=native.module.prepare_state()
- native.methods=tuple(getattr(native.state,name) for name in ("block_entry","resume_consumer",
-  "hold_completion","block_final","rollback_marker","finish_release","outcome"))
- (native.block_entry,native.resume_consumer,native.hold_completion,native.block_final,
-  native.rollback_marker,native.finish_release,native.outcome)=native.methods
+ names=("observe_allocator_admission","block_entry","resume_consumer","hold_completion",
+  "block_final","rollback_marker","finish_release","outcome","prepare_child","spawn_child",
+  "child_fds","close_child_stdin","close_child_stdout","close_child_stderr",
+  "observe_child_exit","reap_child","term_child_group","kill_child_group",
+  "check_child_group","child_status")
+ native.methods=tuple(getattr(native.state,name) for name in names)
+ for name,method in zip(names,native.methods):setattr(native,name,method)
 reset_native();(restoration/"bundle.json").write_bytes(b"provisional")
 real_signal=e.signal.signal;failed=[False];restoration_owner=e.CancellationSignals(admission)
 def fail_restoration(sent,handler):

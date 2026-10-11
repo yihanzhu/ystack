@@ -6,9 +6,12 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -56,14 +59,71 @@ enum failure_slot {
     FAILURE_FINISH_MASK,
     FAILURE_CLOSE,
     FAILURE_CLOSE_FSTAT,
-    FAILURE_CONDITIONAL_CLOSE
+    FAILURE_CONDITIONAL_CLOSE,
+    FAILURE_CHILD_PREPARE,
+    FAILURE_CHILD_SPAWN,
+    FAILURE_CHILD_STDIN_CLOSE,
+    FAILURE_CHILD_STDOUT_CLOSE,
+    FAILURE_CHILD_STDERR_CLOSE,
+    FAILURE_CHILD_OBSERVE,
+    FAILURE_CHILD_TERM,
+    FAILURE_CHILD_KILL,
+    FAILURE_CHILD_GROUP,
+    FAILURE_CHILD_REAP
 };
+
+enum child_spawn_state { CHILD_EMPTY = 0, CHILD_PREPARED, CHILD_NO_CHILD, CHILD_OWNED,
+    CHILD_COMPLETE };
 
 typedef struct {
     int tag;
     int rc;
     int error_number;
 } result_cell;
+
+#define CHILD_ARG_COUNT 128
+#define CHILD_ENV_COUNT 128
+#define CHILD_ARG_BYTES (16 * 1024)
+#define CHILD_ENV_BYTES (32 * 1024)
+
+typedef struct {
+    enum child_spawn_state state;
+    int role;
+    pid_t pid;
+    pid_t pgid;
+    int fds[6];
+    unsigned char fd_owned[6];
+    unsigned char fd_attempted[6];
+    result_cell fd_result[6];
+    result_cell spawn;
+    result_cell observe;
+    result_cell reap;
+    result_cell term;
+    result_cell kill;
+    result_cell group;
+    siginfo_t observed_info;
+    siginfo_t reaped_info;
+    int exit_observed;
+    int leader_reaped;
+    int group_absent;
+    int pipes_complete;
+    int term_required;
+    int kill_required;
+    int first_error;
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    sigset_t parent_mask;
+    int actions_ready;
+    int attributes_ready;
+    char executable[4096];
+    char argv_bytes[CHILD_ARG_BYTES];
+    char env_bytes[CHILD_ENV_BYTES];
+    char *argv[CHILD_ARG_COUNT + 1];
+    char *environment[CHILD_ENV_COUNT + 1];
+    size_t argc;
+    size_t envc;
+    PyObject *fd_tuple;
+} child_record;
 
 typedef struct {
     uint32_t version;
@@ -325,12 +385,13 @@ typedef struct {
     ObservationV1 observation;
     XzmClassSnapshot xzm_snapshot;
     PythonAllocatorSnapshot python_snapshot;
+    child_record child;
     PyObject *outcome_pending;
     PyObject *outcome_success;
     PyObject *outcome_failure;
     PyObject *outcome_value;
     PyObject *module_ref;
-    PyObject *method_refs[8];
+    PyObject *method_refs[21];
 } NativeState;
 
 static PyMethodDef state_methods[];
@@ -491,6 +552,553 @@ require_phase(NativeState *state, enum phase expected)
         return 0;
     }
     return 1;
+}
+
+static void
+child_remember_error(child_record *child, enum failure_slot slot)
+{
+    if (child->first_error == FAILURE_NONE) {
+        child->first_error = slot;
+    }
+}
+
+static void
+child_refresh_complete(child_record *child)
+{
+    size_t index;
+    child->pipes_complete = 1;
+    for (index = 0; index < 6; index++) {
+        if (child->fd_owned[index]) child->pipes_complete = 0;
+    }
+    if (child->leader_reaped && child->group_absent && child->pipes_complete) {
+        child->state = CHILD_COMPLETE;
+    }
+}
+
+static void
+child_close_raw(child_record *child, size_t index)
+{
+    if (child->fd_owned[index]) {
+        int rc;
+        int saved_errno;
+        child->fd_attempted[index] = 1;
+        rc = close(child->fds[index]);
+        saved_errno = rc < 0 ? errno : 0;
+        record_result(&child->fd_result[index], rc, saved_errno);
+        if (rc == 0) child->fd_owned[index] = 0;
+        else child_remember_error(child, FAILURE_CHILD_PREPARE);
+    }
+}
+
+static void
+child_release_prepared(child_record *child)
+{
+    size_t index;
+    int remains = 0;
+    int rc;
+    if (child->actions_ready) {
+        rc = posix_spawn_file_actions_destroy(&child->actions);
+        child->actions_ready = 0;
+        if (rc != 0) child_remember_error(child, FAILURE_CHILD_PREPARE);
+    }
+    if (child->attributes_ready) {
+        rc = posix_spawnattr_destroy(&child->attributes);
+        child->attributes_ready = 0;
+        if (rc != 0) child_remember_error(child, FAILURE_CHILD_PREPARE);
+    }
+    for (index = 0; index < 6; index++) {
+        child_close_raw(child, index);
+        if (child->fd_owned[index]) remains = 1;
+    }
+    child->pipes_complete = !remains;
+    child->state = remains ? CHILD_NO_CHILD : CHILD_EMPTY;
+}
+
+static int
+copy_child_vector(PyObject *value, char *storage, size_t storage_size,
+    char **pointers, size_t pointer_count, size_t *count_out, int environment)
+{
+    Py_ssize_t count;
+    Py_ssize_t index;
+    size_t used = 0;
+    if (!PyTuple_CheckExact(value)) {
+        return 0;
+    }
+    count = PyTuple_GET_SIZE(value);
+    if (count < (environment ? 0 : 1) || (size_t)count > pointer_count) {
+        return 0;
+    }
+    for (index = 0; index < count; index++) {
+        PyObject *item = PyTuple_GET_ITEM(value, index);
+        char *bytes;
+        Py_ssize_t length;
+        if (!PyBytes_CheckExact(item) || PyBytes_AsStringAndSize(item, &bytes, &length) < 0 ||
+                length <= 0 || memchr(bytes, '\0', (size_t)length) != NULL ||
+                (environment && memchr(bytes, '=', (size_t)length) == NULL) ||
+                (size_t)length + 1 > storage_size - used) {
+            PyErr_Clear();
+            return 0;
+        }
+        memcpy(storage + used, bytes, (size_t)length);
+        storage[used + (size_t)length] = '\0';
+        pointers[index] = storage + used;
+        used += (size_t)length + 1;
+    }
+    pointers[count] = NULL;
+    *count_out = (size_t)count;
+    return 1;
+}
+
+static int
+child_environment_allowed(int role, char **environment, size_t count)
+{
+    static const char *general[] = {
+        "GIT_CONFIG_COUNT=1", "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_CONFIG_VALUE_0=", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1",
+        "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "HOME=", "LANG=C",
+        "LC_ALL=C", "PATH=", "TMPDIR="
+    };
+    size_t index;
+    if (role == 1 || role >= 12) {
+        return count == 3 && strcmp(environment[0], "LANG=C") == 0 &&
+            strcmp(environment[1], "LC_ALL=C") == 0 &&
+            strcmp(environment[2], "PATH=/usr/bin:/bin") == 0;
+    }
+    if (count != sizeof(general) / sizeof(general[0])) return 0;
+    for (index = 0; index < count; index++) {
+        size_t length = strlen(general[index]);
+        if (strncmp(environment[index], general[index], length) != 0) return 0;
+        if ((index == 4 || index == 9 || index == 13) &&
+                environment[index][length] != '/') return 0;
+        if (index == 12) {
+            const char *suffix = strstr(environment[index] + length, ":/usr/bin:/bin");
+            if (environment[index][length] != '/' || suffix == NULL ||
+                    strcmp(suffix, ":/usr/bin:/bin") != 0) return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+child_platform_admitted(void)
+{
+#if YSTACK_CANCEL_RELEASE_TESTING
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static PyObject *
+state_prepare_child(NativeState *state, PyObject *argument)
+{
+    child_record *child = &state->child;
+    PyObject *role_object;
+    PyObject *executable_object;
+    PyObject *argv_object;
+    PyObject *environment_object;
+    char *executable;
+    Py_ssize_t executable_length;
+    long role;
+    int pairs[2];
+    int rc;
+    short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+    sigset_t empty;
+    sigset_t defaults;
+    size_t index;
+    if (!require_phase(state, PHASE_CONSUMER) ||
+            (child->state != CHILD_EMPTY && child->state != CHILD_COMPLETE)) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "child state is not empty");
+        return NULL;
+    }
+    if (!child_platform_admitted()) {
+        PyErr_SetString(PyExc_RuntimeError, "native child platform contract is unavailable");
+        return NULL;
+    }
+    if (child->state == CHILD_COMPLETE) {
+        Py_CLEAR(child->fd_tuple);
+        memset(child, 0, sizeof(*child));
+        for (index = 0; index < 6; index++) child->fds[index] = -1;
+    }
+    if (!PyTuple_CheckExact(argument) || PyTuple_GET_SIZE(argument) != 4) {
+        PyErr_SetString(PyExc_TypeError, "prepare_child requires one closed child tuple");
+        return NULL;
+    }
+    role_object = PyTuple_GET_ITEM(argument, 0);
+    executable_object = PyTuple_GET_ITEM(argument, 1);
+    argv_object = PyTuple_GET_ITEM(argument, 2);
+    environment_object = PyTuple_GET_ITEM(argument, 3);
+    if (!PyLong_CheckExact(role_object) || !PyBytes_CheckExact(executable_object)) {
+        PyErr_SetString(PyExc_TypeError, "invalid child role or executable");
+        return NULL;
+    }
+    role = PyLong_AsLong(role_object);
+    if (role < 1 || role > 16 || PyErr_Occurred() ||
+            PyBytes_AsStringAndSize(executable_object, &executable, &executable_length) < 0 ||
+            executable_length < 2 || executable[0] != '/' ||
+            (size_t)executable_length >= sizeof(child->executable) ||
+            memchr(executable, '\0', (size_t)executable_length) != NULL ||
+            !copy_child_vector(argv_object, child->argv_bytes, sizeof(child->argv_bytes),
+                child->argv, CHILD_ARG_COUNT, &child->argc, 0) ||
+            !copy_child_vector(environment_object, child->env_bytes, sizeof(child->env_bytes),
+                child->environment, CHILD_ENV_COUNT, &child->envc, 1) ||
+            !child_environment_allowed((int)role, child->environment, child->envc) ||
+            strlen(child->argv[0]) != (size_t)executable_length ||
+            memcmp(child->argv[0], executable, (size_t)executable_length) != 0) {
+        PyErr_Clear();
+        PyErr_SetString(PyExc_ValueError, "child tuple is outside the fixed contract");
+        return NULL;
+    }
+    memcpy(child->executable, executable, (size_t)executable_length);
+    child->executable[executable_length] = '\0';
+    child->role = (int)role;
+    for (index = 0; index < 3; index++) {
+        if (pipe(pairs) < 0) {
+            goto prepare_failed;
+        }
+        child->fds[index * 2] = pairs[0];
+        child->fd_owned[index * 2] = 1;
+        child->fds[index * 2 + 1] = pairs[1];
+        child->fd_owned[index * 2 + 1] = 1;
+        if (pairs[0] <= STDERR_FILENO || pairs[1] <= STDERR_FILENO) {
+            errno = EBADF;
+            goto prepare_failed;
+        }
+        if (fcntl(pairs[0], F_SETFD, FD_CLOEXEC) < 0 ||
+                fcntl(pairs[1], F_SETFD, FD_CLOEXEC) < 0) {
+            goto prepare_failed;
+        }
+#if YSTACK_CANCEL_RELEASE_TESTING
+        if (YSTACK_CANCEL_TEST_CASE == 21 + (int)index) {
+            errno = EIO;
+            goto prepare_failed;
+        }
+#endif
+    }
+    rc = posix_spawnattr_init(&child->attributes);
+    if (rc != 0) { errno = rc; goto prepare_failed; }
+    child->attributes_ready = 1;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 24) { errno = EIO; goto prepare_failed; }
+#endif
+    if (sigemptyset(&empty) != 0 ||
+            pthread_sigmask(SIG_BLOCK, NULL, &child->parent_mask) != 0 ||
+            sigemptyset(&defaults) != 0 ||
+            sigaddset(&defaults, SIGHUP) != 0 || sigaddset(&defaults, SIGINT) != 0 ||
+            sigaddset(&defaults, SIGTERM) != 0 || sigaddset(&defaults, SIGPIPE) != 0) {
+        goto prepare_failed;
+    }
+#ifdef POSIX_SPAWN_SETSID
+    flags |= POSIX_SPAWN_SETSID;
+#else
+    errno = ENOTSUP;
+    goto prepare_failed;
+#endif
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+    flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
+    rc = posix_spawnattr_setflags(&child->attributes, flags);
+    if (rc == 0) rc = posix_spawnattr_setsigmask(&child->attributes, &child->parent_mask);
+    if (rc == 0) rc = posix_spawnattr_setsigdefault(&child->attributes, &defaults);
+    if (rc != 0) { errno = rc; goto prepare_failed; }
+    rc = posix_spawn_file_actions_init(&child->actions);
+    if (rc != 0) { errno = rc; goto prepare_failed; }
+    child->actions_ready = 1;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 25) { errno = EIO; goto prepare_failed; }
+#endif
+    rc = posix_spawn_file_actions_adddup2(&child->actions, child->fds[0], STDIN_FILENO);
+    if (rc == 0) rc = posix_spawn_file_actions_adddup2(&child->actions, child->fds[3], STDOUT_FILENO);
+    if (rc == 0) rc = posix_spawn_file_actions_adddup2(&child->actions, child->fds[5], STDERR_FILENO);
+    for (index = 0; rc == 0 && index < 6; index++) {
+        rc = posix_spawn_file_actions_addclose(&child->actions, child->fds[index]);
+    }
+    if (rc != 0) { errno = rc; goto prepare_failed; }
+    child->fd_tuple = PyTuple_New(3);
+    if (child->fd_tuple == NULL) goto prepare_failed;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 26) {
+        PyErr_NoMemory();
+        goto prepare_failed;
+    }
+#endif
+    for (index = 0; index < 3; index++) {
+        static const size_t parents[3] = {1, 2, 4};
+        PyObject *fd_value = PyLong_FromLong(child->fds[parents[index]]);
+        if (fd_value == NULL) goto prepare_failed;
+        PyTuple_SET_ITEM(child->fd_tuple, (Py_ssize_t)index, fd_value);
+    }
+    child->state = CHILD_PREPARED;
+    Py_RETURN_NONE;
+
+prepare_failed:
+    child_remember_error(child, FAILURE_CHILD_PREPARE);
+    child_release_prepared(child);
+    Py_CLEAR(child->fd_tuple);
+    if (!PyErr_Occurred()) PyErr_SetFromErrno(PyExc_OSError);
+    return NULL;
+}
+
+static PyObject *
+state_spawn_child(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    child_record *child = &state->child;
+    size_t index;
+    int rc;
+    if (!require_phase(state, PHASE_CONSUMER) || child->state != CHILD_PREPARED) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "child is not prepared");
+        return NULL;
+    }
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 27) rc = EIO;
+    else
+#endif
+    rc = posix_spawn(&child->pid, child->executable, &child->actions,
+        &child->attributes, child->argv, child->environment);
+    record_result(&child->spawn, rc, rc);
+    if (rc == 0) {
+        child->pgid = child->pid;
+        child->state = CHILD_OWNED;
+        child->term_required = 0;
+        child->kill_required = 0;
+    }
+    else {
+        child->pid = 0;
+        child->pgid = 0;
+        child->state = CHILD_NO_CHILD;
+        child_remember_error(child, FAILURE_CHILD_SPAWN);
+    }
+    if (child->actions_ready) {
+        int destroy_rc = posix_spawn_file_actions_destroy(&child->actions);
+        child->actions_ready = 0;
+        if (destroy_rc != 0) child_remember_error(child, FAILURE_CHILD_PREPARE);
+    }
+    if (child->attributes_ready) {
+        int destroy_rc = posix_spawnattr_destroy(&child->attributes);
+        child->attributes_ready = 0;
+        if (destroy_rc != 0) child_remember_error(child, FAILURE_CHILD_PREPARE);
+    }
+    if (rc == 0) {
+        child_close_raw(child, 0);
+        child_close_raw(child, 3);
+        child_close_raw(child, 5);
+    }
+    else {
+        for (index = 0; index < 6; index++) child_close_raw(child, index);
+        child->pipes_complete = 1;
+        for (index = 0; index < 6; index++) {
+            if (child->fd_owned[index]) child->pipes_complete = 0;
+        }
+    }
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 28 && rc == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "simulated lost spawn return");
+        return NULL;
+    }
+#endif
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+state_child_fds(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    if (state->child.state != CHILD_OWNED || state->child.fd_tuple == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "child fds are unavailable");
+        return NULL;
+    }
+    Py_INCREF(state->child.fd_tuple);
+    return state->child.fd_tuple;
+}
+
+static PyObject *
+close_child_parent_fd(NativeState *state, size_t index, enum failure_slot failure)
+{
+    child_record *child = &state->child;
+    int rc;
+    int saved_errno;
+    if (child->fd_attempted[index] && child->fd_result[index].tag == RETURNED &&
+            child->fd_result[index].rc == 0) {
+        Py_RETURN_NONE;
+    }
+    if (child->state == CHILD_EMPTY || child->state == CHILD_COMPLETE ||
+            child->fd_attempted[index]) {
+        PyErr_SetString(PyExc_RuntimeError, "child pipe close is unavailable");
+        return NULL;
+    }
+    child->fd_attempted[index] = 1;
+    if (!child->fd_owned[index]) {
+        record_result(&child->fd_result[index], 0, 0);
+        child_refresh_complete(child);
+        Py_RETURN_NONE;
+    }
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 32 && index == 1) {
+        rc = -1;
+        errno = EIO;
+    }
+    else
+#endif
+    rc = close(child->fds[index]);
+    saved_errno = rc < 0 ? errno : 0;
+    record_result(&child->fd_result[index], rc, saved_errno);
+    if (rc == 0) child->fd_owned[index] = 0;
+    else child_remember_error(child, failure);
+    child_refresh_complete(child);
+    Py_RETURN_NONE;
+}
+
+static PyObject *state_close_child_stdin(NativeState *state, PyObject *Py_UNUSED(ignored))
+{ return close_child_parent_fd(state, 1, FAILURE_CHILD_STDIN_CLOSE); }
+static PyObject *state_close_child_stdout(NativeState *state, PyObject *Py_UNUSED(ignored))
+{ return close_child_parent_fd(state, 2, FAILURE_CHILD_STDOUT_CLOSE); }
+static PyObject *state_close_child_stderr(NativeState *state, PyObject *Py_UNUSED(ignored))
+{ return close_child_parent_fd(state, 4, FAILURE_CHILD_STDERR_CLOSE); }
+
+static PyObject *
+state_observe_child_exit(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    child_record *child = &state->child;
+    siginfo_t info;
+    int rc;
+    int saved_errno;
+    if (child->state != CHILD_OWNED || child->leader_reaped ||
+            (child->observe.tag == RETURNED &&
+             (child->observe.rc != 0 || child->exit_observed))) {
+        PyErr_SetString(PyExc_RuntimeError, "child exit observation is unavailable");
+        return NULL;
+    }
+    memset(&info, 0, sizeof(info));
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 31) {
+        rc = -1;
+        errno = EIO;
+    }
+    else
+#endif
+    rc = waitid(P_PID, (id_t)child->pid, &info, WEXITED | WNOHANG | WNOWAIT);
+    saved_errno = rc < 0 ? errno : 0;
+    record_result(&child->observe, rc, saved_errno);
+    child->observed_info = info;
+    if (rc < 0) child_remember_error(child, FAILURE_CHILD_OBSERVE);
+    else if (info.si_pid == child->pid) child->exit_observed = 1;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 29 && rc == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "simulated lost observe return");
+        return NULL;
+    }
+#endif
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+signal_child_group(NativeState *state, int sent, result_cell *cell,
+    enum failure_slot failure, int *required)
+{
+    child_record *child = &state->child;
+    int rc;
+    int saved_errno;
+    if (child->state != CHILD_OWNED || child->leader_reaped || cell->tag == RETURNED ||
+            child->pgid <= 0) {
+        PyErr_SetString(PyExc_RuntimeError, "child group signal is unavailable");
+        return NULL;
+    }
+    *required = 1;
+    if (sent == SIGTERM) child->kill_required = 1;
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 33 && sent == SIGKILL && child->exit_observed) {
+        rc = -1;
+        errno = ESRCH;
+    }
+    else
+#endif
+    rc = kill(-child->pgid, sent);
+    saved_errno = rc < 0 ? errno : 0;
+    record_result(cell, rc, saved_errno);
+    if (rc < 0 && saved_errno != ESRCH) child_remember_error(child, failure);
+    Py_RETURN_NONE;
+}
+
+static PyObject *state_term_child_group(NativeState *state, PyObject *Py_UNUSED(ignored))
+{ return signal_child_group(state, SIGTERM, &state->child.term,
+    FAILURE_CHILD_TERM, &state->child.term_required); }
+static PyObject *state_kill_child_group(NativeState *state, PyObject *Py_UNUSED(ignored))
+{ return signal_child_group(state, SIGKILL, &state->child.kill,
+    FAILURE_CHILD_KILL, &state->child.kill_required); }
+
+static PyObject *
+state_check_child_group(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    child_record *child = &state->child;
+    int rc;
+    int saved_errno;
+    if ((child->state != CHILD_OWNED && child->state != CHILD_COMPLETE) ||
+            (child->group.tag == RETURNED &&
+             (child->group.rc != 0 || child->group_absent)) || child->pgid <= 0) {
+        PyErr_SetString(PyExc_RuntimeError, "child group check is unavailable");
+        return NULL;
+    }
+    rc = kill(-child->pgid, 0);
+    saved_errno = rc < 0 ? errno : 0;
+    record_result(&child->group, rc, saved_errno);
+    if (rc < 0 && saved_errno == ESRCH) child->group_absent = 1;
+    else if (rc < 0) child_remember_error(child, FAILURE_CHILD_GROUP);
+    child_refresh_complete(child);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+state_reap_child(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    child_record *child = &state->child;
+    siginfo_t info;
+    int rc;
+    int saved_errno;
+    if (child->state != CHILD_OWNED || child->leader_reaped || !child->exit_observed ||
+            (child->term_required && child->term.tag != RETURNED) ||
+            (child->kill_required && (child->kill.tag != RETURNED ||
+             (child->kill.rc != 0 && child->kill.error_number != ESRCH)))) {
+        PyErr_SetString(PyExc_RuntimeError, "child reap is unavailable");
+        return NULL;
+    }
+    memset(&info, 0, sizeof(info));
+    rc = waitid(P_PID, (id_t)child->pid, &info, WEXITED);
+    saved_errno = rc < 0 ? errno : 0;
+    record_result(&child->reap, rc, saved_errno);
+    child->reaped_info = info;
+    if (rc == 0 && info.si_pid == child->pid) child->leader_reaped = 1;
+    else child_remember_error(child, FAILURE_CHILD_REAP);
+    child_refresh_complete(child);
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 30 && rc == 0 && child->leader_reaped) {
+        PyErr_SetString(PyExc_RuntimeError, "simulated lost reap return");
+        return NULL;
+    }
+#endif
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+state_child_status(NativeState *state, PyObject *Py_UNUSED(ignored))
+{
+    child_record *child = &state->child;
+    return Py_BuildValue("(iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii)",
+        child->state, child->pid, child->pgid, child->spawn.tag, child->spawn.rc,
+        child->spawn.error_number, child->observe.tag, child->observe.rc,
+        child->observe.error_number, child->observed_info.si_code,
+        child->observed_info.si_status, child->exit_observed, child->reap.tag,
+        child->reap.rc, child->reap.error_number, child->reaped_info.si_code,
+        child->reaped_info.si_status, child->leader_reaped, child->group_absent,
+        child->pipes_complete, child->term.tag, child->kill.tag, child->group.tag,
+        child->first_error, child->state == CHILD_COMPLETE,
+        child->fd_result[0].tag, child->fd_result[0].rc, child->fd_result[0].error_number,
+        child->fd_result[1].tag, child->fd_result[1].rc, child->fd_result[1].error_number,
+        child->fd_result[2].tag, child->fd_result[2].rc, child->fd_result[2].error_number,
+        child->fd_result[3].tag, child->fd_result[3].rc, child->fd_result[3].error_number,
+        child->fd_result[4].tag, child->fd_result[4].rc, child->fd_result[4].error_number,
+        child->fd_result[5].tag, child->fd_result[5].rc, child->fd_result[5].error_number,
+        child->term.rc, child->term.error_number, child->kill.rc,
+        child->kill.error_number, child->group.rc, child->group.error_number);
 }
 
 #if defined(__APPLE__)
@@ -1103,6 +1711,18 @@ static PyMethodDef state_methods[] = {
     {"rollback_marker", (PyCFunction)state_rollback_marker, METH_NOARGS, NULL},
     {"finish_release", (PyCFunction)state_finish_release, METH_NOARGS, NULL},
     {"outcome", (PyCFunction)state_outcome, METH_NOARGS, NULL},
+    {"prepare_child", (PyCFunction)state_prepare_child, METH_O, NULL},
+    {"spawn_child", (PyCFunction)state_spawn_child, METH_NOARGS, NULL},
+    {"child_fds", (PyCFunction)state_child_fds, METH_NOARGS, NULL},
+    {"close_child_stdin", (PyCFunction)state_close_child_stdin, METH_NOARGS, NULL},
+    {"close_child_stdout", (PyCFunction)state_close_child_stdout, METH_NOARGS, NULL},
+    {"close_child_stderr", (PyCFunction)state_close_child_stderr, METH_NOARGS, NULL},
+    {"observe_child_exit", (PyCFunction)state_observe_child_exit, METH_NOARGS, NULL},
+    {"reap_child", (PyCFunction)state_reap_child, METH_NOARGS, NULL},
+    {"term_child_group", (PyCFunction)state_term_child_group, METH_NOARGS, NULL},
+    {"kill_child_group", (PyCFunction)state_kill_child_group, METH_NOARGS, NULL},
+    {"check_child_group", (PyCFunction)state_check_child_group, METH_NOARGS, NULL},
+    {"child_status", (PyCFunction)state_child_status, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL}
 };
 
@@ -1114,7 +1734,10 @@ prepare_state(PyObject *module, PyObject *Py_UNUSED(ignored))
     size_t index;
     static const char *names[] = {
         "observe_allocator_admission", "block_entry", "resume_consumer", "hold_completion", "block_final",
-        "rollback_marker", "finish_release", "outcome"
+        "rollback_marker", "finish_release", "outcome", "prepare_child", "spawn_child",
+        "child_fds", "close_child_stdin", "close_child_stdout", "close_child_stderr",
+        "observe_child_exit", "reap_child", "term_child_group", "kill_child_group",
+        "check_child_group", "child_status"
     };
     state = PyObject_New(NativeState, &NativeStateType);
     if (state == NULL) {
@@ -1123,6 +1746,8 @@ prepare_state(PyObject *module, PyObject *Py_UNUSED(ignored))
     memset(((char *)state) + sizeof(PyObject), 0, sizeof(*state) - sizeof(PyObject));
     state->phase = PHASE_PREPARED;
     state->completion_fd = -1;
+    state->child.state = CHILD_EMPTY;
+    for (index = 0; index < 6; index++) state->child.fds[index] = -1;
     if (sigemptyset(&state->watched) != 0 ||
             sigaddset(&state->watched, SIGHUP) != 0 ||
             sigaddset(&state->watched, SIGINT) != 0 ||

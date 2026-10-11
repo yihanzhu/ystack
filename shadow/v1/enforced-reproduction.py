@@ -53,6 +53,22 @@ WATCHED_SIGNALS = frozenset((signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
 _STARTUP_KEY = object()
 _NATIVE_ORIGIN: Path | None = None
 _ALLOCATOR_INTERVAL_EVIDENCE_READY = False
+_CHILD_ROLES = {
+    "darwin-acl-uuid-resolution": 1,
+    "incident-validation": 2,
+    "materializer-input-validation": 3,
+    "qualified-identity-validation": 4,
+    "materialization": 5,
+    "materializer-response-validation": 6,
+    "candidate-preparation": 7,
+    "candidate-inspection": 8,
+    "sandbox-bound-evaluation": 9,
+    "sandbox-receipt-check": 10,
+    "trace-validation": 11,
+    "helper-version": 12,
+    "jq-version": 13,
+    "sandbox-launch-boundary": 14,
+}
 
 
 class Refusal(Exception):
@@ -428,7 +444,8 @@ class _DarwinUUIDResolver(c._DarwinUUIDResolver):
         env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
         self.record_command("darwin-acl-uuid-resolution", argv, self.python.sha256,
                             self.source.sha256)
-        output = run_bounded(argv, stdin=c.canonical(uuids), timeout=10,
+        output = run_bounded("darwin-acl-uuid-resolution", argv,
+                             stdin=c.canonical(uuids), timeout=10,
                              output_limit=c.DARWIN_UUID_OUTPUT_LIMIT, env=env,
                              deadline=self.deadline)
         self.recheck()
@@ -543,10 +560,18 @@ class _NativeRelease:
             self.methods = tuple(getattr(self.state, name) for name in (
                 "observe_allocator_admission", "block_entry", "resume_consumer",
                 "hold_completion", "block_final",
-                "rollback_marker", "finish_release", "outcome"))
+                "rollback_marker", "finish_release", "outcome", "prepare_child",
+                "spawn_child", "child_fds", "close_child_stdin", "close_child_stdout",
+                "close_child_stderr", "observe_child_exit", "reap_child",
+                "term_child_group", "kill_child_group", "check_child_group",
+                "child_status"))
             (self.observe_allocator_admission, self.block_entry, self.resume_consumer,
              self.hold_completion, self.block_final, self.rollback_marker,
-             self.finish_release, self.outcome) = self.methods
+             self.finish_release, self.outcome, self.prepare_child, self.spawn_child,
+             self.child_fds, self.close_child_stdin, self.close_child_stdout,
+             self.close_child_stderr, self.observe_child_exit, self.reap_child,
+             self.term_child_group, self.kill_child_group, self.check_child_group,
+             self.child_status) = self.methods
             require(type(self.state).__name__ == "NativeState"
                     and self.methods[-1]() == "native-release.pending", "E_RUNTIME")
             if sys.platform == "darwin":
@@ -721,7 +746,7 @@ def clean_env(jq_path: Path, scratch: Path) -> dict[str, str]:
             "GIT_CONFIG_VALUE_0": str(scratch / "no-hooks")}
 
 
-def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
+def run_bounded(role: str, argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
                 output_limit: int = OUTPUT_LIMIT, env: dict[str, str],
                 deadline: float | None = None) -> bytes:
     require(all(isinstance(item, str) and item for item in argv), "E_RUNTIME")
@@ -729,7 +754,7 @@ def run_bounded(argv: list[str], *, stdin: bytes = b"", timeout: int = 120,
         require(deadline > time.monotonic(), "E_RUNTIME")
     remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
     try:
-        child, stdout, stderr = spawn_bounded(argv, stdin, output_limit, STDERR_LIMIT,
+        child, stdout, stderr = spawn_bounded(role, argv, stdin, output_limit, STDERR_LIMIT,
                                                remaining, env)
     except (OSError, subprocess.SubprocessError):
         raise Refusal("E_RUNTIME") from None
@@ -776,21 +801,232 @@ def stop_child(child: subprocess.Popen) -> None:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
-def spawn_bounded(argv: list[str], input_raw: bytes, stdout_limit: int, stderr_limit: int,
-                  timeout: float, env: dict[str, str]) -> tuple[subprocess.Popen, bytes, bytes]:
-    CancellationSignals.checkpoint()
-    child = None
+@dataclasses.dataclass(frozen=True)
+class _NativeChildResult:
+    returncode: int
+
+
+def _native_child_status(native: object) -> tuple[int, ...]:
+    value = native.child_status()
+    require(isinstance(value, tuple) and len(value) == 49
+            and all(type(item) is int for item in value), "E_RUNTIME")
+    return value
+
+
+def _native_child_spec(role: str, argv: list[str], env: dict[str, str]) -> tuple:
+    require(role in _CHILD_ROLES and argv and Path(argv[0]).is_absolute()
+            and all(type(item) is str and item and "\0" not in item for item in argv)
+            and all(type(key) is str and type(value) is str and key and "=" not in key
+                    and "\0" not in key and "\0" not in value
+                    for key, value in env.items()), "E_RUNTIME")
+    executable = os.fsencode(argv[0])
+    arguments = tuple(os.fsencode(item) for item in argv)
+    environment = tuple(os.fsencode(f"{key}={env[key]}") for key in sorted(env))
+    return (_CHILD_ROLES[role], executable, arguments, environment)
+
+
+def _native_returncode(status: tuple[int, ...]) -> int:
+    code, value = status[9], status[10]
+    if code == getattr(os, "CLD_EXITED", 1):
+        return value
+    require(code in {getattr(os, "CLD_KILLED", 2), getattr(os, "CLD_DUMPED", 3)}
+            and value > 0, "E_RUNTIME")
+    return -value
+
+
+def _native_child_cleanup(native: object, deadline: float) -> None:
+    first: BaseException | None = None
+    for close in (native.close_child_stdin, native.close_child_stdout,
+                  native.close_child_stderr):
+        try:
+            close()
+        except BaseException as exc:
+            if first is None:
+                first = exc
     try:
-        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, env=env, close_fds=True,
-                                 start_new_session=True)
+        initial = _native_child_status(native)
+    except BaseException as exc:
+        initial = None
+        if first is None:
+            first = exc
+    if initial is not None and initial[0] in {0, 2, 4}:
+        if first is not None:
+            raise first
+        require(initial[23] == 0, "E_RUNTIME")
+        return
+    try:
+        native.term_child_group()
+    except BaseException as exc:
+        if first is None:
+            first = exc
+    grace = min(deadline, time.monotonic() + 5)
+    status = initial
+    while (status is None or not status[11]) and time.monotonic() < grace:
+        try:
+            native.observe_child_exit()
+        except BaseException as exc:
+            if first is None:
+                first = exc
+            break
+        try:
+            status = _native_child_status(native)
+        except BaseException as exc:
+            status = None
+            if first is None:
+                first = exc
+        if status is None or not status[11]:
+            time.sleep(min(0.02, max(0, grace - time.monotonic())))
+    try:
+        native.kill_child_group()
+    except BaseException as exc:
+        if first is None:
+            first = exc
+    try:
+        status = _native_child_status(native)
+    except BaseException as exc:
+        status = None
+        if first is None:
+            first = exc
+    while (status is None or not status[11]) and time.monotonic() < deadline:
+        try:
+            native.observe_child_exit()
+        except BaseException as exc:
+            if first is None:
+                first = exc
+            break
+        try:
+            status = _native_child_status(native)
+        except BaseException as exc:
+            status = None
+            if first is None:
+                first = exc
+        if status is None or not status[11]:
+            time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+    if status is not None and status[11]:
+        try:
+            native.reap_child()
+        except BaseException as exc:
+            if first is None:
+                first = exc
+    try:
+        native.check_child_group()
+    except BaseException as exc:
+        if first is None:
+            first = exc
+    status = _native_child_status(native)
+    if first is not None:
+        raise first
+    require(status[17] == 1 and status[18] == 1 and status[19] == 1
+            and status[23] == 0 and status[24] == 1, "E_RUNTIME")
+
+
+def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
+                        stderr_limit: int, timeout: float) -> tuple[_NativeChildResult, bytes, bytes]:
+    stdin_fd, stdout_fd, stderr_fd = native.child_fds()
+    require(all(type(fd) is int and fd > 2 for fd in
+                (stdin_fd, stdout_fd, stderr_fd)), "E_RUNTIME")
+    selector = selectors.DefaultSelector()
+    output = {stdout_fd: bytearray(), stderr_fd: bytearray()}
+    limits = {stdout_fd: stdout_limit, stderr_fd: stderr_limit}
+    closes = {stdin_fd: native.close_child_stdin, stdout_fd: native.close_child_stdout,
+              stderr_fd: native.close_child_stderr}
+    closed: set[int] = set()
+    end = time.monotonic() + timeout
+    def close_fd(fd: int) -> None:
+        if fd not in closed:
+            try:
+                selector.unregister(fd)
+            except KeyError:
+                pass
+            closes[fd]()
+            closed.add(fd)
+    failure: BaseException | None = None
+    try:
+        for fd in (stdin_fd, stdout_fd, stderr_fd):
+            os.set_blocking(fd, False)
+        selector.register(stdout_fd, selectors.EVENT_READ)
+        selector.register(stderr_fd, selectors.EVENT_READ)
+        if input_raw:
+            selector.register(stdin_fd, selectors.EVENT_WRITE)
+        else:
+            close_fd(stdin_fd)
+        sent = 0
+        while selector.get_map():
+            CancellationSignals.checkpoint()
+            remaining = end - time.monotonic()
+            require(remaining > 0, "E_RUNTIME")
+            for key, mask in selector.select(min(remaining, 0.1)):
+                fd = key.fd
+                if fd == stdin_fd and mask & selectors.EVENT_WRITE:
+                    try:
+                        count = os.write(fd, input_raw[sent:sent + 65536])
+                    except BlockingIOError:
+                        continue
+                    require(count > 0, "E_RUNTIME")
+                    sent += count
+                    if sent == len(input_raw):
+                        close_fd(fd)
+                elif mask & selectors.EVENT_READ:
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        close_fd(fd)
+                        continue
+                    require(len(output[fd]) + len(chunk) <= limits[fd], "E_LIMIT")
+                    output[fd].extend(chunk)
         CancellationSignals.checkpoint()
-        stdout, stderr = communicate_bounded(child, input_raw, stdout_limit, stderr_limit,
-                                              timeout, cleanup=False)
-        return child, stdout, stderr
-    except BaseException:
-        if child is not None:
-            stop_child(child)
+        status = _native_child_status(native)
+        while not status[11]:
+            require(time.monotonic() < end, "E_RUNTIME")
+            native.observe_child_exit()
+            status = _native_child_status(native)
+            if not status[11]:
+                time.sleep(min(0.02, max(0, end - time.monotonic())))
+            CancellationSignals.checkpoint()
+        native.reap_child()
+        native.check_child_group()
+        status = _native_child_status(native)
+        require(status[17] == 1 and status[18] == 1 and status[19] == 1
+                and status[23] == 0 and status[24] == 1, "E_RUNTIME")
+        return (_NativeChildResult(_native_returncode(status)), bytes(output[stdout_fd]),
+                bytes(output[stderr_fd]))
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            selector.close()
+        except BaseException:
+            if failure is None:
+                raise
+
+
+def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: int,
+                  stderr_limit: int, timeout: float,
+                  env: dict[str, str]) -> tuple[_NativeChildResult, bytes, bytes]:
+    CancellationSignals.checkpoint()
+    active = CancellationSignals.active
+    require(active is not None and active.native is not None, "E_RUNTIME")
+    native = active.native
+    entered = False
+    try:
+        entered = True
+        native.prepare_child(_native_child_spec(role, argv, env))
+        native.spawn_child()
+        status = _native_child_status(native)
+        require(status[0] == 3 and status[3] == 1 and status[4] == 0
+                and status[1] > 0 and status[2] == status[1]
+                and status[23] == 0, "E_RUNTIME")
+        CancellationSignals.checkpoint()
+        return _communicate_native(native, input_raw, stdout_limit, stderr_limit, timeout)
+    except BaseException as exc:
+        try:
+            if entered:
+                _native_child_cleanup(native, time.monotonic() + 10)
+        except BaseException as cleanup_exc:
+            raise exc from cleanup_exc
         raise
 
 
@@ -1264,7 +1500,8 @@ def _native_launch(anchor: c.Anchor, frame: bytes, deadline: float) -> int:
     require(deadline > time.monotonic(), "E_RUNTIME")
     remaining = min(180, deadline - time.monotonic())
     try:
-        child, stdout, stderr = spawn_bounded(argv, frame, 0, STDERR_LIMIT, remaining, env)
+        child, stdout, stderr = spawn_bounded("sandbox-launch-boundary", argv, frame, 0,
+                                              STDERR_LIMIT, remaining, env)
     except Refusal:
         raise
     except (OSError, subprocess.SubprocessError):
@@ -1496,9 +1733,14 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         require(helper_source.sha256 == context["helper_source_sha256"], "E_DEPENDENCY")
         helper_source.recheck(); c.verify_helper_source(); helper.recheck(); record_command("helper-version", [helper.snapshot.path, "version"],
             helper.sha256, context["helper_source_sha256"])
-        c.probe_dependency(helper, ["version"], b"ystack-object-closure-v1\n")
+        require(run_bounded("helper-version", [helper.snapshot.path, "version"],
+                            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+                            timeout=10, deadline=deadline)
+                == b"ystack-object-closure-v1\n", "E_DEPENDENCY")
         jq.recheck(); record_command("jq-version", [jq.snapshot.path, "--version"], jq.sha256, jq.sha256)
-        c.probe_dependency(jq, ["--version"], b"jq-1.6\n")
+        require(run_bounded("jq-version", [jq.snapshot.path, "--version"],
+                            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+                            timeout=10, deadline=deadline) == b"jq-1.6\n", "E_DEPENDENCY")
         captured = work / "inputs"
         limits = {"incident": OUTPUT_LIMIT, "claim": OUTPUT_LIMIT, "duty_evaluation": OUTPUT_LIMIT,
                   "qualified_identity": OUTPUT_LIMIT, "materialization_input": 8 * OUTPUT_LIMIT}
@@ -1546,7 +1788,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             else:
                 raise Refusal("E_DEPENDENCY")
             record_command(role, argv, executable_sha, source.sha256)
-            result = run_bounded(argv, **options)
+            result = run_bounded(role, argv, **options)
             executable.recheck(); helper.recheck(); jq.recheck()
             for source in sources: source.recheck()
             for item in inputs: item.recheck()
