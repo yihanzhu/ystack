@@ -51,7 +51,7 @@ The build script is claimed only for the normal PAC recipe; `_consumer.py` is cl
 | --- | --- | --- | --- |
 | 1 | Accepted exception | 1000–1200 | Closed R10 evaluator with bounded snapshots and full refs; shared checker preserving legacy outputs; paired binding and compatibility tests, fixed data and restore docs |
 | 2 | Accepted exception | 1200–1400 | Complete installed-byte/verifier binding, full ancestor/ACL/store validation, and meaningful trust-boundary regression proof |
-| 3 | Accepted exception | 4200–7000 | The preserved candidate plus the private C/build boundary, context/provenance and ledger repairs, same-process allocator admission, and complete negative/positive and actual-native paired proof remains one enforced-reproduction concern. |
+| 3 | Accepted exception | 4200–7500 | The preserved candidate plus the private C/build boundary, context/provenance and ledger repairs, same-process allocator admission, the State-owned child owner, and complete negative/positive and actual-native paired proof remain one enforced-reproduction concern. |
 | 4 | Accepted exception | 1200–1700 | Full frozen-bundle, input, patch, digest and candidate-tree relations with real materializer proof |
 | 5 | Accepted exception | 700–1100 | Complete two-attempt admission and integration proof, including withholding, determinism and source/store purity |
 
@@ -62,9 +62,10 @@ change is included.
 
 The slice-3 estimate includes the native source/build boundary; Python context,
 provenance, ledger and release work; completion-fd and authoritative-outcome proof;
-the same-process fixed native ABI, binding, authentication and driver call; complete
-negative/positive and actual Mac/Linux paired proof; and the required docs. The range
-leaves bounded room for readable tests without compressed code or omitted proof.
+the same-process fixed native ABI, binding, authentication and driver call; the
+State-owned child owner and its complete lifecycle validation; complete negative/positive
+and actual Mac/Linux paired proof; and the required docs. The range leaves bounded room
+for readable integration tests without compressed code or omitted proof.
 
 ## Order of work
 
