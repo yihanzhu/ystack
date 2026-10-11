@@ -175,6 +175,18 @@ fstat_call(int fd, struct stat *value)
     return rc;
 }
 
+static int
+hold_fstat_call(int fd, struct stat *value)
+{
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 13) {
+        errno = EIO;
+        return -1;
+    }
+#endif
+    return fstat(fd, value);
+}
+
 static void
 rollback_marker(NativeState *state)
 {
@@ -303,7 +315,7 @@ state_hold_completion(NativeState *state, PyObject *argument)
         Py_RETURN_NONE;
     }
     state->completion_fd = owned;
-    if (fstat(owned, &value) < 0) {
+    if (hold_fstat_call(owned, &value) < 0) {
         saved_errno = errno;
         record_result(&state->hold_fstat, -1, saved_errno);
         remember_failure(state, FAILURE_HOLD_FSTAT);

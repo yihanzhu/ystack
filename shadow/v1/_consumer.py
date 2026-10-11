@@ -498,8 +498,15 @@ class DependencySnapshot:
         raw = self.snapshot.read(self.size, "E_DEPENDENCY")
         _require(len(raw) == self.size and digest(raw) == self.sha256, "E_DEPENDENCY")
     def close(self) -> None:
-        self.original.close()
-        self.snapshot.close()
+        failure = None
+        for item in (self.original, self.snapshot):
+            try:
+                item.close()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
 def snapshot_dependency(path: str, expected_sha256: str, expected_size: int,
                         private_dir: str, name: str) -> DependencySnapshot:
@@ -696,8 +703,15 @@ class Anchor:
         for item in self.held:
             item.seal_recheck(code)
     def close(self) -> None:
+        failure = None
         for item in reversed(self.held):
-            item.close()
+            try:
+                item.close()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
 def load_anchor(resolver: _DarwinUUIDResolver | None = None) -> Anchor:
     held: list[HeldPath] = []

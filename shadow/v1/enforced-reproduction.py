@@ -881,6 +881,7 @@ class CancellationSignals:
         self.write_fd: int | None = None
         self.borrowed = False
         self.rollback_attempted = False
+        self.completion_confirmed = False
         self.borrow_depth = 0
         self.caller_exception: BaseException | None = None
 
@@ -896,14 +897,16 @@ class CancellationSignals:
         require(cls.active.borrow_depth == 0, "E_RUNTIME")
         require(cls.active.native is not None, "E_RUNTIME")
         cls.active.native.hold_completion(directory)
-        return cls.active.native.outcome() == "native-release.pending"
+        confirmed = cls.active.native.outcome() == "native-release.pending"
+        cls.active.completion_confirmed = confirmed
+        return confirmed
 
     @staticmethod
     def _remember(first: BaseException | None, exc: BaseException) -> BaseException:
         return first if first is not None else exc
 
     def _rollback(self, failure: BaseException | None) -> BaseException | None:
-        if self.native is None or self.rollback_attempted:
+        if self.native is None or self.rollback_attempted or not self.completion_confirmed:
             return failure
         self.rollback_attempted = True
         try:
@@ -1057,23 +1060,26 @@ class CancellationSignals:
                 failure = self._rollback(failure)
                 abort = True
             post_l_exception = None
-            finish_result = None
             try:
-                finish_result = self.native.finish_release()
+                self.native.finish_release()
             except BaseException as exc:
                 post_l_exception = exc
             try:
                 native_outcome = self.native.outcome()
             except BaseException as exc:
-                if post_l_exception is None:
-                    post_l_exception = exc
-                native_outcome = finish_result
-            if native_outcome == "native-release.failure":
-                failure = self._remember(failure, Refusal("E_RUNTIME"))
-                abort = True
-            elif native_outcome != "native-release.success":
-                failure = self._remember(failure, Refusal("E_RUNTIME"))
-                abort = True
+                self.caller_exception = exc
+                if post_l_exception is not None:
+                    raise exc from post_l_exception
+                if failure is not None:
+                    raise exc from failure
+                raise
+            else:
+                if native_outcome == "native-release.failure":
+                    failure = self._remember(failure, Refusal("E_RUNTIME"))
+                    abort = True
+                elif native_outcome != "native-release.success":
+                    failure = self._remember(failure, Refusal("E_RUNTIME"))
+                    abort = True
             if post_l_exception is not None and failure is None and decision_made and not abort:
                 self.caller_exception = post_l_exception
                 raise post_l_exception
@@ -1345,6 +1351,7 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+    retained = None
     marker_written = False
     try:
         for name in sorted(files):
@@ -1354,6 +1361,9 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
         held_output.recheck("E_RELATION")
         require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
         os.fsync(directory)
+        retained = CancellationSignals.retain_completion(directory)
+        if retained is False:
+            raise Refusal("E_RUNTIME")
         write_exclusive_at(directory, "bundle.json", bundle, sync=True, remove_on_failure=True)
         marker_written = True
         CancellationSignals.checkpoint()
@@ -1362,7 +1372,7 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
         os.fsync(directory)
         CancellationSignals.checkpoint()
     except BaseException as exc:
-        if marker_written and directory >= 0:
+        if retained is not True and marker_written and directory >= 0:
             try:
                 os.unlink("bundle.json", dir_fd=directory)
                 os.fsync(directory)
@@ -1377,30 +1387,6 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             raise Refusal("E_RUNTIME") from None
         raise
     try:
-        try:
-            retained = CancellationSignals.retain_completion(directory)
-        except BaseException:
-            active = CancellationSignals.active
-            if active is None or active.native is None or \
-                    active.native.outcome() != "native-release.pending":
-                try:
-                    os.unlink("bundle.json", dir_fd=directory)
-                    os.fsync(directory)
-                except OSError:
-                    pass
-            raise
-        if retained is None:
-            os.close(directory)
-            directory = -1
-            return bundle
-        if not retained:
-            try:
-                os.unlink("bundle.json", dir_fd=directory)
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-                directory = -1
-            raise Refusal("E_RUNTIME")
         os.close(directory)
         directory = -1
     except BaseException as exc:

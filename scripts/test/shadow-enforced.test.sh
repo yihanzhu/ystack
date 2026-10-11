@@ -32,7 +32,7 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 3 4 5 6 7 8 9 10 11 12; do
+for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
@@ -44,7 +44,7 @@ def ok(value,message):
  if not value:raise AssertionError(message)
  checks+=1;print("ok native-%d - %s"%(checks,message))
 initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-for case in range(1,13):
+for case in range(1,14):
  directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
@@ -76,7 +76,7 @@ for case in range(1,13):
  else:
   ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
  if case in (3,4,5,10):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
- if case in (6,7,8,9,12):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
+ if case in (6,7,8,9,12,13):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
  if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
 actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
 spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
@@ -1621,9 +1621,9 @@ PY
 # private observations of the fixed owner; the shipped CLI check below uses the
 # real standalone admission.
 "$python_bin" -I -S -B - "$root" "$tmp/cancellation" "$tmp/native-case-12" \
-  "$native_binary" "$tmp/native-case-4" <<'PY'
+  "$native_binary" "$tmp/native-case-4" "$tmp/native-case-13" <<'PY'
 import _thread, contextlib, errno, importlib.util, io, os, pathlib, signal, subprocess, sys, threading, time
-root, base, native_case12, production_binary, native_case4 = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
+root, base, native_case12, production_binary, native_case4, native_case13 = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
 spec = importlib.util.spec_from_file_location("cancel_lifecycle", root / "shadow/v1/enforced-reproduction.py")
 e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
 checks = 0
@@ -1695,14 +1695,21 @@ case12_spec=importlib.util.spec_from_file_location("_cancel_release",case12_bina
 case12_module=importlib.util.module_from_spec(case12_spec);case12_spec.loader.exec_module(case12_module)
 sys.modules.pop("_cancel_release",None)
 class ActualNative:
- def __init__(self,module,after_finish=None,getter_interrupt=None,close_failure=None):
+ def __init__(self,module,after_finish=None,getter_interrupt=None,close_failure=None,
+              before_hold=None,after_hold=None,confirmation_interrupt=None):
   self.state=module.prepare_state()
-  for name in ("block_entry","resume_consumer","hold_completion","block_final","rollback_marker"):
+  for name in ("block_entry","resume_consumer","block_final","rollback_marker"):
    setattr(self,name,getattr(self.state,name))
   self.after_finish=after_finish;self.getter_interrupt=getter_interrupt
   self.close_failure=close_failure
-  self.finished=False;self.finish_calls=0;self.close_calls=0
+  self.before_hold=before_hold;self.after_hold=after_hold
+  self.confirmation_interrupt=confirmation_interrupt
+  self.hold_completed=False;self.finished=False;self.finish_calls=0;self.close_calls=0
  def recheck(self):pass
+ def hold_completion(self,fd):
+  if self.before_hold is not None:raise self.before_hold
+  self.state.hold_completion(fd);self.hold_completed=True
+  if self.after_hold is not None:raise self.after_hold
  def close(self):
   self.close_calls+=1
   if self.close_failure is not None:
@@ -1713,9 +1720,19 @@ class ActualNative:
   return result
  def outcome(self):
   result=self.state.outcome()
+  if self.hold_completed and not self.finished and self.confirmation_interrupt is not None:
+   failure=self.confirmation_interrupt;self.confirmation_interrupt=None;raise failure
   if self.finished and self.getter_interrupt is not None:
    failure=self.getter_interrupt;self.getter_interrupt=None;raise failure
   return result
+def load_native(path):
+ binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
+ native_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
+ sys.modules.pop("_cancel_release",None)
+ return native_module
+production_module=load_native(production_binary);case4_module=load_native(native_case4)
+case13_module=load_native(native_case13)
 actual_dup=ActualNative(case12_module);actual_owner=e.CancellationSignals(admission(native=actual_dup))
 dup_dir=base/"actual-dup-failure";dup_dir.mkdir(mode=0o700);dup_hold=e.stable_directory(dup_dir)
 dup_files={name:b"x" for name in e.EVIDENCE_NAMES}
@@ -1728,18 +1745,77 @@ finally:dup_hold.close()
 ok(not (dup_dir/"bundle.json").exists() and actual_dup.outcome()=="native-release.failure",
    "actual C dup failure rolls back through the original held fd")
 
+# Actual C handoff never permits the first marker byte until hold returned and
+# its authoritative pending state was observed normally.
+def hold_boundary_case(name,native,failure):
+ owner=e.CancellationSignals(admission(native=native));directory=base/name;directory.mkdir(mode=0o700)
+ held=e.stable_directory(directory);case_files={entry:b"x" for entry in e.EVIDENCE_NAMES}
+ try:
+  try:
+   with owner:e.seal(directory,held,case_files,{"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
+  except BaseException as observed:ok(observed is failure,name+" preserves exact handoff interruption")
+  else:raise AssertionError(name+" accepted")
+ finally:held.close()
+ ok(not (directory/"bundle.json").exists() and native.finish_calls==1,
+    name+" writes no marker and releases native ownership once")
+pre_entry=RuntimeError("before native hold")
+hold_boundary_case("actual-hold-not-run",ActualNative(production_module,before_hold=pre_entry),pre_entry)
+lost_return=RuntimeError("after native hold")
+hold_boundary_case("actual-hold-return-lost",ActualNative(production_module,after_hold=lost_return),lost_return)
+confirmation=RuntimeError("authoritative confirmation")
+hold_boundary_case("actual-hold-confirmation-interrupted",ActualNative(production_module,confirmation_interrupt=confirmation),confirmation)
+
 # The real driver and C state preserve exact post-L caller ownership without
 # class, errno or text guesses. Fault injection after the real C return is SIMULATED.
-def load_native(path):
- binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
- native_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
- native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
- sys.modules.pop("_cancel_release",None)
- return native_module
-production_module=load_native(production_binary);case4_module=load_native(native_case4)
-def driver_case(name,failure,module=production_module,getter=False,expect_caller=True):
- native=ActualNative(module,getter_interrupt=failure if getter else None,
-                     after_finish=None if getter else failure)
+fstat_native=ActualNative(case13_module);fstat_owner=e.CancellationSignals(admission(native=fstat_native))
+fstat_dir=base/"actual-hold-fstat-failure";fstat_dir.mkdir(mode=0o700);fstat_hold=e.stable_directory(fstat_dir)
+try:
+ try:
+  with fstat_owner:e.seal(fstat_dir,fstat_hold,{entry:b"x" for entry in e.EVIDENCE_NAMES},
+                          {"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
+ except e.Refusal as exc:ok(exc.code=="E_RUNTIME","actual C hold fstat failure refuses")
+ else:raise AssertionError("actual C hold fstat failure accepted")
+finally:fstat_hold.close()
+ok(not (fstat_dir/"bundle.json").exists() and fstat_native.finish_calls==1
+   and fstat_native.outcome()=="native-release.failure",
+   "actual C hold fstat failure writes no marker and releases duplicate once")
+
+# Ordinary container cleanup attempts each other distinct child once, retains
+# the first OSError, and does not extend that rule to arbitrary BaseException.
+class CloseItem:
+ def __init__(self,name,events,failure=None):self.name=name;self.events=events;self.failure=failure;self.closed=False
+ def close(self):
+  if self.closed:return
+  self.closed=True;self.events.append(self.name)
+  if self.failure is not None:raise self.failure
+dependency_events=[];dependency_failure=OSError(errno.EIO,"original close")
+dependency=e.c.DependencySnapshot(CloseItem("original",dependency_events,dependency_failure),
+                                  CloseItem("snapshot",dependency_events),"0"*64,1)
+try:dependency.close()
+except OSError as observed:ok(observed is dependency_failure,"dependency cleanup retains first ordinary close error")
+else:raise AssertionError("dependency close error accepted")
+dependency.close()
+ok(dependency_events==["original","snapshot"],"dependency cleanup attempts both children once and becomes inert")
+anchor_events=[];anchor_failure=OSError(errno.EIO,"last held close")
+anchor=e.c.Anchor({},b"",[CloseItem("first",anchor_events),CloseItem("second",anchor_events),
+                          CloseItem("third",anchor_events,anchor_failure)],{},("",[]),("",[]),None)
+try:anchor.close()
+except OSError as observed:ok(observed is anchor_failure,"anchor cleanup retains first ordinary close error")
+else:raise AssertionError("anchor close error accepted")
+anchor.close()
+ok(anchor_events==["third","second","first"],"anchor cleanup attempts remaining held paths once and becomes inert")
+base_events=[];base_failure=RuntimeError("non-ordinary close")
+base_dependency=e.c.DependencySnapshot(CloseItem("original",base_events,base_failure),
+                                       CloseItem("snapshot",base_events),"0"*64,1)
+try:base_dependency.close()
+except RuntimeError as observed:ok(observed is base_failure,"arbitrary close interruption is propagated directly")
+else:raise AssertionError("arbitrary close interruption accepted")
+ok(base_events==["original"],"arbitrary close interruption does not promise attempt-all")
+
+def driver_case(name,failure,module=production_module,getter=False,getter_failure=None,
+                body_failure=None,expected_context=None,expect_caller=True,expect_marker=None):
+ native=ActualNative(module,getter_interrupt=(getter_failure if getter_failure is not None else failure) if getter or getter_failure is not None else None,
+                     after_finish=failure if not getter else None)
  saved_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
  directory=base/name;directory.mkdir(mode=0o700)
  original_native,original_context,original_reproduce=e._NativeRelease,e.c.capture_parent_context,e.reproduce
@@ -1748,19 +1824,25 @@ def driver_case(name,failure,module=production_module,getter=False,expect_caller
   fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
   try:ok(e.CancellationSignals.retain_completion(fd),name+" retains actual C owner")
   finally:os.close(fd)
+  if body_failure is not None:raise body_failure
  try:
   e._NativeRelease=lambda _context,_admission:native;e.c.capture_parent_context=lambda:{};e.reproduce=body
   try:
    with contextlib.redirect_stderr(io.StringIO()) as error:
     result=e.main(["driver","reproduce","request","work","output"],admission())
   except BaseException as observed:
-   ok(expect_caller and observed is failure,name+" preserves exact caller exception")
+   expected=getter_failure if getter_failure is not None else failure
+   ok(expect_caller and observed is expected,name+" preserves exact caller exception")
+   if expected_context is not None:
+    ok(observed.__cause__ is expected_context or observed.__context__ is expected_context,
+       name+" retains the prior boundary context")
   else:
    ok(not expect_caller and result==1 and error.getvalue()=="E_RUNTIME\n",
       name+" preserves native failure priority")
  finally:e._NativeRelease,e.c.capture_parent_context,e.reproduce=original_native,original_context,original_reproduce
  ok(native.finish_calls==1 and native.close_calls>=1,name+" closes ordinary resources before one native release")
- ok((directory/"bundle.json").exists()==expect_caller,name+" marker follows authoritative native outcome")
+ marker_expected=expect_caller if expect_marker is None else expect_marker
+ ok((directory/"bundle.json").exists()==marker_expected,name+" marker follows authoritative native outcome")
  signal.pthread_sigmask(signal.SIG_SETMASK,saved_mask)
 for name,failure in (("post-value",ValueError("same")),
  ("post-oserror",OSError(errno.EIO,"same")),("post-memory",MemoryError("same")),
@@ -1768,6 +1850,15 @@ for name,failure in (("post-value",ValueError("same")),
  ("post-consumer-refusal",e.c.Refusal("E_RUNTIME")),
  ("post-parent-refusal",e.c.Refusal("E_PARENT_CONTEXT"))):driver_case(name,failure)
 driver_case("post-getter-interrupt",RuntimeError("getter assignment"),getter=True)
+finish_interrupt=RuntimeError("finish assignment")
+getter_interrupt=RuntimeError("outcome observation")
+driver_case("post-finish-and-getter-interrupt",finish_interrupt,getter_failure=getter_interrupt,
+            expected_context=finish_interrupt)
+earlier_failure=ValueError("earlier body failure")
+earlier_observation=RuntimeError("outcome observation after earlier failure")
+driver_case("earlier-failure-and-getter-interrupt",earlier_failure,getter=True,
+            getter_failure=earlier_observation,body_failure=earlier_failure,
+            expected_context=earlier_failure,expect_marker=False)
 driver_case("native-failure-priority",ValueError("same"),module=case4_module,expect_caller=False)
 close_native=ActualNative(production_module,close_failure=OSError(errno.EIO,"ordinary close"))
 close_dir=base/"ordinary-close-failure";close_dir.mkdir(mode=0o700)
