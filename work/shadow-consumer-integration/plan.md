@@ -391,9 +391,9 @@ State is allocated before the first census and contains only the necessary autho
 Do not add parallel valid/executed/error copies. `NOT_RUN` distinguishes a Python
 argument, recursion or dispatch failure before the C body from a native call that
 returned nonzero. State has no destructor that closes the completion fd, rolls back a
-marker or repeats release. `hold_completion` duplicates ownership and stores the owned
-fd before returning to Python, then records its fstat identity; Python never receives
-an unrecorded duplicate awaiting assignment.
+marker or repeats release. `hold_completion` stores duplicate ownership before returning, then records fstat identity.
+Its normal `None` is not success because dup and fstat failures use it too; only a normally observed authoritative
+no-failure consumer outcome (`native-release.pending`) confirms identity, not sealed release success. A post-fstat-failure duplicate stays State-owned for one release.
 
 Admission requires the Python main interpreter thread and a fresh closed startup
 whose reviewed physical runtime, standard/native dependency closure and exact imports
@@ -435,8 +435,8 @@ child. Process isolation plus checked child termination prevents that child's na
 threads, callbacks and service state from becoming parent receivers. This does not
 claim the membership service is thread-free. The proof must inspect the parent's
 actual admitted call graph and show no remaining membership symbol call or lazy load;
-unknown parent native closure still refuses. Linux keeps its existing independent
-runtime proof.
+unknown parent native closure still refuses. Unresolved actual selected-zone selector-to-target provenance refuses admission.
+No unreviewed pointer probe, PAC guess or weaker inference replaces that gate. Any concrete existing-development evidence method must first establish its ABI, authentication, identity and accepted proof boundary. Linux keeps its independent proof.
 
 After admission, call `block_entry()`. Its C body uses the hard-coded HUP/INT/TERM set,
 calls `pthread_sigmask(SIG_BLOCK,...)` once, and stores raw rc and the old mask before
@@ -453,10 +453,18 @@ handler independently makes the latch sticky. Children inherit neither pipe endp
 nor owner state and preserve the applicable caller mask.
 
 Before the final decision, finish every admitted component action, evidence/identity
-and inventory check, marker/file/directory fsync, child cleanup and ordinary resource
-close. The marker remains provisional. Before L, pass its trusted held directory fd
-once to `hold_completion`; State owns the duplicate and original dev/inode/type before
-Python resumes. Close the ordinary seal fd before L. Then call `block_final()`, which
+and inventory check, child cleanup and ordinary resource close except the seal fd.
+On ordinary child-close `OSError`, keep the first error, attempt every other distinct owned child once and never
+retry the result-unknown fd. Definitely unattempted children stay in the original container; repeated close skips
+processed items. This promises no arbitrary-`BaseException` attempt-all and creates no ordinary-fd native cell.
+
+Require the existing empty output-directory and held-identity preconditions, then pass the trusted held directory fd
+once to `hold_completion` and normally observe the authoritative no-failure consumer outcome (`native-release.pending`,
+not sealed success) before the first marker byte. `NOT_RUN`, non-normal hold or interrupted confirmation writes no marker, makes no
+ownership guess and enters the legal unwind; `finish_release()` handles any duplicate once and dup/fstat
+failure stays sticky. Only confirmed success permits marker write plus file/directory fsync. The marker
+remains provisional. Close the ordinary seal fd before L.
+Then call `block_final()`, which
 stores the real mask rc and final old mask before return. Only its successful result
 permits the final native-thread observation and exactly one nonblocking one-byte pipe
 read. Any returned byte sets sticky
@@ -527,9 +535,15 @@ strongly rooted status singleton; that fixed INCREF is outside the sealed syscal
 performs no allocation, DECREF or callback. `outcome()` is a read-only NOARGS getter for
 that singleton and never releases. Later diagnostic formatting has no control authority.
 An interruption before, during or after the getter, Python assignment, formatting or GC
-does not infer native failure, repeat a syscall or enter a retry loop.
+does not infer native failure, repeat a syscall or enter a retry loop. When outcome
+observation completes normally, classify only that State result. If a new caller event
+interrupts it, propagate that interruption with normal context through the owner, wrapper and complete
+outer-main reporting boundary. Produce no product report, E_RUNTIME guess, cleanup, marker mutation or
+repeated release; State and actual effects remain sealed. Add no fixed getter, atomic propagation
+primitive, signal delay or second selector.
 
-Every outer recoverable/refusal branch checks authoritative State before cleanup logic.
+Every outer recoverable/refusal branch reached under continuing ordinary control checks authoritative State before
+cleanup. No outer layer catches an interrupted outcome observation and resumes normal classification with a fabricated failure.
 When L occurred and native release succeeded with no earlier failure, any later caller
 exception keeps the marker and caller ownership: driver `Refusal`,
 `_consumer.Refusal("E_RUNTIME")`, `E_PARENT_CONTEXT`, identical errno/text `OSError`,
@@ -537,7 +551,9 @@ exception keeps the marker and caller ownership: driver `Refusal`,
 with the same completion result. They cannot create a new inconclusive bundle, roll
 back, run another product action or relabel the event pre-L. A true native or earlier
 failure remains sticky even if the caller also raises, and ordinary control that
-continues reports the existing `E_RUNTIME` precedence.
+continues reports the existing `E_RUNTIME` precedence. An interrupted observation proves
+only that product reporting did not complete; it does not prove success or failure, and
+does not promise that an earlier caller event defeats every later independent event.
 
 `SIG_DFL` may terminate inside the unmask call before rc is recorded or the final close
 runs; it may also terminate after a true failure and before best-effort rollback. Do not
@@ -762,7 +778,7 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
-| shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, complete package/source revision or dependency closure refuses; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
+| shadow-enforced | Real production recipe on actual Mac and Linux records exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
@@ -771,10 +787,10 @@ observations.
 | shadow-enforced | Linux capped `/proc/self/status` identity/`Threads: 1` and macOS preloaded fixed libproc exact-size/`pti_threadnum == 1`; entry non-one/unregistered native thread refuses before effects and final count/read/close failure rolls back; complete physical runtime/startup/dependency and initialized finite-tail evidence proves the census stays exclusive, while a mocked count, Python registry or implementation name does not |
 | shadow-enforced | Real TERM/HUP/INT on actual Mac and Linux before final block, while blocked before L and immediately after L, each paired with no-signal and caller-exception controls; original blocked, returning, `SIG_IGN` and `SIG_DFL` dispositions; pending preservation/discard semantics; default termination reports only the last observed boundary; dual real failure/caller events preserve true first failure and never invent cleanup |
 | shadow-enforced | Native `NOT_RUN` versus `RETURNED(raw_rc)` for entry/resume/final/finish; entry success interrupted before Python assignment still restores saved old mask; failed entry never reads it; nested scopes borrow one owner; direct result cells and first-failure precedence; module/State/method lifetime and fixed return epilogue have no allocation/DECREF/callback in the sealed tail |
-| shadow-enforced | Completion dup ownership is recorded before Python handoff; normal close, simulated EINTR with original fd still held, simulated already-closed/EBADF, fstat error, identity mismatch and unavailable no-reuse closure; exactly one fstat, no wrong-object unlink/reopen/EINTR guess, at most one conditional close and six bounded tail APIs; unlink/fsync failures remain distinct and sticky |
-| shadow-enforced | Earlier Python preparation/release failure rolls back before unmask through the usable held fd and survives later native success; post-L ValueError, identical errno/text OSError, MemoryError, SystemExit, driver Refusal and `_consumer.Refusal` pair with native success/failure; outer recoverable/refusal branches never repeat release or create new inconclusive output; interrupted getter/assignment/formatting/GC neither guesses failure nor retries |
+| shadow-enforced | Empty-directory/held-identity precheck precedes hold; NOT_RUN, dup failure, dup/fstat failure, lost hold return and interrupted authoritative confirmation produce no marker; only normally observed no-failure consumer outcome (`native-release.pending`, not sealed success) permits the first marker byte; any owned duplicate is released once; normal close, simulated EINTR with original fd still held, simulated already-closed/EBADF, identity mismatch and unavailable no-reuse closure; exactly one fstat, no wrong-object unlink/reopen/EINTR guess, at most one conditional close and six bounded tail APIs; unlink/fsync failures remain distinct and sticky |
+| shadow-enforced | Earlier Python preparation/release failure rolls back before unmask through the usable held fd and survives later native success; post-L ValueError, identical errno/text OSError, MemoryError, SystemExit, driver Refusal and `_consumer.Refusal` pair with native success/failure; normal observation classifies authoritative State; a new sentinel interrupting observation crosses the real complete outer-main reporting boundary with its context, no fabricated E_RUNTIME/product cleanup/marker change/repeated release, and no promise that the earliest caller beats a later event |
 | shadow-enforced | Ledger starts before resolver/load_anchor and retains early, repeated, final-recheck, failure and cancellation batches in order; empty batches add no row; freeze precedes no child and later held/named seal still detects drift. On Linux bind the real host fd-path function before mocking Darwin platform, then run the original metadata mutation refusal and positive block without swallowing EINVAL, skipping assertions or faking fstat |
-| shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; no such work follows it; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/handler/wakeup-fd/mask/active-parent restoration failures |
+| shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; ordinary child-close OSError tries other distinct owned children once, retains the first error, never retries result-unknown fds, leaves definitely unattempted responsibility in the original container and makes repeated close inert; no arbitrary-BaseException attempt-all; no cleanup work follows L; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/handler/wakeup-fd/mask/active-parent restoration failures |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
 
