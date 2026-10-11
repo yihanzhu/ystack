@@ -372,6 +372,8 @@ def outcome_binding_case(outcome):
  fake_module=types.SimpleNamespace(prepare_state=lambda:state)
  original_spec=e.importlib.util.spec_from_file_location
  original_module=e.importlib.util.module_from_spec
+ original_origin=e._NATIVE_ORIGIN
+ original_evidence=e._ALLOCATOR_INTERVAL_EVIDENCE_READY
  e.importlib.util.spec_from_file_location=lambda *_args,**_kwargs:fake_spec
  e.importlib.util.module_from_spec=lambda _spec:fake_module
  e._NATIVE_ORIGIN=None;e._ALLOCATOR_INTERVAL_EVIDENCE_READY=True
@@ -386,7 +388,9 @@ def outcome_binding_case(outcome):
  finally:
   e.importlib.util.spec_from_file_location=original_spec
   e.importlib.util.module_from_spec=original_module
-  e._NATIVE_ORIGIN=None;sys.modules.pop("_cancel_release",None)
+  e._NATIVE_ORIGIN=original_origin
+  e._ALLOCATOR_INTERVAL_EVIDENCE_READY=original_evidence
+  sys.modules.pop("_cancel_release",None)
 assert outcome_binding_case("native-release.pending")=="accepted"
 assert outcome_binding_case("native-release.failure")=="refused"
 print("shadow-enforced-native-outcome: simulated pending accepted and non-pending refused")
