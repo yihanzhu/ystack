@@ -32,7 +32,7 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
@@ -108,8 +108,14 @@ if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   /usr/bin/grep -q $'\tautia\t' "$tmp/native-codegen.txt" || fail 'native typed PAC authentication codegen'
   /usr/bin/grep -q $'\tbrk\t#0xc470' "$tmp/native-codegen.txt" || fail 'native PAC authentication trap codegen'
   pac_bad_binary=$(/usr/bin/find "$tmp/native-case-16" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
-  set +e
-  "$python_bin" -I -S -B - "$pac_bad_binary" > "$tmp/pac-bad.stdout" 2> "$tmp/pac-bad.stderr" <<'PY'
+  pac_bad_record="$tmp/native-case-16/build-record.json"
+  pac_bad_codegen="$tmp/pac-bad-codegen.txt"
+  pac_good_binary=$(/usr/bin/find "$tmp/native-case-20" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+  pac_good_record="$tmp/native-case-20/build-record.json"
+  pac_good_codegen="$tmp/pac-good-codegen.txt"
+  /usr/bin/otool -tvV "$pac_bad_binary" > "$pac_bad_codegen"
+  /usr/bin/otool -tvV "$pac_good_binary" > "$pac_good_codegen"
+  cat > "$tmp/pac-pair.py" <<'PY'
 import importlib.util,sys
 print("before-auth",flush=True)
 spec=importlib.util.spec_from_file_location("_cancel_release",sys.argv[1])
@@ -117,8 +123,61 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 module.prepare_state().observe_allocator_admission()
 print("after-auth",flush=True)
 PY
+  set +e
+  "$python_bin" -I -S -B "$tmp/pac-pair.py" "$pac_good_binary" \
+    > "$tmp/pac-good.stdout" 2> "$tmp/pac-good.stderr"
+  pac_good_status=$?
+  "$python_bin" -I -S -B "$tmp/pac-pair.py" "$pac_bad_binary" \
+    > "$tmp/pac-bad.stdout" 2> "$tmp/pac-bad.stderr"
   pac_bad_status=$?
   set -e
+  "$python_bin" -I -S -B - "$pac_good_binary" "$pac_good_record" "$pac_good_codegen" \
+    "$tmp/pac-good.stdout" "$tmp/pac-good.stderr" "$pac_good_status" \
+    "$pac_bad_binary" "$pac_bad_record" "$pac_bad_codegen" \
+    "$tmp/pac-bad.stdout" "$tmp/pac-bad.stderr" "$pac_bad_status" \
+    "$root/shadow/v1/_cancel_release.c" \
+    "$root/shadow/v1/build-cancel-release.sh" "$root/scripts/test/shadow-enforced.test.sh" \
+    "$tmp/pac-pair.py" <<'PY'
+import hashlib,json,pathlib,sys
+good_binary,good_record,good_codegen,good_stdout,good_stderr=map(pathlib.Path,sys.argv[1:6])
+good_status=sys.argv[6]
+bad_binary,bad_record,bad_codegen,bad_stdout,bad_stderr=map(pathlib.Path,sys.argv[7:12])
+bad_status=sys.argv[12]
+source,build,test,runner=map(pathlib.Path,sys.argv[13:17])
+raw=lambda path:path.read_bytes()
+sha=lambda path:hashlib.sha256(raw(path)).hexdigest()
+def result(binary,record,codegen,stdout,stderr,status):
+ lines=raw(codegen).decode("utf-8","strict").splitlines()
+ matches=[index for index,line in enumerate(lines)
+          if "\tpacia\t" in line or "\tautia\t" in line or "\tbrk\t#0xc470" in line]
+ start=max(0,min(matches)-4) if matches else 0
+ end=min(len(lines),max(matches)+5) if matches else 0
+ return {"binary_sha256":sha(binary),"build_record_sha256":sha(record),
+  "build_record":json.loads(raw(record)),"status":int(status),
+  "stdout_hex":raw(stdout).hex(),"stderr_hex":raw(stderr).hex(),
+  "codegen_sha256":sha(codegen),"authentication_window":lines[start:end]}
+evidence={"source_sha256":sha(source),"build_script_sha256":sha(build),
+ "test_script_sha256":sha(test),"runner_sha256":sha(runner),
+ "positive":result(good_binary,good_record,good_codegen,good_stdout,good_stderr,good_status),
+ "negative":result(bad_binary,bad_record,bad_codegen,bad_stdout,bad_stderr,bad_status)}
+print("shadow-enforced-bad-pac-evidence:"+json.dumps(evidence,sort_keys=True,separators=(",",":")))
+PY
+  "$python_bin" -I -S -B - "$tmp" <<'PY'
+import importlib.util,pathlib,sys
+base=pathlib.Path(sys.argv[1])
+for case,label in ((17,"mixed main/tc"),(18,"historical whole tc"),(19,"unknown target")):
+ binary=next((base/("native-case-%d"%case)).glob("_cancel_release*.so"))
+ spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+ state=module.prepare_state()
+ try:state.observe_allocator_admission()
+ except RuntimeError as exc:assert str(exc)=="allocator target refused",(label,str(exc))
+ else:raise AssertionError(label+" profile admitted")
+ print("ok native-profile - "+label+" profile refuses as one tuple")
+PY
+  [ "$pac_good_status" -eq 0 ] || fail 'valid PAC control failed'
+  [ ! -s "$tmp/pac-good.stderr" ] || fail 'valid PAC control stderr'
+  [ "$(cat "$tmp/pac-good.stdout")" = $'before-auth\nafter-auth' ] || fail 'valid PAC control boundary'
   [ "$pac_bad_status" -gt 128 ] || fail 'bad PAC did not terminate'
   [ "$(cat "$tmp/pac-bad.stdout")" = before-auth ] || fail 'bad PAC crossed its last boundary'
 else

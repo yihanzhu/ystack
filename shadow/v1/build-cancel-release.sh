@@ -17,7 +17,7 @@ case "$mode:$#" in
     test_build=true
     test_case=$4
     case "$test_case" in ''|*[!0-9]*) fail ;; esac
-    [ "$test_case" -ge 1 ] && [ "$test_case" -le 16 ] || fail
+    [ "$test_case" -ge 1 ] && [ "$test_case" -le 20 ] || fail
     ;;
   *) fail ;;
 esac

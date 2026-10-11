@@ -494,17 +494,63 @@ require_phase(NativeState *state, enum phase expected)
 }
 
 #if defined(__APPLE__)
+#if YSTACK_CANCEL_RELEASE_TESTING && \
+        (YSTACK_CANCEL_TEST_CASE == 16 || YSTACK_CANCEL_TEST_CASE == 20)
+static boolean_t
+test_bad_pac_claimed(malloc_zone_t *zone, void *pointer)
+{
+    (void)zone;
+    (void)pointer;
+    return false;
+}
+
+static int
+test_pac_pair(void **signed_value)
+{
+    typeof(((malloc_zone_t *)0)->claimed_address) value = test_bad_pac_claimed;
+    void *plain_value = ptrauth_nop_cast(void *, value);
+    void *correct = ptrauth_sign_unauthenticated(plain_value,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+    void *incorrect = ptrauth_sign_unauthenticated(plain_value,
+        ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
+    void *verified;
+    if (correct == incorrect) return 0;
+    verified = ptrauth_auth_data(correct, ptrauth_key_process_independent_code,
+        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+    if (verified != plain_value) return 0;
+    *signed_value = correct;
+    return 1;
+}
+#endif
+
 static uintptr_t
 authenticate_claimed(malloc_zone_t *zone)
 {
-    typeof(zone->claimed_address) value = zone->claimed_address;
-    if (value == NULL) return 0;
-    return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
+#if YSTACK_CANCEL_RELEASE_TESTING && \
+        (YSTACK_CANCEL_TEST_CASE == 16 || YSTACK_CANCEL_TEST_CASE == 20)
+    void *signed_value;
+#if YSTACK_CANCEL_TEST_CASE == 16
+    (void)zone;
+#endif
+    if (!test_pac_pair(&signed_value)) return 0;
+#if YSTACK_CANCEL_TEST_CASE == 16
+    return (uintptr_t)ptrauth_auth_data(signed_value,
         ptrauth_key_process_independent_code,
-#if YSTACK_CANCEL_RELEASE_TESTING && YSTACK_CANCEL_TEST_CASE == 16
-        ptrauth_string_discriminator("malloc_zone_fn.try_free_default"));
+        ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
+#endif
+#endif
+#if !YSTACK_CANCEL_RELEASE_TESTING || YSTACK_CANCEL_TEST_CASE != 16
+    {
+        typeof(zone->claimed_address) value = zone->claimed_address;
+        if (value == NULL) return 0;
+        return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
+            ptrauth_key_process_independent_code,
+            ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+    }
 #else
-        ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+    return 0;
 #endif
 }
 
@@ -630,25 +676,23 @@ capture_allocator_observation(NativeState *state)
     record->try_free_default = authenticate_try_free(zone);
     record->malloc_type_malloc = authenticate_typed_malloc(zone);
     record->malloc_type_realloc = authenticate_typed_realloc(zone);
-    if (record->claimed_address != allocator.malloc_base + 0x3021c) {
-        record->reason = 10; return 0;
-    }
-    if (record->try_free_default != allocator.malloc_base + 0x3b67c
 #if YSTACK_CANCEL_RELEASE_TESTING
-            && record->try_free_default != allocator.malloc_base + 0x3b64c
-#endif
-            ) {
-        record->reason = 11; return 0;
+    if (YSTACK_CANCEL_TEST_CASE == 17) {
+        record->try_free_default = allocator.malloc_base + 0x3b67c;
     }
-    if (record->malloc_type_malloc != allocator.malloc_base + 0x3a5e8
-#if YSTACK_CANCEL_RELEASE_TESTING
-            && record->malloc_type_malloc != allocator.malloc_base + 0x3a528
-#endif
-            ) {
-        record->reason = 12; return 0;
+    else if (YSTACK_CANCEL_TEST_CASE == 18) {
+        record->try_free_default = allocator.malloc_base + 0x3b67c;
+        record->malloc_type_malloc = allocator.malloc_base + 0x3a5e8;
     }
-    if (record->malloc_type_realloc != allocator.malloc_base + 0x30328) {
-        record->reason = 13; return 0;
+    else if (YSTACK_CANCEL_TEST_CASE == 19) {
+        record->malloc_type_realloc = allocator.malloc_base + 0x30330;
+    }
+#endif
+    if (record->claimed_address != allocator.malloc_base + 0x3021c ||
+            record->try_free_default != allocator.malloc_base + 0x3b64c ||
+            record->malloc_type_malloc != allocator.malloc_base + 0x3a528 ||
+            record->malloc_type_realloc != allocator.malloc_base + 0x30328) {
+        record->reason = OBSERVATION_TARGET; return 0;
     }
     memcpy(&parent, (uint8_t *)zone + 0x100, sizeof(parent));
     count = *((uint8_t *)zone + 0xd2);
@@ -766,9 +810,7 @@ state_observe_allocator_admission(NativeState *state, PyObject *Py_UNUSED(ignore
             "allocator identity refused", "allocator mapping refused",
             "allocator profile refused", "allocator target refused",
             "allocator layout refused", "allocator randomization refused",
-            "python allocator refused", "allocator drift refused",
-            "claimed target refused", "try-free target refused",
-            "typed malloc target refused", "typed realloc target refused"
+            "python allocator refused", "allocator drift refused"
         };
         uint32_t reason = state->observation.reason;
         PyErr_SetString(PyExc_RuntimeError,
