@@ -275,6 +275,8 @@ every acquired qualifier and ACL on normal, `OSError`, `MemoryError` and other P
 exits; never rely on freeing the ACL to free a qualifier. Do not invoke the resolver
 after capture fails. Preserve the existing metadata checks, exact tag/permission/UUID
 bytes, 128-entry maximum and original ordering.
+The parent never calls membership resolution or initializes that service,
+including for compatibility UUIDs.
 
 Resolve only the captured UUID bytes in one fresh fixed child per bounded ACL batch:
 `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This is a private role
