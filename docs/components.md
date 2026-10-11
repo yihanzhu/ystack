@@ -1850,6 +1850,11 @@ boundary. `shadow/v1/build-cancel-release.sh` compiles it only for a reviewed Py
 runtime into a new private test or provisioning directory and records the exact source,
 compiler, arguments, ABI, and output. The consumer loads only parent-accepted bytes by
 absolute path with `RTLD_NOW|RTLD_LOCAL`; it never builds or installs them.
+On macOS the recorded recipe uses the SDK pointer-authentication intrinsics and traps.
+Before the first census, the native boundary binds the accepted runtime and shared-cache
+identities, authenticates the fixed allocator callbacks, and captures the bounded XZM and
+public CPython allocator profiles. The same native state rejects a missing observation or
+profile drift before release. Linux keeps its separate C11 release contract.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

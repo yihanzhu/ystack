@@ -3,6 +3,7 @@
 #include <pthread.h>
 
 #include <errno.h>
+#include <stdbool.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
@@ -18,6 +19,12 @@
 #include <mach/mach_vm.h>
 #include <malloc/malloc.h>
 #include <ptrauth.h>
+#if !__has_feature(ptrauth_intrinsics)
+#error ptrauth intrinsics are required
+#endif
+#if __has_feature(ptrauth_calls)
+#error the ordinary arm64 calling ABI is required
+#endif
 #endif
 
 #ifndef YSTACK_CANCEL_RELEASE_TESTING
@@ -39,6 +46,7 @@ enum phase {
 enum failure_slot {
     FAILURE_NONE = 0,
     FAILURE_ENTRY_MASK,
+    FAILURE_ALLOCATOR_DRIFT,
     FAILURE_RESUME_MASK,
     FAILURE_FINAL_MASK,
     FAILURE_HOLD_DUP,
@@ -118,6 +126,8 @@ typedef struct {
     uint32_t *count_storage;
     void **logger_storage;
     uint8_t *slowpath_storage;
+    uint32_t (*random_uniform)(uint32_t);
+    bool (*shared_cache_uuid)(uint8_t[16]);
     uintptr_t malloc_base;
     uintptr_t python_base;
     readable_range zones_storage_range;
@@ -183,8 +193,11 @@ image_uuid(const void *base, const uint8_t expected[16])
     const struct mach_header_64 *header = base;
     const uint8_t *cursor;
     uint32_t index;
-    if (header == NULL || header->magic != MH_MAGIC_64 || header->cputype != CPU_TYPE_ARM64 ||
-            header->sizeofcmds > 1024 * 1024) {
+    readable_range commands;
+    if (header == NULL || !capture_readable_range(header, sizeof(*header), &commands) ||
+            header->magic != MH_MAGIC_64 || header->cputype != CPU_TYPE_ARM64 ||
+            header->sizeofcmds > 1024 * 1024 ||
+            !capture_readable_range(header, sizeof(*header) + header->sizeofcmds, &commands)) {
         return 0;
     }
     cursor = (const uint8_t *)(header + 1);
@@ -207,17 +220,23 @@ image_uuid(const void *base, const uint8_t expected[16])
 static int
 bind_allocator(void)
 {
+    static const uint8_t cache_uuid[16] = {
+        0x42,0x18,0x85,0xd7,0x01,0xcc,0x36,0x29,0xb5,0x9b,0x6a,0x06,0x8d,0xb3,0x44,0x20};
     static const uint8_t malloc_uuid[16] = {
         0x79,0x7c,0x42,0x77,0x18,0xa2,0x36,0x5f,0x8f,0xc9,0x95,0x7c,0x37,0x1a,0x02,0xa4};
     static const uint8_t python_uuid[16] = {
         0x3a,0x57,0xdb,0x8c,0x0f,0x45,0x3d,0x16,0x88,0xca,0x37,0xca,0x36,0xd8,0x69,0xce};
+    static const uint8_t libc_uuid[16] = {
+        0xaf,0x20,0x49,0x63,0xe3,0x50,0x39,0xa8,0x9e,0x50,0x16,0x81,0xdb,0xc4,0x13,0x3d};
     Dl_info malloc_info;
     Dl_info python_info;
+    Dl_info random_info;
     malloc_zone_t **zones;
     malloc_zone_t *zone;
     uintptr_t table_begin;
     uintptr_t table_end;
     uint8_t count;
+    uint8_t observed_cache_uuid[16];
     memset(&allocator, 0, sizeof(allocator));
     dlerror();
     allocator.zones_storage = (malloc_zone_t ***)dlsym(RTLD_DEFAULT, "malloc_zones");
@@ -226,16 +245,31 @@ bind_allocator(void)
     if (dlerror() != NULL) return 0;
     allocator.logger_storage = (void **)dlsym(RTLD_DEFAULT, "malloc_logger");
     if (dlerror() != NULL) return 0;
+    allocator.random_uniform = (uint32_t (*)(uint32_t))dlsym(RTLD_DEFAULT,
+        "arc4random_uniform");
+    if (dlerror() != NULL || allocator.random_uniform == NULL) return 0;
+    allocator.shared_cache_uuid = (bool (*)(uint8_t[16]))dlsym(RTLD_DEFAULT,
+        "_dyld_get_shared_cache_uuid");
+    if (dlerror() != NULL || allocator.shared_cache_uuid == NULL) return 0;
     allocator.slowpath_storage = (uint8_t *)allocator.logger_storage + 0x20;
     if (!dladdr(allocator.zones_storage, &malloc_info) || malloc_info.dli_fbase == NULL ||
             !dladdr((void *)(uintptr_t)PyMem_GetAllocator, &python_info) ||
             python_info.dli_fbase == NULL ||
+            !dladdr((void *)(uintptr_t)allocator.random_uniform, &random_info) ||
+            random_info.dli_fbase == NULL || random_info.dli_saddr == NULL ||
             !image_uuid(malloc_info.dli_fbase, malloc_uuid) ||
-            !image_uuid(python_info.dli_fbase, python_uuid)) return 0;
+            !image_uuid(python_info.dli_fbase, python_uuid) ||
+            !image_uuid(random_info.dli_fbase, libc_uuid) ||
+            !allocator.shared_cache_uuid(observed_cache_uuid) ||
+            memcmp(observed_cache_uuid, cache_uuid, sizeof(cache_uuid)) != 0) return 0;
     allocator.malloc_base = (uintptr_t)malloc_info.dli_fbase;
     allocator.python_base = (uintptr_t)python_info.dli_fbase;
     if ((uintptr_t)(void *)(uintptr_t)PyMem_GetAllocator != allocator.python_base + 0xcca84 ||
             (uintptr_t)(void *)(uintptr_t)PyObject_GetArenaAllocator != allocator.python_base + 0xccc10 ||
+            (uintptr_t)(void *)(uintptr_t)allocator.random_uniform !=
+                (uintptr_t)random_info.dli_fbase + 0x12cd4 ||
+            (uintptr_t)random_info.dli_saddr !=
+                (uintptr_t)(void *)(uintptr_t)allocator.random_uniform ||
             !capture_readable_range(allocator.zones_storage, sizeof(*allocator.zones_storage),
                 &allocator.zones_storage_range) ||
             !capture_readable_range(allocator.count_storage, sizeof(*allocator.count_storage),
@@ -287,6 +321,7 @@ typedef struct {
     mode_t completion_type;
     int rollback_attempted;
     int allocator_observed;
+    uint64_t xzm_f0;
     ObservationV1 observation;
     XzmClassSnapshot xzm_snapshot;
     PythonAllocatorSnapshot python_snapshot;
@@ -462,21 +497,32 @@ require_phase(NativeState *state, enum phase expected)
 static uintptr_t
 authenticate_claimed(malloc_zone_t *zone)
 {
-    uintptr_t bits;
-    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, claimed_address), sizeof(bits));
-    if (bits == 0) return 0;
-    return (uintptr_t)ptrauth_auth_data((void *)bits,
+    typeof(zone->claimed_address) value = zone->claimed_address;
+    if (value == NULL) return 0;
+    return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
         ptrauth_key_process_independent_code,
+#if YSTACK_CANCEL_RELEASE_TESTING && YSTACK_CANCEL_TEST_CASE == 16
+        ptrauth_string_discriminator("malloc_zone_fn.try_free_default"));
+#else
         ptrauth_string_discriminator("malloc_zone_fn.claimed_address"));
+#endif
+}
+
+static int
+zone_slot_is_readable(malloc_zone_t *zone, size_t offset)
+{
+    uintptr_t address = (uintptr_t)zone;
+    return address <= UINTPTR_MAX - offset &&
+        ((address + offset) & (sizeof(void *) - 1)) == 0 &&
+        range_contains(&allocator.zone_range, (uint8_t *)zone + offset, sizeof(void *));
 }
 
 static uintptr_t
 authenticate_try_free(malloc_zone_t *zone)
 {
-    uintptr_t bits;
-    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, try_free_default), sizeof(bits));
-    if (bits == 0) return 0;
-    return (uintptr_t)ptrauth_auth_data((void *)bits,
+    typeof(zone->try_free_default) value = zone->try_free_default;
+    if (value == NULL) return 0;
+    return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
         ptrauth_key_process_independent_code,
         ptrauth_string_discriminator("malloc_zone_fn.try_free_default"));
 }
@@ -484,10 +530,9 @@ authenticate_try_free(malloc_zone_t *zone)
 static uintptr_t
 authenticate_typed_malloc(malloc_zone_t *zone)
 {
-    uintptr_t bits;
-    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, malloc_type_malloc), sizeof(bits));
-    if (bits == 0) return 0;
-    return (uintptr_t)ptrauth_auth_data((void *)bits,
+    typeof(zone->malloc_type_malloc) value = zone->malloc_type_malloc;
+    if (value == NULL) return 0;
+    return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
         ptrauth_key_process_independent_code,
         ptrauth_string_discriminator("malloc_zone_fn.malloc_type_malloc"));
 }
@@ -495,10 +540,9 @@ authenticate_typed_malloc(malloc_zone_t *zone)
 static uintptr_t
 authenticate_typed_realloc(malloc_zone_t *zone)
 {
-    uintptr_t bits;
-    memcpy(&bits, (uint8_t *)zone + offsetof(malloc_zone_t, malloc_type_realloc), sizeof(bits));
-    if (bits == 0) return 0;
-    return (uintptr_t)ptrauth_auth_data((void *)bits,
+    typeof(zone->malloc_type_realloc) value = zone->malloc_type_realloc;
+    if (value == NULL) return 0;
+    return (uintptr_t)ptrauth_auth_data(ptrauth_nop_cast(void *, value),
         ptrauth_key_process_independent_code,
         ptrauth_string_discriminator("malloc_zone_fn.malloc_type_realloc"));
 }
@@ -543,6 +587,7 @@ capture_allocator_observation(NativeState *state)
     uintptr_t end;
     uint8_t count;
     uint8_t index;
+    uint64_t f0;
     ObservationV1 *record = &state->observation;
     XzmClassSnapshot *snapshot = &state->xzm_snapshot;
     memset(record, 0, sizeof(*record));
@@ -550,7 +595,7 @@ capture_allocator_observation(NativeState *state)
     memset(&state->python_snapshot, 0, sizeof(state->python_snapshot));
     record->version = 1;
     if (!allocator.ready) { record->reason = OBSERVATION_BINDING; return 0; }
-    (void)arc4random_uniform(UINT32_MAX);
+    (void)allocator.random_uniform(UINT32_MAX);
     if (!range_contains(&allocator.zones_storage_range, allocator.zones_storage,
                 sizeof(*allocator.zones_storage)) ||
             !range_contains(&allocator.count_storage_range, allocator.count_storage,
@@ -575,6 +620,12 @@ capture_allocator_observation(NativeState *state)
         record->reason = OBSERVATION_PROFILE; return 0;
     }
     record->zone_version = zone->version;
+    if (!zone_slot_is_readable(zone, offsetof(malloc_zone_t, claimed_address)) ||
+            !zone_slot_is_readable(zone, offsetof(malloc_zone_t, try_free_default)) ||
+            !zone_slot_is_readable(zone, offsetof(malloc_zone_t, malloc_type_malloc)) ||
+            !zone_slot_is_readable(zone, offsetof(malloc_zone_t, malloc_type_realloc))) {
+        record->reason = OBSERVATION_MAPPING; return 0;
+    }
     record->claimed_address = authenticate_claimed(zone);
     record->try_free_default = authenticate_try_free(zone);
     record->malloc_type_malloc = authenticate_typed_malloc(zone);
@@ -582,10 +633,18 @@ capture_allocator_observation(NativeState *state)
     if (record->claimed_address != allocator.malloc_base + 0x3021c) {
         record->reason = 10; return 0;
     }
-    if (record->try_free_default != allocator.malloc_base + 0x3b67c) {
+    if (record->try_free_default != allocator.malloc_base + 0x3b67c
+#if YSTACK_CANCEL_RELEASE_TESTING
+            && record->try_free_default != allocator.malloc_base + 0x3b64c
+#endif
+            ) {
         record->reason = 11; return 0;
     }
-    if (record->malloc_type_malloc != allocator.malloc_base + 0x3a5e8) {
+    if (record->malloc_type_malloc != allocator.malloc_base + 0x3a5e8
+#if YSTACK_CANCEL_RELEASE_TESTING
+            && record->malloc_type_malloc != allocator.malloc_base + 0x3a528
+#endif
+            ) {
         record->reason = 12; return 0;
     }
     if (record->malloc_type_realloc != allocator.malloc_base + 0x30328) {
@@ -601,6 +660,17 @@ capture_allocator_observation(NativeState *state)
             !range_contains(&allocator.table_range, (void *)begin, end - begin)) {
         record->reason = OBSERVATION_LAYOUT; return 0;
     }
+    if ((uintptr_t)zone > UINTPTR_MAX - 0xf0 ||
+            (((uintptr_t)zone + 0xf0) & (sizeof(f0) - 1)) != 0 ||
+            !range_contains(&allocator.zone_range, (uint8_t *)zone + 0xf0, sizeof(f0))) {
+        record->reason = OBSERVATION_LAYOUT; return 0;
+    }
+    memcpy(&f0, (uint8_t *)zone + 0xf0, sizeof(f0));
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 15) f0 = 1;
+#endif
+    if (f0 != 0) { record->reason = OBSERVATION_PROFILE; return 0; }
+    state->xzm_f0 = f0;
     snapshot->count = count;
     snapshot->zone = (uint64_t)(uintptr_t)zone;
     snapshot->begin = begin;
@@ -638,13 +708,27 @@ allocator_snapshot_matches(NativeState *state)
     uintptr_t end;
     uint8_t count;
     uint8_t index;
+    uint64_t f0;
     if (!state->allocator_observed || !allocator.ready) return 0;
+    if (!range_contains(&allocator.zones_storage_range, allocator.zones_storage,
+                sizeof(*allocator.zones_storage)) ||
+            !range_contains(&allocator.count_storage_range, allocator.count_storage,
+                sizeof(*allocator.count_storage)) ||
+            !range_contains(&allocator.logger_storage_range, allocator.logger_storage,
+                sizeof(*allocator.logger_storage)) ||
+            !range_contains(&allocator.slowpath_storage_range, allocator.slowpath_storage, 1)) return 0;
     zones = *allocator.zones_storage;
     if (zones == NULL || *allocator.count_storage != state->observation.zone_count ||
+            !range_contains(&allocator.zones_range, zones,
+                state->observation.zone_count * sizeof(*zones)) ||
             zones[0] != (malloc_zone_t *)(uintptr_t)state->observation.zone0 ||
             *allocator.logger_storage != (void *)(uintptr_t)state->observation.logger ||
             *allocator.slowpath_storage != state->observation.slowpath) return 0;
     zone = zones[0];
+    if (!range_contains(&allocator.zone_range, zone, 0x268) ||
+            !range_contains(&allocator.table_range,
+                (void *)(uintptr_t)state->xzm_snapshot.begin,
+                state->xzm_snapshot.end - state->xzm_snapshot.begin)) return 0;
     memcpy(&parent, (uint8_t *)zone + 0x100, sizeof(parent));
     count = *((uint8_t *)zone + 0xd2);
     memcpy(&begin, (uint8_t *)zone + 0xd8, sizeof(begin));
@@ -652,6 +736,14 @@ allocator_snapshot_matches(NativeState *state)
     if (parent != 0 || count != state->xzm_snapshot.count ||
             begin != state->xzm_snapshot.begin || end != state->xzm_snapshot.end ||
             zone->version != state->observation.zone_version) return 0;
+    if ((uintptr_t)zone > UINTPTR_MAX - 0xf0 ||
+            (((uintptr_t)zone + 0xf0) & (sizeof(f0) - 1)) != 0 ||
+            !range_contains(&allocator.zone_range, (uint8_t *)zone + 0xf0, sizeof(f0))) return 0;
+    memcpy(&f0, (uint8_t *)zone + 0xf0, sizeof(f0));
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 14) f0 = 1;
+#endif
+    if (f0 != state->xzm_f0 || f0 != 0) return 0;
     for (index = 0; index < count; index++) {
         if (*((uint8_t *)begin + (size_t)index * 0x60 + 0x58) !=
                 state->xzm_snapshot.values[index]) return 0;
@@ -699,6 +791,12 @@ state_block_entry(NativeState *state, PyObject *Py_UNUSED(ignored))
     if (!require_phase(state, PHASE_PREPARED)) {
         return NULL;
     }
+#if defined(__APPLE__)
+    if (!state->allocator_observed) {
+        PyErr_SetString(PyExc_RuntimeError, "allocator observation is required");
+        return NULL;
+    }
+#endif
     rc = mask_call(1, SIG_BLOCK, &state->watched, &state->entry_old);
     record_result(&state->entry_mask, rc, 0);
     if (rc != 0) {
@@ -795,7 +893,7 @@ state_block_final(NativeState *state, PyObject *Py_UNUSED(ignored))
     }
 #if defined(__APPLE__)
     if (!allocator_snapshot_matches(state)) {
-        remember_failure(state, FAILURE_FINAL_MASK);
+        remember_failure(state, FAILURE_ALLOCATOR_DRIFT);
     }
 #endif
     rc = mask_call(3, SIG_BLOCK, &state->watched, &state->final_old);

@@ -32,7 +32,7 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13; do
+for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
@@ -44,13 +44,23 @@ def ok(value,message):
  if not value:raise AssertionError(message)
  checks+=1;print("ok native-%d - %s"%(checks,message))
 initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-for case in range(1,14):
+for case in range(1,16):
  directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
  marker=directory/"bundle.json";fd=None;delivered=[]
  prior=signal.signal(signal.SIGTERM,lambda *_:delivered.append(True))
  try:
+  if case==15:
+   try:state.observe_allocator_admission()
+   except RuntimeError:pass
+   else:raise AssertionError("simulated nonzero f0 admitted")
+   try:state.block_entry()
+   except RuntimeError:pass
+   else:raise AssertionError("direct caller bypassed allocator admission")
+   ok(not marker.exists(),"simulated initial nonzero f0 refuses before marker")
+   continue
+  state.observe_allocator_admission()
   state.block_entry()
   if case==11:
    result=state.finish_release()
@@ -75,13 +85,13 @@ for case in range(1,14):
   signal.pthread_sigmask(signal.SIG_SETMASK,initial)
  else:
   ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
- if case in (3,4,5,10):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
+ if case in (3,4,5,10,14):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
  if case in (6,7,8,9,12,13):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
  if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
 actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
 spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
-state.block_entry();state.resume_consumer()
+state.observe_allocator_admission();state.block_entry();state.resume_consumer()
 signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGHUP})
 (actual_dir/"bundle.json").write_bytes(b"complete")
 fd=os.open(actual_dir,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
@@ -93,10 +103,32 @@ ok(result=="native-release.success" and signal.SIGHUP in final_mask
 signal.pthread_sigmask(signal.SIG_SETMASK,initial)
 print("shadow-enforced-native: %d checks passed"%checks)
 PY
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  /usr/bin/otool -tvV "$native_binary" > "$tmp/native-codegen.txt"
+  /usr/bin/grep -q $'\tautia\t' "$tmp/native-codegen.txt" || fail 'native typed PAC authentication codegen'
+  /usr/bin/grep -q $'\tbrk\t#0xc470' "$tmp/native-codegen.txt" || fail 'native PAC authentication trap codegen'
+  pac_bad_binary=$(/usr/bin/find "$tmp/native-case-16" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+  set +e
+  "$python_bin" -I -S -B - "$pac_bad_binary" > "$tmp/pac-bad.stdout" 2> "$tmp/pac-bad.stderr" <<'PY'
+import importlib.util,sys
+print("before-auth",flush=True)
+spec=importlib.util.spec_from_file_location("_cancel_release",sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+module.prepare_state().observe_allocator_admission()
+print("after-auth",flush=True)
+PY
+  pac_bad_status=$?
+  set -e
+  [ "$pac_bad_status" -gt 128 ] || fail 'bad PAC did not terminate'
+  [ "$(cat "$tmp/pac-bad.stdout")" = before-auth ] || fail 'bad PAC crossed its last boundary'
+else
+  ! /usr/bin/grep -q -- '-fptrauth-' "$native_out/build-record.json" || fail 'Linux PAC flags'
+fi
 native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
-"$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" <<'PY'
-import hashlib,importlib.util,os,pathlib,sys,sysconfig
-root,binary,record=map(pathlib.Path,sys.argv[1:])
+"$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" \
+  "$native_binary" "$native_out/build-record.json" "$tmp" <<'PY'
+import hashlib,importlib.util,json,os,pathlib,shutil,sys,sysconfig
+root,binary,record,production,production_record,base=map(pathlib.Path,sys.argv[1:])
 spec=importlib.util.spec_from_file_location("test_build_refusal",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
@@ -114,6 +146,32 @@ try:e._NativeRelease(context,admission)
 except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" not in sys.modules
 else:raise AssertionError("test-only native binary received production admission")
 print("shadow-enforced-native-admission: test build refused before import")
+original=json.loads(production_record.read_bytes())
+expected=["/usr/bin/cc","-std=gnu11" if sys.platform=="darwin" else "-std=c11",
+ "-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC",
+ "-I"+os.path.realpath(sysconfig.get_config_var("INCLUDEPY")),
+ "-I"+os.path.realpath(sysconfig.get_config_var("CONFINCLUDEPY"))]
+expected += (["-fptrauth-intrinsics","-fptrauth-auth-traps","-bundle","-undefined","dynamic_lookup"]
+             if sys.platform=="darwin" else ["-shared"])
+expected += [str(root/"shadow/v1/_cancel_release.c"),"-o",str(production)]
+assert original["body"]["argv"]==expected
+def mutation(name,change):
+ directory=base/("native-record-"+name);directory.mkdir()
+ target=directory/production.name;shutil.copyfile(production,target);target.chmod(0o500)
+ document=json.loads(production_record.read_bytes());change(document["body"]["argv"])
+ document["body"]["argv_sha256"]=sha(e.canonical(document["body"]["argv"]))
+ changed=directory/"build-record.json";changed.write_bytes(e.canonical(document));changed.chmod(0o400)
+ native=dict(context["native_release"],build_record_sha256=sha(changed.read_bytes()),
+  binary_path=str(target),binary_size=target.stat().st_size,binary_sha256=sha(target.read_bytes()))
+ try:e._NativeRelease({"native_release":native},admission)
+ except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" not in sys.modules
+ else:raise AssertionError("accepted native argv mutation "+name)
+mutation("missing-pac",lambda a:a.remove("-fptrauth-intrinsics") if sys.platform=="darwin" else a.remove("-shared"))
+mutation("repeated-pac",lambda a:a.insert(a.index("-bundle") if sys.platform=="darwin" else a.index("-shared"),
+ "-fptrauth-auth-traps" if sys.platform=="darwin" else "-shared"))
+mutation("reordered-pac",lambda a:a.__setitem__(slice(a.index("-fptrauth-intrinsics"),a.index("-fptrauth-auth-traps")+1),
+ ["-fptrauth-auth-traps","-fptrauth-intrinsics"]) if sys.platform=="darwin" else a.reverse())
+print("shadow-enforced-native-argv: exact recipe and three mutations checked")
 PY
 "$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
 import ctypes,hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,struct,subprocess,sys,sysconfig,uuid

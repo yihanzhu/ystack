@@ -1209,3 +1209,7 @@ inventory with:
 ```sh
 bash scripts/test/shadow-enforced.test.sh
 ```
+
+On macOS, also require the recorded GNU C11 recipe with the two SDK PAC flags, the fixed
+shared-cache and allocator identities, the one-shot allocator observation, and the final
+XZM/guard recheck. Missing identity or lifecycle proof remains a refusal before census.

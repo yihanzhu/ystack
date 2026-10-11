@@ -487,9 +487,11 @@ class _NativeRelease:
                         (include, config_include, extension, abi)), "E_DEPENDENCY")
             compiler_path = Path("/usr/bin/cc").resolve(strict=True)
             self.compiler = stable_file(compiler_path, allow_hardlinks=True)
-            platform_flags = (["-bundle", "-undefined", "dynamic_lookup"]
+            platform_flags = (["-fptrauth-intrinsics", "-fptrauth-auth-traps", "-bundle",
+                               "-undefined", "dynamic_lookup"]
                               if sys.platform == "darwin" else ["-shared"])
-            expected_argv = [str(compiler_path), "-std=c11", "-Wall", "-Wextra", "-Werror",
+            language = "-std=gnu11" if sys.platform == "darwin" else "-std=c11"
+            expected_argv = [str(compiler_path), language, "-Wall", "-Wextra", "-Werror",
                 "-O2", "-fvisibility=hidden", "-fPIC", "-I" + include,
                 "-I" + config_include, *platform_flags, str(self.source.held.path), "-o",
                 str(self.binary.held.path)]

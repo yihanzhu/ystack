@@ -17,7 +17,7 @@ case "$mode:$#" in
     test_build=true
     test_case=$4
     case "$test_case" in ''|*[!0-9]*) fail ;; esac
-    [ "$test_case" -ge 1 ] && [ "$test_case" -le 13 ] || fail
+    [ "$test_case" -ge 1 ] && [ "$test_case" -le 16 ] || fail
     ;;
   *) fail ;;
 esac
@@ -79,15 +79,19 @@ trap cleanup EXIT
 mkdir -m 0700 -- "$output"
 extension=$output/_cancel_release$ext_suffix
 
-argv=("$cc" -std=c11 -Wall -Wextra -Werror -O2 -fvisibility=hidden -fPIC
+case "$platform_name" in
+  darwin) language=-std=gnu11 ;;
+  linux) language=-std=c11 ;;
+  *) fail ;;
+esac
+argv=("$cc" "$language" -Wall -Wextra -Werror -O2 -fvisibility=hidden -fPIC
       -I"$include" -I"$config_include")
 if [ "$test_build" = true ]; then
   argv+=("-DYSTACK_CANCEL_RELEASE_TESTING=1" "-DYSTACK_CANCEL_TEST_CASE=$test_case")
 fi
 case "$platform_name" in
-  darwin) argv+=(-bundle -undefined dynamic_lookup) ;;
+  darwin) argv+=(-fptrauth-intrinsics -fptrauth-auth-traps -bundle -undefined dynamic_lookup) ;;
   linux) argv+=(-shared) ;;
-  *) fail ;;
 esac
 argv+=("$source" -o "$extension")
 
