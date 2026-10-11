@@ -380,13 +380,31 @@ assignment therefore leaves the same State as owner.
 
 Use the preallocated integer fds with the existing bounded selector I/O; no file
 object or finalizer owns them. Native fixed operations close each named parent pipe,
-poll/wait without blocking, send the TERM and KILL group stages, and check group
-absence. Each records direct rc, errno, status and ownership before returning.
-`leader_reaped` is not `group_absent` and neither proves the pipes complete. Only a
-consumed leader, confirmed absent group and completed parent-pipe obligations allow
-the record to become `COMPLETE` and a later serial child to start. Never wait an
-already consumed pid, signal through an old possibly reused pid, or retry an unknown
-fd result.
+observe exit without consumption, send the TERM and KILL group stages, perform one
+final reap, and check group absence. Each records direct rc, errno, status and
+ownership before returning. Use the selected platform's public `waitid` with
+`WEXITED|WNOHANG|WNOWAIT` only after its exact contract is accepted. A successful
+matching observation marks `exit_observed` but leaves the leader waitable, so pid/pgid
+identity remains reserved. A lost observation return cannot lose ownership or consume
+the leader.
+
+Every signal that may still be required occurs before final reap. On normal completion,
+all pipes must be at EOF/closed and the fixed command's accepted contract must leave no
+descendant requiring a group signal; otherwise enter cleanup. Cleanup attempts TERM,
+retains the waitable leader through its grace period, and attempts the bounded KILL
+stage before reap whenever TERM did not close every group obligation. Leader exit after
+TERM does not skip a still-required KILL. Late cancellation before reap also enters or
+finishes those stages; cancellation after reap cannot signal the old pgid.
+
+`reap_child()` is the sole consuming operation. It is legal only after a matching
+nonconsuming exit observation and after State has marked every TERM/KILL stage either
+completed or not required by the normal-path condition above. It stores raw consume
+rc/errno/status and `leader_reaped` before returning. A lost reap return therefore
+cannot cause a second consume. After reap only no-effect group-absence observation and
+pipe bookkeeping may run; never signal through the old, possibly reused pid/pgid.
+`leader_reaped` is not `group_absent` and neither proves pipes complete. Only all three
+allow `COMPLETE` and a later serial child. Unknown observation/consume results do not
+grant a retry or advance authority.
 
 The resolver uses this same cancellation-aware runner, fixed cleared environment,
 new process session, applicable mask, declared stdio only and no extra inherited fd.
@@ -429,7 +447,7 @@ The returned opaque non-subclassable `NativeState` keeps the fixed methods
 `rollback_marker()`, `finish_release()`, `observe_allocator_admission()` and
 `outcome()`. It adds only `prepare_child(spec)`, `spawn_child()`, `child_fds()`,
 `close_child_stdin()`, `close_child_stdout()`, `close_child_stderr()`,
-`poll_child()`, `term_child_group()`, `kill_child_group()`,
+`observe_child_exit()`, `reap_child()`, `term_child_group()`, `kill_child_group()`,
 `check_child_group()` and `child_status()`.
 
 Only `hold_completion` and `prepare_child` take arguments. The former keeps its one
@@ -448,9 +466,10 @@ State is allocated before the first census and contains only the necessary autho
   fixed close/fstat/unlinkat/fsync result cells storing direct rc and errno copied in
   the next C statement after failure;
 - one fixed serial-child record containing spawn `NOT_RUN/NO_CHILD/OWNED`, raw pid and
-  pgid, six fd owned/attempted/result cells, wait `NOT_RUN/RETURNED(raw_pid,raw_status,
-  errno)`, `leader_reaped`, TERM/KILL/group-check results, `group_absent`, pipe
-  obligations, `COMPLETE` and its first error;
+  pgid, six fd owned/attempted/result cells, nonconsuming observation and final-reap
+  `NOT_RUN/RETURNED` cells with raw rc/errno/siginfo/status, `exit_observed`,
+  `leader_reaped`, TERM/KILL/group-check results, `group_absent`, pipe obligations,
+  `COMPLETE` and its first error;
 - one phase value (`prepared`, `entry-blocked`, `consumer`, `final-blocked`,
   `release-running`, `sealed`), one rollback-attempted value, and `first_failure`
   pointing to the first fixed result cell without overwriting it; and
@@ -464,13 +483,14 @@ marker or repeats release. `hold_completion` stores duplicate ownership before r
 Its normal `None` is not success because dup and fstat failures use it too; only a normally observed authoritative
 no-failure consumer outcome (`native-release.pending`) confirms identity, not sealed release success. A post-fstat-failure duplicate stays State-owned for one release.
 
-The child record is the only spawn-to-reap owner. Native wait stores raw consumption
-before a diagnostic status allocation; an interrupted getter cannot repeat wait or
-erase remaining group/pipe work. Repeated cleanup skips consumed operations but still
-attempts every outstanding required operation once. No parallel child, second owner,
-pid scan, destructor cleanup, Python-object pid authority, raw-fork or private-syscall
-fallback is allowed. Bind and first-use the public spawn symbols and all child methods
-before the first census; the protected interval performs no import, load or lookup.
+The child record is the only spawn-to-reap owner. Native observation and reap store raw
+results before a diagnostic allocation; an interrupted getter cannot consume, repeat
+reap or erase remaining group/pipe work. Repeated cleanup skips consumed operations but
+still attempts every outstanding required operation once. No parallel child, second
+owner, pid scan, destructor cleanup, Python-object pid authority, raw-fork or
+private-syscall fallback is allowed. Bind and first-use the public spawn/wait symbols
+and all child methods before the first census; the protected interval performs no
+import, load or lookup.
 
 On Darwin use only the accepted public `posix_spawn`, SETSID, CLOEXEC_DEFAULT, fixed
 file actions and exact signal default/mask behavior, never `spawnp`. The actual
@@ -479,8 +499,9 @@ default configuration may rewrite attributes or argv. Until actual initializatio
 default-config effect and the fixed function-table slots are closed, refuse before
 prepare or any child effect. On Linux do the same for the exact libc SETSID, close-all,
 parent watched-mask/cancellation and child-error contract. A route that changes the
-parent watched mask or remains unknown cannot admit. Do not change P, the arm64e
-recipe or signal standards, and do not substitute raw fork, a new runtime probe,
+parent watched mask or remains unknown cannot admit. Each platform must also bind the
+actual public nonconsuming-observation and final-reap contracts; API constants alone
+do not prove them. Do not change P, the accepted ordinary-arm64/PAC recipe or signal standards, and do not substitute raw fork, a new runtime probe,
 context field or certificate.
 
 After this plan is accepted, inactive fail-closed State control flow and injected
@@ -713,7 +734,7 @@ Before the final decision, finish every admitted component action, evidence/iden
 and inventory check, child cleanup and ordinary resource close except the seal fd.
 On ordinary child-close `OSError`, keep the first error, attempt every other distinct owned child once and never
 retry the result-unknown fd. Definitely unattempted children stay in the original container; repeated close skips
-processed items. This promises no arbitrary-`BaseException` attempt-all and creates no ordinary-fd native cell.
+processed items. This promises no arbitrary-`BaseException` attempt-all and creates no ordinary-fd native cell outside the six named child-pipe cells.
 
 Require the existing empty output-directory and held-identity preconditions, then pass the trusted held directory fd
 once to `hold_completion` and normally observe the authoritative no-failure consumer outcome (`native-release.pending`,
@@ -1045,7 +1066,7 @@ observations.
 | shadow-enforced | Real production recipe on actual Mac uses exact `gnu11`/PAC-intrinsics/auth-traps argv and Linux keeps exact `c11` without PAC flags; build-record and consumer equality reject missing/extra/reordered/platform-mismatched flags before load; bounded production codegen plus valid typed control and a disposable bad-PAC subprocess prove actual SDK typed authentication and trap termination, not merely flag presence; both platforms record exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, RNG entry identity, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
-| shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; a consumed native wait followed by lost status observation never waits again; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/wait/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, raw error/status and bounded group disappearance; filter or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
+| shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before every signal/mask/wakeup API; an existing wakeup owner under each warning mode keeps its fd, handlers, mask, delivery and full-buffer warning behavior with zero setter calls; nested scopes borrow only; child mask and no pipe/owner inheritance |
