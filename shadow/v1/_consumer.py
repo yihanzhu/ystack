@@ -230,12 +230,16 @@ class HeldPath:
         return b"".join(chunks)
 
     def close(self) -> None:
+        failure = None
         for component in reversed(self.components):
             try:
                 os.close(component.fd)
-            except OSError:
-                pass
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
         self.components.clear()
+        if failure is not None:
+            raise failure
 
 def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
     rows = []

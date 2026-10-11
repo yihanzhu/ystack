@@ -142,6 +142,22 @@ close_call(int fd, int conditional)
 }
 
 static int
+duplicate_call(int fd)
+{
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (YSTACK_CANCEL_TEST_CASE == 12) {
+        errno = EIO;
+        return -1;
+    }
+#endif
+#ifdef F_DUPFD_CLOEXEC
+    return fcntl(fd, F_DUPFD_CLOEXEC, 0);
+#else
+    return dup(fd);
+#endif
+}
+
+static int
 fstat_call(int fd, struct stat *value)
 {
 #if YSTACK_CANCEL_RELEASE_TESTING
@@ -271,10 +287,8 @@ state_hold_completion(NativeState *state, PyObject *argument)
     if (borrowed < 0 || borrowed > INT32_MAX || PyErr_Occurred()) {
         return NULL;
     }
-#ifdef F_DUPFD_CLOEXEC
-    owned = fcntl((int)borrowed, F_DUPFD_CLOEXEC, 0);
-#else
-    owned = dup((int)borrowed);
+    owned = duplicate_call((int)borrowed);
+#ifndef F_DUPFD_CLOEXEC
     if (owned >= 0 && fcntl(owned, F_SETFD, FD_CLOEXEC) < 0) {
         saved_errno = errno;
         (void)close(owned);
@@ -307,7 +321,11 @@ static PyObject *
 state_block_final(NativeState *state, PyObject *Py_UNUSED(ignored))
 {
     int rc;
-    if (!require_phase(state, PHASE_CONSUMER) || state->completion_fd < 0) {
+    if (!require_phase(state, PHASE_CONSUMER)) {
+        return NULL;
+    }
+    if (state->completion_fd < 0) {
+        PyErr_SetString(PyExc_RuntimeError, "completion ownership is unavailable");
         return NULL;
     }
     rc = mask_call(3, SIG_BLOCK, &state->watched, &state->final_old);

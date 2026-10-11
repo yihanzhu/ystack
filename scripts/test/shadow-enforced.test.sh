@@ -32,7 +32,7 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 3 4 5 6 7 8 9 10 11; do
+for native_case in 1 2 3 4 5 6 7 8 9 10 11 12; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
@@ -44,7 +44,7 @@ def ok(value,message):
  if not value:raise AssertionError(message)
  checks+=1;print("ok native-%d - %s"%(checks,message))
 initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-for case in range(1,12):
+for case in range(1,13):
  directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
@@ -58,7 +58,8 @@ for case in range(1,12):
    state.resume_consumer()
    if case!=2:
     marker.write_bytes(b"provisional");fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
-    state.hold_completion(fd);os.close(fd);fd=None;state.block_final()
+    state.hold_completion(fd);os.close(fd);fd=None
+    if case!=12:state.block_final()
     if case in (3,9,10):state.rollback_marker()
    result=state.finish_release()
   else:result=state.finish_release()
@@ -75,7 +76,7 @@ for case in range(1,12):
  else:
   ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
  if case in (3,4,5,10):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
- if case in (6,7,8,9):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
+ if case in (6,7,8,9,12):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
  if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
 actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
 spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
@@ -115,7 +116,7 @@ else:raise AssertionError("test-only native binary received production admission
 print("shadow-enforced-native-admission: test build refused before import")
 PY
 "$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
-import hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,subprocess,sys,sysconfig
+import ctypes,hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,struct,subprocess,sys,sysconfig,uuid
 root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
@@ -227,8 +228,40 @@ if sys.platform=="linux":
 else:
  native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
  parts=pathlib.Path(executable).parts
+ dyld=ctypes.CDLL(None)
+ dyld._dyld_image_count.restype=ctypes.c_uint32
+ dyld._dyld_get_image_header.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_header.restype=ctypes.c_void_p
+ dyld._dyld_get_image_name.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_name.restype=ctypes.c_char_p
+ def mapped_identity(address):
+  header=ctypes.string_at(address,32);magic,cputype,cpusubtype,_filetype,ncmds,sizeofcmds,_flags,_reserved=struct.unpack("<8I",header)
+  assert magic==0xfeedfacf and ncmds<=4096 and sizeofcmds<=4*1024*1024
+  commands=ctypes.string_at(address+32,sizeofcmds);offset=0;values=[]
+  for _ in range(ncmds):
+   cmd,size=struct.unpack_from("<II",commands,offset);assert size>=8 and offset+size<=len(commands)
+   if cmd==0x1b:assert size==24;values.append(str(uuid.UUID(bytes=commands[offset+8:offset+24])))
+   offset+=size
+  assert offset==len(commands) and len(values)==1
+  return {"cpu_type":cputype,"cpu_subtype":cpusubtype,"uuid":values[0]}
+ images=[]
+ for index in range(dyld._dyld_image_count()):
+  address=dyld._dyld_get_image_header(index);name=dyld._dyld_get_image_name(index)
+  assert address and name
+  images.append({"path":os.path.realpath(os.fsdecode(name)),"identity":mapped_identity(address)})
+ class DlInfo(ctypes.Structure):
+  _fields_=[("name",ctypes.c_char_p),("base",ctypes.c_void_p),("symbol",ctypes.c_char_p),("address",ctypes.c_void_p)]
+ dyld.dladdr.argtypes=[ctypes.c_void_p,ctypes.POINTER(DlInfo)];dyld.dladdr.restype=ctypes.c_int
+ bindings=[]
+ for symbol in ("pthread_sigmask","fcntl","close","fstat","unlinkat","fsync"):
+  function=getattr(dyld,symbol);info=DlInfo();assert dyld.dladdr(ctypes.cast(function,ctypes.c_void_p),ctypes.byref(info))==1
+  identity=mapped_identity(info.base);locator=os.path.realpath(os.fsdecode(info.name))
+  bindings.append({"symbol":symbol,"mapped_image":locator,"mapped_identity":identity,
+   "locator_identity":command(["/usr/bin/dyld_info","-uuid",locator],4096)})
+ cache=(ctypes.c_ubyte*16)();dyld._dyld_get_shared_cache_uuid.argtypes=[ctypes.POINTER(ctypes.c_ubyte)]
+ dyld._dyld_get_shared_cache_uuid.restype=ctypes.c_bool;assert dyld._dyld_get_shared_cache_uuid(cache)
  body.update({"build_id":command(["/usr/bin/dwarfdump","--uuid",executable]),
   "native_dependencies":{path:command(["/usr/bin/otool","-L",path]) for path in native},
+  "darwin_mapped_images":images,"darwin_release_symbol_bindings":bindings,
+  "darwin_shared_cache_uuid":{"status":"ok","value":str(uuid.UUID(bytes=bytes(cache)))},
   "package":{"kind":"homebrew-cellar" if "Cellar" in parts else "system",
    "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else None,
    "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else None}})
@@ -1587,9 +1620,10 @@ PY
 # The cancellation boundary has a separate lifecycle proof. Its substitutions are
 # private observations of the fixed owner; the shipped CLI check below uses the
 # real standalone admission.
-"$python_bin" -I -S -B - "$root" "$tmp/cancellation" <<'PY'
+"$python_bin" -I -S -B - "$root" "$tmp/cancellation" "$tmp/native-case-12" \
+  "$native_binary" "$tmp/native-case-4" <<'PY'
 import _thread, contextlib, errno, importlib.util, io, os, pathlib, signal, subprocess, sys, threading, time
-root, base = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]); base.mkdir(mode=0o700)
+root, base, native_case12, production_binary, native_case4 = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
 spec = importlib.util.spec_from_file_location("cancel_lifecycle", root / "shadow/v1/enforced-reproduction.py")
 e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
 checks = 0
@@ -1640,11 +1674,11 @@ class FixtureNative:
   if pending is not None:raise pending
   return self.status
  def outcome(self):return self.status
-def admission(census=None):
+def admission(census=None,native=None):
  executable=e.stable_file(pathlib.Path(e.sys.executable))
  try:
   return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
-   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census(),FixtureNative())
+   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census(),native or FixtureNative())
  finally:executable.close()
 def guard(census=None):return e.CancellationSignals(admission(census))
 def marker(owner, name):
@@ -1653,6 +1687,102 @@ def marker(owner, name):
  descriptor=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
  ok(e.CancellationSignals.retain_completion(descriptor),name+" retains marker owner")
  return directory
+
+# SIMULATED dup failure in the actual C owner leaves the original held fd responsible
+# for rollback; the driver removes the provisional marker before closing that fd.
+case12_binary=next(native_case12.glob("_cancel_release*.so"))
+case12_spec=importlib.util.spec_from_file_location("_cancel_release",case12_binary)
+case12_module=importlib.util.module_from_spec(case12_spec);case12_spec.loader.exec_module(case12_module)
+sys.modules.pop("_cancel_release",None)
+class ActualNative:
+ def __init__(self,module,after_finish=None,getter_interrupt=None,close_failure=None):
+  self.state=module.prepare_state()
+  for name in ("block_entry","resume_consumer","hold_completion","block_final","rollback_marker"):
+   setattr(self,name,getattr(self.state,name))
+  self.after_finish=after_finish;self.getter_interrupt=getter_interrupt
+  self.close_failure=close_failure
+  self.finished=False;self.finish_calls=0;self.close_calls=0
+ def recheck(self):pass
+ def close(self):
+  self.close_calls+=1
+  if self.close_failure is not None:
+   failure=self.close_failure;self.close_failure=None;raise failure
+ def finish_release(self):
+  self.finish_calls+=1;result=self.state.finish_release();self.finished=True
+  if self.after_finish is not None:raise self.after_finish
+  return result
+ def outcome(self):
+  result=self.state.outcome()
+  if self.finished and self.getter_interrupt is not None:
+   failure=self.getter_interrupt;self.getter_interrupt=None;raise failure
+  return result
+actual_dup=ActualNative(case12_module);actual_owner=e.CancellationSignals(admission(native=actual_dup))
+dup_dir=base/"actual-dup-failure";dup_dir.mkdir(mode=0o700);dup_hold=e.stable_directory(dup_dir)
+dup_files={name:b"x" for name in e.EVIDENCE_NAMES}
+try:
+ try:
+  with actual_owner:e.seal(dup_dir,dup_hold,dup_files,{"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
+ except e.Refusal as exc:ok(exc.code=="E_RUNTIME","actual C dup failure reaches driver refusal")
+ else:raise AssertionError("actual C dup failure accepted")
+finally:dup_hold.close()
+ok(not (dup_dir/"bundle.json").exists() and actual_dup.outcome()=="native-release.failure",
+   "actual C dup failure rolls back through the original held fd")
+
+# The real driver and C state preserve exact post-L caller ownership without
+# class, errno or text guesses. Fault injection after the real C return is SIMULATED.
+def load_native(path):
+ binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
+ native_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+ native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
+ sys.modules.pop("_cancel_release",None)
+ return native_module
+production_module=load_native(production_binary);case4_module=load_native(native_case4)
+def driver_case(name,failure,module=production_module,getter=False,expect_caller=True):
+ native=ActualNative(module,getter_interrupt=failure if getter else None,
+                     after_finish=None if getter else failure)
+ saved_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ directory=base/name;directory.mkdir(mode=0o700)
+ original_native,original_context,original_reproduce=e._NativeRelease,e.c.capture_parent_context,e.reproduce
+ def body(_request,_work,_output,parent=None):
+  (directory/"bundle.json").write_bytes(b"provisional")
+  fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+  try:ok(e.CancellationSignals.retain_completion(fd),name+" retains actual C owner")
+  finally:os.close(fd)
+ try:
+  e._NativeRelease=lambda _context,_admission:native;e.c.capture_parent_context=lambda:{};e.reproduce=body
+  try:
+   with contextlib.redirect_stderr(io.StringIO()) as error:
+    result=e.main(["driver","reproduce","request","work","output"],admission())
+  except BaseException as observed:
+   ok(expect_caller and observed is failure,name+" preserves exact caller exception")
+  else:
+   ok(not expect_caller and result==1 and error.getvalue()=="E_RUNTIME\n",
+      name+" preserves native failure priority")
+ finally:e._NativeRelease,e.c.capture_parent_context,e.reproduce=original_native,original_context,original_reproduce
+ ok(native.finish_calls==1 and native.close_calls>=1,name+" closes ordinary resources before one native release")
+ ok((directory/"bundle.json").exists()==expect_caller,name+" marker follows authoritative native outcome")
+ signal.pthread_sigmask(signal.SIG_SETMASK,saved_mask)
+for name,failure in (("post-value",ValueError("same")),
+ ("post-oserror",OSError(errno.EIO,"same")),("post-memory",MemoryError("same")),
+ ("post-system-exit",SystemExit(73)),("post-driver-refusal",e.Refusal("E_RUNTIME")),
+ ("post-consumer-refusal",e.c.Refusal("E_RUNTIME")),
+ ("post-parent-refusal",e.c.Refusal("E_PARENT_CONTEXT"))):driver_case(name,failure)
+driver_case("post-getter-interrupt",RuntimeError("getter assignment"),getter=True)
+driver_case("native-failure-priority",ValueError("same"),module=case4_module,expect_caller=False)
+close_native=ActualNative(production_module,close_failure=OSError(errno.EIO,"ordinary close"))
+close_dir=base/"ordinary-close-failure";close_dir.mkdir(mode=0o700)
+original_native,original_context,original_reproduce=e._NativeRelease,e.c.capture_parent_context,e.reproduce
+def close_body(_request,_work,_output,parent=None):
+ (close_dir/"bundle.json").write_bytes(b"provisional");fd=os.open(close_dir,os.O_RDONLY|os.O_DIRECTORY)
+ try:assert e.CancellationSignals.retain_completion(fd)
+ finally:os.close(fd)
+try:
+ e._NativeRelease=lambda _context,_admission:close_native;e.c.capture_parent_context=lambda:{};e.reproduce=close_body
+ with contextlib.redirect_stderr(io.StringIO()) as close_error:
+  close_result=e.main(["driver","reproduce","request","work","output"],admission())
+finally:e._NativeRelease,e.c.capture_parent_context,e.reproduce=original_native,original_context,original_reproduce
+ok(close_result==1 and close_error.getvalue()=="E_RUNTIME\n" and not (close_dir/"bundle.json").exists()
+   and close_native.finish_calls==1,"ordinary native close failure is reported and rolls back before L")
 
 # Missing admission and an imported main refuse before all signal ownership APIs.
 api_names=("getsignal","signal","pthread_sigmask","set_wakeup_fd","sigpending")
@@ -2017,7 +2147,7 @@ cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" 2
 [ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_USAGE ] || fail 'standalone closed startup admission'
 cli_result=0
 cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" reproduce /nonexistent /nonexistent /nonexistent 2>&1) || cli_result=$?
-[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_RUNTIME ] || fail 'standalone owner acquisition'
+[ "$cli_result" -eq 1 ] && [ "$cli_stderr" = E_PARENT_CONTEXT ] || fail 'standalone owner acquisition'
 /usr/bin/printf 'shadow-enforced-cli: closed startup and owner acquisition passed\n'
 
 

@@ -573,11 +573,19 @@ class _NativeRelease:
             "loader_mode": native["loader_mode"]}
 
     def close(self) -> None:
+        failure = None
         for name in ("compiler", "binary", "record", "script", "source"):
             item = getattr(self, name, None)
             if item is not None:
-                item.close()
-                setattr(self, name, None)
+                try:
+                    item.close()
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+                finally:
+                    setattr(self, name, None)
+        if failure is not None:
+            raise failure
 
 
 def stable_directory(path: Path) -> StableDirectory:
@@ -587,6 +595,23 @@ def stable_directory(path: Path) -> StableDirectory:
     result = StableDirectory(held)
     result.recheck()
     return result
+
+
+def close_all(items: Iterable[object]) -> None:
+    active = sys.exception()
+    failure = None
+    for item in items:
+        if item is None:
+            continue
+        try:
+            item.close()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        if active is not None:
+            raise active from failure
+        raise failure
 
 
 def fixed_bash() -> FixedExecutable:
@@ -857,6 +882,7 @@ class CancellationSignals:
         self.borrowed = False
         self.rollback_attempted = False
         self.borrow_depth = 0
+        self.caller_exception: BaseException | None = None
 
     @classmethod
     def checkpoint(cls) -> None:
@@ -864,14 +890,13 @@ class CancellationSignals:
             raise Cancelled()
 
     @classmethod
-    def retain_completion(cls, directory: int) -> bool:
+    def retain_completion(cls, directory: int) -> bool | None:
         if cls.active is None:
-            return False
+            return None
         require(cls.active.borrow_depth == 0, "E_RUNTIME")
         require(cls.active.native is not None, "E_RUNTIME")
         cls.active.native.hold_completion(directory)
-        require(cls.active.native.outcome() == "native-release.pending", "E_RUNTIME")
-        return True
+        return cls.active.native.outcome() == "native-release.pending"
 
     @staticmethod
     def _remember(first: BaseException | None, exc: BaseException) -> BaseException:
@@ -977,34 +1002,37 @@ class CancellationSignals:
         abort = True
         try:
             require(self.native is not None, "E_RUNTIME")
-            self.native.block_final()
-            require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
-            try:
-                require(self.admission is not None, "E_RUNTIME")
-                self.admission.census.observe()
-            except BaseException as exc:
-                failure = exc
-            try:
-                require(self.read_fd is not None, "E_RUNTIME")
-                observed = os.read(self.read_fd, 1)
-                uncertain = True
-                if observed:
-                    self.requested = True
-            except OSError as exc:
-                if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+            if kind is not None:
+                failure = self._rollback(failure)
+            else:
+                self.native.block_final()
+                require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
+                try:
+                    require(self.admission is not None, "E_RUNTIME")
+                    self.admission.census.observe()
+                except BaseException as exc:
+                    failure = exc
+                try:
+                    require(self.read_fd is not None, "E_RUNTIME")
+                    observed = os.read(self.read_fd, 1)
+                    uncertain = True
+                    if observed:
+                        self.requested = True
+                except OSError as exc:
+                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        uncertain = True
+                        failure = self._remember(failure, exc)
+                except BaseException as exc:
                     uncertain = True
                     failure = self._remember(failure, exc)
-            except BaseException as exc:
-                uncertain = True
-                failure = self._remember(failure, exc)
-            try:
-                pending = set(signal.sigpending()) & WATCHED_SIGNALS
-            except BaseException as exc:
-                failure = self._remember(failure, exc)
-            abort = kind is not None or self.requested or uncertain or bool(pending) or failure is not None
-            decision_made = True
-            if abort:
-                failure = self._rollback(failure)
+                try:
+                    pending = set(signal.sigpending()) & WATCHED_SIGNALS
+                except BaseException as exc:
+                    failure = self._remember(failure, exc)
+                abort = self.requested or uncertain or bool(pending) or failure is not None
+                decision_made = True
+                if abort:
+                    failure = self._rollback(failure)
         except BaseException as exc:
             failure = self._remember(failure, exc)
             failure = self._rollback(failure)
@@ -1029,14 +1057,17 @@ class CancellationSignals:
                 failure = self._rollback(failure)
                 abort = True
             post_l_exception = None
+            finish_result = None
             try:
-                self.native.finish_release()
+                finish_result = self.native.finish_release()
             except BaseException as exc:
                 post_l_exception = exc
             try:
                 native_outcome = self.native.outcome()
-            except BaseException:
-                raise
+            except BaseException as exc:
+                if post_l_exception is None:
+                    post_l_exception = exc
+                native_outcome = finish_result
             if native_outcome == "native-release.failure":
                 failure = self._remember(failure, Refusal("E_RUNTIME"))
                 abort = True
@@ -1044,6 +1075,7 @@ class CancellationSignals:
                 failure = self._remember(failure, Refusal("E_RUNTIME"))
                 abort = True
             if post_l_exception is not None and failure is None and decision_made and not abort:
+                self.caller_exception = post_l_exception
                 raise post_l_exception
         if failure is not None:
             raise failure
@@ -1314,7 +1346,6 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
     marker_written = False
-    transfer_started = False
     try:
         for name in sorted(files):
             CancellationSignals.checkpoint()
@@ -1330,19 +1361,49 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
         require(set(os.listdir(directory)) == set(EVIDENCE_NAMES) | {"bundle.json"}, "E_RELATION")
         os.fsync(directory)
         CancellationSignals.checkpoint()
-        transfer_started = True
-        CancellationSignals.retain_completion(directory)
-        try:
-            os.close(directory)
-        finally:
-            directory = -1
     except BaseException as exc:
-        if marker_written and not transfer_started and directory >= 0:
+        if marker_written and directory >= 0:
             try:
                 os.unlink("bundle.json", dir_fd=directory)
                 os.fsync(directory)
             except OSError:
                 pass
+        try:
+            os.close(directory)
+        except BaseException as close_exc:
+            raise exc from close_exc
+        directory = -1
+        if isinstance(exc, OSError):
+            raise Refusal("E_RUNTIME") from None
+        raise
+    try:
+        try:
+            retained = CancellationSignals.retain_completion(directory)
+        except BaseException:
+            active = CancellationSignals.active
+            if active is None or active.native is None or \
+                    active.native.outcome() != "native-release.pending":
+                try:
+                    os.unlink("bundle.json", dir_fd=directory)
+                    os.fsync(directory)
+                except OSError:
+                    pass
+            raise
+        if retained is None:
+            os.close(directory)
+            directory = -1
+            return bundle
+        if not retained:
+            try:
+                os.unlink("bundle.json", dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+                directory = -1
+            raise Refusal("E_RUNTIME")
+        os.close(directory)
+        directory = -1
+    except BaseException as exc:
         if isinstance(exc, OSError):
             raise Refusal("E_RUNTIME") from None
         raise
@@ -1683,20 +1744,13 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
         for item in inputs: item.recheck()
         return seal(output, output_hold, files, incident, "enforced-reproduction.v1")
     finally:
-        for item in reversed(inputs): item.close()
-        for source in reversed(sources): source.close()
-        if python_file is not None: python_file.close()
-        if sudo_file is not None: sudo_file.close()
-        if bash is not None: bash.close()
-        if anchor is not None: anchor.close()
-        if jq is not None: jq.close()
-        if helper is not None: helper.close()
-        if work_hold is not None: work_hold.close()
-        if output_hold is not None: output_hold.close()
+        close_all([*reversed(inputs), *reversed(sources), python_file, sudo_file, bash,
+                   anchor, jq, helper, work_hold, output_hold])
 
 
 def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
     native = None
+    owner = None
     try:
         require(isinstance(admission, _StartupAdmission) and admission.key is _STARTUP_KEY,
                 "E_RUNTIME")
@@ -1705,17 +1759,31 @@ def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
         native = _NativeRelease(context, admission)
         admission = dataclasses.replace(admission, native=native,
                                         module_origins=_runtime_module_origins())
-        with CancellationSignals(admission):
-            reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]), parent=context)
+        owner = CancellationSignals(admission)
+        with owner:
+            try:
+                reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]), parent=context)
+            except BaseException as exc:
+                try:
+                    native.close()
+                except BaseException as close_exc:
+                    raise exc from close_exc
+                raise
+            native.close()
         return 0
-    except Cancelled:
-        print("E_RUNTIME", file=sys.stderr); return 1
-    except (Refusal, c.Refusal) as exc:
-        print(exc.code if exc.code in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_SHAPE",
-              "E_CANONICAL", "E_RELATION", "E_WORKSPACE"} else "E_RUNTIME", file=sys.stderr)
-        return 1
-    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
-        print("E_RUNTIME", file=sys.stderr); return 1
+    except BaseException as exc:
+        if owner is not None and owner.caller_exception is exc:
+            raise
+        if isinstance(exc, Cancelled):
+            print("E_RUNTIME", file=sys.stderr); return 1
+        if isinstance(exc, (Refusal, c.Refusal)):
+            print(exc.code if exc.code in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_SHAPE",
+                  "E_CANONICAL", "E_RELATION", "E_WORKSPACE", "E_PARENT_CONTEXT"}
+                  else "E_RUNTIME", file=sys.stderr)
+            return 1
+        if isinstance(exc, (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError)):
+            print("E_RUNTIME", file=sys.stderr); return 1
+        raise
     finally:
         if native is not None:
             native.close()
