@@ -504,10 +504,20 @@ logger and zero slowpath. The accepted complete updater plus the no-later-write 
 must establish `slowpath == 0` implies no lite zone; do not read another private field.
 Read zone0's SDK typed slots at `+0x88`, `+0x90`, `+0xa0` and `+0xb0`; authenticate with
 the process-independent-code key and each exact string discriminator, then require
-libmalloc-base offsets `+0x3021c`, `+0x3b67c`, `+0x3a5e8` and `+0x30328`. Check readable
+the one whole main-profile tuple of libmalloc-base offsets `+0x3021c`, `+0x3b64c`,
+`+0x3a528` and `+0x30328`. Check readable
 width, alignment, overflow and bounds before raw loads. Reread count, zones, zone0,
 version, logger and slowpath and require byte-for-byte stability. Count 2 and version 16
-define this profile only; they are not general macOS rules.
+define this profile only; they are not general macOS rules. A mixed tuple, the historical
+whole tc tuple or any unknown target refuses. Do not turn the four slots into independent
+allowlists or change allocator configuration to force tc.
+
+The main malloc entry's normal/error proof must cover its actual class selection,
+small/tiny/mfm routes and large-huge tail; it cannot reuse tc's distinct small-object TLS
+cache path as an equivalence proof. The main try-free entry must cover its actual
+freelist/CAS, time/wait, chunk-list/batch/madvise and abort/outlined/not-found routes.
+Connect each finite delta to already proved shared nodes by exact control flow and retain
+their conditions; names, one positive or the old tc result do not close the delta.
 
 The same State also owns one bounded private `XzmClassSnapshot`; it does not change the
 80-byte record or add a config value, request field, public method or output. After the
@@ -950,7 +960,7 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
-| shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record, bounded XZM snapshot, one full 144-byte public-getter CPython snapshot and exact 8-byte `zone0+0xf0==0` predicate; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; foreign/debug/mimalloc/tracemalloc or any initial profile mismatch refuses without setter and before effects; XZM initial identity/profile, null parent, `0<N<=255`, exact `0x60*N` span, complete mapping, byte 1 or nonzero/unknown `+0xf0` likewise refuse before census; final XZM or `+0xf0` drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no fabricated mask rc, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove finite CPython types/bodies/no-setter/no-foreign-finalizer, `+0xf0` lifecycle/existing-object applicability, small-table, ordinary large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
+| shadow-enforced | Same-P actual Mac preflight normal return followed before census by the fixed 80-byte admission record with exact whole main tuple `3021c/3b64c/3a528/30328`, bounded XZM snapshot, one full 144-byte public-getter CPython snapshot and exact 8-byte `zone0+0xf0==0` predicate; mixed/tc/unknown tuple and every initial identity/profile mismatch refuse before effects without widening per-slot allowlists or changing allocator configuration; exact header sizes, NULL contexts and normalized RAW/MEM/OBJ/arena callbacks; XZM null parent, `0<N<=255`, exact `0x60*N` span, complete mapping, byte 1 or nonzero/unknown `+0xf0` likewise refuse before census; final XZM or `+0xf0` drift instead proves the real pre-L sticky failure, held-fd rollback, outer outcome, no fabricated mask rc, no success marker and no repeated release after prior effects; bad-PAC asserts only termination at its last boundary; actual normal/error paths prove main malloc/try-free deltas and finite CPython types/bodies/no-setter/no-foreign-finalizer, `+0xf0` lifecycle/existing-object applicability, small-table, ordinary large-class, other-zone and abort/setter closures throughout the complete protected interval; any other UNKNOWN or noncompliant path refuses before census; A/B/C or atfork/reseed/reset unknown never admits; mocked or old metadata is not the actual positive |
 | shadow-enforced | Real production recipe on actual Mac uses exact `gnu11`/PAC-intrinsics/auth-traps argv and Linux keeps exact `c11` without PAC flags; build-record and consumer equality reject missing/extra/reordered/platform-mismatched flags before load; bounded production codegen plus valid typed control and a disposable bad-PAC subprocess prove actual SDK typed authentication and trap termination, not merely flag presence; both platforms record exact source/script/compiler/P/ABI/output; accepted RTLD_NOW/local absolute load and init/State/symbol/first-use precede first census; strong refs survive release; unknown JIT, image/shared-cache UUID, RNG entry identity, loader/libc, package/source revision, dependency closure or selected-zone selector-to-target provenance refuses; no unreviewed pointer probe/PAC guess, and any existing-development evidence method first proves ABI/authentication/identity and its accepted boundary; test-build identity and unaccepted LD_/DYLD_ context refuse without import; provenance exact fields/path digests and stale frozen-reader cases preserve the 29-file inventory |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
@@ -993,14 +1003,11 @@ Use the existing pinned jq 1.6 fixture cache; a system jq with a different versi
 cannot substitute. No new tool installation is needed. Use shellcheck 0.11.0 with
 `-x -S style` on changed shell files and the repository’s required quick CI.
 SC-CANCEL-3 remains a repair of original PR #519. Full run `38051431041` remains failed and
-formal G3 remains NOT PASS. The original author has preserved the exact two-file bytes in
-one clean local checkpoint `bab3cd54283e98b94f28fb78f0eed984994391d1`, whose sole parent
-is `b75bc8abd9bb83bdd4079078f8ae0c444165adff`; its upstream remains that parent and the
-checkpoint is not pushed. After this plan is independently accepted and protected-merged,
-resume only that same worktree and branch by an ordinary merge whose first parent is the
-checkpoint and second parent is the accepted new main. Verify the checkpoint tree, clean
-state, ordered parents and unchanged implementation bytes before pushing and obtaining a
-fresh exact claim/evidence tuple. Do not reset, clean, stash, rebase, force, replay the
-patch, recreate the branch/worktree or use a dirty merge. Then allow the original Sol
+formal G3 remains NOT PASS. After this plan is independently accepted and protected-merged,
+resume only the preserved clean implementation attempt by an ordinary merge whose first
+parent is its verified current head and second parent is the accepted new main. Verify the
+clean state, ordered parents, tree, history and unchanged implementation bytes before push,
+then obtain a fresh exact claim/evidence tuple. Do not reset, clean, stash, rebase, force,
+replay the patch, recreate the branch/worktree or use a dirty merge. Then allow the original Sol
 repair; require the actual Mac/Linux proof, all relevant shadow suites, the six-shard full
 matrix and one fresh G3 on exact head. Quick green is not that matrix.
