@@ -1131,9 +1131,9 @@ try:helper.ParentInputs(package,python,native,path,dependency_path,collector)
 except (OSError,ValueError):print("parent-relation-refused build-output")
 else:raise AssertionError("accepted recomputed build relation")
 PY
-"$python_bin" -I -S -B - "$root" "$native_actual_child_binary" "$jq_bin" <<'PY'
+"$python_bin" -I -S -B - "$root" "$native_actual_child_binary" "$jq_bin" "$tmp" <<'PY'
 import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
-root,binary,jq=map(pathlib.Path,sys.argv[1:])
+root,binary,jq,ack_root=map(pathlib.Path,sys.argv[1:])
 consumer_spec=importlib.util.spec_from_file_location("filter_parent_consumer",root/"shadow/v1/_consumer.py")
 c=importlib.util.module_from_spec(consumer_spec);sys.modules[consumer_spec.name]=c;consumer_spec.loader.exec_module(c)
 driver_spec=importlib.util.spec_from_file_location("native_communication_driver",root/"shadow/v1/enforced-reproduction.py")
@@ -1352,6 +1352,62 @@ if sys.platform=="darwin":
  atexit.register(actual_filter_final)
  actual_filter.recheck()
 
+class AckRefusal(Exception):pass
+class ReaperAck:
+ def __init__(self,state,directory,deadline):
+  self.state=state;self.directory=directory;self.deadline=deadline;self.queries=0;self.child=None
+ def __getattr__(self,name):return getattr(self.state,name)
+ def _read(self,name):
+  fd=os.open(self.directory/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+  try:
+   info=os.fstat(fd)
+   if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=0o600:
+    raise AckRefusal("ack file")
+   if info.st_size==0:raise FileNotFoundError("ack not published")
+   if info.st_size>256:raise AckRefusal("ack size")
+   raw=os.read(fd,256)
+  finally:os.close(fd)
+  try:value=json.loads(raw)
+  except (ValueError,UnicodeError):raise AckRefusal("ack encoding")
+  return value
+ def check_child_group(self):
+  if self.queries or self.state.child_status()[22]!=0:raise AckRefusal("query already attempted")
+  while True:
+   if time.monotonic()>=self.deadline:raise AckRefusal("ack deadline")
+   try:ready,ack=self._read("child"),self._read("reaped")
+   except FileNotFoundError:
+    time.sleep(min(.01,max(0,self.deadline-time.monotonic())));continue
+   if time.monotonic()>=self.deadline:raise AckRefusal("late ack")
+   if (not isinstance(ready,dict) or set(ready)!={"leader","child"}
+       or not isinstance(ack,dict) or set(ack)!={"child","status"}
+       or any(type(value) is not int for value in (*ready.values(),*ack.values()))
+       or ready["leader"]!=self.state.child_status()[1] or ready["child"]<=0
+       or ack["child"]!=ready["child"] or not os.WIFSIGNALED(ack["status"])
+       or os.WTERMSIG(ack["status"])!=signal.SIGKILL):raise AckRefusal("ack relation")
+   self.child=ready["child"];self.queries+=1;self.state.check_child_group();return
+
+class AckQueryCounter:
+ def __init__(self):self.queries=0
+ def child_status(self):return (3,321)+(0,)*47
+ def check_child_group(self):self.queries+=1
+for name,ready,ack,delay in (
+ ("wrong-child",{"leader":321,"child":654},{"child":655,"status":signal.SIGKILL},1),
+ ("wrong-status",{"leader":321,"child":654},{"child":654,"status":signal.SIGTERM},1),
+ ("wrong-leader",{"leader":322,"child":654},{"child":654,"status":signal.SIGKILL},1),
+ ("missing",None,None,0),("timed-out",None,None,.01),
+ ("late",{"leader":321,"child":654},{"child":654,"status":signal.SIGKILL},-1)):
+ directory=ack_root/("ack-negative-"+name);directory.mkdir(mode=0o700)
+ for file,value in (("child",ready),("reaped",ack)):
+  if value is not None:
+   fd=os.open(directory/file,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_CLOEXEC,0o600)
+   try:os.write(fd,json.dumps(value).encode())
+   finally:os.close(fd)
+ counter=AckQueryCounter();proxy=ReaperAck(counter,directory,time.monotonic()+delay)
+ try:proxy.check_child_group()
+ except AckRefusal:assert proxy.queries==counter.queries==0
+ else:raise AssertionError("invalid ack accepted: "+name)
+ print("reaper-ack-refused-before-query",name)
+
 # Real abnormal fixed-role children keep the leader waitable until the live
 # same-group descendant has received KILL.
 inherited=os.open("/dev/null",os.O_RDONLY);high=fcntl.fcntl(inherited,fcntl.F_DUPFD,200)
@@ -1362,7 +1418,7 @@ def absent(fd):
  try:os.fstat(fd)
  except OSError as exc:return exc.errno==errno.EBADF
  return False
-mode=sys.argv[1];leader=os.getpid();ready_r,ready_w=os.pipe();reaper=os.fork()
+mode=sys.argv[1];channel=sys.argv[2];leader=os.getpid();ready_r,ready_w=os.pipe();reaper=os.fork()
 if reaper==0:
  os.close(ready_r);os.setpgid(0,0);child=os.fork()
  if child==0:
@@ -1371,7 +1427,17 @@ if reaper==0:
   os.write(ready_w,(str(os.getpid())+"\\n").encode());os.close(ready_w)
   os.close(0);os.close(1);os.close(2)
   while True:signal.pause()
- os.close(ready_w);os.close(0);os.close(1);os.close(2);os.waitpid(child,0);os._exit(0)
+ os.close(ready_w);os.close(0);os.close(1);os.close(2)
+ def publish(name,value):
+  fd=os.open(channel+"/"+name,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+  try:
+   raw=(json.dumps(value,sort_keys=True,separators=(",",":"))+"\\n").encode()
+   if os.write(fd,raw)!=len(raw):os._exit(72)
+  finally:os.close(fd)
+ publish("child",{"leader":leader,"child":child})
+ waited,status=os.waitpid(child,0)
+ if waited!=child or not os.WIFSIGNALED(status) or os.WTERMSIG(status)!=signal.SIGKILL:os._exit(71)
+ publish("reaped",{"child":waited,"status":status});os._exit(0)
 os.close(ready_w);child=int(os.read(ready_r,32));os.close(ready_r)
 os.write(1,(json.dumps({"kind":"leader","pid":leader,"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d),"filter_absent":all(absent(fd) for fd in %r)},sort_keys=True,separators=(",",":"))+"\\n").encode())
 os.close(0);os.close(1);os.close(2)
@@ -1379,16 +1445,19 @@ if mode=="nonzero":os._exit(7)
 os.kill(leader,signal.SIGUSR1)
 ''' % (inherited,high,filter_fds))
 def abnormal(mode,expected):
- state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program,mode.encode())
+ state=owner();directory=ack_root/("ack-positive-"+mode);directory.mkdir(mode=0o700)
+ argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program,mode.encode(),os.fsencode(directory))
  state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
- e.CancellationSignals.active=types.SimpleNamespace(native=state)
- try:result,out,err=e._communicate_native(state,b"",4096,4096,8)
+ proxy=ReaperAck(state,directory,time.monotonic()+8)
+ e.CancellationSignals.active=types.SimpleNamespace(native=proxy)
+ try:result,out,err=e._communicate_native(proxy,b"",4096,4096,8)
  finally:e.CancellationSignals.active=None
  records=[json.loads(line) for line in out.splitlines()];assert len(records)==2 and not err
  leader=next(item for item in records if item["kind"]=="leader")
  descendant=next(item for item in records if item["kind"]=="descendant")
  assert leader["pid"]==leader["pgid"]==descendant["pgid"]
- assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
+ assert leader["descendant"]==descendant["pid"]==proxy.child and proxy.queries==1
+ assert leader["uid"]==descendant["uid"]==os.getuid()
  assert leader["inherited_absent"] and leader["high_absent"] and leader["filter_absent"]
  final=state.child_status();assert result.returncode==expected
  assert final[17:20]==(1,1,1) and final[20:23]==(1,1,1) and final[24]==1
@@ -1396,7 +1465,7 @@ def abnormal(mode,expected):
  try:state.kill_child_group()
  except RuntimeError:pass
  else:raise AssertionError("signal allowed after reap")
- print("actual-abnormal-descendant",mode,leader,descendant,final[17:25],flush=True)
+ print("actual-abnormal-descendant",mode,leader,descendant,final,flush=True)
  state.abort_release();assert state.outcome()=="native-release.failure"
 abnormal("nonzero",7);abnormal("signaled",-signal.SIGUSR1)
 os.close(high);os.close(inherited)
@@ -1417,8 +1486,8 @@ else:
  assert negative[45:47]==(0,0)
  state.reap_child();state.check_child_group();negative=state.child_status()
  assert negative[17:20]==(1,1,1) and negative[24]==1 and negative[47:49]==(-1,errno.ESRCH)
- state.abort_release();assert state.outcome()=="native-release.failure"
-print("actual-single-leader",sys.platform,negative[45:49],negative[23:25])
+state.abort_release();assert state.outcome()=="native-release.failure"
+print("actual-single-leader",sys.platform,negative,state.outcome())
 if actual_filter is not None:
  actual_filter_final();atexit.unregister(actual_filter_final)
  print("actual-default-filter-parent",[(name,identity) for _fd,name,identity in actual_filter._rows],
@@ -2756,6 +2825,29 @@ except MemoryError as exc:
   and "reap" in lost.calls and "group" in lost.calls,
   "lost child-status allocation preserves failure after required native cleanup")
 else:raise AssertionError("lost child-status allocation accepted")
+
+class LostAfterTerm(FakeNativeChild):
+ def __init__(self):super().__init__();self.lost=False
+ def child_status(self):
+  if "term" in self.calls and not self.lost:
+   self.lost=True;raise MemoryError("post-TERM diagnostic allocation")
+  return super().child_status()
+later=LostAfterTerm()
+try:e._native_child_cleanup(later,time.monotonic()+1)
+except MemoryError as exc:
+ ok(str(exc)=="post-TERM diagnostic allocation" and later.state==4
+  and all(later.calls.count(name)==1 for name in ("term","kill","reap","group")),
+  "lost post-TERM diagnostic preserves first failure without repeating native obligations")
+else:raise AssertionError("post-TERM allocation failure accepted")
+class MissingDiagnostic(FakeNativeChild):
+ def child_status(self):
+  self.calls.append("status");raise MemoryError("first unavailable diagnostic" if len(self.calls)==1 else "second unavailable diagnostic")
+unavailable=MissingDiagnostic()
+try:e._native_child_cleanup(unavailable,time.monotonic()+1)
+except MemoryError as exc:
+ ok(str(exc)=="first unavailable diagnostic" and unavailable.calls==["status","status"],
+  "unavailable raw diagnostics preserve first failure without blind native operations")
+else:raise AssertionError("missing diagnostics accepted")
 
 setup_ready=base/"setup.ready"
 setup_child=original_popen([sys.executable,"-c","import pathlib,sys,time;pathlib.Path(sys.argv[1]).touch();time.sleep(30)",str(setup_ready)],stdin=subprocess.PIPE,

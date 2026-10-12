@@ -894,10 +894,27 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
             if first is None:
                 first = exc
         return False
+    def snapshot():
+        nonlocal first
+        try:
+            return _native_child_status(native)
+        except MemoryError as exc:
+            if first is None:
+                first = exc
+            try:
+                return _native_child_status(native)
+            except BaseException:
+                raise first
+    status = snapshot()
+    if status[0] in {0, 1, 2, 4}:
+        if first is not None:
+            raise first
+        require(status[23] == 0, "E_RUNTIME")
+        return
     for name in ("close_child_stdin", "close_child_stdout", "close_child_stderr"):
-        if name in _native_child_pending(_native_child_status(native)):
+        if name in _native_child_pending(snapshot()):
             attempt(getattr(native, name))
-    status = _native_child_status(native)
+    status = snapshot()
     if status[0] in {0, 2, 4}:
         if first is not None:
             raise first
@@ -908,29 +925,29 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
     observation_failed = False
     def observe_until(end):
         nonlocal observation_failed
-        status = _native_child_status(native)
+        status = snapshot()
         while (not observation_failed and "observe_child_exit" in _native_child_pending(status)
                and time.monotonic() < end):
             returned = attempt(native.observe_child_exit)
-            status = _native_child_status(native)
+            status = snapshot()
             if not returned:
                 observation_failed = True
                 break
             if not status[11]:
                 time.sleep(min(0.02, max(0, end - time.monotonic())))
     observe_until(min(deadline, time.monotonic() + 5))
-    status = _native_child_status(native)
+    status = snapshot()
     if "kill_child_group" in _native_child_pending(status):
         attempt(native.kill_child_group)
     observe_until(deadline)
-    status = _native_child_status(native)
+    status = snapshot()
     if "reap_child" in _native_child_pending(status):
         attempt(native.reap_child)
-    status = _native_child_status(native)
+    status = snapshot()
     while ("check_child_group" in _native_child_pending(status)
            and time.monotonic() < deadline):
         returned = attempt(native.check_child_group)
-        status = _native_child_status(native)
+        status = snapshot()
         if not returned:
             break
         if not status[18]:
@@ -1055,7 +1072,12 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
         return _communicate_native(native, input_raw, stdout_limit, stderr_limit, timeout)
     except BaseException as exc:
         try:
-            status = _native_child_status(native)
+            try:
+                status = _native_child_status(native)
+            except MemoryError:
+                if attempted:
+                    _native_child_cleanup(native, time.monotonic() + 10)
+                raise
             if attempted and status[0] == 3 and _native_child_pending(status):
                 _native_child_cleanup(native, time.monotonic() + 10)
         except BaseException as cleanup_exc:
