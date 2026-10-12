@@ -740,11 +740,16 @@ PY
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
 /bin/chmod 0555 "$tmp/object-closure"
 
-"$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
+  "$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
   "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, stat, sys, sysconfig, tempfile, types
+import os
+startup_environment_keys=tuple(sorted(os.environ))
+import hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, types
 
 root, base, helper, jq, native_binary, native_record, dependency_record = map(pathlib.Path, sys.argv[1:])
+dependency_document=json.loads(dependency_record.read_bytes())
+assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 dependency_work = base / "dependency-work"; dependency_work.mkdir()
 spec = importlib.util.spec_from_file_location("shadow_consumer", root / "shadow/v1/_consumer.py")
 c = importlib.util.module_from_spec(spec); sys.modules[spec.name] = c; spec.loader.exec_module(c)
@@ -1981,10 +1986,15 @@ cli_stderr=$("$python_bin" -I -S -B "$root/shadow/v1/enforced-reproduction.py" r
 # Exercise the production orchestration with only host identity, child process,
 # and native launch boundaries substituted. The component-specific suites run
 # each unchanged child interface; this case proves their byte flow and ordering.
-"$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" "$native_binary" \
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
+  "$python_bin" -I -S -B - "$root" "$tmp/slice3-orchestration" "$native_binary" \
   "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, sys, sysconfig, types
+import os
+startup_environment_keys=tuple(sorted(os.environ))
+import hashlib, importlib.util, json, pathlib, sys, sysconfig, types
 root, base, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
+dependency_document=json.loads(dependency_record.read_bytes())
+assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 base.mkdir(mode=0o700)
 spec=importlib.util.spec_from_file_location("enforced_flow",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
@@ -2392,10 +2402,15 @@ PATH="$real/bin:/usr/bin:/bin" "$fixture/adapters/local-git-materializer/v1/mate
 real_native="$real/native-release"
 /bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" build "$python_bin" "$real_native"
 real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
-"$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
+  "$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
   "$real_native/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
-import dataclasses, hashlib, importlib.util, json, os, pathlib, shutil, stat, subprocess, sys, sysconfig, types
+import os
+startup_environment_keys=tuple(sorted(os.environ))
+import dataclasses, hashlib, importlib.util, json, pathlib, shutil, stat, subprocess, sys, sysconfig, types
 base, package, physical_python, native_binary, native_record, dependency_record = map(pathlib.Path,sys.argv[1:])
+dependency_document=json.loads(dependency_record.read_bytes())
+assert tuple(dependency_document["body"]["preexec_environment"]["observed_keys"])==startup_environment_keys
 module_path=package/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("real_shadow_enforced",module_path)
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
