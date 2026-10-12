@@ -943,7 +943,7 @@ class ParentInputs:
    if functions.get("gate_only_provenance",{}).get("status")!="ok" or production!=build or not isinstance(gate,dict) or gate.get("body",{}).get("test_build") is not True or gate.get("body",{}).get("test_case")!=48:raise ValueError("ELF gate provenance")
    gate_body=gate["body"];shared=set(body)-{"argv","argv_sha256","output_name","output_size","output_sha256","test_build"}
    if any(gate_body.get(key)!=body[key] for key in shared):raise ValueError("ELF gate source relation")
-   expected_gate=list(expected);source_index=expected_gate.index(str(source));expected_gate[source_index:source_index]=["-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48"]
+   expected_gate=list(expected);link_index=expected_gate.index("-shared");expected_gate[link_index:link_index]=["-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48"]
    expected_gate[-1]=gate_body.get("argv",[None])[-1]
    if gate_body.get("argv")!=expected_gate or gate_body.get("argv_sha256")!=hashlib.sha256((json.dumps(expected_gate,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()).hexdigest():raise ValueError("ELF gate recipe")
   elif facts["platform"]=="darwin":
@@ -1097,6 +1097,13 @@ else:
  case("rehashed-body",changed_body)
  case("gate-as-production",lambda body:next(row for row in body["libc_function_bodies"]["functions"] if "label" in row).update(origin_role="gate-only-case-48"))
  case("child-address",lambda body:body["libc_function_bodies"]["spawn_child_candidate"].update(start=0))
+ def reordered_gate(body):
+  gate=body["libc_function_bodies"]["build_records"]["gate_only"]["body"];argv=gate["argv"]
+  defines=[argv.pop(argv.index(value)) for value in ("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48")]
+  source_index=next(index for index,value in enumerate(argv) if value.endswith("/_cancel_release.c"))
+  argv[source_index:source_index]=defines
+  gate["argv_sha256"]=hashlib.sha256(canonical(argv)).hexdigest()
+ case("rehashed-gate-order",reordered_gate)
 for index,(name,value) in enumerate(cases):
  path=tmp/("parent-relation-%02d.json"%index);path.write_bytes(canonical(value));path.chmod(0o400)
  try:helper.ParentInputs(package,python,native,build_path,path,collector)
