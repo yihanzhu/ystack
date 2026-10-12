@@ -3394,9 +3394,17 @@ PATH="$real/bin:/usr/bin:/bin" "$fixture/adapters/local-git-materializer/v1/mate
 real_native="$real/native-release"
 /bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" build "$python_bin" "$real_native"
 real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+real_gate_binary="$native_actual_child_binary"
+real_gate_record="$native_actual_child_record"
+if [ "$(uname -s)" = Linux ]; then
+  real_gate="$real/native-case-48"
+  /bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" test-build "$python_bin" "$real_gate" 48
+  real_gate_binary=$(/usr/bin/find "$real_gate" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+  real_gate_record="$real_gate/build-record.json"
+fi
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$fixture" "$real_native_binary" \
-    "$native_actual_child_binary" "$native_actual_child_record" \
+    "$real_gate_binary" "$real_gate_record" \
   > "$real/runtime-dependency-record.json"
 "$python_bin" -I -S -B - "$real/runtime-dependency-record.json" <<'PY'
 import hashlib,json,pathlib,sys
