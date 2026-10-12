@@ -732,6 +732,109 @@ assert len(encoded)<=1024*1024
 sys.stdout.buffer.write(encoded)
 PY
 /bin/chmod 0400 "$tmp/runtime-dependency-collector.py"
+cat > "$tmp/parent-input-helper.py" <<'PY'
+import errno,hashlib,json,os,pathlib,stat,sys,sysconfig
+FIXED_ENV={"LANG":"C","LC_ALL":"C","PATH":"/usr/bin:/bin"}
+def pairs(values):
+ result={}
+ for key,value in values:
+  if key in result:raise ValueError("duplicate key")
+  result[key]=value
+ return result
+def canonical(raw):
+ value=json.loads(raw,object_pairs_hook=pairs)
+ if raw!=(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode():raise ValueError("canonical")
+ return value
+def identity(value):return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+class ParentInputs:
+ def __init__(self,package,physical_python,native_binary,build_record,dependency_record):
+  if dict(os.environ)!=FIXED_ENV:raise OSError(errno.EACCES,"startup environment")
+  self._fds=[None]*16;self._count=0;self._rows=[];self.package=pathlib.Path(package)
+  self.physical_python=os.path.realpath(physical_python);self.native_binary=os.path.realpath(native_binary)
+  try:self._prepare(pathlib.Path(build_record),pathlib.Path(dependency_record))
+  except BaseException:
+   try:self.close()
+   except OSError:pass
+   raise
+ def hold(self,path,limit):
+  path=pathlib.Path(path)
+  if self._count>=len(self._fds):raise OSError(errno.E2BIG,"held inputs")
+  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC);index=self._count
+  self._fds[index]=fd;self._count=index+1
+  if os.get_inheritable(fd):raise OSError(errno.EIO,"inheritable input")
+  before=os.fstat(fd)
+  if not stat.S_ISREG(before.st_mode) or before.st_size>limit:raise OSError(errno.EFBIG,"input shape")
+  raw=bytearray();remaining=before.st_size
+  while remaining:
+   chunk=os.read(fd,min(remaining,1024*1024))
+   if not chunk:raise OSError(errno.EIO,"short input")
+   raw.extend(chunk);remaining-=len(chunk)
+  after=os.fstat(fd);named=os.lstat(path)
+  if identity(before)!=identity(after) or (named.st_dev,named.st_ino)!=(after.st_dev,after.st_ino):raise OSError(errno.EIO,"input changed")
+  row={"path":str(path),"identity":identity(after),"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw)}
+  self._rows.append(row);return bytes(raw),row
+ def _prepare(self,build_path,dependency_path):
+  source=self.package/"shadow/v1/_cancel_release.c";script=self.package/"shadow/v1/build-cancel-release.sh"
+  driver=self.package/"shadow/v1/enforced-reproduction.py";consumer=self.package/"shadow/v1/_consumer.py"
+  python_raw,python_row=self.hold(self.physical_python,256*1024*1024)
+  source_raw,source_row=self.hold(source,1024*1024);script_raw,script_row=self.hold(script,1024*1024)
+  driver_raw,driver_row=self.hold(driver,4*1024*1024);consumer_raw,consumer_row=self.hold(consumer,1024*1024)
+  native_raw,native_row=self.hold(self.native_binary,256*1024*1024)
+  build_raw,_=self.hold(build_path,1024*1024);dependency_raw,_=self.hold(dependency_path,1024*1024)
+  build=canonical(build_raw);dependency=canonical(dependency_raw)
+  if set(build)!={"schema_version","kind","id","body"} or (build["schema_version"],build["kind"],build["id"])!=(1,"shadow_cancel_release_build_record","shadow.cancel-release.build"):raise ValueError("build envelope")
+  body=build["body"];required=("platform","source_sha256","build_script_sha256","compiler_path","compiler_sha256","python_path","python_sha256","output_sha256","output_size","test_build","argv")
+  build_keys={"platform","architecture","source_sha256","build_script_sha256","compiler_path","compiler_sha256","compiler_version_sha256","argv","argv_sha256","python_path","python_sha256","python_implementation","python_version","soabi","ext_suffix","configuration","output_name","output_size","output_sha256","test_build"}
+  if not isinstance(body,dict) or set(body)!=build_keys or any(name not in body for name in required) or body["test_build"] is not False:raise ValueError("build body")
+  compiler_raw,compiler_row=self.hold(body["compiler_path"],256*1024*1024)
+  if (body["source_sha256"]!=source_row["sha256"] or body["build_script_sha256"]!=script_row["sha256"] or os.path.realpath(body["python_path"])!=self.physical_python or body["python_sha256"]!=python_row["sha256"] or body["compiler_sha256"]!=compiler_row["sha256"] or body["output_sha256"]!=native_row["sha256"] or body["output_size"]!=native_row["size"]):raise ValueError("build relation")
+  if set(dependency)!={"schema_version","kind","id","body"} or (dependency["schema_version"],dependency["kind"],dependency["id"])!=(1,"shadow_runtime_dependency_record","shadow.runtime-dependency"):raise ValueError("dependency envelope")
+  facts=dependency["body"]
+  if not isinstance(facts,dict) or facts.get("platform")!=body["platform"] or os.path.realpath(facts.get("executable",""))!=self.physical_python:raise ValueError("runtime relation")
+  common={"platform","executable","executable_identity","flags","jit","preexec_environment","loaded_origins","soabi","stdlib","version","build_configuration"}
+  platform_keys={"executable_build_id","elf_interpreter","elf_images","mapped_file_gaps","libc_function_bodies","required_roles"} if facts["platform"]=="linux" else {"build_id","native_dependencies","darwin_mapped_images","darwin_release_symbol_bindings","darwin_shared_cache_uuid","package"}
+  if set(facts)!=common|platform_keys:raise ValueError("dependency body")
+  if facts.get("executable_identity")!={"status":"ok","sha256":python_row["sha256"],"size":python_row["size"]}:raise ValueError("runtime P")
+  if facts.get("flags")!={"isolated":1,"no_site":1,"dont_write_bytecode":1} or facts.get("preexec_environment")!={"observed_keys":["LANG","LC_ALL","PATH"],"forbidden_keys":[]}:raise ValueError("runtime startup")
+  if facts.get("soabi")!=sysconfig.get_config_var("SOABI") or os.path.realpath(facts.get("stdlib",""))!=os.path.realpath(sysconfig.get_path("stdlib")) or facts.get("version")!=sys.version:raise ValueError("runtime metadata")
+  origins=facts.get("loaded_origins")
+  if not isinstance(origins,list):raise ValueError("origins")
+  for item in origins:
+   if set(item)!={"path","identity"} or not os.path.isabs(item["path"]):raise ValueError("origin shape")
+   value=item["identity"]
+   if set(value)!={"status","sha256","size"} or value["status"]!="ok" or not isinstance(value["sha256"],str) or len(value["sha256"])!=64 or not isinstance(value["size"],int) or value["size"]<0:raise ValueError("origin identity")
+  for path,row in ((driver,driver_row),(consumer,consumer_row),(pathlib.Path(self.native_binary),native_row)):
+   matches=[item for item in origins if os.path.realpath(item.get("path",""))==os.path.realpath(path)]
+   if len(matches)!=1 or matches[0].get("identity")!={"status":"ok","sha256":row["sha256"],"size":row["size"]}:raise ValueError("origin relation")
+  if facts["platform"]=="linux":
+   images=facts.get("elf_images");roles=("python-executable","native-release","elf-interpreter","libc")
+   if not isinstance(images,list) or facts.get("required_roles")!={role:1 for role in roles}:raise ValueError("ELF roles")
+   native=[item for item in images if "native-release" in item.get("roles",[])]
+   if len(native)!=1 or os.path.realpath(native[0].get("path",""))!=self.native_binary or native[0].get("identity")!={"status":"ok","sha256":native_row["sha256"],"size":native_row["size"]}:raise ValueError("ELF native")
+   for role in ("elf-interpreter","libc"):
+    item=next(item for item in images if role in item.get("roles",[]));self.hold(item["path"],256*1024*1024)
+  elif facts["platform"]!="darwin":raise ValueError("platform")
+  self.build=build;self.dependency=dependency;self.build_sha256=hashlib.sha256(build_raw).hexdigest();self.dependency_sha256=hashlib.sha256(dependency_raw).hexdigest();self.rows=tuple(self._rows)
+ def recheck(self):
+  for index,row in enumerate(self._rows):
+   fd=self._fds[index];value=os.fstat(fd);named=os.lstat(row["path"])
+   if identity(value)!=row["identity"] or (named.st_dev,named.st_ino)!=(value.st_dev,value.st_ino):raise OSError(errno.EIO,"input identity changed")
+   os.lseek(fd,0,os.SEEK_SET);measured=hashlib.sha256();remaining=row["size"]
+   while remaining:
+    chunk=os.read(fd,min(remaining,1024*1024))
+    if not chunk:raise OSError(errno.EIO,"input shortened")
+    measured.update(chunk);remaining-=len(chunk)
+   if measured.hexdigest()!=row["sha256"]:raise OSError(errno.EIO,"input bytes changed")
+ def close(self):
+  failure=None
+  while self._count:
+   index=self._count-1;fd=self._fds[index];self._fds[index]=None;self._count=index
+   try:os.close(fd)
+   except OSError as exc:
+    if failure is None:failure=exc
+  if failure is not None:raise failure
+PY
+/bin/chmod 0400 "$tmp/parent-input-helper.py"
 native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
   -type f ! -name build-record.json -print)
 [ -n "$native_actual_child_binary" ] && [ -f "$native_actual_child_binary" ] || fail 'native actual child output'
@@ -763,6 +866,18 @@ for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-re
  evidence={"schema_version":1,"kind":kind,"id":name,
   "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
  print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
+PY
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$python_bin" -I -S -B - \
+  "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+import importlib.util,json,pathlib,sys
+path=pathlib.Path(sys.argv[1]);spec=importlib.util.spec_from_file_location("parent_input_helper",path)
+helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);held=helper.ParentInputs(*sys.argv[2:])
+try:
+ held.recheck();print(json.dumps({"kind":"shadow_parent_input_mechanical_record",
+  "build_sha256":held.build_sha256,"dependency_sha256":held.dependency_sha256,
+  "held_files":len(held.rows)},sort_keys=True,separators=(",",":")))
+finally:held.close()
 PY
 "$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
 import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
