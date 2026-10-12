@@ -245,6 +245,29 @@ class HeldPath:
         if failure is not None:
             raise failure
 
+def _close_components(rows: list[HeldComponent], failure: BaseException | None = None) -> None:
+    while rows:
+        row = rows.pop()
+        try:
+            os.close(row.fd)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+def _close_paths(items: list[HeldPath]) -> None:
+    failure = None
+    while items:
+        item = items.pop()
+        try:
+            item.close()
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
 def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
     rows = []
     try:
@@ -252,10 +275,13 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
         for row in parent.components:
             rows.append(HeldComponent(os.dup(row.fd), row.name, row.before, row.rule, row.ancestor))
         return rows
-    except (OSError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except OSError:
+            raise Refusal(code) from None
 
 def _open_held(path: str, directory: bool, rule: Rule, code: str,
                allow_hardlinks: bool = False) -> HeldPath:
@@ -286,10 +312,13 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str,
         result = HeldPath(path, rows)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, ValueError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except (OSError, ValueError):
+            raise Refusal(code) from None
 
 def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
     _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
@@ -307,10 +336,13 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
         result = HeldPath(parent.path + "/" + name, rows)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, ValueError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except (OSError, ValueError):
+            raise Refusal(code) from None
 
 def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
     try:
@@ -764,9 +796,11 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None,
         result = Anchor(config, config_raw, held, installed, registry, accepted, resolver)
         result.recheck()
         return result
-    except BaseException:
-        for item in reversed(held):
-            item.close()
+    except BaseException as exc:
+        try:
+            _close_paths(held)
+        except OSError as close_exc:
+            raise exc from close_exc
         raise
 
 def verifier_observation(anchor: Anchor, environment_id: str, target_repository_id: str) -> bytes:
@@ -813,6 +847,7 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
     opened: list[HeldPath] = []
     snapshots: dict[str, bytes] = {}
     observations: list[dict] = []
+    failure = None
     try:
         store = _open_held(root, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(store)
@@ -901,9 +936,15 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
                                      "attempt_id": attempt_id, "entries": observations,
                                      "result": "authenticated"}})
         return snapshots, observation
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
-        for item in reversed(opened):
-            item.close()
+        try:
+            _close_paths(opened)
+        except OSError:
+            if failure is None:
+                raise
 
 def _read_resolver_input() -> bytes:
     raw = bytearray()

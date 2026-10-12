@@ -70,7 +70,7 @@ record=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
 base=list(record["argv"]);temporary=pathlib.Path(sys.argv[2]);source=str(pathlib.Path(sys.argv[3]))
 if source not in base:raise SystemExit("native child test source is not in the build argv")
 index={}
-cases=(*range(21,35),*((35,) if sys.platform=="linux" else ()))
+cases=(20,*range(21,35),*((35,) if sys.platform=="linux" else ()))
 for case in cases:
  directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
  output=directory/record["output_name"];argv=[]
@@ -238,9 +238,13 @@ elif case==33:
  prepare((b"/bin/sh",b"-c",b'trap "exit 0" TERM; while :; do :; done'));state.spawn_child();close_pipes();state.term_child_group();observe();state.kill_child_group();value=status();assert value[20:22]==(1,1) and value[45:47]==(-1,errno.ESRCH);state.reap_child();state.check_child_group();assert status()[24]==1;print("term-leader-kill")
 elif case==34:
  prepare();state.spawn_child();close_pipes();observe();state.reap_child();before=status();assert before[12:15]==(1,-1,errno.EIO) and before[17]==0 and before[23]==35;refuses(state.reap_child);assert status()==before;print("unknown-reap")
+elif case==20:
+ refuses(prepare);before=status();assert before[0]==2 and before[19]==0 and before[23]==26 and before[25:28]==(1,-1,errno.EIO)
+ state.abort_release();after=status();assert after[25:28]==before[25:28] and after[23]==before[23]
+ print("prepared-close-unknown-once",before[25:43],after[25:43])
 else:raise AssertionError(case)
 PY
-native_child_cases="21 22 23 24 25 26 27 28 29 30 31 32 33 34"
+native_child_cases="20 21 22 23 24 25 26 27 28 29 30 31 32 33 34"
 [ "$(uname -s)" != Linux ] || native_child_cases="$native_child_cases 35"
 for native_case in $native_child_cases; do
   child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 -maxdepth 1 -type f -name '_cancel_release*.so' -print)
@@ -1120,6 +1124,8 @@ import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,
 root,binary=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
 consumer_spec=importlib.util.spec_from_file_location("filter_parent_consumer",root/"shadow/v1/_consumer.py")
 c=importlib.util.module_from_spec(consumer_spec);sys.modules[consumer_spec.name]=c;consumer_spec.loader.exec_module(c)
+driver_spec=importlib.util.spec_from_file_location("native_communication_driver",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(driver_spec);sys.modules[driver_spec.name]=e;driver_spec.loader.exec_module(e)
 environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
 def owner():
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
@@ -1136,6 +1142,35 @@ def close_at_eof(state,fd,close):
   assert readable
   if not os.read(fd,4096):break
  close()
+
+def communicate_actual(program):
+ state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
+ state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
+ e.CancellationSignals.active=types.SimpleNamespace(native=state)
+ try:result,stdout,stderr=e._communicate_native(state,b"",4096,4096,8)
+ finally:e.CancellationSignals.active=None
+ final=state.child_status();assert result.returncode==0 and stdout==stderr==b""
+ assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
+ state.abort_release();return final
+
+plain=communicate_actual(b"pass")
+print("actual-communicate-no-descendant",sys.platform,plain[17:25])
+descendant_program=b'''import os,signal
+child=os.fork()
+if child==0:
+ signal.signal(signal.SIGTERM,signal.SIG_IGN)
+ for fd in (0,1,2):
+  try:os.close(fd)
+  except OSError:pass
+ while True:signal.pause()
+for fd in (0,1,2):
+ try:os.close(fd)
+ except OSError:pass
+os._exit(0)
+'''
+descendant_final=communicate_actual(descendant_program)
+assert descendant_final[20:22]==(1,1)
+print("actual-communicate-closed-stdio-descendant",sys.platform,descendant_final[17:25])
 
 class MissingFilterComponent(Exception):pass
 class DefaultFilterHold:
@@ -1418,7 +1453,7 @@ PY
 native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" \
   "$native_binary" "$native_out/build-record.json" "$tmp" <<'PY'
-import hashlib,importlib.util,json,os,pathlib,shutil,sys,sysconfig,types
+import contextlib,errno,hashlib,importlib.util,io,json,os,pathlib,shutil,sys,sysconfig,types
 root,binary,record,production,production_record,base=map(pathlib.Path,sys.argv[1:])
 spec=importlib.util.spec_from_file_location("test_build_refusal",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
@@ -1561,6 +1596,17 @@ try:
   try:e.main(["driver","reproduce","request","work","output"],admission)
   except BaseException as exc:assert exc is observation_error and outer_native.close_calls==1
   else:raise AssertionError("outer main fabricated an observation result")
+ class PassingOwner:
+  caller_exception=None
+  def __enter__(self):return self
+  def __exit__(self,*_args):return False
+ outer_native=OuterNative();e._NativeRelease=lambda *_args,**_kwargs:outer_native
+ e.CancellationSignals=lambda *_args,**_kwargs:PassingOwner()
+ e.reproduce=lambda *_args,**_kwargs:(_ for _ in ()).throw(OSError(errno.EIO,"seal directory fsync"))
+ error_output=io.StringIO()
+ with contextlib.redirect_stderr(error_output):
+  result=e.main(["driver","reproduce","request","work","output"],admission)
+ assert result==1 and error_output.getvalue()=="E_RUNTIME\n" and outer_native.close_calls==1
 finally:
  e._NativeRelease=original_release;e.CancellationSignals=original_owner
  e.c.capture_parent_context=original_capture;e.reproduce=original_reproduce
@@ -2146,6 +2192,99 @@ c.sys.executable = old_python
 before = len(os.listdir("/dev/fd")); anchor = fixture_anchor(); anchor.close()
 ok(len(os.listdir("/dev/fd")) == before, "successful anchor ownership closes cleanly")
 anchor = fixture_anchor()
+
+class ClosingItem:
+    def __init__(self, name, failure=None): self.name, self.failure, self.calls = name, failure, 0
+    def close(self):
+        self.calls += 1
+        if self.failure is not None: raise self.failure
+
+component_calls=[]; body_failure=c.Refusal("E_INSTALL")
+first_close=OSError(errno.EIO,"first close"); later_close=OSError(errno.EBADF,"later close")
+component_rows=[c.HeldComponent(fd,None,None,None,False) for fd in (71,72,73)]
+real_component_close=c.os.close
+def component_close(fd):
+ component_calls.append(fd)
+ if fd==73:raise first_close
+ if fd==72:raise later_close
+c.os.close=component_close
+try:
+ try:c._close_components(component_rows,body_failure)
+ except c.Refusal as exc:ok(exc is body_failure and component_calls==[73,72,71] and not component_rows,
+  "component cleanup preserves the body failure and attempts every distinct close once")
+ else:raise AssertionError("component body failure was replaced")
+ component_calls.clear();component_rows=[c.HeldComponent(fd,None,None,None,False) for fd in (71,72,73)]
+ try:c._close_components(component_rows)
+ except OSError as exc:ok(exc is first_close and component_calls==[73,72,71] and not component_rows,
+  "component cleanup keeps its first close error after attempting later closes")
+ else:raise AssertionError("component close failure accepted")
+ component_calls.clear();component_rows=[c.HeldComponent(71,None,None,None,False)]
+ c.os.close=lambda fd:component_calls.append(fd)
+ c._close_components(component_rows)
+ ok(component_calls==[71] and not component_rows,"component cleanup normally returns after one close")
+finally:c.os.close=real_component_close
+
+original_cleanup,original_physical=c._close_components,c._physical
+original_os_open,original_metadata=c.os.open,c._metadata
+original_clone=c._clone
+def preserve_body(_rows,failure=None):
+ if failure is not body_failure:raise AssertionError("wrong body failure")
+ raise failure
+class FailedParent:
+ components=[];path="/parent"
+ def recheck(self,_code):raise body_failure
+c._close_components=preserve_body
+try:
+ try:c._clone(FailedParent(),"E_INSTALL")
+ except c.Refusal as exc:ok(exc is body_failure,"clone preserves body failure over cleanup failure")
+ else:raise AssertionError("clone cleanup replaced body failure")
+ c._physical=lambda _path:True;c.os.open=lambda *_args,**_kwargs:81
+ c._metadata=lambda _fd:types.SimpleNamespace(st_mode=stat.S_IFDIR,st_nlink=1)
+ try:c._open_held("/fixture",True,lambda *_args:(_ for _ in ()).throw(body_failure),"E_INSTALL")
+ except c.Refusal as exc:ok(exc is body_failure,"open-held preserves body failure over cleanup failure")
+ else:raise AssertionError("open-held cleanup replaced body failure")
+ c._clone=lambda *_args:[c.HeldComponent(80,None,None,None,False)]
+ try:c._open_child(FailedParent(),"child",True,
+  lambda *_args:(_ for _ in ()).throw(body_failure),"E_INSTALL")
+ except c.Refusal as exc:ok(exc is body_failure,"open-child preserves body failure over cleanup failure")
+ else:raise AssertionError("open-child cleanup replaced body failure")
+finally:
+ c._close_components,c._physical=original_cleanup,original_physical
+ c.os.open,c._metadata,c._clone=original_os_open,original_metadata,original_clone
+original_open_held, original_open_child, original_platform = c._open_held, c._open_child, c.sys.platform
+items = [ClosingItem("anchor"), ClosingItem("config", OSError(errno.EIO, "config close"))]
+primary = c.Refusal("E_INSTALL"); child_calls = [0]
+def anchor_open(*_args, **_kwargs): return items[0]
+def anchor_child(*_args, **_kwargs):
+    child_calls[0] += 1
+    if child_calls[0] == 1: return items[1]
+    raise primary
+c._open_held, c._open_child, c.sys.platform = anchor_open, anchor_child, "linux"
+try:
+    try: c.load_anchor()
+    except c.Refusal as exc: ok(exc is primary and [item.calls for item in items] == [1, 1],
+        "load_anchor preserves its first failure after every distinct ordinary close")
+    else: raise AssertionError("load_anchor cleanup failure accepted")
+finally: c._open_held, c._open_child, c.sys.platform = original_open_held, original_open_child, original_platform
+
+store_items = [ClosingItem("store"), ClosingItem("attempt", OSError(errno.EIO, "attempt close"))]
+store_primary = c.Refusal("E_STORE"); store_calls = [0]
+class StoreAnchor:
+    config = {"principal_uid": 1, "consumer_gid": 1, "store_root": "/store"}
+    resolver = None
+    def recheck(self, *_args): pass
+def store_open(*_args, **_kwargs): return store_items[0]
+def store_child(*_args, **_kwargs):
+    store_calls[0] += 1
+    if store_calls[0] == 1: return store_items[1]
+    raise store_primary
+c._open_held, c._open_child = store_open, store_child
+try:
+    try: c.read_store_attempt(StoreAnchor(), "attempt.fixture")
+    except c.Refusal as exc: ok(exc is store_primary and [item.calls for item in store_items] == [1, 1],
+        "read_store_attempt preserves its first failure after every distinct ordinary close")
+    else: raise AssertionError("store cleanup failure accepted")
+finally: c._open_held, c._open_child = original_open_held, original_open_child
 
 def make_attempt(attempt_id="attempt.fixture", evidence_raw=b"proof", name_hex="70726f6f66"):
     attempt = store / attempt_id; payload = attempt / "payload"; payload.mkdir(parents=True, mode=0o750)
@@ -2839,7 +2978,11 @@ def tracked_write(fd,name,raw,mode=0o400,sync=False,**options):
  sync_order.append("write:"+name);return order_write(fd,name,raw,mode,sync,**options)
 e.os.fsync=tracked_fsync;e.write_exclusive_at=tracked_write
 bundle=e.seal(out,out_hold,files,incident,"enforced-reproduction.v1")
-e.os.fsync=order_fsync;e.write_exclusive_at=order_write;out_hold.close()
+e.os.fsync=order_fsync;e.write_exclusive_at=order_write
+borrowed_fd=out_hold.held.fd;os.fstat(borrowed_fd);out_hold.close()
+try:os.fstat(borrowed_fd)
+except OSError as exc:ok(exc.errno==errno.EBADF,"seal borrows the held directory and its owner closes it once")
+else:raise AssertionError("seal left the held directory open")
 bundle_doc=e.parse(bundle)
 ok([row["name"] for row in bundle_doc["body"]["files"]] == sorted(e.EVIDENCE_NAMES),
    "bundle rows are sorted exact 29-file inventory")
@@ -2871,6 +3014,18 @@ try:refuses("E_RUNTIME",lambda:e.seal(filefail,filefail_hold,files,incident,"enf
             "evidence file fsync failure refuses before marker")
 finally:e.os.fsync=real_fsync
 ok(not (filefail/"bundle.json").exists(),"evidence fsync failure leaves no marker");filefail_hold.close()
+allocation=base/"allocation";allocation.mkdir(mode=0o700);allocation_hold=e.stable_directory(allocation)
+allocation_fd=allocation_hold.held.fd;real_canonical=e.canonical
+e.canonical=lambda _value:(_ for _ in ()).throw(MemoryError("bundle allocation"))
+try:
+ try:e.seal(allocation,allocation_hold,files,incident,"enforced-reproduction.v1")
+ except MemoryError:ok(True,"bundle allocation failure retains the existing directory owner")
+ else:raise AssertionError("bundle allocation failure accepted")
+finally:e.canonical=real_canonical
+os.fstat(allocation_fd);allocation_hold.close()
+try:os.fstat(allocation_fd)
+except OSError as exc:ok(exc.errno==errno.EBADF,"allocation failure leaves one directory close authority")
+else:raise AssertionError("allocation failure leaked the held directory")
 ok(all(not path.name.endswith("bundle.json") for path in out.iterdir()),
    "Python sealing never creates the native-owned marker")
 owner_source=inspect.getsource(e.CancellationSignals)

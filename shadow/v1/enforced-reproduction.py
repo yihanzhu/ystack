@@ -1020,9 +1020,14 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
             if not status[11]:
                 time.sleep(min(0.02, max(0, end - time.monotonic())))
             CancellationSignals.checkpoint()
-        native.reap_child()
         native.check_child_group()
         status = _native_child_status(native)
+        if not status[18]:
+            _native_child_cleanup(native, end)
+            status = _native_child_status(native)
+        else:
+            native.reap_child()
+            status = _native_child_status(native)
         require(status[17] == 1 and status[18] == 1 and status[19] == 1
                 and status[23] == 0 and status[24] == 1, "E_RUNTIME")
         return (_NativeChildResult(_native_returncode(status)), bytes(output[stdout_fd]),
@@ -1581,7 +1586,7 @@ def trace_ledger(incident: dict, attempt_id: str, environment_id: str, outcome: 
 def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
          incident: dict, record_form: str) -> bytes:
     require(set(files) == set(EVIDENCE_NAMES), "E_RELATION")
-    directory = os.dup(held_output.held.fd)
+    directory = held_output.held.fd
     rows = [{"name": name, "size_bytes": len(files[name]), "sha256": sha(files[name])}
             for name in sorted(files)]
     bundle = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle",
@@ -1589,37 +1594,17 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
-    try:
-        for name in sorted(files):
-            CancellationSignals.checkpoint()
-            held_output.recheck("E_RELATION")
-            write_exclusive_at(directory, name, files[name], sync=True)
+    for name in sorted(files):
+        CancellationSignals.checkpoint()
         held_output.recheck("E_RELATION")
-        require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
-        os.fsync(directory)
-        retained = CancellationSignals.retain_completion(directory)
-        if retained is not True:
-            raise Refusal("E_RUNTIME")
-        CancellationSignals.prepare_completion(bundle)
-    except BaseException as exc:
-        try:
-            os.close(directory)
-        except BaseException as close_exc:
-            raise exc from close_exc
-        directory = -1
-        if isinstance(exc, OSError):
-            raise Refusal("E_RUNTIME") from None
-        raise
-    try:
-        os.close(directory)
-        directory = -1
-    except BaseException as exc:
-        if isinstance(exc, OSError):
-            raise Refusal("E_RUNTIME") from None
-        raise
-    finally:
-        if directory >= 0:
-            os.close(directory)
+        write_exclusive_at(directory, name, files[name], sync=True)
+    held_output.recheck("E_RELATION")
+    require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
+    os.fsync(directory)
+    retained = CancellationSignals.retain_completion(directory)
+    if retained is not True:
+        raise Refusal("E_RUNTIME")
+    CancellationSignals.prepare_completion(bundle)
     return bundle
 
 

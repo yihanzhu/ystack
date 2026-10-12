@@ -317,10 +317,17 @@ child_refresh_complete(child_record *child)
 static void
 child_close_raw(child_record *child, size_t index)
 {
-    if (child->fd_owned[index]) {
+    if (child->fd_owned[index] && !child->fd_attempted[index]) {
         int rc;
         int saved_errno;
         child->fd_attempted[index] = 1;
+#if YSTACK_CANCEL_RELEASE_TESTING
+        if (YSTACK_CANCEL_TEST_CASE == 20 && index == 0) {
+            rc = -1;
+            errno = EIO;
+        }
+        else
+#endif
         rc = close(child->fds[index]);
         saved_errno = rc < 0 ? errno : 0;
         record_result(&child->fd_result[index], rc, saved_errno);
@@ -596,6 +603,10 @@ state_prepare_child(NativeState *state, PyObject *argument)
     if (child->fd_tuple == NULL) goto prepare_failed;
 #if YSTACK_CANCEL_RELEASE_TESTING
     if (YSTACK_CANCEL_TEST_CASE == 26) {
+        PyErr_NoMemory();
+        goto prepare_failed;
+    }
+    if (YSTACK_CANCEL_TEST_CASE == 20) {
         PyErr_NoMemory();
         goto prepare_failed;
     }
