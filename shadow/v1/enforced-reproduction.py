@@ -1822,7 +1822,7 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
             yield from ((b"request.json", launch_raw), (b"evaluation.json", evaluation_raw),
                 (b"incident.json", incident_raw), (b"record.json", record_raw),
                 (b"manifest.json", manifest_raw), (b"instruction", instruction))
-            for index, row in enumerate(manifest["entries"]):
+            for index, row in enumerate(row for row in manifest["entries"] if row["kind"] == "file"):
                 require(integer(row.get("size_bytes")) and row["size_bytes"] >= 0, "E_RELATION")
                 raw = read_regular(prep / "candidate" / row["path"], row["size_bytes"], "E_RELATION")
                 require(len(raw) == row["size_bytes"] and sha(raw) == row["sha256"], "E_RELATION")

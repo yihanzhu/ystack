@@ -96,6 +96,45 @@ def run_writer_tests():
             raise AssertionError("writer negative unexpectedly accepted")
         ok(not (paths[3] / "bundle.json").exists(), "slice4 never completes outer write bundle")
         return result
+    stable_directory = e.stable_directory
+    for fail_at, close_error in ((2, False), (3, False), (3, True), (0, False)):
+        acquired, attempted = [], []
+        first_error, cleanup_error = e.Refusal("E_WORKSPACE"), OSError("fixture close failure")
+        class DirectoryOwner:
+            def __init__(self, item):
+                self.item, self.closes = item, 0
+            def __getattr__(self, name):
+                return getattr(self.item, name)
+            def close(self):
+                self.closes += 1
+                self.item.close()
+                if close_error:
+                    raise cleanup_error
+        def acquire(path):
+            attempted.append(path)
+            if len(attempted) == fail_at:
+                raise first_error
+            owner = DirectoryOwner(stable_directory(path))
+            acquired.append(owner)
+            return owner
+        e.stable_directory = acquire
+        owner_paths = case("directory-owner")
+        try:
+            with partial_owner():
+                try:
+                    owner = w._Workspace(*owner_paths, parent)
+                except e.Refusal as exc:
+                    ok(fail_at and exc is first_error, "directory acquisition preserves first refusal")
+                    if close_error:
+                        ok(exc.__cause__ is cleanup_error, "directory cleanup error remains chained")
+                else:
+                    ok(not fail_at, "normal directory acquisition succeeds")
+                    owner.close()
+                    owner.close()
+            ok(len(acquired) == (fail_at - 1 if fail_at else 3)
+               and all(item.closes == 1 for item in acquired), "every acquired directory closes once; none unacquired")
+        finally:
+            e.stable_directory = stable_directory
     def digest_directory(directory):
         return {str(path.relative_to(directory)): sha(path.read_bytes())
                 for path in directory.rglob("*") if path.is_file()}
@@ -222,6 +261,43 @@ def run_writer_tests():
                 row.update(size_bytes=len(path.read_bytes()), sha256=sha(path.read_bytes()))
         (d / "bundle.json").chmod(0o600)
         (d / "bundle.json").write_bytes(canonical(marker))
+    def rehash_provenance(directory, mutate):
+        change_frozen(directory, "consumer-provenance.json", mutate)
+        raw = (directory / "consumer-provenance.json").read_bytes()
+        change_frozen(directory, "shadow-record.json",
+            lambda doc: doc["body"].update(consumer_provenance_ref=e.document_ref(raw)))
+    provenance_doc = json.loads((output / "consumer-provenance.json").read_bytes())
+    mutations = [("missing-" + key, lambda doc, key=key: doc["body"].pop(key))
+                 for key in provenance_doc["body"]]
+    mutations += [("kind", lambda doc: doc.update(kind="wrong")),
+        ("id", lambda doc: doc.update(id="attempt.other")),
+        ("schema-type", lambda doc: doc.update(schema_version=True)),
+        ("body-type", lambda doc: doc.update(body=[])),
+        ("extra-envelope", lambda doc: doc.update(extra=True)),
+        ("extra-body", lambda doc: doc["body"].update(extra=True)),
+        ("digest-type", lambda doc: doc["body"].update(helper_executable_sha256=1)),
+        ("changed-source", lambda doc: doc["body"].update(consumer_source_sha256="0" * 64)),
+        ("commands-type", lambda doc: doc["body"].update(commands={})),
+        ("commands-empty", lambda doc: doc["body"].update(commands=[])),
+        ("command-missing", lambda doc: doc["body"]["commands"][0].pop("argv_sha256")),
+        ("command-extra", lambda doc: doc["body"]["commands"][0].update(extra=True)),
+        ("command-role", lambda doc: doc["body"]["commands"][0].update(role="write-git-inspection")),
+        ("command-digest", lambda doc: doc["body"]["commands"][0].update(argv_sha256="invalid")),
+        ("command-executable", lambda doc: doc["body"]["commands"][0].update(executable_sha256="0" * 64)),
+        ("command-component", lambda doc: doc["body"]["commands"][0].update(component_sha256="0" * 64))]
+    bounded = e.run_bounded
+    for name, mutate in mutations:
+        called = []
+        def observed(role, *args, **kwargs):
+            called.append(role)
+            return bounded(role, *args, **kwargs)
+        e.run_bounded = observed
+        try:
+            invoke(case("provenance-" + name, frozen_change=lambda d: rehash_provenance(d, mutate)), True)
+            ok(not any(role.startswith("write-") or role == "materialization" for role in called),
+               "rehash cannot pass malformed provenance before conversion/materialization: " + name)
+        finally:
+            e.run_bounded = bounded
     invoke(case("rehashed-native-context", frozen_change=lambda d: change_frozen(d, "consumer-provenance.json", lambda doc: doc["body"]["native_release"].update(binary_sha256="0" * 64))), True)
     invoke(case("rehashed-evaluation", frozen_change=lambda d: change_frozen(d, "sandbox-evaluation.json", lambda doc: doc["body"].update(verdict="refused"))), True)
     invoke(case("rehashed-receipt", frozen_change=lambda d: change_frozen(d, "sandbox-receipt.json", lambda doc: doc["body"]["lifecycle"].update(runtime="failed"))), True)
@@ -281,6 +357,53 @@ def run_writer_tests():
             source_facts = w._git_inventory(ws, base / "source.git", incident_doc["body"]["git_revision_ref"])
             actual = w._candidate_facts(ws, result.response_raw, incident_doc, source_facts, result.files, result.write_set)
             ok(actual["commit_id"] == result.candidate_commit_id, "actual parent/tree/blob positive before fact mutations")
+            facts = w._git_inventory(ws, ws.work / "candidate/repository.git",
+                dict(incident_doc["body"]["git_revision_ref"], commit_id=result.candidate_commit_id))
+            sibling = "ystack-evidence/incident.previous/old.txt"
+            ok(sibling in source_facts and facts[sibling] == source_facts[sibling]
+               and facts["ystack-evidence"][2] != source_facts["ystack-evidence"][2]
+               and facts["unrelated"] == source_facts["unrelated"], "actual sibling survives changed ancestor; unrelated tree unchanged")
+            repository = ws.work / "candidate/repository.git"
+            git_env = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0",
+                "GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                "GIT_COMMITTER_NAME": "fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+            def object_write(args, raw):
+                return subprocess.check_output(["/usr/bin/git", "--no-replace-objects",
+                    "--git-dir=" + str(repository), *args], input=raw, env=git_env).decode().strip()
+            changed_blob = object_write(["hash-object", "-w", "--stdin"], b"changed old content\n")
+            def changed_tree(entries, directory=""):
+                children = {path[len(directory):].split("/")[0] for path in entries if path.startswith(directory)}
+                rows = []
+                for name in sorted(children):
+                    path = directory + name
+                    mode, kind, oid = entries[path]
+                    if kind == "tree":
+                        oid = changed_tree(entries, path + "/")
+                    rows.append(f"{mode} {kind} {oid}\t{name}\n")
+                return object_write(["mktree"], "".join(rows).encode())
+            for name, mutate in (("old-blob", lambda f: f.update({sibling: ("100644", "blob", changed_blob)})),
+                ("old-mode", lambda f: f.update({sibling: ("100755", "blob", f[sibling][2])})),
+                ("old-type", lambda f: f.update({sibling: ("120000", "blob", f[sibling][2])})),
+                ("old-removal", lambda f: f.pop(sibling)),
+                ("extra-leaf", lambda f: f.update({"extra.txt": ("100644", "blob", changed_blob)})),
+                ("unrelated-tree", lambda f: f.update({"unrelated/old.txt": ("100644", "blob", changed_blob)}))):
+                changed = dict(facts)
+                mutate(changed)
+                tree = changed_tree(changed)
+                commit = object_write(["commit-tree", tree, "-p", incident_doc["body"]["git_revision_ref"]["commit_id"]], b"fixture mutation\n")
+                response_doc = json.loads(result.response_raw)
+                receipt_doc = json.loads(response_doc["payloads"][0]["data"])
+                receipt_doc["candidate"].update(commit_id=commit, tree_id=tree)
+                receipt_raw = canonical(receipt_doc)
+                response_doc["payloads"][0].update(data=receipt_raw.decode(), sha256=sha(receipt_raw))
+                try:
+                    w._candidate_facts(ws, canonical(response_doc), incident_doc, source_facts, result.files, result.write_set)
+                except e.Refusal:
+                    ok(True, "actual Git candidate rejects " + name)
+                else:
+                    raise AssertionError("changed old candidate accepted: " + name)
             for key, value in (("mode", "100755"), ("git_blob_oid", "0" * 40), ("path", root_name + "/unlisted")):
                 changed = copy.deepcopy(result.write_set)
                 changed[0][key] = value
@@ -416,6 +539,11 @@ source=source.replace('for component_dir in adapters core preparation control en
 old=' for index,row in enumerate(manifest["entries"]):\n  raw=values[f"candidate/{index:05d}".encode()]'
 if source.count(old)!=1:raise SystemExit("existing launch fixture boundary changed")
 source=source.replace(old,' for directory in (row for row in manifest["entries"] if row["kind"]=="directory"):\n  (verifier_root/"candidate"/directory["path"]).mkdir(parents=True,exist_ok=True)\n for index,row in enumerate(row for row in manifest["entries"] if row["kind"]=="file"):\n  raw=values[f"candidate/{index:05d}".encode()]',1)
+tree_line='real_tree=$(/usr/bin/printf \'100644 blob %s\\tsource.txt\\n\' "$real_blob" | git_fixture --git-dir="$real/source.git" mktree)'
+if source.count(tree_line)!=1:raise SystemExit("existing actual source tree boundary changed")
+sibling_tree='real_old_tree=$(/usr/bin/printf \'100644 blob %s\\told.txt\\n\' "$real_blob" | git_fixture --git-dir="$real/source.git" mktree)'
+evidence_tree='real_evidence_tree=$(/usr/bin/printf \'040000 tree %s\\tincident.previous\\n\' "$real_old_tree" | git_fixture --git-dir="$real/source.git" mktree)'
+source=source.replace(tree_line,sibling_tree+"\n"+evidence_tree+"\n"+tree_line.replace('source.txt\\n', 'source.txt\\n040000 tree %s\\tunrelated\\n040000 tree %s\\tystack-evidence\\n').replace('"$real_blob" |','"$real_blob" "$real_old_tree" "$real_evidence_tree" |'),1)
 point='e.c.load_anchor=lambda _resolver=None,_group_reader=None: Anchor()'
 if source.count(point)!=1:raise SystemExit("existing input diagnostic boundary changed")
 diag="""

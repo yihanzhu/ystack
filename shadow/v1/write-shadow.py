@@ -68,9 +68,11 @@ class _Workspace:
             e.private_empty(output)
             e.disjoint([request, bundle, work, output, *self.paths.values()])
             self.work_hold = e.stable_directory(work)
+            self.owned.append(self.work_hold)
             self.output_hold = e.stable_directory(output)
+            self.owned.append(self.output_hold)
             self.bundle_hold = e.stable_directory(bundle)
-            self.owned.extend([self.work_hold, self.output_hold, self.bundle_hold])
+            self.owned.append(self.bundle_hold)
             self.bundle = bundle
             for name in ("dependencies", "captured", "runtime", "frozen", "seed", "builder",
                          "candidate", "materializer", "preparation-parent", "preparation-scratch",
@@ -104,6 +106,8 @@ class _Workspace:
             self.owned.append(self.jq)
             self.bash = e.fixed_bash()
             self.owned.append(self.bash)
+            self.sudo = e.fixed_sudo()
+            self.owned.append(self.sudo)
             self.git = self.hold(Path("/usr/bin/git").resolve(), c.EXECUTABLE_LIMIT, True)
             self.git_named = e.stable_file(Path("/usr/bin/git"), allow_hardlinks=True)
             self.owned.append(self.git_named)
@@ -201,8 +205,9 @@ class _Workspace:
             "--git-dir=" + str(repository), *args], SOURCE / "shadow/v1/write-shadow.py", output_limit=limit)
 
     def close(self):
-        e.close_all(reversed(self.owned))
+        owned = self.owned
         self.owned = []
+        e.close_all(reversed(owned))
 
 
 def _inventory(ws):
@@ -232,7 +237,7 @@ def _inventory(ws):
     for role, name in (("incident", "incident.json"), ("materialization_input", "materialization-input.json"),
                        ("qualified_identity", "qualified-identity.json")):
         require((ws.work / "captured" / (role + ".json")).read_bytes() == files[name], "E_RELATION")
-    provenance = parse(files["consumer-provenance.json"])
+    provenance = _provenance(ws, files)
     native = e.CancellationSignals.active.native
     require(provenance["body"]["native_release"] == native.provenance(ws.parent)
             and provenance["body"]["instruction_utf8"].encode() == e.make_instruction(incident)
@@ -248,6 +253,56 @@ def _inventory(ws):
     response_check = ws.capture("frozen-response-check.json", e.response_check(input_doc, files["materialization-response.json"]))
     ws.protocol("validate-response", response_check)
     return files, incident, receipt
+
+
+def _provenance(ws, files):
+    doc = parse(files["consumer-provenance.json"])
+    digests = {"helper_source_sha256": ws.parent["helper_source_sha256"],
+        "helper_build_record_sha256": ws.parent["helper_build_record_sha256"],
+        "helper_executable_sha256": ws.parent["helper_executable_sha256"],
+        "consumer_source_sha256": ws.components[SOURCE / "shadow/v1/enforced-reproduction.py"].sha256,
+        "python_sha256": ws.python.sha256, "jq_sha256": ws.jq.sha256}
+    keys = {"activation_state", "authority", "instruction_utf8", "instruction_sha256",
+            "observation", "observation_sha256", "native_release", "commands", *digests}
+    require(set(doc) == {"schema_version", "kind", "id", "body"}
+            and type(doc["schema_version"]) is int and doc["schema_version"] == 1
+            and doc["kind"] == "shadow_consumer_provenance"
+            and doc["id"] == parse(files["sandbox-request.json"])["id"]
+            and c._id(doc["id"]) and type(doc["body"]) is dict
+            and set(doc["body"]) == keys, "E_RELATION")
+    body = doc["body"]
+    require(body["activation_state"] == "inactive" and body["authority"] == "none"
+            and type(body["instruction_utf8"]) is str
+            and type(body["observation"]) is dict and type(body["native_release"]) is dict
+            and all(c._sha(body[key]) and body[key] == value for key, value in digests.items())
+            and c._sha(body["instruction_sha256"]) and c._sha(body["observation_sha256"])
+            and body["observation_sha256"] == sha(canonical(body["observation"])), "E_RELATION")
+    commands = body["commands"]
+    supervisor = next(item for item in ws.anchor.held if item.path == str(Path(c.ANCHOR) / "host-supervisor.py"))
+    fixed = {"helper-version": (ws.helper.sha256, digests["helper_source_sha256"]),
+        "jq-version": (ws.jq.sha256, ws.jq.sha256),
+        "sandbox-launch-boundary": (ws.sudo.sha256, sha(supervisor.read(c.EXECUTABLE_LIMIT, "E_RELATION"))),
+        "darwin-acl-uuid-resolution": (ws.python.sha256, ws.consumer.sha256),
+        "darwin-group-membership": (ws.python.sha256, ws.consumer.sha256)}
+    for executable, sources in ((ws.bash.physical.sha256, {
+        "incident-validation": "shadow/v1/validate-incident.sh",
+        "materialization": "adapters/local-git-materializer/v1/materialize.sh",
+        "sandbox-bound-evaluation": "control/v1/evaluate-bound-sandbox.sh",
+        "sandbox-receipt-check": "enforcement/v1/check-sandbox-receipt.sh",
+        "trace-validation": "telemetry/v1/validate-trace-ledger.sh"}), (ws.jq.sha256, {
+        "materializer-input-validation": "adapters/local-git-materializer/v1/protocol.jq",
+        "materializer-response-validation": "adapters/local-git-materializer/v1/protocol.jq",
+        "qualified-identity-validation": "shadow/v1/qualified-identity.jq"}), (ws.python.sha256, {
+        "candidate-preparation": "preparation/v1/prepare-candidate.py",
+        "candidate-inspection": "preparation/v1/prepare-candidate.py"})):
+        fixed.update({role: (executable, ws.components[SOURCE / path].sha256) for role, path in sources.items()})
+    require(type(commands) is list and commands and all(type(row) is dict
+        and set(row) == {"role", "argv_sha256", "executable_sha256", "component_sha256"}
+        and type(row["role"]) is str and row["role"] in fixed
+        and all(c._sha(row[key]) for key in ("argv_sha256", "executable_sha256", "component_sha256"))
+        and (row["executable_sha256"], row["component_sha256"]) == fixed[row["role"]]
+        for row in commands), "E_RELATION")
+    return doc
 
 
 def _identity_check(ws, raw, incident):
@@ -474,10 +529,12 @@ def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
     headers = commit.split(b"\n\n", 1)[0].splitlines()
     require([line[7:].decode() for line in headers if line.startswith(b"parent ")] == [revision["commit_id"]]
             and [line[5:].decode() for line in headers if line.startswith(b"tree ")] == [candidate["tree_id"]], "E_RELATION")
-    require(all(facts.get(path) == value for path, value in source_facts.items()), "E_RELATION")
+    expected_directories = {"/".join(path.split("/")[:index]) for path in files for index in range(1, len(path.split("/")))}
+    require(all(facts.get(path) == value or (path in expected_directories
+        and value[:2] == ("040000", "tree") and facts.get(path, ())[:2] == value[:2])
+        for path, value in source_facts.items()), "E_RELATION")
     additions = {path: value for path, value in facts.items() if path not in source_facts and value[1] != "tree"}
     require(additions == {row["path"]: ("100644", "blob", row["git_blob_oid"]) for row in expected}, "E_RELATION")
-    expected_directories = {"/".join(path.split("/")[:index]) for path in files for index in range(1, len(path.split("/")))}
     require({path for path in facts if path not in source_facts and facts[path][1] == "tree"} == expected_directories - set(source_facts), "E_RELATION")
     for row in expected:
         raw = ws.git_read(repository, ["cat-file", "blob", row["git_blob_oid"]], len(files[row["path"]]) + 1)
