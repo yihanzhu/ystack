@@ -442,8 +442,8 @@ def function_bodies(path):
    for line in parent["body"].splitlines():
     match=pattern.match(line)
     if match:
-     target=int(match.group(1),16);matches=[bounds for bounds in fde_ranges if bounds[0]==target]
-     if len(matches)==1:references.append((line,target,matches[0]))
+     target=int(match.group(1),16);matches=[bounds for bounds in fde_ranges if bounds[0]<=target<bounds[1]]
+     if len(matches)==1 and matches[0][0]==target:references.append((line,target,matches[0]))
   if frame_status["status"]!="ok":
    answer["spawn_child_candidate"]={"status":"unavailable","reason":"frame-metadata-incomplete",
     "semantic_binding":"unresolved"}
@@ -492,10 +492,18 @@ def function_bodies(path):
  source_after={"identity":digest(path),"build_id":build_id(path)}
  tools_after={name:digest(row["path"]) for name,row in answer["tools"].items()}
  answer["source_after"]=source_after;answer["tools_after"]=tools_after
- answer["evidence_binding"]={"status":"ok" if source_before==source_after and all(
-  answer["tools"][name]["identity"]==tools_after[name] for name in answer["tools"]) else "unavailable",
-  "reason":None if source_before==source_after and all(answer["tools"][name]["identity"]==tools_after[name]
-   for name in answer["tools"]) else "source-or-tool-identity-changed"}
+ source_valid=all((source_before["identity"].get("status")=="ok",
+  bool(source_before["identity"].get("sha256")),source_before["build_id"].get("status")=="ok",
+  bool(source_before["build_id"].get("value")),source_after["identity"].get("status")=="ok",
+  bool(source_after["identity"].get("sha256")),source_after["build_id"].get("status")=="ok",
+  bool(source_after["build_id"].get("value"))))
+ tools_valid=all(answer["tools"][name]["identity"].get("status")=="ok" and
+  answer["tools"][name]["identity"].get("sha256") and tools_after[name].get("status")=="ok" and
+  tools_after[name].get("sha256") for name in answer["tools"])
+ binding_ok=source_valid and tools_valid and source_before==source_after and all(
+  answer["tools"][name]["identity"]==tools_after[name] for name in answer["tools"])
+ answer["evidence_binding"]={"status":"ok" if binding_ok else "unavailable",
+  "reason":None if binding_ok else "source-or-tool-identity-missing-or-changed"}
  if answer["evidence_binding"]["status"]!="ok":answer["status"]="unavailable";answer["reason"]="binding-changed"
  return answer
 def jit():
