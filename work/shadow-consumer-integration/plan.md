@@ -439,11 +439,10 @@ completion descriptor and define no second handoff. One invocation has one owner
 
 During acquisition, product work and ordinary cleanup, the main thread blocks HUP,
 INT and TERM. Python bytecode, allocation, exception creation, ACL capture/free,
-child preparation and status conversion run only in that blocked state. A fixed
-native checkpoint temporarily restores the original caller mask inside `pselect`,
-where natural delivery invokes only the private native handler. `pselect` restores
-the blocked mask before its C wrapper returns or touches Python. This changes the
-private delivery mechanism, preserving cancellation, original caller restoration,
+child preparation and status conversion run only in that blocked state. The fixed
+native checkpoint observes pending watched signals with sigpending and sets the
+sticky cancellation latch without changing the mask or consuming a signal. Original
+caller mask restoration happens only in release. This preserves cancellation,
 single L, sticky failures, usable-held-fd rollback and post-L caller protection.
 It does not promise zero allocation throughout reproduction or port it into C.
 
@@ -466,9 +465,11 @@ State is prepared before the first census and is the sole authority. It contains
 - the original entry mask, fixed watched mask and original native sigaction for
   each watched signal; separate capture/install/restore result and ownership cells;
 - owned nonblocking/CLOEXEC pipe ends with acquired/attempted/direct-result cells;
-  one `volatile sig_atomic_t` cancellation latch, written only as the constant 1
-  by the sole signal receiver and read only with watched signals blocked;
-- entry/final/checkpoint/finish raw result cells, tagged NOT_RUN or RETURNED,
+  one `volatile sig_atomic_t` cancellation latch, assigned only the constant 1 by
+  the fixed handler or main-thread pending observer; observer reads/writes occur
+  with watched signals blocked, and only preparation initializes it to zero;
+- entry/final/checkpoint/finish raw result cells, including checkpoint pending and
+  fixed membership results, tagged NOT_RUN or RETURNED,
   saving errno immediately for APIs that return -1; pthread_sigmask stores its
   direct error code, not an errno-derived replacement;
 - the existing completion duplicate, captured dev/inode/type, individual
@@ -582,17 +583,28 @@ another write failure cannot clear the latch. Pipe saturation is not cancellatio
 loss. Prebind/first-use the handler's actual write/errno path before census and prove
 the accepted implementation is async-signal-safe; the handler never calls malloc.
 
-`checkpoint()` is one fixed call to
-`pselect(0, NULL, NULL, NULL, &zero_timeout, &entry_old)` with a stack zero timeout.
-It captures raw return/errno before any later call. The original blocked mask is
-restored on every returning path, including EINTR and other errors, before any
-Python result/refcount operation. EINTR is not itself a product failure; the sticky
-latch decides cancellation. Other errors remain sticky and prevent new work. Return
-only an already-rooted status singleton. Do not split unblock/wait/reblock into
-separate Python calls, use sigwait/signalfd, drain/replay signals or release the GIL.
-The actual platform proof must show natural pending delivery even with zero timeout;
-if it does not, this exact method fails review and needs a new bounded plan method,
-not an unreviewed busy loop or additional event engine.
+`checkpoint()` makes one fixed sigpending call into a native sigset_t while the
+watched set stays blocked. Record its raw rc and errno immediately; a failed call
+never reads the output set. On success, test only fixed HUP, INT and TERM through
+sigismember, recording the three direct results; any watched member assigns latch=1.
+Do not count signals or clear the latch on an empty later observation. Pending or
+membership failure is sticky and prevents new work. Once a checkpoint failure is
+recorded, later calls return the rooted failure singleton without another syscall
+or overwriting the result cell referred to by first_failure. Cleanup continues its
+separately owned duties. On ordinary success return only an already-rooted status
+singleton, with no allocation, DECREF, Python callback, GIL release or lazy lookup.
+
+This is a nonconsuming cancellation observation, not delivery, waiting or another
+completion decision. Repeated observations leave the pending signal in the kernel.
+A signal arriving after a checkpoint is observed at the next existing checkpoint
+or the final pending sample; it cannot turn a sampled clear prefix into completion.
+Do not use pselect, a timeout/unblock fallback, sigsuspend, sigwait, signalfd, drain,
+replay, manual handler invocation or a second event loop. The private native actions
+remain installed during the lease: an originally ignored watched signal can become
+pending instead of being discarded by SIG_IGN. Keep the handler/latch/private pipe
+and final one-byte observation; do not introduce an unblock to exercise them in the
+product. Actual normal/error contracts for this fixed observation must bind both
+selected platforms.
 
 Call this method at existing private cancellation checkpoints, immediately before
 new child/evidence effects, and around existing bounded I/O waits. Retain Python's
@@ -603,8 +615,9 @@ the existing owned-group cleanup. Cleanup observes checkpoints without aborting 
 outstanding TERM/KILL/observe/reap/pipe duties. Preserve the 180-second supervisor
 deadline and further 10-second cancellation observation, including the existing
 bounds and refusal on exhaustion. The checkpoint adds no syscall hard-time promise.
-Caller-originally-blocked watched signals remain blocked and pending; final pending
-observation detects them without consumption or replay.
+Caller-originally-blocked watched signals also remain pending; observing them may
+stop new work sooner but never unblocks or consumes them. Every early observation
+can only cancel or fail; only the final post-durability pending sample may create L.
 
 The child record remains the only spawn-to-reap owner. `prepare_child` copies the
 saved original entry mask into its explicit POSIX_SPAWN_SETSIGMASK attribute;
@@ -703,9 +716,9 @@ abort/rollback and release in this same C call, never to L or an early Python re
 After all marker operations succeed, observe the private pipe with exactly one
 nonblocking one-byte read. Any byte, EOF, unknown descriptor or error other than
 EAGAIN/EWOULDBLOCK makes abort sticky. Never drain, retry or read twice. Read the
-sticky latch and sample sigpending once. The inputs are prior preparation failure,
-any raw failure, latch, uncertain pipe and watched pending. Any set input selects
-abort. Only their absence and all preconditions permit completed. The successful
+sticky latch and take exactly one final sigpending snapshot. The inputs are prior
+preparation failure, any raw failure, latch, uncertain pipe and watched pending.
+Any set input selects abort. Only their absence and all preconditions permit completed. The successful
 final pending sampling instant is **L**; neither the marker's last byte/fsync, mask
 restore, C return nor Python assignment is L. No semantic work, child work, second
 decision or Python call follows L.
@@ -759,11 +772,15 @@ The epilogue only INCREFs and returns a preallocated strongly rooted singleton;
 `outcome()` is a read-only NOARGS getter, never release. Repeated release calls are
 inert with respect to consumed effects and cannot retry. Diagnostics occur later.
 
-Caller-blocked pending signals remain blocked; restoring original SIG_IGN may
-properly discard pending signals. No consumer consumes or replays them. Original
-SIG_DFL may terminate inside unmask before rc/close; report only the last real
-observation, no imaginary cleanup or E_RUNTIME from a dead process. Returning or
-ignored controls classify normally observed authoritative State. No wrapper delays
+Observed lease-time signals remain pending: restoring original SIG_IGN may
+properly discard them, while restoring an originally unblocked returning action
+permits its natural delivery. Caller-blocked signals remain blocked and pending.
+No consumer consumes, replays or claims to have delivered an observed signal.
+Original SIG_DFL may terminate inside unmask before rc/close. A pre-L cancellation
+first takes the required rollback path; a post-L caller signal does not undo the
+sealed completion decision. Report only the last real observation, no imaginary
+cleanup or E_RUNTIME from a dead process. Returning or ignored controls classify
+normally observed authoritative State. No wrapper delays
 original disposition solely to force a report or cleanup.
 
 After L and successful native release, an arbitrary caller exception must retain
@@ -999,7 +1016,7 @@ observations.
 | control-sandbox-bound | Valid complete same-set duty/claim/observation; actual evaluator execution; full-ref/source pins; altered role/argv/root/limit/partial claim; legacy-set duty; wrong entry/target/set; zero/ones/unlisted digest; two accepted unequal verifier digests; shipped empty set refusal |
 | sandbox-receipt | Original check results byte-identical; explicit mode cannot be auto-selected; bound observation digest and exact d; all six control fields; retained legacy shape/accounting/mechanism/limit/outcome refusals; CPU/wall none cannot satisfy |
 | shadow-enforced | Schema-2 parent-context absent/writable/malformed/schema-1/request-forged; exact helper/native field types and bounds; `E_PARENT_CONTEXT`; source/build/compiler argv and identity/P/ABI/binary/dependency mismatch; unapproved/raced helper or native binary leaves no execution marker; pinned jq before version; root/config principal bootstrap; every directory/file mode/owner/ACL/link/alias/read-race boundary; no native load after precheck failure |
-| shadow-enforced | Same-P actual Mac and Linux normal reproduction passes with the fixed native owner; every Python/ACL/child conversion boundary is watched-blocked; zero-time pselect naturally delivers an already-pending originally-unblocked watched signal and returns blocked for timeout, EINTR and error; original-blocked signals remain pending; matching no-signal controls; checkpoint failures stop new effects and reach sticky rollback. No primitive-only result or permanent false guard is a product positive. |
+| shadow-enforced | Same-P actual Mac and Linux normal reproduction passes with the fixed native owner; every Python/ACL/child conversion and checkpoint boundary is watched-blocked. Real pending HUP/INT/TERM, originally blocked/unblocked/ignored controls, repeated observations and no-signal controls prove sigpending sets the sticky cancel status without delivery, mask change or consumption; a signal after one observation is caught by the next checkpoint or final sample. Raw pending/membership failures stop new effects, preserve first_failure across later calls and reach sticky rollback; injected errors remain labelled simulated. No checkpoint can create L, no timeout/unblock fallback exists, and no primitive-only result or permanent false guard is a product positive. |
 | shadow-enforced | Native handler has all-watched sa_mask, fixed sticky assignment and one nonblocking write, preserves errno, and never calls Python/allocator/CheckSignals or changes dispositions; TERM/HUP/INT combinations cannot lose the latch; full pipe, write EINTR/error and repeated delivery preserve cancellation; source plus exact output review establishes the fixed call boundary, paired real deliveries establish actual behavior. |
 | shadow-enforced | Entry/partial arm/raw action capture and every restore/pipe-close failure retain authoritative ownership across lost returns; all original sigaction fields restored on success; restoration failure is sticky, rolls back while fd usable, and retains live handler storage plus pipe rather than closing/reusing an endpoint still referenced; no second acquisition/retry/destructor cleanup; queued pre-acquisition CPython flags and old returning-handler controls cannot be silently excluded or misclassified. |
 | shadow-enforced | Actual root-specific thread/mask evidence distinguishes inherited blocked pthreads from workqueue/explicit-unmask paths; temporary threads cannot be receivers/waiters and must end before final census; a negative explicit-unmask/competing-owner fixture demonstrates why inheritance alone is insufficient, not a new runtime detector. Known RNG→abort watched-mask writes remain blocked on the bound image; source/error-path proof cannot be replaced by noreturn or preflight success. Fatal prefix controls assert their last real boundary and no marker; no allocator/unknown-callback path remains from first marker byte to L. |
@@ -1011,7 +1028,7 @@ observations.
 | shadow-enforced | Native finalization performs exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before signal/mask/wakeup APIs; pre-existing wakeup owner under both warning modes retains fd, actions, mask, delivery and full-buffer warning behavior with zero Python signal/wakeup setter calls; native owner leaves Python handler table and disabled/warning pair untouched; nested scopes borrow; children receive saved original caller mask and no owner/pipe inheritance. |
 | shadow-enforced | Both exact actual first/final native census observations remain required; entry non-one refuses before effects and final count/read/close failure selects abort and held-fd rollback. Actual bounded relevant-root evidence excludes transient competing receivers, waiters and owner replacement; census snapshots, mocks and implementation names alone do not. Final single-thread plus fixed tail proves no fd reuse. |
-| shadow-enforced | Real TERM/HUP/INT on actual Mac and Linux before final block, while blocked before L and immediately after L, each paired with no-signal and caller-exception controls; original blocked, returning, `SIG_IGN` and `SIG_DFL` dispositions; pending preservation/discard semantics; default termination reports only the last observed boundary; dual real failure/caller events preserve true first failure and never invent cleanup |
+| shadow-enforced | Real TERM/HUP/INT on actual Mac and Linux before final block, while blocked before L and immediately after L, each paired with no-signal and caller-exception controls; original blocked, returning, `SIG_IGN` and `SIG_DFL` dispositions; checkpoint observation preserves pending, restore-IGNORE may discard, returning actions receive naturally after release, pre-L default termination follows the required rollback attempt, and post-L default termination preserves the completion decision; report only the last observed boundary; dual real failure/caller events preserve true first failure and never invent cleanup |
 | shadow-enforced | NOT_RUN versus RETURNED(raw_rc/raw_errno) for entry/arm/checkpoint/final/commit/release; entry capture survives lost return and failed capture is never read; native phase/decision/result is sole authority; abort_release publishes earlier Python failure, creates no L and cannot later report success. Marker open/write/sync/close, final one-byte/pending decision, action/pipe restoration and mask/fd tail stay in one C call; fixed rooted singleton epilogue has no allocation/DECREF/callback and outcome never releases. |
 | shadow-enforced | Empty-directory/held-identity precheck precedes hold; NOT_RUN, dup failure, dup/fstat failure, lost hold return and interrupted authoritative confirmation produce no marker; only normally observed no-failure consumer outcome (`native-release.pending`, not sealed success) permits the first marker byte; any owned duplicate is released once; normal close, simulated EINTR with original fd still held, simulated already-closed/EBADF, identity mismatch and unavailable no-reuse closure; exactly one fstat, no wrong-object unlink/reopen/EINTR guess, at most one conditional close and six bounded tail APIs; unlink/fsync failures remain distinct and sticky |
 | shadow-enforced | Exact bytes/nonempty/1-MiB cap and fixed driver-generated canonical payload; subclass, bytearray, buffer exporter, oversized/invalid input and wrong phase refuse before open; all business/JSON/ordinary cleanup, final census and active-parent restoration precede marker creation. Real fatal prefix paired with normal control proves last boundary and absent marker, never imagined rollback. Review actual marker-to-L native call closure for no allocation, deferred first use or unknown callback; prepared bytes cannot stand in for completed outcome. |
