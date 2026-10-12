@@ -220,8 +220,14 @@ for native_case in $native_child_cases; do
   child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 -maxdepth 1 -type f -name '_cancel_release*.so' -print)
   "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"
 done
-"$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
-import ctypes,hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,struct,subprocess,sys,sysconfig,uuid
+cat > "$tmp/runtime-dependency-collector.py" <<'PY'
+import os
+startup_environment_keys=tuple(sorted(os.environ))
+forbidden_startup_keys=tuple(key for key in startup_environment_keys if
+ key.startswith(("MallocStackLogging","OBJC_","LD_","DYLD_")) or
+ key=="POSIX_SPAWN_FILTERING_RULES_PATH")
+if forbidden_startup_keys:raise SystemExit("forbidden startup environment")
+import ctypes,hashlib,importlib.machinery,importlib.util,json,pathlib,re,struct,subprocess,sys,sysconfig,uuid
 root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
@@ -333,6 +339,7 @@ build_jit=sysconfig.get_config_var("Py_ENABLE_JIT")
 body={"platform":sys.platform,"executable":executable,"executable_identity":digest(executable),
  "flags":{"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,
  "dont_write_bytecode":sys.flags.dont_write_bytecode},"jit":jit(),
+ "preexec_environment":{"observed_keys":startup_environment_keys,"forbidden_keys":forbidden_startup_keys},
  "loaded_origins":[{"path":path,"identity":digest(path)} for path in origins],
  "soabi":sysconfig.get_config_var("SOABI"),"stdlib":os.path.realpath(sysconfig.get_path("stdlib")),
  "version":sys.version,"build_configuration":{"Py_ENABLE_JIT":{"status":"missing"} if build_jit is None
@@ -415,6 +422,22 @@ encoded=(json.dumps(facts,sort_keys=True,separators=(",",":"),ensure_ascii=False
 assert len(encoded)<=1024*1024
 sys.stdout.buffer.write(encoded)
 PY
+/bin/chmod 0400 "$tmp/runtime-dependency-collector.py"
+for polluted_key in MallocStackLogging OBJC_PRINT_IMAGES LD_YSTACK_FIXTURE DYLD_YSTACK_FIXTURE \
+  POSIX_SPAWN_FILTERING_RULES_PATH; do
+  if /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$polluted_key=fixture" \
+    "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$root" "$native_binary" \
+    > "$tmp/preexec-$polluted_key.stdout" 2> "$tmp/preexec-$polluted_key.stderr"; then
+    fail "runtime dependency accepted $polluted_key"
+  fi
+  [ ! -s "$tmp/preexec-$polluted_key.stdout" ] || fail "runtime dependency wrote polluted output"
+  /usr/bin/grep -Fx 'forbidden startup environment' "$tmp/preexec-$polluted_key.stderr" >/dev/null \
+    || fail "runtime dependency returned wrong polluted refusal"
+done
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
+  "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$root" "$native_binary" \
+  > "$tmp/runtime-dependency-record.json"
+/usr/bin/printf 'shadow-runtime-preexec-environment: fixed clean startup and 5 polluted starts refused\n'
 "$python_bin" -I -S -B - "$native_out/build-record.json" \
   "$tmp/runtime-dependency-record.json" <<'PY'
 import hashlib,json,pathlib,sys
