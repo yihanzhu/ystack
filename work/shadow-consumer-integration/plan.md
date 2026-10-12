@@ -258,13 +258,15 @@ named-entry checks. Hold ancestor descriptors until the operation finishes.
 Compare device, inode, kind, uid/gid, mode, link count, size and nanosecond change
 metadata before/after each read; bound bytes while reading, not after allocation.
 
-For the production anchor, walk from `/` to the exact spec R3 path. First require
-root ownership and no non-root write grant for config/script and their ancestors.
-Only then parse config and trust principal_uid, consumer_gid, store_id and store_root.
-Check real/effective consumer UIDs, supplementary group membership, and nonzero
-separate supervisor UID. There is no caller/test environment override of this path.
-Validate installed files and verifier path under R10.1, permitting only root or the
-already authenticated supervisor principal where that contract allows it.
+For the production anchor, walk from `/` to the exact spec R3 path. Require root
+ownership and no non-root write grant for config/script and their ancestors before
+parsing config and trusting principal_uid, consumer_gid, store_id or store_root.
+Require nonzero separate supervisor UID. For authenticated consumer_gid, read its real and
+effective gid first; either exact match satisfies spec R3 without a supplementary query.
+Otherwise protected Darwin uses the fixed State-owned group reader below and never calls `os.getgroups()` in the parent.
+The protected Linux path keeps its separately accepted actual closure. There is no caller/test
+environment override. Validate installed files and verifier under R10.1, permitting only root
+or the authenticated supervisor where that contract allows it.
 
 On macOS use one private ACL boundary in `_consumer.py`. Before cancellation
 admission, bind the fixed descriptor ACL retrieval, iteration, qualifier-copy and
@@ -281,38 +283,32 @@ bytes, 128-entry maximum and original ordering.
 The parent never calls membership resolution or initializes that service,
 including for compatibility UUIDs.
 
-Resolve only the captured UUID bytes in one fresh fixed child per bounded ACL batch:
-`P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This is a private role
-in the existing source file, not a public CLI, helper registry or selectable command.
-The role cannot invoke the parent consumer or recurse. Its canonical JSON input is
-an exact array of at most 128 lowercase 32-hex UUIDs and at most 16 KiB. Its canonical
-JSON output is at most 32 KiB and has one positional result per input. Each result
-has exactly `{uuid,status,kind,id}`. Status is `resolved` or `unresolved`; a resolved
-row has kind `user` or `group` and an unsigned 32-bit id, while an unresolved row
-has null kind and id. Reject duplicate JSON keys, extra or missing rows,
-reordered/mismatched UUIDs, unknown fields, malformed values and trailing data. Map
-only a resolved user row to the existing identifier; group and unresolved rows keep
-the existing no-identifier semantics. A membership miss stays unresolved; transport,
-protocol or process failure refuses the ACL observation. A child result supplies
-neither permission bits nor an authorization decision.
+Resolve captured UUID bytes only in one fixed child per bounded batch:
+`P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This remains a private role, not a public CLI, registry or selectable command. Input is an
+exact canonical array of at most 128 lowercase 32-hex UUIDs and 16 KiB; output is at most 32 KiB with one positional
+exact `{uuid,status,kind,id}` row per input. Resolved rows have user/group kind and uint32 id; unresolved rows have
+null kind/id. Reject duplicate keys, unknown fields, malformed values, trailing data and missing, extra, reordered or
+mismatched rows. Map only users; groups and membership misses remain unresolved. Transport, protocol or process
+failure refuses the observation. A result supplies no permissions or authorization; the role cannot invoke the parent or recurse.
 
-The already trusted parent fixes P and the reviewed physical S under spec R2.1/R2.4
-before the first ACL operation, using the admitted standalone invocation and retained
-source bytes rather than an ACL observation made through this resolver. Recheck those
-identities and `_consumer.py` before each launch. This breaks the bootstrap cycle:
-ACL checks do not establish the interpreter or resolver source that they invoke.
-The enforced-reproduction entry constructs one module-private resolver from the
-existing cancellation-aware runner and the fixed argv, then passes that value through
-every parent-facing held-path rule and recheck that can inspect a Darwin ACL. It is a
-fixed concrete adapter, not an arbitrary callable. A missing resolver refuses before
-the first Darwin ACL capture; the child role cannot construct or receive one. Thus
-every existing ACL caller is accounted for, with no default in-process membership
-fallback, caller-supplied callback or request-selected runner. Linux keeps fd-based
-POSIX ACL xattr reads and makes no resolver call. Fail on unsupported or unreadable
-ACL observations on either platform.
-Accept no ACL on store objects. Root-only anchor checks reject every grant permitting
-another principal to modify it; later installed-object checks follow VM R10.1 exactly.
+Darwin supplementary membership uses a separate fixed private role and argv:
+`P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group`. Stdin is exactly canonical `{"gid":G}\n`, at most 32 bytes, where G is the authenticated uint32 consumer_gid. The child calls existing
+`os.getgroups()` once with its original Darwin extended semantics. Its only stdout is
+canonical `[]\n` or `[G]\n`, at most 16 bytes, containing actual matching group-id data.
+Query error exits nonzero with no accepted output. The parent validates exact bytes and
+itself requires `[consumer_gid]`; the child returns no member, accepted, permission,
+principal or policy field. This caps no legitimate group list and does not replace the Darwin query with the nonequivalent plain syscall.
 
+The trusted parent fixes and rechecks P, reviewed physical S and `_consumer.py` under spec R2.1/R2.4 before either child;
+ACL or group results do not establish those identities. The enforced entry constructs concrete module-private UUID and
+group reader adapters from the existing State runner and fixed argv; they are not callables,
+subclass hooks or request-selected runners. A protected Darwin `load_anchor` requires
+both adapters, uses the gid short-circuit above, and refuses a missing group reader
+without in-process fallback. An ordinary nonadmitted consumer may retain its legacy
+local group query, but cannot enter the protected reproduction or supply its source closure.
+Linux keeps fd ACL reads and makes no UUID resolver call. Unsupported or
+unreadable ACL observations refuse. Store objects accept no ACL; root and installed
+rules preserve every existing R10.1 permission and principal decision.
 Open store_root, attempt directory, receipt and payload descendants relative to
 held descriptors. Enforce spec R3's uid/gid, 0750/0440, no-ACL and single-link rules.
 Use the existing fixed payload names/inventory; reject extra/missing/aliased names.
@@ -346,6 +342,7 @@ scratch children. Use argument arrays and no shell command strings.
 | Trace | `/bin/bash -p S/telemetry/v1/validate-trace-ledger.sh validate INCIDENT_ID ATTEMPT_ID LEDGER` |
 | Convert seed | `/bin/bash -p S/maintenance/v1/incident-to-eval.sh convert INCIDENT FROZEN_SHADOW EMPTY_SEED_DIRECTORY` |
 | Resolve Darwin UUIDs | `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids` |
+| Read Darwin group | `P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group` |
 
 Fixed script calls receive only `PATH=DEPENDENCY_BIN:/usr/bin:/bin`, `LC_ALL=C`,
 `LANG=C`; DEPENDENCY_BIN contains the checked jq. Clear inherited Git configuration,
@@ -365,13 +362,14 @@ file-action or argv allocation. Record each of the six pipe ends and every later
 resource immediately after acquisition. A prepare failure attempts every acquired
 resource once, keeps the first error and creates no child.
 
-`prepare_child()` accepts one exact built-in tuple: a closed command-role integer,
-absolute UTF-8-bytes executable, tuple-of-bytes argv and tuple-of-bytes environment.
-It rejects path-like objects, callables, NUL, an unknown role, extra environment keys,
-nonfixed stdio actions, conflicting descriptors and the existing argument, environment,
-file and output bounds. It never accepts a REQUEST-selected program, PATH search or a
-generic syscall/action list. Before a kernel spawn it copies every byte, creates all
-pipes and file actions, and preallocates the fd tuple and return singleton.
+`prepare_child()` accepts one exact built-in tuple: closed role integer, absolute UTF-8-bytes
+executable, tuple-of-bytes argv and tuple-of-bytes environment. Add only role 15,
+`darwin-group-membership`, beside unchanged role 1 UUID resolution; role 16 stays unreachable.
+Each identity role requires its exact P/S argv, fixed three-key environment and own stdin/stdout caps. Reject path-like objects,
+callables, NUL, unknown or mismatched role, extra environment, nonfixed stdio,
+conflicting descriptors and existing argument/environment/file/output bounds. Never
+accept a REQUEST-selected program, PATH search or generic dispatcher/action list.
+Before spawn copy every byte, create all pipes/actions, and preallocate return objects.
 
 `spawn_child()` is NOARGS. The selected public `posix_spawn` writes pid directly to
 State. On return zero, the next C statement records raw pid, the platform-proven pgid,
@@ -408,13 +406,15 @@ pipe bookkeeping may run; never signal through the old, possibly reused pid/pgid
 allow `COMPLETE` and a later serial child. Unknown observation/consume results do not
 grant a retry or advance authority.
 
-The resolver uses this same cancellation-aware runner, fixed cleared environment,
-new process session, applicable mask, declared stdio only and no extra inherited fd.
-It has a 10-second batch deadline within the overall budget, a 32 KiB stdout cap and
-64 KiB stderr cap, with no retry. Normal completion records wait/reap, group absence,
-every pipe and selector close, then validates output. Timeout, cancellation, failure
-or a later Python allocation error performs the same one bounded owned-group cleanup.
-No resolver work or resource survives into the completion tail.
+Both private identity roles use this same cancellation-aware State runner, fixed
+three-key clean environment, new process session, saved original caller mask, declared
+stdio only, close-all and no extra inherited fd. Each permits only one serial child,
+has a 10-second deadline within the overall budget, 64-KiB stderr and no retry; UUID
+stdout remains 32 KiB and group stdout is 16 bytes. Normal completion records wait,
+unique reap, group absence and every pipe/selector close before parsing output.
+Timeout, cancellation, child failure, malformed output or later allocation failure
+uses the same bounded owned-group cleanup. No identity child or resource survives
+into the completion tail, and the two roles never run in parallel.
 
 The only future native argv is `/usr/bin/sudo -n -u #UID -- P ANCHOR/host-supervisor.py
 launch`, with stdin the complete frame and UID/config/P already checked. The
@@ -1047,7 +1047,7 @@ observations.
 | shadow-enforced | Real unchanged-P production build on Mac uses exact gnu11/bundle recipe and Linux exact c11/shared recipe, neither with PAC flags; exact argv mismatch and test_build refuse before load; source/script/compiler/P/ABI/output and relevant actual loader/libc/dependency identities match. RTLD_NOW/local load and module/State/symbol/first-use precede census; strong references survive release and partial restoration. Unknown relevant startup/thread/mask/handler/spawn or release contract refuses, without whole-OS certification; provenance keeps exact schema 2, path digests and the 29-file inventory. |
 | shadow-enforced | Fixed platform predicate accepts the proven normal condition and refuses unsupported close-all or changed/uncertain Darwin default-filter conditions before child effects. Real inheritable extra fds, including a high-numbered fd and the parent's held descriptors, never reach exec while declared stdio does. Linux closefrom action errors retain direct rc and bounded preparation cleanup. Record gate-only controls separately; repeat the real controls on each final production output, with accepted complete dependency evidence and no test bypass. |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
-| shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
+| shadow-enforced | Actual UUID and group-role execs have checked P/S, distinct fixed argv/role, clean environment, saved mask and no inherited owner or held descriptor; neither child's native threads change the parent's census or owner. Primary real/effective gid match starts no membership child and traps parent os.getgroups; actual Darwin supplementary-only membership returns exactly the authenticated gid and passes unchanged R3 checks; actual nonmember returns empty and refuses. A controlled child-level `os.getgroups()` error exercises the same role encoder/exit boundary, exits nonzero and refuses without fallback; no fixture-only positive passes. Exact canonical gid input, empty/singleton output, extra input/field/value, malformed/oversized output, role/argv/env mismatch, normal unique reap/close, timeout and cancellation preserve one bounded cleanup and disappearance. Delayed UUID reply plus held/name mutation still refuses; every ACL caller retains its fixed resolver and nonempty ACL semantics. |
 | shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Native finalization performs exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
