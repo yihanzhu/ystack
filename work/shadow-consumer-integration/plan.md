@@ -28,7 +28,7 @@ The first four track #506; only the fifth closes it.
 | 1 — bound evaluator/checker | `control/v1/sandbox-bound-policy.json`, `control/v1/sandbox-bound-decision.json`, `control/v1/control-policy-set-sandbox-bound.json`, `control/v1/evaluate-bound-sandbox.sh`, `control/v1/sandbox-bound.jq`, `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`, `scripts/test/control-sandbox-bound.test.sh`, `scripts/test/sandbox-receipt.test.sh`, `scripts/test/portable-core-schema.test.sh` (only the spec R10.9 expected-path addition) |
 | 2 — trusted dependencies and origin reader | `shadow/v1/_consumer.py`, `scripts/test/shadow-enforced.test.sh` |
 | 3 — enforced reproduction | `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh` |
-| 4 — add-only materialization | `shadow/v1/_cancel_release.c`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-write.test.sh` |
+| 4 — add-only materialization | `shadow/v1/_cancel_release.c`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-enforced.test.sh`, `scripts/test/shadow-write.test.sh` |
 | 5 — withheld request and complete integration | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `scripts/test/shadow-write.test.sh`, `scripts/test/shadow-enforced.test.sh` |
 
 The common documentation set is exactly `docs/components.md`, `RESTORE.md`, and
@@ -39,7 +39,7 @@ slice history and is not a repair path. Each other slice may change only its acc
 component descriptions and manifest entries. Keep shell drivers/tests executable.
 Intermediate entry points refuse operations whose remaining checks are not implemented;
 they cannot emit a completed write bundle early. No other source or accepted artifact
-changes. Slice 4 has exactly nine paths: its six table entries plus the common set.
+changes. Slice 4 has exactly ten paths: its seven table entries plus the common set.
 
 The current SC-CANCEL-6 repair claim is the exact seven-path subset
 `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
@@ -445,6 +445,21 @@ through its grace period, and attempts the bounded KILL stage before reap whenev
 did not close every group obligation. Leader exit after TERM does not skip a still-required
 KILL. Late cancellation before reap also enters or finishes those stages; cancellation
 after reap cannot signal the old pgid.
+
+The abnormal fixed-role descendant success fixture owns one unique exclusive
+acknowledgment. Its designated reaper emits it only after `waitpid` returns the exact
+descendant, `WIFSIGNALED` is true and `WTERMSIG` is `SIGKILL`. Within the existing
+bound, a one-to-one test-only forwarding proxy may wait for and validate that
+acknowledgment before the same
+real State's first real group query. Wrong, missing or late acknowledgment fails before
+that query. The channel is not inherited by the tested child or descendant and does not
+hold stdio open. The acknowledgment never substitutes for the unchanged native result:
+the original native gate remains the sole success condition and still requires actual
+`ESRCH`, unique reap, pipe completion and every original
+fd/identity gate. No production wait, sleep, scan, API, State field, lifecycle change,
+query retry or `EPERM` reinterpretation is allowed. Keep a fresh isolated actual
+UNKNOWN/EPERM control with raw first failure and no L; never reset unresolved `OWNED`
+state and continue the same invocation.
 
 `reap_child()` is the sole consuming operation. It is legal only after a matching
 nonconsuming exit observation and after State has marked every TERM/KILL stage either
@@ -1117,6 +1132,7 @@ observations.
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual UUID and group-role execs have checked P/S, distinct fixed argv/role, clean environment, saved mask and no inherited owner or held descriptor; neither child's native threads change the parent's census or owner. Primary real/effective gid match starts no membership child and traps parent os.getgroups; actual Darwin supplementary-only membership returns exactly the authenticated gid and passes unchanged R3 checks; actual nonmember returns empty and refuses. A controlled child-level `os.getgroups()` error exercises the same role encoder/exit boundary, exits nonzero and refuses without fallback; no fixture-only positive passes. Exact canonical gid input, empty/singleton output, extra input/field/value, malformed/oversized output, role/argv/env mismatch, normal unique reap/close, timeout and cancellation preserve one bounded cleanup and disappearance. Delayed UUID reply plus held/name mutation still refuses; every ACL caller retains its fixed resolver and nonempty ACL semantics. |
 | shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; the real driver pairs a real fixed normal command with synchronized actual nonzero and signaled leaders whose same-group descendant is ready, has closed stdio and remains alive, proving required TERM/KILL before one reap, no signal after reap, final absence on successful cleanup, retained raw failure otherwise and no completion marker; no arbitrary program may borrow a fixed role's normal contract; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
+| shadow-enforced | The signaled-descendant success control reaches its first real group query only after the fixture validates the exact-child/actual-SIGKILL reaper acknowledgment. Pair that path with wrong-child, wrong-status, missing and timed-out acknowledgments that fail before query. The synchronized positive must still obtain real ESRCH; retain separate actual UNKNOWN/EPERM, no-L and raw-first-failure controls plus both old raw PASS/FAIL records without run selection. Run the original complete suite directly and the complete writer suite on the same final head, with actual Linux proof and fresh required CI; a still-unknown synchronized positive remains failed. |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Native finalization performs exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before signal/mask/wakeup APIs; pre-existing wakeup owner under both warning modes retains fd, actions, mask, delivery and full-buffer warning behavior with zero Python signal/wakeup setter calls; native owner leaves Python handler table and disabled/warning pair untouched; nested scopes borrow; children receive saved original caller mask and no owner/pipe inheritance. |
