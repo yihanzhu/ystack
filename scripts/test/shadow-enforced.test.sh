@@ -710,7 +710,7 @@ finally:
  e._NativeRelease=original_release;e.CancellationSignals=original_owner
  e.c.capture_parent_context=original_capture;e.reproduce=original_reproduce
 print("shadow-enforced-native-outcome-events: simulated authority and caller ordering passed")
-expected=["/usr/bin/cc","-std=gnu11" if sys.platform=="darwin" else "-std=c11",
+expected=[os.path.realpath("/usr/bin/cc"),"-std=gnu11" if sys.platform=="darwin" else "-std=c11",
  "-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC",
  "-I"+os.path.realpath(sysconfig.get_config_var("INCLUDEPY")),
  "-I"+os.path.realpath(sysconfig.get_config_var("CONFINCLUDEPY"))]
