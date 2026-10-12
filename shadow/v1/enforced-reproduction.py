@@ -1261,6 +1261,24 @@ class CancellationSignals:
                 if commit_exception is not None:
                     raise exc from commit_exception
                 raise
+            if commit_exception is not None and native_outcome == "native-release.pending":
+                abort_exception = None
+                try:
+                    self.native.abort_release()
+                except BaseException as exc:
+                    abort_exception = exc
+                try:
+                    native_outcome = self.native.outcome()
+                except BaseException as exc:
+                    raise exc from (abort_exception if abort_exception is not None
+                                    else commit_exception)
+                if native_outcome != "native-release.failure":
+                    raise Refusal("E_RUNTIME") from (abort_exception if abort_exception is not None
+                                                     else commit_exception)
+                self.caller_exception = abort_exception or commit_exception
+                if abort_exception is not None:
+                    raise abort_exception from commit_exception
+                raise commit_exception
             if commit_exception is not None and native_outcome == "native-release.success":
                 self.caller_exception = commit_exception
                 raise commit_exception

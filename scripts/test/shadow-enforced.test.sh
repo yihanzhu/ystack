@@ -386,6 +386,13 @@ class ExitNative:
   if self.getter_error is not None and (self.committed or self.aborted):
    error=self.getter_error;self.getter_error=None;raise error
   return self.native_outcome
+class PreEntryNative(ExitNative):
+ def __init__(self,commit_error,abort_error=None):
+  super().__init__(commit_error=commit_error);self.abort_error=abort_error;self.abort_calls=0
+ def commit_completion(self,_payload):raise self.commit_error
+ def abort_release(self):
+  self.abort_calls+=1;self.aborted=True;self.native_outcome="native-release.failure"
+  if self.abort_error is not None:raise self.abort_error
 def exit_owner(native):
  owner=e.CancellationSignals();owner.native=native
  owner.admission=types.SimpleNamespace(census=Census())
@@ -405,6 +412,17 @@ getter_interrupt=RuntimeError("outcome observation")
 try:exit_owner(ExitNative(commit_error=commit_interrupt,getter_error=getter_interrupt)).__exit__(None,None,None)
 except RuntimeError as exc:assert exc is getter_interrupt and exc.__cause__ is commit_interrupt
 else:raise AssertionError("outcome observation interruption hidden")
+not_run=RuntimeError("commit did not enter native")
+not_run_native=PreEntryNative(not_run)
+try:exit_owner(not_run_native).__exit__(None,None,None)
+except RuntimeError as exc:assert exc is not_run and not_run_native.abort_calls==1 and not_run_native.aborted
+else:raise AssertionError("pending commit interruption skipped native abort")
+late_abort=RuntimeError("abort return interruption")
+lost_abort_native=PreEntryNative(not_run,late_abort)
+try:exit_owner(lost_abort_native).__exit__(None,None,None)
+except RuntimeError as exc:
+ assert exc is late_abort and exc.__cause__ is not_run and lost_abort_native.abort_calls==1
+else:raise AssertionError("late abort interruption hidden")
 earlier=ValueError("earlier body")
 later=RuntimeError("later outcome observation")
 try:exit_owner(ExitNative("native-release.failure",getter_error=later)).__exit__(ValueError,earlier,None)
@@ -1205,7 +1223,7 @@ PY
 # Slice 3 keeps launch substitution private while exercising the production
 # framing, durable-request, payload, record, inventory and bounded-child code.
 "$python_bin" -I -S -B - "$root" "$tmp/slice3" "$jq_bin" "$tmp/native-case-33" <<'PY'
-import hashlib, importlib.util, json, os, pathlib, shutil, signal, stat, subprocess, sys, time, types
+import errno, hashlib, importlib.util, inspect, json, os, pathlib, shutil, signal, stat, subprocess, sys, time, types
 root, base, jq_bin, native_dir = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
 spec = importlib.util.spec_from_file_location("enforced", root / "shadow/v1/enforced-reproduction.py")
 e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
@@ -1213,7 +1231,8 @@ native_path=next(native_dir.glob("_cancel_release*.so"))
 native_spec=importlib.util.spec_from_file_location("_cancel_release",native_path)
 native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
 native_state=native_module.prepare_state();native_state.block_entry();native_state.arm_consumer()
-e.CancellationSignals.active=types.SimpleNamespace(native=native_state)
+parent_owner=e.CancellationSignals();parent_owner.native=native_state
+e.CancellationSignals.active=parent_owner
 checks = 0
 def ok(value, message):
     global checks
@@ -1355,7 +1374,8 @@ if sys.platform=="darwin":
   {"uuid":group_uuid,"status":"resolved","kind":"group","id":os.getgid()},
   {"uuid":missing_uuid,"status":"unresolved","kind":None,"id":None}],
   "real fixed child preserves native user group and noncompatibility miss semantics")
- ok(e.CancellationSignals.active is None,"reaped native resolver leaves parent cancellation owner unchanged")
+ ok(e.CancellationSignals.active is parent_owner,
+  "reaped native resolver leaves parent cancellation owner unchanged")
 consumer_snapshot.close();python_snapshot.close()
 
 original_popen=e.subprocess.Popen
@@ -1512,7 +1532,8 @@ for _ in range(100):
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
 cleanup_source=inspect.getsource(e._native_child_cleanup)
-ok(cleanup_source.count("CancellationSignals.checkpoint()") >= 6
+ok(cleanup_source.count("CancellationSignals.checkpoint()") == 1
+   and cleanup_source.count("observe_checkpoint()") >= 7
    and cleanup_source.index("term_child_group") < cleanup_source.index("kill_child_group")
    < cleanup_source.index("reap_child"),
    "owned cleanup observes cancellation without skipping TERM, KILL or reap")
@@ -1700,16 +1721,17 @@ e.os.fsync=order_fsync;e.write_exclusive_at=order_write;out_hold.close()
 bundle_doc=e.parse(bundle)
 ok([row["name"] for row in bundle_doc["body"]["files"]] == sorted(e.EVIDENCE_NAMES),
    "bundle rows are sorted exact 29-file inventory")
-ok(len(bundle_doc["body"]["files"])==29 and set(p.name for p in out.iterdir())==set(e.EVIDENCE_NAMES)|{"bundle.json"},
-   "bundle marker closes exact inventory")
+ok(len(bundle_doc["body"]["files"])==29 and set(p.name for p in out.iterdir())==set(e.EVIDENCE_NAMES)
+   and parent_owner.completion_confirmed and parent_owner.completion_payload==bundle,
+   "exact inventory is retained without a marker before native commit")
 ok(all((out/row["name"]).stat().st_size==row["size_bytes"] and
        sha((out/row["name"]).read_bytes())==row["sha256"] for row in bundle_doc["body"]["files"]),
    "bundle sizes and digests bind actual bytes")
-ok(len([item for item in out.iterdir() if item.name!="bundle.json"])==29,
-   "all evidence bytes precede the completion marker")
+ok(len(list(out.iterdir()))==29 and not (out/"bundle.json").exists(),
+   "all evidence bytes precede the native completion marker")
 ok(sync_order==sum((["write:"+name,"file"] for name in sorted(e.EVIDENCE_NAMES)),[])+
-   ["directory","write:bundle.json","file","directory"],
-   "each evidence file is durable before directory and last-marker durability")
+   ["directory"],
+   "each evidence file and its directory are durable before native marker commit")
 partial=base/"partial"; partial.mkdir(mode=0o700); write(partial/"incident.json",e.canonical(incident))
 ok(not (partial/"bundle.json").exists(),"partial attempt has no completion marker")
 extra=base/"extra"; extra.mkdir(mode=0o700); write(extra/"extra",b"x")
@@ -1727,52 +1749,8 @@ try:refuses("E_RUNTIME",lambda:e.seal(filefail,filefail_hold,files,incident,"enf
             "evidence file fsync failure refuses before marker")
 finally:e.os.fsync=real_fsync
 ok(not (filefail/"bundle.json").exists(),"evidence fsync failure leaves no marker");filefail_hold.close()
-markerfail=base/"marker-fsync";markerfail.mkdir(mode=0o700);markerfail_hold=e.stable_directory(markerfail)
-fsync_calls=[0]
-def fail_marker_fsync(fd):
- fsync_calls[0]+=1
- if fsync_calls[0]==31:raise OSError("fixture marker fsync")
- return real_fsync(fd)
-e.os.fsync=fail_marker_fsync
-try:refuses("E_RUNTIME",lambda:e.seal(markerfail,markerfail_hold,files,incident,"enforced-reproduction.v1"),
-            "marker fsync failure refuses")
-finally:e.os.fsync=real_fsync
-ok(not (markerfail/"bundle.json").exists(),"partial marker is removed through held output")
-markerfail_hold.close()
-short=base/"short-marker";short.mkdir(mode=0o700);short_fd=os.open(short,os.O_RDONLY|os.O_DIRECTORY)
-real_os_write=e.os.write;e.os.write=lambda _fd,_raw:0
-try:refuses("E_RUNTIME",lambda:e.write_exclusive_at(short_fd,"bundle.json",b"partial",
-        remove_on_failure=True),"short marker write refuses")
-finally:e.os.write=real_os_write
-os.close(short_fd);ok(not (short/"bundle.json").exists(),"non-OSError marker failure removes owned partial")
-preexisting=base/"preexisting-marker";preexisting.mkdir(mode=0o700);write(preexisting/"bundle.json",b"owned")
-pre_fd=os.open(preexisting,os.O_RDONLY|os.O_DIRECTORY)
-refuses("E_RUNTIME",lambda:e.write_exclusive_at(pre_fd,"bundle.json",b"new",sync=True,
-        remove_on_failure=True),"preexisting marker refuses exclusive creation")
-os.close(pre_fd);ok((preexisting/"bundle.json").read_bytes()==b"owned","preexisting marker is not removed")
-late=base/"late-fsync";late.mkdir(mode=0o700);late_hold=e.stable_directory(late)
-fsync_calls=[0]
-def fail_final_fsync(fd):
- fsync_calls[0]+=1
- if fsync_calls[0]==32:raise OSError("fixture directory fsync")
- return real_fsync(fd)
-e.os.fsync=fail_final_fsync
-try:refuses("E_RUNTIME",lambda:e.seal(late,late_hold,files,incident,"enforced-reproduction.v1"),
-            "final directory fsync refuses")
-finally:e.os.fsync=real_fsync
-ok(not (late/"bundle.json").exists(),"directory fsync failure removes marker");late_hold.close()
-renamed=base/"renamed";renamed.mkdir(mode=0o700);renamed_hold=e.stable_directory(renamed)
-real_write_at=e.write_exclusive_at
-def rename_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
- real_write_at(fd,name,raw,mode,sync,**options)
- if name=="bundle.json":renamed.rename(renamed.with_name("renamed-held"));renamed.mkdir(mode=0o700)
-e.write_exclusive_at=rename_after_marker
-try:refuses("E_RELATION",lambda:e.seal(renamed,renamed_hold,files,incident,"enforced-reproduction.v1"),
-            "output replacement after marker write refuses")
-finally:e.write_exclusive_at=real_write_at
-ok(not (renamed.with_name("renamed-held")/"bundle.json").exists() and
-   not (renamed/"bundle.json").exists(),"failed marker cleanup stays bound to held output")
-renamed_hold.close()
+ok(all(not path.name.endswith("bundle.json") for path in out.iterdir()),
+   "Python sealing never creates the native-owned marker")
 owner_source=inspect.getsource(e.CancellationSignals)
 ok("signal.signal" not in owner_source and "set_wakeup_fd" not in owner_source
    and "pthread_sigmask" not in owner_source,
@@ -1788,7 +1766,7 @@ ok(t["body"]["seal"]["final_digest"]==t["body"]["events"][-1]["record_digest"],
    "trace seal binds final event")
 trace_path=base/"trace.json"; write(trace_path,trace)
 trace_bin=base/"trace-bin"; trace_bin.mkdir(mode=0o700); shutil.copy2(jq_bin,trace_bin/"jq"); (trace_bin/"jq").chmod(0o500)
-trace_env={"PATH":str(trace_bin)+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base)}
+trace_env=e.clean_env(trace_bin/"jq",base)
 trace_receipt=e.run_bounded("trace-validation",["/bin/bash","-p",str(root/"telemetry/v1/validate-trace-ledger.sh"),
     "validate",incident["id"],"attempt.fixture",str(trace_path)],env=trace_env)
 ok(e.parse(trace_receipt)["body"]["ledger_ref"]["sha256"]==sha(trace),
