@@ -195,8 +195,10 @@ No allocator callback slot, private allocator layout or PAC probe is an admissio
 input. Keep actual loader/dependency provenance for the selected public signal,
 spawn/wait, ACL and fixed-release effects required by this plan.
 
-The dependency record is parent-retained canonical evidence, not a bundle sidecar. It
-binds the actual P/framework, extension, loader and relevant libc/system images, plus
+The dependency record is parent-retained canonical evidence, not a bundle sidecar.
+Before creating context, the trusted parent accepts its complete contents and proof;
+its digest preserves that acceptance, never establishes behavior by itself. It binds
+the actual P/framework, extension, loader and relevant libc/system images, plus
 the source/package/build identity used for every internal-behavior assumption and the
 no-deferred-first-use call graph. Linux includes the physical ELF interpreter/loader
 and libc paths, hashes and build IDs, complete binary package version and source package
@@ -630,13 +632,35 @@ waitid/WNOWAIT observation, leader identity while any group signal remains requi
 at most one final reap, and separate leader-reaped/group-absent/pipes-complete facts.
 No raw fork, private syscall, Popen fallback, parallel child, pid scan or destructor.
 
-Actual Darwin spawn filter initialization/dispatch and fixed attributes, Linux
-parent-mask/close-all behavior, and both platforms' wait/error contracts remain
-relevant admission proof. A public API name or empty environment is insufficient.
-The new parent mask may change the proof needed, never child meaning or defaults.
-Inactive State code and injected controls may be built after plan acceptance while
-actual platform proof is open; neither production guard opens until actual Mac and
-Linux normal/error controls meet the original standard on these exact bytes.
+Under that accepted runtime closure, prepare_child checks one fixed platform
+predicate before pipes. Require the compiled public session, saved-mask, defaults,
+stdio/close-all and wait contracts; a macro, API name or version alone is not proof.
+Darwin requires CLOEXEC_DEFAULT and the bound spawn-filter branches: fixed env
+excludes POSIX_SPAWN_FILTERING_RULES_PATH, and the public default path
+/usr/local/share/posix_spawn_filtering_rules is absent. Check that fixed absence
+before preparation and recheck before spawn; any other result refuses. Parent
+acceptance must bind protected ancestors and absence through use, including ACLs;
+a past ENOENT alone is insufficient. Existing administrator/same-principal trust
+residuals stay unchanged. No private selector or rule parser is added.
+Linux uses public posix_spawn_file_actions_addclosefrom_np(3) after the three
+stdio dup2 actions and existing pipe-close actions. Its nonzero direct rc fails
+preparation with one cleanup per acquired resource. No usable close-all contract
+means refusal, never inheritance of extra fds or a fallback fd scan.
+Bind these effects and both platforms' normal/error wait contracts to the actual
+images. Linux records full package/source revision, file hash and build ID, then
+uses corresponding source or bounded actual function bodies for spawn mask,
+close-all, setsid, wait and release cancellation paths; generic GNU source is insufficient.
+
+First establish actual Mac and Linux public-call controls from the same source;
+a separately identified test build may bypass only the closed platform gate while
+leaving those calls uninjected. This proves platform behavior, not production
+admission. With those controls and the relevant source closure reviewed, implement
+the fixed predicate as an ordinary development candidate under this plan. No new
+context token or runtime bypass is added. Then run both platforms' production
+builds, test_build:false, with no bypass: all normal/error pairs, canonical
+reproduction, relevant suites, full matrix and fresh independent G3 remain required.
+Only final exact-head, per-platform exact-output evidence permits acceptance;
+test variants, permanent false guards and stale output cannot supply a positive.
 
 Finish every semantic, identity, evidence-durability and owned-child operation
 before marker creation. Perform final resolver-backed anchor/ACL recheck before
@@ -1021,6 +1045,7 @@ observations.
 | shadow-enforced | Entry/partial arm/raw action capture and every restore/pipe-close failure retain authoritative ownership across lost returns; all original sigaction fields restored on success; restoration failure is sticky, rolls back while fd usable, and retains live handler storage plus pipe rather than closing/reusing an endpoint still referenced; no second acquisition/retry/destructor cleanup; queued pre-acquisition CPython flags and old returning-handler controls cannot be silently excluded or misclassified. |
 | shadow-enforced | Actual root-specific thread/mask evidence distinguishes inherited blocked pthreads from workqueue/explicit-unmask paths; temporary threads cannot be receivers/waiters and must end before final census; a negative explicit-unmask/competing-owner fixture demonstrates why inheritance alone is insufficient, not a new runtime detector. Known RNG→abort watched-mask writes remain blocked on the bound image; source/error-path proof cannot be replaced by noreturn or preflight success. Fatal prefix controls assert their last real boundary and no marker; no allocator/unknown-callback path remains from first marker byte to L. |
 | shadow-enforced | Real unchanged-P production build on Mac uses exact gnu11/bundle recipe and Linux exact c11/shared recipe, neither with PAC flags; exact argv mismatch and test_build refuse before load; source/script/compiler/P/ABI/output and relevant actual loader/libc/dependency identities match. RTLD_NOW/local load and module/State/symbol/first-use precede census; strong references survive release and partial restoration. Unknown relevant startup/thread/mask/handler/spawn or release contract refuses, without whole-OS certification; provenance keeps exact schema 2, path digests and the 29-file inventory. |
+| shadow-enforced | Fixed platform predicate accepts the proven normal condition and refuses unsupported close-all or changed/uncertain Darwin default-filter conditions before child effects. Real inheritable extra fds, including a high-numbered fd and the parent's held descriptors, never reach exec while declared stdio does. Linux closefrom action errors retain direct rc and bounded preparation cleanup. Record gate-only controls separately; repeat the real controls on each final production output, with accepted complete dependency evidence and no test bypass. |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual resolver exec has the checked P/S/argv/environment/mask and no inherited owner or held descriptor; a resolver with native threads leaves the parent's census and wakeup ownership unchanged; normal exit/reap/close, exit failure, timeout, cancellation and oversized output prove one bounded group cleanup and disappearance; delayed reply plus parent held/name metadata mutation refuses before result use; every existing ACL caller uses the fixed resolver and no in-process membership fallback |
 | shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
