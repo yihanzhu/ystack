@@ -1798,8 +1798,15 @@ class Census:
 class Native:
  def __init__(self,path):
   binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
+  binary=binary.resolve(strict=True);self.previous_origin=e._NATIVE_ORIGIN
+  e._NATIVE_ORIGIN=None
   module_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
   module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
+  try:e._runtime_module_origins()
+  except e.Refusal as exc:assert exc.code=="E_RUNTIME"
+  else:raise AssertionError("unbound native module origin accepted")
+  e._NATIVE_ORIGIN=binary
+  assert str(binary) in e._runtime_module_origins()
   self.state=module.prepare_state()
   for name in ("block_entry","arm_consumer","checkpoint","hold_completion","block_final",
    "rollback_marker","commit_completion","abort_release","outcome","prepare_child","spawn_child",
@@ -1823,7 +1830,9 @@ def run(path,name,expect_success):
   else:
    if not expect_success:raise AssertionError("fault build accepted")
    ok((directory/"bundle.json").read_bytes()==bundle,"native commit writes the exact prepared bytes")
- finally:held.close()
+ finally:
+  held.close();e._NATIVE_ORIGIN=native.previous_origin
+  sys.modules.pop("_cancel_release",None)
  if not expect_success:ok(not (directory/"bundle.json").exists(),"native hold failure leaves no marker")
 run(case12_path,"dup-failure",False)
 run(production_path,"success",True)
@@ -1966,7 +1975,9 @@ snapshots={"receipt.json":e.canonical(receipt),"payload/stdout":b"","payload/std
 e.c.read_store_attempt=lambda anchor,attempt:(snapshots,origin)
 
 real_run=e.run_bounded
-def child(argv,**kwargs):
+def child(role,argv,**kwargs):
+ if role=="helper-version": return b"ystack-object-closure-v1\n"
+ if role=="jq-version": return b"jq-1.6\n"
  role=pathlib.Path(argv[0]).name+":"+" ".join(argv[1:3]);events.append(role)
  if "validate-input" in argv or "validate-response" in argv: return b"true\n"
  if "validate-incident.sh" in " ".join(argv): return e.canonical(doc("shadow_incident_validation",incident["id"],{}))
@@ -2466,6 +2477,41 @@ parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha25
  "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
  "python_abi":sysconfig.get_config_var("SOABI"),
  "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
+class Census:
+ def observe(self):pass
+executable=e.stable_file(physical_python)
+admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+executable.close();native=e._NativeRelease(parent,admission)
+admission=dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
+with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
+bundle_doc=json.loads(bundle);ok(len(bundle_doc["body"]["files"])==29,"actual reproduce seals 29 evidence files")
+record=json.loads((output/"shadow-record.json").read_bytes())
+ok(record["body"]["record_form"]=="enforced-reproduction.v1" and
+ record["body"]["outcome"]=="no-change" and record["body"]["producer_invocations"]==0,
+ "actual reproduce retains enforced no-change record")
+check=json.loads((output/"sandbox-check.json").read_bytes())
+ok(check["body"]["check_verdict"]=="valid" and check["body"]["enforcement_verdict"]=="satisfied",
+ "actual receipt checker accepts controlled-store receipt")
+ok(json.loads((output/"file-digest-result.json").read_bytes())["body"]["reason_id"]=="file.match",
+ "actual verifier payload is retained unchanged")
+ok((output/"bundle.json").exists(),"completion marker written after real chain")
+provenance=json.loads((output/"consumer-provenance.json").read_bytes())
+roles=[row["role"] for row in provenance["body"]["commands"]]
+ordinary_roles=[role for role in roles if role!="darwin-acl-uuid-resolution"]
+ok(ordinary_roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
+ "qualified-identity-validation","materialization","materializer-response-validation",
+ "candidate-preparation","candidate-inspection","sandbox-bound-evaluation",
+ "sandbox-launch-boundary","sandbox-receipt-check","trace-validation"] and
+ (sys.platform=="darwin" or "darwin-acl-uuid-resolution" not in roles) and
+ all(set(row)=={"role","argv_sha256","executable_sha256","component_sha256"}
+     for row in provenance["body"]["commands"]),
+ "frozen provenance retains every executed role without private argv: "+repr(roles))
+trace=json.loads((output/"trace-ledger.json").read_bytes())
+ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.local-macos-fixture" and
+ trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
+ trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
+ "trace binds claim environment and distinct declaration and enforcement evidence")
 mismatch_case=base/"case-mismatch";mismatch_case.mkdir(mode=0o700)
 mismatch_q=json.loads((base/"q-input.json").read_bytes())
 mismatch_identity=json.loads((base/"identity.json").read_bytes())
