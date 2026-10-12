@@ -46,7 +46,8 @@ record=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
 base=list(record["argv"]);temporary=pathlib.Path(sys.argv[2]);source=str(pathlib.Path(sys.argv[3]))
 if source not in base:raise SystemExit("native child test source is not in the build argv")
 index={}
-for case in range(21,36):
+cases=(*range(21,35),*((35,) if sys.platform=="linux" else ()))
+for case in cases:
  directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
  output=directory/record["output_name"];argv=[]
  for value in base:
@@ -556,6 +557,38 @@ def soname(path):
  if result["status"]=="ok" and len(matches)==1:return {"status":"ok","value":matches[0]}
  if result["status"]=="ok" and not matches:return {"status":"missing"}
  return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
+def function_bodies(path):
+ tool="/usr/bin/objdump";symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
+  "posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","setsid",
+  "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
+  "waitid","kill","pthread_sigmask","sigpending","write","fsync","close","unlinkat","fstat")
+ answer={"tool":{"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
+  {"status":"unavailable","reason":"missing"}},"image":path,"functions":[]}
+ if answer["tool"]["identity"]["status"]!="ok":return answer
+ total=0
+ for symbol in symbols:
+  argv=[tool,"-d","--disassemble="+symbol,path]
+  try:
+   result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
+    timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+  except (OSError,subprocess.SubprocessError) as error:
+   answer["functions"].append({"symbol":symbol,"argv":argv,"status":"unavailable",
+    "reason":type(error).__name__});continue
+  raw=result.stdout;error_raw=result.stderr;total+=len(raw)+len(error_raw)
+  row={"symbol":symbol,"argv":argv,"exit":result.returncode,"body_bytes":len(raw),
+   "body_sha256":hashlib.sha256(raw).hexdigest(),"stderr_bytes":len(error_raw),
+   "stderr_sha256":hashlib.sha256(error_raw).hexdigest()}
+  has_instructions=bool(re.search(rb"(?m)^\s*[0-9a-f]+:\s+[0-9a-f][0-9a-f ]+\s+",raw))
+  if len(raw)>65536 or len(error_raw)>8192 or total>786432:
+   row.update({"status":"unavailable","reason":"output-limit"})
+  else:
+   row.update({"status":"ok" if result.returncode==0 and has_instructions else "unavailable",
+    "reason":None if result.returncode==0 and has_instructions else "failed-or-no-instructions",
+    "body":raw.decode("utf-8","replace"),"stderr":error_raw.decode("utf-8","replace")})
+  answer["functions"].append(row)
+ answer["total_bytes"]=total;answer["limits"]={"functions":len(symbols),"body_each":65536,
+  "stderr_each":8192,"total":786432,"timeout_seconds_each":10}
+ return answer
 def jit():
  api=getattr(sys,"_jit",None)
  if api is None:return {"status":"missing"}
@@ -607,8 +640,11 @@ if sys.platform=="linux":
   if image_soname.get("value")=="libc.so.6":roles.append("libc")
   images.append({"path":path,"roles":roles,"identity":digest(path),"build_id":build_id(path),
    "soname":image_soname,"package":dpkg(path)})
+ libc_paths=[image["path"] for image in images if "libc" in image["roles"]]
  body.update({"executable_build_id":build_id(executable),"elf_interpreter":elf_interpreter,
   "elf_images":images,"mapped_file_gaps":map_gaps,
+  "libc_function_bodies":function_bodies(libc_paths[0]) if len(libc_paths)==1 else
+   {"status":"unavailable","reason":"libc-role-count","count":len(libc_paths)},
   "required_roles":{role:sum(role in image["roles"] for image in images)
    for role in ("python-executable","native-release","elf-interpreter","libc")}})
 else:
