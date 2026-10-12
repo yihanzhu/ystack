@@ -9,10 +9,11 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `9295d658405afaae98cfea724fba24184f271fe1`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 900–1100 lines. The five-slice contract,
+Plan PR: `review_size: accepted-exception`, 900–1120 lines. The five-slice contract,
 closed native context, fixed native signal checkpoint, direct-result release and
 State-owned child handoff need one coherent implementation brief. The range keeps
-complete signal/fd/platform proof readable and changes only the soft size budget.
+complete signal/fd/platform and fixed identity-child proof readable and changes only
+the soft size budget.
 
 ## Files that change
 
@@ -45,9 +46,10 @@ The current SC-CANCEL-6 repair claim is the exact seven-path subset
 `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`,
 `scripts/test/shadow-enforced.test.sh`, `docs/components.md` and `RESTORE.md`.
 The build script removes the obsolete PAC flags from the same fixed physical-P
-recipe. `_consumer.py` retains only the native ACL and qualifier ownership repair
-below. The driver and native module implement the fixed blocked-work/checkpoint
-owner described in section 5. This amendment does not claim `ci/required-files.txt`.
+recipe. `_consumer.py` retains only the native ACL/qualifier repair and fixed Darwin
+UUID/group-reader, GID short-circuit and parent comparison owner closure below. The
+driver and native module implement the fixed blocked-work/checkpoint owner described
+in section 5. This amendment does not claim `ci/required-files.txt`.
 
 | Slice | Classification | Net-line range | Evidence for the estimate |
 | --- | --- | --- | --- |
@@ -261,9 +263,10 @@ metadata before/after each read; bound bytes while reading, not after allocation
 For the production anchor, walk from `/` to the exact spec R3 path. Require root
 ownership and no non-root write grant for config/script and their ancestors before
 parsing config and trusting principal_uid, consumer_gid, store_id or store_root.
-Require nonzero separate supervisor UID. For authenticated consumer_gid, read its real and
-effective gid first; either exact match satisfies spec R3 without a supplementary query.
-Otherwise protected Darwin uses the fixed State-owned group reader below and never calls `os.getgroups()` in the parent.
+Require nonzero principal_uid distinct from the consumer's real and effective UIDs.
+For authenticated consumer_gid, read its real and effective gid first. Either exact
+match satisfies spec R3 without a supplementary query. Otherwise protected Darwin
+uses the fixed State-owned group reader below and never calls `os.getgroups()` in the parent.
 The protected Linux path keeps its separately accepted actual closure. There is no caller/test
 environment override. Validate installed files and verifier under R10.1, permitting only root
 or the authenticated supervisor where that contract allows it.
@@ -284,24 +287,32 @@ The parent never calls membership resolution or initializes that service,
 including for compatibility UUIDs.
 
 Resolve captured UUID bytes only in one fixed child per bounded batch:
-`P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This remains a private role, not a public CLI, registry or selectable command. Input is an
-exact canonical array of at most 128 lowercase 32-hex UUIDs and 16 KiB; output is at most 32 KiB with one positional
-exact `{uuid,status,kind,id}` row per input. Resolved rows have user/group kind and uint32 id; unresolved rows have
-null kind/id. Reject duplicate keys, unknown fields, malformed values, trailing data and missing, extra, reordered or
-mismatched rows. Map only users; groups and membership misses remain unresolved. Transport, protocol or process
-failure refuses the observation. A result supplies no permissions or authorization; the role cannot invoke the parent or recurse.
+`P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids`. This remains a private
+role, not a public CLI, registry or selectable command. Input is an exact canonical
+array of at most 128 lowercase 32-hex UUIDs and 16 KiB. Output is at most 32 KiB with
+one positional exact `{uuid,status,kind,id}` row per input. Resolved rows have user or
+group kind and uint32 id; unresolved rows have null kind/id. Reject duplicate keys,
+unknown fields, malformed values, trailing data and missing, extra, reordered or
+mismatched rows. Map only users; groups and membership misses remain unresolved.
+Transport, protocol or process failure refuses the observation. A result supplies no
+permissions or authorization; the role cannot invoke the parent or recurse.
 
 Darwin supplementary membership uses a separate fixed private role and argv:
-`P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group`. Stdin is exactly canonical `{"gid":G}\n`, at most 32 bytes, where G is the authenticated uint32 consumer_gid. The child calls existing
-`os.getgroups()` once with its original Darwin extended semantics. Its only stdout is
-canonical `[]\n` or `[G]\n`, at most 16 bytes, containing actual matching group-id data.
+`P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group`. Stdin is exactly canonical
+`{"gid":G}\n`, at most 32 bytes, where G is the authenticated uint32 consumer_gid. The
+child calls existing `os.getgroups()` once with its original Darwin extended semantics.
+Its only stdout is canonical `[]\n` or `[G]\n`, at most 16 bytes, containing actual
+matching group-id data.
 Query error exits nonzero with no accepted output. The parent validates exact bytes and
 itself requires `[consumer_gid]`; the child returns no member, accepted, permission,
-principal or policy field. This caps no legitimate group list and does not replace the Darwin query with the nonequivalent plain syscall.
+principal or policy field. This caps no legitimate group list and does not replace the
+Darwin query with the nonequivalent plain syscall.
 
-The trusted parent fixes and rechecks P, reviewed physical S and `_consumer.py` under spec R2.1/R2.4 before either child;
-ACL or group results do not establish those identities. The enforced entry constructs concrete module-private UUID and
-group reader adapters from the existing State runner and fixed argv; they are not callables,
+Before the first Darwin ACL capture, the trusted parent fixes P, reviewed physical S
+and `_consumer.py` under spec R2.1/R2.4. It rechecks them before either child. No ACL or
+group result establishes those identities. The enforced entry constructs concrete
+module-private UUID and group reader adapters from the existing State runner and fixed
+argv; they are not callables,
 subclass hooks or request-selected runners. A protected Darwin `load_anchor` requires
 both adapters, uses the gid short-circuit above, and refuses a missing group reader
 without in-process fallback. An ordinary nonadmitted consumer may retain its legacy
