@@ -2882,12 +2882,25 @@ for _ in range(100):
  if interrupt_child.poll() is not None:break
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
-cleanup_source=inspect.getsource(e._native_child_cleanup)
-ok(cleanup_source.count("CancellationSignals.checkpoint()") == 1
-   and cleanup_source.count("observe_checkpoint()") >= 7
-   and cleanup_source.index("term_child_group") < cleanup_source.index("kill_child_group")
-   < cleanup_source.index("reap_child"),
-   "owned cleanup observes cancellation without skipping TERM, KILL or reap")
+cancelled=FakeNativeChild();events=[];cancellation=e.Cancelled()
+original_checkpoint=e.CancellationSignals.checkpoint
+def cancel_checkpoint():events.append("checkpoint");raise cancellation
+e.CancellationSignals.checkpoint=cancel_checkpoint
+for name in ("close_child_stdin","close_child_stdout","close_child_stderr",
+             "term_child_group","observe_child_exit","kill_child_group","reap_child","check_child_group"):
+ method=getattr(cancelled,name)
+ def watched(method=method,name=name):events.append(name);return method()
+ setattr(cancelled,name,watched)
+try:
+ try:e._native_child_cleanup(cancelled,time.monotonic()+1)
+ except e.Cancelled as exc:
+  ok(exc is cancellation and cancelled.state==4
+   and all(events[index-1]=="checkpoint" for index,event in enumerate(events) if event!="checkpoint")
+   and all(cancelled.calls.count(name)==1 for name in ("term","kill","reap","group"))
+   and cancelled.calls.index("term")<cancelled.calls.index("kill")<cancelled.calls.index("reap"),
+   "owned cleanup observes cancellation before every required duty without skipping TERM, KILL or reap")
+ else:raise AssertionError("cleanup cancellation accepted")
+finally:e.CancellationSignals.checkpoint=original_checkpoint
 bash=e.fixed_bash();bash.recheck();ok(True,"fixed /bin/bash alias and physical bytes recheck")
 original_lstat=e.os.lstat
 def linux_alias(path):
