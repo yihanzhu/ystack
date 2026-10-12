@@ -640,9 +640,11 @@ for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-re
 PY
 native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
   -type f ! -name build-record.json -print)
-"$python_bin" -I -S -B - "$native_actual_child_binary" <<'PY'
-import errno,fcntl,importlib.util,json,os,pathlib,select,signal,sys,time
-binary=pathlib.Path(sys.argv[1])
+"$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
+import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
+root,binary=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
+consumer_spec=importlib.util.spec_from_file_location("filter_parent_consumer",root/"shadow/v1/_consumer.py")
+c=importlib.util.module_from_spec(consumer_spec);sys.modules[consumer_spec.name]=c;consumer_spec.loader.exec_module(c)
 environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
 def owner():
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
@@ -660,10 +662,165 @@ def close_at_eof(state,fd,close):
   if not os.read(fd,4096):break
  close()
 
+class MissingFilterComponent(Exception):pass
+class DefaultFilterHold:
+ def __init__(self,open_fn=os.open,metadata_fn=c._metadata,named_fn=c._named_metadata,
+              acl_fn=None,free_fn=None,close_fn=os.close,inheritable_fn=os.get_inheritable):
+  self._open,self._metadata,self._named=open_fn,metadata_fn,named_fn
+  self._acl,self._free,self._close,self._inheritable=acl_fn,free_fn,close_fn,inheritable_fn
+  self._owners=[];self._rows=[];self._missing=None;self._acl_results=[]
+  try:self._prepare()
+  except BaseException:
+   try:self.close()
+   except OSError:pass
+   raise
+ def _identity(self,value):return c._identity(value)
+ def _protected(self,value):
+  return stat.S_ISDIR(value.st_mode) and value.st_uid==0 and not stat.S_IMODE(value.st_mode)&0o022
+ def _no_acl(self,fd):
+  pointer,error=self._acl(fd)
+  if pointer:
+   released=None
+   try:pass
+   finally:
+    released=self._free(pointer);self._acl_results.append((fd,True,error,released))
+    if released!=0:raise OSError(errno.EIO,"acl_free")
+   raise OSError(errno.EACCES,"extended ACL property")
+  self._acl_results.append((fd,False,error,None))
+  if error!=errno.ENOENT:raise OSError(error or errno.EIO,"acl_get_fd_np")
+ def _take(self,name,parent):
+  flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+  try:fd=self._open(name,flags) if parent is None else self._open(name,flags,dir_fd=parent)
+  except OSError as exc:
+   if parent is not None and exc.errno==errno.ENOENT:raise MissingFilterComponent from None
+   raise
+  self._owners.append(fd)
+  if self._inheritable(fd):raise OSError(errno.EIO,"inheritable filter parent")
+  value=self._metadata(fd)
+  if not self._protected(value):raise OSError(errno.EACCES,"unprotected filter parent")
+  if parent is not None and self._identity(self._named(name,parent))!=self._identity(value):
+   raise OSError(errno.EIO,"filter parent name mismatch")
+  self._no_acl(fd);self._rows.append((fd,name,self._identity(value)))
+  return fd
+ def _absent(self,name,parent):
+  try:self._named(name,parent)
+  except OSError as exc:
+   if exc.errno==errno.ENOENT:return
+   raise
+  raise OSError(errno.EEXIST,"filter component appeared")
+ def _prepare(self):
+  parent=self._take("/",None)
+  for name in ("usr","local","share"):
+   try:parent=self._take(name,parent)
+   except MissingFilterComponent:
+    self._missing=(parent,name);self._absent(name,parent);return
+  self._missing=(parent,"posix_spawn_filtering_rules");self._absent(self._missing[1],parent)
+ def recheck(self):
+  for index,(fd,name,before) in enumerate(self._rows):
+   value=self._metadata(fd)
+   if not self._protected(value) or self._identity(value)!=before:raise OSError(errno.EIO,"filter parent changed")
+   if index and self._identity(self._named(name,self._rows[index-1][0]))!=before:
+    raise OSError(errno.EIO,"filter parent name changed")
+   self._no_acl(fd)
+  self._absent(self._missing[1],self._missing[0])
+ def close(self):
+  owners,self._owners=self._owners,[];failure=None
+  for fd in reversed(owners):
+   try:self._close(fd)
+   except OSError as exc:
+    if failure is None:failure=exc
+  if failure is not None:raise failure
+
+class FakeFilter:
+ def __init__(self,missing="share"):
+  self.nodes={"/":self.meta(ino=1)}
+  if missing!="usr":self.nodes["/usr"]=self.meta(ino=2)
+  if missing not in ("usr","local"):self.nodes["/usr/local"]=self.meta(ino=3)
+  if missing not in ("usr","local","share"):self.nodes["/usr/local/share"]=self.meta(ino=4)
+  self.fds={};self.next=20;self.closed=[];self.acl={};self.freed=[];self.close_error=set();self.open_error={}
+ def meta(self,uid=0,mode=stat.S_IFDIR|0o755,ino=1):
+  return types.SimpleNamespace(st_dev=1,st_ino=ino,st_mode=mode,st_uid=uid,st_gid=0,st_nlink=1,
+   st_size=0,st_mtime_ns=1,st_ctime_ns=1)
+ def open(self,name,flags,dir_fd=None):
+  parent="" if dir_fd is None else self.fds[dir_fd].rstrip("/");path="/" if name=="/" else parent+"/"+name
+  if path in self.open_error:raise OSError(self.open_error[path],"open refusal")
+  if path not in self.nodes:raise OSError(errno.ENOENT,"missing")
+  assert flags&(os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)==os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+  fd=self.next;self.next+=1;self.fds[fd]=path;return fd
+ def metadata(self,fd):return self.nodes[self.fds[fd]]
+ def named(self,name,parent):
+  path=self.fds[parent].rstrip("/")+"/"+name
+  if path not in self.nodes:raise OSError(errno.ENOENT,"missing")
+  return self.nodes[path]
+ def capture(self,fd):return self.acl.get(self.fds[fd],(None,errno.ENOENT))
+ def free(self,pointer):self.freed.append(pointer);return -1 if pointer=="free-fails" else 0
+ def close(self,fd):
+  self.closed.append(fd)
+  if fd in self.close_error:raise OSError(errno.EIO,"close")
+def fake_hold(fake):
+ return DefaultFilterHold(fake.open,fake.metadata,fake.named,fake.capture,fake.free,fake.close,lambda _fd:False)
+for missing,count in (("usr",1),("local",2),("share",3),("rule",4)):
+ fake=FakeFilter(missing);hold=fake_hold(fake);hold.recheck();hold.close();assert len(fake.closed)==count and len(set(fake.closed))==count
+for failure in (errno.ELOOP,errno.ENOTDIR,errno.EACCES):
+ fake=FakeFilter();fake.open_error["/usr"]=failure
+ try:fake_hold(fake)
+ except OSError as exc:assert exc.errno==failure
+ else:raise AssertionError("accepted filter open refusal")
+ assert len(fake.closed)==1
+for change in (lambda f:f.nodes.__setitem__("/usr",f.meta(uid=1)),
+               lambda f:f.nodes.__setitem__("/usr",f.meta(mode=stat.S_IFDIR|0o775)),
+               lambda f:f.nodes.__setitem__("/usr",f.meta(mode=stat.S_IFREG|0o755))):
+ fake=FakeFilter();change(fake)
+ try:fake_hold(fake)
+ except OSError:pass
+ else:raise AssertionError("accepted unprotected filter parent")
+ assert len(fake.closed)==len(set(fake.closed))
+for result in ((None,0),(None,errno.EACCES),("nonempty",0),("empty",0),("free-fails",0)):
+ fake=FakeFilter();fake.acl["/"]=result
+ try:fake_hold(fake)
+ except OSError:pass
+ else:raise AssertionError("accepted filter ACL refusal")
+ assert len(fake.freed)==(1 if result[0] else 0) and len(fake.closed)==len(set(fake.closed))
+fake=FakeFilter();hold=fake_hold(fake);fake.nodes["/usr/local/share"]=fake.meta()
+try:hold.recheck()
+except OSError:pass
+else:raise AssertionError("accepted appeared filter component")
+hold.close()
+fake=FakeFilter();hold=fake_hold(fake);fake.nodes["/usr/local"].st_ctime_ns=2
+try:hold.recheck()
+except OSError:pass
+else:raise AssertionError("accepted changed filter parent")
+hold.close()
+fake=FakeFilter();hold=fake_hold(fake);fake.nodes["/usr/local"]=fake.meta(ino=99)
+try:hold.recheck()
+except OSError:pass
+else:raise AssertionError("accepted replaced filter parent name")
+hold.close()
+fake=FakeFilter();hold=fake_hold(fake);fake.close_error.add(hold._owners[-1])
+try:hold.close()
+except OSError:pass
+else:raise AssertionError("ignored filter parent close failure")
+assert len(fake.closed)==len(set(fake.closed));hold.close();assert len(fake.closed)==len(set(fake.closed))
+print("default-filter-parent-fixture: fixed path, ACL refusal, identity and owner controls passed")
+
+actual_filter=None
+if sys.platform=="darwin":
+ lib=c._DARWIN_ACL_FUNCTIONS.library
+ def actual_acl(fd):
+  import ctypes
+  ctypes.set_errno(0);pointer=lib.acl_get_fd_np(fd,0x100);return pointer,ctypes.get_errno()
+ actual_filter=DefaultFilterHold(acl_fn=actual_acl,free_fn=lib.acl_free)
+ def actual_filter_final():
+  try:actual_filter.recheck()
+  finally:actual_filter.close()
+ atexit.register(actual_filter_final)
+ actual_filter.recheck()
+
 # The positive keeps the leader waitable while a same-group descendant ignores TERM.
 state=owner()
 inherited=os.open("/dev/null",os.O_RDONLY);high=fcntl.fcntl(inherited,fcntl.F_DUPFD,200)
 os.set_inheritable(inherited,True);os.set_inheritable(high,True)
+filter_fds=tuple(actual_filter._owners) if actual_filter is not None else ()
 program=(b'''import errno,json,os,signal
 def absent(fd):
  try:os.fstat(fd)
@@ -679,9 +836,9 @@ if reaper==0:
   while True:signal.pause()
  os.write(ready_w,(str(child)+"\\n").encode());os.close(ready_w);os.waitpid(child,0);os._exit(0)
 os.close(ready_w);child=int(os.read(ready_r,32));os.close(ready_r)
-os.write(1,(json.dumps({"kind":"leader","pid":leader,"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d)},sort_keys=True,separators=(",",":"))+"\\n").encode())
+os.write(1,(json.dumps({"kind":"leader","pid":leader,"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d),"filter_absent":all(absent(fd) for fd in %r)},sort_keys=True,separators=(",",":"))+"\\n").encode())
 while True:signal.pause()
-''' % (inherited,high))
+''' % (inherited,high,filter_fds))
 argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
 state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
 stdin_fd,stdout_fd,stderr_fd=state.child_fds();state.close_child_stdin()
@@ -695,7 +852,7 @@ leader=next(item for item in records if item["kind"]=="leader")
 descendant=next(item for item in records if item["kind"]=="descendant")
 assert leader["pid"]==leader["pgid"]==descendant["pgid"]
 assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
-assert leader["inherited_absent"] and leader["high_absent"]
+assert leader["inherited_absent"] and leader["high_absent"] and leader["filter_absent"]
 os.close(high);os.close(inherited)
 state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
 state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
@@ -724,6 +881,10 @@ else:
  assert negative[17:20]==(1,1,1) and negative[24]==1 and negative[47:49]==(-1,errno.ESRCH)
  state.abort_release();assert state.outcome()=="native-release.failure"
 print("actual-single-leader",sys.platform,negative[45:49],negative[23:25])
+if actual_filter is not None:
+ actual_filter_final();atexit.unregister(actual_filter_final)
+ print("actual-default-filter-parent",[(name,identity) for _fd,name,identity in actual_filter._rows],
+  actual_filter._missing[1],actual_filter._acl_results)
 PY
 "$python_bin" -I -S -B - "$root" "$native_control_binary" <<'PY'
 import importlib.util,pathlib,sys,types
