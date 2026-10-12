@@ -228,7 +228,8 @@ forbidden_startup_keys=tuple(key for key in startup_environment_keys if
  key=="POSIX_SPAWN_FILTERING_RULES_PATH")
 if forbidden_startup_keys:raise SystemExit("forbidden startup environment")
 import ctypes,hashlib,importlib.machinery,importlib.util,json,pathlib,re,struct,subprocess,sys,sysconfig,tempfile,uuid
-root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
+root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2])
+gate_binary=os.path.realpath(sys.argv[3]);gate_record=pathlib.Path(sys.argv[4]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
 native_spec=importlib.util.spec_from_file_location("_cancel_release",native_binary)
@@ -288,7 +289,7 @@ def function_bodies(path):
   "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
   "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
   "write","fsync","close","unlinkat","fstat")
- answer={"tools":{},"image":path,"functions":[],"internal_functions":[]}
+ answer={"tools":{},"image":path,"functions":[],"internal_functions":[],"gate_only_functions":[]}
  for name,tool in (("objdump",objdump),("readelf",readelf)):
   answer["tools"][name]={"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
    {"status":"unavailable","reason":"missing"}}
@@ -338,8 +339,76 @@ def function_bodies(path):
   status["image_role"]=label
   return entries,status
  native_entries,native_status=symbols_from(native_binary,"native-release")
+ gate_entries,gate_status=symbols_from(gate_binary,"gate-only-case-48")
  provider_entries,provider_status=symbols_from(path,"libc")
- answer["symbol_metadata"]={"native":native_status,"provider":provider_status}
+ answer["symbol_metadata"]={"native":native_status,"gate_only":gate_status,"provider":provider_status}
+ def canonical_record(record_path):
+  try:
+   raw=record_path.read_bytes()
+   if len(raw)>1024*1024:return None,"record-size-limit"
+   value=json.loads(raw)
+   if raw!=(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode():
+    return None,"record-not-canonical"
+   return value,None
+  except (OSError,ValueError,TypeError):return None,"record-unavailable"
+ production_record,production_error=canonical_record(pathlib.Path(native_binary).parent/"build-record.json")
+ gate_record_value,gate_error=canonical_record(gate_record)
+ gate_before={"identity":digest(gate_binary),"build_id":build_id(gate_binary)}
+ def build_relation():
+  if production_error or gate_error:return {"status":"unavailable","reason":production_error or gate_error}
+  if production_record.get("kind")!="shadow_cancel_release_build_record" or gate_record_value.get("kind")!="shadow_cancel_release_build_record":
+   return {"status":"unavailable","reason":"record-kind"}
+  production=production_record.get("body",{});gate=gate_record_value.get("body",{})
+  if production.get("test_build") is not False or gate.get("test_build") is not True or gate.get("test_case")!=48:
+   return {"status":"unavailable","reason":"build-role"}
+  shared=("platform","architecture","source_sha256","build_script_sha256","compiler_path",
+   "compiler_sha256","compiler_version_sha256","python_path","python_sha256","python_implementation",
+   "python_version","soabi","ext_suffix","configuration")
+  if any(production.get(name)!=gate.get(name) for name in shared):
+   return {"status":"unavailable","reason":"source-recipe-runtime-mismatch"}
+  production_argv=list(production.get("argv",()));gate_argv=list(gate.get("argv",()))
+  defines=("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48")
+  if any(value not in gate_argv for value in defines):return {"status":"unavailable","reason":"testing-defines"}
+  reduced=[value for value in gate_argv if value not in defines]
+  try:
+   production_output=production_argv.index("-o")+1;gate_output=reduced.index("-o")+1
+  except ValueError:return {"status":"unavailable","reason":"output-argument"}
+  production_argv[production_output]="<output>";reduced[gate_output]="<output>"
+  production_argv=["<source>" if value.endswith("/_cancel_release.c") else value for value in production_argv]
+  reduced=["<source>" if value.endswith("/_cancel_release.c") else value for value in reduced]
+  if production_argv!=reduced:return {"status":"unavailable","reason":"argv-difference"}
+  if gate.get("output_sha256")!=gate_before["identity"].get("sha256") or gate.get("output_size")!=gate_before["identity"].get("size"):
+   return {"status":"unavailable","reason":"gate-output-binding"}
+  return {"status":"ok","origin":"gate-only-case-48","differences":[*defines,"source-path","output-path"],
+   "production_record_sha256":hashlib.sha256((pathlib.Path(native_binary).parent/"build-record.json").read_bytes()).hexdigest(),
+   "gate_record_sha256":hashlib.sha256(gate_record.read_bytes()).hexdigest(),"shared_fields":list(shared)}
+ answer["gate_only_provenance"]=build_relation()
+ gate_after=None
+ logical_families={"openat":("openat","openat64"),"fstat":("fstat","fstat64")}
+ gate_symbols={"posix_spawn_file_actions_addclosefrom_np","posix_spawn_file_actions_adddup2",
+  "posix_spawn_file_actions_addclose","posix_spawnattr_setflags","posix_spawnattr_setsigmask",
+  "posix_spawnattr_setsigdefault"}
+ def selected_function(logical,entries,status,role):
+  if status["status"]!="ok" or provider_status["status"]!="ok":return {"symbol":logical,
+   "status":"unavailable","reason":"symbol-metadata-incomplete","origin_role":role}
+  family=logical_families.get(logical,(logical,))
+  imports=[entry for entry in entries if entry["base"] in family and entry["section"]=="UND"]
+  if len(imports)!=1:return {"symbol":logical,"status":"unavailable","reason":"native-symbol-count",
+   "count":len(imports),"origin_role":role,"metadata_lines":[entry["line"] for entry in imports]}
+  required=imports[0]
+  provider=[entry for entry in provider_entries if entry["base"]==required["base"] and
+   entry["version"]==required["version"] and entry["section"]!="UND" and entry["type"]=="FUNC"]
+  locations={(entry["value"],entry["size"]) for entry in provider}
+  if not provider or len(locations)!=1 or provider[0]["size"]<=0:
+   return {"symbol":logical,"imported_symbol":required["base"],"required_version":required["version"],
+    "status":"unavailable","reason":"provider-symbol-count-or-shape","count":len(provider),
+    "origin_role":role,"metadata_lines":[required["line"],*(entry["line"] for entry in provider)]}
+  selected=provider[0];aliases=[entry["line"] for entry in provider_entries if
+   entry["section"]!="UND" and entry["type"]=="FUNC" and
+   (entry["value"],entry["size"])==(selected["value"],selected["size"])]
+  metadata_lines=list(dict.fromkeys([required["line"],selected["line"],*aliases]))
+  return {"symbol":logical,"imported_symbol":required["base"],"required_version":required["version"],
+   "origin_role":role,"selected":selected,"metadata_lines":metadata_lines}
  def range_body(label,start,end):
   nonlocal recorded
   if not (0<=start<end and end-start<=65536):return {"status":"unavailable","reason":"invalid-range"}
@@ -364,39 +433,38 @@ def function_bodies(path):
    if row["status"]=="ok":recorded+=len(raw)+len(error_raw)
   return row
  for symbol in symbols:
-  if native_status["status"]!="ok" or provider_status["status"]!="ok":
+  if symbol=="setsid":
    answer["functions"].append({"symbol":symbol,"status":"unavailable",
-    "reason":"symbol-metadata-incomplete"});continue
-  native=[entry for entry in native_entries if entry["base"]==symbol and entry["section"]=="UND"]
-  if len(native)!=1:
-   answer["functions"].append({"symbol":symbol,"status":"unavailable","reason":"native-symbol-count",
-    "count":len(native),"metadata_lines":[entry["line"] for entry in native]});continue
-  required=native[0]
-  provider=[entry for entry in provider_entries if entry["base"]==symbol and
-   entry["version"]==required["version"] and entry["section"]!="UND" and entry["type"]=="FUNC"]
-  locations={(entry["value"],entry["size"]) for entry in provider}
-  if len(provider)!=1 or len(locations)!=1 or provider[0]["size"]<=0:
-   answer["functions"].append({"symbol":symbol,"required_version":required["version"],
-    "status":"unavailable","reason":"provider-symbol-count-or-shape","count":len(provider),
-    "metadata_lines":[required["line"],*(entry["line"] for entry in provider)]});continue
-  selected=provider[0];aliases=[entry["line"] for entry in provider_entries if
-   entry["section"]!="UND" and entry["type"]=="FUNC" and
-   (entry["value"],entry["size"])==(selected["value"],selected["size"])]
-  metadata_lines=list(dict.fromkeys([required["line"],selected["line"],*aliases]))
+    "reason":"spawn-child-entry-unresolved","origin_role":"spawn-child"});continue
+  role="gate-only-case-48" if symbol in gate_symbols else "production-native"
+  selected_row=selected_function(symbol,gate_entries if symbol in gate_symbols else native_entries,
+   gate_status if symbol in gate_symbols else native_status,role)
+  if role=="gate-only-case-48" and answer["gate_only_provenance"]["status"]!="ok":
+   selected_row={"symbol":symbol,"status":"unavailable","reason":"gate-only-provenance",
+    "origin_role":role,"provenance":answer["gate_only_provenance"]}
+  if "selected" not in selected_row:
+   answer["functions"].append(selected_row)
+   if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(selected_row))
+   continue
+  selected=selected_row.pop("selected");metadata_lines=selected_row["metadata_lines"]
   metadata_bytes=sum(len(line.encode("utf-8"))+1 for line in metadata_lines)
   if recorded+metadata_bytes>786432:
-   answer["functions"].append({"symbol":symbol,"status":"unavailable","reason":"metadata-output-limit"});continue
+   selected_row.update({"status":"unavailable","reason":"metadata-output-limit"})
+   answer["functions"].append(selected_row)
+   if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(selected_row))
+   continue
   recorded+=metadata_bytes
   row=range_body(symbol,selected["value"],selected["value"]+selected["size"])
-  row.update({"symbol":symbol,"required_version":required["version"],"metadata_lines":metadata_lines,
+  row.update(selected_row);row.update({"metadata_lines":metadata_lines,
    "provider_type":selected["type"],"provider_bind":selected["bind"],
    "provider_visibility":selected["visibility"],"provider_section":selected["section"]})
   answer["functions"].append(row)
+  if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(row))
  image_identity=source_before["identity"];image_build_id=source_before["build_id"]
  answer["image_identity"]=image_identity;answer["image_build_id"]=image_build_id
  fixed_identity=(image_identity.get("sha256")=="3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf" and
   image_build_id.get("value")=="a4a7992a8e66555c8141ab2a08a8465ff6e0ea65")
- internal=(0x10ffc0,0x98630,0x986b0,0x10f200,0x10f260)
+ internal=(0x10ffc0,0x98630,0x986b0,0x10f200,0x10f260,0x10f520,0x45340)
  if fixed_identity:
   targets={address:[] for address in internal};fde_ranges=[];current=None
   def flush_frame():
@@ -409,13 +477,14 @@ def function_bodies(path):
   def frames(raw):
    nonlocal current
    text=raw.decode("utf-8","replace")
+   header=re.search(r"\b(CIE|FDE)\b",text)
    match=re.search(r"\bFDE\b.*\bpc=([0-9a-fA-F]+)\.\.([0-9a-fA-F]+)",text)
    if match:
     flush_frame()
     start,end=(int(value,16) for value in match.groups())
     fde_ranges.append((start,end))
     current=(start,end,[text]) if any(start<=target<end for target in internal) else None
-   elif re.match(r"^[0-9a-fA-F]{8,}\s",text):flush_frame()
+   elif header:flush_frame()
    elif current is not None:current[2].append(text)
    if current is not None and text.strip()=="":flush_frame()
   frame_status=metadata([readelf,"--debug-dump=frames-interp",path],frames)
@@ -435,49 +504,17 @@ def function_bodies(path):
      "reason":"metadata-output-limit"});continue
    recorded+=block_bytes;row=range_body("internal-0x%x"%target,start,end)
    row.update({"entry":target,"fde":block});answer["internal_functions"].append(row)
-  parent=next((row for row in answer["internal_functions"] if row.get("entry")==0x10ffc0),None)
-  references=[]
-  if parent is not None and parent.get("status")=="ok":
-   pattern=re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+lea\w*\s+[^#\n]*\(%rip\),%rsi\s+#\s*([0-9a-f]+)\b")
-   for line in parent["body"].splitlines():
-    match=pattern.match(line)
-    if match:
-     target=int(match.group(1),16);matches=[bounds for bounds in fde_ranges if bounds[0]<=target<bounds[1]]
-     if len(matches)==1 and matches[0][0]==target:references.append((line,target,matches[0]))
-  if frame_status["status"]!="ok":
-   answer["spawn_child_candidate"]={"status":"unavailable","reason":"frame-metadata-incomplete",
-    "semantic_binding":"unresolved"}
-  elif len(references)==1:
-   instruction,target,(candidate_start,candidate_end)=references[0];candidate_blocks=[];candidate=None
-   def flush_candidate():
-    nonlocal candidate
-    if candidate is not None:candidate_blocks.append("".join(candidate));candidate=None
-   def candidate_frames(raw):
-    nonlocal candidate
-    text=raw.decode("utf-8","replace")
-    match=re.search(r"\bFDE\b.*\bpc=([0-9a-fA-F]+)\.\.([0-9a-fA-F]+)",text)
-    if match:
-     flush_candidate();start,end=(int(value,16) for value in match.groups())
-     candidate=[text] if (start,end)==(candidate_start,candidate_end) else None
-    elif re.match(r"^[0-9a-fA-F]{8,}\s",text):flush_candidate()
-    elif candidate is not None:candidate.append(text)
-    if candidate is not None and text.strip()=="":flush_candidate()
-   candidate_status=metadata([readelf,"--debug-dump=frames-interp",path],candidate_frames)
-   flush_candidate();answer["spawn_child_candidate_metadata"]=candidate_status
-   if candidate_status["status"]=="ok" and len(candidate_blocks)==1:
-    block=candidate_blocks[0];block_bytes=len(block.encode("utf-8"))
-    if recorded+block_bytes<=786432:
-     recorded+=block_bytes;candidate_row=range_body("spawn-child-candidate",candidate_start,candidate_end)
-     candidate_row.update({"semantic_binding":"unresolved","instruction":instruction,
-      "referenced_entry":target,"fde":block})
-     answer["spawn_child_candidate"]=candidate_row
-    else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"metadata-output-limit",
-     "semantic_binding":"unresolved","instruction":instruction,"referenced_entry":target}
-   else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"candidate-fde-count-or-metadata",
-    "semantic_binding":"unresolved","instruction":instruction,"referenced_entry":target,
-    "count":len(candidate_blocks)}
-  else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"unique-lea-rsi-fde-start-not-found",
-   "semantic_binding":"unresolved","count":len(references)}
+  callers=((0x10ffc0,0x10f520,"call"),("sigaction",0x45340,"jmp"))
+  for source,target,opcode in callers:
+   parent=next((row for row in (answer["functions"] if isinstance(source,str) else answer["internal_functions"])
+    if row.get("symbol")==source or row.get("entry")==source),None)
+   child=next((row for row in answer["internal_functions"] if row.get("entry")==target),None)
+   lines=[] if parent is None or parent.get("status")!="ok" else [line for line in parent["body"].splitlines()
+    if re.search(r"\b%s\w*\s+(?:0x)?%x\b"%(opcode,target),line)]
+   if child is not None:child["caller"]={"source":source,"opcode":opcode,"lines":lines,
+    "status":"ok" if len(lines)==1 else "unavailable"}
+  answer["spawn_child_candidate"]={"status":"unavailable","reason":"fixed-parent-body-needs-source-binding",
+   "semantic_binding":"unresolved","parent_entry":0x10f520}
  else:
   answer["frame_metadata"]={"status":"unavailable","reason":"fixed-libc-identity-mismatch",
    "identity":image_identity,"build_id":image_build_id}
@@ -490,8 +527,10 @@ def function_bodies(path):
   "internal_functions":len(internal),"body_each":65536,"stderr_each":8192,
   "recorded_total":786432,"timeout_seconds_each":10}
  source_after={"identity":digest(path),"build_id":build_id(path)}
+ gate_after={"identity":digest(gate_binary),"build_id":build_id(gate_binary)}
  tools_after={name:digest(row["path"]) for name,row in answer["tools"].items()}
- answer["source_after"]=source_after;answer["tools_after"]=tools_after
+ answer["source_after"]=source_after;answer["gate_before"]=gate_before
+ answer["gate_after"]=gate_after;answer["tools_after"]=tools_after
  source_valid=all((source_before["identity"].get("status")=="ok",
   bool(source_before["identity"].get("sha256")),source_before["build_id"].get("status")=="ok",
   bool(source_before["build_id"].get("value")),source_after["identity"].get("status")=="ok",
@@ -500,7 +539,11 @@ def function_bodies(path):
  tools_valid=all(answer["tools"][name]["identity"].get("status")=="ok" and
   answer["tools"][name]["identity"].get("sha256") and tools_after[name].get("status")=="ok" and
   tools_after[name].get("sha256") for name in answer["tools"])
- binding_ok=source_valid and tools_valid and source_before==source_after and all(
+ gate_valid=all((gate_before["identity"].get("status")=="ok",bool(gate_before["identity"].get("sha256")),
+  gate_before["build_id"].get("status")=="ok",bool(gate_before["build_id"].get("value")),
+  gate_after["identity"].get("status")=="ok",bool(gate_after["identity"].get("sha256")),
+  gate_after["build_id"].get("status")=="ok",bool(gate_after["build_id"].get("value"))))
+ binding_ok=source_valid and gate_valid and tools_valid and source_before==source_after and gate_before==gate_after and all(
   answer["tools"][name]["identity"]==tools_after[name] for name in answer["tools"])
  answer["evidence_binding"]={"status":"ok" if binding_ok else "unavailable",
   "reason":None if binding_ok else "source-or-tool-identity-missing-or-changed"}
@@ -612,10 +655,15 @@ assert len(encoded)<=1024*1024
 sys.stdout.buffer.write(encoded)
 PY
 /bin/chmod 0400 "$tmp/runtime-dependency-collector.py"
+native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
+  -type f ! -name build-record.json -print)
+[ -n "$native_actual_child_binary" ] && [ -f "$native_actual_child_binary" ] || fail 'native actual child output'
+native_actual_child_record="$tmp/native-case-48/build-record.json"
 for polluted_key in MallocStackLogging OBJC_PRINT_IMAGES LD_YSTACK_FIXTURE DYLD_YSTACK_FIXTURE \
   POSIX_SPAWN_FILTERING_RULES_PATH; do
   if /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$polluted_key=fixture" \
     "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$root" "$native_binary" \
+      "$native_actual_child_binary" "$native_actual_child_record" \
     > "$tmp/preexec-$polluted_key.stdout" 2> "$tmp/preexec-$polluted_key.stderr"; then
     fail "runtime dependency accepted $polluted_key"
   fi
@@ -625,6 +673,7 @@ for polluted_key in MallocStackLogging OBJC_PRINT_IMAGES LD_YSTACK_FIXTURE DYLD_
 done
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$root" "$native_binary" \
+    "$native_actual_child_binary" "$native_actual_child_record" \
   > "$tmp/runtime-dependency-record.json"
 /usr/bin/printf 'shadow-runtime-preexec-environment: fixed clean startup and 5 polluted starts refused\n'
 "$python_bin" -I -S -B - "$native_out/build-record.json" \
@@ -638,8 +687,6 @@ for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-re
   "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
  print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
 PY
-native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
-  -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
 import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
 root,binary=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
@@ -2784,6 +2831,7 @@ real_native="$real/native-release"
 real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$fixture" "$real_native_binary" \
+    "$native_actual_child_binary" "$native_actual_child_record" \
   > "$real/runtime-dependency-record.json"
 "$python_bin" -I -S -B - "$real/runtime-dependency-record.json" <<'PY'
 import hashlib,json,pathlib,sys
