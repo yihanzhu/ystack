@@ -9,11 +9,11 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `9295d658405afaae98cfea724fba24184f271fe1`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 900–1140 lines. The five-slice contract,
+Plan PR: `review_size: accepted-exception`, 900–1200 lines. The five-slice contract,
 closed native context, fixed native signal checkpoint, direct-result release and
-State-owned child handoff need one coherent implementation brief. The range keeps
-complete signal/fd/platform and fixed child-lifecycle proof readable and changes only
-the soft size budget.
+State-owned child handoff, and the fixed writer-child roles need one coherent
+implementation brief. The range keeps complete signal/fd/platform and fixed
+child-lifecycle proof readable and changes only the soft size budget.
 
 ## Files that change
 
@@ -28,7 +28,7 @@ The first four track #506; only the fifth closes it.
 | 1 — bound evaluator/checker | `control/v1/sandbox-bound-policy.json`, `control/v1/sandbox-bound-decision.json`, `control/v1/control-policy-set-sandbox-bound.json`, `control/v1/evaluate-bound-sandbox.sh`, `control/v1/sandbox-bound.jq`, `enforcement/v1/check-sandbox-receipt.sh`, `enforcement/v1/sandbox-receipt.jq`, `scripts/test/control-sandbox-bound.test.sh`, `scripts/test/sandbox-receipt.test.sh`, `scripts/test/portable-core-schema.test.sh` (only the spec R10.9 expected-path addition) |
 | 2 — trusted dependencies and origin reader | `shadow/v1/_consumer.py`, `scripts/test/shadow-enforced.test.sh` |
 | 3 — enforced reproduction | `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `scripts/test/shadow-enforced.test.sh` |
-| 4 — add-only materialization | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-write.test.sh` |
+| 4 — add-only materialization | `shadow/v1/_cancel_release.c`, `shadow/v1/_consumer.py`, `shadow/v1/enforced-reproduction.py`, `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq`, `scripts/test/shadow-write.test.sh` |
 | 5 — withheld request and complete integration | `shadow/v1/_consumer.py`, `shadow/v1/write-shadow.py`, `scripts/test/shadow-write.test.sh`, `scripts/test/shadow-enforced.test.sh` |
 
 The common documentation set is exactly `docs/components.md`, `RESTORE.md`, and
@@ -39,7 +39,7 @@ slice history and is not a repair path. Each other slice may change only its acc
 component descriptions and manifest entries. Keep shell drivers/tests executable.
 Intermediate entry points refuse operations whose remaining checks are not implemented;
 they cannot emit a completed write bundle early. No other source or accepted artifact
-changes.
+changes. Slice 4 has exactly nine paths: its six table entries plus the common set.
 
 The current SC-CANCEL-6 repair claim is the exact seven-path subset
 `shadow/v1/_cancel_release.c`, `shadow/v1/build-cancel-release.sh`,
@@ -352,12 +352,15 @@ scratch children. Use argument arrays and no shell command strings.
 | Check receipt | `/bin/bash -p S/enforcement/v1/check-sandbox-receipt.sh check-bound RECEIPT EXPECTATION EVALUATION OBSERVATION` |
 | Trace | `/bin/bash -p S/telemetry/v1/validate-trace-ledger.sh validate INCIDENT_ID ATTEMPT_ID LEDGER` |
 | Convert seed | `/bin/bash -p S/maintenance/v1/incident-to-eval.sh convert INCIDENT FROZEN_SHADOW EMPTY_SEED_DIRECTORY` |
+| Build write input | `J -L G -S -c --arg phase PHASE --rawfile contract CONTRACT --rawfile patch PATCH --slurpfile metadata METADATA -f S/shadow/v1/write-materialization-input.jq PHASE_INPUT` where PHASE/PHASE_INPUT are exactly the captured original input for `stage-request` or the captured first-phase document for `final-input` |
+| Inspect write Git | `/usr/bin/git --no-replace-objects --git-dir=CAPTURED_SOURCE_OR_CANDIDATE` followed only by `config --file CAPTURED_CONFIG --name-only --list --no-includes`, `rev-parse --is-bare-repository`, `rev-parse --show-object-format`, `ls-tree -r -t -z --full-tree FULL_OID`, `cat-file commit FULL_OID`, or `cat-file blob FULL_OID` |
 | Resolve Darwin UUIDs | `P -I -S -B S/shadow/v1/_consumer.py _resolve-darwin-uuids` |
 | Read Darwin group | `P -I -S -B S/shadow/v1/_consumer.py _read-darwin-group` |
 
-Fixed script calls receive only `PATH=DEPENDENCY_BIN:/usr/bin:/bin`, `LC_ALL=C`,
-`LANG=C`; DEPENDENCY_BIN contains the checked jq. Clear inherited Git configuration,
-hooks, prompts, loader/Python variables, functions and network/proxy settings.
+Child environment is classified only by closed role. Roles 1 and 12–15 receive exactly
+`PATH=/usr/bin:/bin`, `LC_ALL=C` and `LANG=C`. Roles 2–11 and 16–18 receive the
+existing 14-key `clean_env` defined below. Clear inherited Git configuration, hooks,
+prompts, loader/Python variables, functions and network/proxy settings.
 All children close inherited descriptors except their declared stdio. Use a new
 process group per ordinary component. Each ordinary child has a 120-second deadline,
 64 KiB stderr cap and its upstream output cap (1 MiB where no tighter cap exists).
@@ -365,6 +368,20 @@ Preparation/inspect have 300 seconds, matching their existing operation bound.
 On expiry stop that owned child group, wait at most 10 seconds and record failure;
 never call a truncated output successful. Consumers have a 1,200-second overall
 budget; a deadline only removes opportunities for work, never relaxes admission.
+
+Writer roles 16 `write-seed-conversion`, 17 `write-materialization-input` and 18
+`write-git-inspection` bind the three writer operations above. The general environment
+has exactly `PATH=DEPENDENCY_BIN:/usr/bin:/bin`, caller-owned disposable `HOME` and
+`TMPDIR`, `LANG=C`, `LC_ALL=C`, `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`,
+`GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_COUNT=1`,
+`GIT_CONFIG_KEY_0=core.hooksPath` and `GIT_CONFIG_VALUE_0=ABSENT_NO_HOOKS_PATH`.
+DEPENDENCY_BIN contains only the checked private jq. Role 19 and every mismatched argv
+or environment refuse.
+Each writer role keeps the 120-second deadline and 64-KiB stderr cap. Converter stdout
+is at most 1 MiB; builder stdout is at most 8 MiB; tree listings are at most 16 MiB and
+commits are at most 1 MiB. A blob read is bounded by its expected length plus one;
+other smaller Git results use tighter bounds. Truncation is failure.
 
 The private runner no longer makes a Python `Popen` object the sole owner between
 kernel spawn and reap. It puts one serial child's authority in the existing
@@ -374,9 +391,10 @@ resource immediately after acquisition. A prepare failure attempts every acquire
 resource once, keeps the first error and creates no child.
 
 `prepare_child()` accepts one exact built-in tuple: closed role integer, absolute UTF-8-bytes
-executable, tuple-of-bytes argv and tuple-of-bytes environment. Add only role 15,
-`darwin-group-membership`, beside unchanged role 1 UUID resolution; role 16 stays unreachable.
-Each identity role requires its exact P/S argv, fixed three-key environment and own stdin/stdout caps. Reject path-like objects,
+executable, tuple-of-bytes argv and tuple-of-bytes environment. Roles 1–15 retain their
+accepted meanings. Add only the three writer roles 16–18 above; role 19 stays unreachable.
+Every role requires its exact executable/argv, classified environment and own
+stdin/stdout caps. Reject path-like objects,
 callables, NUL, unknown or mismatched role, extra environment, nonfixed stdio,
 conflicting descriptors and existing argument/environment/file/output bounds. Never
 accept a REQUEST-selected program, PATH search or generic dispatcher/action list.
@@ -411,6 +429,14 @@ finite environment-list process-substitution producers retain the observed stder
 they exit. A role number alone gives no such contract to an arbitrary caller or test
 program. The sudo/supervisor role keeps its separate authenticated receipt and teardown
 requirements; wrapper exit never proves VM teardown.
+
+The converter's reviewed source runs its fixed jq/utilities synchronously, creates one
+fixed-family seed and completes scratch cleanup before its successful foreground exit.
+The builder's final fixed source and core graph must prove a pure synchronous JSON
+transformation; it may not name or execute a program. Jq and the closed read-only Git
+operations are leaf commands. These source contracts, exact role tuples, EOF on every
+pipe, zero `CLD_EXITED` WNOWAIT status and no recorded child error are all required for
+the no-signal path. The role number alone proves none of them.
 
 Nonzero or signal exit, an unknown observation, cancellation, timeout or communication
 failure enters cleanup while the leader remains waitable. Do not use a pre-reap group
@@ -934,6 +960,9 @@ snapshots and repeat the fixed evaluator/checker checks. Keep this fresh observa
 only in outer write provenance. The committed reproduction bundle never changes.
 Run the existing converter and require its sole output
 `eval-seed-case-stale-moved-artifacts.json`; copy those exact bytes as eval-seed.json.
+Invoke it only through role 16 with the captured incident, frozen shadow and fresh empty
+output directory. Require stdout to equal the sole canonical seed file byte for byte.
+No fresh origin or outer-attempt data enters this conversion.
 
 Create exactly spec R7's 32 files under the absent `ystack-evidence/<incident-id>/`.
 Use its exact README bytes. Require allowed_paths sorted and exactly equal to this
@@ -947,6 +976,11 @@ aliases, unsafe segments, any deletion/change and patches above 1,048,576 bytes.
 the following replacements. `_consumer.py` supplies actual byte hashes as explicit
 jq args after constructing the bytes; jq checks shapes/relations using existing
 core modules. No payload hash is inferred from its textual representation.
+Role 17 uses `--rawfile` for the contract and patch, never an argv scalar for the
+up-to-1-MiB patch. Small digest/attempt facts come from one canonical metadata file.
+The two fixed phases emit exactly one canonical JSON document each; hash the captured
+stage-request bytes between them. Recheck J, G, the builder source and every captured
+input before and after use. No caller filter, module path or extra phase is accepted.
 
 | Location | Required value or replacement |
 | --- | --- |
@@ -989,6 +1023,12 @@ equal to target revision. Prepare and inspect that candidate and run the same R4
 incident check. Generate the outer qualified identity from retained profile/config/
 model/prompt/skill refs, the new request ref, original target and actual instruction
 ref; validate it using the unchanged predicate. Never reuse a stale request hash.
+Role 18 accepts only full validated OIDs and the closed read operations in section 4.
+It first applies the existing seven-key source-config admission to the captured config.
+It accepts no revision expression, pathspec, caller option, write command, hook, filter,
+credential, transport or network action. Compare raw tree/commit/blob facts in the
+parent; the child never grants authorization. Roles 16–18 finish and release their
+single State-owned child before any completion marker can be created.
 
 ### 8. Withheld admission and completion
 
@@ -1090,6 +1130,9 @@ observations.
 | shadow-enforced | Ledger starts before resolver/load_anchor and retains early, repeated, final-recheck, failure and cancellation batches in order; empty batches add no row; freeze precedes no child and later held/named seal still detects drift. On Linux bind the real host fd-path function before mocking Darwin platform, then run the original metadata mutation refusal and positive block without swallowing EINVAL, skipping assertions or faking fstat |
 | shadow-enforced | All semantic, durability, child and ordinary cleanup work precedes L; ordinary child-close OSError tries other distinct owned children once, retains the first error, never retries result-unknown fds, leaves definitely unattempted responsibility in the original container and makes repeated close inert; no arbitrary-BaseException attempt-all; no cleanup work follows L; preserve actual child handoff, recoverable I/O, one bounded group cleanup and disappearance, displaced-directory/held-descriptor rollback, late exceptions, and sticky unlink/fsync/close/native-action/private-pipe/mask/active-parent restoration failures; all Python preparation and active-parent restoration precede the first marker byte, and the unchanged Python wakeup pair has no restoration call to fail |
 | shadow-write | Reauthenticate frozen receipt/payload; regenerate evaluation; missing/extra/modified evidence; seed converter refs; original profile graph unchanged; exact protocol input/response; altered payload/ref digests; required allowed_modes plus actual100644; add-only/single-parent/protected/existing/binary/oversize failures |
+| shadow-write | Roles 16–18 each pair their actual fixed successful command with wrong-role, role 19, argv and environment refusal before spawn. Concrete final-binary checks retain saved mask, close-all, unique observe/reap and group disappearance. Nonzero, oversize, timeout and cancellation preserve raw State failure and no completion marker; unchanged native/platform receipts and the real `shadow-enforced` regression are compatibility evidence, never substitutes for these new-role controls. |
+| shadow-write | Real role-16 converter emits the sole named canonical seed with stdout/file equality; extra inventory, byte drift and fresh-origin input refuse. Real role-17 phases use retained contract/patch/metadata files, accept the maximum valid patch without exceeding native argv, and reject malformed, extra-phase, changed-source/core/J/input and invalid generated protocol data. |
+| shadow-write | Real role-18 fixed Git reads prove admitted config, bare/hash algorithm, complete source/candidate trees, sole parent and raw blob facts. Revision expressions, pathspecs, unlisted commands/options, writes, hooks/filters and changed metadata refuse. Pair every new role's positive with nonzero, oversized output, timeout/cancel and absence of an early completion marker. |
 | shadow-write | Separate original/write attempt subjects; identical two-run tree/write_set/request despite nonce/time differences; zero producer/model/publisher calls; exact withholding/admission/post-write equality; source/store digests unchanged; no committed outer-attempt bytes |
 
 Run the slice's new suites and affected compatibility suite before its review:
