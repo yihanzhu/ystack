@@ -1864,6 +1864,10 @@ and provider evidence. Linux also requires the public session, mask, default-act
 close-from, and wait capabilities used by the fixed child recipe. macOS checks the fixed
 default spawn-filter path before preparation and again immediately before spawn while the
 parent holds and rechecks its protected ancestors.
+On protected macOS runs, primary or effective group membership is decided locally.
+Supplementary membership is read once by a distinct State-owned private child with fixed
+Python, source, arguments, environment, input, output, and cleanup; the parent never
+initializes Darwin's extended group service.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

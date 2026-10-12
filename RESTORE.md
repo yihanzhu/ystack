@@ -1215,6 +1215,9 @@ the saved caller mask, non-consuming pending checkpoints, State-owned child life
 and exact-byte native completion commit. Bind the actual system providers and spawn-filter
 state used by the reviewed runtime. Missing signal, child, identity, or lifecycle proof
 remains a refusal before its effect.
+Protected Darwin restoration also requires the fixed State-owned supplementary-group
+child. Primary or effective gid matches start no query; supplementary results are only
+the exact requested gid or an empty array, and any child or protocol failure refuses.
 
 On Linux, also require the recorded C11 recipe and the public close-from action after the
 fixed stdio and pipe actions. Prove with an explicitly inheritable ordinary descriptor and

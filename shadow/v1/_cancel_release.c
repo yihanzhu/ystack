@@ -505,7 +505,7 @@ state_prepare_child(NativeState *state, PyObject *argument)
         return NULL;
     }
     role = PyLong_AsLong(role_object);
-    if (role < 1 || role > 16 || PyErr_Occurred() ||
+    if (role < 1 || role > 15 || PyErr_Occurred() ||
             PyBytes_AsStringAndSize(executable_object, &executable, &executable_length) < 0 ||
             executable_length < 2 || executable[0] != '/' ||
             (size_t)executable_length >= sizeof(child->executable) ||

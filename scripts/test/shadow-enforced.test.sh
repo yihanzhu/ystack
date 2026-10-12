@@ -500,9 +500,11 @@ def function_bodies(path):
   if symbol=="setsid":
    answer["functions"].append({"symbol":symbol,"status":"unavailable",
     "reason":"spawn-child-entry-unresolved","origin_role":"spawn-child"});continue
-  role="gate-only-case-48" if symbol in gate_symbols else "production-native"
-  selected_row=selected_function(symbol,gate_entries if symbol in gate_symbols else native_entries,
-   gate_status if symbol in gate_symbols else native_status,role)
+  role="production-native"
+  selected_row=selected_function(symbol,native_entries,native_status,role)
+  if symbol in gate_symbols and "selected" not in selected_row:
+   role="gate-only-case-48"
+   selected_row=selected_function(symbol,gate_entries,gate_status,role)
   if role=="gate-only-case-48" and answer["gate_only_provenance"]["status"]!="ok":
    selected_row={"symbol":symbol,"status":"unavailable","reason":"gate-only-provenance",
     "origin_role":role,"provenance":answer["gate_only_provenance"]}
@@ -770,7 +772,7 @@ LINUX_PUBLIC={
  "waitid":("GLIBC_2.2.5",1116512,1116675,"1360edbe046fb42e8953968e824cee5335295e0dbc121f7159834cb56eebff92"),"kill":("GLIBC_2.2.5",283952,283989,"d50e8da96bd1d65d00f2f675c37928154f6ec7bb556638d9b20ec83dc0d2b733"),"pthread_sigmask":("GLIBC_2.32",671712,671935,"3043a39417b506fe7e7a280d25c0afa2352548dff517da9b10edcbb09f80347a"),"sigpending":("GLIBC_2.2.5",284000,284050,"d49832fee54ef678bf120b24183d35a8bbb6a7a9dfcfe2cd755e9702106b5d44"),"sigaction":("GLIBC_2.2.5",283360,283412,"a304a32c5ea02577db83795ea66d3f3df1a9b0ed7d1c997dd3700c3aae590cef"),"sigismember":("GLIBC_2.2.5",285984,286044,"920372824353b830dc98f3b0605e01248a5159993a35577ddfdacd83d8bddf34"),"openat":("GLIBC_2.4",1160560,1160824,"26911bf0d6da6abedb3630f3d9be8112741ea6a46af9cf5b408a5175e6fa5b23"),"read":("GLIBC_2.2.5",1162528,1162677,"34c15fa809ef2060efee95f3f9d36c0f4646c1d2863e8bbe7c7f57039e59e75c"),"write":("GLIBC_2.2.5",1165360,1165517,"0f7113fcb1fe89e611ba7000f794672049c384e995bc5ce3114e2bd2a6f6a9ff"),"fsync":("GLIBC_2.2.5",1175712,1175843,"66e747db445c320e010f62683da56d4c1ab03cbf372a62dc9337d46b5c3f6bba"),"close":("GLIBC_2.2.5",1141168,1141299,"192013146611c5b26fad8e10c6e631620b189484121ad496b01e84b824fc3a12"),"unlinkat":("GLIBC_2.4",1165056,1165093,"fd41e59e7cacd11b993d44a1c8d79d956a1888bd112eb47fbabbe6ab4542b797"),"fstat":("GLIBC_2.33",1144400,1144442,"60f34480d7daf97dd72daf34658d002ec38da4226b582ed538d3e1f6f1cb0f97")}
 LINUX_INTERNAL={(1114048,1114096):"64887898097779cd4eb2dfa3a5a6dbee7a1dae6f83ef6675d4c8048965c001fe",(624176,624294):"6fdf5cb86e3d4e88a27e2535f12d523f4f2b4d1d1e0f7b6da8dc59cbbf0f0622",(624304,624435):"b3c4b25a0311f125b20d9f586f777d497455c957ae3c28c45a748c44b17f4a71",(1110528,1110590):"1d3b6b6fec0a543547c4870f17ccc175eb0c3607d4ce2f92cd27d94c6aa9474d",(1110624,1110695):"1c30dba8de93cce0fba79e46e68eaed9d5481c7ff9beae6de92e5ddd0047ddbb",(1111328,1112526):"fda92da328c31dc15c2b94de79df5db22812cbc2d054008da7d98349350f2387",(283456,283896):"e16a3c9ea6be1d7128125d0666c900f94d6f2f267c4b43654f840589b5561442"}
 LINUX_GATE={"posix_spawn_file_actions_addclosefrom_np","posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault"}
-DARWIN_UUIDS={"/usr/lib/system/libsystem_kernel.dylib":"ea1df724-0264-3bd8-beb2-ce75aa5534cd","/usr/lib/system/libsystem_c.dylib":"af204963-e350-39a8-9e50-1681dbc4133d","/usr/lib/system/libsystem_platform.dylib":"b4dc35d3-e0f0-3d32-85b4-cd3436c0819b","/usr/lib/system/libsystem_pthread.dylib":"3aab1736-e768-37e9-a828-2309e16cf6b2"}
+DARWIN_UUIDS={"/usr/lib/libobjc.A.dylib":"1ff743de-675d-30f9-82ec-a3b6801513d7","/usr/lib/libSystem.B.dylib":"74f3fc55-9eb4-3987-92f7-6242c72219a3","/usr/lib/system/libdispatch.dylib":"ad67f6eb-837b-303a-b2af-ceb742bc2be0","/usr/lib/system/libsystem_blocks.dylib":"2cbfeafc-84e1-3ac3-aa9e-8c42c7e4407e","/usr/lib/system/libsystem_c.dylib":"af204963-e350-39a8-9e50-1681dbc4133d","/usr/lib/system/libsystem_malloc.dylib":"797c4277-18a2-365f-8fc9-957c371a02a4","/usr/lib/system/libsystem_kernel.dylib":"ea1df724-0264-3bd8-beb2-ce75aa5534cd","/usr/lib/system/libsystem_platform.dylib":"b4dc35d3-e0f0-3d32-85b4-cd3436c0819b","/usr/lib/system/libsystem_pthread.dylib":"3aab1736-e768-37e9-a828-2309e16cf6b2"}
 def startup_environment():
  environment=dict(os.environ);base={key:environment.pop(key,None) for key in FIXED_ENV}
  if base!=FIXED_ENV:raise OSError(errno.EACCES,"startup environment")
@@ -890,6 +892,8 @@ class ParentInputs:
   if facts.get("soabi")!=sysconfig.get_config_var("SOABI") or os.path.realpath(facts.get("stdlib",""))!=os.path.realpath(sysconfig.get_path("stdlib")) or facts.get("version")!=sys.version:raise ValueError("runtime metadata")
   origins=facts.get("loaded_origins")
   if not isinstance(origins,list):raise ValueError("origins")
+  resolved_origins=[os.path.realpath(item.get("path","")) for item in origins]
+  if len(set(resolved_origins))!=len(resolved_origins):raise ValueError("duplicate origin")
   for item in origins:
    if set(item)!={"path","identity"} or not os.path.isabs(item["path"]):raise ValueError("origin shape")
    value=item["identity"]
@@ -927,8 +931,7 @@ class ParentInputs:
    if set(found)!=set(LINUX_PUBLIC):raise ValueError("ELF public set")
    for name,expected_function in LINUX_PUBLIC.items():
     row=found[name]
-    expected_role="gate-only-case-48" if name in LINUX_GATE else "production-native"
-    if row.get("status")!="ok" or row.get("origin_role")!=expected_role or (row.get("required_version"),row.get("start"),row.get("end"),row.get("body_sha256"))!=expected_function or hashlib.sha256(row.get("body","").encode()).hexdigest()!=expected_function[3]:raise ValueError("ELF public body")
+    if row.get("status")!="ok" or row.get("origin_role")!="production-native" or (row.get("required_version"),row.get("start"),row.get("end"),row.get("body_sha256"))!=expected_function or hashlib.sha256(row.get("body","").encode()).hexdigest()!=expected_function[3]:raise ValueError("ELF public body")
    internal=functions.get("internal_functions");indexed={(row.get("start"),row.get("end")):row for row in internal} if isinstance(internal,list) else {}
    if set(indexed)!=set(LINUX_INTERNAL):raise ValueError("ELF internal set")
    for key,digest in LINUX_INTERNAL.items():
@@ -936,7 +939,7 @@ class ParentInputs:
     if row.get("status")!="ok" or row.get("body_sha256")!=digest or hashlib.sha256(row.get("body","").encode()).hexdigest()!=digest:raise ValueError("ELF internal body")
    child=functions.get("spawn_child_candidate")
    if not isinstance(child,dict) or child.get("status")!="ok" or (child.get("start"),child.get("end"),child.get("body_sha256"))!=(1112528,1114043,"7ee884c26dd4ad90da96f4786080082a0e7f6c91f55ebae142972ddedeff8059") or hashlib.sha256(child.get("body","").encode()).hexdigest()!=child["body_sha256"]:raise ValueError("ELF child body")
-   gate=functions.get("build_records",{}).get("gate");production=functions.get("build_records",{}).get("production")
+   gate=functions.get("build_records",{}).get("gate_only");production=functions.get("build_records",{}).get("production")
    if functions.get("gate_only_provenance",{}).get("status")!="ok" or production!=build or not isinstance(gate,dict) or gate.get("body",{}).get("test_build") is not True or gate.get("body",{}).get("test_case")!=48:raise ValueError("ELF gate provenance")
    gate_body=gate["body"];shared=set(body)-{"argv","argv_sha256","output_name","output_size","output_sha256","test_build"}
    if any(gate_body.get(key)!=body[key] for key in shared):raise ValueError("ELF gate source relation")
@@ -945,8 +948,20 @@ class ParentInputs:
    if gate_body.get("argv")!=expected_gate or gate_body.get("argv_sha256")!=hashlib.sha256((json.dumps(expected_gate,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()).hexdigest():raise ValueError("ELF gate recipe")
   elif facts["platform"]=="darwin":
    if facts.get("executable_identity")!={"status":"ok","sha256":"1b5cb11d163e5ba34e2a05fc533c0ed89574d4425f9749a9d89405f651980e0d","size":34640} or facts.get("package")!={"kind":"homebrew-cellar","formula":"python@3.14","version":"3.14.8_2"} or facts.get("darwin_shared_cache_uuid")!={"status":"ok","value":"421885d7-01cc-3629-b59b-6a068db34420"}:raise ValueError("Darwin runtime")
-   selected={item.get("path"):item.get("identity") for item in facts.get("darwin_mapped_images",[]) if item.get("path") in DARWIN_UUIDS}
+   mapped=facts.get("darwin_mapped_images")
+   if not isinstance(mapped,list) or any(set(item)!={"path","identity"} or set(item["identity"])!={"cpu_type","cpu_subtype","uuid"} for item in mapped):raise ValueError("Darwin mapped shape")
+   mapped_paths=[os.path.realpath(item["path"]) for item in mapped]
+   if len(set(mapped_paths))!=len(mapped_paths):raise ValueError("Darwin mapped duplicate")
+   allowed_mapped=("/usr/lib/","/System/Library/","/opt/homebrew/",str(pathlib.Path(self.native_binary).parent)+os.sep)
+   if any(not path.startswith(allowed_mapped) for path in mapped_paths):raise ValueError("Darwin mapped source")
+   selected={item.get("path"):item.get("identity") for item in mapped if item.get("path") in DARWIN_UUIDS}
    if set(selected)!=set(DARWIN_UUIDS) or any(selected[path]!={"cpu_type":16777228,"cpu_subtype":2147483650,"uuid":value} for path,value in DARWIN_UUIDS.items()):raise ValueError("Darwin providers")
+   framework=[item for item in mapped if item["path"].endswith("/Python.framework/Versions/3.14/Python")]
+   native_mapped=[item for item in mapped if os.path.realpath(item["path"])==self.native_binary]
+   build_id=facts.get("build_id",{})
+   if len(framework)!=1 or framework[0]["identity"]!={"cpu_type":16777228,"cpu_subtype":0,"uuid":"3a57db8c-0f45-3d16-88ca-37ca36d869ce"} or len(native_mapped)!=1 or native_mapped[0]["identity"].get("cpu_type")!=16777228 or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",native_mapped[0]["identity"].get("uuid","")) or build_id.get("status")!="ok" or "E28BD2D0-0E18-3730-BCE7-33F5216EACD3 (arm64)" not in build_id.get("stdout",""):raise ValueError("Darwin output identities")
+   dependencies=facts.get("native_dependencies")
+   if not isinstance(dependencies,dict) or any(path not in dependencies or dependencies[path].get("status")!="ok" for path in (self.physical_python,self.native_binary)):raise ValueError("Darwin dependency relation")
    bindings=facts.get("darwin_release_symbol_bindings");expected_symbols={"pthread_sigmask":"/usr/lib/system/libsystem_pthread.dylib","fcntl":"/usr/lib/system/libsystem_kernel.dylib","close":"/usr/lib/system/libsystem_kernel.dylib","fstat":"/usr/lib/system/libsystem_kernel.dylib","unlinkat":"/usr/lib/system/libsystem_kernel.dylib","fsync":"/usr/lib/system/libsystem_kernel.dylib"}
    if not isinstance(bindings,list) or len(bindings)!=6 or any(row.get("mapped_image")!=expected_symbols.get(row.get("symbol")) or row.get("mapped_identity",{}).get("uuid")!=DARWIN_UUIDS[row["mapped_image"]] for row in bindings):raise ValueError("Darwin bindings")
   else:raise ValueError("platform")
@@ -1052,6 +1067,46 @@ try:
   "build_sha256":held.build_sha256,"dependency_sha256":held.dependency_sha256,
   "environment_keys":held.environment_keys,"held_files":len(held.rows)},sort_keys=True,separators=(",",":")))
 finally:held.close()
+PY
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C "$python_bin" -I -S -B - \
+  "$tmp/parent-input-helper.py" "$root" "$python_bin" "$native_binary" \
+  "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
+  "$tmp/runtime-dependency-collector.py" "$tmp" <<'PY'
+import copy,hashlib,importlib.util,json,pathlib,sys
+helper_path,package,python,native,build_path,dependency_path,collector,tmp=map(pathlib.Path,sys.argv[1:])
+spec=importlib.util.spec_from_file_location("parent_relation_helper",helper_path)
+helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+canonical=lambda value:(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+dependency=json.loads(dependency_path.read_bytes());build=json.loads(build_path.read_bytes());cases=[]
+def case(name,mutate):
+ value=copy.deepcopy(dependency);mutate(value["body"]);cases.append((name,value))
+case("unknown-origin",lambda body:body["loaded_origins"].append(
+ {"path":"/tmp/foreign.so","identity":{"status":"ok","sha256":"0"*64,"size":1}}))
+if dependency["body"]["platform"]=="darwin":
+ case("provider-uuid",lambda body:body["darwin_mapped_images"][next(i for i,row in enumerate(
+  body["darwin_mapped_images"]) if row["path"]=="/usr/lib/system/libsystem_kernel.dylib")]["identity"].update(uuid="0"*8+"-0000-0000-0000-"+"0"*12))
+ case("launcher-build-id",lambda body:body["build_id"].update(stdout="UUID: 00000000-0000-0000-0000-000000000000 (arm64) "+str(python)+"\n"))
+ case("release-provider",lambda body:body["darwin_release_symbol_bindings"][0].update(mapped_image="/usr/lib/system/libsystem_c.dylib"))
+else:
+ functions=dependency["body"]["libc_function_bodies"]
+ case("provider-build-id",lambda body:next(row for row in body["elf_images"] if "libc" in row["roles"])["build_id"].update(value="0"*40))
+ case("required-version",lambda body:next(row for row in body["libc_function_bodies"]["functions"] if "label" in row).update(required_version="GLIBC_0.0"))
+ def changed_body(body):
+  row=next(row for row in body["libc_function_bodies"]["functions"] if "label" in row)
+  row["body"]+="\n";row["body_sha256"]=hashlib.sha256(row["body"].encode()).hexdigest()
+ case("rehashed-body",changed_body)
+ case("gate-as-production",lambda body:next(row for row in body["libc_function_bodies"]["functions"] if "label" in row).update(origin_role="gate-only-case-48"))
+ case("child-address",lambda body:body["libc_function_bodies"]["spawn_child_candidate"].update(start=0))
+for index,(name,value) in enumerate(cases):
+ path=tmp/("parent-relation-%02d.json"%index);path.write_bytes(canonical(value));path.chmod(0o400)
+ try:helper.ParentInputs(package,python,native,build_path,path,collector)
+ except (OSError,ValueError):print("parent-relation-refused",name)
+ else:raise AssertionError("accepted recomputed parent relation: "+name)
+bad=copy.deepcopy(build);bad["body"]["output_sha256"]="0"*64
+path=tmp/"parent-relation-build.json";path.write_bytes(canonical(bad));path.chmod(0o400)
+try:helper.ParentInputs(package,python,native,path,dependency_path,collector)
+except (OSError,ValueError):print("parent-relation-refused build-output")
+else:raise AssertionError("accepted recomputed build relation")
 PY
 "$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
 import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
@@ -1763,6 +1818,9 @@ class FixedResolver(c._DarwinUUIDResolver):
         return self.rows if self.rows is not None else [
             {"uuid": uuid, "status": "resolved", "kind": "user", "id": 0}
             for uuid in uuids]
+class FixedGroupReader(c._DarwinGroupReader):
+    def __init__(self, member=True): self.member, self.calls = member, []
+    def contains(self, gid): self.calls.append(gid); return self.member
 real_functions = c._DARWIN_ACL_FUNCTIONS
 c.sys.platform = "darwin"; c._acl_state = real_acl
 def darwin_rule(failure, installed=False):
@@ -1895,7 +1953,7 @@ def observed_named(name, parent_fd): return observed_value(real_named(name, pare
 c._metadata, c._named_metadata = observed, observed_named; c._source_root = lambda: str(source)
 c._acl_state = lambda _fd, _resolver=None: ([], None) if c.sys.platform == "darwin" else (None, None)
 def fixture_anchor():
-    return c.load_anchor(FixedResolver() if c.sys.platform == "darwin" else None)
+    return c.load_anchor(FixedResolver(), FixedGroupReader()) if c.sys.platform == "darwin" else c.load_anchor()
 c.ANCHOR = str(anchor_path); c.sys.executable = identity_paths["toolchain"]
 helper_source = source / c.HELPER_SOURCE
 helper_source.parent.mkdir(parents=True, exist_ok=True)
@@ -1905,7 +1963,13 @@ source_bytes = helper_source.read_bytes()
 write(helper_source, source_bytes + b"\n")
 refuses("E_DEPENDENCY", c.verify_helper_source)
 write(helper_source, source_bytes)
-remember_store(); anchor = fixture_anchor()
+remember_store()
+original_getgroups=c.os.getgroups
+c.os.getgroups=lambda:(_ for _ in ()).throw(AssertionError("primary gid queried supplementary groups"))
+try:anchor=fixture_anchor()
+finally:c.os.getgroups=original_getgroups
+ok(anchor.config["consumer_gid"] in (os.getgid(),os.getegid()),
+   "primary or effective gid starts no supplementary membership query")
 observation = json.loads(c.verifier_observation(anchor, env_id, target_id))
 ok(set(observation) == {"schema_version", "kind", "id", "body"}
    and observation["schema_version"] == 1
@@ -1920,6 +1984,13 @@ ok(observation["body"]["environment_entry_sha256"] == sha(c.canonical(json.loads
    "selected registry entry digest bound")
 refuses("E_RELATION", lambda: c.verifier_observation(anchor, env_id, "repo.other"))
 anchor.close()
+
+bad_uid=json.loads(config);bad_uid["body"]["principal_uid"]=os.getuid()
+write(anchor_path/"host-config.json",c.canonical(bad_uid))
+uid_reader=FixedGroupReader()
+refuses("E_CONFIG",lambda:c.load_anchor(FixedResolver(),uid_reader))
+ok(uid_reader.calls==[],"invalid principal uid refuses before supplementary membership query")
+write(anchor_path/"host-config.json",config)
 
 for role in sorted(c.INSTALLED_SOURCES):
     path = pathlib.Path(installed[role]); original = path.read_bytes(); path.chmod(0o640); path.write_bytes(original + b"x")
@@ -2223,6 +2294,29 @@ refuses("E_RUNTIME", lambda: e.run_bounded("helper-version", [sys.executable, "-
 # The ACL resolver is one concrete adapter with fixed P/S/role, environment and caps.
 python_snapshot=e.stable_file(pathlib.Path(sys.executable))
 consumer_snapshot=e.stable_file(root/"shadow/v1/_consumer.py")
+if sys.platform=="darwin":
+ group_argv=[sys.executable,"-I","-S","-B",str(root/"shadow/v1/_consumer.py"),"_read-darwin-group"]
+ group_env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"}
+ actual_gid=12
+ ok(actual_gid not in (os.getgid(),os.getegid()),"actual group control is supplementary-only")
+ actual_group=e.run_bounded("darwin-group-membership",group_argv,
+  stdin=e.c.canonical({"gid":actual_gid}),timeout=10,output_limit=16,env=group_env)
+ ok(actual_group==e.c.canonical([actual_gid]),"actual fixed group child returns matching supplementary gid")
+ missing_gid=0xffffffff
+ ok(e.run_bounded("darwin-group-membership",group_argv,
+  stdin=e.c.canonical({"gid":missing_gid}),timeout=10,output_limit=16,env=group_env)==e.c.canonical([]),
+  "actual fixed group child returns exact empty nonmember result")
+ group_error_code=("import importlib.util,sys;"
+  "s=importlib.util.spec_from_file_location('group_error',sys.argv[1]);"
+  "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+  "m.os.getgroups=lambda:(_ for _ in ()).throw(OSError(5,'simulated getgroups'));"
+  "m._read_darwin_group()")
+ refuses("E_RUNTIME",lambda:e.run_bounded("darwin-group-membership",
+  [sys.executable,"-I","-S","-B","-c",group_error_code,str(root/"shadow/v1/_consumer.py")],
+  stdin=e.c.canonical({"gid":actual_gid}),timeout=10,output_limit=16,env=group_env),
+  "simulated group query error remains a nonzero child failure")
+ ok(e._native_child_status(parent_owner.native)[0]==4,
+  "simulated group query error leaves the test-only State child complete")
 resolver_ledger=[]
 def resolver_record(role,argv,executable_sha256,component_sha256):
  resolver_ledger.append({"role":role,"argv_sha256":e.sha(e.canonical(argv)),
@@ -2273,6 +2367,21 @@ ok(len(resolver.resolve(boundary_uuids))==128,"resolver accepts exact 128-entry 
 e.run_bounded=original_run
 resolver_refuses(lambda:e.c._json_array(b"["+b'"00",'*8192+b'"00"]\n',16*1024,"E_ACL"),
  "resolver input byte cap enforced before parsing")
+group_reader=e._DarwinGroupReader(resolver);group_calls=[]
+def group_run(role,argv,**options):
+ group_calls.append((role,argv,options));return e.c.canonical([20])
+e.run_bounded=group_run
+ok(group_reader.contains(20),"fixed group reader accepts exact matching gid")
+role,argv,options=group_calls[0]
+ok(role=="darwin-group-membership" and argv[-1]=="_read-darwin-group"
+ and options["stdin"]==e.c.canonical({"gid":20}) and options["timeout"]==10
+ and options["output_limit"]==16,"group reader argv input and caps are fixed")
+e.run_bounded=lambda *_args,**_options:e.c.canonical([])
+ok(not group_reader.contains(20),"fixed group reader preserves exact nonmember result")
+for bad in (e.c.canonical([21]),b"[20,20]\n",b'{"member":true}\n',b"x"*17):
+ e.run_bounded=lambda *_args,bad=bad,**_options:bad
+ resolver_refuses(lambda:group_reader.contains(20),"malformed group result refuses")
+e.run_bounded=original_run
 if sys.platform=="darwin":
  lib=e.ctypes.CDLL(e.c.DARWIN_SYSTEM_C,use_errno=True)
  def native_uuid(name,value):
@@ -2381,6 +2490,9 @@ spec=e._native_child_spec("darwin-acl-uuid-resolution",["/fixed/python","-I"],
 ok(spec==(1,b"/fixed/python",(b"/fixed/python",b"-I"),
  (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")),
  "native child spec is a fixed role and canonical bytes tuple")
+group_spec=e._native_child_spec("darwin-group-membership",["/fixed/python","-I"],
+ {"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C"})
+ok(group_spec[0]==15 and group_spec[1:]==spec[1:],"group membership has one distinct fixed native role")
 refuses("E_RUNTIME",lambda:e._native_child_spec("unknown",["/fixed/python"],{}),
  "unknown native child role refuses")
 refuses("E_RUNTIME",lambda:e._native_child_spec("incident-validation",["relative"],{}),
@@ -2877,7 +2989,7 @@ e.c.snapshot_dependency=lambda path,digest_value,size,private,name: Snap(helper,
 e.c.snapshot_jq=lambda path,private: Snap(jq,sha(b"jq"))
 e.c.verify_helper_source=lambda: events.append("helper-source")
 e.c.probe_dependency=lambda snap,args,expected: events.append("probe:"+args[0])
-e.c.load_anchor=lambda _resolver=None: Anchor()
+e.c.load_anchor=lambda _resolver=None,_group_reader=None: Anchor()
 e.c.verifier_observation=lambda anchor,environment,target:e.canonical(doc("sandbox_verifier_observation",
  "observation.flow",{"environment_id":environment,"environment_entry_sha256":sha(e.canonical(entry)),
  "target_repository_id":target,"accepted_set_sha256":sha(accepted),"verifier_sha256":"9"*64}))
@@ -3442,6 +3554,7 @@ parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha25
  "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
  "python_abi":sysconfig.get_config_var("SOABI"),
  "dependency_record_sha256":parent_inputs.dependency_sha256,"loader_mode":"rtld-now-local.v1"}}
+checker_tmp=base/"checker-tmp";checker_tmp.mkdir(mode=0o700)
 census=e._NativeThreadCensus();census.observe()
 executable=e.stable_file(physical_python)
 admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
@@ -3476,7 +3589,7 @@ ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.l
  trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
  trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
  "trace binds claim environment and distinct declaration and enforcement evidence")
-mismatch_case=base/"case-mismatch";mismatch_case.mkdir(mode=0o700)
+mismatch_case=work/"case-mismatch";mismatch_case.mkdir(mode=0o700)
 mismatch_q=json.loads((base/"q-input.json").read_bytes())
 mismatch_identity=json.loads((base/"identity.json").read_bytes())
 mismatch_incident=json.loads((base/"incident.json").read_bytes())
@@ -3492,6 +3605,7 @@ for field,value in (("incident",mismatch_incident),("materialization_input",mism
 mismatch_request=mismatch_case/"request.json";write(mismatch_request,canonical(mismatch_outer),0o400)
 mismatch_work=mismatch_case/"work";mismatch_output=mismatch_case/"output"
 mismatch_work.mkdir(mode=0o700);mismatch_output.mkdir(mode=0o700)
+scenario_work=mismatch_work
 def reset_native():
  native.state=native.module.prepare_state()
  names=("block_entry","arm_consumer","checkpoint","hold_completion","block_final",
@@ -3502,20 +3616,17 @@ def reset_native():
  native.methods=tuple(getattr(native.state,name) for name in names)
  for name,method in zip(names,native.methods):setattr(native,name,method)
 reset_native();admission=dataclasses.replace(admission,native=native)
-try:
- with e.CancellationSignals(admission):
-  mismatch=json.loads(e.reproduce(mismatch_request,mismatch_work,mismatch_output,parent))
-finally:native.close()
+with e.CancellationSignals(admission):
+ mismatch=json.loads(e.reproduce(mismatch_request,mismatch_work,mismatch_output,parent))
 ok(mismatch["body"]["record_form"]=="enforced-reproduction.v1" and
  json.loads((mismatch_output/"shadow-record.json").read_bytes())["body"]["outcome"]=="reproduced",
  "actual mismatch completes only as a reproduced result")
 checker_driver=package/"enforcement/v1/check-sandbox-receipt.sh"
-checker_env={"PATH":str(base/"bin")+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base/"checker-tmp")}
-(base/"checker-tmp").mkdir(mode=0o700)
+checker_env={"PATH":str(base/"bin")+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(checker_tmp)}
 accepted=json.loads((package/"enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"][0]
 def check_mutation(name,mutate):
  receipt=json.loads((output/"sandbox-receipt.json").read_bytes());mutate(receipt)
- path=base/(name+"-receipt.json");write(path,canonical(receipt),0o400)
+ path=checker_tmp/(name+"-receipt.json");write(path,canonical(receipt),0o400)
  run=subprocess.run(["/bin/bash","-p",str(checker_driver),"check-bound",str(path),
   str(work/"launch/sandbox-expectation.json"),str(output/"sandbox-evaluation.json"),
   str(work/"observation/observation.json")],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
@@ -3537,7 +3648,7 @@ base_q=json.loads((base/"q-input.json").read_bytes())
 base_identity=json.loads((base/"identity.json").read_bytes())
 base_incident=json.loads((base/"incident.json").read_bytes())
 def case_documents(name,mutate=None):
- case=base/("case-"+name);case.mkdir(mode=0o700)
+ case=work/("case-"+name);case.mkdir(mode=0o700)
  q=json.loads(json.dumps(base_q));identity=json.loads(json.dumps(base_identity))
  incident=json.loads(json.dumps(base_incident));outer=json.loads(json.dumps(base_request))
  if mutate is not None: mutate(outer,q,identity,incident)
@@ -3582,15 +3693,20 @@ def refuse_case(name,mode="success",mutate=None,launches=0):
  changed=mutation_path(mode)
  changed_raw=changed.read_bytes() if changed else None
  changed_mode=changed.stat().st_mode&0o777 if changed else None
+ caught=None
  try:
-  try: e.reproduce(request_path,case_work,case_output,parent)
-  except (e.Refusal,c.Refusal): pass
+  reset_native()
+  try:
+   with e.CancellationSignals(admission):e.reproduce(request_path,case_work,case_output,parent)
+  except (e.Refusal,c.Refusal) as exc:
+   caught=exc.code
   else: raise AssertionError(name+" accepted")
  finally:
   if component.read_bytes()!=original:component.write_bytes(original);component.chmod(0o755)
   if changed is not None:
    changed.chmod(0o600);changed.write_bytes(changed_raw);changed.chmod(changed_mode)
- ok(launch_count-before==launches,name+" stops at the intended boundary")
+ ok(launch_count-before==launches,
+    name+" stops at the intended boundary: "+repr((launch_count-before,launches,caught)))
  marker=case_output/"bundle.json"
  displaced=case_output.with_name(case_output.name+"-displaced")/"bundle.json"
  ok(not marker.exists() and not displaced.exists(),name+" cannot expose completion marker")
@@ -3615,11 +3731,19 @@ refuse_case("wrong-environment",mutate=wrong_environment)
 refuse_case("wrong-identity",mutate=wrong_identity)
 refuse_case("boolean-request",mutate=bool_request)
 for mode in ("incomplete","refused","missing","partial","cpu-none","unconfirmed","cancel",
-             "replace-output","mutate-component","mutate-request","mutate-consumer",
-             "mutate-helper-source","mutate-receipt-program","mutate-core-selector",
-             "mutate-core-ingress","mutate-contracts","mutate-control-source"):
+             "replace-output","mutate-component","mutate-request"):
+ refuse_case(mode,mode=mode,launches=1)
+parent_inputs.recheck()
+refuse_case("mutate-consumer",mode="mutate-consumer",launches=1)
+try:parent_inputs.recheck()
+except OSError:ok(True,"parent input hold refuses restored bytes with changed identity")
+else:raise AssertionError("changed parent input identity accepted")
+parent_inputs.close()
+for mode in ("mutate-helper-source","mutate-receipt-program",
+             "mutate-core-selector","mutate-core-ingress","mutate-contracts",
+             "mutate-control-source"):
  refuse_case(mode,mode=mode,launches=1)
 scenario_mode="success";scenario_output=None
-parent_inputs.recheck();parent_inputs.close()
+native.close()
 print(f"shadow-enforced-real-reproduce: {checks} checks passed")
 PY

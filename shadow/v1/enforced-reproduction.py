@@ -67,6 +67,7 @@ _CHILD_ROLES = {
     "helper-version": 12,
     "jq-version": 13,
     "sandbox-launch-boundary": 14,
+    "darwin-group-membership": 15,
 }
 
 
@@ -462,6 +463,27 @@ class _DarwinUUIDResolver(c._DarwinUUIDResolver):
         return rows
 
 
+class _DarwinGroupReader(c._DarwinGroupReader):
+    def __init__(self, resolver: _DarwinUUIDResolver) -> None:
+        self.resolver = resolver
+
+    def contains(self, gid: int) -> bool:
+        require(integer(gid) and 0 <= gid <= 0xffffffff, "E_ACL")
+        resolver = self.resolver
+        resolver.recheck()
+        argv = [str(resolver.python.held.path), "-I", "-S", "-B",
+                str(resolver.source.held.path), "_read-darwin-group"]
+        env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+        resolver.record_command("darwin-group-membership", argv, resolver.python.sha256,
+                                resolver.source.sha256)
+        output = run_bounded("darwin-group-membership", argv, stdin=c.canonical({"gid": gid}),
+                             timeout=10, output_limit=16, env=env,
+                             deadline=resolver.deadline)
+        resolver.recheck()
+        require(output in (c.canonical([]), c.canonical([gid])), "E_ACL")
+        return output == c.canonical([gid])
+
+
 class _NativeRelease:
     _BUILD_KEYS = {"platform", "architecture", "source_sha256", "build_script_sha256",
         "compiler_path", "compiler_sha256", "compiler_version_sha256", "argv",
@@ -773,9 +795,9 @@ def _stop_child(child: subprocess.Popen) -> None:
                     child.wait(timeout=max(0.001, end - time.monotonic()))
                 return
             except PermissionError:
-                time.sleep(min(0.02, boundary - time.monotonic()))
+                time.sleep(max(0, min(0.02, boundary - time.monotonic())))
                 continue
-            time.sleep(min(0.02, boundary - time.monotonic()))
+            time.sleep(max(0, min(0.02, boundary - time.monotonic())))
     try:
         os.killpg(child.pid, 0)
     except ProcessLookupError:
@@ -1638,7 +1660,8 @@ def reproduce(request_path: Path, work: Path, output: Path, parent: dict | None 
                 "executable_sha256": executable_sha256, "component_sha256": component_sha256})
         resolver = (_DarwinUUIDResolver(python_file, consumer_source, deadline, record_command)
                     if sys.platform == "darwin" else None)
-        anchor = c.load_anchor(resolver)
+        group_reader = _DarwinGroupReader(resolver) if resolver is not None else None
+        anchor = c.load_anchor(resolver, group_reader)
         exclusions = [SOURCE, request_path, Path(c.ANCHOR).parent, Path(anchor.config["store_root"]),
                       Path(anchor.config["work_root"]), *paths.values()]
         exclusions.extend(Path(value) for value in anchor.config["installed_files"].values())

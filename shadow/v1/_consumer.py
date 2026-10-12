@@ -131,6 +131,10 @@ class _DarwinUUIDResolver:
     def resolve(self, uuids: list[str]) -> list[dict]:
         raise NotImplementedError
 
+class _DarwinGroupReader:
+    def contains(self, gid: int) -> bool:
+        raise NotImplementedError
+
 def _metadata(fd: int) -> os.stat_result:
     """Private OS observation seam used only by in-process fixtures."""
     return os.fstat(fd)
@@ -716,11 +720,13 @@ class Anchor:
         if failure is not None:
             raise failure
 
-def load_anchor(resolver: _DarwinUUIDResolver | None = None) -> Anchor:
+def load_anchor(resolver: _DarwinUUIDResolver | None = None,
+                group_reader: _DarwinGroupReader | None = None) -> Anchor:
     held: list[HeldPath] = []
     try:
         if sys.platform == "darwin":
             _require(isinstance(resolver, _DarwinUUIDResolver), "E_INSTALL")
+            _require(isinstance(group_reader, _DarwinGroupReader), "E_INSTALL")
         root_rule = _root_rule(resolver)
         anchor = _open_held(ANCHOR, True, root_rule, "E_INSTALL")
         held.append(anchor)
@@ -731,8 +737,13 @@ def load_anchor(resolver: _DarwinUUIDResolver | None = None) -> Anchor:
         config_raw = config_file.read(DOCUMENT_LIMIT, "E_CONFIG")
         config = _parse_config(config_raw)
         uid, gid = config["principal_uid"], config["consumer_gid"]
-        _require(uid > 0 and uid not in (os.getuid(), os.geteuid())
-                 and gid in set(os.getgroups()) | {os.getgid(), os.getegid()}, "E_CONFIG")
+        _require(uid > 0 and uid not in (os.getuid(), os.geteuid()), "E_CONFIG")
+        primary_groups = (os.getgid(), os.getegid())
+        member = gid in primary_groups
+        if not member:
+            member = (group_reader.contains(gid) if group_reader is not None
+                      else gid in os.getgroups())
+        _require(member, "E_CONFIG")
         installed: dict[str, tuple[bytes, str]] = {}
         source_root = _source_root()
         for role, source_name in INSTALLED_SOURCES.items():
@@ -930,11 +941,30 @@ def _resolve_darwin_uuids() -> bytes:
     _require(len(output) <= DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
     return output
 
+def _read_darwin_group() -> bytes:
+    _require(sys.platform == "darwin", "E_ACL")
+    raw = bytearray()
+    while len(raw) <= 32:
+        part = os.read(0, min(33 - len(raw), 4096))
+        if not part:
+            break
+        raw.extend(part)
+    _require(len(raw) <= 32, "E_ACL")
+    body = _json(bytes(raw), 32, "E_ACL")
+    _require(set(body) == {"gid"} and _integer(body["gid"])
+             and 0 <= body["gid"] <= 0xffffffff and canonical(body) == bytes(raw), "E_ACL")
+    gid = body["gid"]
+    output = canonical([gid] if gid in os.getgroups() else [])
+    _require(len(output) <= 16, "E_ACL")
+    return output
+
 def _resolver_main(argv: list[str]) -> int:
     try:
-        _require(argv == [argv[0], "_resolve-darwin-uuids"] and sys.flags.isolated == 1
+        _require(len(argv) == 2 and argv[1] in
+                 ("_resolve-darwin-uuids", "_read-darwin-group") and sys.flags.isolated == 1
                  and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1, "E_ACL")
-        output = _resolve_darwin_uuids()
+        output = (_resolve_darwin_uuids() if argv[1] == "_resolve-darwin-uuids"
+                  else _read_darwin_group())
         sent = 0
         while sent < len(output):
             count = os.write(1, output[sent:])
