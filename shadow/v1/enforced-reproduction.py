@@ -855,6 +855,29 @@ def _native_returncode(status: tuple[int, ...]) -> int:
     return -value
 
 
+def _native_child_pending(status: tuple[int, ...]) -> tuple[str, ...]:
+    actions = []
+    if status[0] not in {0, 4}:
+        for tag, name in ((28, "close_child_stdin"), (31, "close_child_stdout"),
+                          (37, "close_child_stderr")):
+            if status[tag] == 0:
+                actions.append(name)
+    if status[0] == 3 and not status[17]:
+        if status[20] == 0:
+            actions.append("term_child_group")
+        if status[21] == 0:
+            actions.append("kill_child_group")
+        if not status[11] and (status[6] == 0 or status[7] == 0):
+            actions.append("observe_child_exit")
+        if (status[12] == 0 and status[11] and status[20] == status[21] == 1
+                and (status[45] == 0 or status[46] == errno.ESRCH)):
+            actions.append("reap_child")
+    if (status[0] in {3, 4} and not status[18]
+            and (status[22] == 0 or status[47] == 0)):
+        actions.append("check_child_group")
+    return tuple(actions)
+
+
 def _native_child_cleanup(native: object, deadline: float) -> None:
     first: BaseException | None = None
     def attempt(method) -> bool:
@@ -871,25 +894,23 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
             if first is None:
                 first = exc
         return False
-    for tag, close in ((28, native.close_child_stdin), (31, native.close_child_stdout),
-                       (37, native.close_child_stderr)):
-        status = _native_child_status(native)
-        if status[0] not in {0, 4} and status[tag] == 0:
-            attempt(close)
+    for name in ("close_child_stdin", "close_child_stdout", "close_child_stderr"):
+        if name in _native_child_pending(_native_child_status(native)):
+            attempt(getattr(native, name))
     status = _native_child_status(native)
     if status[0] in {0, 2, 4}:
         if first is not None:
             raise first
         require(status[23] == 0, "E_RUNTIME")
         return
-    if status[0] == 3 and not status[17] and status[20] == 0:
+    if "term_child_group" in _native_child_pending(status):
         attempt(native.term_child_group)
     observation_failed = False
     def observe_until(end):
         nonlocal observation_failed
         status = _native_child_status(native)
-        while (not observation_failed and status[0] == 3 and not status[17] and not status[11]
-               and (status[6] == 0 or status[7] == 0) and time.monotonic() < end):
+        while (not observation_failed and "observe_child_exit" in _native_child_pending(status)
+               and time.monotonic() < end):
             returned = attempt(native.observe_child_exit)
             status = _native_child_status(native)
             if not returned:
@@ -899,17 +920,15 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
                 time.sleep(min(0.02, max(0, end - time.monotonic())))
     observe_until(min(deadline, time.monotonic() + 5))
     status = _native_child_status(native)
-    if status[0] == 3 and not status[17] and status[21] == 0:
+    if "kill_child_group" in _native_child_pending(status):
         attempt(native.kill_child_group)
     observe_until(deadline)
     status = _native_child_status(native)
-    if (status[0] == 3 and not status[17] and status[12] == 0 and status[11]
-            and status[20] == status[21] == 1
-            and (status[45] == 0 or status[46] == errno.ESRCH)):
+    if "reap_child" in _native_child_pending(status):
         attempt(native.reap_child)
     status = _native_child_status(native)
-    while (status[0] in {3, 4} and not status[18]
-           and (status[22] == 0 or status[47] == 0) and time.monotonic() < deadline):
+    while ("check_child_group" in _native_child_pending(status)
+           and time.monotonic() < deadline):
         returned = attempt(native.check_child_group)
         status = _native_child_status(native)
         if not returned:
@@ -992,10 +1011,12 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
                   and status[9] == getattr(os, "CLD_EXITED", 1) and status[10] == 0
                   and status[11] == 1 and status[19] == 1 and status[20:23] == (0, 0, 0)
                   and status[23] == 0)
-        require(normal, "E_RUNTIME")
-        native.reap_child()
-        status = _native_child_status(native)
-        native.check_child_group()
+        if normal:
+            native.reap_child()
+            status = _native_child_status(native)
+            native.check_child_group()
+        else:
+            _native_child_cleanup(native, end)
         status = _native_child_status(native)
         require(status[17] == 1 and status[18] == 1 and status[19] == 1
                 and status[23] == 0 and status[24] == 1, "E_RUNTIME")
@@ -1034,7 +1055,8 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
         return _communicate_native(native, input_raw, stdout_limit, stderr_limit, timeout)
     except BaseException as exc:
         try:
-            if attempted and _native_child_status(native)[0] == 3:
+            status = _native_child_status(native)
+            if attempted and status[0] == 3 and _native_child_pending(status):
                 _native_child_cleanup(native, time.monotonic() + 10)
         except BaseException as cleanup_exc:
             raise exc from cleanup_exc
