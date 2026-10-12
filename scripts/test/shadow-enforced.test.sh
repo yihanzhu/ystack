@@ -278,7 +278,9 @@ os.close(high);os.close(inherited)
 state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
 state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
 close_at_eof(state,stdout_fd,state.close_child_stdout);close_at_eof(state,stderr_fd,state.close_child_stderr)
+if sys.platform=="linux":time.sleep(1)
 state.reap_child();state.check_child_group();final=state.child_status()
+print("actual-descendant-final",sys.platform,final,flush=True)
 assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
 print("actual-descendant-group",leader,descendant,final[17:25])
 state.abort_release();assert state.outcome()=="native-release.failure"
