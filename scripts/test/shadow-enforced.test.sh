@@ -289,7 +289,7 @@ def function_bodies(path):
   "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
   "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
   "write","fsync","close","unlinkat","fstat")
- answer={"tools":{},"image":path,"functions":[],"internal_functions":[],"gate_only_functions":[]}
+ answer={"tools":{},"image":path,"functions":[],"internal_functions":[]}
  for name,tool in (("objdump",objdump),("readelf",readelf)):
   answer["tools"][name]={"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
    {"status":"unavailable","reason":"missing"}}
@@ -413,7 +413,6 @@ def function_bodies(path):
       production["output_size"]!=digest(native_binary).get("size")):
    return {"status":"unavailable","reason":"output-binding"}
   return {"status":"ok","origin":"gate-only-case-48","differences":[*defines,"source-path","output-path"],
-   "production_record":production_record,"gate_record":gate_record_value,
    "production_record_sha256":production_record_before.get("sha256"),
    "gate_record_sha256":gate_record_before.get("sha256"),"production_inputs":production_inputs,
    "gate_inputs":gate_inputs,"shared_fields":list(shared)}
@@ -483,14 +482,12 @@ def function_bodies(path):
     "origin_role":role,"provenance":answer["gate_only_provenance"]}
   if "selected" not in selected_row:
    answer["functions"].append(selected_row)
-   if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(selected_row))
    continue
   selected=selected_row.pop("selected");metadata_lines=selected_row["metadata_lines"]
   metadata_bytes=sum(len(line.encode("utf-8"))+1 for line in metadata_lines)
   if recorded+metadata_bytes>786432:
    selected_row.update({"status":"unavailable","reason":"metadata-output-limit"})
    answer["functions"].append(selected_row)
-   if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(selected_row))
    continue
   recorded+=metadata_bytes
   row=range_body(symbol,selected["value"],selected["value"]+selected["size"])
@@ -498,7 +495,6 @@ def function_bodies(path):
    "provider_type":selected["type"],"provider_bind":selected["bind"],
    "provider_visibility":selected["visibility"],"provider_section":selected["section"]})
   answer["functions"].append(row)
-  if role=="gate-only-case-48":answer["gate_only_functions"].append(dict(row))
  image_identity=source_before["identity"];image_build_id=source_before["build_id"]
  answer["image_identity"]=image_identity;answer["image_build_id"]=image_build_id
  fixed_identity=(image_identity.get("sha256")=="3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf" and
