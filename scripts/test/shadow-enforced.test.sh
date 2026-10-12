@@ -294,6 +294,8 @@ def function_bodies(path):
    {"status":"unavailable","reason":"missing"}}
  if any(row["identity"]["status"]!="ok" for row in answer["tools"].values()):
   answer["status"]="unavailable";answer["reason"]="missing-tool";return answer
+ source_before={"identity":digest(path),"build_id":build_id(path)}
+ answer["source_before"]=source_before
  recorded=0
  def metadata(argv,feed):
   with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -342,6 +344,7 @@ def function_bodies(path):
   nonlocal recorded
   if not (0<=start<end and end-start<=65536):return {"status":"unavailable","reason":"invalid-range"}
   argv=[objdump,"-d","--start-address=0x%x"%start,"--stop-address=0x%x"%end,path]
+  if recorded>=786432:return {"label":label,"argv":argv,"status":"unavailable","reason":"recorded-total-limit"}
   try:
    result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
     timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
@@ -361,6 +364,9 @@ def function_bodies(path):
    if row["status"]=="ok":recorded+=len(raw)+len(error_raw)
   return row
  for symbol in symbols:
+  if native_status["status"]!="ok" or provider_status["status"]!="ok":
+   answer["functions"].append({"symbol":symbol,"status":"unavailable",
+    "reason":"symbol-metadata-incomplete"});continue
   native=[entry for entry in native_entries if entry["base"]==symbol and entry["section"]=="UND"]
   if len(native)!=1:
    answer["functions"].append({"symbol":symbol,"status":"unavailable","reason":"native-symbol-count",
@@ -386,13 +392,13 @@ def function_bodies(path):
    "provider_type":selected["type"],"provider_bind":selected["bind"],
    "provider_visibility":selected["visibility"],"provider_section":selected["section"]})
   answer["functions"].append(row)
- image_identity=digest(path);image_build_id=build_id(path)
+ image_identity=source_before["identity"];image_build_id=source_before["build_id"]
  answer["image_identity"]=image_identity;answer["image_build_id"]=image_build_id
  fixed_identity=(image_identity.get("sha256")=="3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf" and
   image_build_id.get("value")=="a4a7992a8e66555c8141ab2a08a8465ff6e0ea65")
  internal=(0x10ffc0,0x98630,0x986b0,0x10f200,0x10f260)
  if fixed_identity:
-  targets={address:[] for address in internal};current=None
+  targets={address:[] for address in internal};fde_ranges=[];current=None
   def flush_frame():
    nonlocal current
    if current is None:return
@@ -407,6 +413,7 @@ def function_bodies(path):
    if match:
     flush_frame()
     start,end=(int(value,16) for value in match.groups())
+    fde_ranges.append((start,end))
     current=(start,end,[text]) if any(start<=target<end for target in internal) else None
    elif re.match(r"^[0-9a-fA-F]{8,}\s",text):flush_frame()
    elif current is not None:current[2].append(text)
@@ -415,6 +422,9 @@ def function_bodies(path):
   flush_frame()
   answer["frame_metadata"]=frame_status
   for target in internal:
+   if frame_status["status"]!="ok":
+    answer["internal_functions"].append({"entry":target,"status":"unavailable",
+     "reason":"frame-metadata-incomplete"});continue
    choices=targets[target]
    if len(choices)!=1:
     answer["internal_functions"].append({"entry":target,"status":"unavailable",
@@ -425,16 +435,68 @@ def function_bodies(path):
      "reason":"metadata-output-limit"});continue
    recorded+=block_bytes;row=range_body("internal-0x%x"%target,start,end)
    row.update({"entry":target,"fde":block});answer["internal_functions"].append(row)
+  parent=next((row for row in answer["internal_functions"] if row.get("entry")==0x10ffc0),None)
+  references=[]
+  if parent is not None and parent.get("status")=="ok":
+   pattern=re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+lea\w*\s+[^#\n]*\(%rip\),%rsi\s+#\s*([0-9a-f]+)\b")
+   for line in parent["body"].splitlines():
+    match=pattern.match(line)
+    if match:
+     target=int(match.group(1),16);matches=[bounds for bounds in fde_ranges if bounds[0]==target]
+     if len(matches)==1:references.append((line,target,matches[0]))
+  if frame_status["status"]!="ok":
+   answer["spawn_child_candidate"]={"status":"unavailable","reason":"frame-metadata-incomplete",
+    "semantic_binding":"unresolved"}
+  elif len(references)==1:
+   instruction,target,(candidate_start,candidate_end)=references[0];candidate_blocks=[];candidate=None
+   def flush_candidate():
+    nonlocal candidate
+    if candidate is not None:candidate_blocks.append("".join(candidate));candidate=None
+   def candidate_frames(raw):
+    nonlocal candidate
+    text=raw.decode("utf-8","replace")
+    match=re.search(r"\bFDE\b.*\bpc=([0-9a-fA-F]+)\.\.([0-9a-fA-F]+)",text)
+    if match:
+     flush_candidate();start,end=(int(value,16) for value in match.groups())
+     candidate=[text] if (start,end)==(candidate_start,candidate_end) else None
+    elif re.match(r"^[0-9a-fA-F]{8,}\s",text):flush_candidate()
+    elif candidate is not None:candidate.append(text)
+    if candidate is not None and text.strip()=="":flush_candidate()
+   candidate_status=metadata([readelf,"--debug-dump=frames-interp",path],candidate_frames)
+   flush_candidate();answer["spawn_child_candidate_metadata"]=candidate_status
+   if candidate_status["status"]=="ok" and len(candidate_blocks)==1:
+    block=candidate_blocks[0];block_bytes=len(block.encode("utf-8"))
+    if recorded+block_bytes<=786432:
+     recorded+=block_bytes;candidate_row=range_body("spawn-child-candidate",candidate_start,candidate_end)
+     candidate_row.update({"semantic_binding":"unresolved","instruction":instruction,
+      "referenced_entry":target,"fde":block})
+     answer["spawn_child_candidate"]=candidate_row
+    else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"metadata-output-limit",
+     "semantic_binding":"unresolved","instruction":instruction,"referenced_entry":target}
+   else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"candidate-fde-count-or-metadata",
+    "semantic_binding":"unresolved","instruction":instruction,"referenced_entry":target,
+    "count":len(candidate_blocks)}
+  else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"unique-lea-rsi-fde-start-not-found",
+   "semantic_binding":"unresolved","count":len(references)}
  else:
   answer["frame_metadata"]={"status":"unavailable","reason":"fixed-libc-identity-mismatch",
    "identity":image_identity,"build_id":image_build_id}
   for target in internal:answer["internal_functions"].append({"entry":target,"status":"unavailable",
    "reason":"fixed-libc-identity-mismatch"})
- answer["spawn_child_entry"]={"status":"unavailable","reason":"not-uniquely-derived-from-parent-body",
-  "parent_entry":0x10ffc0}
+ if "spawn_child_candidate" not in answer:
+  answer["spawn_child_candidate"]={"status":"unavailable","reason":"fixed-libc-identity-mismatch",
+   "semantic_binding":"unresolved"}
  answer["recorded_bytes"]=recorded;answer["limits"]={"public_functions":len(symbols),
   "internal_functions":len(internal),"body_each":65536,"stderr_each":8192,
   "recorded_total":786432,"timeout_seconds_each":10}
+ source_after={"identity":digest(path),"build_id":build_id(path)}
+ tools_after={name:digest(row["path"]) for name,row in answer["tools"].items()}
+ answer["source_after"]=source_after;answer["tools_after"]=tools_after
+ answer["evidence_binding"]={"status":"ok" if source_before==source_after and all(
+  answer["tools"][name]["identity"]==tools_after[name] for name in answer["tools"]) else "unavailable",
+  "reason":None if source_before==source_after and all(answer["tools"][name]["identity"]==tools_after[name]
+   for name in answer["tools"]) else "source-or-tool-identity-changed"}
+ if answer["evidence_binding"]["status"]!="ok":answer["status"]="unavailable";answer["reason"]="binding-changed"
  return answer
 def jit():
  api=getattr(sys,"_jit",None)
