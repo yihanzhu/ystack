@@ -1210,6 +1210,8 @@ inventory with:
 bash scripts/test/shadow-enforced.test.sh
 ```
 
-On macOS, also require the recorded GNU C11 recipe with the two SDK PAC flags, the fixed
-shared-cache and allocator identities, the one-shot allocator observation, and the final
-XZM/guard recheck. Missing identity or lifecycle proof remains a refusal before census.
+On macOS, also require the recorded GNU C11 bundle recipe, the fixed native signal owner,
+the saved caller mask, non-consuming pending checkpoints, State-owned child lifecycle,
+and exact-byte native completion commit. Bind the actual system providers and spawn-filter
+state used by the reviewed runtime. Missing signal, child, identity, or lifecycle proof
+remains a refusal before its effect.

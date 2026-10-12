@@ -52,7 +52,6 @@ REQUEST_BODY_KEYS = {"attempt_id", "attempt_number", "incident", "claim", "duty_
 WATCHED_SIGNALS = frozenset((signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
 _STARTUP_KEY = object()
 _NATIVE_ORIGIN: Path | None = None
-_ALLOCATOR_INTERVAL_EVIDENCE_READY = False
 _CHILD_ROLES = {
     "darwin-acl-uuid-resolution": 1,
     "incident-validation": 2,
@@ -504,8 +503,7 @@ class _NativeRelease:
                         (include, config_include, extension, abi)), "E_DEPENDENCY")
             compiler_path = Path("/usr/bin/cc").resolve(strict=True)
             self.compiler = stable_file(compiler_path, allow_hardlinks=True)
-            platform_flags = (["-fptrauth-intrinsics", "-fptrauth-auth-traps", "-bundle",
-                               "-undefined", "dynamic_lookup"]
+            platform_flags = (["-bundle", "-undefined", "dynamic_lookup"]
                               if sys.platform == "darwin" else ["-shared"])
             language = "-std=gnu11" if sys.platform == "darwin" else "-std=c11"
             expected_argv = [str(compiler_path), language, "-Wall", "-Wextra", "-Werror",
@@ -558,28 +556,22 @@ class _NativeRelease:
             self.module = module
             self.state = module.prepare_state()
             self.methods = tuple(getattr(self.state, name) for name in (
-                "observe_allocator_admission", "block_entry", "resume_consumer",
-                "hold_completion", "block_final",
-                "rollback_marker", "finish_release", "outcome", "prepare_child",
+                "block_entry", "arm_consumer", "checkpoint", "hold_completion", "block_final",
+                "rollback_marker", "commit_completion", "abort_release", "outcome", "prepare_child",
                 "spawn_child", "child_fds", "close_child_stdin", "close_child_stdout",
                 "close_child_stderr", "observe_child_exit", "reap_child",
                 "term_child_group", "kill_child_group", "check_child_group",
                 "child_status"))
-            (self.observe_allocator_admission, self.block_entry, self.resume_consumer,
+            (self.block_entry, self.arm_consumer, self.checkpoint,
              self.hold_completion, self.block_final, self.rollback_marker,
-             self.finish_release, self.outcome, self.prepare_child, self.spawn_child,
+             self.commit_completion, self.abort_release, self.outcome,
+             self.prepare_child, self.spawn_child,
              self.child_fds, self.close_child_stdin, self.close_child_stdout,
              self.close_child_stderr, self.observe_child_exit, self.reap_child,
              self.term_child_group, self.kill_child_group, self.check_child_group,
              self.child_status) = self.methods
             require(type(self.state).__name__ == "NativeState"
                     and self.outcome() == "native-release.pending", "E_RUNTIME")
-            if sys.platform == "darwin":
-                try:
-                    self.observe_allocator_admission()
-                except BaseException:
-                    raise Refusal("E_RUNTIME") from None
-                require(_ALLOCATOR_INTERVAL_EVIDENCE_READY, "E_RUNTIME")
             self.recheck()
         except BaseException:
             self.close()
@@ -836,8 +828,16 @@ def _native_returncode(status: tuple[int, ...]) -> int:
 
 def _native_child_cleanup(native: object, deadline: float) -> None:
     first: BaseException | None = None
+    def observe_checkpoint() -> None:
+        nonlocal first
+        try:
+            CancellationSignals.checkpoint()
+        except BaseException as exc:
+            if first is None:
+                first = exc
     for close in (native.close_child_stdin, native.close_child_stdout,
                   native.close_child_stderr):
+        observe_checkpoint()
         try:
             close()
         except BaseException as exc:
@@ -855,6 +855,7 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         require(initial[23] == 0, "E_RUNTIME")
         return
     try:
+        observe_checkpoint()
         native.term_child_group()
     except BaseException as exc:
         if first is None:
@@ -862,6 +863,7 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
     grace = min(deadline, time.monotonic() + 5)
     status = initial
     while (status is None or not status[11]) and time.monotonic() < grace:
+        observe_checkpoint()
         try:
             native.observe_child_exit()
         except BaseException as exc:
@@ -877,6 +879,7 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         if status is None or not status[11]:
             time.sleep(min(0.02, max(0, grace - time.monotonic())))
     try:
+        observe_checkpoint()
         native.kill_child_group()
     except BaseException as exc:
         if first is None:
@@ -888,6 +891,7 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         if first is None:
             first = exc
     while (status is None or not status[11]) and time.monotonic() < deadline:
+        observe_checkpoint()
         try:
             native.observe_child_exit()
         except BaseException as exc:
@@ -903,16 +907,24 @@ def _native_child_cleanup(native: object, deadline: float) -> None:
         if status is None or not status[11]:
             time.sleep(min(0.02, max(0, deadline - time.monotonic())))
     if status is not None and status[11]:
+        observe_checkpoint()
         try:
             native.reap_child()
         except BaseException as exc:
             if first is None:
                 first = exc
-    try:
-        native.check_child_group()
-    except BaseException as exc:
-        if first is None:
-            first = exc
+    while time.monotonic() < deadline:
+        try:
+            observe_checkpoint()
+            native.check_child_group()
+        except BaseException as exc:
+            if first is None:
+                first = exc
+            break
+        status = _native_child_status(native)
+        if status[18] or status[22] != 1 or status[47] != 0:
+            break
+        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
     status = _native_child_status(native)
     if first is not None:
         raise first
@@ -1010,9 +1022,11 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
     active = CancellationSignals.active
     require(active is not None and active.native is not None, "E_RUNTIME")
     native = active.native
-    entered = False
+    initial = _native_child_status(native)
+    require(initial[0] in {0, 4}, "E_RUNTIME")
+    attempted = False
     try:
-        entered = True
+        attempted = True
         native.prepare_child(_native_child_spec(role, argv, env))
         native.spawn_child()
         status = _native_child_status(native)
@@ -1023,7 +1037,7 @@ def spawn_bounded(role: str, argv: list[str], input_raw: bytes, stdout_limit: in
         return _communicate_native(native, input_raw, stdout_limit, stderr_limit, timeout)
     except BaseException as exc:
         try:
-            if entered:
+            if attempted and _native_child_status(native)[0] == 3:
                 _native_child_cleanup(native, time.monotonic() + 10)
         except BaseException as cleanup_exc:
             raise exc from cleanup_exc
@@ -1139,46 +1153,43 @@ class CancellationSignals:
     def __init__(self, admission: _StartupAdmission | None = None) -> None:
         self.admission = admission
         self.native = admission.native if isinstance(admission, _StartupAdmission) else None
-        self.previous: dict[int, object] = {}
-        self.requested = False
         self.parent: CancellationSignals | None = None
-        self.read_fd: int | None = None
-        self.write_fd: int | None = None
         self.borrowed = False
-        self.rollback_attempted = False
-        self.completion_confirmed = False
         self.borrow_depth = 0
+        self.completion_confirmed = False
+        self.completion_payload: bytes | None = None
         self.caller_exception: BaseException | None = None
 
     @classmethod
     def checkpoint(cls) -> None:
-        if cls.active is not None and cls.active.requested:
+        if cls.active is None:
+            return
+        require(cls.active.native is not None, "E_RUNTIME")
+        result = cls.active.native.checkpoint()
+        if result == "native-checkpoint.cancelled":
             raise Cancelled()
+        require(result == "native-checkpoint.clear", "E_RUNTIME")
 
     @classmethod
     def retain_completion(cls, directory: int) -> bool | None:
         if cls.active is None:
             return None
-        require(cls.active.borrow_depth == 0, "E_RUNTIME")
-        require(cls.active.native is not None, "E_RUNTIME")
+        require(cls.active.borrow_depth == 0 and cls.active.native is not None, "E_RUNTIME")
         cls.active.native.hold_completion(directory)
         confirmed = cls.active.native.outcome() == "native-release.pending"
         cls.active.completion_confirmed = confirmed
         return confirmed
 
+    @classmethod
+    def prepare_completion(cls, payload: bytes) -> None:
+        require(cls.active is not None and cls.active.borrow_depth == 0
+                and cls.active.completion_confirmed and type(payload) is bytes
+                and 0 < len(payload) <= c.DOCUMENT_LIMIT, "E_RUNTIME")
+        cls.active.completion_payload = payload
+
     @staticmethod
     def _remember(first: BaseException | None, exc: BaseException) -> BaseException:
         return first if first is not None else exc
-
-    def _rollback(self, failure: BaseException | None) -> BaseException | None:
-        if self.native is None or self.rollback_attempted or not self.completion_confirmed:
-            return failure
-        self.rollback_attempted = True
-        try:
-            self.native.rollback_marker()
-        except BaseException as exc:
-            failure = self._remember(failure, exc)
-        return failure
 
     def __enter__(self) -> CancellationSignals:
         if CancellationSignals.active is not None:
@@ -1201,157 +1212,74 @@ class CancellationSignals:
             held_executable.close()
         self.native.recheck()
         self.admission.census.observe()
-
-        def cancel(_signum: int, _frame: object) -> None:
-            self.requested = True
-
-        installed_handlers: list[int] = []
-        wakeup_installed = False
         failure = None
         try:
             self.native.block_entry()
             require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
-            for sent in WATCHED_SIGNALS:
-                self.previous[sent] = signal.getsignal(sent)
-            self.read_fd, self.write_fd = os.pipe()
-            for descriptor in (self.read_fd, self.write_fd):
-                os.set_blocking(descriptor, False)
-                os.set_inheritable(descriptor, False)
-            prior = signal.set_wakeup_fd(self.write_fd, warn_on_full_buffer=False)
-            wakeup_installed = True
-            require(prior == -1, "E_RUNTIME")
-            for sent in WATCHED_SIGNALS:
-                signal.signal(sent, cancel)
-                installed_handlers.append(sent)
+            self.native.arm_consumer()
+            require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
             self.parent = CancellationSignals.active
             CancellationSignals.active = self
-            self.native.resume_consumer()
-            require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
             return self
         except BaseException as exc:
             failure = exc
-            for sent in reversed(installed_handlers):
-                try:
-                    signal.signal(sent, self.previous[sent])
-                except BaseException as release_exc:
-                    failure = self._remember(failure, release_exc)
-            if wakeup_installed:
-                try:
-                    signal.set_wakeup_fd(-1, warn_on_full_buffer=True)
-                except BaseException as release_exc:
-                    failure = self._remember(failure, release_exc)
             CancellationSignals.active = self.parent
-            for descriptor in (self.write_fd, self.read_fd):
-                if descriptor is not None:
-                    try:
-                        os.close(descriptor)
-                    except BaseException as release_exc:
-                        failure = self._remember(failure, release_exc)
             try:
-                self.native.finish_release()
-            except BaseException as release_exc:
-                failure = self._remember(failure, release_exc)
-            try:
-                if self.native.outcome() == "native-release.failure":
-                    failure = self._remember(failure, Refusal("E_RUNTIME"))
+                self.native.abort_release()
             except BaseException as release_exc:
                 failure = self._remember(failure, release_exc)
             raise failure
 
-    def __exit__(self, kind: object, _value: object, _traceback: object) -> None:
+    def __exit__(self, kind: object, value: object, _traceback: object) -> None:
         if self.borrowed:
             require(self.parent is not None and self.parent.borrow_depth > 0, "E_RUNTIME")
             self.parent.borrow_depth -= 1
             return
-        failure = None
-        uncertain = False
-        pending: set[signal.Signals] = set()
-        decision_made = False
-        abort = True
-        try:
-            require(self.native is not None, "E_RUNTIME")
-            if kind is not None:
-                failure = self._rollback(failure)
-            else:
+        require(self.native is not None, "E_RUNTIME")
+        body_failure = value if isinstance(value, BaseException) else None
+        failure = body_failure
+        if failure is None:
+            try:
+                require(self.completion_payload is not None and self.completion_confirmed,
+                        "E_RUNTIME")
                 self.native.block_final()
                 require(self.native.outcome() == "native-release.pending", "E_RUNTIME")
-                try:
-                    require(self.admission is not None, "E_RUNTIME")
-                    self.admission.census.observe()
-                except BaseException as exc:
-                    failure = exc
-                try:
-                    require(self.read_fd is not None, "E_RUNTIME")
-                    observed = os.read(self.read_fd, 1)
-                    uncertain = True
-                    if observed:
-                        self.requested = True
-                except OSError as exc:
-                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        uncertain = True
-                        failure = self._remember(failure, exc)
-                except BaseException as exc:
-                    uncertain = True
-                    failure = self._remember(failure, exc)
-                try:
-                    pending = set(signal.sigpending()) & WATCHED_SIGNALS
-                except BaseException as exc:
-                    failure = self._remember(failure, exc)
-                abort = self.requested or uncertain or bool(pending) or failure is not None
-                decision_made = True
-                if abort:
-                    failure = self._rollback(failure)
-        except BaseException as exc:
-            failure = self._remember(failure, exc)
-            failure = self._rollback(failure)
-        finally:
-            for sent in WATCHED_SIGNALS:
-                try:
-                    signal.signal(sent, self.previous[sent])
-                except BaseException as exc:
-                    failure = self._remember(failure, exc)
-            try:
-                signal.set_wakeup_fd(-1, warn_on_full_buffer=True)
+                require(self.admission is not None, "E_RUNTIME")
+                self.admission.census.observe()
             except BaseException as exc:
                 failure = self._remember(failure, exc)
-            CancellationSignals.active = self.parent
-            for descriptor in (self.write_fd, self.read_fd):
-                if descriptor is not None:
-                    try:
-                        os.close(descriptor)
-                    except BaseException as exc:
-                        failure = self._remember(failure, exc)
-            if failure is not None and decision_made and not abort:
-                failure = self._rollback(failure)
-                abort = True
-            post_l_exception = None
+        CancellationSignals.active = self.parent
+        if failure is None:
+            commit_exception = None
             try:
-                self.native.finish_release()
+                self.native.commit_completion(self.completion_payload)
             except BaseException as exc:
-                post_l_exception = exc
+                commit_exception = exc
             try:
                 native_outcome = self.native.outcome()
             except BaseException as exc:
-                self.caller_exception = exc
-                if post_l_exception is not None:
-                    raise exc from post_l_exception
-                if failure is not None:
-                    raise exc from failure
+                if commit_exception is not None:
+                    raise exc from commit_exception
                 raise
-            else:
-                if native_outcome == "native-release.failure":
+            if commit_exception is not None and native_outcome == "native-release.success":
+                self.caller_exception = commit_exception
+                raise commit_exception
+            if native_outcome != "native-release.success":
+                failure = Refusal("E_RUNTIME")
+                if commit_exception is not None:
+                    raise failure from commit_exception
+        else:
+            try:
+                self.native.abort_release()
+            except BaseException as exc:
+                failure = self._remember(failure, exc)
+            try:
+                if self.native.outcome() != "native-release.failure":
                     failure = self._remember(failure, Refusal("E_RUNTIME"))
-                    abort = True
-                elif native_outcome != "native-release.success":
-                    failure = self._remember(failure, Refusal("E_RUNTIME"))
-                    abort = True
-            if post_l_exception is not None and failure is None and decision_made and not abort:
-                self.caller_exception = post_l_exception
-                raise post_l_exception
-        if failure is not None:
+            except BaseException as exc:
+                raise exc from failure
+        if body_failure is None and failure is not None:
             raise failure
-        if kind is None and abort:
-            raise Cancelled()
 
 
 def frame_write(records: Iterable[tuple[bytes, bytes]]) -> bytes:
@@ -1617,8 +1545,6 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
             "activation_state": "inactive", "record_form": record_form,
             "incident_sha256": sha(files["incident.json"]),
             "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
-    retained = None
-    marker_written = False
     try:
         for name in sorted(files):
             CancellationSignals.checkpoint()
@@ -1628,22 +1554,10 @@ def seal(output: Path, held_output: StableDirectory, files: dict[str, bytes],
         require(set(os.listdir(directory)) == set(EVIDENCE_NAMES), "E_RELATION")
         os.fsync(directory)
         retained = CancellationSignals.retain_completion(directory)
-        if retained is False:
+        if retained is not True:
             raise Refusal("E_RUNTIME")
-        write_exclusive_at(directory, "bundle.json", bundle, sync=True, remove_on_failure=True)
-        marker_written = True
-        CancellationSignals.checkpoint()
-        held_output.recheck("E_RELATION")
-        require(set(os.listdir(directory)) == set(EVIDENCE_NAMES) | {"bundle.json"}, "E_RELATION")
-        os.fsync(directory)
-        CancellationSignals.checkpoint()
+        CancellationSignals.prepare_completion(bundle)
     except BaseException as exc:
-        if retained is not True and marker_written and directory >= 0:
-            try:
-                os.unlink("bundle.json", dir_fd=directory)
-                os.fsync(directory)
-            except OSError:
-                pass
         try:
             os.close(directory)
         except BaseException as close_exc:

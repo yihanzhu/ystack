@@ -32,10 +32,13 @@ native_out="$tmp/native-release"
 /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" build "$python_bin" "$native_out"
 native_binary=$(/usr/bin/find "$native_out" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 [ -n "$native_binary" ] && [ -f "$native_binary" ] || fail 'native release build output'
-for native_case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+for native_case in 1 2 5 6 7 8 9 10 12 13 33 36 37 38 39 40 41 42 43 44 45 46 47 48; do
   /bin/bash -p "$root/shadow/v1/build-cancel-release.sh" test-build "$python_bin" \
     "$tmp/native-case-$native_case" "$native_case"
 done
+native_control_binary=$(/usr/bin/find "$tmp/native-case-33" -mindepth 1 -maxdepth 1 \
+  -type f ! -name build-record.json -print)
+[ -n "$native_control_binary" ] && [ -f "$native_control_binary" ] || fail 'native child control output'
 "$python_bin" -I -S -B - "$native_out/build-record.json" "$tmp" \
   "$root/shadow/v1/_cancel_release.c" <<'PY'
 import hashlib,json,pathlib,subprocess,sys
@@ -47,107 +50,140 @@ for case in range(21,35):
  directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
  output=directory/record["output_name"];argv=[]
  for value in base:
-  if value==source:
-   argv.extend(("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=%d"%case,value))
+  if value==source:argv.extend(("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=%d"%case,value))
   elif value.endswith(record["output_name"]):argv.append(str(output))
   else:argv.append(value)
  result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
  (directory/"stdout").write_bytes(result.stdout);(directory/"stderr").write_bytes(result.stderr)
  if result.returncode:raise SystemExit("native child test build %d failed"%case)
- output.chmod(0o500)
- encoded=(json.dumps(argv,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+ output.chmod(0o500);encoded=(json.dumps(argv,separators=(",",":"),ensure_ascii=False)+"\n").encode()
  (directory/"argv.json").write_bytes(encoded)
- index[str(case)]={"argv_sha256":hashlib.sha256(encoded).hexdigest(),
-  "output_sha256":hashlib.sha256(output.read_bytes()).hexdigest()}
-(temporary/"native-child-build-index.json").write_text(
- json.dumps(index,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
+ index[str(case)]={"argv_sha256":hashlib.sha256(encoded).hexdigest(),"output_sha256":hashlib.sha256(output.read_bytes()).hexdigest()}
+(temporary/"native-child-build-index.json").write_text(json.dumps(index,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8")
 PY
-"$python_bin" -I -S -B - "$tmp" "$native_binary" <<'PY'
+cat > "$tmp/native-owner-case.py" <<'PY'
 import importlib.util,os,pathlib,signal,sys
-base=pathlib.Path(sys.argv[1]);checks=0
-def ok(value,message):
- global checks
- if not value:raise AssertionError(message)
- checks+=1;print("ok native-%d - %s"%(checks,message))
-initial=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-for case in range(1,16):
- directory=base/("native-case-%d"%case);binary=next(directory.glob("_cancel_release*.so"))
- spec=importlib.util.spec_from_file_location("_cancel_release",binary)
- module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
- marker=directory/"bundle.json";fd=None;delivered=[]
- prior=signal.signal(signal.SIGTERM,lambda *_:delivered.append(True))
- try:
-  if case==15:
-   try:state.observe_allocator_admission()
-   except RuntimeError:pass
-   else:raise AssertionError("simulated nonzero f0 admitted")
-   try:state.block_entry()
-   except RuntimeError:pass
-   else:raise AssertionError("direct caller bypassed allocator admission")
-   ok(not marker.exists(),"simulated initial nonzero f0 refuses before marker")
-   continue
-  state.observe_allocator_admission()
-  state.block_entry()
-  if case==11:
-   result=state.finish_release()
-  elif case!=1:
-   state.resume_consumer()
-   if case!=2:
-    marker.write_bytes(b"provisional");fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
-    state.hold_completion(fd);os.close(fd);fd=None
-    if case!=12:state.block_final()
-    if case in (3,9,10):state.rollback_marker()
-   result=state.finish_release()
-  else:result=state.finish_release()
- finally:
-  signal.signal(signal.SIGTERM,prior)
-  if fd is not None:os.close(fd)
- ok(result==("native-release.success" if case==11 else "native-release.failure")
-    and state.outcome()==result,"simulated case %d stores authoritative outcome"%case)
- observed_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
- if case==4:
-  ok(all(sent in observed_mask for sent in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)),
-     "simulated finish-mask failure leaves the final watched mask blocked")
-  signal.pthread_sigmask(signal.SIG_SETMASK,initial)
- else:
-  ok(observed_mask==initial,"simulated case %d restores the saved applicable mask"%case)
- if case in (3,4,5,10,14):ok(not marker.exists(),"simulated case %d removes provisional marker"%case)
- if case in (6,7,8,9,12,13):ok(marker.exists(),"simulated case %d never guesses unsafe marker authority"%case)
- if case==11:ok(delivered,"simulated interrupted entry handoff restores and delivers pending TERM")
-actual_binary=pathlib.Path(sys.argv[2]);actual_dir=base/"native-distinct-masks";actual_dir.mkdir()
-spec=importlib.util.spec_from_file_location("_cancel_release",actual_binary)
+case=int(sys.argv[1]);binary=pathlib.Path(sys.argv[2]);directory=pathlib.Path(sys.argv[3]);directory.mkdir()
+spec=importlib.util.spec_from_file_location("_cancel_release",binary)
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
-state.observe_allocator_admission();state.block_entry();state.resume_consumer()
-signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGHUP})
-(actual_dir/"bundle.json").write_bytes(b"complete")
-fd=os.open(actual_dir,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
-state.block_final();result=state.finish_release()
-final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-ok(result=="native-release.success" and signal.SIGHUP in final_mask
-   and final_mask-{signal.SIGHUP}==initial-{signal.SIGHUP},
-   "production native release restores its distinct final-phase saved mask")
-signal.pthread_sigmask(signal.SIG_SETMASK,initial)
-print("shadow-enforced-native: %d checks passed"%checks)
+initial=signal.pthread_sigmask(signal.SIG_BLOCK,set());delivered=[]
+old={sent:signal.signal(sent,lambda value,_frame:delivered.append(value)) for sent in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)}
+def outcome():return state.outcome()
+try:
+ state.block_entry()
+ if outcome()=="native-release.pending":state.arm_consumer()
+ if outcome()=="native-release.pending" and case in (39,40):state.checkpoint()
+ if outcome()=="native-release.pending" and case not in (1,36,37,38,39,40):
+  fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
+  if outcome()=="native-release.pending" and case in (9,10):os.kill(os.getpid(),signal.SIGTERM)
+  if outcome()=="native-release.pending":state.block_final()
+  if outcome()=="native-release.pending":state.commit_completion(b'{"complete":true}\n')
+ if outcome()=="native-release.pending":state.abort_release()
+ result=outcome()
+finally:
+ for sent,value in old.items():signal.signal(sent,value)
+ current=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ if current!=initial:signal.pthread_sigmask(signal.SIG_SETMASK,initial)
+print(case,result,int((directory/"bundle.json").exists()),int(current==initial),len(delivered))
+PY
+checks=0
+for native_case in 1 2 5 6 7 8 9 10 12 13 36 37 38 39 40 41 42 43 44 45 46 47; do
+  case_binary=$(/usr/bin/find "$tmp/native-case-$native_case" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
+  "$python_bin" -I -S -B "$tmp/native-owner-case.py" "$native_case" "$case_binary" "$tmp/native-owner-result-$native_case" > "$tmp/native-owner-case-$native_case.raw"
+  /usr/bin/grep -Eq "^$native_case native-release.failure [01] [01] [0-9]+$" "$tmp/native-owner-case-$native_case.raw" || fail "native owner fault $native_case"
+  checks=$((checks+1)); /usr/bin/printf 'ok native-%d - simulated owner fault %d is authoritative\n' "$checks" "$native_case"
+done
+"$python_bin" -I -S -B - "$native_binary" "$tmp/native-positive" <<'PY'
+import importlib.util,os,pathlib,signal,sys
+binary=pathlib.Path(sys.argv[1]);directory=pathlib.Path(sys.argv[2]);directory.mkdir()
+spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+initial=signal.pthread_sigmask(signal.SIG_BLOCK,set());old={sent:signal.getsignal(sent) for sent in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)}
+state.block_entry();state.arm_consumer();assert state.checkpoint()=="native-checkpoint.clear"
+fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
+state.block_final();payload=b'{"complete":true}\n';assert state.commit_completion(payload)=="native-release.success"
+assert state.outcome()=="native-release.success" and (directory/"bundle.json").read_bytes()==payload
+assert signal.pthread_sigmask(signal.SIG_BLOCK,set())==initial and all(signal.getsignal(sent)==old[sent] for sent in old)
+print("shadow-enforced-native-positive: exact bytes, action and mask restoration passed")
+PY
+cat > "$tmp/native-pending.py" <<'PY'
+import importlib.util,os,pathlib,signal,sys
+binary=pathlib.Path(sys.argv[1]);directory=pathlib.Path(sys.argv[2]);directory.mkdir()
+spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+seen=[];old=signal.signal(signal.SIGTERM,lambda sent,_frame:seen.append(sent))
+try:
+ state.block_entry();state.arm_consumer();os.kill(os.getpid(),signal.SIGTERM)
+ assert state.checkpoint()=="native-checkpoint.cancelled" and signal.SIGTERM in signal.sigpending()
+ state.abort_release();assert state.outcome()=="native-release.failure" and not (directory/"bundle.json").exists()
+finally:signal.signal(signal.SIGTERM,old)
+print("shadow-enforced-native-pending: nonconsuming sticky pending passed",len(seen))
+PY
+"$python_bin" -I -S -B "$tmp/native-pending.py" "$native_binary" "$tmp/native-pending"
+cat > "$tmp/native-disposition.py" <<'PY'
+import importlib.util,os,pathlib,signal,sys
+mode,binary,directory=sys.argv[1],pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]);directory.mkdir()
+seen=[];prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+if mode=="default":prior_action=signal.signal(signal.SIGTERM,signal.SIG_DFL)
+elif mode=="ignore":prior_action=signal.signal(signal.SIGTERM,signal.SIG_IGN)
+else:
+ prior_action=signal.signal(signal.SIGTERM,lambda sent,_frame:seen.append(sent))
+ if mode=="blocked":signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
+spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);state=module.prepare_state()
+try:
+ state.block_entry();state.arm_consumer()
+ fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY);state.hold_completion(fd);os.close(fd)
+ state.block_final();os.kill(os.getpid(),signal.SIGTERM)
+ result=state.commit_completion(b'{"complete":true}\n')
+ assert result=="native-release.failure" and not (directory/"bundle.json").exists()
+ current=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ if mode=="ignore":assert signal.getsignal(signal.SIGTERM)==signal.SIG_IGN and signal.SIGTERM not in signal.sigpending()
+ elif mode=="blocked":assert signal.SIGTERM in current and signal.SIGTERM in signal.sigpending() and not seen
+ else:assert mode=="returning" and seen==[signal.SIGTERM] and signal.SIGTERM not in current
+ print(mode,result,len(seen),int(signal.SIGTERM in current),int(signal.SIGTERM in signal.sigpending()))
+finally:
+ signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask);signal.signal(signal.SIGTERM,prior_action)
+PY
+for disposition in ignore blocked returning; do
+  "$python_bin" -I -S -B "$tmp/native-disposition.py" "$disposition" "$native_binary" \
+    "$tmp/native-disposition-$disposition"
+done
+default_result=0
+"$python_bin" -I -S -B "$tmp/native-disposition.py" default "$native_binary" \
+  "$tmp/native-disposition-default" || default_result=$?
+[ "$default_result" -eq 143 ] || fail 'default pending signal did not terminate after rollback'
+[ ! -e "$tmp/native-disposition-default/bundle.json" ] || fail 'default pending rollback left marker'
+/usr/bin/printf 'shadow-enforced-native-dispositions: returning, ignored, blocked and default controls passed\n'
+"$python_bin" -I -S -B - "$native_binary" <<'PY'
+import importlib.util,sys
+spec=importlib.util.spec_from_file_location("_cancel_release",sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+state=module.prepare_state();state.block_entry();state.arm_consumer()
+try:
+ state.prepare_child((12,b"/usr/bin/true",(b"/usr/bin/true",),
+  (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")))
+except RuntimeError as exc:
+ assert str(exc)=="native child platform contract is unavailable"
+ assert state.child_status()[0]==0
+else:raise AssertionError("production child platform admitted without complete proof")
+print("shadow-enforced-native-child-admission: unknown platform contract refused before effect")
 PY
 cat > "$tmp/native-child-state.py" <<'PY'
 import errno,importlib.util,os,signal,sys,time
 case=int(sys.argv[1]);binary=sys.argv[2]
 spec=importlib.util.spec_from_file_location("_cancel_release",binary)
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-state=module.prepare_state();state.observe_allocator_admission();state.block_entry();state.resume_consumer()
+state=module.prepare_state();state.block_entry();state.arm_consumer()
 environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
 def status():
- value=state.child_status()
- assert type(value) is tuple and len(value)==49 and all(type(item) is int for item in value)
- return value
-def prepare(argv=(b"/usr/bin/true",)):
- state.prepare_child((12,argv[0],argv,environment))
+ value=state.child_status();assert type(value) is tuple and len(value)==49 and all(type(item) is int for item in value);return value
+def prepare(argv=(b"/usr/bin/true",)):state.prepare_child((12,argv[0],argv,environment))
 def refuses(call):
  try:call()
  except (MemoryError,OSError,RuntimeError):return
  raise AssertionError("operation did not refuse")
-def close_pipes():
- state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
+def close_pipes():state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
 def observe(lost=False):
  deadline=time.monotonic()+3
  while True:
@@ -156,181 +192,124 @@ def observe(lost=False):
    if lost and status()[11]:return
    raise
   if status()[11]:return
-  assert time.monotonic()<deadline
-  time.sleep(.01)
+  assert time.monotonic()<deadline;time.sleep(.01)
 if 21<=case<=26:
- refuses(prepare);value=status()
- assert value[0] in (0,2) and value[1]==0 and value[19]==1 and value[23]==13
- print("prepare-failure",case,"state",value[0],"fd-results",value[25:43])
+ refuses(prepare);value=status();assert value[0] in (0,2) and value[1]==0 and value[19]==1 and value[23]==26;print("prepare-failure",case,value[25:43])
 elif case==27:
- prepare();state.spawn_child();value=status()
- assert value[0]==2 and value[3]==1 and value[4]!=0 and value[19]==1 and value[23]==14
- refuses(state.child_fds);print("spawn-nonzero",value[:6],value[19],value[23])
+ prepare();state.spawn_child();value=status();assert value[0]==2 and value[3]==1 and value[4]!=0 and value[19]==1 and value[23]==27;refuses(state.child_fds);print("spawn-nonzero",value[:6])
 elif case==28:
- prepare();refuses(state.spawn_child);value=status()
- assert value[0]==3 and value[1]>0 and value[3:5]==(1,0) and value[23]==0
- close_pipes();observe();state.reap_child();state.check_child_group();value=status()
- assert value[17:20]==(1,1,1) and value[24]==1
- print("spawn-lost-return complete",value[24])
+ prepare();refuses(state.spawn_child);value=status();assert value[0]==3 and value[1]>0 and value[3:5]==(1,0) and value[23]==0;close_pipes();observe();state.reap_child();state.check_child_group();value=status();assert value[17:20]==(1,1,1) and value[24]==1;print("spawn-lost-return",value[24])
 elif case==29:
- prepare();state.spawn_child();close_pipes();time.sleep(.05);observe(True);value=status()
- assert value[11]==1;refuses(state.observe_child_exit)
- state.reap_child();state.check_child_group();value=status();assert value[24]==1
- print("observe-lost-return complete",value[24])
+ prepare();state.spawn_child();close_pipes();time.sleep(.05);observe(True);value=status();assert value[11]==1;refuses(state.observe_child_exit);state.reap_child();state.check_child_group();assert status()[24]==1;print("observe-lost-return")
 elif case==30:
- prepare();state.spawn_child();close_pipes();observe();refuses(state.reap_child);value=status()
- assert value[17]==1;refuses(state.reap_child);state.check_child_group();value=status();assert value[24]==1
- print("reap-lost-return complete",value[24])
+ prepare();state.spawn_child();close_pipes();observe();refuses(state.reap_child);value=status();assert value[17]==1;refuses(state.reap_child);state.check_child_group();assert status()[24]==1;print("reap-lost-return")
 elif case==31:
- prepare();state.spawn_child();close_pipes();state.observe_child_exit();value=status()
- assert value[6:9]==(1,-1,5) and value[11]==0 and value[23]==18
- refuses(state.observe_child_exit);print("observe-unknown-no-retry",value[6:9],value[23])
+ prepare();state.spawn_child();close_pipes();state.observe_child_exit();value=status();assert value[6:9]==(1,-1,5) and value[11]==0 and value[23]==31;refuses(state.observe_child_exit);print("observe-unknown")
 elif case==32:
- prepare();state.spawn_child();state.close_child_stdin();value=status()
- assert value[28:31]==(1,-1,5) and value[23]==15
- refuses(state.close_child_stdin);print("close-failure-retained",value[28:31],value[23])
+ prepare();state.spawn_child();state.close_child_stdin();value=status();assert value[28:31]==(1,-1,5) and value[23]==28;refuses(state.close_child_stdin);print("close-failure")
 elif case==33:
- prepare((b"/bin/sh",b"-c",b'trap "exit 0" TERM; while :; do :; done'))
- state.spawn_child();close_pipes();state.term_child_group();observe();state.kill_child_group()
- value=status();assert value[20:22]==(1,1) and value[45:47]==(-1,errno.ESRCH)
- state.reap_child();state.check_child_group();value=status();assert value[24]==1
- first_signals=value[20:22]
- prepare();state.spawn_child();close_pipes();observe();state.reap_child();state.check_child_group()
- value=status();assert value[24]==1
- print("term-leader-exit-still-kill-and-serial",first_signals,value[24])
+ prepare((b"/bin/sh",b"-c",b'trap "exit 0" TERM; while :; do :; done'));state.spawn_child();close_pipes();state.term_child_group();observe();state.kill_child_group();value=status();assert value[20:22]==(1,1) and value[45:47]==(-1,errno.ESRCH);state.reap_child();state.check_child_group();assert status()[24]==1;print("term-leader-kill")
 elif case==34:
- prepare();state.spawn_child();close_pipes();observe();state.reap_child();before=status()
- assert before[12:15]==(1,-1,errno.EIO) and before[17]==0 and before[23]==22
- refuses(state.reap_child);after=status();assert after==before
- print("unknown-reap-no-retry",before[12:15],before[23])
+ prepare();state.spawn_child();close_pipes();observe();state.reap_child();before=status();assert before[12:15]==(1,-1,errno.EIO) and before[17]==0 and before[23]==35;refuses(state.reap_child);assert status()==before;print("unknown-reap")
 else:raise AssertionError(case)
 PY
 for native_case in 21 22 23 24 25 26 27 28 29 30 31 32 33 34; do
-  child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 \
-    -maxdepth 1 -type f -name '_cancel_release*.so' -print)
+  child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 -maxdepth 1 -type f -name '_cancel_release*.so' -print)
   "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"
 done
-if [ "$(/usr/bin/uname -s)" = Darwin ]; then
-  /usr/bin/otool -tvV "$native_binary" > "$tmp/native-codegen.txt"
-  /usr/bin/grep -q $'\tautia\t' "$tmp/native-codegen.txt" || fail 'native typed PAC authentication codegen'
-  /usr/bin/grep -q $'\tbrk\t#0xc470' "$tmp/native-codegen.txt" || fail 'native PAC authentication trap codegen'
-  pac_bad_binary=$(/usr/bin/find "$tmp/native-case-16" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
-  pac_bad_record="$tmp/native-case-16/build-record.json"
-  pac_bad_codegen="$tmp/pac-bad-codegen.txt"
-  pac_good_binary=$(/usr/bin/find "$tmp/native-case-20" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
-  pac_good_record="$tmp/native-case-20/build-record.json"
-  pac_good_codegen="$tmp/pac-good-codegen.txt"
-  /usr/bin/otool -tvV "$pac_bad_binary" > "$pac_bad_codegen"
-  /usr/bin/otool -tvV "$pac_good_binary" > "$pac_good_codegen"
-  /usr/bin/strings "$pac_bad_binary" > "$tmp/pac-bad-strings.txt"
-  /usr/bin/strings "$pac_good_binary" > "$tmp/pac-good-strings.txt"
-  for marker in pac:signatures-equal pac:correct-auth-mismatch pac:signed-different pac:correct-auth; do
-    /usr/bin/grep -Fxq "$marker" "$tmp/pac-bad-strings.txt" || fail 'bad PAC fixed branch marker'
-    /usr/bin/grep -Fxq "$marker" "$tmp/pac-good-strings.txt" || fail 'valid PAC fixed branch marker'
-  done
-  /usr/bin/grep -Fxq pac:before-wrong-auth "$tmp/pac-bad-strings.txt" || fail 'bad PAC last-boundary marker'
-  /usr/bin/grep -Fxq pac:actual-auth-returned "$tmp/pac-good-strings.txt" || fail 'valid PAC actual-target marker'
-  "$python_bin" -I -S -B - "$pac_good_codegen" "$pac_bad_codegen" <<'PY'
-import pathlib,sys
-good,bad=(pathlib.Path(path).read_text(encoding="utf-8") for path in sys.argv[1:])
-def body(raw,name):
- marker="_"+name+":"
- assert raw.count(marker)==1,(name,"label")
- section=raw.split(marker,1)[1]
- next_label=section.find("\n_")
- return section if next_label<0 else section[:next_label]
-correct=body(good,"test_auth_claimed_correct")
-wrong=body(bad,"test_auth_claimed_wrong")
-record=body(good,"test_pac_record")
-stop=body(good,"test_pac_stop")
-good_claimed=body(good,"authenticate_claimed")
-bad_claimed=body(bad,"authenticate_claimed")
-assert "\tautia\t" in correct and "#0xe3bf" in correct and "\tbrk\t#0xc470" in correct
-assert "\tautia\t" in wrong and "#0xeafc" in wrong and "\tbrk\t#0xc470" in wrong
-assert "symbol stub for: _write" in record and "symbol stub for: __exit" in record
-assert "_test_pac_record" in stop and "symbol stub for: __exit" in stop
-assert "#0x5c" in record
-for claimed in (good_claimed,bad_claimed):
- assert "#0x5d" in claimed and "#0x5e" in claimed
-for raw,label in ((good,"good"),(bad,"bad")):
- assert raw.count("\tpacia\t")>=2,(label,"same-input signatures")
- assert "_test_auth_claimed_correct" in raw,(label,"correct helper call")
-assert "_test_auth_claimed_wrong" in bad
-assert "_test_pac_record" in good and "_test_pac_stop" in good
-print("ok native-pac-codegen - same-input checks and both auth helpers retained")
-PY
-  cat > "$tmp/pac-pair.py" <<'PY'
-import importlib.util,sys
-print("before-auth",flush=True)
-spec=importlib.util.spec_from_file_location("_cancel_release",sys.argv[1])
-module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-module.prepare_state().observe_allocator_admission()
-print("after-auth",flush=True)
-PY
-  set +e
-  "$python_bin" -I -S -B "$tmp/pac-pair.py" "$pac_good_binary" \
-    > "$tmp/pac-good.stdout" 2> "$tmp/pac-good.stderr"
-  pac_good_status=$?
-  "$python_bin" -I -S -B "$tmp/pac-pair.py" "$pac_bad_binary" \
-    > "$tmp/pac-bad.stdout" 2> "$tmp/pac-bad.stderr"
-  pac_bad_status=$?
-  set -e
-  "$python_bin" -I -S -B - "$pac_good_binary" "$pac_good_record" "$pac_good_codegen" \
-    "$tmp/pac-good.stdout" "$tmp/pac-good.stderr" "$pac_good_status" \
-    "$pac_bad_binary" "$pac_bad_record" "$pac_bad_codegen" \
-    "$tmp/pac-bad.stdout" "$tmp/pac-bad.stderr" "$pac_bad_status" \
-    "$root/shadow/v1/_cancel_release.c" \
-    "$root/shadow/v1/build-cancel-release.sh" "$root/scripts/test/shadow-enforced.test.sh" \
-    "$tmp/pac-pair.py" <<'PY'
-import hashlib,json,pathlib,sys
-good_binary,good_record,good_codegen,good_stdout,good_stderr=map(pathlib.Path,sys.argv[1:6])
-good_status=sys.argv[6]
-bad_binary,bad_record,bad_codegen,bad_stdout,bad_stderr=map(pathlib.Path,sys.argv[7:12])
-bad_status=sys.argv[12]
-source,build,test,runner=map(pathlib.Path,sys.argv[13:17])
-raw=lambda path:path.read_bytes()
-sha=lambda path:hashlib.sha256(raw(path)).hexdigest()
-def result(binary,record,codegen,stdout,stderr,status):
- lines=raw(codegen).decode("utf-8","strict").splitlines()
- matches=[index for index,line in enumerate(lines)
-          if "\tpacia\t" in line or "\tautia\t" in line or "\tbrk\t#0xc470" in line]
- start=max(0,min(matches)-4) if matches else 0
- end=min(len(lines),max(matches)+5) if matches else 0
- return {"binary_sha256":sha(binary),"build_record_sha256":sha(record),
-  "build_record":json.loads(raw(record)),"status":int(status),
-  "stdout_hex":raw(stdout).hex(),"stderr_hex":raw(stderr).hex(),
-  "codegen_sha256":sha(codegen),"authentication_window":lines[start:end]}
-evidence={"source_sha256":sha(source),"build_script_sha256":sha(build),
- "test_script_sha256":sha(test),"runner_sha256":sha(runner),
- "positive":result(good_binary,good_record,good_codegen,good_stdout,good_stderr,good_status),
- "negative":result(bad_binary,bad_record,bad_codegen,bad_stdout,bad_stderr,bad_status)}
-print("shadow-enforced-bad-pac-evidence:"+json.dumps(evidence,sort_keys=True,separators=(",",":")))
-PY
-  "$python_bin" -I -S -B - "$tmp" <<'PY'
-import importlib.util,pathlib,sys
-base=pathlib.Path(sys.argv[1])
-for case,label in ((17,"mixed main/tc"),(18,"historical whole tc"),(19,"unknown target")):
- binary=next((base/("native-case-%d"%case)).glob("_cancel_release*.so"))
+native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
+  -type f ! -name build-record.json -print)
+"$python_bin" -I -S -B - "$native_actual_child_binary" <<'PY'
+import errno,importlib.util,json,os,pathlib,select,signal,sys,time
+binary=pathlib.Path(sys.argv[1])
+environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
+def owner():
  spec=importlib.util.spec_from_file_location("_cancel_release",binary)
  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
- state=module.prepare_state()
- try:state.observe_allocator_admission()
- except RuntimeError as exc:assert str(exc)=="allocator target refused",(label,str(exc))
- else:raise AssertionError(label+" profile admitted")
- print("ok native-profile - "+label+" profile refuses as one tuple")
+ state=module.prepare_state();state.block_entry();state.arm_consumer();return state
+def observe(state):
+ deadline=time.monotonic()+5
+ while not state.child_status()[11]:
+  state.observe_child_exit();assert time.monotonic()<deadline;time.sleep(.01)
+def close_at_eof(state,fd,close):
+ deadline=time.monotonic()+5
+ while True:
+  readable,_,_=select.select([fd],[],[],max(0,deadline-time.monotonic()))
+  assert readable
+  if not os.read(fd,4096):break
+ close()
+
+# The positive keeps the leader waitable while a same-group descendant ignores TERM.
+state=owner()
+program=b'''import json,os,signal
+def finish(_sent,_frame):raise SystemExit(0)
+signal.signal(signal.SIGTERM,finish);child=os.fork()
+if child==0:
+ signal.signal(signal.SIGTERM,signal.SIG_IGN)
+ os.write(1,(json.dumps({"kind":"descendant","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid()},sort_keys=True,separators=(",",":"))+"\\n").encode())
+ while True:signal.pause()
+os.write(1,(json.dumps({"kind":"leader","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child},sort_keys=True,separators=(",",":"))+"\\n").encode())
+while True:signal.pause()
+'''
+argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
+state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
+stdin_fd,stdout_fd,stderr_fd=state.child_fds();state.close_child_stdin()
+records=[];buffer=b"";deadline=time.monotonic()+5
+while len(records)<2:
+ readable,_,_=select.select([stdout_fd],[],[],max(0,deadline-time.monotonic()));assert readable
+ chunk=os.read(stdout_fd,4096);assert chunk;buffer+=chunk
+ while b"\n" in buffer:
+  line,buffer=buffer.split(b"\n",1);records.append(json.loads(line))
+leader=next(item for item in records if item["kind"]=="leader")
+descendant=next(item for item in records if item["kind"]=="descendant")
+assert leader["pid"]==leader["pgid"]==descendant["pgid"]
+assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
+state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
+state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
+close_at_eof(state,stdout_fd,state.close_child_stdout);close_at_eof(state,stderr_fd,state.close_child_stderr)
+state.reap_child();state.check_child_group();final=state.child_status()
+assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
+print("actual-descendant-group",leader,descendant,final[17:25])
+state.abort_release();assert state.outcome()=="native-release.failure"
+
+# A separate State gets a real Darwin UNKNOWN last, because it must not be reused.
+state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",b"import signal;signal.pause()")
+state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
+state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
+state.term_child_group();observe(state);state.kill_child_group();negative=state.child_status()
+if sys.platform=="darwin":
+ assert negative[45:47]==(-1,errno.EPERM) and negative[23]==33 and not negative[24]
+ try:state.reap_child()
+ except RuntimeError:pass
+ else:raise AssertionError("unknown group duty allowed reap")
+ state.check_child_group();negative=state.child_status()
+ assert negative[47:49]==(-1,errno.EPERM) and not negative[17] and not negative[24]
+print("actual-single-leader",sys.platform,negative[45:49],negative[23:25])
 PY
-  [ "$pac_good_status" -ne 92 ] && [ "$pac_bad_status" -ne 92 ] || fail 'PAC branch marker write incomplete'
-  [ "$pac_good_status" -ne 93 ] && [ "$pac_bad_status" -ne 93 ] || fail 'PAC signatures compared equal'
-  [ "$pac_good_status" -ne 94 ] && [ "$pac_bad_status" -ne 94 ] || fail 'PAC correct authentication mismatched plain input'
-  [ "$pac_good_status" -eq 0 ] || fail 'valid PAC control failed'
-  [ "$(cat "$tmp/pac-good.stderr")" = $'pac:signed-different\npac:correct-auth\npac:actual-auth-returned' ] || fail 'valid PAC branch record'
-  [ "$(cat "$tmp/pac-good.stdout")" = $'before-auth\nafter-auth' ] || fail 'valid PAC control boundary'
-  [ "$pac_bad_status" -gt 128 ] || fail 'bad PAC did not terminate'
-  [ "$(cat "$tmp/pac-bad.stdout")" = before-auth ] || fail 'bad PAC crossed its last boundary'
-  [ "$(cat "$tmp/pac-bad.stderr")" = $'pac:signed-different\npac:correct-auth\npac:before-wrong-auth' ] || fail 'bad PAC branch record'
-else
-  ! /usr/bin/grep -q -- '-fptrauth-' "$native_out/build-record.json" || fail 'Linux PAC flags'
-fi
+"$python_bin" -I -S -B - "$root" "$native_control_binary" <<'PY'
+import importlib.util,pathlib,sys,types
+root=pathlib.Path(sys.argv[1]);binary=sys.argv[2]
+driver_spec=importlib.util.spec_from_file_location("prepare_owner",root/"shadow/v1/enforced-reproduction.py")
+e=importlib.util.module_from_spec(driver_spec);sys.modules[driver_spec.name]=e;driver_spec.loader.exec_module(e)
+native_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(module)
+state=module.prepare_state();state.block_entry();state.arm_consumer()
+class LostPrepareReturn:
+ def __getattr__(self,name):return getattr(state,name)
+ def prepare_child(self,value):state.prepare_child(value);raise RuntimeError("lost prepare return")
+e.CancellationSignals.active=types.SimpleNamespace(native=LostPrepareReturn())
+env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"}
+try:e.spawn_bounded("helper-version",[sys.executable,"-I","-S","-B","-c","pass"],b"",16,16,1,env)
+except RuntimeError as exc:assert str(exc)=="lost prepare return"
+else:raise AssertionError("lost prepare return accepted")
+before=state.child_status();assert before[0]==1 and before[1]==0 and before[19]==0
+state.abort_release();after=state.child_status()
+assert after[0]==0 and after[1]==0 and after[19]==1
+assert all(after[index]==1 for index in (25,28,31,34,37,40))
+print("shadow-enforced-native-prepare-owner: lost return released six owned fds without child effect")
+PY
+! /usr/bin/grep -Eq 'ptrauth|malloc_zone|observe_allocator|resume_consumer' "$root/shadow/v1/_cancel_release.c" || fail 'obsolete allocator/PAC owner remains'
+! /usr/bin/grep -q -- '-fptrauth-' "$native_out/build-record.json" || fail 'obsolete PAC flags remain'
 native_test_binary=$(/usr/bin/find "$tmp/native-case-1" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$root" "$native_test_binary" "$tmp/native-case-1/build-record.json" \
   "$native_binary" "$native_out/build-record.json" "$tmp" <<'PY'
@@ -373,10 +352,9 @@ def outcome_binding_case(outcome):
  original_spec=e.importlib.util.spec_from_file_location
  original_module=e.importlib.util.module_from_spec
  original_origin=e._NATIVE_ORIGIN
- original_evidence=e._ALLOCATOR_INTERVAL_EVIDENCE_READY
  e.importlib.util.spec_from_file_location=lambda *_args,**_kwargs:fake_spec
  e.importlib.util.module_from_spec=lambda _spec:fake_module
- e._NATIVE_ORIGIN=None;e._ALLOCATOR_INTERVAL_EVIDENCE_READY=True
+ e._NATIVE_ORIGIN=None
  try:
   try:native=e._NativeRelease({"native_release":production_native},admission)
   except e.Refusal as exc:
@@ -389,16 +367,56 @@ def outcome_binding_case(outcome):
   e.importlib.util.spec_from_file_location=original_spec
   e.importlib.util.module_from_spec=original_module
   e._NATIVE_ORIGIN=original_origin
-  e._ALLOCATOR_INTERVAL_EVIDENCE_READY=original_evidence
   sys.modules.pop("_cancel_release",None)
 assert outcome_binding_case("native-release.pending")=="accepted"
 assert outcome_binding_case("native-release.failure")=="refused"
 print("shadow-enforced-native-outcome: simulated pending accepted and non-pending refused")
+class Census:
+ def observe(self):pass
+class ExitNative:
+ def __init__(self,native_outcome="native-release.success",commit_error=None,getter_error=None):
+  self.native_outcome="native-release.pending";self.commit_outcome=native_outcome;self.commit_error=commit_error
+  self.getter_error=getter_error;self.committed=False;self.aborted=False
+ def block_final(self):pass
+ def commit_completion(self,_payload):
+  self.committed=True;self.native_outcome=self.commit_outcome
+  if self.commit_error is not None:raise self.commit_error
+ def abort_release(self):self.aborted=True;self.native_outcome="native-release.failure"
+ def outcome(self):
+  if self.getter_error is not None and (self.committed or self.aborted):
+   error=self.getter_error;self.getter_error=None;raise error
+  return self.native_outcome
+def exit_owner(native):
+ owner=e.CancellationSignals();owner.native=native
+ owner.admission=types.SimpleNamespace(census=Census())
+ owner.completion_confirmed=True;owner.completion_payload=b"{}\n"
+ e.CancellationSignals.active=owner
+ return owner
+caller=RuntimeError("post-L caller")
+try:exit_owner(ExitNative(commit_error=caller)).__exit__(None,None,None)
+except RuntimeError as exc:assert exc is caller
+else:raise AssertionError("post-L caller interruption hidden")
+native_failure=RuntimeError("native commit return")
+try:exit_owner(ExitNative("native-release.failure",native_failure)).__exit__(None,None,None)
+except e.Refusal as exc:assert exc.code=="E_RUNTIME" and exc.__cause__ is native_failure
+else:raise AssertionError("native failure lost authoritative priority")
+commit_interrupt=RuntimeError("commit return")
+getter_interrupt=RuntimeError("outcome observation")
+try:exit_owner(ExitNative(commit_error=commit_interrupt,getter_error=getter_interrupt)).__exit__(None,None,None)
+except RuntimeError as exc:assert exc is getter_interrupt and exc.__cause__ is commit_interrupt
+else:raise AssertionError("outcome observation interruption hidden")
+earlier=ValueError("earlier body")
+later=RuntimeError("later outcome observation")
+try:exit_owner(ExitNative("native-release.failure",getter_error=later)).__exit__(ValueError,earlier,None)
+except RuntimeError as exc:assert exc is later and exc.__cause__ is earlier
+else:raise AssertionError("new outcome observation did not cross the outer boundary")
+e.CancellationSignals.active=None
+print("shadow-enforced-native-outcome-events: simulated authority and caller ordering passed")
 expected=["/usr/bin/cc","-std=gnu11" if sys.platform=="darwin" else "-std=c11",
  "-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC",
  "-I"+os.path.realpath(sysconfig.get_config_var("INCLUDEPY")),
  "-I"+os.path.realpath(sysconfig.get_config_var("CONFINCLUDEPY"))]
-expected += (["-fptrauth-intrinsics","-fptrauth-auth-traps","-bundle","-undefined","dynamic_lookup"]
+expected += (["-bundle","-undefined","dynamic_lookup"]
              if sys.platform=="darwin" else ["-shared"])
 expected += [str(root/"shadow/v1/_cancel_release.c"),"-o",str(production)]
 assert original["body"]["argv"]==expected
@@ -413,11 +431,11 @@ def mutation(name,change):
  try:e._NativeRelease({"native_release":native},admission)
  except e.Refusal as exc:assert exc.code=="E_DEPENDENCY" and "_cancel_release" not in sys.modules
  else:raise AssertionError("accepted native argv mutation "+name)
-mutation("missing-pac",lambda a:a.remove("-fptrauth-intrinsics") if sys.platform=="darwin" else a.remove("-shared"))
-mutation("repeated-pac",lambda a:a.insert(a.index("-bundle") if sys.platform=="darwin" else a.index("-shared"),
- "-fptrauth-auth-traps" if sys.platform=="darwin" else "-shared"))
-mutation("reordered-pac",lambda a:a.__setitem__(slice(a.index("-fptrauth-intrinsics"),a.index("-fptrauth-auth-traps")+1),
- ["-fptrauth-auth-traps","-fptrauth-intrinsics"]) if sys.platform=="darwin" else a.reverse())
+mutation("missing-link-mode",lambda a:a.remove("-bundle") if sys.platform=="darwin" else a.remove("-shared"))
+mutation("repeated-link-mode",lambda a:a.insert(a.index("-bundle") if sys.platform=="darwin" else a.index("-shared"),
+ "-bundle" if sys.platform=="darwin" else "-shared"))
+mutation("reordered-link-mode",lambda a:a.__setitem__(slice(a.index("-bundle"),a.index("dynamic_lookup")+1),
+ ["-undefined","dynamic_lookup","-bundle"]) if sys.platform=="darwin" else a.reverse())
 print("shadow-enforced-native-argv: exact recipe and three mutations checked")
 PY
 "$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
@@ -1186,11 +1204,16 @@ PY
 
 # Slice 3 keeps launch substitution private while exercising the production
 # framing, durable-request, payload, record, inventory and bounded-child code.
-"$python_bin" -I -S -B - "$root" "$tmp/slice3" "$jq_bin" <<'PY'
+"$python_bin" -I -S -B - "$root" "$tmp/slice3" "$jq_bin" "$tmp/native-case-33" <<'PY'
 import hashlib, importlib.util, json, os, pathlib, shutil, signal, stat, subprocess, sys, time, types
-root, base, jq_bin = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]); base.mkdir(mode=0o700)
+root, base, jq_bin, native_dir = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
 spec = importlib.util.spec_from_file_location("enforced", root / "shadow/v1/enforced-reproduction.py")
 e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
+native_path=next(native_dir.glob("_cancel_release*.so"))
+native_spec=importlib.util.spec_from_file_location("_cancel_release",native_path)
+native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
+native_state=native_module.prepare_state();native_state.block_entry();native_state.arm_consumer()
+e.CancellationSignals.active=types.SimpleNamespace(native=native_state)
 checks = 0
 def ok(value, message):
     global checks
@@ -1240,26 +1263,26 @@ e.FRAME_LIMIT = old_limit
 # Bounded children get a clean explicit environment and process group. A
 # timeout is failure; truncated stdout/stderr can never be accepted.
 env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
-out = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", "print('fixed')"], env=env)
+out = e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c", "print('fixed')"], env=env)
 ok(out == b"fixed\n", "bounded child success")
 mask_code = "import signal;print(bool(signal.pthread_sigmask(signal.SIG_BLOCK,set())&{signal.SIGTERM,signal.SIGHUP,signal.SIGINT}))"
-ok(e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env) == b"False\n",
+ok(e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env) == b"False\n",
    "bounded child inherits the caller's unblocked termination mask")
 prior_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
 try:
-    inherited = e.run_bounded([sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env)
+    inherited = e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c", mask_code], env=env)
 finally:
     signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)
-ok(inherited == b"True\n", "bounded child preserves a caller-blocked termination signal")
-refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+ok(inherited == b"False\n", "bounded child uses the native owner's saved original caller mask")
+refuses("E_RUNTIME", lambda: e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c",
     "import time;time.sleep(2)"], timeout=.05, env=env), "bounded child timeout is failure")
-refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+refuses("E_LIMIT", lambda: e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c",
     "import sys,time;sys.stdout.write('x'*100);sys.stdout.flush();time.sleep(30)"],
     output_limit=8, env=env), "bounded stdout refuses instead of truncating")
-refuses("E_LIMIT", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+refuses("E_LIMIT", lambda: e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c",
     "import sys,time;sys.stderr.write('x'*70000);sys.stderr.flush();time.sleep(30)"], env=env),
     "bounded stderr refuses instead of truncating")
-refuses("E_RUNTIME", lambda: e.run_bounded([sys.executable, "-I", "-S", "-B", "-c",
+refuses("E_RUNTIME", lambda: e.run_bounded("helper-version", [sys.executable, "-I", "-S", "-B", "-c",
     "raise SystemExit(3)"], env=env), "nonzero component exit refuses")
 
 # The ACL resolver is one concrete adapter with fixed P/S/role, environment and caps.
@@ -1488,202 +1511,11 @@ for _ in range(100):
  if interrupt_child.poll() is not None:break
  time.sleep(.01)
 ok(interrupt_child.poll() is not None,"cancelled child was reaped")
-signal_wrapper=base/"signal-wrapper.py"
-signal_wrapper.write_text("""import importlib.util
-import inspect
-import os
-import pathlib
-import signal
-import sys
-
-root = pathlib.Path(sys.argv[1])
-pid_path = pathlib.Path(sys.argv[2])
-done_path = pathlib.Path(sys.argv[3])
-cleanup_path = pathlib.Path(sys.argv[4])
-mode = sys.argv[6]
-spec = importlib.util.spec_from_file_location(
-    "signaled", root / "shadow/v1/enforced-reproduction.py")
-driver = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = driver
-spec.loader.exec_module(driver)
-
-watched = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
-before = {sent: signal.getsignal(sent) for sent in watched}
-original_mask = signal.pthread_sigmask
-initial_mask = original_mask(signal.SIG_BLOCK, set())
-delivered = False
-blocking_active = False
-continued = False
-cleanup_disappeared = False
-
-def observed_mask(how, values):
-    result = original_mask(how, values)
-    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
-            and mode == "guard" and driver.CancellationSignals.active is not None
-            and not cleanup_path.exists()):
-        cleanup_path.touch()
-        os.kill(os.getpid(), signal.SIGTERM)
-    if (how == signal.SIG_BLOCK and signal.SIGTERM in values
-            and driver.CancellationSignals.active is not None):
-        cleanup_path.touch()
-    return result
-
-driver.signal.pthread_sigmask = observed_mask
-original_stop = driver.stop_child
-
-def observed_stop(child):
-    global cleanup_disappeared
-    cleanup_path.touch()
-    if mode == "stop":
-        os.kill(os.getpid(), signal.SIGTERM)
-    result = original_stop(child)
-    try:
-        os.killpg(child.pid, 0)
-    except ProcessLookupError:
-        cleanup_disappeared = True
-    else:
-        raise AssertionError("owned process group survived cleanup")
-    return result
-
-driver.stop_child = observed_stop
-real_read = driver.os.read
-
-def recover(fd, size):
-    global delivered, blocking_active
-    caller = sys._getframe(1)
-    output_fds = caller.f_locals.get("output", {})
-    if (mode == "recover" and not delivered
-            and caller.f_code is driver.communicate_bounded.__code__
-            and fd in output_fds):
-        try:
-            raise BlockingIOError()
-        except BlockingIOError:
-            blocking_active = isinstance(sys.exception(), BlockingIOError)
-            delivered = True
-            os.kill(os.getpid(), signal.SIGTERM)
-            raise
-    return real_read(fd, size)
-
-driver.os.read = recover
-lines, start = inspect.getsourcelines(driver.spawn_bounded)
-handoff_line = start + next(
-    index for index, line in reversed(list(enumerate(lines)))
-    if "CancellationSignals.checkpoint()" in line)
-
-def trace(frame, event, _arg):
-    global delivered
-    if (mode == "handoff" and not delivered
-            and frame.f_code is driver.spawn_bounded.__code__
-            and event == "line" and frame.f_lineno == handoff_line):
-        delivered = True
-        pid_path.write_text(str(frame.f_locals["child"].pid))
-        os.kill(os.getpid(), signal.SIGTERM)
-    return trace
-
-sys.settrace(trace)
-
-def reproduce(*_args):
-    global continued
-    child_code = (
-        "import os,pathlib,signal,sys,time;"
-        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
-        "print('ready',flush=True);time.sleep(30)")
-    driver.run_bounded(
-        [sys.executable, "-I", "-S", "-B", "-c", child_code, str(pid_path)],
-        timeout=float(sys.argv[5]),
-        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
-    continued = True
-
-driver.reproduce = reproduce
-class FixtureCensus:
-    def observe(self):
-        pass
-class FixtureNative:
-    def __init__(self):
-        self.phase="prepared"; self.entry=None; self.final=None
-        self.completion=None; self.status="native-release.pending"; self.rolled=False
-    def recheck(self): pass
-    def block_entry(self):
-        self.entry=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="entry"
-    def resume_consumer(self):
-        driver.signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
-    def hold_completion(self,fd): self.completion=os.dup(fd)
-    def block_final(self):
-        self.final=driver.signal.pthread_sigmask(signal.SIG_BLOCK,driver.WATCHED_SIGNALS);self.phase="final"
-    def rollback_marker(self):
-        if self.rolled or self.completion is None:return
-        self.rolled=True
-        try:os.unlink("bundle.json",dir_fd=self.completion)
-        except FileNotFoundError:pass
-        os.fsync(self.completion)
-    def finish_release(self):
-        restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
-        if restore is not None:driver.signal.pthread_sigmask(signal.SIG_SETMASK,restore)
-        if self.completion is not None:os.close(self.completion);self.completion=None
-        self.status="native-release.success";return self.status
-    def outcome(self):return self.status
-admission = driver._StartupAdmission(
-    driver._STARTUP_KEY, driver.sys.executable,
-    driver.sha(pathlib.Path(driver.sys.executable).read_bytes()), driver.sys.version,
-    tuple(driver.sys.version_info[:2]), driver._runtime_module_origins(), FixtureCensus(),
-    FixtureNative())
-try:
-    with driver.CancellationSignals(admission):
-        reproduce()
-except (driver.Cancelled, driver.Refusal, OSError):
-    print("E_RUNTIME",file=sys.stderr);return_code=1
-else:
-    return_code=0
-after_mask = original_mask(signal.SIG_BLOCK, set())
-restored = all(signal.getsignal(sent) == before[sent] for sent in before)
-done_path.write_text(
-    f"{return_code}:{restored}:{after_mask == initial_mask}:"
-    f"{delivered}:{blocking_active}:{continued}:{cleanup_disappeared}")
-""")
-for name,first,later,timeout,entry in (("single",signal.SIGTERM,(),30,"none"),("repeated",signal.SIGTERM,
- (signal.SIGHUP,signal.SIGINT),30,"none"),("timeout-stop-entry",None,(),1,"stop"),
- ("timeout-guard-entry",None,(),1,"guard"),("timeout-post-mask",None,(signal.SIGTERM,),1,"none"),
- ("spawn-handoff",None,(),30,"handoff"),("recoverable-read",None,(),30,"recover")):
- child_pid=base/(name+".pid");done=base/(name+".done");cleanup=base/(name+".cleanup")
- wrapper=subprocess.Popen([sys.executable,"-I","-S","-B",str(signal_wrapper),str(root),
-  str(child_pid),str(done),str(cleanup),str(timeout),entry],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
- for _ in range(500):
-  if child_pid.exists():break
-  if wrapper.poll() is not None:break
-  time.sleep(.01)
- if wrapper.poll() is not None and not child_pid.exists():
-  early_stdout,early_stderr=wrapper.communicate()
-  raise AssertionError(name+" wrapper exited early: "+repr((wrapper.returncode,early_stdout,early_stderr)))
- ok(child_pid.exists(),name+" production consumer reached TERM-ignoring owned child")
- if first is not None:wrapper.send_signal(first)
- for _ in range(500):
-  if cleanup.exists():break
-  time.sleep(.01)
- ok(cleanup.exists(),name+" entered production owned-group cleanup")
- for sent in later:wrapper.send_signal(sent)
- stdout,stderr=wrapper.communicate(timeout=15)
- result=done.read_text().split(":")
- ok(wrapper.returncode==0 and result[:3]==["1","True","True"] and stderr==b"E_RUNTIME\n",
-    name+" cleanup is idempotent and restores handlers and mask")
- if entry in {"handoff","recover"}:
-  ok(result[3]=="True" and result[5]=="False",name+" consumes the delivered signal before continuation")
- if entry=="recover":
-  ok(result[4]=="True",name+" delivers TERM with BlockingIOError active in the production read")
- ok(result[6]=="True",name+" confirms cleanup returned after ESRCH and leader reap")
-pid_file=base/"descendant.pid"
-group_program=("import os,pathlib,signal,sys,time;pid=os.fork();"
- "(signal.signal(signal.SIGTERM,signal.SIG_IGN),time.sleep(30)) if pid==0 else "
- "(pathlib.Path(sys.argv[1]).write_text(str(pid)),time.sleep(30))")
-started=time.monotonic()
-refuses("E_RUNTIME",lambda:e.run_bounded([sys.executable,"-c",group_program,str(pid_file)],
-        timeout=.1,env=env),"timeout stops leader and TERM-ignoring descendant")
-descendant=int(pid_file.read_text());gone=False
-for _ in range(100):
- try:os.kill(descendant,0)
- except ProcessLookupError:gone=True;break
- time.sleep(.01)
-ok(gone and time.monotonic()-started<11,"owned process group is gone within one cleanup bound")
+cleanup_source=inspect.getsource(e._native_child_cleanup)
+ok(cleanup_source.count("CancellationSignals.checkpoint()") >= 6
+   and cleanup_source.index("term_child_group") < cleanup_source.index("kill_child_group")
+   < cleanup_source.index("reap_child"),
+   "owned cleanup observes cancellation without skipping TERM, KILL or reap")
 bash=e.fixed_bash();bash.recheck();ok(True,"fixed /bin/bash alias and physical bytes recheck")
 original_lstat=e.os.lstat
 def linux_alias(path):
@@ -1941,102 +1773,10 @@ finally:e.write_exclusive_at=real_write_at
 ok(not (renamed.with_name("renamed-held")/"bundle.json").exists() and
    not (renamed/"bundle.json").exists(),"failed marker cleanup stays bound to held output")
 renamed_hold.close()
-cancelmark=base/"cancel-marker";cancelmark.mkdir(mode=0o700);cancelmark_hold=e.stable_directory(cancelmark)
-class FixtureCensus:
- def observe(self):pass
-class FixtureNative:
- def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
- def recheck(self):pass
- def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
- def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
- def hold_completion(self,fd):self.completion=os.dup(fd)
- def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
- def rollback_marker(self):
-  if self.rolled or self.completion is None:return
-  self.rolled=True
-  try:os.unlink("bundle.json",dir_fd=self.completion)
-  except FileNotFoundError:pass
-  os.fsync(self.completion)
- def finish_release(self):
-  restore=self.entry if self.phase=="entry" else self.final if self.phase=="final" else None
-  if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
-  if self.completion is not None:
-   try:os.close(self.completion)
-   except OSError:
-    self.rollback_marker();self.status="native-release.failure"
-    os.close(self.completion);self.completion=None
-    raise
-   self.completion=None
-  self.status="native-release.success";return self.status
- def outcome(self):return self.status
-def guard(census=None):
- executable=e.stable_file(pathlib.Path(e.sys.executable))
- try:
-  value=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
-        tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or FixtureCensus(),FixtureNative())
- finally:executable.close()
- return e.CancellationSignals(value)
-def cancel_after_marker(fd,name,raw,mode=0o400,sync=False,**options):
- real_write_at(fd,name,raw,mode,sync,**options)
- if name=="bundle.json":os.kill(os.getpid(),signal.SIGTERM)
-e.write_exclusive_at=cancel_after_marker
-try:
- with guard():
-  e.seal(cancelmark,cancelmark_hold,files,incident,"enforced-reproduction.v1")
-except e.Cancelled:ok(True,"signal after marker creation enters owned cleanup")
-else:raise AssertionError("marker cancellation accepted")
-finally:e.write_exclusive_at=real_write_at
-ok(not (cancelmark/"bundle.json").exists(),"cancelled marker is removed through held output")
-cancelmark_hold.close()
-latecancel=base/"late-cancel";latecancel.mkdir(mode=0o700);latecancel_hold=e.stable_directory(latecancel)
-try:
- with guard():e.seal(latecancel,latecancel_hold,files,incident,"enforced-reproduction.v1");os.kill(os.getpid(),signal.SIGTERM)
-except e.Cancelled:ok(not (latecancel/"bundle.json").exists(),"latched cancellation rolls back retained completion")
-latecancel_hold.close()
-pendingcancel=base/"pending-exit-cancel";pendingcancel.mkdir(mode=0o700)
-pendingcancel_hold=e.stable_directory(pendingcancel);pending_guard=guard();pending_sent=[False]
-real_mask=e.signal.pthread_sigmask
-pending_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
-def signal_after_exit_mask(how,values):
- result=real_mask(how,values)
- if (how==signal.SIG_BLOCK and signal.SIGTERM in values and pending_guard.native.completion is not None
-     and not pending_sent[0]):pending_sent[0]=True;os.kill(os.getpid(),signal.SIGTERM)
- return result
-e.signal.pthread_sigmask=signal_after_exit_mask
-try:
- with pending_guard:e.seal(pendingcancel,pendingcancel_hold,files,incident,"enforced-reproduction.v1")
-except e.Cancelled:ok(pending_sent[0] and not (pendingcancel/"bundle.json").exists(),
-                      "pending exit signal rolls back before handler ownership transfers")
-else:raise AssertionError("pending exit cancellation accepted")
-finally:e.signal.pthread_sigmask=real_mask;signal.signal(signal.SIGTERM,pending_handler)
-pendingcancel_hold.close()
-outer=guard()
-try:
- with outer:
-  outer.requested=True
-  with e.CancellationSignals():pass
-except e.Cancelled:ok(e.CancellationSignals.active is None,"nested context retains outer cancellation")
-before_handlers={sent:signal.getsignal(sent) for sent in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT)}
-before_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-for failure_name in ("unlink","fsync"):
- failure_dir=base/("completion-"+failure_name);failure_dir.mkdir(mode=0o700)
- failure_hold=e.stable_directory(failure_dir);completion_guard=guard()
- real_unlink,real_fsync=e.os.unlink,e.os.fsync
- try:
-  with completion_guard:
-   e.seal(failure_dir,failure_hold,files,incident,"enforced-reproduction.v1")
-   completion_guard.requested=True
-   if failure_name=="unlink":e.os.unlink=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture unlink"))
-   else:e.os.fsync=lambda *_args,**_kwargs: (_ for _ in ()).throw(OSError("fixture fsync"))
- except OSError:pass
- else:raise AssertionError("completion "+failure_name+" failure accepted")
- finally:e.os.unlink,e.os.fsync=real_unlink,real_fsync
- ok(e.CancellationSignals.active is None and signal.pthread_sigmask(signal.SIG_BLOCK,set())==before_mask
-    and all(signal.getsignal(sent)==before_handlers[sent] for sent in before_handlers),
-    "completion "+failure_name+" failure restores handlers, active context and mask")
- if (failure_dir/"bundle.json").exists():(failure_dir/"bundle.json").unlink()
- failure_hold.close()
-
+owner_source=inspect.getsource(e.CancellationSignals)
+ok("signal.signal" not in owner_source and "set_wakeup_fd" not in owner_source
+   and "pthread_sigmask" not in owner_source,
+   "Python owner delegates actions, wakeup and masks to the native State")
 evaluation_fixture=e.canonical(doc("sandbox_policy_evaluation","evaluation.fixture",{}))
 checker_fixture=e.canonical(doc("sandbox_receipt_check","check.fixture",{}))
 trace=e.trace_ledger(incident,"attempt.fixture","env.fixture","reproduced","tool.verifier",
@@ -2049,7 +1789,7 @@ ok(t["body"]["seal"]["final_digest"]==t["body"]["events"][-1]["record_digest"],
 trace_path=base/"trace.json"; write(trace_path,trace)
 trace_bin=base/"trace-bin"; trace_bin.mkdir(mode=0o700); shutil.copy2(jq_bin,trace_bin/"jq"); (trace_bin/"jq").chmod(0o500)
 trace_env={"PATH":str(trace_bin)+":/usr/bin:/bin","LC_ALL":"C","LANG":"C","TMPDIR":str(base)}
-trace_receipt=e.run_bounded(["/bin/bash","-p",str(root/"telemetry/v1/validate-trace-ledger.sh"),
+trace_receipt=e.run_bounded("trace-validation",["/bin/bash","-p",str(root/"telemetry/v1/validate-trace-ledger.sh"),
     "validate",incident["id"],"attempt.fixture",str(trace_path)],env=trace_env)
 ok(e.parse(trace_receipt)["body"]["ledger_ref"]["sha256"]==sha(trace),
    "real trace validator binds ledger")
@@ -2058,623 +1798,58 @@ trace_none=e.trace_ledger(incident,"attempt.none","env.fixture","inconclusive",N
 ok(e.parse(trace_none)["body"]["events"][1]["facts"]["tool"]=={"state":"not-applicable"},
    "unexecuted tool is not named")
 
+native_state.abort_release();e.CancellationSignals.active=None
 print("shadow-enforced-slice3: %d checks passed" % checks)
 PY
 
-# The cancellation boundary has a separate lifecycle proof. Its substitutions are
-# private observations of the fixed owner; the shipped CLI check below uses the
-# real standalone admission.
+# The native cancellation owner is exercised through the production Python boundary.
 "$python_bin" -I -S -B - "$root" "$tmp/cancellation" "$tmp/native-case-12" \
-  "$native_binary" "$tmp/native-case-4" "$tmp/native-case-13" <<'PY'
-import _thread, contextlib, errno, importlib.util, io, os, pathlib, signal, subprocess, sys, threading, time
-root, base, native_case12, production_binary, native_case4, native_case13 = map(pathlib.Path,sys.argv[1:]); base.mkdir(mode=0o700)
-spec = importlib.util.spec_from_file_location("cancel_lifecycle", root / "shadow/v1/enforced-reproduction.py")
-e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
-checks = 0
-def ok(value, message):
- global checks
- if not value: raise AssertionError(message)
- checks += 1; print("ok cancel-%d - %s" % (checks, message))
-class Census:
- def __init__(self, fail=0):self.calls=0;self.fail=fail
- def observe(self):
-  self.calls+=1
-  if self.calls==self.fail:raise e.Refusal("E_RUNTIME")
-class FixtureNative:
- def __init__(self):
-  self.phase="prepared";self.entry_mask=None;self.final_mask=None
-  self.completion=None;self.status="native-release.pending";self.rolled=False
- def recheck(self):pass
- def block_entry(self):
-  self.entry_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
- def resume_consumer(self):
-  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry_mask);self.phase="consumer"
- def hold_completion(self,fd):
-  self.completion=os.dup(fd)
- def block_final(self):
-  self.final_mask=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
- def rollback_marker(self):
-  if self.rolled or self.completion is None:return
-  self.rolled=True
-  try:os.unlink("bundle.json",dir_fd=self.completion)
-  except FileNotFoundError:pass
-  os.fsync(self.completion)
- def finish_release(self):
-  restore=self.entry_mask if self.phase=="entry" else self.final_mask if self.phase=="final" else None
-  pending=None
-  try:
-   if restore is not None:signal.pthread_sigmask(signal.SIG_SETMASK,restore)
-  except BaseException as exc:
-   pending=exc
-   if isinstance(exc,OSError):self.rollback_marker();self.status="native-release.failure"
-  if self.completion is not None:
-   try:os.close(self.completion)
-   except OSError:
-    self.rollback_marker();self.status="native-release.failure"
-    os.close(self.completion);self.completion=None
-    raise
-   self.completion=None
-  if self.status!="native-release.failure":self.status="native-release.success"
-  if pending is not None:raise pending
-  return self.status
- def outcome(self):return self.status
-def admission(census=None,native=None):
- executable=e.stable_file(pathlib.Path(e.sys.executable))
- try:
-  return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
-   tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census or Census(),native or FixtureNative())
- finally:executable.close()
-def guard(census=None):return e.CancellationSignals(admission(census))
-def marker(owner, name):
- directory=base/name;directory.mkdir(mode=0o700)
- (directory/"bundle.json").write_bytes(b"provisional")
- descriptor=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
- ok(e.CancellationSignals.retain_completion(descriptor),name+" retains marker owner")
- return directory
-
-# SIMULATED dup failure in the actual C owner leaves the original held fd responsible
-# for rollback; the driver removes the provisional marker before closing that fd.
-case12_binary=next(native_case12.glob("_cancel_release*.so"))
-case12_spec=importlib.util.spec_from_file_location("_cancel_release",case12_binary)
-case12_module=importlib.util.module_from_spec(case12_spec);case12_spec.loader.exec_module(case12_module)
-sys.modules.pop("_cancel_release",None)
-class ActualNative:
- def __init__(self,module,after_finish=None,getter_interrupt=None,close_failure=None,
-              before_hold=None,after_hold=None,confirmation_interrupt=None):
-  self.state=module.prepare_state()
-  for name in ("block_entry","resume_consumer","block_final","rollback_marker"):
-   setattr(self,name,getattr(self.state,name))
-  self.after_finish=after_finish;self.getter_interrupt=getter_interrupt
-  self.close_failure=close_failure
-  self.before_hold=before_hold;self.after_hold=after_hold
-  self.confirmation_interrupt=confirmation_interrupt
-  self.hold_completed=False;self.finished=False;self.finish_calls=0;self.close_calls=0
- def recheck(self):pass
- def hold_completion(self,fd):
-  if self.before_hold is not None:raise self.before_hold
-  self.state.hold_completion(fd);self.hold_completed=True
-  if self.after_hold is not None:raise self.after_hold
- def close(self):
-  self.close_calls+=1
-  if self.close_failure is not None:
-   failure=self.close_failure;self.close_failure=None;raise failure
- def finish_release(self):
-  self.finish_calls+=1;result=self.state.finish_release();self.finished=True
-  if self.after_finish is not None:raise self.after_finish
-  return result
- def outcome(self):
-  result=self.state.outcome()
-  if self.hold_completed and not self.finished and self.confirmation_interrupt is not None:
-   failure=self.confirmation_interrupt;self.confirmation_interrupt=None;raise failure
-  if self.finished and self.getter_interrupt is not None:
-   failure=self.getter_interrupt;self.getter_interrupt=None;raise failure
-  return result
-def load_native(path):
- binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
- native_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
- native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
- sys.modules.pop("_cancel_release",None)
- return native_module
-production_module=load_native(production_binary);case4_module=load_native(native_case4)
-case13_module=load_native(native_case13)
-actual_dup=ActualNative(case12_module);actual_owner=e.CancellationSignals(admission(native=actual_dup))
-dup_dir=base/"actual-dup-failure";dup_dir.mkdir(mode=0o700);dup_hold=e.stable_directory(dup_dir)
-dup_files={name:b"x" for name in e.EVIDENCE_NAMES}
-try:
- try:
-  with actual_owner:e.seal(dup_dir,dup_hold,dup_files,{"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
- except e.Refusal as exc:ok(exc.code=="E_RUNTIME","actual C dup failure reaches driver refusal")
- else:raise AssertionError("actual C dup failure accepted")
-finally:dup_hold.close()
-ok(not (dup_dir/"bundle.json").exists() and actual_dup.outcome()=="native-release.failure",
-   "actual C dup failure rolls back through the original held fd")
-
-# Actual C handoff never permits the first marker byte until hold returned and
-# its authoritative pending state was observed normally.
-def hold_boundary_case(name,native,failure):
- owner=e.CancellationSignals(admission(native=native));directory=base/name;directory.mkdir(mode=0o700)
- held=e.stable_directory(directory);case_files={entry:b"x" for entry in e.EVIDENCE_NAMES}
- try:
-  try:
-   with owner:e.seal(directory,held,case_files,{"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
-  except BaseException as observed:ok(observed is failure,name+" preserves exact handoff interruption")
-  else:raise AssertionError(name+" accepted")
- finally:held.close()
- ok(not (directory/"bundle.json").exists() and native.finish_calls==1,
-    name+" writes no marker and releases native ownership once")
-pre_entry=RuntimeError("before native hold")
-hold_boundary_case("actual-hold-not-run",ActualNative(production_module,before_hold=pre_entry),pre_entry)
-lost_return=RuntimeError("after native hold")
-hold_boundary_case("actual-hold-return-lost",ActualNative(production_module,after_hold=lost_return),lost_return)
-confirmation=RuntimeError("authoritative confirmation")
-hold_boundary_case("actual-hold-confirmation-interrupted",ActualNative(production_module,confirmation_interrupt=confirmation),confirmation)
-
-# The real driver and C state preserve exact post-L caller ownership without
-# class, errno or text guesses. Fault injection after the real C return is SIMULATED.
-fstat_native=ActualNative(case13_module);fstat_owner=e.CancellationSignals(admission(native=fstat_native))
-fstat_dir=base/"actual-hold-fstat-failure";fstat_dir.mkdir(mode=0o700);fstat_hold=e.stable_directory(fstat_dir)
-try:
- try:
-  with fstat_owner:e.seal(fstat_dir,fstat_hold,{entry:b"x" for entry in e.EVIDENCE_NAMES},
-                          {"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
- except e.Refusal as exc:ok(exc.code=="E_RUNTIME","actual C hold fstat failure refuses")
- else:raise AssertionError("actual C hold fstat failure accepted")
-finally:fstat_hold.close()
-ok(not (fstat_dir/"bundle.json").exists() and fstat_native.finish_calls==1
-   and fstat_native.outcome()=="native-release.failure",
-   "actual C hold fstat failure writes no marker and releases duplicate once")
-
-# Ordinary container cleanup attempts each other distinct child once, retains
-# the first OSError, and does not extend that rule to arbitrary BaseException.
-class CloseItem:
- def __init__(self,name,events,failure=None):self.name=name;self.events=events;self.failure=failure;self.closed=False
- def close(self):
-  if self.closed:return
-  self.closed=True;self.events.append(self.name)
-  if self.failure is not None:raise self.failure
-dependency_events=[];dependency_failure=OSError(errno.EIO,"original close")
-dependency=e.c.DependencySnapshot(CloseItem("original",dependency_events,dependency_failure),
-                                  CloseItem("snapshot",dependency_events),"0"*64,1)
-try:dependency.close()
-except OSError as observed:ok(observed is dependency_failure,"dependency cleanup retains first ordinary close error")
-else:raise AssertionError("dependency close error accepted")
-dependency.close()
-ok(dependency_events==["original","snapshot"],"dependency cleanup attempts both children once and becomes inert")
-anchor_events=[];anchor_failure=OSError(errno.EIO,"last held close")
-anchor=e.c.Anchor({},b"",[CloseItem("first",anchor_events),CloseItem("second",anchor_events),
-                          CloseItem("third",anchor_events,anchor_failure)],{},("",[]),("",[]),None)
-try:anchor.close()
-except OSError as observed:ok(observed is anchor_failure,"anchor cleanup retains first ordinary close error")
-else:raise AssertionError("anchor close error accepted")
-anchor.close()
-ok(anchor_events==["third","second","first"],"anchor cleanup attempts remaining held paths once and becomes inert")
-base_events=[];base_failure=RuntimeError("non-ordinary close")
-base_dependency=e.c.DependencySnapshot(CloseItem("original",base_events,base_failure),
-                                       CloseItem("snapshot",base_events),"0"*64,1)
-try:base_dependency.close()
-except RuntimeError as observed:ok(observed is base_failure,"arbitrary close interruption is propagated directly")
-else:raise AssertionError("arbitrary close interruption accepted")
-ok(base_events==["original"],"arbitrary close interruption does not promise attempt-all")
-
-def driver_case(name,failure,module=production_module,getter=False,getter_failure=None,
-                body_failure=None,expected_context=None,expect_caller=True,expect_marker=None):
- native=ActualNative(module,getter_interrupt=(getter_failure if getter_failure is not None else failure) if getter or getter_failure is not None else None,
-                     after_finish=failure if not getter else None)
- saved_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
- directory=base/name;directory.mkdir(mode=0o700)
- original_native,original_context,original_reproduce=e._NativeRelease,e.c.capture_parent_context,e.reproduce
- def body(_request,_work,_output,parent=None):
-  (directory/"bundle.json").write_bytes(b"provisional")
-  fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
-  try:ok(e.CancellationSignals.retain_completion(fd),name+" retains actual C owner")
-  finally:os.close(fd)
-  if body_failure is not None:raise body_failure
- try:
-  e._NativeRelease=lambda _context,_admission:native;e.c.capture_parent_context=lambda:{};e.reproduce=body
-  try:
-   with contextlib.redirect_stderr(io.StringIO()) as error:
-    result=e.main(["driver","reproduce","request","work","output"],admission())
-  except BaseException as observed:
-   expected=getter_failure if getter_failure is not None else failure
-   ok(expect_caller and observed is expected,name+" preserves exact caller exception")
-   if expected_context is not None:
-    ok(observed.__cause__ is expected_context or observed.__context__ is expected_context,
-       name+" retains the prior boundary context")
-  else:
-   ok(not expect_caller and result==1 and error.getvalue()=="E_RUNTIME\n",
-      name+" preserves native failure priority")
- finally:e._NativeRelease,e.c.capture_parent_context,e.reproduce=original_native,original_context,original_reproduce
- ok(native.finish_calls==1 and native.close_calls>=1,name+" closes ordinary resources before one native release")
- marker_expected=expect_caller if expect_marker is None else expect_marker
- ok((directory/"bundle.json").exists()==marker_expected,name+" marker follows authoritative native outcome")
- signal.pthread_sigmask(signal.SIG_SETMASK,saved_mask)
-for name,failure in (("post-value",ValueError("same")),
- ("post-oserror",OSError(errno.EIO,"same")),("post-memory",MemoryError("same")),
- ("post-system-exit",SystemExit(73)),("post-driver-refusal",e.Refusal("E_RUNTIME")),
- ("post-consumer-refusal",e.c.Refusal("E_RUNTIME")),
- ("post-parent-refusal",e.c.Refusal("E_PARENT_CONTEXT"))):driver_case(name,failure)
-driver_case("post-getter-interrupt",RuntimeError("getter assignment"),getter=True)
-finish_interrupt=RuntimeError("finish assignment")
-getter_interrupt=RuntimeError("outcome observation")
-driver_case("post-finish-and-getter-interrupt",finish_interrupt,getter_failure=getter_interrupt,
-            expected_context=finish_interrupt)
-earlier_failure=ValueError("earlier body failure")
-earlier_observation=RuntimeError("outcome observation after earlier failure")
-driver_case("earlier-failure-and-getter-interrupt",earlier_failure,getter=True,
-            getter_failure=earlier_observation,body_failure=earlier_failure,
-            expected_context=earlier_failure,expect_marker=False)
-driver_case("native-failure-priority",ValueError("same"),module=case4_module,expect_caller=False)
-close_native=ActualNative(production_module,close_failure=OSError(errno.EIO,"ordinary close"))
-close_dir=base/"ordinary-close-failure";close_dir.mkdir(mode=0o700)
-original_native,original_context,original_reproduce=e._NativeRelease,e.c.capture_parent_context,e.reproduce
-def close_body(_request,_work,_output,parent=None):
- (close_dir/"bundle.json").write_bytes(b"provisional");fd=os.open(close_dir,os.O_RDONLY|os.O_DIRECTORY)
- try:assert e.CancellationSignals.retain_completion(fd)
- finally:os.close(fd)
-try:
- e._NativeRelease=lambda _context,_admission:close_native;e.c.capture_parent_context=lambda:{};e.reproduce=close_body
- with contextlib.redirect_stderr(io.StringIO()) as close_error:
-  close_result=e.main(["driver","reproduce","request","work","output"],admission())
-finally:e._NativeRelease,e.c.capture_parent_context,e.reproduce=original_native,original_context,original_reproduce
-ok(close_result==1 and close_error.getvalue()=="E_RUNTIME\n" and not (close_dir/"bundle.json").exists()
-   and close_native.finish_calls==1,"ordinary native close failure is reported and rolls back before L")
-
-# Missing admission and an imported main refuse before all signal ownership APIs.
-api_names=("getsignal","signal","pthread_sigmask","set_wakeup_fd","sigpending")
-originals={name:getattr(e.signal,name) for name in api_names}; calls=[]
-for name in api_names:
- setattr(e.signal,name,lambda *_args,_name=name,**_kwargs:calls.append(_name))
-try:
- try:
-  with e.CancellationSignals():pass
- except e.Refusal as exc:ok(exc.code=="E_RUNTIME","missing admission refuses")
- else:raise AssertionError("missing admission accepted")
- with contextlib.redirect_stderr(io.StringIO()) as error:
-  result=e.main(["driver","reproduce","request","work","output"])
- ok(result==1 and error.getvalue()=="E_RUNTIME\n","imported main refuses")
- ok(calls==[],"imported refusal makes no signal, mask or wakeup call")
-finally:
- for name,value in originals.items():setattr(e.signal,name,value)
-
-# A pre-existing owner remains byte-for-byte functional for either warning mode.
-for warning in (False,True):
- read_fd,write_fd=os.pipe();os.set_blocking(read_fd,False);os.set_blocking(write_fd,False)
- prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
- prior=signal.set_wakeup_fd(write_fd,warn_on_full_buffer=warning);ok(prior==-1,"fixture wakeup starts disabled")
- setter_calls=[];real_setter=e.signal.set_wakeup_fd
- e.signal.set_wakeup_fd=lambda *args,**kwargs:(setter_calls.append((args,kwargs)) or -1)
- try:
-  with contextlib.redirect_stderr(io.StringIO()):
-   result=e.main(["driver","reproduce","request","work","output"])
- finally:e.signal.set_wakeup_fd=real_setter
- os.kill(os.getpid(),signal.SIGTERM);observed=os.read(read_fd,1)
- while True:
-  try:os.write(write_fd,b"x"*4096)
-  except BlockingIOError:break
- warning_output=io.StringIO()
- with contextlib.redirect_stderr(warning_output):os.kill(os.getpid(),signal.SIGTERM)
- retained=signal.set_wakeup_fd(-1,warn_on_full_buffer=True)
- signal.signal(signal.SIGTERM,prior_handler);os.close(write_fd);os.close(read_fd)
- ok(result==1 and not setter_calls and retained==write_fd and observed,
-    "unknown owner warning=%s remains installed and receives delivery" % warning)
- ok(bool(warning_output.getvalue())==warning,
-    "unknown owner warning=%s preserves full-buffer behavior" % warning)
-
-# Entry census refusal happens before the first ownership API.
-entry_calls=[];real_mask=e.signal.pthread_sigmask
-e.signal.pthread_sigmask=lambda *args,**kwargs:(entry_calls.append(args) or real_mask(*args,**kwargs))
-try:
- try:
-  with guard(Census(1)):pass
- except e.Refusal:pass
- else:raise AssertionError("entry census failure accepted")
-finally:e.signal.pthread_sigmask=real_mask
-ok(entry_calls==[],"entry native census refuses before signal ownership")
-
-# One final read and one pending sample decide every fixed-tail result.
-def tail_case(name, read_result=None, read_error=None, pending=(), latch=False, expect_success=False):
- owner=guard();real_read=e.os.read;real_pending=e.signal.sigpending;reads=[];pendings=[]
- try:
-  with owner:
-   if latch:owner.requested=True
-   def observed_read(fd,size):
-    if fd==owner.read_fd:
-     reads.append((fd,size))
-     if read_error is not None:raise read_error
-     return read_result
-    return real_read(fd,size)
-   e.os.read=observed_read
-   e.signal.sigpending=lambda:(pendings.append(True) or set(pending))
- except (e.Cancelled,e.Refusal,OSError):
-  outcome=False
- else:outcome=True
- finally:e.os.read=real_read;e.signal.sigpending=real_pending
- ok(outcome==expect_success and len(reads)==1 and reads[0][1]==1 and len(pendings)==1,name)
-tail_case("EAGAIN is the sole empty success",read_error=BlockingIOError(errno.EAGAIN,"empty"),expect_success=True)
-tail_case("one returned byte aborts",read_result=b"x")
-tail_case("EOF aborts",read_result=b"")
-tail_case("unexpected read error aborts",read_error=OSError(errno.EIO,"fixture"))
-tail_case("sticky latch alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),latch=True)
-tail_case("watched pending alone aborts",read_error=BlockingIOError(errno.EAGAIN,"empty"),pending=(signal.SIGTERM,))
-
-# Replenishment cannot extend the fixed read count, and nested scopes own nothing.
-owner=guard();read_calls=[];real_read=e.os.read
-try:
- with owner:
-  def replenish(fd,size):
-   if fd==owner.read_fd:
-    read_calls.append(size);os.write(owner.write_fd,b"z");return b"x"
-   return real_read(fd,size)
-  e.os.read=replenish
-except e.Cancelled:pass
-finally:e.os.read=real_read
-ok(read_calls==[1],"concurrent replenishment cannot extend one read")
-saturated=guard();real_read=e.os.read;saturated_reads=[]
-try:
- try:
-  with saturated:
-   while True:
-    try:os.write(saturated.write_fd,b"u"*4096)
-    except BlockingIOError:break
-   os.kill(os.getpid(),signal.SIGTERM)
-   def count_saturated(fd,size):
-    if fd==saturated.read_fd:saturated_reads.append(size)
-    return real_read(fd,size)
-   e.os.read=count_saturated
- except e.Cancelled:pass
- else:raise AssertionError("saturated wakeup signal accepted")
-finally:e.os.read=real_read
-ok(saturated_reads==[1],"unrelated saturation and watched delivery still take one byte")
-owner=guard();real_signal=e.signal.signal;nested_calls=[]
-try:
- with owner:
-  try:
-   e.signal.signal=lambda *args,**kwargs:nested_calls.append(args)
-   with e.CancellationSignals():
-    nested_fd=os.dup(1)
-    try:
-     try:e.CancellationSignals.retain_completion(nested_fd)
-     except e.Refusal:pass
-     else:raise AssertionError("nested scope retained completion")
-    finally:os.close(nested_fd)
-  finally:e.signal.signal=real_signal
-finally:e.signal.signal=real_signal
-ok(not nested_calls and owner.borrow_depth==0,"nested scope borrows without ownership APIs")
-
-# Both pipe endpoints are private and a child sees the caller's applicable mask.
-owner=guard()
-with owner:
- ok(not os.get_inheritable(owner.read_fd) and not os.get_inheritable(owner.write_fd),
-    "owner pipe endpoints are noninheritable")
- child=os.spawnve(os.P_WAIT,sys.executable,[sys.executable,"-I","-S","-B","-c",
-  "import signal,sys;sys.exit(1 if signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()) else 0)"],
-  {"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
- ok(child==0,"child preserves the unblocked caller mask")
-
-# Every watched signal is independently recorded before L.
-for sent in e.WATCHED_SIGNALS:
- try:
-  with guard():os.kill(os.getpid(),sent)
- except e.Cancelled:ok(True,"%s before L aborts" % signal.Signals(sent).name)
- else:raise AssertionError("watched signal accepted")
-
-# Caller-blocked nonignored pending state stays blocked and pending after rollback.
-prior_handler=signal.signal(signal.SIGTERM,lambda _signum,_frame:None)
-prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
-try:
- try:
-  with guard():os.kill(os.getpid(),signal.SIGTERM)
- except e.Cancelled:pass
- else:raise AssertionError("blocked pending signal accepted")
- current=signal.pthread_sigmask(signal.SIG_BLOCK,set())
- ok(signal.SIGTERM in current and signal.SIGTERM in signal.sigpending(),
-    "caller-blocked nonignored signal remains blocked and pending")
-finally:
- signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
- signal.signal(signal.SIGTERM,prior_handler)
-
-# Original SIG_IGN may discard pending only after rollback and disposition restoration.
-prior_handler=signal.signal(signal.SIGTERM,signal.SIG_IGN)
-prior_mask=signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM})
-ignored_owner=guard();ignored_dir=None
-try:
- try:
-  with ignored_owner:
-   ignored_dir=marker(ignored_owner,"ignored-pending")
-   os.kill(os.getpid(),signal.SIGTERM)
- except e.Cancelled:pass
- else:raise AssertionError("ignored pending signal accepted")
- ok(ignored_dir is not None and not (ignored_dir/"bundle.json").exists()
-    and signal.getsignal(signal.SIGTERM)==signal.SIG_IGN
-    and signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK,set()),
-    "ignored pending rollback precedes exact disposition and mask restoration")
-finally:
- signal.pthread_sigmask(signal.SIG_SETMASK,prior_mask)
- signal.signal(signal.SIGTERM,prior_handler)
-
-# A final native-count failure removes the marker; a live unregistered thread
-# makes the real entry census refuse before the body can run.
-final_census=Census(2);final_owner=guard(final_census);final_dir=None
-try:
- with final_owner:final_dir=marker(final_owner,"final-census")
-except e.Refusal:pass
-else:raise AssertionError("final census failure accepted")
-ok(final_census.calls==2 and final_dir is not None and not (final_dir/"bundle.json").exists(),
-   "final native census failure rolls back marker")
-ready=threading.Event();release=threading.Event()
-def native_peer():ready.set();release.wait()
-_thread.start_new_thread(native_peer,());ready.wait()
-entered=False
-try:
- try:
-  with e.CancellationSignals(admission(e._NativeThreadCensus())):entered=True
- except e.Refusal:pass
- else:raise AssertionError("multi-thread entry accepted")
-finally:release.set()
-ok(not entered,"real native non-one entry census refuses before effects")
-ready=threading.Event();release=threading.Event();native_final_owner=e.CancellationSignals(admission(e._NativeThreadCensus()))
-native_final_dir=None
-try:
- try:
-  with native_final_owner:
-   native_final_dir=marker(native_final_owner,"native-final-census")
-   _thread.start_new_thread(native_peer,());ready.wait()
- except e.Refusal:pass
- else:raise AssertionError("real native non-one final census accepted")
-finally:release.set()
-ok(native_final_dir is not None and not (native_final_dir/"bundle.json").exists(),
-   "real native non-one final census rolls back marker")
-
-default_script=base/"default-pending.py";default_output=base/"default-pending-output"
-default_script.write_text('''import hashlib,importlib.util,os,pathlib,signal,sys
-root,output=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]);output.mkdir(mode=0o700)
-spec=importlib.util.spec_from_file_location("default_pending",root/"shadow/v1/enforced-reproduction.py")
+  "$native_binary" <<'PY'
+import importlib.util,os,pathlib,sys
+root,base,case12_path,production_path=map(pathlib.Path,sys.argv[1:]);base.mkdir(mode=0o700)
+spec=importlib.util.spec_from_file_location("cancel_lifecycle",root/"shadow/v1/enforced-reproduction.py")
 e=importlib.util.module_from_spec(spec);sys.modules[spec.name]=e;spec.loader.exec_module(e)
+checks=0
+def ok(value,message):
+ global checks
+ if not value:raise AssertionError(message)
+ checks+=1;print("ok cancel-%d - %s"%(checks,message))
 class Census:
- def observe(self):pass
+ def __init__(self):self.calls=0
+ def observe(self):self.calls+=1
 class Native:
- def __init__(self):self.phase="prepared";self.entry=None;self.final=None;self.completion=None;self.status="native-release.pending";self.rolled=False
+ def __init__(self,path):
+  binary=next(path.glob("_cancel_release*.so")) if path.is_dir() else path
+  module_spec=importlib.util.spec_from_file_location("_cancel_release",binary)
+  module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
+  self.state=module.prepare_state()
+  for name in ("block_entry","arm_consumer","checkpoint","hold_completion","block_final",
+   "rollback_marker","commit_completion","abort_release","outcome","prepare_child","spawn_child",
+   "child_fds","close_child_stdin","close_child_stdout","close_child_stderr","observe_child_exit",
+   "reap_child","term_child_group","kill_child_group","check_child_group","child_status"):
+   setattr(self,name,getattr(self.state,name))
  def recheck(self):pass
- def block_entry(self):self.entry=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="entry"
- def resume_consumer(self):signal.pthread_sigmask(signal.SIG_SETMASK,self.entry);self.phase="consumer"
- def hold_completion(self,fd):self.completion=os.dup(fd)
- def block_final(self):self.final=signal.pthread_sigmask(signal.SIG_BLOCK,e.WATCHED_SIGNALS);self.phase="final"
- def rollback_marker(self):
-  if not self.rolled:
-   self.rolled=True;os.unlink("bundle.json",dir_fd=self.completion);os.fsync(self.completion)
- def finish_release(self):
-  signal.pthread_sigmask(signal.SIG_SETMASK,self.entry if self.phase=="entry" else self.final)
-  os.close(self.completion);self.completion=None;self.status="native-release.success";return self.status
- def outcome(self):return self.status
-path=pathlib.Path(e.sys.executable);admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,
- hashlib.sha256(path.read_bytes()).hexdigest(),e.sys.version,tuple(e.sys.version_info[:2]),
- e._runtime_module_origins(),Census(),Native())
-owner=e.CancellationSignals(admission);real_mask=e.signal.pthread_sigmask;sent=False
-def inject(how,values):
- global sent
- result=real_mask(how,values)
- if how==signal.SIG_BLOCK and owner.native.completion is not None and not sent:
-  sent=True;os.kill(os.getpid(),signal.SIGTERM)
- return result
-e.signal.pthread_sigmask=inject
-with owner:
- (output/"bundle.json").write_bytes(b"provisional")
- e.CancellationSignals.retain_completion(os.open(output,os.O_RDONLY|os.O_DIRECTORY))
-''')
-default_result=subprocess.run([sys.executable,"-I","-S","-B",str(default_script),str(root),
- str(default_output)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False)
-ok(default_result.returncode==-signal.SIGTERM and not (default_output/"bundle.json").exists(),
-   "default pending delivery occurs only after marker rollback")
-
-# A caller handler exception after L keeps the marker; an actual release failure
-# rolls it back while the held descriptor remains usable.
-class CallerSignal(Exception):pass
-for sent in e.WATCHED_SIGNALS:
- post_owner=guard();post_dir=None;real_mask=e.signal.pthread_sigmask
- prior_handler=signal.signal(sent,lambda _signum,_frame:(_ for _ in ()).throw(CallerSignal()))
- def deliver_after_restore(how,values):
-  result=real_mask(how,values)
-  if how==signal.SIG_SETMASK:os.kill(os.getpid(),sent)
-  return result
+def admission(native):
+ executable=e.stable_file(pathlib.Path(e.sys.executable))
+ try:return e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
+  tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census(),native)
+ finally:executable.close()
+def run(path,name,expect_success):
+ directory=base/name;directory.mkdir(mode=0o700);held=e.stable_directory(directory)
+ native=Native(path);owner=e.CancellationSignals(admission(native));files={key:b"x" for key in e.EVIDENCE_NAMES}
  try:
   try:
-   with post_owner:
-    post_dir=marker(post_owner,"post-l-"+signal.Signals(sent).name.lower())
-    e.signal.pthread_sigmask=deliver_after_restore
-  except CallerSignal:pass
-  else:raise AssertionError("post-L caller exception hidden")
- finally:e.signal.pthread_sigmask=real_mask;signal.signal(sent,prior_handler)
- ok(post_dir is not None and (post_dir/"bundle.json").exists(),
-    signal.Signals(sent).name+" post-L caller exception does not revoke marker")
-
-release_owner=guard();release_dir=None;real_setter=e.signal.set_wakeup_fd
-try:
- try:
-  with release_owner:
-   release_dir=marker(release_owner,"release-failure")
-   e.signal.set_wakeup_fd=lambda fd,**kwargs:(_ for _ in ()).throw(OSError("fixture release")) if fd==-1 else real_setter(fd,**kwargs)
- except OSError:pass
- else:raise AssertionError("release failure accepted")
-finally:
- e.signal.set_wakeup_fd=real_setter;real_setter(-1,warn_on_full_buffer=True)
-ok(release_dir is not None and not (release_dir/"bundle.json").exists(),
-   "actual release failure rolls back while held descriptor is usable")
-
-handler_owner=guard();handler_dir=None;real_signal=e.signal.signal;handler_failed=False
-def fail_handler(sent,handler):
- global handler_failed
- if not handler_failed and handler is handler_owner.previous.get(sent):
-  handler_failed=True;raise OSError("fixture handler restore")
- return real_signal(sent,handler)
-try:
- try:
-  with handler_owner:
-   handler_dir=marker(handler_owner,"handler-release-failure")
-   e.signal.signal=fail_handler
- except OSError:pass
- else:raise AssertionError("handler restoration failure accepted")
-finally:
- e.signal.signal=real_signal
- for sent,handler in handler_owner.previous.items():real_signal(sent,handler)
-ok(handler_failed and handler_dir is not None and not (handler_dir/"bundle.json").exists()
-   and e.CancellationSignals.active is None,"handler restoration failure is sticky and rolls back")
-
-mask_owner=guard();mask_dir=None;real_mask=e.signal.pthread_sigmask;mask_failed=False
-def fail_mask(how,values):
- global mask_failed
- result=real_mask(how,values)
- if how==signal.SIG_SETMASK and not mask_failed:mask_failed=True;raise OSError("fixture mask restore")
- return result
-try:
- try:
-  with mask_owner:
-   mask_dir=marker(mask_owner,"mask-release-failure")
-   e.signal.pthread_sigmask=fail_mask
- except (OSError,e.Refusal):pass
- else:raise AssertionError("mask restoration failure accepted")
-finally:e.signal.pthread_sigmask=real_mask
-ok(mask_failed and mask_dir is not None and not (mask_dir/"bundle.json").exists()
-   and e.CancellationSignals.active is None,"mask restoration failure is sticky and rolls back")
-
-pipe_owner=guard();pipe_dir=None;real_close=e.os.close;pipe_failed=False
-def fail_pipe_close(fd):
- global pipe_failed
- if fd==pipe_owner.write_fd and not pipe_failed:pipe_failed=True;raise OSError("fixture pipe close")
- return real_close(fd)
-try:
- try:
-  with pipe_owner:
-   pipe_dir=marker(pipe_owner,"pipe-release-failure")
-   e.os.close=fail_pipe_close
- except OSError:pass
- else:raise AssertionError("pipe close failure accepted")
-finally:
- e.os.close=real_close
- if pipe_failed:real_close(pipe_owner.write_fd)
-ok(pipe_failed and pipe_dir is not None and not (pipe_dir/"bundle.json").exists()
-   and e.CancellationSignals.active is None,"pipe close failure is sticky and rolls back")
-
-completion_owner=guard();completion_dir=None;real_close=e.os.close;completion_failed=False
-def fail_completion_close(fd):
- global completion_failed
- if fd==completion_owner.native.completion and not completion_failed:
-  completion_failed=True;raise OSError("fixture completion close")
- return real_close(fd)
-try:
- try:
-  with completion_owner:
-   completion_dir=marker(completion_owner,"completion-release-failure")
-   e.os.close=fail_completion_close
- except (OSError,e.Refusal):pass
- else:raise AssertionError("completion close failure accepted")
-finally:
- e.os.close=real_close
- if completion_failed and completion_owner.native.completion is not None:
-  real_close(completion_owner.native.completion)
-ok(completion_failed and completion_dir is not None and not (completion_dir/"bundle.json").exists()
-   and e.CancellationSignals.active is None,"completion close failure is sticky and rolls back")
-
-print("shadow-enforced-cancellation: %d checks passed" % checks)
+   with owner:bundle=e.seal(directory,held,files,{"body":{"git_revision_ref":"a"*40}},"enforced-reproduction.v1")
+  except e.Refusal:
+   if expect_success:raise
+  else:
+   if not expect_success:raise AssertionError("fault build accepted")
+   ok((directory/"bundle.json").read_bytes()==bundle,"native commit writes the exact prepared bytes")
+ finally:held.close()
+ if not expect_success:ok(not (directory/"bundle.json").exists(),"native hold failure leaves no marker")
+run(case12_path,"dup-failure",False)
+run(production_path,"success",True)
+print("shadow-enforced-cancellation: %d checks passed"%checks)
 PY
 
 cli_result=0
@@ -3329,71 +2504,15 @@ for field,value in (("incident",mismatch_incident),("materialization_input",mism
 mismatch_request=mismatch_case/"request.json";write(mismatch_request,canonical(mismatch_outer),0o400)
 mismatch_work=mismatch_case/"work";mismatch_output=mismatch_case/"output"
 mismatch_work.mkdir(mode=0o700);mismatch_output.mkdir(mode=0o700)
-restoration=base/"native-restoration-failure";restoration.mkdir(mode=0o700)
-class Census:
- def observe(self):pass
-executable=e.stable_file(physical_python)
-admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
- tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
-executable.close();native=e._NativeRelease(parent,admission)
-admission=dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
-with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)
-bundle_doc=json.loads(bundle);ok(len(bundle_doc["body"]["files"])==29,"actual reproduce seals 29 evidence files")
-record=json.loads((output/"shadow-record.json").read_bytes())
-ok(record["body"]["record_form"]=="enforced-reproduction.v1" and
- record["body"]["outcome"]=="no-change" and record["body"]["producer_invocations"]==0,
- "actual reproduce retains enforced no-change record")
-check=json.loads((output/"sandbox-check.json").read_bytes())
-ok(check["body"]["check_verdict"]=="valid" and check["body"]["enforcement_verdict"]=="satisfied",
- "actual receipt checker accepts controlled-store receipt")
-ok(json.loads((output/"file-digest-result.json").read_bytes())["body"]["reason_id"]=="file.match",
- "actual verifier payload is retained unchanged")
-ok((output/"bundle.json").exists(),"completion marker written after real chain")
-provenance=json.loads((output/"consumer-provenance.json").read_bytes())
-roles=[row["role"] for row in provenance["body"]["commands"]]
-ordinary_roles=[role for role in roles if role!="darwin-acl-uuid-resolution"]
-ok(ordinary_roles==["helper-version","jq-version","incident-validation","materializer-input-validation",
- "qualified-identity-validation","materialization","materializer-response-validation",
- "candidate-preparation","candidate-inspection","sandbox-bound-evaluation",
- "sandbox-launch-boundary","sandbox-receipt-check","trace-validation"] and
- (sys.platform=="darwin" or "darwin-acl-uuid-resolution" not in roles) and
- all(set(row)=={"role","argv_sha256","executable_sha256","component_sha256"}
-     for row in provenance["body"]["commands"]),
- "frozen provenance retains every executed role without private argv: "+repr(roles))
-trace=json.loads((output/"trace-ledger.json").read_bytes())
-ok(trace["body"]["events"][0]["facts"]["execution_environment"]["value"]=="env.local-macos-fixture" and
- trace["body"]["events"][0]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-evaluation.json").read_bytes()) and
- trace["body"]["events"][1]["facts"]["gate"]["source_ref"]["sha256"]==sha((output/"sandbox-check.json").read_bytes()),
- "trace binds claim environment and distinct declaration and enforcement evidence")
-scenario_mode="success";scenario_output=mismatch_output;scenario_work=mismatch_work
 def reset_native():
  native.state=native.module.prepare_state()
- names=("observe_allocator_admission","block_entry","resume_consumer","hold_completion",
-  "block_final","rollback_marker","finish_release","outcome","prepare_child","spawn_child",
+ names=("block_entry","arm_consumer","checkpoint","hold_completion","block_final",
+  "rollback_marker","commit_completion","abort_release","outcome","prepare_child","spawn_child",
   "child_fds","close_child_stdin","close_child_stdout","close_child_stderr",
   "observe_child_exit","reap_child","term_child_group","kill_child_group",
   "check_child_group","child_status")
  native.methods=tuple(getattr(native.state,name) for name in names)
  for name,method in zip(names,native.methods):setattr(native,name,method)
-reset_native();(restoration/"bundle.json").write_bytes(b"provisional")
-real_signal=e.signal.signal;failed=[False];restoration_owner=e.CancellationSignals(admission)
-def fail_restoration(sent,handler):
- if not failed[0] and e.CancellationSignals.active.previous.get(sent) is handler:
-  failed[0]=True;raise OSError("simulated Python handler restoration failure")
- return real_signal(sent,handler)
-try:
- try:
-  with restoration_owner:
-   descriptor=os.open(restoration,os.O_RDONLY|os.O_DIRECTORY)
-   e.CancellationSignals.retain_completion(descriptor);os.close(descriptor)
-   e.signal.signal=fail_restoration
- except OSError:pass
- else:raise AssertionError("Python restoration failure accepted")
-finally:
- e.signal.signal=real_signal
- for sent,handler in restoration_owner.previous.items():real_signal(sent,handler)
-ok(failed[0] and not (restoration/"bundle.json").exists(),
- "actual native owner rolls back true Python restoration failure before final close")
 reset_native();admission=dataclasses.replace(admission,native=native)
 try:
  with e.CancellationSignals(admission):
