@@ -1591,12 +1591,12 @@ PY
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B - "$root" "$tmp" "$tmp/object-closure" "$jq_bin" \
   "$native_binary" "$native_out/build-record.json" "$tmp/runtime-dependency-record.json" \
-  "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" <<'PY'
+  "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" "$native_control_binary" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
-import hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, types
+import hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, time, types
 
-root, base, helper, jq, native_binary, native_record, dependency_record, parent_helper, collector = map(pathlib.Path, sys.argv[1:])
+root, base, helper, jq, native_binary, native_record, dependency_record, parent_helper, collector, group_control = map(pathlib.Path, sys.argv[1:])
 helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
 parent_module=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(parent_module)
 parent_inputs=parent_module.ParentInputs(root,pathlib.Path(sys.executable).resolve(),native_binary,native_record,dependency_record,collector)
@@ -1928,6 +1928,7 @@ for name in c.IDENTITY_KEYS - {"dyld_cache_files"}:
         verifier_raw if name == "verifier" else name.encode())
 cache = install / "cache"; write(cache, b"cache"); identity_paths["dyld_cache_files"] = [str(cache)]
 store = base / "store"; store.mkdir(mode=0o750); store.chmod(0o750)
+observed_store_gid = [os.getgid()]
 config_body = {"consumer_gid": os.getgid(), "environment_id": env_id,
     "identity_paths": identity_paths, "installed_files": installed, "principal_uid": 54321,
     "runtime": {"driver": identity_paths["host_runtime"], "vfkit": identity_paths["vm_service"]},
@@ -1946,7 +1947,7 @@ def observed_value(value):
     owned = (value.st_dev, value.st_ino) in store_nodes
     mode = value.st_mode if owned else stat.S_IFMT(value.st_mode) | (0o555 if stat.S_ISDIR(value.st_mode) else 0o444)
     return types.SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino, st_mode=mode,
-        st_uid=54321 if owned else 0, st_gid=os.getgid(), st_nlink=value.st_nlink,
+        st_uid=54321 if owned else 0, st_gid=observed_store_gid[0] if owned else os.getgid(), st_nlink=value.st_nlink,
         st_size=value.st_size, st_mtime_ns=value.st_mtime_ns, st_ctime_ns=value.st_ctime_ns)
 def observed(fd): return observed_value(real_metadata(fd))
 def observed_named(name, parent_fd): return observed_value(real_named(name, parent_fd))
@@ -1991,6 +1992,68 @@ uid_reader=FixedGroupReader()
 refuses("E_CONFIG",lambda:c.load_anchor(FixedResolver(),uid_reader))
 ok(uid_reader.calls==[],"invalid principal uid refuses before supplementary membership query")
 write(anchor_path/"host-config.json",config)
+
+if real_platform == "darwin":
+    driver_spec = importlib.util.spec_from_file_location(
+        "group_fixture_driver", root / "shadow/v1/enforced-reproduction.py")
+    group_driver = importlib.util.module_from_spec(driver_spec)
+    sys.modules[driver_spec.name] = group_driver
+    driver_spec.loader.exec_module(group_driver)
+    native_spec = importlib.util.spec_from_file_location("_cancel_release", group_control)
+    group_native = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(group_native)
+    group_state = group_native.prepare_state()
+    group_state.block_entry(); group_state.arm_consumer()
+    group_owner = group_driver.CancellationSignals(); group_owner.native = group_state
+    group_driver.CancellationSignals.active = group_owner
+    fixture_executable = c.sys.executable
+    c.sys.executable = physical_python
+    group_python = group_driver.stable_file(pathlib.Path(sys.executable))
+    group_source = group_driver.stable_file(root / "shadow/v1/_consumer.py")
+    group_ledger = []
+    def record_group(role, argv, executable_sha256, component_sha256):
+        group_ledger.append((role, group_driver.sha(group_driver.canonical(argv)),
+                             executable_sha256, component_sha256))
+    group_resolver = group_driver._DarwinUUIDResolver(
+        group_python, group_source, time.monotonic() + 30, record_group)
+    actual_group_reader = group_driver._DarwinGroupReader(group_resolver)
+    class ActualGroupReader(c._DarwinGroupReader):
+        def contains(self, gid): return actual_group_reader.contains(gid)
+    actual_reader = ActualGroupReader()
+    group_census = group_driver._NativeThreadCensus()
+    try:
+        supplementary = json.loads(config)
+        supplementary["body"]["consumer_gid"] = 12
+        observed_store_gid[0] = 12
+        write(anchor_path / "host-config.json", c.canonical(supplementary))
+        acl_resolver = FixedResolver()
+        group_census.observe()
+        supplementary_anchor = c.load_anchor(acl_resolver, actual_reader)
+        supplementary_anchor.recheck()
+        ok(supplementary_anchor.config["principal_uid"] == 54321
+           and supplementary_anchor.config["consumer_gid"] == 12
+           and supplementary_anchor.resolver is acl_resolver and supplementary_anchor.held,
+           "actual supplementary result reaches unchanged UID, ACL and held anchor checks")
+        supplementary_anchor.close(); group_census.observe()
+
+        nonmember = json.loads(config)
+        nonmember["body"]["consumer_gid"] = 0xffffffff
+        observed_store_gid[0] = 0xffffffff
+        write(anchor_path / "host-config.json", c.canonical(nonmember))
+        group_census.observe()
+        refuses("E_CONFIG", lambda: c.load_anchor(FixedResolver(), actual_reader))
+        group_census.observe()
+        ok(len(group_ledger) == 2
+           and all(row[0] == "darwin-group-membership" for row in group_ledger)
+           and all(row[2:] == (group_python.sha256, group_source.sha256) for row in group_ledger),
+           "actual member and nonmember group children are both bound in the command ledger")
+    finally:
+        observed_store_gid[0] = os.getgid()
+        write(anchor_path / "host-config.json", config)
+        group_source.close(); group_python.close()
+        group_state.abort_release()
+        group_driver.CancellationSignals.active = None
+        c.sys.executable = fixture_executable
 
 for role in sorted(c.INSTALLED_SOURCES):
     path = pathlib.Path(installed[role]); original = path.read_bytes(); path.chmod(0o640); path.write_bytes(original + b"x")
@@ -2306,6 +2369,13 @@ if sys.platform=="darwin":
  ok(e.run_bounded("darwin-group-membership",group_argv,
   stdin=e.c.canonical({"gid":missing_gid}),timeout=10,output_limit=16,env=group_env)==e.c.canonical([]),
   "actual fixed group child returns exact empty nonmember result")
+ for invalid,message in (({"gid":True},"boolean gid"),({"gid":actual_gid,"extra":0},"extra field"),
+                         ({"gid":-1},"negative gid"),({"gid":0x100000000},"oversized gid")):
+  refuses("E_RUNTIME",lambda invalid=invalid:e.run_bounded("darwin-group-membership",group_argv,
+   stdin=e.c.canonical(invalid),timeout=10,output_limit=16,env=group_env),
+   "actual fixed group child refuses canonical "+message)
+  ok(e._native_child_status(parent_owner.native)[0]==4,
+   "canonical "+message+" refusal leaves the test-only State child complete")
  group_error_code=("import importlib.util,sys;"
   "s=importlib.util.spec_from_file_location('group_error',sys.argv[1]);"
   "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
