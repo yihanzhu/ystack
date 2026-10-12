@@ -665,10 +665,12 @@ def close_at_eof(state,fd,close):
 class MissingFilterComponent(Exception):pass
 class DefaultFilterHold:
  def __init__(self,open_fn=os.open,metadata_fn=c._metadata,named_fn=c._named_metadata,
-              acl_fn=None,free_fn=None,close_fn=os.close,inheritable_fn=os.get_inheritable):
+              acl_fn=None,free_fn=None,close_fn=os.close,inheritable_fn=os.get_inheritable,
+              rows_factory=list):
   self._open,self._metadata,self._named=open_fn,metadata_fn,named_fn
   self._acl,self._free,self._close,self._inheritable=acl_fn,free_fn,close_fn,inheritable_fn
-  self._owners=[];self._rows=[];self._missing=None;self._acl_results=[]
+  self._owners=[None,None,None,None];self._owner_count=0
+  self._rows=rows_factory();self._missing=None;self._acl_results=[]
   try:self._prepare()
   except BaseException:
    try:self.close()
@@ -690,11 +692,12 @@ class DefaultFilterHold:
   if error!=errno.ENOENT:raise OSError(error or errno.EIO,"acl_get_fd_np")
  def _take(self,name,parent):
   flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+  if self._owner_count>=len(self._owners):raise OSError(errno.E2BIG,"filter parent count")
   try:fd=self._open(name,flags) if parent is None else self._open(name,flags,dir_fd=parent)
   except OSError as exc:
    if parent is not None and exc.errno==errno.ENOENT:raise MissingFilterComponent from None
    raise
-  self._owners.append(fd)
+  self._owners[self._owner_count]=fd;self._owner_count+=1
   if self._inheritable(fd):raise OSError(errno.EIO,"inheritable filter parent")
   value=self._metadata(fd)
   if not self._protected(value):raise OSError(errno.EACCES,"unprotected filter parent")
@@ -724,8 +727,9 @@ class DefaultFilterHold:
    self._no_acl(fd)
   self._absent(self._missing[1],self._missing[0])
  def close(self):
-  owners,self._owners=self._owners,[];failure=None
-  for fd in reversed(owners):
+  count,self._owner_count=self._owner_count,0;failure=None
+  for index in range(count-1,-1,-1):
+   fd,self._owners[index]=self._owners[index],None
    try:self._close(fd)
    except OSError as exc:
     if failure is None:failure=exc
@@ -796,11 +800,25 @@ try:hold.recheck()
 except OSError:pass
 else:raise AssertionError("accepted replaced filter parent name")
 hold.close()
-fake=FakeFilter();hold=fake_hold(fake);fake.close_error.add(hold._owners[-1])
+fake=FakeFilter();hold=fake_hold(fake);fake.close_error.add(hold._owners[hold._owner_count-1])
 try:hold.close()
 except OSError:pass
 else:raise AssertionError("ignored filter parent close failure")
 assert len(fake.closed)==len(set(fake.closed));hold.close();assert len(fake.closed)==len(set(fake.closed))
+fake=FakeFilter()
+try:DefaultFilterHold(fake.open,fake.metadata,fake.named,fake.capture,fake.free,fake.close,
+                       lambda _fd:(_ for _ in ()).throw(MemoryError()))
+except MemoryError:pass
+else:raise AssertionError("accepted post-open owner interruption")
+assert len(fake.closed)==1
+class FailingRows(list):
+ def append(self,_value):raise MemoryError()
+fake=FakeFilter()
+try:DefaultFilterHold(fake.open,fake.metadata,fake.named,fake.capture,fake.free,fake.close,
+                       lambda _fd:False,FailingRows)
+except MemoryError:pass
+else:raise AssertionError("accepted late row interruption")
+assert len(fake.closed)==1
 print("default-filter-parent-fixture: fixed path, ACL refusal, identity and owner controls passed")
 
 actual_filter=None
@@ -820,7 +838,7 @@ if sys.platform=="darwin":
 state=owner()
 inherited=os.open("/dev/null",os.O_RDONLY);high=fcntl.fcntl(inherited,fcntl.F_DUPFD,200)
 os.set_inheritable(inherited,True);os.set_inheritable(high,True)
-filter_fds=tuple(actual_filter._owners) if actual_filter is not None else ()
+filter_fds=tuple(actual_filter._owners[:actual_filter._owner_count]) if actual_filter is not None else ()
 program=(b'''import errno,json,os,signal
 def absent(fd):
  try:os.fstat(fd)
