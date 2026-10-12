@@ -227,7 +227,7 @@ forbidden_startup_keys=tuple(key for key in startup_environment_keys if
  key.startswith(("MallocStackLogging","OBJC_","LD_","DYLD_")) or
  key=="POSIX_SPAWN_FILTERING_RULES_PATH")
 if forbidden_startup_keys:raise SystemExit("forbidden startup environment")
-import ctypes,hashlib,importlib.machinery,importlib.util,json,pathlib,re,struct,subprocess,sys,sysconfig,uuid
+import ctypes,hashlib,importlib.machinery,importlib.util,json,pathlib,re,struct,subprocess,sys,sysconfig,tempfile,uuid
 root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
 spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
@@ -282,40 +282,159 @@ def soname(path):
  if result["status"]=="ok" and not matches:return {"status":"missing"}
  return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
 def function_bodies(path):
- tool="/usr/bin/objdump";symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
+ objdump="/usr/bin/objdump";readelf="/usr/bin/readelf"
+ symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
   "posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","setsid",
   "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
   "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
   "write","fsync","close","unlinkat","fstat")
- answer={"tool":{"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
-  {"status":"unavailable","reason":"missing"}},"image":path,"functions":[]}
- if answer["tool"]["identity"]["status"]!="ok":return answer
- total=0
- for symbol in symbols:
-  if total>=786432:
-   answer["functions"].append({"symbol":symbol,"status":"unavailable",
-    "reason":"total-output-limit-before-read"});continue
-  argv=[tool,"-d","--disassemble="+symbol,path]
+ answer={"tools":{},"image":path,"functions":[],"internal_functions":[]}
+ for name,tool in (("objdump",objdump),("readelf",readelf)):
+  answer["tools"][name]={"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
+   {"status":"unavailable","reason":"missing"}}
+ if any(row["identity"]["status"]!="ok" for row in answer["tools"].values()):
+  answer["status"]="unavailable";answer["reason"]="missing-tool";return answer
+ recorded=0
+ def metadata(argv,feed):
+  with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+   try:
+    process=subprocess.Popen(argv,stdout=stdout,stderr=stderr,
+     env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+    try:exit_code=process.wait(timeout=10);reason=None
+    except subprocess.TimeoutExpired:
+     process.kill();process.wait();exit_code=process.returncode;reason="timeout"
+   except OSError as error:
+    return {"argv":argv,"status":"unavailable","reason":type(error).__name__}
+   stdout.seek(0);stdout_hash=hashlib.sha256();stdout_bytes=0
+   for raw in stdout:
+    stdout_hash.update(raw);stdout_bytes+=len(raw);feed(raw)
+   stderr.seek(0);stderr_hash=hashlib.sha256();stderr_bytes=0;stderr_kept=bytearray()
+   while chunk:=stderr.read(65536):
+    stderr_hash.update(chunk);stderr_bytes+=len(chunk)
+    if len(stderr_kept)<=8192:stderr_kept.extend(chunk[:8193-len(stderr_kept)])
+   status="ok" if exit_code==0 and reason is None and stderr_bytes<=8192 else "unavailable"
+   return {"argv":argv,"status":status,"reason":reason if reason else
+    (None if status=="ok" else "exit-or-stderr-limit"),"exit":exit_code,
+    "stdout_bytes":stdout_bytes,"stdout_sha256":stdout_hash.hexdigest(),
+    "stdout_truncated":False,"stderr_bytes":stderr_bytes,
+    "stderr_sha256":stderr_hash.hexdigest(),"stderr_truncated":stderr_bytes>8192,
+    "stderr":bytes(stderr_kept[:8192]).decode("utf-8","replace")}
+ def symbols_from(image,label):
+  entries=[]
+  def feed(raw):
+   text=raw.decode("utf-8","replace").rstrip("\n");fields=text.split(None,7)
+   if len(fields)!=8 or not fields[0].endswith(":") or not re.fullmatch(r"[0-9a-fA-F]+",fields[1]):return
+   token=fields[7].split()[0]
+   if "@@" in token:base,version=token.split("@@",1)
+   elif "@" in token:base,version=token.split("@",1)
+   else:base,version=token,None
+   try:value=int(fields[1],16);size=int(fields[2])
+   except ValueError:return
+   entries.append({"base":base,"version":version,"value":value,"size":size,
+    "type":fields[3],"bind":fields[4],"visibility":fields[5],"section":fields[6],"line":text})
+  status=metadata([readelf,"--dyn-syms","--wide",image],feed)
+  status["image_role"]=label
+  return entries,status
+ native_entries,native_status=symbols_from(native_binary,"native-release")
+ provider_entries,provider_status=symbols_from(path,"libc")
+ answer["symbol_metadata"]={"native":native_status,"provider":provider_status}
+ def range_body(label,start,end):
+  nonlocal recorded
+  if not (0<=start<end and end-start<=65536):return {"status":"unavailable","reason":"invalid-range"}
+  argv=[objdump,"-d","--start-address=0x%x"%start,"--stop-address=0x%x"%end,path]
   try:
    result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
     timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
   except (OSError,subprocess.SubprocessError) as error:
-   answer["functions"].append({"symbol":symbol,"argv":argv,"status":"unavailable",
-    "reason":type(error).__name__});continue
-  raw=result.stdout;error_raw=result.stderr;total+=len(raw)+len(error_raw)
-  row={"symbol":symbol,"argv":argv,"exit":result.returncode,"body_bytes":len(raw),
+   return {"label":label,"argv":argv,"status":"unavailable","reason":type(error).__name__}
+  raw=result.stdout;error_raw=result.stderr
+  row={"label":label,"argv":argv,"start":start,"end":end,"exit":result.returncode,"body_bytes":len(raw),
    "body_sha256":hashlib.sha256(raw).hexdigest(),"stderr_bytes":len(error_raw),
    "stderr_sha256":hashlib.sha256(error_raw).hexdigest()}
   has_instructions=bool(re.search(rb"(?m)^\s*[0-9a-f]+:\s+[0-9a-f][0-9a-f ]+\s+",raw))
-  if len(raw)>65536 or len(error_raw)>8192 or total>786432:
+  if len(raw)>65536 or len(error_raw)>8192 or recorded+len(raw)+len(error_raw)>786432:
    row.update({"status":"unavailable","reason":"output-limit"})
   else:
    row.update({"status":"ok" if result.returncode==0 and has_instructions else "unavailable",
     "reason":None if result.returncode==0 and has_instructions else "failed-or-no-instructions",
     "body":raw.decode("utf-8","replace"),"stderr":error_raw.decode("utf-8","replace")})
+   if row["status"]=="ok":recorded+=len(raw)+len(error_raw)
+  return row
+ for symbol in symbols:
+  native=[entry for entry in native_entries if entry["base"]==symbol and entry["section"]=="UND"]
+  if len(native)!=1:
+   answer["functions"].append({"symbol":symbol,"status":"unavailable","reason":"native-symbol-count",
+    "count":len(native),"metadata_lines":[entry["line"] for entry in native]});continue
+  required=native[0]
+  provider=[entry for entry in provider_entries if entry["base"]==symbol and
+   entry["version"]==required["version"] and entry["section"]!="UND" and entry["type"]=="FUNC"]
+  locations={(entry["value"],entry["size"]) for entry in provider}
+  if len(provider)!=1 or len(locations)!=1 or provider[0]["size"]<=0:
+   answer["functions"].append({"symbol":symbol,"required_version":required["version"],
+    "status":"unavailable","reason":"provider-symbol-count-or-shape","count":len(provider),
+    "metadata_lines":[required["line"],*(entry["line"] for entry in provider)]});continue
+  selected=provider[0];aliases=[entry["line"] for entry in provider_entries if
+   entry["section"]!="UND" and entry["type"]=="FUNC" and
+   (entry["value"],entry["size"])==(selected["value"],selected["size"])]
+  metadata_lines=list(dict.fromkeys([required["line"],selected["line"],*aliases]))
+  metadata_bytes=sum(len(line.encode("utf-8"))+1 for line in metadata_lines)
+  if recorded+metadata_bytes>786432:
+   answer["functions"].append({"symbol":symbol,"status":"unavailable","reason":"metadata-output-limit"});continue
+  recorded+=metadata_bytes
+  row=range_body(symbol,selected["value"],selected["value"]+selected["size"])
+  row.update({"symbol":symbol,"required_version":required["version"],"metadata_lines":metadata_lines,
+   "provider_type":selected["type"],"provider_bind":selected["bind"],
+   "provider_visibility":selected["visibility"],"provider_section":selected["section"]})
   answer["functions"].append(row)
- answer["total_bytes"]=total;answer["limits"]={"functions":len(symbols),"body_each":65536,
-  "stderr_each":8192,"total":786432,"timeout_seconds_each":10}
+ image_identity=digest(path);image_build_id=build_id(path)
+ answer["image_identity"]=image_identity;answer["image_build_id"]=image_build_id
+ fixed_identity=(image_identity.get("sha256")=="3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf" and
+  image_build_id.get("value")=="a4a7992a8e66555c8141ab2a08a8465ff6e0ea65")
+ internal=(0x10ffc0,0x98630,0x986b0,0x10f200,0x10f260)
+ if fixed_identity:
+  targets={address:[] for address in internal};current=None
+  def flush_frame():
+   nonlocal current
+   if current is None:return
+   start,end,lines=current
+   for target in internal:
+    if start<=target<end:targets[target].append((start,end,"".join(lines)))
+   current=None
+  def frames(raw):
+   nonlocal current
+   text=raw.decode("utf-8","replace")
+   match=re.search(r"\bFDE\b.*\bpc=([0-9a-fA-F]+)\.\.([0-9a-fA-F]+)",text)
+   if match:
+    flush_frame()
+    start,end=(int(value,16) for value in match.groups())
+    current=(start,end,[text]) if any(start<=target<end for target in internal) else None
+   elif re.match(r"^[0-9a-fA-F]{8,}\s",text):flush_frame()
+   elif current is not None:current[2].append(text)
+   if current is not None and text.strip()=="":flush_frame()
+  frame_status=metadata([readelf,"--debug-dump=frames-interp",path],frames)
+  flush_frame()
+  answer["frame_metadata"]=frame_status
+  for target in internal:
+   choices=targets[target]
+   if len(choices)!=1:
+    answer["internal_functions"].append({"entry":target,"status":"unavailable",
+     "reason":"fde-count","count":len(choices)});continue
+   start,end,block=choices[0];block_bytes=len(block.encode("utf-8"))
+   if recorded+block_bytes>786432:
+    answer["internal_functions"].append({"entry":target,"status":"unavailable",
+     "reason":"metadata-output-limit"});continue
+   recorded+=block_bytes;row=range_body("internal-0x%x"%target,start,end)
+   row.update({"entry":target,"fde":block});answer["internal_functions"].append(row)
+ else:
+  answer["frame_metadata"]={"status":"unavailable","reason":"fixed-libc-identity-mismatch",
+   "identity":image_identity,"build_id":image_build_id}
+  for target in internal:answer["internal_functions"].append({"entry":target,"status":"unavailable",
+   "reason":"fixed-libc-identity-mismatch"})
+ answer["spawn_child_entry"]={"status":"unavailable","reason":"not-uniquely-derived-from-parent-body",
+  "parent_entry":0x10ffc0}
+ answer["recorded_bytes"]=recorded;answer["limits"]={"public_functions":len(symbols),
+  "internal_functions":len(internal),"body_each":65536,"stderr_each":8192,
+  "recorded_total":786432,"timeout_seconds_each":10}
  return answer
 def jit():
  api=getattr(sys,"_jit",None)
