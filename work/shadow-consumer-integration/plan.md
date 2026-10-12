@@ -9,10 +9,10 @@ Tracks #506. This implements Step-8 child 5 under the accepted spec. The authori
 is `9295d658405afaae98cfea724fba24184f271fe1`; base movement is external context, not
 permission to change meaning. Intent blob: `6feb2ad7dd5f096bdd483ed9bace07cae2c24be5`.
 
-Plan PR: `review_size: accepted-exception`, 900–1120 lines. The five-slice contract,
+Plan PR: `review_size: accepted-exception`, 900–1140 lines. The five-slice contract,
 closed native context, fixed native signal checkpoint, direct-result release and
 State-owned child handoff need one coherent implementation brief. The range keeps
-complete signal/fd/platform and fixed identity-child proof readable and changes only
+complete signal/fd/platform and fixed child-lifecycle proof readable and changes only
 the soft size budget.
 
 ## Files that change
@@ -399,20 +399,37 @@ matching observation marks `exit_observed` but leaves the leader waitable, so pi
 identity remains reserved. A lost observation return cannot lose ownership or consume
 the leader.
 
-Every signal that may still be required occurs before final reap. On normal completion,
-all pipes must be at EOF/closed and the fixed command's accepted contract must leave no
-descendant requiring a group signal; otherwise enter cleanup. Cleanup attempts TERM,
-retains the waitable leader through its grace period, and attempts the bounded KILL
-stage before reap whenever TERM did not close every group obligation. Leader exit after
-TERM does not skip a still-required KILL. Late cancellation before reap also enters or
-finishes those stages; cancellation after reap cannot signal the old pgid.
+Every signal that may still be required occurs before final reap. The normal no-signal
+path is limited to the exact fixed role, executable, argv and environment contracts in
+section 4. After all pipes reach EOF/close, require a matching successful WNOWAIT
+observation. Before reap, its recorded `si_code` and `si_status` must be `CLD_EXITED`
+and zero. There must be no recorded child error or outstanding cleanup signal stage.
+Only then may the fixed command's normal completion contract establish that TERM and
+KILL are not required. The fixed leaf commands do not spawn descendants. Compound
+commands finish their foreground work before successful exit. The materializer's two
+finite environment-list process-substitution producers retain the observed stderr until
+they exit. A role number alone gives no such contract to an arbitrary caller or test
+program. The sudo/supervisor role keeps its separate authenticated receipt and teardown
+requirements; wrapper exit never proves VM teardown.
+
+Nonzero or signal exit, an unknown observation, cancellation, timeout or communication
+failure enters cleanup while the leader remains waitable. Do not use a pre-reap group
+query or `EPERM` as normal-path proof. Cleanup attempts TERM, retains the waitable leader
+through its grace period, and attempts the bounded KILL stage before reap whenever TERM
+did not close every group obligation. Leader exit after TERM does not skip a still-required
+KILL. Late cancellation before reap also enters or finishes those stages; cancellation
+after reap cannot signal the old pgid.
 
 `reap_child()` is the sole consuming operation. It is legal only after a matching
 nonconsuming exit observation and after State has marked every TERM/KILL stage either
-completed or not required by the normal-path condition above. It stores raw consume
-rc/errno/status and `leader_reaped` before returning. A lost reap return therefore
-cannot cause a second consume. After reap only no-effect group-absence observation and
-pipe bookkeeping may run; never signal through the old, possibly reused pid/pgid.
+completed or not required by the normal-path condition above. When no signal stage was
+requested, native reap also requires the recorded `CLD_EXITED`/zero observation. That
+native gate is necessary but not sufficient: only the trusted driver may bind it to the
+fixed command contract, and no caller boolean may grant the shortcut. Entered cleanup
+keeps the existing strict signal-stage gate. Reap stores raw rc/errno/status and
+`leader_reaped` before returning. A lost reap return cannot cause a second consume.
+After reap only no-effect group-absence observation and pipe bookkeeping may run; never
+signal through the old, possibly reused pid/pgid.
 `leader_reaped` is not `group_absent` and neither proves pipes complete. Only all three
 allow `COMPLETE` and a later serial child. Unknown observation/consume results do not
 grant a retry or advance authority.
@@ -1059,7 +1076,7 @@ observations.
 | shadow-enforced | Fixed platform predicate accepts the proven normal condition and refuses unsupported close-all or changed/uncertain Darwin default-filter conditions before child effects. Real inheritable extra fds, including a high-numbered fd and the parent's held descriptors, never reach exec while declared stdio does. Linux closefrom action errors retain direct rc and bounded preparation cleanup. Record gate-only controls separately; repeat the real controls on each final production output, with accepted complete dependency evidence and no test bypass. |
 | shadow-enforced | Real noncompatibility Darwin UUID resolution in the fixed child plus controlled UID, group, unresolved and lookup-error semantics in original order; exact 128-entry/16-KiB/32-KiB/64-KiB bounds; malformed, duplicate-key, missing, extra, reordered and mismatched results; no path/fd/permissions/decision in the protocol; all root, principal, nonprincipal, harmless/dangerous grant and no-ACL controls remain paired; a `MemoryError` at the first post-ACL operation frees the ACL exactly once without resolver use, and a `MemoryError` during the 16-byte qualifier copy frees that qualifier then the ACL exactly once, with paired normal controls preserving UUID bytes and order |
 | shadow-enforced | Actual UUID and group-role execs have checked P/S, distinct fixed argv/role, clean environment, saved mask and no inherited owner or held descriptor; neither child's native threads change the parent's census or owner. Primary real/effective gid match starts no membership child and traps parent os.getgroups; actual Darwin supplementary-only membership returns exactly the authenticated gid and passes unchanged R3 checks; actual nonmember returns empty and refuses. A controlled child-level `os.getgroups()` error exercises the same role encoder/exit boundary, exits nonzero and refuses without fallback; no fixture-only positive passes. Exact canonical gid input, empty/singleton output, extra input/field/value, malformed/oversized output, role/argv/env mismatch, normal unique reap/close, timeout and cancellation preserve one bounded cleanup and disappearance. Delayed UUID reply plus held/name mutation still refuses; every ACL caller retains its fixed resolver and nonempty ACL semantics. |
-| shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
+| shadow-enforced | State-owned child prepare fails after each individual pipe/attr/action/buffer acquisition with no child and one attempt per acquired resource; spawn nonzero records NO_CHILD; spawn success records raw pid/pgid/fds before a lost native return, Python assignment or later output allocation; nonconsuming exit observation and final reap each preserve raw results across lost returns; leader-before-descendants and TERM-then-leader-exit controls keep identity waitable while a required KILL remains; late cancellation before reap finishes applicable signal stages, while late cancellation after reap never signals; final reap occurs once only after matching exit observation and no remaining signal authority; normal, nonzero, exec-error, timeout, cancellation and oversize keep leader-reaped, group-absent and pipes-complete distinct; partial TERM/KILL/observe/reap/group-check/close failures retain first error and outstanding duties; repeated cleanup is inert only for consumed operations; test wrappers prove State control flow only, while actual Mac/Linux pairs prove exact executable/argv/env, session/pgid, stdio/no-extra-fd, signal mask/default, waitid/WNOWAIT and final-reap semantics, raw error/status and bounded group disappearance; the real driver pairs a real fixed normal command with synchronized actual nonzero and signaled leaders whose same-group descendant is ready, has closed stdio and remains alive, proving required TERM/KILL before one reap, no signal after reap, final absence on successful cleanup, retained raw failure otherwise and no completion marker; no arbitrary program may borrow a fixed role's normal contract; filter, wait or parent-mask UNKNOWN refuses before child effect and cannot be called a positive |
 | shadow-enforced | Actual materializer/preparation; pre-launch fsync ordering; nonce/request/subject/expectation equality; copied receipt; wrong candidate/evaluator/payload; success, mismatch, refusal, missing/partial evidence, timeout/cancel and unconfirmed teardown; raw instruction retention; exact 29-file inventory and marker-last behavior |
 | shadow-enforced | Native finalization performs exactly one nonblocking one-byte pipe observation where any byte, EOF, uncertain descriptor or unexpected error aborts and only EAGAIN/EWOULDBLOCK permits the empty control; unrelated-byte saturation followed by delayed watched delivery and concurrent replenishment prove the fixed read bound; latch-only and pending-only refusals; no read retry, drain, wait, replay or signal consumption |
 | shadow-enforced | Fresh reviewed executable positive; imported/missing-admission refusal before signal/mask/wakeup APIs; pre-existing wakeup owner under both warning modes retains fd, actions, mask, delivery and full-buffer warning behavior with zero Python signal/wakeup setter calls; native owner leaves Python handler table and disabled/warning pair untouched; nested scopes borrow; children receive saved original caller mask and no owner/pipe inheritance. |
