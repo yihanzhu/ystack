@@ -561,12 +561,16 @@ def function_bodies(path):
  tool="/usr/bin/objdump";symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
   "posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","setsid",
   "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
-  "waitid","kill","pthread_sigmask","sigpending","write","fsync","close","unlinkat","fstat")
+  "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
+  "write","fsync","close","unlinkat","fstat")
  answer={"tool":{"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
   {"status":"unavailable","reason":"missing"}},"image":path,"functions":[]}
  if answer["tool"]["identity"]["status"]!="ok":return answer
  total=0
  for symbol in symbols:
+  if total>=786432:
+   answer["functions"].append({"symbol":symbol,"status":"unavailable",
+    "reason":"total-output-limit-before-read"});continue
   argv=[tool,"-d","--disassemble="+symbol,path]
   try:
    result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
