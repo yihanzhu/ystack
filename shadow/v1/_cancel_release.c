@@ -419,10 +419,10 @@ child_environment_allowed(int role, char **environment, size_t count)
     return 1;
 }
 
+#if defined(__APPLE__)
 static int
 darwin_filter_absent(int before_spawn)
 {
-#if defined(__APPLE__)
     struct stat value;
     int rc;
     (void)before_spawn;
@@ -437,11 +437,8 @@ darwin_filter_absent(int before_spawn)
     if (rc < 0 && errno == ENOENT) return 1;
     if (rc == 0) errno = EEXIST;
     return 0;
-#else
-    (void)before_spawn;
-    return 0;
-#endif
 }
+#endif
 
 static int
 child_platform_admitted(void)

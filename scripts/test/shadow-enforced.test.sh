@@ -919,7 +919,11 @@ class ParentInputs:
      if (held["sha256"],held["size"])!=expected_image[:2]:raise ValueError("ELF held identity")
    functions=facts.get("libc_function_bodies")
    if not isinstance(functions,dict) or functions.get("evidence_binding")!={"reason":None,"status":"ok"} or functions.get("image_identity")!={"status":"ok","sha256":LINUX_IMAGES["libc"][0],"size":LINUX_IMAGES["libc"][1]} or functions.get("image_build_id")!={"status":"ok","value":LINUX_IMAGES["libc"][2]} or functions.get("source_before")!=functions.get("source_after"):raise ValueError("ELF evidence binding")
-   rows=functions.get("functions");found={row.get("label"):row for row in rows} if isinstance(rows,list) else {}
+   rows=functions.get("functions")
+   if not isinstance(rows,list):raise ValueError("ELF public rows")
+   unavailable=[row for row in rows if "label" not in row]
+   if unavailable!=[{"origin_role":"spawn-child","reason":"spawn-child-entry-unresolved","status":"unavailable","symbol":"setsid"}]:raise ValueError("ELF setsid diagnostic")
+   found={row.get("label"):row for row in rows if "label" in row}
    if set(found)!=set(LINUX_PUBLIC):raise ValueError("ELF public set")
    for name,expected_function in LINUX_PUBLIC.items():
     row=found[name]
@@ -938,7 +942,7 @@ class ParentInputs:
    if any(gate_body.get(key)!=body[key] for key in shared):raise ValueError("ELF gate source relation")
    expected_gate=list(expected);source_index=expected_gate.index(str(source));expected_gate[source_index:source_index]=["-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48"]
    expected_gate[-1]=gate_body.get("argv",[None])[-1]
-   if gate_body.get("argv")!=expected_gate or gate_body.get("argv_sha256")!=hashlib.sha256((json.dumps(expected_gate,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()):raise ValueError("ELF gate recipe")
+   if gate_body.get("argv")!=expected_gate or gate_body.get("argv_sha256")!=hashlib.sha256((json.dumps(expected_gate,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()).hexdigest():raise ValueError("ELF gate recipe")
   elif facts["platform"]=="darwin":
    if facts.get("executable_identity")!={"status":"ok","sha256":"1b5cb11d163e5ba34e2a05fc533c0ed89574d4425f9749a9d89405f651980e0d","size":34640} or facts.get("package")!={"kind":"homebrew-cellar","formula":"python@3.14","version":"3.14.8_2"} or facts.get("darwin_shared_cache_uuid")!={"status":"ok","value":"421885d7-01cc-3629-b59b-6a068db34420"}:raise ValueError("Darwin runtime")
    selected={item.get("path"):item.get("identity") for item in facts.get("darwin_mapped_images",[]) if item.get("path") in DARWIN_UUIDS}
