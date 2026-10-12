@@ -855,7 +855,10 @@ watched_handler(int sent)
     (void)sent;
     if (state != NULL) {
         state->cancelled = 1;
-        if (state->signal_pipe[1] >= 0) (void)write(state->signal_pipe[1], &value, 1);
+        if (state->signal_pipe[1] >= 0) {
+            ssize_t write_result = write(state->signal_pipe[1], &value, 1);
+            (void)write_result;
+        }
     }
     errno = saved_errno;
 }
