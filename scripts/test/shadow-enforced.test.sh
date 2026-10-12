@@ -220,6 +220,212 @@ for native_case in $native_child_cases; do
   child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 -maxdepth 1 -type f -name '_cancel_release*.so' -print)
   "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"
 done
+"$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
+import ctypes,hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,struct,subprocess,sys,sysconfig,uuid
+root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
+spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
+module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+native_spec=importlib.util.spec_from_file_location("_cancel_release",native_binary)
+native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
+def digest(path):
+ size=os.stat(path).st_size
+ if size>256*1024*1024: return {"status":"unavailable","reason":"file-size-limit","size":size}
+ measured=hashlib.sha256();seen=0
+ with open(path,"rb") as source:
+  while chunk:=source.read(1024*1024):measured.update(chunk);seen+=len(chunk)
+ return {"status":"ok","sha256":measured.hexdigest(),"size":seen}
+def command(argv,limit=32768):
+ try:
+  result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+ except (OSError,subprocess.SubprocessError) as error:
+  return {"status":"unavailable","reason":type(error).__name__}
+ raw=result.stdout
+ return {"status":"ok" if result.returncode==0 else "failed","exit":result.returncode,
+  "stdout":raw[:limit].decode("utf-8","replace"),"truncated":len(raw)>limit}
+def dpkg(path):
+ owner=command(["/usr/bin/dpkg-query","-S",path],4096)
+ if owner["status"]!="ok":return {"status":"unavailable","owner_query":owner,"packages":[]}
+ answer={"status":"ok","packages":[]}
+ names=sorted({line.rsplit(": ",1)[0] for line in owner["stdout"].splitlines() if ": " in line})
+ if len(names)>8:return {"owner_query":owner,"packages":[],"status":"unavailable","reason":"owner-count-limit"}
+ for name in names:
+  query=command(["/usr/bin/dpkg-query","-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\n",name],4096)
+  item={"status":"unavailable","query":query}
+  if query["status"]=="ok":
+   fields=query["stdout"].rstrip("\n").split("\t")
+   if len(fields)==4:item={"status":"ok",**dict(zip(
+    ("binary_package","binary_version","source_package","source_version"),(field or None for field in fields)))}
+  answer["packages"].append(item)
+ return answer
+def build_id(path):
+ result=command(["/usr/bin/readelf","-n",path])
+ matches=re.findall(r"Build ID: ([0-9a-fA-F]+)",result.get("stdout",""))
+ return {"status":"ok","value":matches[0].lower()} if result["status"]=="ok" and len(matches)==1 else {
+  "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def interpreter(path):
+ result=command(["/usr/bin/readelf","-l",path])
+ matches=re.findall(r"Requesting program interpreter: ([^]]+)",result.get("stdout",""))
+ return {"status":"ok","requested":matches[0],"resolved":os.path.realpath(matches[0])} \
+  if result["status"]=="ok" and len(matches)==1 else {
+   "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
+def soname(path):
+ result=command(["/usr/bin/readelf","-d",path])
+ matches=re.findall(r"\(SONAME\).*\[([^]]+)\]",result.get("stdout",""))
+ if result["status"]=="ok" and len(matches)==1:return {"status":"ok","value":matches[0]}
+ if result["status"]=="ok" and not matches:return {"status":"missing"}
+ return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
+def function_bodies(path):
+ tool="/usr/bin/objdump";symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
+  "posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","setsid",
+  "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
+  "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
+  "write","fsync","close","unlinkat","fstat")
+ answer={"tool":{"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
+  {"status":"unavailable","reason":"missing"}},"image":path,"functions":[]}
+ if answer["tool"]["identity"]["status"]!="ok":return answer
+ total=0
+ for symbol in symbols:
+  if total>=786432:
+   answer["functions"].append({"symbol":symbol,"status":"unavailable",
+    "reason":"total-output-limit-before-read"});continue
+  argv=[tool,"-d","--disassemble="+symbol,path]
+  try:
+   result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
+    timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
+  except (OSError,subprocess.SubprocessError) as error:
+   answer["functions"].append({"symbol":symbol,"argv":argv,"status":"unavailable",
+    "reason":type(error).__name__});continue
+  raw=result.stdout;error_raw=result.stderr;total+=len(raw)+len(error_raw)
+  row={"symbol":symbol,"argv":argv,"exit":result.returncode,"body_bytes":len(raw),
+   "body_sha256":hashlib.sha256(raw).hexdigest(),"stderr_bytes":len(error_raw),
+   "stderr_sha256":hashlib.sha256(error_raw).hexdigest()}
+  has_instructions=bool(re.search(rb"(?m)^\s*[0-9a-f]+:\s+[0-9a-f][0-9a-f ]+\s+",raw))
+  if len(raw)>65536 or len(error_raw)>8192 or total>786432:
+   row.update({"status":"unavailable","reason":"output-limit"})
+  else:
+   row.update({"status":"ok" if result.returncode==0 and has_instructions else "unavailable",
+    "reason":None if result.returncode==0 and has_instructions else "failed-or-no-instructions",
+    "body":raw.decode("utf-8","replace"),"stderr":error_raw.decode("utf-8","replace")})
+  answer["functions"].append(row)
+ answer["total_bytes"]=total;answer["limits"]={"functions":len(symbols),"body_each":65536,
+  "stderr_each":8192,"total":786432,"timeout_seconds_each":10}
+ return answer
+def jit():
+ api=getattr(sys,"_jit",None)
+ if api is None:return {"status":"missing"}
+ answer={"status":"present"}
+ for name in ("is_available","is_enabled","is_active"):
+  call=getattr(api,name,None)
+  if call is None:answer[name]={"status":"missing"}
+  else:
+   try:answer[name]={"status":"ok","value":call()}
+   except Exception as error:answer[name]={"status":"unavailable","reason":type(error).__name__}
+ return answer
+executable=os.path.realpath(sys.executable);suffixes=tuple(importlib.machinery.EXTENSION_SUFFIXES)
+origins=[]
+for loaded in tuple(sys.modules.values()):
+ origin=getattr(getattr(loaded,"__spec__",None),"origin",None)
+ if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
+ if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
+origins=sorted(set(origins));assert len(origins)<=256
+build_jit=sysconfig.get_config_var("Py_ENABLE_JIT")
+body={"platform":sys.platform,"executable":executable,"executable_identity":digest(executable),
+ "flags":{"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,
+ "dont_write_bytecode":sys.flags.dont_write_bytecode},"jit":jit(),
+ "loaded_origins":[{"path":path,"identity":digest(path)} for path in origins],
+ "soabi":sysconfig.get_config_var("SOABI"),"stdlib":os.path.realpath(sysconfig.get_path("stdlib")),
+ "version":sys.version,"build_configuration":{"Py_ENABLE_JIT":{"status":"missing"} if build_jit is None
+  else {"status":"present","value":build_jit}}}
+if sys.platform=="linux":
+ maps=pathlib.Path("/proc/self/maps").read_bytes();assert len(maps)<=1024*1024
+ paths=[];map_gaps=[]
+ for line in maps.decode("utf-8","strict").splitlines():
+  fields=line.split(None,5)
+  if len(fields)==6 and fields[5].startswith("/"):
+   if fields[5].endswith(" (deleted)"):
+    map_gaps.append({"path":fields[5],"status":"unavailable","reason":"deleted-mapping"});continue
+   path=os.path.realpath(fields[5])
+   if not os.path.isfile(path):
+    map_gaps.append({"path":path,"status":"unavailable","reason":"missing-mapped-file"});continue
+   with open(path,"rb") as image:header=image.read(4)
+   if header==b"\x7fELF":paths.append(path)
+ paths=sorted(set(paths));assert 1<=len(paths)<=64 and len(map_gaps)<=16
+ elf_interpreter=interpreter(executable)
+ interpreter_path=elf_interpreter.get("resolved")
+ images=[]
+ for path in paths:
+  image_soname=soname(path);roles=[]
+  if path==executable:roles.append("python-executable")
+  if path==native_binary:roles.append("native-release")
+  if path==interpreter_path:roles.append("elf-interpreter")
+  if image_soname.get("value")=="libc.so.6":roles.append("libc")
+  images.append({"path":path,"roles":roles,"identity":digest(path),"build_id":build_id(path),
+   "soname":image_soname,"package":dpkg(path)})
+ libc_paths=[image["path"] for image in images if "libc" in image["roles"]]
+ body.update({"executable_build_id":build_id(executable),"elf_interpreter":elf_interpreter,
+  "elf_images":images,"mapped_file_gaps":map_gaps,
+  "libc_function_bodies":function_bodies(libc_paths[0]) if len(libc_paths)==1 else
+   {"status":"unavailable","reason":"libc-role-count","count":len(libc_paths)},
+  "required_roles":{role:sum(role in image["roles"] for image in images)
+   for role in ("python-executable","native-release","elf-interpreter","libc")}})
+else:
+ native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
+ parts=pathlib.Path(executable).parts
+ dyld=ctypes.CDLL(None)
+ dyld._dyld_image_count.restype=ctypes.c_uint32
+ dyld._dyld_get_image_header.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_header.restype=ctypes.c_void_p
+ dyld._dyld_get_image_name.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_name.restype=ctypes.c_char_p
+ def mapped_identity(address):
+  header=ctypes.string_at(address,32);magic,cputype,cpusubtype,_filetype,ncmds,sizeofcmds,_flags,_reserved=struct.unpack("<8I",header)
+  assert magic==0xfeedfacf and ncmds<=4096 and sizeofcmds<=4*1024*1024
+  commands=ctypes.string_at(address+32,sizeofcmds);offset=0;values=[]
+  for _ in range(ncmds):
+   cmd,size=struct.unpack_from("<II",commands,offset);assert size>=8 and offset+size<=len(commands)
+   if cmd==0x1b:assert size==24;values.append(str(uuid.UUID(bytes=commands[offset+8:offset+24])))
+   offset+=size
+  assert offset==len(commands) and len(values)==1
+  return {"cpu_type":cputype,"cpu_subtype":cpusubtype,"uuid":values[0]}
+ images=[]
+ for index in range(dyld._dyld_image_count()):
+  address=dyld._dyld_get_image_header(index);name=dyld._dyld_get_image_name(index)
+  assert address and name
+  images.append({"path":os.path.realpath(os.fsdecode(name)),"identity":mapped_identity(address)})
+ class DlInfo(ctypes.Structure):
+  _fields_=[("name",ctypes.c_char_p),("base",ctypes.c_void_p),("symbol",ctypes.c_char_p),("address",ctypes.c_void_p)]
+ dyld.dladdr.argtypes=[ctypes.c_void_p,ctypes.POINTER(DlInfo)];dyld.dladdr.restype=ctypes.c_int
+ bindings=[]
+ for symbol in ("pthread_sigmask","fcntl","close","fstat","unlinkat","fsync"):
+  function=getattr(dyld,symbol);info=DlInfo();assert dyld.dladdr(ctypes.cast(function,ctypes.c_void_p),ctypes.byref(info))==1
+  identity=mapped_identity(info.base);locator=os.path.realpath(os.fsdecode(info.name))
+  bindings.append({"symbol":symbol,"mapped_image":locator,"mapped_identity":identity,
+   "locator_identity":command(["/usr/bin/dyld_info","-uuid",locator],4096)})
+ cache=(ctypes.c_ubyte*16)();dyld._dyld_get_shared_cache_uuid.argtypes=[ctypes.POINTER(ctypes.c_ubyte)]
+ dyld._dyld_get_shared_cache_uuid.restype=ctypes.c_bool;assert dyld._dyld_get_shared_cache_uuid(cache)
+ body.update({"build_id":command(["/usr/bin/dwarfdump","--uuid",executable]),
+  "native_dependencies":{path:command(["/usr/bin/otool","-L",path]) for path in native},
+  "darwin_mapped_images":images,"darwin_release_symbol_bindings":bindings,
+  "darwin_shared_cache_uuid":{"status":"ok","value":str(uuid.UUID(bytes=bytes(cache)))},
+  "package":{"kind":"homebrew-cellar" if "Cellar" in parts else "system",
+   "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else None,
+   "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else None}})
+facts={"schema_version":1,"kind":"shadow_runtime_dependency_record",
+ "id":"shadow.runtime-dependency","body":body}
+encoded=(json.dumps(facts,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+assert len(encoded)<=1024*1024
+sys.stdout.buffer.write(encoded)
+PY
+"$python_bin" -I -S -B - "$native_out/build-record.json" \
+  "$tmp/runtime-dependency-record.json" <<'PY'
+import hashlib,json,pathlib,sys
+for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-release.build-evidence",sys.argv[1]),
+ ("shadow_runtime_dependency_evidence","shadow.runtime-dependency-evidence",sys.argv[2])):
+ raw=pathlib.Path(path).read_bytes();assert len(raw)<=1024*1024
+ record=json.loads(raw);assert raw==(json.dumps(record,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+ evidence={"schema_version":1,"kind":kind,"id":name,
+  "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
+ print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
+PY
 native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
   -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$native_actual_child_binary" <<'PY'
@@ -506,212 +712,6 @@ mutation("repeated-link-mode",lambda a:a.insert(a.index("-bundle") if sys.platfo
 mutation("reordered-link-mode",lambda a:a.__setitem__(slice(a.index("-bundle"),a.index("dynamic_lookup")+1),
  ["-undefined","dynamic_lookup","-bundle"]) if sys.platform=="darwin" else a.reverse())
 print("shadow-enforced-native-argv: exact recipe and three mutations checked")
-PY
-"$python_bin" -I -S -B - "$root" "$native_binary" <<'PY' > "$tmp/runtime-dependency-record.json"
-import ctypes,hashlib,importlib.machinery,importlib.util,json,os,pathlib,re,struct,subprocess,sys,sysconfig,uuid
-root=pathlib.Path(sys.argv[1]);native_binary=os.path.realpath(sys.argv[2]);driver=root/"shadow/v1/enforced-reproduction.py"
-spec=importlib.util.spec_from_file_location("shadow_runtime_diagnostic",driver)
-module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
-native_spec=importlib.util.spec_from_file_location("_cancel_release",native_binary)
-native_module=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native_module)
-def digest(path):
- size=os.stat(path).st_size
- if size>256*1024*1024: return {"status":"unavailable","reason":"file-size-limit","size":size}
- measured=hashlib.sha256();seen=0
- with open(path,"rb") as source:
-  while chunk:=source.read(1024*1024):measured.update(chunk);seen+=len(chunk)
- return {"status":"ok","sha256":measured.hexdigest(),"size":seen}
-def command(argv,limit=32768):
- try:
-  result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-   check=False,timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
- except (OSError,subprocess.SubprocessError) as error:
-  return {"status":"unavailable","reason":type(error).__name__}
- raw=result.stdout
- return {"status":"ok" if result.returncode==0 else "failed","exit":result.returncode,
-  "stdout":raw[:limit].decode("utf-8","replace"),"truncated":len(raw)>limit}
-def dpkg(path):
- owner=command(["/usr/bin/dpkg-query","-S",path],4096)
- if owner["status"]!="ok":return {"status":"unavailable","owner_query":owner,"packages":[]}
- answer={"status":"ok","packages":[]}
- names=sorted({line.rsplit(": ",1)[0] for line in owner["stdout"].splitlines() if ": " in line})
- if len(names)>8:return {"owner_query":owner,"packages":[],"status":"unavailable","reason":"owner-count-limit"}
- for name in names:
-  query=command(["/usr/bin/dpkg-query","-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\n",name],4096)
-  item={"status":"unavailable","query":query}
-  if query["status"]=="ok":
-   fields=query["stdout"].rstrip("\n").split("\t")
-   if len(fields)==4:item={"status":"ok",**dict(zip(
-    ("binary_package","binary_version","source_package","source_version"),(field or None for field in fields)))}
-  answer["packages"].append(item)
- return answer
-def build_id(path):
- result=command(["/usr/bin/readelf","-n",path])
- matches=re.findall(r"Build ID: ([0-9a-fA-F]+)",result.get("stdout",""))
- return {"status":"ok","value":matches[0].lower()} if result["status"]=="ok" and len(matches)==1 else {
-  "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
-def interpreter(path):
- result=command(["/usr/bin/readelf","-l",path])
- matches=re.findall(r"Requesting program interpreter: ([^]]+)",result.get("stdout",""))
- return {"status":"ok","requested":matches[0],"resolved":os.path.realpath(matches[0])} \
-  if result["status"]=="ok" and len(matches)==1 else {
-   "status":"unavailable","reason":"missing-or-ambiguous","readelf":result}
-def soname(path):
- result=command(["/usr/bin/readelf","-d",path])
- matches=re.findall(r"\(SONAME\).*\[([^]]+)\]",result.get("stdout",""))
- if result["status"]=="ok" and len(matches)==1:return {"status":"ok","value":matches[0]}
- if result["status"]=="ok" and not matches:return {"status":"missing"}
- return {"status":"unavailable","reason":"failed-or-ambiguous","readelf":result}
-def function_bodies(path):
- tool="/usr/bin/objdump";symbols=("posix_spawn","posix_spawn_file_actions_addclosefrom_np",
-  "posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addclose","setsid",
-  "posix_spawnattr_setflags","posix_spawnattr_setsigmask","posix_spawnattr_setsigdefault",
-  "waitid","kill","pthread_sigmask","sigpending","sigaction","sigismember","openat","read",
-  "write","fsync","close","unlinkat","fstat")
- answer={"tool":{"path":tool,"identity":digest(tool) if os.path.isfile(tool) else
-  {"status":"unavailable","reason":"missing"}},"image":path,"functions":[]}
- if answer["tool"]["identity"]["status"]!="ok":return answer
- total=0
- for symbol in symbols:
-  if total>=786432:
-   answer["functions"].append({"symbol":symbol,"status":"unavailable",
-    "reason":"total-output-limit-before-read"});continue
-  argv=[tool,"-d","--disassemble="+symbol,path]
-  try:
-   result=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,
-    timeout=10,env={"PATH":"/usr/bin:/bin","LC_ALL":"C","LANG":"C"})
-  except (OSError,subprocess.SubprocessError) as error:
-   answer["functions"].append({"symbol":symbol,"argv":argv,"status":"unavailable",
-    "reason":type(error).__name__});continue
-  raw=result.stdout;error_raw=result.stderr;total+=len(raw)+len(error_raw)
-  row={"symbol":symbol,"argv":argv,"exit":result.returncode,"body_bytes":len(raw),
-   "body_sha256":hashlib.sha256(raw).hexdigest(),"stderr_bytes":len(error_raw),
-   "stderr_sha256":hashlib.sha256(error_raw).hexdigest()}
-  has_instructions=bool(re.search(rb"(?m)^\s*[0-9a-f]+:\s+[0-9a-f][0-9a-f ]+\s+",raw))
-  if len(raw)>65536 or len(error_raw)>8192 or total>786432:
-   row.update({"status":"unavailable","reason":"output-limit"})
-  else:
-   row.update({"status":"ok" if result.returncode==0 and has_instructions else "unavailable",
-    "reason":None if result.returncode==0 and has_instructions else "failed-or-no-instructions",
-    "body":raw.decode("utf-8","replace"),"stderr":error_raw.decode("utf-8","replace")})
-  answer["functions"].append(row)
- answer["total_bytes"]=total;answer["limits"]={"functions":len(symbols),"body_each":65536,
-  "stderr_each":8192,"total":786432,"timeout_seconds_each":10}
- return answer
-def jit():
- api=getattr(sys,"_jit",None)
- if api is None:return {"status":"missing"}
- answer={"status":"present"}
- for name in ("is_available","is_enabled","is_active"):
-  call=getattr(api,name,None)
-  if call is None:answer[name]={"status":"missing"}
-  else:
-   try:answer[name]={"status":"ok","value":call()}
-   except Exception as error:answer[name]={"status":"unavailable","reason":type(error).__name__}
- return answer
-executable=os.path.realpath(sys.executable);suffixes=tuple(importlib.machinery.EXTENSION_SUFFIXES)
-origins=[]
-for loaded in tuple(sys.modules.values()):
- origin=getattr(getattr(loaded,"__spec__",None),"origin",None)
- if origin in (None,"built-in","frozen"):origin=getattr(loaded,"__file__",None)
- if origin and os.path.isabs(origin) and os.path.isfile(origin):origins.append(os.path.realpath(origin))
-origins=sorted(set(origins));assert len(origins)<=256
-build_jit=sysconfig.get_config_var("Py_ENABLE_JIT")
-body={"platform":sys.platform,"executable":executable,"executable_identity":digest(executable),
- "flags":{"isolated":sys.flags.isolated,"no_site":sys.flags.no_site,
- "dont_write_bytecode":sys.flags.dont_write_bytecode},"jit":jit(),
- "loaded_origins":[{"path":path,"identity":digest(path)} for path in origins],
- "soabi":sysconfig.get_config_var("SOABI"),"stdlib":os.path.realpath(sysconfig.get_path("stdlib")),
- "version":sys.version,"build_configuration":{"Py_ENABLE_JIT":{"status":"missing"} if build_jit is None
-  else {"status":"present","value":build_jit}}}
-if sys.platform=="linux":
- maps=pathlib.Path("/proc/self/maps").read_bytes();assert len(maps)<=1024*1024
- paths=[];map_gaps=[]
- for line in maps.decode("utf-8","strict").splitlines():
-  fields=line.split(None,5)
-  if len(fields)==6 and fields[5].startswith("/"):
-   if fields[5].endswith(" (deleted)"):
-    map_gaps.append({"path":fields[5],"status":"unavailable","reason":"deleted-mapping"});continue
-   path=os.path.realpath(fields[5])
-   if not os.path.isfile(path):
-    map_gaps.append({"path":path,"status":"unavailable","reason":"missing-mapped-file"});continue
-   with open(path,"rb") as image:header=image.read(4)
-   if header==b"\x7fELF":paths.append(path)
- paths=sorted(set(paths));assert 1<=len(paths)<=64 and len(map_gaps)<=16
- elf_interpreter=interpreter(executable)
- interpreter_path=elf_interpreter.get("resolved")
- images=[]
- for path in paths:
-  image_soname=soname(path);roles=[]
-  if path==executable:roles.append("python-executable")
-  if path==native_binary:roles.append("native-release")
-  if path==interpreter_path:roles.append("elf-interpreter")
-  if image_soname.get("value")=="libc.so.6":roles.append("libc")
-  images.append({"path":path,"roles":roles,"identity":digest(path),"build_id":build_id(path),
-   "soname":image_soname,"package":dpkg(path)})
- libc_paths=[image["path"] for image in images if "libc" in image["roles"]]
- body.update({"executable_build_id":build_id(executable),"elf_interpreter":elf_interpreter,
-  "elf_images":images,"mapped_file_gaps":map_gaps,
-  "libc_function_bodies":function_bodies(libc_paths[0]) if len(libc_paths)==1 else
-   {"status":"unavailable","reason":"libc-role-count","count":len(libc_paths)},
-  "required_roles":{role:sum(role in image["roles"] for image in images)
-   for role in ("python-executable","native-release","elf-interpreter","libc")}})
-else:
- native=sorted({executable,native_binary,*(path for path in origins if path.endswith(suffixes))})
- parts=pathlib.Path(executable).parts
- dyld=ctypes.CDLL(None)
- dyld._dyld_image_count.restype=ctypes.c_uint32
- dyld._dyld_get_image_header.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_header.restype=ctypes.c_void_p
- dyld._dyld_get_image_name.argtypes=[ctypes.c_uint32];dyld._dyld_get_image_name.restype=ctypes.c_char_p
- def mapped_identity(address):
-  header=ctypes.string_at(address,32);magic,cputype,cpusubtype,_filetype,ncmds,sizeofcmds,_flags,_reserved=struct.unpack("<8I",header)
-  assert magic==0xfeedfacf and ncmds<=4096 and sizeofcmds<=4*1024*1024
-  commands=ctypes.string_at(address+32,sizeofcmds);offset=0;values=[]
-  for _ in range(ncmds):
-   cmd,size=struct.unpack_from("<II",commands,offset);assert size>=8 and offset+size<=len(commands)
-   if cmd==0x1b:assert size==24;values.append(str(uuid.UUID(bytes=commands[offset+8:offset+24])))
-   offset+=size
-  assert offset==len(commands) and len(values)==1
-  return {"cpu_type":cputype,"cpu_subtype":cpusubtype,"uuid":values[0]}
- images=[]
- for index in range(dyld._dyld_image_count()):
-  address=dyld._dyld_get_image_header(index);name=dyld._dyld_get_image_name(index)
-  assert address and name
-  images.append({"path":os.path.realpath(os.fsdecode(name)),"identity":mapped_identity(address)})
- class DlInfo(ctypes.Structure):
-  _fields_=[("name",ctypes.c_char_p),("base",ctypes.c_void_p),("symbol",ctypes.c_char_p),("address",ctypes.c_void_p)]
- dyld.dladdr.argtypes=[ctypes.c_void_p,ctypes.POINTER(DlInfo)];dyld.dladdr.restype=ctypes.c_int
- bindings=[]
- for symbol in ("pthread_sigmask","fcntl","close","fstat","unlinkat","fsync"):
-  function=getattr(dyld,symbol);info=DlInfo();assert dyld.dladdr(ctypes.cast(function,ctypes.c_void_p),ctypes.byref(info))==1
-  identity=mapped_identity(info.base);locator=os.path.realpath(os.fsdecode(info.name))
-  bindings.append({"symbol":symbol,"mapped_image":locator,"mapped_identity":identity,
-   "locator_identity":command(["/usr/bin/dyld_info","-uuid",locator],4096)})
- cache=(ctypes.c_ubyte*16)();dyld._dyld_get_shared_cache_uuid.argtypes=[ctypes.POINTER(ctypes.c_ubyte)]
- dyld._dyld_get_shared_cache_uuid.restype=ctypes.c_bool;assert dyld._dyld_get_shared_cache_uuid(cache)
- body.update({"build_id":command(["/usr/bin/dwarfdump","--uuid",executable]),
-  "native_dependencies":{path:command(["/usr/bin/otool","-L",path]) for path in native},
-  "darwin_mapped_images":images,"darwin_release_symbol_bindings":bindings,
-  "darwin_shared_cache_uuid":{"status":"ok","value":str(uuid.UUID(bytes=bytes(cache)))},
-  "package":{"kind":"homebrew-cellar" if "Cellar" in parts else "system",
-   "formula":parts[parts.index("Cellar")+1] if "Cellar" in parts else None,
-   "version":parts[parts.index("Cellar")+2] if "Cellar" in parts else None}})
-facts={"schema_version":1,"kind":"shadow_runtime_dependency_record",
- "id":"shadow.runtime-dependency","body":body}
-encoded=(json.dumps(facts,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
-assert len(encoded)<=1024*1024
-sys.stdout.buffer.write(encoded)
-PY
-"$python_bin" -I -S -B - "$native_out/build-record.json" \
-  "$tmp/runtime-dependency-record.json" <<'PY'
-import hashlib,json,pathlib,sys
-for kind,name,path in (("shadow_cancel_release_build_evidence","shadow.cancel-release.build-evidence",sys.argv[1]),
- ("shadow_runtime_dependency_evidence","shadow.runtime-dependency-evidence",sys.argv[2])):
- raw=pathlib.Path(path).read_bytes();assert len(raw)<=1024*1024
- record=json.loads(raw);assert raw==(json.dumps(record,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
- evidence={"schema_version":1,"kind":kind,"id":name,
-  "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
- print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
 PY
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 \
   "$root/adapters/local-git-materializer/v1/object-closure.c" -o "$tmp/object-closure"
