@@ -25,6 +25,7 @@ def run_writer_tests():
     sys.modules[spec.name] = w
     spec.loader.exec_module(w)
     w.e, w.c = e, c
+    w.require, w.canonical, w.sha, w.parse = e.require, e.canonical, e.sha, e.parse
     original_work, original_output = scenario_work, scenario_output
     original_mode, original_request = scenario_mode, scenario_request
     fixture = work / "writer-fixtures"
@@ -86,7 +87,7 @@ def run_writer_tests():
         try:
             with partial_owner():
                 result = w.prepare(*paths, parent)
-        except (e.Refusal, c.Refusal, OSError, ValueError) as exc:
+        except (e.Refusal, c.Refusal) as exc:
             if not refusal:
                 raise
             ok(not (paths[3] / "bundle.json").exists(), "writer refusal leaves no completion: " + str(exc))
@@ -161,7 +162,7 @@ def run_writer_tests():
     roles = [row["role"] for row in json.loads((paths[2] / "builder/first.json").read_bytes()).get("commands", [])]
     ok(not roles, "candidate excludes outer command provenance")
     unreviewed = types.ModuleType("writer_unreviewed_origin")
-    unreviewed.__spec__ = importlib.util.spec_from_file_location("writer_unreviewed_origin", paths[2] / "builder/metadata-first.json")
+    unreviewed.__spec__ = types.SimpleNamespace(origin=str(paths[2] / "builder/metadata-first.json"))
     sys.modules[unreviewed.__name__] = unreviewed
     try:
         try:
@@ -205,7 +206,7 @@ def run_writer_tests():
     invoke(case("unsorted-paths", lambda doc: doc["body"]["allowed_paths"].reverse()), True)
     invoke(case("missing-path", lambda doc: doc["body"]["allowed_paths"].pop()), True)
     invoke(case("extra-path", lambda doc: doc["body"]["allowed_paths"].append("ystack-evidence/extra")), True)
-    invoke(case("legacy-bundle", frozen_change=lambda d: (d / "bundle.json").write_bytes(canonical(dict(json.loads((d / "bundle.json").read_bytes()), kind="legacy")))), True)
+    invoke(case("legacy-bundle", frozen_change=lambda d: ((d / "bundle.json").chmod(0o600), (d / "bundle.json").write_bytes(canonical(dict(json.loads((d / "bundle.json").read_bytes()), kind="legacy"))))), True)
     invoke(case("missing-evidence", frozen_change=lambda d: (d / "trace-receipt.json").unlink()), True)
     invoke(case("extra-evidence", frozen_change=lambda d: (d / "extra").write_bytes(b"")), True)
     invoke(case("symlink-evidence", frozen_change=lambda d: ((d / "policy.json").unlink(), (d / "policy.json").symlink_to(output / "policy.json"))), True)
@@ -381,6 +382,23 @@ source=source.replace('for component_dir in adapters core preparation control en
 old=' for index,row in enumerate(manifest["entries"]):\n  raw=values[f"candidate/{index:05d}".encode()]'
 if source.count(old)!=1:raise SystemExit("existing launch fixture boundary changed")
 source=source.replace(old,' for directory in (row for row in manifest["entries"] if row["kind"]=="directory"):\n  (verifier_root/"candidate"/directory["path"]).mkdir(parents=True,exist_ok=True)\n for index,row in enumerate(row for row in manifest["entries"] if row["kind"]=="file"):\n  raw=values[f"candidate/{index:05d}".encode()]',1)
+point='e.c.load_anchor=lambda _resolver=None,_group_reader=None: Anchor()'
+if source.count(point)!=1:raise SystemExit("existing input diagnostic boundary changed")
+diag="""
+original_input_recheck=e.InputSnapshot.recheck
+def diagnose_input_recheck(self):
+ try:original_input_recheck(self)
+ except BaseException:
+  print("failed held input",self.held.path,file=sys.stderr)
+  for index,component in enumerate(self.held.components):
+   current=e.c._metadata(component.fd)
+   named=current if component.name is None else e.c._named_metadata(component.name,self.held.components[index-1].fd)
+   if e.c._identity(current)!=e.c._identity(component.before) or e.c._identity(named)!=e.c._identity(component.before):
+    print("identity difference",index,component.name,e.c._identity(component.before),e.c._identity(current),e.c._identity(named),file=sys.stderr)
+  raise
+e.InputSnapshot.recheck=diagnose_input_recheck
+"""
+source=source.replace(point,point+"\n"+diag,1)
 body="root = pathlib.Path("+repr(str(root))+")\n"+(tmp/"writer-tests.py").read_text()
 source=source.replace(anchor,"exec(compile("+repr(body)+", 'shadow-write-fixture-controls', 'exec'))\n"+anchor,1)
 (tmp/"enforced-with-writer.sh").write_text(source)

@@ -464,6 +464,7 @@ def _build_input(ws, original_raw, paths, patch, claim_raw):
 def _candidate_facts(ws, response_raw, incident, source_facts, files, expected):
     receipt = parse(parse(response_raw)["payloads"][0]["data"].encode())
     revision = incident["body"]["git_revision_ref"]
+    require(expected == c.evidence_patch(files, revision["hash_algorithm"])[1], "E_RELATION")
     candidate = receipt["candidate"]
     require(candidate["parent_commit_id"] == revision["commit_id"] and receipt["changed_paths"]["count"] == 32, "E_RELATION")
     repository = ws.work / "candidate/repository.git"
