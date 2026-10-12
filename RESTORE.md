@@ -1232,9 +1232,14 @@ spawn.
 Restore `shadow/v1/write-shadow.py`, `shadow/v1/write-materialization-input.jq` and
 `scripts/test/shadow-write.test.sh` beside the enforced consumer and its native source.
 The writer reauthenticates frozen evidence, prepares 32 additions, verifies the actual
-candidate, and keeps outer completion withheld. Public `prepare` remains a refusal
-until the separate admission slice lands. Never substitute archived origin for a fresh
-controlled-store read or enlarge the native role/argv/environment contract.
+candidate, and validates the withheld request through one private admission boundary.
+The isolated public `prepare REQUEST BUNDLE WORK OUTPUT` entry requires descriptor-3
+schema-2 context and the reviewed physical Python/native source. It seals an inactive
+`withheld-write.v1` outer bundle only after the separate authenticated write check.
+The marker includes the publisher body; the candidate includes only frozen evidence.
+Publication stays withheld, and the existing scope evaluator refuses this form.
+Never substitute archived origin for a fresh controlled-store read or enlarge the
+native role/argv/environment contract. No branch transport or publisher is restored.
 
 Run `bash scripts/test/shadow-write.test.sh`. It includes the full unchanged enforced
 regression and real writer component checks in disposable fixtures. Retain final native

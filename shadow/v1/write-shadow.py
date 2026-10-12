@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Private deterministic materialization; completed write admission is withheld."""
+"""Private deterministic evidence writer; publication remains withheld."""
 from __future__ import annotations
 
 import dataclasses
+import gc
 import importlib.util
 import json
 import os
@@ -40,6 +41,7 @@ class MaterializedWrite:
     candidate_commit_id: str
     candidate_tree_id: str
     verification_files: dict[str, bytes]
+    source_facts: dict[str, tuple]
 
 
 class _Workspace:
@@ -160,11 +162,13 @@ class _Workspace:
         self.inputs.append((path, raw))
         return path
 
-    def recheck(self):
+    def recheck(self, sealed=False):
         for path, raw in self.inputs:
             require(e.read_regular(path, max(1, len(raw))) == raw, "E_RELATION")
         for item in self.owned:
-            if hasattr(item, "recheck"):
+            if sealed and item is self.anchor:
+                item.seal_recheck()
+            elif hasattr(item, "recheck"):
                 item.recheck()
         native = e.CancellationSignals.active.native if e.CancellationSignals.active else None
         require(isinstance(native, e._NativeRelease), "E_RUNTIME")
@@ -364,25 +368,31 @@ def _authenticated_frozen(ws, files, incident):
     return fresh_origin
 
 
-def _record_relations(files, incident, result, fresh_origin, anchor):
+def _record_relations(files, incident, result, fresh_origin, anchor, write=None):
     record = parse(files["shadow-record.json"])
+    require(set(record) == {"schema_version", "kind", "id", "body"}
+        and type(record["schema_version"]) is int and record["schema_version"] == 1
+        and type(record["body"]) is dict, "E_RELATION")
     body = record["body"]
-    outcome = "no-change" if result["outcome"] == "match" else "reproduced"
-    require(record["schema_version"] == 1 and record["kind"] == "shadow_reproduction_record"
-            and record["id"] == incident["id"] and body["record_form"] == "enforced-reproduction.v1"
-            and body["activation_state"] == "inactive" and body["authority"] == "none"
-            and body["deploy_authority"] == "none" and body["shadow"] is True
-            and body["qualification"] == {"state": "unavailable", "reason_id": "shadow.unqualified"}
-            and body["outcome"] == outcome and body["producer_invocations"] == 0
-            and body["git_revision_ref"] == incident["body"]["git_revision_ref"]
-            and body["target_repository_id"] == incident["body"]["target_repository_id"]
-            and body["check"]["failing_check"] == incident["body"]["failing_check"]
-            and body["qualified_identity"] == parse(files["qualified-identity.json"])["body"], "E_RELATION")
     require(set(body) == {"record_form", "activation_state", "authority", "deploy_authority",
         "effects", "evaluation_mode", "shadow", "qualification", "outcome", "reason_id", "observed_at",
         "target_repository_id", "git_revision_ref", "qualified_identity", "qualified_identity_ref",
         "incident_ref", "environment", "materialization", "check", "sandbox", "producer_invocations",
-        "consumer_provenance_ref", "trace_ledger_ref"}, "E_RELATION")
+        "consumer_provenance_ref", "trace_ledger_ref"} | ({"write"} if write is not None else set()), "E_RELATION")
+    if write is not None:
+        require(canonical(body["write"]) == canonical(write), "E_RELATION")
+    outcome = "no-change" if result["outcome"] == "match" else "reproduced"
+    require(record["schema_version"] == 1 and record["kind"] == "shadow_reproduction_record"
+            and record["id"] == incident["id"] and body["record_form"] == ("withheld-write.v1" if write is not None else "enforced-reproduction.v1")
+            and body["activation_state"] == "inactive" and body["authority"] == "none"
+            and body["deploy_authority"] == "none" and body["shadow"] is True
+            and body["qualification"] == {"state": "unavailable", "reason_id": "shadow.unqualified"}
+            and body["outcome"] == outcome and type(body["producer_invocations"]) is int
+            and body["producer_invocations"] == 0
+            and body["git_revision_ref"] == incident["body"]["git_revision_ref"]
+            and body["target_repository_id"] == incident["body"]["target_repository_id"]
+            and body["check"]["failing_check"] == incident["body"]["failing_check"]
+            and body["qualified_identity"] == parse(files["qualified-identity.json"])["body"], "E_RELATION")
     require(body["effects"] == ["caller-disposable-candidate-repository"]
             and body["evaluation_mode"] == "observation-only"
             and body["reason_id"] == ("check.passed-at-revision" if outcome == "no-change" else "check.failed-at-revision")
@@ -391,7 +401,7 @@ def _record_relations(files, incident, result, fresh_origin, anchor):
     receipt = parse(response["payloads"][0]["data"].encode())
     stage = response["stage_result"]
     require(body["materialization"] == {"state": "present", "value": {
-        "adapter_id": "adapter.local-git-materializer.v1", "outcome": "no-change",
+        "adapter_id": "adapter.local-git-materializer.v1", "outcome": ("changed" if write is not None else "no-change"),
         "source": receipt["source"], "candidate": receipt["candidate"],
         "stage_result_ref": {"schema_version": 2, "kind": "stage_result", "id": stage["id"],
                              "sha256": sha(canonical(stage))}}}, "E_RELATION")
@@ -571,8 +581,17 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     try:
         ws.recheck()
         sudo.recheck()
+        supervisor = next(item for item in ws.anchor.held
+            if item.path == str(Path(c.ANCHOR) / "host-supervisor.py"))
+        supervisor.recheck("E_RELATION")
+        argv = ["/usr/bin/sudo", "-n", "-u", f"#{ws.anchor.config['principal_uid']}", "--",
+            sys.executable, str(Path(c.ANCHOR) / "host-supervisor.py"), "launch"]
+        ws.commands.append({"role": "sandbox-launch-boundary", "argv_sha256": sha(canonical(argv)),
+            "executable_sha256": sudo.sha256,
+            "component_sha256": sha(supervisor.read(c.EXECUTABLE_LIMIT, "E_RELATION"))})
         require(e._launch(ws.anchor, frame, ws.deadline) == 0, "E_RUNTIME")
         sudo.recheck()
+        supervisor.recheck("E_RELATION")
     finally:
         sudo.close()
     snapshots, origin_raw = c.read_store_attempt(ws.anchor, ws.request_doc["id"])
@@ -596,72 +615,299 @@ def _verify_write(ws, incident, input_raw, record_raw, manifest_raw, evaluation_
     return files
 
 
+def _materialize(ws):
+    work, output = ws.work, ws.output
+    frozen, incident, _receipt = _inventory(ws)
+    origin_raw = _authenticated_frozen(ws, frozen, incident)
+    revision = incident["body"]["git_revision_ref"]
+    source_facts = _git_inventory(ws, ws.paths["source_git_dir"], revision)
+    files, paths, patch, write_set = _write_files(ws, frozen, incident, source_facts)
+    claim_raw = (work / "captured/claim.json").read_bytes()
+    claim = parse(claim_raw)
+    require(claim["id"] == parse(frozen["claim.json"])["id"]
+            and claim["body"]["policy_set_ref"] == parse(frozen["claim.json"])["body"]["policy_set_ref"], "E_RELATION")
+    observation_raw = c.verifier_observation(ws.anchor, claim["id"], incident["body"]["target_repository_id"])
+    observation_path = ws.capture("write-observation.json", observation_raw, "observation")
+    evaluation_raw = ws.component("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh",
+        ["evaluate", str(work / "captured/duty_evaluation.json"), str(work / "captured/claim.json"), str(observation_path)])
+    require(parse(evaluation_raw)["body"]["verdict"] == "satisfied", "E_RELATION")
+    input_raw, input_path = _build_input(ws, frozen["materialization-input.json"], paths, patch, claim_raw)
+    response_raw = ws.component("materialization", "adapters/local-git-materializer/v1/materialize.sh",
+        ["materialize", str(input_path), incident["body"]["target_repository_id"], str(ws.paths["source_git_dir"]),
+         str(work / "candidate"), str(work / "materializer"), ws.helper.snapshot.path, ws.jq.snapshot.path])
+    response_path = ws.capture("response.json", response_raw)
+    response_check = ws.capture("response-check.json", e.response_check(parse(input_raw, 8 * e.OUTPUT_LIMIT), response_raw))
+    ws.protocol("validate-response", response_check)
+    candidate = _candidate_facts(ws, response_raw, incident, source_facts, files, write_set)
+    prep = work / "preparation-parent/preparation"
+    preparation = SOURCE / "preparation/v1/prepare-candidate.py"
+    common = ["--input", str(input_path), "--input-sha256", sha(input_raw), "--response", str(response_path),
+        "--response-sha256", sha(response_raw), "--candidate-repository", str(work / "candidate/repository.git"),
+        "--output", str(prep), "--jq", ws.jq.snapshot.path]
+    for operation, scratch in (("prepare", "preparation-scratch"), ("inspect", "inspection-scratch")):
+        ws.execute("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
+            [sys.executable, "-I", "-S", "-B", str(preparation), operation, *common,
+             "--scratch", str(work / scratch)], preparation, timeout=300)
+    prep_raw = ws.hold(prep / "record.json", 64 * 1024).raw
+    manifest_raw = ws.hold(prep / "manifest.json", 2 * e.OUTPUT_LIMIT).raw
+    instruction = e.make_instruction(incident)
+    identity = parse(frozen["qualified-identity.json"])
+    identity["id"] = "identity.shadow-write." + sha(ws.request_doc["id"].encode())[:32]
+    identity["body"]["stage_request_ref"] = e.pair_ref(parse(input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"])
+    identity["body"]["verification_instructions_ref"]["sha256"] = sha(instruction)
+    identity_raw = canonical(identity)
+    _identity_check(ws, identity_raw, incident)
+    ws.capture("write-qualified-identity.json", identity_raw)
+    ws.capture("write-evaluation.json", evaluation_raw)
+    ws.capture("write-origin-observation.json", origin_raw)
+    verification_files = _verify_write(ws, incident, input_raw, prep_raw, manifest_raw,
+        evaluation_raw, observation_raw)
+    ws.recheck()
+    require(_git_inventory(ws, ws.paths["source_git_dir"], revision) == source_facts, "E_RELATION")
+    require(set(os.listdir(ws.bundle_hold.held.fd)) == set(NAMES), "E_RELATION")
+    require(not (output / "bundle.json").exists(), "E_RELATION")
+    return MaterializedWrite(files, input_raw, response_raw, identity_raw, prep_raw, manifest_raw,
+        origin_raw, evaluation_raw, write_set, work / "candidate/repository.git",
+        candidate["commit_id"], candidate["tree_id"], verification_files, source_facts)
+
+
 def prepare(request_path: Path, bundle: Path, work: Path, output: Path, parent: dict):
     ws = _Workspace(request_path, bundle, work, output, parent)
     try:
-        frozen, incident, _receipt = _inventory(ws)
-        origin_raw = _authenticated_frozen(ws, frozen, incident)
-        revision = incident["body"]["git_revision_ref"]
-        source_facts = _git_inventory(ws, ws.paths["source_git_dir"], revision)
-        files, paths, patch, write_set = _write_files(ws, frozen, incident, source_facts)
-        claim_raw = (work / "captured/claim.json").read_bytes()
-        claim = parse(claim_raw)
-        require(claim["id"] == parse(frozen["claim.json"])["id"]
-                and claim["body"]["policy_set_ref"] == parse(frozen["claim.json"])["body"]["policy_set_ref"], "E_RELATION")
-        observation_raw = c.verifier_observation(ws.anchor, claim["id"], incident["body"]["target_repository_id"])
-        observation_path = ws.capture("write-observation.json", observation_raw, "observation")
-        evaluation_raw = ws.component("sandbox-bound-evaluation", "control/v1/evaluate-bound-sandbox.sh",
-            ["evaluate", str(work / "captured/duty_evaluation.json"), str(work / "captured/claim.json"), str(observation_path)])
-        require(parse(evaluation_raw)["body"]["verdict"] == "satisfied", "E_RELATION")
-        input_raw, input_path = _build_input(ws, frozen["materialization-input.json"], paths, patch, claim_raw)
-        response_raw = ws.component("materialization", "adapters/local-git-materializer/v1/materialize.sh",
-            ["materialize", str(input_path), incident["body"]["target_repository_id"], str(ws.paths["source_git_dir"]),
-             str(work / "candidate"), str(work / "materializer"), ws.helper.snapshot.path, ws.jq.snapshot.path])
-        response_path = ws.capture("response.json", response_raw)
-        response_check = ws.capture("response-check.json", e.response_check(parse(input_raw, 8 * e.OUTPUT_LIMIT), response_raw))
-        ws.protocol("validate-response", response_check)
-        candidate = _candidate_facts(ws, response_raw, incident, source_facts, files, write_set)
-        prep = work / "preparation-parent/preparation"
-        preparation = SOURCE / "preparation/v1/prepare-candidate.py"
-        common = ["--input", str(input_path), "--input-sha256", sha(input_raw), "--response", str(response_path),
-            "--response-sha256", sha(response_raw), "--candidate-repository", str(work / "candidate/repository.git"),
-            "--output", str(prep), "--jq", ws.jq.snapshot.path]
-        for operation, scratch in (("prepare", "preparation-scratch"), ("inspect", "inspection-scratch")):
-            ws.execute("candidate-" + ("preparation" if operation == "prepare" else "inspection"),
-                [sys.executable, "-I", "-S", "-B", str(preparation), operation, *common,
-                 "--scratch", str(work / scratch)], preparation, timeout=300)
-        prep_raw = ws.hold(prep / "record.json", 64 * 1024).raw
-        manifest_raw = ws.hold(prep / "manifest.json", 2 * e.OUTPUT_LIMIT).raw
-        instruction = e.make_instruction(incident)
-        identity = parse(frozen["qualified-identity.json"])
-        identity["id"] = "identity.shadow-write." + sha(ws.request_doc["id"].encode())[:32]
-        identity["body"]["stage_request_ref"] = e.pair_ref(parse(input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"])
-        identity["body"]["verification_instructions_ref"]["sha256"] = sha(instruction)
-        identity_raw = canonical(identity)
-        _identity_check(ws, identity_raw, incident)
-        ws.capture("write-qualified-identity.json", identity_raw)
-        ws.capture("write-evaluation.json", evaluation_raw)
-        ws.capture("write-origin-observation.json", origin_raw)
-        verification_files = _verify_write(ws, incident, input_raw, prep_raw, manifest_raw,
-            evaluation_raw, observation_raw)
-        ws.recheck()
-        require(_git_inventory(ws, ws.paths["source_git_dir"], revision) == source_facts, "E_RELATION")
-        require(set(os.listdir(ws.bundle_hold.held.fd)) == set(NAMES), "E_RELATION")
-        require(not (output / "bundle.json").exists(), "E_RELATION")
-        return MaterializedWrite(files, input_raw, response_raw, identity_raw, prep_raw, manifest_raw,
-            origin_raw, evaluation_raw, write_set, work / "candidate/repository.git",
-            candidate["commit_id"], candidate["tree_id"], verification_files)
+        return _materialize(ws)
     finally:
         ws.close()
 
 
-def main(argv):
-    if len(argv) != 6 or argv[1] != "prepare":
-        print("E_USAGE", file=sys.stderr)
-        return 1
-    print("E_RUNTIME", file=sys.stderr)
-    return 1
+def _bundle_ref(raw):
+    return {"content_id": "shadow-consumer-bundle",
+        "media_type": "application/vnd.ystack.shadow-consumer-bundle+json", "sha256": sha(raw)}
+
+
+def _publisher(incident, tree):
+    identity = incident["id"]
+    body = ("Shadow evidence for " + identity + ". Publication is withheld.\n").encode()
+    request = {"schema_version": 1, "kind": "shadow_publisher_request", "id": identity,
+        "body": {"target_repository_id": incident["body"]["target_repository_id"],
+            "branch": "ystack/evidence/" + identity,
+            "base_revision": incident["body"]["git_revision_ref"], "candidate_tree_id": tree,
+            "title": "Shadow evidence: " + identity, "body_sha256": sha(body)}}
+    return request, body
+
+
+def _write_provenance(ws, incident):
+    native = e.CancellationSignals.active.native
+    instruction = e.make_instruction(incident)
+    observation = (ws.work / "observation/write-observation.json").read_bytes()
+    return canonical({"schema_version": 1, "kind": "shadow_consumer_provenance", "id": ws.request_doc["id"],
+        "body": {"activation_state": "inactive", "authority": "none", "instruction_utf8": instruction.decode(),
+            "instruction_sha256": sha(instruction), "observation": parse(observation), "observation_sha256": sha(observation),
+            "helper_source_sha256": ws.parent["helper_source_sha256"], "helper_build_record_sha256": ws.parent["helper_build_record_sha256"],
+            "helper_executable_sha256": ws.parent["helper_executable_sha256"],
+            "consumer_source_sha256": ws.components[SOURCE / "shadow/v1/write-shadow.py"].sha256,
+            "python_sha256": ws.python.sha256, "jq_sha256": ws.jq.sha256,
+            "native_release": native.provenance(ws.parent), "commands": ws.commands}})
+
+
+def _admit(ws, materialized, frozen, files, write):
+    incident = parse(frozen["incident.json"])
+    revision = incident["body"]["git_revision_ref"]
+    require(set(write) == {"bundle_ref", "scope_id", "workflow_id", "task_class", "write_set",
+        "publisher_request", "admission", "publication", "post_write_verification"}, "E_RELATION")
+    generated = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)
+    stage = generated["stage_request"]["content"]["body"]
+    request, body = _publisher(incident, materialized.candidate_tree_id)
+    write_set = materialized.write_set
+    require(canonical(write["bundle_ref"]) == canonical(_bundle_ref(frozen["bundle.json"]))
+        and write["scope_id"] == ws.request_doc["body"]["scope_id"]
+        and write["workflow_id"] == stage["workflow_id"] == "workflow.shadow-evidence-commit"
+        and write["task_class"] == stage["task_class_id"] == "task.commit-shadow-evidence"
+        and canonical(write["write_set"]) == canonical(write_set)
+        and canonical(write_set) == canonical(c.evidence_patch(materialized.files, revision["hash_algorithm"])[1])
+        and [row["path"] for row in write_set] == ws.request_doc["body"]["allowed_paths"]
+        and canonical(write["publisher_request"]) == canonical(request) and files["publisher-body.txt"] == body
+        and request["body"]["body_sha256"] == sha(files["publisher-body.txt"])
+        and canonical(write["publication"]) == canonical({"state": "withheld", "reason_id": "shadow.write-not-published"})
+        and canonical(write["post_write_verification"]) == canonical({"target_revision": revision,
+            "candidate_tree_id": materialized.candidate_tree_id, "write_set": write_set}), "E_RELATION")
+    expected = {"state": "checked", "effect": "none", "request_sha256": sha(canonical(request)),
+        "write_set_sha256": sha(canonical(write_set))}
+    require(canonical(write["admission"]) == canonical(expected), "E_RELATION")
+    prefix = "ystack-evidence/" + incident["id"] + "/"
+    require(all(materialized.files[prefix + name] == raw for name, raw in frozen.items()), "E_RELATION")
+    require(set(files) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"}, "E_RELATION")
+    retained = {"materialization-input.json": materialized.input_raw,
+        "materialization-response.json": materialized.response_raw,
+        "preparation-record.json": materialized.preparation_record_raw,
+        "preparation-manifest.json": materialized.preparation_manifest_raw,
+        "qualified-identity.json": materialized.qualified_identity_raw,
+        "sandbox-evaluation.json": materialized.evaluation_raw, **materialized.verification_files}
+    require(all(files[name] == raw for name, raw in retained.items()), "E_RELATION")
+    require(_git_inventory(ws, ws.paths["source_git_dir"], revision) == materialized.source_facts, "E_RELATION")
+    candidate = _candidate_facts(ws, materialized.response_raw, incident, materialized.source_facts,
+        materialized.files, write_set)
+    require(candidate["commit_id"] == materialized.candidate_commit_id
+        and candidate["tree_id"] == materialized.candidate_tree_id, "E_RELATION")
+    ws.recheck()
+    provenance = _write_provenance(ws, incident)
+    files["consumer-provenance.json"] = provenance
+    files["shadow-record.json"] = _outer_record(ws, materialized, frozen, files, write,
+        provenance, files["trace-ledger.json"])
+    result = parse(files["file-digest-result.json"])["body"]
+    _record_relations(files, incident, result, files["origin-observation.json"], ws.anchor, write)
+    ws.recheck(sealed=True)
+    return expected
+
+
+def _outer_record(ws, materialized, frozen, files, write, provenance, trace):
+    incident = parse(frozen["incident.json"])
+    body = parse(frozen["shadow-record.json"])["body"]
+    response = parse(materialized.response_raw)
+    receipt = parse(response["payloads"][0]["data"].encode())
+    stage = response["stage_result"]
+    evaluation = parse(materialized.evaluation_raw)
+    result = parse(files["file-digest-result.json"])["body"]
+    outcome = "no-change" if result["outcome"] == "match" else "reproduced"
+    body.update(record_form="withheld-write.v1", qualified_identity=parse(materialized.qualified_identity_raw)["body"],
+        qualified_identity_ref={"content_id": "shadow-qualified-identity",
+            "media_type": "application/vnd.ystack.qualified-identity+json", "sha256": sha(materialized.qualified_identity_raw)},
+        outcome=outcome, reason_id="check.passed-at-revision" if outcome == "no-change" else "check.failed-at-revision",
+        materialization={"state": "present", "value": {"adapter_id": "adapter.local-git-materializer.v1",
+            "outcome": stage["body"]["outcome"]["value"], "source": receipt["source"], "candidate": receipt["candidate"],
+            "stage_result_ref": {"schema_version": 2, "kind": "stage_result", "id": stage["id"],
+                "sha256": sha(canonical(stage))}}},
+        check={"failing_check": incident["body"]["failing_check"], "execution": {"state": "present", "value": {
+            "tool_id": "tool.verifier", "observed_sha256": result["observed"]["sha256"], "matches_expected": result["outcome"] == "match"}}},
+        consumer_provenance_ref=e.document_ref(provenance),
+        trace_ledger_ref={"content_id": "shadow-trace-ledger", "media_type": "application/vnd.ystack.telemetry-trace-ledger+json",
+            "sha256": sha(trace)}, write=write)
+    body["environment"]["evaluation"] = {"state": "present", "value": {
+        "verdict": evaluation["body"]["verdict"], "reason_ids": evaluation["body"]["reason_ids"],
+        "evaluation_ref": {"content_id": "shadow-sandbox-evaluation",
+            "media_type": "application/vnd.ystack.control-evaluation+json", "sha256": sha(materialized.evaluation_raw)}}}
+    body["sandbox"] = {"state": "satisfied", "reason_id": "shadow.sandbox-satisfied",
+        "launch_request_ref": e.document_ref(files["sandbox-request.json"]),
+        "expectation_ref": e.document_ref(files["sandbox-expectation.json"]),
+        "receipt_ref": e.document_ref(files["sandbox-receipt.json"]), "check_ref": e.document_ref(files["sandbox-check.json"]),
+        "origin": {"state": "authenticated", "store_id": ws.anchor.config["store_id"],
+            "method": "controlled-storage.v1", "observation_sha256": sha(files["origin-observation.json"])},
+        "payload_ref": {"content_id": "file-digest-result", "media_type": "application/json",
+            "sha256": sha(files["file-digest-result.json"])}}
+    return canonical({"schema_version": 1, "kind": "shadow_reproduction_record", "id": incident["id"], "body": body})
+
+
+def write(request_path: Path, bundle: Path, work: Path, output: Path, parent: dict):
+    ws = _Workspace(request_path, bundle, work, output, parent)
+    try:
+        materialized = _materialize(ws)
+        frozen = {name: (work / "frozen" / name).read_bytes() for name in NAMES}
+        incident = parse(frozen["incident.json"])
+        publisher, publisher_body = _publisher(incident, materialized.candidate_tree_id)
+        stage = parse(materialized.input_raw, 8 * e.OUTPUT_LIMIT)["stage_request"]["content"]["body"]
+        write_section = {"bundle_ref": _bundle_ref(frozen["bundle.json"]),
+            "scope_id": ws.request_doc["body"]["scope_id"], "workflow_id": stage["workflow_id"],
+            "task_class": stage["task_class_id"], "write_set": materialized.write_set, "publisher_request": publisher,
+            "admission": {"state": "checked", "effect": "none", "request_sha256": sha(canonical(publisher)),
+                "write_set_sha256": sha(canonical(materialized.write_set))},
+            "publication": {"state": "withheld", "reason_id": "shadow.write-not-published"},
+            "post_write_verification": {"target_revision": incident["body"]["git_revision_ref"],
+                "candidate_tree_id": materialized.candidate_tree_id, "write_set": materialized.write_set}}
+        files = {name: frozen[name] for name in e.EVIDENCE_NAMES}
+        files.update({"materialization-input.json": materialized.input_raw,
+            "materialization-response.json": materialized.response_raw,
+            "preparation-record.json": materialized.preparation_record_raw,
+            "preparation-manifest.json": materialized.preparation_manifest_raw,
+            "qualified-identity.json": materialized.qualified_identity_raw,
+            "sandbox-evaluation.json": materialized.evaluation_raw,
+            "publisher-body.txt": publisher_body, **materialized.verification_files})
+        result = parse(files["file-digest-result.json"])["body"]
+        outcome = "no-change" if result["outcome"] == "match" else "reproduced"
+        trace = e.trace_ledger(incident, ws.request_doc["id"], parse(files["claim.json"])["id"],
+            outcome, "tool.verifier", materialized.evaluation_raw, files["sandbox-check.json"])
+        trace_path = ws.capture("write-trace-ledger.json", trace)
+        trace_receipt = ws.component("trace-validation", "telemetry/v1/validate-trace-ledger.sh",
+            ["validate", incident["id"], ws.request_doc["id"], str(trace_path)])
+        files.update({"trace-ledger.json": trace, "trace-receipt.json": trace_receipt})
+        _admit(ws, materialized, frozen, files, write_section)
+        ws.anchor.seal_recheck()
+        ws.recheck(sealed=True)
+        rows = [{"name": name, "size_bytes": len(raw), "sha256": sha(raw)} for name, raw in sorted(files.items())]
+        marker = canonical({"schema_version": 1, "kind": "shadow_consumer_bundle", "id": "bundle." + sha(files["incident.json"])[:32],
+            "body": {"activation_state": "inactive", "record_form": "withheld-write.v1",
+                "incident_sha256": sha(files["incident.json"]), "target_revision": incident["body"]["git_revision_ref"], "files": rows}})
+        directory = ws.output_hold.held.fd
+        for name, raw in sorted(files.items()):
+            e.CancellationSignals.checkpoint()
+            ws.output_hold.recheck("E_RELATION")
+            e.write_exclusive_at(directory, name, raw, sync=True)
+        ws.output_hold.recheck("E_RELATION")
+        require(set(os.listdir(directory)) == set(files), "E_RELATION")
+        os.fsync(directory)
+        require(e.CancellationSignals.retain_completion(directory) is True, "E_RUNTIME")
+        e.CancellationSignals.prepare_completion(marker)
+        return marker
+    finally:
+        ws.close()
+
+
+def _startup():
+    require(__name__ == "__main__" and sys.flags.isolated == 1 and sys.flags.no_site == 1
+            and sys.flags.dont_write_bytecode == 1, "E_RUNTIME")
+    require(not any(key.startswith(("LD_", "DYLD_")) for key in os.environ), "E_RUNTIME")
+    executable = Path(sys.executable)
+    require(executable.is_absolute() and executable.resolve(strict=True) == executable, "E_RUNTIME")
+    e._runtime_callbacks_clear()
+    gc.disable()
+    held = e.stable_file(executable)
+    try:
+        digest = held.sha256
+        held.recheck("E_RUNTIME")
+    finally:
+        held.close()
+    return e._StartupAdmission(e._STARTUP_KEY, str(executable), digest, sys.version,
+        tuple(sys.version_info[:2]), e._runtime_module_origins(), e._NativeThreadCensus())
+
+
+def main(argv, admission=None):
+    native = owner = None
+    try:
+        require(isinstance(admission, e._StartupAdmission) and admission.key is e._STARTUP_KEY, "E_RUNTIME")
+        require(len(argv) == 6 and argv[1] == "prepare", "E_USAGE")
+        context = c.capture_parent_context()
+        native = e._NativeRelease(context, admission)
+        admission = dataclasses.replace(admission, native=native, module_origins=e._runtime_module_origins())
+        owner = e.CancellationSignals(admission)
+        with owner:
+            try:
+                write(*map(Path, argv[2:]), context)
+            except BaseException as exc:
+                closing, native = native, None
+                try:
+                    closing.close()
+                except BaseException as close_exc:
+                    raise exc from close_exc
+                raise
+            closing, native = native, None
+            closing.close()
+        return 0
+    except BaseException as exc:
+        if owner is not None and owner.caller_exception is exc:
+            raise
+        if isinstance(exc, (e.Cancelled, e.Refusal, c.Refusal, KeyError, TypeError, ValueError, OSError, json.JSONDecodeError)):
+            code = exc.code if isinstance(exc, (e.Refusal, c.Refusal)) else "E_RUNTIME"
+            print(code if code in {"E_USAGE", "E_RUNTIME", "E_LIMIT", "E_SHAPE", "E_CANONICAL", "E_RELATION",
+                "E_WORKSPACE", "E_PARENT_CONTEXT"} else "E_RUNTIME", file=sys.stderr)
+            return 1
+        raise
+    finally:
+        if native is not None:
+            native.close()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    try:
+        admission = _startup()
+    except Exception:
+        print("E_RUNTIME", file=sys.stderr)
+        raise SystemExit(1) from None
+    raise SystemExit(main(sys.argv, admission))

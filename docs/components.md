@@ -1886,8 +1886,21 @@ incident check through a separate write attempt. Frozen reproduction bytes stay 
 contract bytes use raw files, within the existing native argv bound. Native roles
 16–18 are only the fixed converter, builder and read-only Git inspection commands.
 They use the existing State owner and general cleared environment; role 19 refuses.
-The public `prepare` entry still refuses. Completed admission and the outer write
-marker belong to the next slice. This code adds no publisher or qualification.
+The public isolated `prepare REQUEST BUNDLE WORK OUTPUT` entry now completes an
+inactive `withheld-write.v1` bundle under the original native owner. Descriptor 3
+must supply the schema-2 parent context. The private admission checks actual candidate
+facts, the frozen bundle and the separate authenticated write receipt. It emits a
+neutral request and a post-write check description, with no publication authority.
+`publisher-body.txt` stays outside the 32-file candidate. Publication remains withheld.
+
+The final provenance includes every fixed child command before admission seals the
+record and trace. The completion marker inventories the original 29 outer evidence
+names plus the publisher body. Native L occurs after ordinary owners close. A failure
+or cancellation can retain partial evidence but cannot create the completion marker.
+Two fresh disposable attempts prove identical trees, write sets, request bytes and
+post-write digests. The unchanged scope evaluator still refuses the new record form.
+The shipped accepted set stays empty; CPU/wall enforcement is none and native
+qualification remains blocked. No publisher implementation ships here.
 
 `shadow-write.test.sh` reuses the unchanged enforced test's disposable real-chain
 fixture by inserting writer controls into a temporary script copy. It also runs the

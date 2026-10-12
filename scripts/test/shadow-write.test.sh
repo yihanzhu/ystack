@@ -15,7 +15,7 @@ fi
 python_bin=$("$python_bin" -I -S -B -c 'import os,sys; print(os.path.realpath(sys.executable))')
 cat > "$tmp/writer-tests.py" <<'PY'
 def run_writer_tests():
-    import copy, signal
+    import copy, signal, datetime
     from contextlib import contextmanager
     global scenario_work, scenario_output, scenario_mode, scenario_request
     module_names = ("shadow_writer_test_subject", "ystack_shadow_enforced", "ystack_shadow_consumer")
@@ -515,8 +515,448 @@ def run_writer_tests():
                     raise AssertionError(role + " pending cancellation accepted")
         finally:
             signal.signal(signal.SIGTERM, old_term)
+    def complete(paths, refusal=False, mode="success"):
+        global scenario_work, scenario_output, scenario_mode, scenario_request
+        scenario_work, scenario_output = paths[2], paths[3]
+        scenario_mode, scenario_request = mode, paths[0]
+        original_launch = e._launch
+        def timed_fixture_launch(anchor, frame, deadline):
+            code = original_launch(anchor, frame, deadline)
+            attempt = json.loads(paths[0].read_bytes())["id"]
+            receipt_path = store / attempt / "receipt.json"
+            if receipt_path.exists():
+                receipt = json.loads(receipt_path.read_bytes())
+                start = datetime.datetime(2026, 8, 30, 0, counter % 50, 5, tzinfo=datetime.timezone.utc)
+                receipt["body"]["timing"] = {"admitted_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "terminated_at": (start + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                receipt_path.chmod(0o600)
+                receipt_path.write_bytes(canonical(receipt))
+                receipt_path.chmod(0o440)
+            return code
+        e._launch = timed_fixture_launch
+        try:
+            with e.CancellationSignals(reset()):
+                marker = w.write(*paths, parent)
+                ok(not (paths[3] / "bundle.json").exists(), "writer marker stays absent before native L")
+        except (e.Refusal, c.Refusal) as exc:
+            if not refusal:
+                raise
+            ok(native.outcome() == "native-release.failure", "full writer refusal uses real native abort-release")
+            ok(not (paths[3] / "bundle.json").exists(), "full writer refusal leaves no outer marker: " + str(exc))
+            return None
+        finally:
+            e._launch = original_launch
+        if refusal:
+            raise AssertionError("complete writer negative unexpectedly accepted")
+        ok(native.outcome() == "native-release.success", "complete writer uses actual native completion L")
+        ok((paths[3] / "bundle.json").read_bytes() == marker, "actual native L installs exact writer marker")
+        return {path.name: path.read_bytes() for path in paths[3].iterdir()}
+    admit_function = w._admit
+    inspection = []
+    def inspected_admission(ws, materialized, frozen, retained, write_section):
+        expected = copy.deepcopy(write_section)
+        names = set(retained)
+        marker = ws.output / "bundle.json"
+        ok(not marker.exists() and not any(ws.output.iterdir()), "admission starts before any outer retained output")
+        for field in sorted(expected):
+            altered = copy.deepcopy(expected)
+            altered.pop(field)
+            try:
+                admit_function(ws, materialized, frozen, dict(retained), altered)
+            except e.Refusal as exc:
+                ok(str(exc) == "E_RELATION" and not marker.exists(), "missing write field refuses before seal: " + field)
+            else:
+                raise AssertionError("missing write field accepted: " + field)
+        mutations = [
+            ("bundle-digest", lambda value: value["bundle_ref"].update(sha256="0" * 64)),
+            ("bundle-extra-kind", lambda value: value["bundle_ref"].update(kind="shadow_reproduction_record")),
+            ("scope", lambda value: value.update(scope_id="scope.other")),
+            ("workflow", lambda value: value.update(workflow_id="workflow.other")),
+            ("task", lambda value: value.update(task_class="task.other")),
+            ("write-order", lambda value: value["write_set"].reverse()),
+            ("write-path", lambda value: value["write_set"][0].update(path="ystack-evidence/elsewhere")),
+            ("write-mode", lambda value: value["write_set"][0].update(mode="100755")),
+            ("write-raw-digest", lambda value: value["write_set"][0].update(sha256="0" * 64)),
+            ("write-git-oid", lambda value: value["write_set"][0].update(git_blob_oid="0" * 40)),
+            ("write-add-only", lambda value: value["write_set"][0].update(add_only=False)),
+            ("write-extra", lambda value: value["write_set"][0].update(extra="not-reviewed")),
+            ("write-missing", lambda value: value["write_set"].pop()),
+            ("publisher-kind", lambda value: value["publisher_request"].update(kind="publisher_command")),
+            ("publisher-schema", lambda value: value["publisher_request"].update(schema_version=True)),
+            ("publisher-id", lambda value: value["publisher_request"].update(id="incident.other")),
+            ("publisher-extra", lambda value: value["publisher_request"]["body"].update(url="https://invalid.example")),
+            ("publication-effect", lambda value: value.update(publication={"state": "published"})),
+            ("publication-reason", lambda value: value["publication"].update(reason_id="publication.allowed")),
+            ("publication-extra", lambda value: value["publication"].update(authority="publish")),
+            ("post-target", lambda value: value["post_write_verification"]["target_revision"].update(commit_id="0" * 40)),
+            ("post-tree", lambda value: value["post_write_verification"].update(candidate_tree_id="0" * 40)),
+            ("post-set", lambda value: value["post_write_verification"]["write_set"].pop()),
+            ("post-extra", lambda value: value["post_write_verification"].update(verified=True)),
+        ]
+        for value in (False, 0, 1):
+            mutations.append(("typed-add-only-" + repr(value), lambda section, value=value:
+                section["write_set"][0].update(add_only=value)))
+        for value in (True, False, 0):
+            mutations.append(("typed-publisher-schema-" + repr(value), lambda section, value=value:
+                section["publisher_request"].update(schema_version=value)))
+        for value in (True, False, 0, 1):
+            mutations.extend((
+                ("typed-admission-effect-" + repr(value), lambda section, value=value: section["admission"].update(effect=value)),
+                ("typed-admission-state-" + repr(value), lambda section, value=value: section["admission"].update(state=value)),
+                ("typed-publication-state-" + repr(value), lambda section, value=value: section["publication"].update(state=value)),
+                ("typed-scope-" + repr(value), lambda section, value=value: section.update(scope_id=value)),
+                ("bundle-extra-schema-" + repr(value), lambda section, value=value: section["bundle_ref"].update(schema_version=value))))
+        for key in sorted(expected["admission"]):
+            if key not in {"request_sha256", "write_set_sha256"}:
+                mutations.append(("admission-missing-" + key, lambda section, key=key: section["admission"].pop(key)))
+        mutations.extend((
+            ("admission-extra", lambda section: section["admission"].update(transport="forbidden")),
+            ("admission-effect", lambda section: section["admission"].update(effect="published")),
+            ("admission-state", lambda section: section["admission"].update(state="authorized"))))
+        for key in sorted(expected["publisher_request"]["body"]):
+            mutations.append(("publisher-" + key, lambda value, key=key:
+                value["publisher_request"]["body"].update({key: None})))
+        for key in sorted(expected["write_set"][0]):
+            mutations.append(("write-row-missing-" + key, lambda value, key=key: value["write_set"][0].pop(key)))
+        for name, mutate in mutations:
+            altered = copy.deepcopy(expected)
+            mutate(altered)
+            # Linked digests are recomputed; refusal must concern equality, not a stale hash.
+            altered["admission"]["request_sha256"] = sha(canonical(altered["publisher_request"]))
+            altered["admission"]["write_set_sha256"] = sha(canonical(altered["write_set"]))
+            commands_before = copy.deepcopy(ws.commands)
+            try:
+                admit_function(ws, materialized, frozen, dict(retained), altered)
+            except e.Refusal as exc:
+                ok(str(exc) == "E_RELATION" and not marker.exists(), "linked write mutation refuses: " + name)
+                ok(ws.commands == commands_before, "request mutation launches no later child: " + name)
+            else:
+                raise AssertionError("altered writer relation accepted: " + name)
+        for key in ("request_sha256", "write_set_sha256"):
+            for value in (None, "0" * 64, True, False, 0, 1):
+                altered = copy.deepcopy(expected)
+                altered["admission"][key] = value
+                commands_before = copy.deepcopy(ws.commands)
+                try:
+                    admit_function(ws, materialized, frozen, dict(retained), altered)
+                except e.Refusal as exc:
+                    ok(str(exc) == "E_RELATION" and not marker.exists(), "admission hash mutation refuses: " + key + ":" + repr(value))
+                    ok(ws.commands == commands_before, "admission hash refuses before later child")
+                else:
+                    raise AssertionError("invalid admission hash accepted")
+        for name, alter in (("body-byte", lambda value: value.update({"publisher-body.txt": value["publisher-body.txt"] + b"\n"})),
+                            ("outer-missing", lambda value: value.pop("policy.json")),
+                            ("outer-extra", lambda value: value.update(extra=b"")),
+                            ("retained-response", lambda value: value.update({"materialization-response.json": b"{}\n"})),
+                            ("retained-identity", lambda value: value.update({"qualified-identity.json": b"{}\n"})),
+                            ("retained-preparation", lambda value: value.update({"preparation-manifest.json": b"{}\n"})),
+                            ("retained-check", lambda value: value.update({"sandbox-check.json": b"{}\n"})),
+                            ("retained-receipt", lambda value: value.update({"sandbox-receipt.json": b"{}\n"}))):
+            altered = dict(retained)
+            alter(altered)
+            commands_before = copy.deepcopy(ws.commands)
+            try:
+                admit_function(ws, materialized, frozen, altered, copy.deepcopy(expected))
+            except e.Refusal as exc:
+                ok(str(exc) == "E_RELATION" and not marker.exists(), "outer retained mismatch refuses: " + name)
+                ok(ws.commands == commands_before, "retained mismatch launches no later child: " + name)
+            else:
+                raise AssertionError("altered retained evidence accepted: " + name)
+        original_record_builder = w._outer_record
+        def inspect_record(*args):
+            raw = original_record_builder(*args)
+            record = json.loads(raw)
+            record_mutations = [("missing-" + key, lambda value, key=key: value["body"].pop(key))
+                for key in ("record_form", "write", "materialization", "check", "qualified_identity_ref", "consumer_provenance_ref", "trace_ledger_ref")]
+            record_mutations.extend((
+                ("typed-record-schema", lambda item: item.update(schema_version=True)),
+                ("typed-zero-producer", lambda item: item["body"].update(producer_invocations=False)),
+                ("extra-envelope", lambda item: item.update(authority="publish"))))
+            for value in (1, 0, False):
+                record_mutations.append(("typed-retained-add-only-" + repr(value),
+                    lambda item, value=value: item["body"]["write"]["write_set"][0].update(add_only=value)))
+            commands_before = copy.deepcopy(ws.commands)
+            for name, mutate in record_mutations:
+                altered = copy.deepcopy(record)
+                mutate(altered)
+                if "write" in altered["body"]:
+                    section = altered["body"]["write"]
+                    section["admission"]["write_set_sha256"] = sha(canonical(section["write_set"]))
+                proof_files = dict(retained, **{"shadow-record.json": canonical(altered)})
+                try:
+                    w._record_relations(proof_files, json.loads(frozen["incident.json"]),
+                        json.loads(retained["file-digest-result.json"])["body"], retained["origin-observation.json"], ws.anchor, expected)
+                except e.Refusal as exc:
+                    ok(str(exc) == "E_RELATION" and not marker.exists(), "closed outer relation refuses with linked hashes: " + name)
+                    ok(ws.commands == commands_before and not any(ws.output.iterdir()), "malformed outer record permits no child or output after exact admission boundary")
+                else:
+                    raise AssertionError("malformed retained outer record accepted: " + name)
+            return raw
+        w._outer_record = inspect_record
+        try:
+            answer = admit_function(ws, materialized, frozen, retained, write_section)
+        finally:
+            w._outer_record = original_record_builder
+        inspection.append((materialized, copy.deepcopy(ws.commands), answer))
+        return answer
+    w._admit = inspected_admission
+    first_complete_paths = case("complete-first")
+    try:
+        first_complete = complete(first_complete_paths)
+    finally:
+        w._admit = admit_function
+    second_complete_paths = case("complete-second")
+    second_complete = complete(second_complete_paths)
+    first_launch = json.loads(first_complete["sandbox-request.json"])
+    second_launch = json.loads(second_complete["sandbox-request.json"])
+    ok(first_launch["id"] != second_launch["id"] and first_launch["body"]["nonce"] != second_launch["body"]["nonce"],
+       "two disposable complete attempts have distinct actual generated nonce and identity")
+    ok(json.loads(first_complete["sandbox-receipt.json"])["body"]["timing"] !=
+       json.loads(second_complete["sandbox-receipt.json"])["body"]["timing"],
+       "two synthetic launch receipts explicitly vary timing; native proof does not grant VM qualification")
+    first_record = json.loads(first_complete["shadow-record.json"])
+    second_record = json.loads(second_complete["shadow-record.json"])
+    first_write, second_write = first_record["body"]["write"], second_record["body"]["write"]
+    incident = json.loads(output.joinpath("incident.json").read_bytes())
+    expected_publisher_body = b"Shadow evidence for " + incident["id"].encode() + b". Publication is withheld.\n"
+    expected_publisher = {"schema_version": 1, "kind": "shadow_publisher_request", "id": incident["id"],
+        "body": {"target_repository_id": incident["body"]["target_repository_id"],
+            "branch": "ystack/evidence/" + incident["id"], "base_revision": incident["body"]["git_revision_ref"],
+            "candidate_tree_id": first_write["post_write_verification"]["candidate_tree_id"],
+            "title": "Shadow evidence: " + incident["id"], "body_sha256": sha(expected_publisher_body)}}
+    ok(first_complete["publisher-body.txt"] == second_complete["publisher-body.txt"] == expected_publisher_body,
+       "publisher body is exact single-line UTF8 and one final LF")
+    ok(first_write["publisher_request"] == second_write["publisher_request"] == expected_publisher,
+       "neutral publisher request has exact six body keys and fixed bytes across fresh attempts")
+    ok(canonical(first_write["write_set"]) == canonical(second_write["write_set"]), "two actual candidates have identical canonical verified write sets")
+    ok(first_write["post_write_verification"] == second_write["post_write_verification"], "two actual candidate trees and post-write data agree")
+    ok(sha(canonical(first_write["post_write_verification"])) == sha(canonical(second_write["post_write_verification"])), "post-write digests stable across two fresh attempts")
+    ok(first_write == second_write, "complete offline write section is independent of attempt nonce and timings")
+    ok(first_write["bundle_ref"] == {"content_id": "shadow-consumer-bundle",
+        "media_type": "application/vnd.ystack.shadow-consumer-bundle+json",
+        "sha256": sha(output.joinpath("bundle.json").read_bytes())}, "bundle ref binds exact frozen raw marker")
+    for retained, paths in ((first_complete, first_complete_paths), (second_complete, second_complete_paths)):
+        ok(set(retained) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt", "bundle.json"}, "complete outer inventory contains exactly 30 evidence files plus marker")
+        marker = json.loads(retained["bundle.json"])
+        ok(marker["body"]["record_form"] == "withheld-write.v1" and marker["body"]["activation_state"] == "inactive", "outer marker discriminates inactive write form")
+        ok(marker["body"]["files"] == [{"name": name, "sha256": sha(raw), "size_bytes": len(raw)}
+            for name, raw in sorted(retained.items()) if name != "bundle.json"], "native marker inventories every actual retained byte")
+        record = json.loads(retained["shadow-record.json"])
+        ok(record["body"]["producer_invocations"] == 0 and record["body"]["authority"] == record["body"]["deploy_authority"] == "none", "complete writer grants no producer or publication authority")
+        ok(record["body"]["outcome"] == "no-change" and record["body"]["materialization"]["value"]["outcome"] == "changed", "completed fixed check outcome remains separate from changed materialization")
+        ok(record["body"]["qualified_identity"] == json.loads(retained["qualified-identity.json"])["body"], "outer identity uses actual new generated write stage request")
+        write_section = record["body"]["write"]
+        request_body = json.loads(retained["materialization-input.json"])["stage_request"]["content"]["body"]
+        ok(write_section["workflow_id"] == request_body["workflow_id"] and write_section["task_class"] == request_body["task_class_id"], "write workflow/task equal actual generated request")
+        ok(write_section["admission"] == {"state": "checked", "effect": "none",
+            "request_sha256": sha(canonical(write_section["publisher_request"])), "write_set_sha256": sha(canonical(write_section["write_set"]))}, "offline admission hashes actual canonical request and write set")
+        ok(write_section["publication"] == {"state": "withheld", "reason_id": "shadow.write-not-published"}, "publication is exactly withheld")
+        ok(set(write_section["post_write_verification"]) == {"target_revision", "candidate_tree_id", "write_set"}, "post-write object describes checks without claiming verified publication")
+        receipt = json.loads(retained["sandbox-receipt.json"])
+        launch_doc = json.loads(retained["sandbox-request.json"])
+        ok(launch_doc["id"] == json.loads(paths[0].read_bytes())["id"] != json.loads(output.joinpath("sandbox-request.json").read_bytes())["id"], "outer request is distinct fresh attempt")
+        ok(receipt["body"]["attempt"]["attempt_id"] == launch_doc["id"], "outer authenticated receipt belongs to fresh write attempt")
+        ok(record["body"]["sandbox"]["receipt_ref"] == e.document_ref(retained["sandbox-receipt.json"]), "record binds actual new receipt instead of frozen original")
+        ok(record["body"]["sandbox"]["origin"]["observation_sha256"] == sha(retained["origin-observation.json"]), "outer origin ref binds fresh store observation")
+        ok(record["body"]["consumer_provenance_ref"] == e.document_ref(retained["consumer-provenance.json"]), "record binds full writer provenance")
+        provenance = json.loads(retained["consumer-provenance.json"])
+        ok(provenance["id"] == launch_doc["id"] and provenance["body"]["consumer_source_sha256"] == sha((package / "shadow/v1/write-shadow.py").read_bytes()), "provenance binds current reviewed writer source")
+        roles = [row["role"] for row in provenance["body"]["commands"]]
+        ok(all(role in roles for role in ("write-seed-conversion", "write-materialization-input", "write-git-inspection", "candidate-preparation", "candidate-inspection", "sandbox-receipt-check", "trace-validation", "sandbox-launch-boundary")), "full actual fixed-command ledger reaches admission fact checks")
+        launch_rows = [row for row in provenance["body"]["commands"] if row["role"] == "sandbox-launch-boundary"]
+        expected_argv = ["/usr/bin/sudo", "-n", "-u", f"#{principal}", "--", sys.executable,
+            str(anchor / "host-supervisor.py"), "launch"]
+        ok(len(launch_rows) == 1 and launch_rows[0]["argv_sha256"] == sha(canonical(expected_argv))
+           and launch_rows[0]["component_sha256"] == sha((anchor / "host-supervisor.py").read_bytes()),
+           "one actual simulated launch boundary row binds original fixed argv and held supervisor source")
+        ok(not any("publisher" in role or "producer" in role or "model" in role for role in roles), "no producer, model or publisher command occurs")
+        trace = json.loads(retained["trace-ledger.json"])
+        ok(trace["body"]["attempt_id"] == launch_doc["id"] and record["body"]["trace_ledger_ref"]["sha256"] == sha(retained["trace-ledger.json"]), "outer trace binds actual write attempt and completed fixed check")
+        candidate = paths[2] / "preparation-parent/preparation/candidate"
+        prefix = candidate / "ystack-evidence" / incident["id"]
+        ok(not (prefix / "publisher-body.txt").exists(), "publisher body remains outside the 32-file candidate")
+        for name in w.NAMES:
+            ok((prefix / name).read_bytes() == output.joinpath(name).read_bytes(), "candidate keeps original frozen bytes: " + name)
+        for name in ("sandbox-request.json", "sandbox-receipt.json", "shadow-record.json", "trace-ledger.json", "consumer-provenance.json"):
+            ok((prefix / name).read_bytes() != retained[name], "new outer attempt evidence stays outside candidate: " + name)
+    ok(inspection[0][1] == json.loads(first_complete["consumer-provenance.json"])["body"]["commands"], "no child command appears after frozen complete provenance")
+    ok(digest_directory(base / "source.git") == source_before and digest_directory(output) == frozen_before
+       and digest_directory(original_attempt) == store_before, "complete two-attempt flow preserves original source, bundle and controlled-store bytes")
+    for mode in ("cpu-none", "unconfirmed", "missing", "partial"):
+        invalid_receipt_paths = case("write-receipt-" + mode)
+        complete(invalid_receipt_paths, True, mode)
+        ok(not any(invalid_receipt_paths[3].iterdir()), "failed or unavailable write receipt leaves no outer retained output: " + mode)
+        ok((invalid_receipt_paths[2] / "captured/response.json").exists()
+           and (invalid_receipt_paths[2] / "preparation-parent/preparation/record.json").exists(),
+           "receipt refusal follows actual completed materialization and preparation: " + mode)
+        ok(not (invalid_receipt_paths[2] / "captured/write-trace-ledger.json").exists(),
+           "invalid receipt never reaches outer trace validation or admission: " + mode)
+        ok(native.outcome() == "native-release.failure", "failed verification cannot gain native completion: " + mode)
+        if mode == "cpu-none":
+            receipt = json.loads((store / json.loads(invalid_receipt_paths[0].read_bytes())["id"] / "receipt.json").read_bytes())
+            ok(receipt["body"]["limits"]["cpu_time_ms"]["enforcement"] ==
+               receipt["body"]["limits"]["wall_time_ms"]["enforcement"] == "none",
+               "actual checker refuses explicit simulated NONE controls; production qualification stays blocked")
+    original_outer = w._outer_record
+    boundary = []
+    def refuse_outer(ws, materialized, frozen, retained, section, provenance, trace):
+        boundary.append("materialization-and-authenticated-verification-completed")
+        altered = json.loads(original_outer(ws, materialized, frozen, retained, section, provenance, trace))
+        altered["body"]["sandbox"]["receipt_ref"]["sha256"] = sha(frozen["sandbox-receipt.json"])
+        return canonical(altered)
+    w._outer_record = refuse_outer
+    try:
+        failed_paths = case("outer-original-receipt")
+        complete(failed_paths, True)
+        ok(boundary == ["materialization-and-authenticated-verification-completed"] and not any(failed_paths[3].iterdir()), "wrong outer receipt refuses at admission before retained output/seal")
+    finally:
+        w._outer_record = original_outer
+    def no_marker(paths, label):
+        ok(not (paths[3] / "bundle.json").exists(), label + " leaves no completed marker")
+        ok(native.outcome() == "native-release.failure", label + " preserves actual native failure")
+    write_at = e.write_exclusive_at
+    for stop_name in ("accepted-identities.json", "publisher-body.txt", "trace-receipt.json"):
+        retained_names = []
+        stopped = case("seal-failure-" + stop_name)
+        def fail_at_file(directory, name, raw, **options):
+            retained_names.append(name)
+            if name == stop_name:
+                raise e.Refusal("E_RUNTIME")
+            return write_at(directory, name, raw, **options)
+        e.write_exclusive_at = fail_at_file
+        try:
+            complete(stopped, True)
+            no_marker(stopped, "outer retained write failure")
+            ok(retained_names[-1] == stop_name and retained_names.count(stop_name) == 1,
+               "outer write stops once at exact first failed file")
+            expected_names = sorted(set(e.EVIDENCE_NAMES) | {"publisher-body.txt"})
+            ok(retained_names == expected_names[:expected_names.index(stop_name) + 1],
+               "no later retained write happens after failed boundary")
+            ok(set(path.name for path in stopped[3].iterdir()) == set(retained_names[:-1]),
+               "only successfully retained prefix exists after write failure")
+        finally:
+            e.write_exclusive_at = write_at
+    workspace_close = w._Workspace.close
+    closed = []
+    close_paths = case("ordinary-close-failure")
+    first_close_error = e.Refusal("E_RUNTIME")
+    def fail_after_close(ws):
+        closed.append(ws)
+        workspace_close(ws)
+        raise first_close_error
+    w._Workspace.close = fail_after_close
+    try:
+        complete(close_paths, True)
+        no_marker(close_paths, "ordinary owner close failure")
+        ok(len(closed) == 1 and closed[0].owned == [], "every ordinary owner closes before native completion and is not retried")
+        ok(set(path.name for path in close_paths[3].iterdir()) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"},
+           "close failure can retain evidence but never reports completion")
+    finally:
+        w._Workspace.close = workspace_close
+    for phase in ("before-admission", "during-retention", "after-retention"):
+        cancelled_paths = case("cancel-" + phase)
+        calls = []
+        prior_signal = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        def cancel_admission(*args):
+            calls.append("verified-materialization")
+            os.kill(os.getpid(), signal.SIGTERM)
+            e.CancellationSignals.checkpoint()
+            return admit_function(*args)
+        def cancel_retention(directory, name, raw, **options):
+            calls.append(name)
+            result = write_at(directory, name, raw, **options)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return result
+        def cancel_after_close(ws):
+            calls.append("ordinary-close")
+            workspace_close(ws)
+            os.kill(os.getpid(), signal.SIGTERM)
+        if phase == "before-admission":
+            w._admit = cancel_admission
+        elif phase == "during-retention":
+            e.write_exclusive_at = cancel_retention
+        else:
+            w._Workspace.close = cancel_after_close
+        try:
+            try:
+                complete(cancelled_paths)
+            except (e.Cancelled, e.Refusal) as exc:
+                ok(isinstance(exc, e.Cancelled) or str(exc) == "E_RUNTIME", "watched signal is refusal under real native owner")
+            else:
+                raise AssertionError("cancelled complete writer accepted")
+            no_marker(cancelled_paths, "writer cancellation at " + phase)
+            if phase == "before-admission":
+                ok(calls == ["verified-materialization"] and not any(cancelled_paths[3].iterdir()),
+                   "pre-admission cancellation leaves no retained output or later operation")
+            elif phase == "during-retention":
+                ok(calls == ["accepted-identities.json"], "retention cancellation stops at next real checkpoint")
+                ok(set(path.name for path in cancelled_paths[3].iterdir()) == {"accepted-identities.json"},
+                   "retention cancellation leaves exact completed prefix")
+            else:
+                ok(calls == ["ordinary-close"], "post-retention cancellation does not repeat ordinary cleanup")
+                ok(set(path.name for path in cancelled_paths[3].iterdir()) == set(e.EVIDENCE_NAMES) | {"publisher-body.txt"},
+                   "post-retention cancellation preserves evidence and rolls back completion")
+        finally:
+            signal.signal(signal.SIGTERM, prior_signal)
+            w._admit = admit_function
+            e.write_exclusive_at = write_at
+            w._Workspace.close = workspace_close
+    public_paths = case("public-main")
+    public_entry = subprocess.run([sys.executable, "-I", "-S", "-B", str(native_public_runner),
+        *map(str, (base, package, physical_python, native_binary, native_record, dependency_record, parent_helper, collector)),
+        *map(str, public_paths)], env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+    print("fresh public writer", public_entry.stdout.decode())
+    ok(public_entry.returncode == 0 and public_entry.stderr == b"",
+       "public prepare uses fresh isolated P, real descriptor3 and actual first NativeRelease constructor: " + public_entry.stderr.decode())
+    ok((public_paths[3] / "bundle.json").exists(), "fresh public actual native owner installs writer marker")
+    public_record = json.loads((public_paths[3] / "shadow-record.json").read_bytes())
+    ok(public_record["body"]["write"]["publication"] == {"state": "withheld", "reason_id": "shadow.write-not-published"},
+       "public native completion keeps publication withheld")
+    for operation in ("prepare", "reproduce", "publish"):
+        untrusted = case("public-untrusted-" + operation)
+        untrusted_argv = [sys.executable, "-I", "-S", "-B", str(package / "shadow/v1/write-shadow.py"), operation,
+            *map(str, untrusted)]
+        process = subprocess.run(untrusted_argv, env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        expected_code = b"E_PARENT_CONTEXT\n" if operation == "prepare" else b"E_USAGE\n"
+        ok(process.returncode == 1 and process.stdout == b"" and process.stderr == expected_code,
+           "actual isolated public entry refuses untrusted context or unavailable operation: " + operation)
+        ok(not any(untrusted[2].iterdir()) and not any(untrusted[3].iterdir()),
+           "actual untrusted public entry starts no workspace or outer write")
+    cache = base.parent.parent / "ystack-portable-core-jq16" / ("jq-osx-amd64" if sys.platform == "darwin" else "jq-linux64")
+    cache_digest = ("5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef" if sys.platform == "darwin"
+        else "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44")
+    ok(cache.is_file() and not cache.is_symlink() and sha(cache.read_bytes()) == cache_digest,
+       "scope paired control requires already verified jq1.6 cache; no download fallback")
+    scope_source = (root / "scripts/test/scope-qualification.test.sh").read_text()
+    scope_boundary = 'run_validator "$tmp/scope.json" || fail'
+    ok(scope_source.count(scope_boundary) == 1, "existing scope fixture has one fixed evaluator boundary")
+    scope_prelude = scope_source[:scope_source.index(scope_boundary)]
+    scope_root = 'root=$(CDPATH=\'\' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)'
+    ok(scope_prelude.count(scope_root) == 1, "scope fixture keeps fixed physical repository root")
+    scope_prelude = scope_prelude.replace(scope_root, "root=" + repr(str(root)), 1)
+    scope_script = fixture / "scope-write-form.sh"
+    supplied_record = fixture / "scope-write-record.json"
+    write(supplied_record, first_complete["shadow-record.json"], 0o400)
+    scope_tail = '''
+run_evaluator "${good[@]}" > "$tmp/legacy-evaluation.json"
+"$jq_bin" -e '(.body.reason_ids | index("scope.malformed")) == null' "$tmp/legacy-evaluation.json" >/dev/null || fail 'existing legacy positive malformed'
+"$jq_bin" -S -c --slurpfile write_record "$1" '.body.records=[$write_record[0]]' "$tmp/shadow-set.json" > "$tmp/write-set.json"
+scope_for_shadow "$tmp/write-set.json" "$tmp/write-scope.json"
+run_evaluator "$tmp/write-scope.json" "$tmp/write-set.json" "$tmp/dashboard.json" "$tmp/risk.json" "$tmp/kill.json" "$tmp/duty.json" "$tmp/marker.json" > "$tmp/write-evaluation.json"
+"$jq_bin" -e '.body.outcome=="not-proposable" and (.body.reason_ids | index("scope.malformed") != null) and .body.authority_effect=="none"' "$tmp/write-evaluation.json" >/dev/null || fail 'write form was accepted by old evaluator'
+cat "$tmp/legacy-evaluation.json" "$tmp/write-evaluation.json"
+'''
+    write(scope_script, (scope_prelude + scope_tail).encode(), 0o500)
+    scope_check = subprocess.run(["/bin/bash", str(scope_script), str(supplied_record)],
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(base.parent.parent), "YSTACK_SCOPE_TEST_BOUNDED": "1"},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+    ok(scope_check.returncode == 0, "unchanged actual scope evaluator refuses complete write form; legacy positive remains valid: " + scope_check.stderr.decode())
+    print(scope_check.stdout.decode())
     ok(json.loads((root / "enforcement/v1/accepted-identities.json").read_bytes())["body"]["environments"] == [], "shipped accepted set stays empty")
-    ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "interim public prepare refuses without marker")
+    ok(w.main(["write-shadow.py", "prepare", "request", "bundle", "work", "output"]) == 1, "public prepare refuses without trusted startup admission")
     scenario_work, scenario_output = original_work, original_output
     scenario_mode, scenario_request = original_mode, original_request
     for name, previous in module_state.items():
@@ -607,9 +1047,36 @@ assert native.child_status()==status
 print(json.dumps({"role":role,"case":name,"status":status,"classification":classification,"refusal":refusal_code,
  "outcome":native.outcome(),"no_completion":True},sort_keys=True))
 """
+public_prelude=prelude[:prelude.index('executable.close();native=e._NativeRelease')]+"executable.close()\n"
+public_body="""
+writer_spec=importlib.util.spec_from_file_location("shadow_writer_public_subject",package/"shadow/v1/write-shadow.py")
+writer=importlib.util.module_from_spec(writer_spec);sys.modules[writer_spec.name]=writer
+writer_spec.loader.exec_module(writer)
+writer.e,writer.c=e,c
+writer.require,writer.canonical,writer.sha,writer.parse=e.require,e.canonical,e.sha,e.parse
+admission=dataclasses.replace(admission,module_origins=e._runtime_module_origins())
+parent_inputs.recheck();parent_inputs.close()
+paths=list(map(pathlib.Path,sys.argv[9:13]))
+context_path=paths[0].parent/"descriptor3-parent-context.json"
+write(context_path,canonical({"schema_version":2,"kind":"shadow_consumer_parent_context","id":"shadow.parent","body":parent}),0o400)
+context_fd=os.open(context_path,os.O_RDONLY)
+os.dup2(context_fd,3)
+if context_fd!=3:os.close(context_fd)
+scenario_work,scenario_output=paths[2:]
+scenario_mode,scenario_request="success",paths[0]
+assert e._NATIVE_ORIGIN is None and "_cancel_release" not in sys.modules
+code=writer.main(["write-shadow.py","prepare",*map(str,paths)],admission)
+assert code==0,"fresh public main refusal"
+assert (paths[3]/"bundle.json").exists()
+record=json.loads((paths[3]/"shadow-record.json").read_bytes())
+assert record["body"]["record_form"]=="withheld-write.v1"
+print(json.dumps({"fresh_public_main":True,"descriptor3":"actual readonly regular schema2","native_first_load":str(e._NATIVE_ORIGIN),"record":record},sort_keys=True))
+"""
+(tmp/"writer-public-entry.py").write_text(public_prelude+public_body)
 runner=tmp/"writer-native-negative.py"
 runner.write_text(prelude+negative)
 body="root = pathlib.Path("+repr(str(root))+")\n"+(tmp/"writer-tests.py").read_text()
+body="native_public_runner = pathlib.Path("+repr(str(tmp/"writer-public-entry.py"))+")\n"+body
 body="native_negative_runner = pathlib.Path("+repr(str(tmp/"writer-native-negative.py"))+")\n"+body
 source=source.replace(anchor,"exec(compile("+repr(body)+", 'shadow-write-fixture-controls', 'exec'))\n"+anchor,1)
 (tmp/"enforced-with-writer.sh").write_text(source)
