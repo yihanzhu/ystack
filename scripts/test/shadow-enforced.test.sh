@@ -46,7 +46,7 @@ record=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
 base=list(record["argv"]);temporary=pathlib.Path(sys.argv[2]);source=str(pathlib.Path(sys.argv[3]))
 if source not in base:raise SystemExit("native child test source is not in the build argv")
 index={}
-for case in range(21,35):
+for case in range(21,36):
  directory=temporary/("native-child-case-%d"%case);directory.mkdir(mode=0o700)
  output=directory/record["output_name"];argv=[]
  for value in base:
@@ -193,7 +193,7 @@ def observe(lost=False):
    raise
   if status()[11]:return
   assert time.monotonic()<deadline;time.sleep(.01)
-if 21<=case<=26:
+if 21<=case<=26 or case==35:
  refuses(prepare);value=status();assert value[0] in (0,2) and value[1]==0 and value[19]==1 and value[23]==26;print("prepare-failure",case,value[25:43])
 elif case==27:
  prepare();state.spawn_child();value=status();assert value[0]==2 and value[3]==1 and value[4]!=0 and value[19]==1 and value[23]==27;refuses(state.child_fds);print("spawn-nonzero",value[:6])
@@ -213,14 +213,16 @@ elif case==34:
  prepare();state.spawn_child();close_pipes();observe();state.reap_child();before=status();assert before[12:15]==(1,-1,errno.EIO) and before[17]==0 and before[23]==35;refuses(state.reap_child);assert status()==before;print("unknown-reap")
 else:raise AssertionError(case)
 PY
-for native_case in 21 22 23 24 25 26 27 28 29 30 31 32 33 34; do
+native_child_cases="21 22 23 24 25 26 27 28 29 30 31 32 33 34"
+[ "$(uname -s)" != Linux ] || native_child_cases="$native_child_cases 35"
+for native_case in $native_child_cases; do
   child_binary=$(/usr/bin/find "$tmp/native-child-case-$native_case" -mindepth 1 -maxdepth 1 -type f -name '_cancel_release*.so' -print)
   "$python_bin" -I -S -B "$tmp/native-child-state.py" "$native_case" "$child_binary"
 done
 native_actual_child_binary=$(/usr/bin/find "$tmp/native-case-48" -mindepth 1 -maxdepth 1 \
   -type f ! -name build-record.json -print)
 "$python_bin" -I -S -B - "$native_actual_child_binary" <<'PY'
-import errno,importlib.util,json,os,pathlib,select,signal,sys,time
+import errno,fcntl,importlib.util,json,os,pathlib,select,signal,sys,time
 binary=pathlib.Path(sys.argv[1])
 environment=(b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")
 def owner():
@@ -241,16 +243,22 @@ def close_at_eof(state,fd,close):
 
 # The positive keeps the leader waitable while a same-group descendant ignores TERM.
 state=owner()
-program=b'''import json,os,signal
+inherited=os.open("/dev/null",os.O_RDONLY);high=fcntl.fcntl(inherited,fcntl.F_DUPFD,200)
+os.set_inheritable(inherited,True);os.set_inheritable(high,True)
+program=(b'''import errno,json,os,signal
+def absent(fd):
+ try:os.fstat(fd)
+ except OSError as exc:return exc.errno==errno.EBADF
+ return False
 def finish(_sent,_frame):raise SystemExit(0)
 signal.signal(signal.SIGTERM,finish);child=os.fork()
 if child==0:
  signal.signal(signal.SIGTERM,signal.SIG_IGN)
  os.write(1,(json.dumps({"kind":"descendant","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid()},sort_keys=True,separators=(",",":"))+"\\n").encode())
  while True:signal.pause()
-os.write(1,(json.dumps({"kind":"leader","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child},sort_keys=True,separators=(",",":"))+"\\n").encode())
+os.write(1,(json.dumps({"kind":"leader","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d)},sort_keys=True,separators=(",",":"))+"\\n").encode())
 while True:signal.pause()
-'''
+''' % (inherited,high))
 argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
 state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
 stdin_fd,stdout_fd,stderr_fd=state.child_fds();state.close_child_stdin()
@@ -264,6 +272,8 @@ leader=next(item for item in records if item["kind"]=="leader")
 descendant=next(item for item in records if item["kind"]=="descendant")
 assert leader["pid"]==leader["pgid"]==descendant["pgid"]
 assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
+assert leader["inherited_absent"] and leader["high_absent"]
+os.close(high);os.close(inherited)
 state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
 state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
 close_at_eof(state,stdout_fd,state.close_child_stdout);close_at_eof(state,stderr_fd,state.close_child_stderr)
@@ -284,6 +294,11 @@ if sys.platform=="darwin":
  else:raise AssertionError("unknown group duty allowed reap")
  state.check_child_group();negative=state.child_status()
  assert negative[47:49]==(-1,errno.EPERM) and not negative[17] and not negative[24]
+else:
+ assert negative[45:47]==(0,0)
+ state.reap_child();state.check_child_group();negative=state.child_status()
+ assert negative[17:20]==(1,1,1) and negative[24]==1 and negative[47:49]==(-1,errno.ESRCH)
+ state.abort_release();assert state.outcome()=="native-release.failure"
 print("actual-single-leader",sys.platform,negative[45:49],negative[23:25])
 PY
 "$python_bin" -I -S -B - "$root" "$native_control_binary" <<'PY'
@@ -409,8 +424,9 @@ except e.Refusal as exc:assert exc.code=="E_RUNTIME" and exc.__cause__ is native
 else:raise AssertionError("native failure lost authoritative priority")
 commit_interrupt=RuntimeError("commit return")
 getter_interrupt=RuntimeError("outcome observation")
-try:exit_owner(ExitNative(commit_error=commit_interrupt,getter_error=getter_interrupt)).__exit__(None,None,None)
-except RuntimeError as exc:assert exc is getter_interrupt and exc.__cause__ is commit_interrupt
+getter_owner=exit_owner(ExitNative(commit_error=commit_interrupt,getter_error=getter_interrupt))
+try:getter_owner.__exit__(None,None,None)
+except RuntimeError as exc:assert exc is getter_interrupt and exc.__cause__ is commit_interrupt and getter_owner.caller_exception is exc
 else:raise AssertionError("outcome observation interruption hidden")
 not_run=RuntimeError("commit did not enter native")
 not_run_native=PreEntryNative(not_run)
@@ -425,10 +441,39 @@ except RuntimeError as exc:
 else:raise AssertionError("late abort interruption hidden")
 earlier=ValueError("earlier body")
 later=RuntimeError("later outcome observation")
-try:exit_owner(ExitNative("native-release.failure",getter_error=later)).__exit__(ValueError,earlier,None)
-except RuntimeError as exc:assert exc is later and exc.__cause__ is earlier
+later_owner=exit_owner(ExitNative("native-release.failure",getter_error=later))
+try:later_owner.__exit__(ValueError,earlier,None)
+except RuntimeError as exc:assert exc is later and exc.__cause__ is earlier and later_owner.caller_exception is exc
 else:raise AssertionError("new outcome observation did not cross the outer boundary")
+observation_errors=(ValueError("value observation"),OSError(e.errno.EIO,"os observation"),
+ e.Refusal("E_RUNTIME"),e.c.Refusal("E_RUNTIME"),e.Cancelled(),RuntimeError("runtime observation"))
+for observation_error in observation_errors:
+ observation_owner=exit_owner(ExitNative(getter_error=observation_error))
+ try:observation_owner.__exit__(None,None,None)
+ except BaseException as exc:assert exc is observation_error and observation_owner.caller_exception is exc
+ else:raise AssertionError("observation exception class was hidden")
 e.CancellationSignals.active=None
+class OuterNative:
+ def __init__(self):self.close_calls=0
+ def close(self):self.close_calls+=1
+class OuterOwner:
+ def __init__(self,error):self.error=error;self.caller_exception=None
+ def __enter__(self):return self
+ def __exit__(self,*_args):self.caller_exception=self.error;raise self.error
+original_release=e._NativeRelease;original_owner=e.CancellationSignals
+original_capture=e.c.capture_parent_context;original_reproduce=e.reproduce
+try:
+ for observation_error in observation_errors:
+  outer_native=OuterNative();outer_owner=OuterOwner(observation_error)
+  e._NativeRelease=lambda *_args,native=outer_native,**_kwargs:native
+  e.CancellationSignals=lambda *_args,owner=outer_owner,**_kwargs:owner
+  e.c.capture_parent_context=lambda:{};e.reproduce=lambda *_args,**_kwargs:None
+  try:e.main(["driver","reproduce","request","work","output"],admission)
+  except BaseException as exc:assert exc is observation_error and outer_native.close_calls==1
+  else:raise AssertionError("outer main fabricated an observation result")
+finally:
+ e._NativeRelease=original_release;e.CancellationSignals=original_owner
+ e.c.capture_parent_context=original_capture;e.reproduce=original_reproduce
 print("shadow-enforced-native-outcome-events: simulated authority and caller ordering passed")
 expected=["/usr/bin/cc","-std=gnu11" if sys.platform=="darwin" else "-std=c11",
  "-Wall","-Wextra","-Werror","-O2","-fvisibility=hidden","-fPIC",
@@ -1384,6 +1429,23 @@ class CloseResource:
  def close(self):
   self.calls+=1
   if self.failure is not None:raise self.failure
+release=object.__new__(e._NativeRelease)
+release_items=[CloseResource(OSError(errno.EIO,"release close")),CloseResource(),
+ CloseResource(),CloseResource(),CloseResource()]
+for name,item in zip(("compiler","binary","record","script","source"),release_items):setattr(release,name,item)
+try:release.close()
+except OSError as exc:ok(exc is release_items[0].failure and [item.calls for item in release_items]==[1]*5
+ and all(getattr(release,name) is None for name in ("compiler","binary","record","script","source")),
+ "native release attempts all ordinary OSError closes once and preserves the first error")
+else:raise AssertionError("native release ordinary close error accepted")
+release=object.__new__(e._NativeRelease);release_items=[CloseResource(SystemExit(17)),CloseResource(),
+ CloseResource(),CloseResource(),CloseResource()]
+for name,item in zip(("compiler","binary","record","script","source"),release_items):setattr(release,name,item)
+try:release.close()
+except SystemExit as exc:ok(exc.code==17 and [item.calls for item in release_items]==[1,0,0,0,0]
+ and release.compiler is release_items[0] and release.binary is release_items[1],
+ "native release leaves arbitrary-interruption responsibility without attempt-all")
+else:raise AssertionError("native release arbitrary interruption accepted")
 normal=[CloseResource() for _ in range(4)]
 ok(e._close_communication(*normal)==None and [item.calls for item in normal]==[1,1,1,1],
  "communicate close attempts each distinct normal resource once")
@@ -2477,11 +2539,10 @@ parent={"helper_source_sha256":c.HELPER_SOURCE_SHA256,"helper_build_record_sha25
  "python_path":str(physical_python),"python_sha256":sha(physical_python.read_bytes()),
  "python_abi":sysconfig.get_config_var("SOABI"),
  "dependency_record_sha256":sha(dependency_record.read_bytes()),"loader_mode":"rtld-now-local.v1"}}
-class Census:
- def observe(self):pass
+census=e._NativeThreadCensus();census.observe()
 executable=e.stable_file(physical_python)
 admission=e._StartupAdmission(e._STARTUP_KEY,e.sys.executable,executable.sha256,e.sys.version,
- tuple(e.sys.version_info[:2]),e._runtime_module_origins(),Census())
+ tuple(e.sys.version_info[:2]),e._runtime_module_origins(),census)
 executable.close();native=e._NativeRelease(parent,admission)
 admission=dataclasses.replace(admission,native=native,module_origins=e._runtime_module_origins())
 with e.CancellationSignals(admission):bundle=e.reproduce(base/"request.json",work,output,parent)

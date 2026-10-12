@@ -607,10 +607,11 @@ class _NativeRelease:
             if item is not None:
                 try:
                     item.close()
-                except BaseException as exc:
+                except OSError as exc:
                     if failure is None:
                         failure = exc
-                finally:
+                    setattr(self, name, None)
+                else:
                     setattr(self, name, None)
         if failure is not None:
             raise failure
@@ -1258,6 +1259,7 @@ class CancellationSignals:
             try:
                 native_outcome = self.native.outcome()
             except BaseException as exc:
+                self.caller_exception = exc
                 if commit_exception is not None:
                     raise exc from commit_exception
                 raise
@@ -1270,6 +1272,7 @@ class CancellationSignals:
                 try:
                     native_outcome = self.native.outcome()
                 except BaseException as exc:
+                    self.caller_exception = exc
                     raise exc from (abort_exception if abort_exception is not None
                                     else commit_exception)
                 if native_outcome != "native-release.failure":
@@ -1295,6 +1298,7 @@ class CancellationSignals:
                 if self.native.outcome() != "native-release.failure":
                     failure = self._remember(failure, Refusal("E_RUNTIME"))
             except BaseException as exc:
+                self.caller_exception = exc
                 raise exc from failure
         if body_failure is None and failure is not None:
             raise failure
@@ -1953,12 +1957,16 @@ def main(argv: list[str], admission: _StartupAdmission | None = None) -> int:
             try:
                 reproduce(Path(argv[2]), Path(argv[3]), Path(argv[4]), parent=context)
             except BaseException as exc:
+                closing = native
+                native = None
                 try:
-                    native.close()
+                    closing.close()
                 except BaseException as close_exc:
                     raise exc from close_exc
                 raise
-            native.close()
+            closing = native
+            native = None
+            closing.close()
         return 0
     except BaseException as exc:
         if owner is not None and owner.caller_exception is exc:

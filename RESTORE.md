@@ -1215,3 +1215,9 @@ the saved caller mask, non-consuming pending checkpoints, State-owned child life
 and exact-byte native completion commit. Bind the actual system providers and spawn-filter
 state used by the reviewed runtime. Missing signal, child, identity, or lifecycle proof
 remains a refusal before its effect.
+
+On Linux, also require the recorded C11 recipe and the public close-from action after the
+fixed stdio and pipe actions. Prove with an explicitly inheritable ordinary descriptor and
+high descriptor that neither reaches exec. This gate-only control does not open production
+admission; the matching package, build ID, source/body, wait, signal, and release evidence
+must still bind the exact production bytes.

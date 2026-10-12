@@ -1857,7 +1857,9 @@ mask, installs fixed native HUP/INT/TERM handlers, and keeps those signals block
 one non-consuming native pending-signal observation. The same state owns child process
 identity and the exact completion bytes through the first marker byte, durability point,
 action and mask restoration, and final close. Unknown signal, child, or platform behavior
-refuses before its effect. Linux keeps its separate C11 release contract.
+refuses before its effect. Linux keeps its separate C11 release contract and adds the
+public close-from action after the fixed stdio and pipe actions. Platform admission stays
+closed until the same-source public-call controls and provider evidence are complete.
 
 ```sh
 bash scripts/test/shadow-enforced.test.sh

@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <pthread.h>
@@ -548,6 +551,13 @@ state_prepare_child(NativeState *state, PyObject *argument)
     for (index = 0; rc == 0 && index < 6; index++) {
         rc = posix_spawn_file_actions_addclose(&child->actions, child->fds[index]);
     }
+#if defined(__linux__)
+#if YSTACK_CANCEL_RELEASE_TESTING
+    if (rc == 0 && YSTACK_CANCEL_TEST_CASE == 35) rc = EIO;
+    else
+#endif
+    if (rc == 0) rc = posix_spawn_file_actions_addclosefrom_np(&child->actions, 3);
+#endif
     if (rc != 0) { errno = rc; goto prepare_failed; }
     child->fd_tuple = PyTuple_New(3);
     if (child->fd_tuple == NULL) goto prepare_failed;
