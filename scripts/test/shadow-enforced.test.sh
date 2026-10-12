@@ -727,9 +727,10 @@ class DefaultFilterHold:
    self._no_acl(fd)
   self._absent(self._missing[1],self._missing[0])
  def close(self):
-  count,self._owner_count=self._owner_count,0;failure=None
-  for index in range(count-1,-1,-1):
-   fd,self._owners[index]=self._owners[index],None
+  failure=None
+  while self._owner_count:
+   index=self._owner_count-1;fd=self._owners[index]
+   self._owners[index]=None;self._owner_count=index
    try:self._close(fd)
    except OSError as exc:
     if failure is None:failure=exc
@@ -819,6 +820,17 @@ try:DefaultFilterHold(fake.open,fake.metadata,fake.named,fake.capture,fake.free,
 except MemoryError:pass
 else:raise AssertionError("accepted late row interruption")
 assert len(fake.closed)==1
+class StopClose(BaseException):pass
+fake=FakeFilter();hold=fake_hold(fake);first=hold._owners[hold._owner_count-1]
+def stop_close(fd):
+ fake.closed.append(fd)
+ if fd==first:raise StopClose()
+hold._close=stop_close
+try:hold.close()
+except StopClose:pass
+else:raise AssertionError("lost close interruption")
+assert fake.closed==[first] and hold._owner_count==2 and first not in hold._owners
+hold._close=fake.close;hold.close();assert len(fake.closed)==3 and len(set(fake.closed))==3
 print("default-filter-parent-fixture: fixed path, ACL refusal, identity and owner controls passed")
 
 actual_filter=None
@@ -2771,8 +2783,20 @@ real_native="$real/native-release"
 /bin/bash -p "$fixture/shadow/v1/build-cancel-release.sh" build "$python_bin" "$real_native"
 real_native_binary=$(/usr/bin/find "$real_native" -mindepth 1 -maxdepth 1 -type f ! -name build-record.json -print)
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
+  "$python_bin" -I -S -B "$tmp/runtime-dependency-collector.py" "$fixture" "$real_native_binary" \
+  > "$real/runtime-dependency-record.json"
+"$python_bin" -I -S -B - "$real/runtime-dependency-record.json" <<'PY'
+import hashlib,json,pathlib,sys
+raw=pathlib.Path(sys.argv[1]).read_bytes();assert len(raw)<=1024*1024
+record=json.loads(raw);assert raw==(json.dumps(record,sort_keys=True,separators=(",",":"),ensure_ascii=False)+"\n").encode()
+evidence={"schema_version":1,"kind":"shadow_runtime_dependency_evidence",
+ "id":"shadow.runtime-dependency-evidence.real-chain",
+ "body":{"record_sha256":hashlib.sha256(raw).hexdigest(),"record":record}}
+print(json.dumps(evidence,sort_keys=True,separators=(",",":"),ensure_ascii=False))
+PY
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C LANG=C \
   "$python_bin" -I -S -B - "$real" "$fixture" "$python_bin" "$real_native_binary" \
-  "$real_native/build-record.json" "$tmp/runtime-dependency-record.json" <<'PY'
+  "$real_native/build-record.json" "$real/runtime-dependency-record.json" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
 import dataclasses, hashlib, importlib.util, json, pathlib, shutil, stat, subprocess, sys, sysconfig, types
