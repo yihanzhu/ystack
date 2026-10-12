@@ -3025,7 +3025,7 @@ result_body={"check":{"path":"source.txt","expected_sha256":"a"*64},
 result_raw=e.canonical(doc("file_digest_verifier_payload","file-digest-payload",result_body))
 evidence_manifest=doc("sandbox_evidence_manifest","evidence-manifest",{"files":[{
     "name_hex":b"file-digest-result.json".hex(),"sha256":sha(result_raw),"size_bytes":len(result_raw)}]})
-prep_manifest={"entries":[{"path":"source.txt","sha256":"f"*64,"size_bytes":7}]}
+prep_manifest={"entries":[{"kind":"file","path":"source.txt","sha256":"f"*64,"size_bytes":7}]}
 snapshots={"payload/stdout":b"","payload/stderr":b"","payload/evidence/0000":result_raw}
 payload_receipt={"body":{"lifecycle":{"admission":"admitted","runtime":"completed","control_deadline":"met"},
  "teardown":{"state":"confirmed"},"payload":{"exit_state":"exited","exit_code":0,
@@ -3333,7 +3333,7 @@ record={"schema_version":1,"kind":"candidate_content_preparation","status":"comp
  "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
  "candidate":{"commit_id":commit,"tree_id":tree}}
 manifest={"schema_version":1,"kind":"candidate_content_manifest","entries":[{
- "path":"source.txt","mode":"100644","blob_oid":"f"*40,"size_bytes":6,"sha256":sha(b"fixed\n")}],
+ "kind":"file","path":"source.txt","mode":"100644","blob_oid":"f"*40,"size_bytes":6,"sha256":sha(b"fixed\n")}],
  "file_count":1,"directory_count":0,"total_file_bytes":6,"hash_algorithm":"sha256"}
 materializer_receipt={
  "source":{"repository_id":"fixture.target","hash_algorithm":"sha1","commit_id":commit,"tree_id":tree},
