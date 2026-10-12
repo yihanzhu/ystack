@@ -852,11 +852,18 @@ static PyObject *
 state_reap_child(NativeState *state, PyObject *Py_UNUSED(ignored))
 {
     child_record *child = &state->child;
+    int normal_unrequested;
     siginfo_t info;
     int rc;
     int saved_errno;
+    normal_unrequested = !child->term_required && !child->kill_required &&
+        child->observe.tag == RETURNED && child->observe.rc == 0 &&
+        child->exit_observed && child->observed_info.si_code == CLD_EXITED &&
+        child->observed_info.si_status == 0 && child->pipes_complete &&
+        child->first_error == FAILURE_NONE;
     if (child->state != CHILD_OWNED || child->leader_reaped ||
             child->reap.tag == RETURNED || !child->exit_observed ||
+            (!child->term_required && !child->kill_required && !normal_unrequested) ||
             (child->term_required && child->term.tag != RETURNED) ||
             (child->kill_required && (child->kill.tag != RETURNED ||
              (child->kill.rc != 0 && child->kill.error_number != ESRCH)))) {

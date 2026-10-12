@@ -1020,17 +1020,22 @@ def _communicate_native(native: object, input_raw: bytes, stdout_limit: int,
             if not status[11]:
                 time.sleep(min(0.02, max(0, end - time.monotonic())))
             CancellationSignals.checkpoint()
-        native.check_child_group()
-        status = _native_child_status(native)
-        if not status[18]:
-            _native_child_cleanup(native, end)
+        returncode = _native_returncode(status)
+        normal = (returncode == 0 and status[6:9] == (1, 0, 0)
+                  and status[9] == getattr(os, "CLD_EXITED", 1) and status[10] == 0
+                  and status[11] == 1 and status[19] == 1 and status[20:23] == (0, 0, 0)
+                  and status[23] == 0)
+        if normal:
+            native.reap_child()
+            status = _native_child_status(native)
+            native.check_child_group()
             status = _native_child_status(native)
         else:
-            native.reap_child()
+            _native_child_cleanup(native, end)
             status = _native_child_status(native)
         require(status[17] == 1 and status[18] == 1 and status[19] == 1
                 and status[23] == 0 and status[24] == 1, "E_RUNTIME")
-        return (_NativeChildResult(_native_returncode(status)), bytes(output[stdout_fd]),
+        return (_NativeChildResult(returncode), bytes(output[stdout_fd]),
                 bytes(output[stderr_fd]))
     except BaseException as exc:
         failure = exc

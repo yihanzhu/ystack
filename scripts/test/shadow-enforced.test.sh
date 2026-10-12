@@ -195,6 +195,18 @@ state.reap_child();state.check_child_group();status=state.child_status()
 assert status[17:20]==(1,1,1) and status[24]==1 and status[47:49]==(-1,3)
 state.abort_release();assert state.outcome()=="native-release.failure"
 print("shadow-enforced-native-child-admission: production child completed with no residual group")
+state=module.prepare_state();state.block_entry();state.arm_consumer()
+state.prepare_child((12,b"/usr/bin/false",(b"/usr/bin/false",),
+ (b"LANG=C",b"LC_ALL=C",b"PATH=/usr/bin:/bin")))
+state.spawn_child();state.close_child_stdin();state.close_child_stdout();state.close_child_stderr()
+deadline=time.monotonic()+5
+while not state.child_status()[11]:
+ state.observe_child_exit();assert time.monotonic()<deadline;time.sleep(.01)
+try:state.reap_child()
+except RuntimeError:pass
+else:raise AssertionError("abnormal leader used the unrequested-signal shortcut")
+status=state.child_status();assert status[10]==1 and status[17]==0 and status[20:23]==(0,0,0)
+print("shadow-enforced-native-child-admission: abnormal leader retained before cleanup",status[6:12])
 PY
 cat > "$tmp/native-child-state.py" <<'PY'
 import errno,importlib.util,os,signal,sys,time
@@ -1119,9 +1131,9 @@ try:helper.ParentInputs(package,python,native,path,dependency_path,collector)
 except (OSError,ValueError):print("parent-relation-refused build-output")
 else:raise AssertionError("accepted recomputed build relation")
 PY
-"$python_bin" -I -S -B - "$root" "$native_actual_child_binary" <<'PY'
+"$python_bin" -I -S -B - "$root" "$native_actual_child_binary" "$jq_bin" <<'PY'
 import atexit,errno,fcntl,importlib.util,json,os,pathlib,select,signal,stat,sys,time,types
-root,binary=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
+root,binary,jq=map(pathlib.Path,sys.argv[1:])
 consumer_spec=importlib.util.spec_from_file_location("filter_parent_consumer",root/"shadow/v1/_consumer.py")
 c=importlib.util.module_from_spec(consumer_spec);sys.modules[consumer_spec.name]=c;consumer_spec.loader.exec_module(c)
 driver_spec=importlib.util.spec_from_file_location("native_communication_driver",root/"shadow/v1/enforced-reproduction.py")
@@ -1143,34 +1155,18 @@ def close_at_eof(state,fd,close):
   if not os.read(fd,4096):break
  close()
 
-def communicate_actual(program):
- state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
- state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
+def communicate_actual():
+ state=owner();argv=(os.fsencode(jq),b"--version")
+ state.prepare_child((13,argv[0],argv,environment));state.spawn_child()
  e.CancellationSignals.active=types.SimpleNamespace(native=state)
  try:result,stdout,stderr=e._communicate_native(state,b"",4096,4096,8)
  finally:e.CancellationSignals.active=None
- final=state.child_status();assert result.returncode==0 and stdout==stderr==b""
+ final=state.child_status();assert result.returncode==0 and stdout==b"jq-1.6\n" and stderr==b""
  assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
  state.abort_release();return final
 
-plain=communicate_actual(b"pass")
-print("actual-communicate-no-descendant",sys.platform,plain[17:25])
-descendant_program=b'''import os,signal
-child=os.fork()
-if child==0:
- signal.signal(signal.SIGTERM,signal.SIG_IGN)
- for fd in (0,1,2):
-  try:os.close(fd)
-  except OSError:pass
- while True:signal.pause()
-for fd in (0,1,2):
- try:os.close(fd)
- except OSError:pass
-os._exit(0)
-'''
-descendant_final=communicate_actual(descendant_program)
-assert descendant_final[20:22]==(1,1)
-print("actual-communicate-closed-stdio-descendant",sys.platform,descendant_final[17:25])
+plain=communicate_actual()
+print("actual-communicate-fixed-jq-version",sys.platform,plain[17:25])
 
 class MissingFilterComponent(Exception):pass
 class DefaultFilterHold:
@@ -1356,52 +1352,54 @@ if sys.platform=="darwin":
  atexit.register(actual_filter_final)
  actual_filter.recheck()
 
-# The positive keeps the leader waitable while a same-group descendant ignores TERM.
-state=owner()
+# Real abnormal fixed-role children keep the leader waitable until the live
+# same-group descendant has received KILL.
 inherited=os.open("/dev/null",os.O_RDONLY);high=fcntl.fcntl(inherited,fcntl.F_DUPFD,200)
 os.set_inheritable(inherited,True);os.set_inheritable(high,True)
 filter_fds=tuple(actual_filter._owners[:actual_filter._owner_count]) if actual_filter is not None else ()
-program=(b'''import errno,json,os,signal
+program=(b'''import errno,json,os,signal,sys
 def absent(fd):
  try:os.fstat(fd)
  except OSError as exc:return exc.errno==errno.EBADF
  return False
-def finish(_sent,_frame):raise SystemExit(0)
-signal.signal(signal.SIGTERM,finish);leader=os.getpid();ready_r,ready_w=os.pipe();reaper=os.fork()
+mode=sys.argv[1];leader=os.getpid();ready_r,ready_w=os.pipe();reaper=os.fork()
 if reaper==0:
  os.close(ready_r);os.setpgid(0,0);child=os.fork()
  if child==0:
-  os.close(ready_w);os.setpgid(0,leader);signal.signal(signal.SIGTERM,signal.SIG_IGN)
+  os.setpgid(0,leader);signal.signal(signal.SIGTERM,signal.SIG_IGN)
   os.write(1,(json.dumps({"kind":"descendant","pid":os.getpid(),"pgid":os.getpgrp(),"uid":os.getuid()},sort_keys=True,separators=(",",":"))+"\\n").encode())
+  os.write(ready_w,(str(os.getpid())+"\\n").encode());os.close(ready_w)
+  os.close(0);os.close(1);os.close(2)
   while True:signal.pause()
- os.write(ready_w,(str(child)+"\\n").encode());os.close(ready_w);os.waitpid(child,0);os._exit(0)
+ os.close(ready_w);os.close(0);os.close(1);os.close(2);os.waitpid(child,0);os._exit(0)
 os.close(ready_w);child=int(os.read(ready_r,32));os.close(ready_r)
 os.write(1,(json.dumps({"kind":"leader","pid":leader,"pgid":os.getpgrp(),"uid":os.getuid(),"descendant":child,"inherited_absent":absent(%d),"high_absent":absent(%d),"filter_absent":all(absent(fd) for fd in %r)},sort_keys=True,separators=(",",":"))+"\\n").encode())
-while True:signal.pause()
+os.close(0);os.close(1);os.close(2)
+if mode=="nonzero":os._exit(7)
+os.kill(leader,signal.SIGUSR1)
 ''' % (inherited,high,filter_fds))
-argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program)
-state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
-stdin_fd,stdout_fd,stderr_fd=state.child_fds();state.close_child_stdin()
-records=[];buffer=b"";deadline=time.monotonic()+5
-while len(records)<2:
- readable,_,_=select.select([stdout_fd],[],[],max(0,deadline-time.monotonic()));assert readable
- chunk=os.read(stdout_fd,4096);assert chunk;buffer+=chunk
- while b"\n" in buffer:
-  line,buffer=buffer.split(b"\n",1);records.append(json.loads(line))
-leader=next(item for item in records if item["kind"]=="leader")
-descendant=next(item for item in records if item["kind"]=="descendant")
-assert leader["pid"]==leader["pgid"]==descendant["pgid"]
-assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
-assert leader["inherited_absent"] and leader["high_absent"] and leader["filter_absent"]
+def abnormal(mode,expected):
+ state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",program,mode.encode())
+ state.prepare_child((12,argv[0],argv,environment));state.spawn_child()
+ e.CancellationSignals.active=types.SimpleNamespace(native=state)
+ try:result,out,err=e._communicate_native(state,b"",4096,4096,8)
+ finally:e.CancellationSignals.active=None
+ records=[json.loads(line) for line in out.splitlines()];assert len(records)==2 and not err
+ leader=next(item for item in records if item["kind"]=="leader")
+ descendant=next(item for item in records if item["kind"]=="descendant")
+ assert leader["pid"]==leader["pgid"]==descendant["pgid"]
+ assert leader["descendant"]==descendant["pid"] and leader["uid"]==descendant["uid"]==os.getuid()
+ assert leader["inherited_absent"] and leader["high_absent"] and leader["filter_absent"]
+ final=state.child_status();assert result.returncode==expected
+ assert final[17:20]==(1,1,1) and final[20:23]==(1,1,1) and final[24]==1
+ assert final[47:49]==(-1,errno.ESRCH)
+ try:state.kill_child_group()
+ except RuntimeError:pass
+ else:raise AssertionError("signal allowed after reap")
+ print("actual-abnormal-descendant",mode,leader,descendant,final[17:25],flush=True)
+ state.abort_release();assert state.outcome()=="native-release.failure"
+abnormal("nonzero",7);abnormal("signaled",-signal.SIGUSR1)
 os.close(high);os.close(inherited)
-state.term_child_group();observe(state);before=state.child_status();assert before[17]==0
-state.kill_child_group();after_kill=state.child_status();assert after_kill[45:47]==(0,0)
-close_at_eof(state,stdout_fd,state.close_child_stdout);close_at_eof(state,stderr_fd,state.close_child_stderr)
-state.reap_child();state.check_child_group();final=state.child_status()
-print("actual-descendant-final",sys.platform,final,flush=True)
-assert final[17:20]==(1,1,1) and final[24]==1 and final[47:49]==(-1,errno.ESRCH)
-print("actual-descendant-group",leader,descendant,final[17:25])
-state.abort_release();assert state.outcome()=="native-release.failure"
 
 # A separate State gets a real Darwin UNKNOWN last, because it must not be reused.
 state=owner();argv=(sys.executable.encode(),b"-I",b"-S",b"-B",b"-c",b"import signal;signal.pause()")
@@ -1647,7 +1645,7 @@ PY
   "$tmp/parent-input-helper.py" "$tmp/runtime-dependency-collector.py" "$native_control_binary" <<'PY'
 import os
 startup_environment_keys=tuple(sorted(os.environ))
-import hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, time, types
+import errno, hashlib, importlib.util, json, pathlib, shutil, stat, sys, sysconfig, tempfile, time, types
 
 root, base, helper, jq, native_binary, native_record, dependency_record, parent_helper, collector, group_control = map(pathlib.Path, sys.argv[1:])
 helper_spec=importlib.util.spec_from_file_location("parent_input_helper",parent_helper)
