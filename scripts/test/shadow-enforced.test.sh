@@ -338,7 +338,11 @@ def function_bodies(path):
   status=metadata([readelf,"--dyn-syms","--wide",image],feed)
   status["image_role"]=label
   return entries,status
+ production_record_path=pathlib.Path(native_binary).parent/"build-record.json"
+ production_record_before=digest(production_record_path);gate_record_before=digest(gate_record)
+ gate_identity_before=digest(gate_binary)
  native_entries,native_status=symbols_from(native_binary,"native-release")
+ gate_before={"identity":gate_identity_before,"build_id":build_id(gate_binary)}
  gate_entries,gate_status=symbols_from(gate_binary,"gate-only-case-48")
  provider_entries,provider_status=symbols_from(path,"libc")
  answer["symbol_metadata"]={"native":native_status,"gate_only":gate_status,"provider":provider_status}
@@ -351,14 +355,22 @@ def function_bodies(path):
     return None,"record-not-canonical"
    return value,None
   except (OSError,ValueError,TypeError):return None,"record-unavailable"
- production_record,production_error=canonical_record(pathlib.Path(native_binary).parent/"build-record.json")
+ production_record,production_error=canonical_record(production_record_path)
  gate_record_value,gate_error=canonical_record(gate_record)
- gate_before={"identity":digest(gate_binary),"build_id":build_id(gate_binary)}
+ answer["build_records"]={"production":production_record if production_error is None else
+  {"status":"unavailable","reason":production_error},"gate_only":gate_record_value if gate_error is None else
+  {"status":"unavailable","reason":gate_error}}
  def build_relation():
   if production_error or gate_error:return {"status":"unavailable","reason":production_error or gate_error}
   if production_record.get("kind")!="shadow_cancel_release_build_record" or gate_record_value.get("kind")!="shadow_cancel_release_build_record":
    return {"status":"unavailable","reason":"record-kind"}
   production=production_record.get("body",{});gate=gate_record_value.get("body",{})
+  required=("platform","architecture","source_sha256","build_script_sha256","compiler_path",
+   "compiler_sha256","compiler_version_sha256","argv","argv_sha256","python_path","python_sha256",
+   "python_implementation","python_version","soabi","ext_suffix","configuration","output_name",
+   "output_size","output_sha256","test_build")
+  if any(name not in production or production[name] is None or name not in gate or gate[name] is None for name in required):
+   return {"status":"unavailable","reason":"build-field-missing"}
   if production.get("test_build") is not False or gate.get("test_build") is not True or gate.get("test_case")!=48:
    return {"status":"unavailable","reason":"build-role"}
   shared=("platform","architecture","source_sha256","build_script_sha256","compiler_path",
@@ -366,9 +378,27 @@ def function_bodies(path):
    "python_version","soabi","ext_suffix","configuration")
   if any(production.get(name)!=gate.get(name) for name in shared):
    return {"status":"unavailable","reason":"source-recipe-runtime-mismatch"}
-  production_argv=list(production.get("argv",()));gate_argv=list(gate.get("argv",()))
+  if not isinstance(production["argv"],list) or not isinstance(gate["argv"],list):
+   return {"status":"unavailable","reason":"argv-shape"}
+  production_argv=list(production["argv"]);gate_argv=list(gate["argv"])
   defines=("-DYSTACK_CANCEL_RELEASE_TESTING=1","-DYSTACK_CANCEL_TEST_CASE=48")
-  if any(value not in gate_argv for value in defines):return {"status":"unavailable","reason":"testing-defines"}
+  if any(gate_argv.count(value)!=1 for value in defines) or any(value in production_argv for value in defines):
+   return {"status":"unavailable","reason":"testing-defines"}
+  def actual_inputs(body,argv):
+   sources=[pathlib.Path(value) for value in argv if value.endswith("/_cancel_release.c")]
+   if len(sources)!=1:return {"status":"unavailable","reason":"source-path-count"}
+   checks=((sources[0],"source_sha256"),(sources[0].with_name("build-cancel-release.sh"),"build_script_sha256"),
+    (pathlib.Path(body["compiler_path"]),"compiler_sha256"),(pathlib.Path(body["python_path"]),"python_sha256"))
+   rows=[]
+   for actual,field in checks:
+    measured=digest(actual)
+    if measured.get("status")!="ok" or measured.get("sha256")!=body[field]:
+     return {"status":"unavailable","reason":"actual-input-mismatch","field":field,"actual":str(actual)}
+    rows.append({"field":field,"path":str(actual),"identity":measured})
+   return {"status":"ok","inputs":rows}
+  production_inputs=actual_inputs(production,production_argv);gate_inputs=actual_inputs(gate,gate_argv)
+  if production_inputs["status"]!="ok" or gate_inputs["status"]!="ok":
+   return {"status":"unavailable","reason":"actual-inputs","production":production_inputs,"gate":gate_inputs}
   reduced=[value for value in gate_argv if value not in defines]
   try:
    production_output=production_argv.index("-o")+1;gate_output=reduced.index("-o")+1
@@ -377,12 +407,21 @@ def function_bodies(path):
   production_argv=["<source>" if value.endswith("/_cancel_release.c") else value for value in production_argv]
   reduced=["<source>" if value.endswith("/_cancel_release.c") else value for value in reduced]
   if production_argv!=reduced:return {"status":"unavailable","reason":"argv-difference"}
-  if gate.get("output_sha256")!=gate_before["identity"].get("sha256") or gate.get("output_size")!=gate_before["identity"].get("size"):
-   return {"status":"unavailable","reason":"gate-output-binding"}
+  if (gate["output_sha256"]!=gate_before["identity"].get("sha256") or
+      gate["output_size"]!=gate_before["identity"].get("size") or
+      production["output_sha256"]!=digest(native_binary).get("sha256") or
+      production["output_size"]!=digest(native_binary).get("size")):
+   return {"status":"unavailable","reason":"output-binding"}
   return {"status":"ok","origin":"gate-only-case-48","differences":[*defines,"source-path","output-path"],
-   "production_record_sha256":hashlib.sha256((pathlib.Path(native_binary).parent/"build-record.json").read_bytes()).hexdigest(),
-   "gate_record_sha256":hashlib.sha256(gate_record.read_bytes()).hexdigest(),"shared_fields":list(shared)}
+   "production_record":production_record,"gate_record":gate_record_value,
+   "production_record_sha256":production_record_before.get("sha256"),
+   "gate_record_sha256":gate_record_before.get("sha256"),"production_inputs":production_inputs,
+   "gate_inputs":gate_inputs,"shared_fields":list(shared)}
  answer["gate_only_provenance"]=build_relation()
+ build_record_bytes=sum(row.get("size",786433) for row in (production_record_before,gate_record_before))
+ if answer["gate_only_provenance"]["status"]=="ok":
+  if recorded+build_record_bytes<=786432:recorded+=build_record_bytes
+  else:answer["gate_only_provenance"]={"status":"unavailable","reason":"metadata-output-limit"}
  gate_after=None
  logical_families={"openat":("openat","openat64"),"fstat":("fstat","fstat64")}
  gate_symbols={"posix_spawn_file_actions_addclosefrom_np","posix_spawn_file_actions_adddup2",
@@ -513,8 +552,45 @@ def function_bodies(path):
     if re.search(r"\b%s\w*\s+(?:0x)?%x\b"%(opcode,target),line)]
    if child is not None:child["caller"]={"source":source,"opcode":opcode,"lines":lines,
     "status":"ok" if len(lines)==1 else "unavailable"}
-  answer["spawn_child_candidate"]={"status":"unavailable","reason":"fixed-parent-body-needs-source-binding",
-   "semantic_binding":"unresolved","parent_entry":0x10f520}
+  parent=next((row for row in answer["internal_functions"] if row.get("entry")==0x10f520),None)
+  references=[]
+  if parent is not None and parent.get("status")=="ok":
+   pattern=re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+(?:lea|mov)\w*\s+[^#\n]*\(%rip\),%r\w+\s+#\s*([0-9a-f]+)\b")
+   for line in parent["body"].splitlines():
+    match=pattern.match(line)
+    if match:
+     target=int(match.group(1),16);covering=[bounds for bounds in fde_ranges if bounds[0]<=target<bounds[1]]
+     if len(covering)==1 and covering[0][0]==target:references.append((line,target,covering[0]))
+  if len(references)==1:
+   instruction,target,bounds=references[0];blocks=[];selected_block=None
+   def candidate_frames(raw):
+    nonlocal selected_block
+    text=raw.decode("utf-8","replace");header=re.search(r"\b(CIE|FDE)\b",text)
+    match=re.search(r"\bFDE\b.*\bpc=([0-9a-fA-F]+)\.\.([0-9a-fA-F]+)",text)
+    if match:
+     if selected_block is not None:blocks.append("".join(selected_block))
+     selected_block=[text] if tuple(int(value,16) for value in match.groups())==bounds else None
+    elif header:
+     if selected_block is not None:blocks.append("".join(selected_block));selected_block=None
+    elif selected_block is not None:selected_block.append(text)
+    if selected_block is not None and text.strip()=="":blocks.append("".join(selected_block));selected_block=None
+   candidate_status=metadata([readelf,"--debug-dump=frames-interp",path],candidate_frames)
+   if selected_block is not None:blocks.append("".join(selected_block))
+   answer["spawn_child_candidate_metadata"]=candidate_status
+   if candidate_status["status"]=="ok" and len(blocks)==1:
+    block=blocks[0];block_bytes=len(block.encode())
+    if recorded+block_bytes<=786432:
+     recorded+=block_bytes;candidate=range_body("spawn-child-codepointer-candidate",*bounds)
+     candidate.update({"semantic_binding":"unresolved","candidate_kind":"codepointer-candidate",
+      "parent_entry":0x10f520,"parent_instruction":instruction,"referenced_entry":target,"fde":block})
+     answer["spawn_child_candidate"]=candidate
+    else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"metadata-output-limit",
+     "semantic_binding":"unresolved","parent_entry":0x10f520,"parent_instruction":instruction}
+   else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"candidate-fde-count-or-metadata",
+    "semantic_binding":"unresolved","parent_entry":0x10f520,"parent_instruction":instruction,
+    "count":len(blocks)}
+  else:answer["spawn_child_candidate"]={"status":"unavailable","reason":"codepointer-candidate-count",
+   "semantic_binding":"unresolved","parent_entry":0x10f520,"count":len(references)}
  else:
   answer["frame_metadata"]={"status":"unavailable","reason":"fixed-libc-identity-mismatch",
    "identity":image_identity,"build_id":image_build_id}
@@ -528,9 +604,12 @@ def function_bodies(path):
   "recorded_total":786432,"timeout_seconds_each":10}
  source_after={"identity":digest(path),"build_id":build_id(path)}
  gate_after={"identity":digest(gate_binary),"build_id":build_id(gate_binary)}
+ production_record_after=digest(production_record_path);gate_record_after=digest(gate_record)
  tools_after={name:digest(row["path"]) for name,row in answer["tools"].items()}
  answer["source_after"]=source_after;answer["gate_before"]=gate_before
- answer["gate_after"]=gate_after;answer["tools_after"]=tools_after
+ answer["gate_after"]=gate_after;answer["production_record_before"]=production_record_before
+ answer["production_record_after"]=production_record_after;answer["gate_record_before"]=gate_record_before
+ answer["gate_record_after"]=gate_record_after;answer["tools_after"]=tools_after
  source_valid=all((source_before["identity"].get("status")=="ok",
   bool(source_before["identity"].get("sha256")),source_before["build_id"].get("status")=="ok",
   bool(source_before["build_id"].get("value")),source_after["identity"].get("status")=="ok",
@@ -543,7 +622,9 @@ def function_bodies(path):
   gate_before["build_id"].get("status")=="ok",bool(gate_before["build_id"].get("value")),
   gate_after["identity"].get("status")=="ok",bool(gate_after["identity"].get("sha256")),
   gate_after["build_id"].get("status")=="ok",bool(gate_after["build_id"].get("value"))))
- binding_ok=source_valid and gate_valid and tools_valid and source_before==source_after and gate_before==gate_after and all(
+ records_valid=all(row.get("status")=="ok" and row.get("sha256") for row in
+  (production_record_before,production_record_after,gate_record_before,gate_record_after))
+ binding_ok=source_valid and gate_valid and tools_valid and records_valid and source_before==source_after and gate_before==gate_after and production_record_before==production_record_after and gate_record_before==gate_record_after and all(
   answer["tools"][name]["identity"]==tools_after[name] for name in answer["tools"])
  answer["evidence_binding"]={"status":"ok" if binding_ok else "unavailable",
   "reason":None if binding_ok else "source-or-tool-identity-missing-or-changed"}
