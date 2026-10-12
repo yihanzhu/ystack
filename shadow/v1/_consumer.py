@@ -2,7 +2,6 @@
 """Private trust primitives for the inactive shadow consumer."""
 from __future__ import annotations
 import ctypes
-import ctypes.util
 import dataclasses
 import errno
 import fcntl
@@ -22,6 +21,10 @@ EXECUTABLE_LIMIT, OUTPUT_LIMIT = 16 * 1024 * 1024, 10 * 1024 * 1024
 JQ_SHA256 = {"darwin": "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef",
              "linux": "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"}
 HASH_KEYS = ("helper_source_sha256", "helper_build_record_sha256", "helper_executable_sha256")
+NATIVE_RELEASE_KEYS = {"source_sha256", "build_script_sha256", "build_record_sha256",
+                       "binary_path", "binary_size", "binary_sha256", "python_path",
+                       "python_sha256", "python_abi", "dependency_record_sha256",
+                       "loader_mode"}
 CONFIG_KEYS = {"consumer_gid", "environment_id", "identity_paths", "installed_files",
                "principal_uid", "runtime", "store_id", "store_root", "work_root"}
 IDENTITY_KEYS = {"guest_init", "guest_kernel", "guest_kernel_config", "guest_supervisor",
@@ -41,6 +44,10 @@ IDENTITY_SLOTS = {"host_runtime", "guest_kernel", "guest_kernel_config", "guest_
                   "verification_instructions"}
 MECHANISMS = {"cpu_time_ms", "memory_bytes", "output_bytes", "process_count",
               "scratch_bytes", "wall_time_ms"}
+DARWIN_UUID_INPUT_LIMIT = 16 * 1024
+DARWIN_UUID_OUTPUT_LIMIT = 32 * 1024
+DARWIN_UUID_COUNT_LIMIT = 128
+DARWIN_SYSTEM_C = "/usr/lib/libSystem.B.dylib"
 
 class Refusal(Exception):
     def __init__(self, code: str):
@@ -90,6 +97,44 @@ def _json(raw: bytes, maximum: int, code: str) -> dict:
         raise Refusal(code) from None
     return value
 
+def _json_array(raw: bytes, maximum: int, code: str) -> list:
+    _require(len(raw) <= maximum, code)
+    try:
+        value = json.loads(raw, object_pairs_hook=_unique_object)
+        _require(isinstance(value, list) and canonical(value) == raw, code)
+    except (UnicodeDecodeError, UnicodeEncodeError, ValueError, TypeError, RecursionError):
+        raise Refusal(code) from None
+    return value
+
+def _uuid_hex(value: object) -> bool:
+    return (isinstance(value, str) and len(value) == 32
+            and all(char in "0123456789abcdef" for char in value))
+
+class _DarwinACLFunctions:
+    def __init__(self) -> None:
+        library = ctypes.CDLL(DARWIN_SYSTEM_C, use_errno=True)
+        library.acl_get_fd_np.restype = ctypes.c_void_p
+        library.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+        library.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+        library.acl_get_tag_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+        library.acl_get_qualifier.restype = ctypes.c_void_p
+        library.acl_get_qualifier.argtypes = [ctypes.c_void_p]
+        library.acl_get_permset.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        library.acl_get_perm_np.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        library.acl_free.argtypes = [ctypes.c_void_p]
+        self.library = library
+
+_DARWIN_ACL_FUNCTIONS = _DarwinACLFunctions() if sys.platform == "darwin" else None
+
+class _DarwinUUIDResolver:
+    def resolve(self, uuids: list[str]) -> list[dict]:
+        raise NotImplementedError
+
+class _DarwinGroupReader:
+    def contains(self, gid: int) -> bool:
+        raise NotImplementedError
+
 def _metadata(fd: int) -> os.stat_result:
     """Private OS observation seam used only by in-process fixtures."""
     return os.fstat(fd)
@@ -137,6 +182,24 @@ class HeldPath:
             expected = _identity(component.before)
             _require(_identity(current) == expected and _identity(named) == expected, code)
             _require(component.rule(component.fd, current, component.ancestor), code)
+            try:
+                after = _metadata(component.fd)
+                after_named = (after if component.name is None else
+                               _named_metadata(component.name, self.components[index - 1].fd))
+            except (OSError, ValueError):
+                raise Refusal(code) from None
+            _require(_identity(after) == expected and _identity(after_named) == expected, code)
+
+    def seal_recheck(self, code: str) -> None:
+        for index, component in enumerate(self.components):
+            try:
+                current = _metadata(component.fd)
+                named = (current if component.name is None else
+                         _named_metadata(component.name, self.components[index - 1].fd))
+            except (OSError, ValueError):
+                raise Refusal(code) from None
+            expected = _identity(component.before)
+            _require(_identity(current) == expected and _identity(named) == expected, code)
 
     def read(self, maximum: int, code: str) -> bytes:
         self.recheck(code)
@@ -171,12 +234,39 @@ class HeldPath:
         return b"".join(chunks)
 
     def close(self) -> None:
+        failure = None
         for component in reversed(self.components):
             try:
                 os.close(component.fd)
-            except OSError:
-                pass
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
         self.components.clear()
+        if failure is not None:
+            raise failure
+
+def _close_components(rows: list[HeldComponent], failure: BaseException | None = None) -> None:
+    while rows:
+        row = rows.pop()
+        try:
+            os.close(row.fd)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+def _close_paths(items: list[HeldPath]) -> None:
+    failure = None
+    while items:
+        item = items.pop()
+        try:
+            item.close()
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
     rows = []
@@ -185,12 +275,16 @@ def _clone(parent: HeldPath, code: str) -> list[HeldComponent]:
         for row in parent.components:
             rows.append(HeldComponent(os.dup(row.fd), row.name, row.before, row.rule, row.ancestor))
         return rows
-    except (OSError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except OSError:
+            raise Refusal(code) from None
 
-def _open_held(path: str, directory: bool, rule: Rule, code: str) -> HeldPath:
+def _open_held(path: str, directory: bool, rule: Rule, code: str,
+               allow_hardlinks: bool = False) -> HeldPath:
     _require(_physical(path) and path != "/", code)
     parts = path.split("/")[1:]
     _require(all(part not in ("", ".", "..") for part in parts), code)
@@ -213,14 +307,18 @@ def _open_held(path: str, directory: bool, rule: Rule, code: str) -> HeldPath:
             _require(rule(fd, state, not last), code)
         state = rows[-1].before
         _require((directory and stat.S_ISDIR(state.st_mode)) or
-                 (not directory and stat.S_ISREG(state.st_mode) and state.st_nlink == 1), code)
+                 (not directory and stat.S_ISREG(state.st_mode)
+                  and (allow_hardlinks or state.st_nlink == 1)), code)
         result = HeldPath(path, rows)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, ValueError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except (OSError, ValueError):
+            raise Refusal(code) from None
 
 def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: str) -> HeldPath:
     _require(isinstance(name, str) and name and "/" not in name and name not in (".", ".."), code)
@@ -238,10 +336,13 @@ def _open_child(parent: HeldPath, name: str, directory: bool, rule: Rule, code: 
         result = HeldPath(parent.path + "/" + name, rows)
         result.recheck(code)
         return result
-    except (OSError, ValueError, Refusal):
-        for row in reversed(rows):
-            os.close(row.fd)
-        raise Refusal(code) from None
+    except (OSError, ValueError, Refusal) as exc:
+        try:
+            _close_components(rows, exc)
+        except Refusal:
+            raise
+        except (OSError, ValueError):
+            raise Refusal(code) from None
 
 def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
     try:
@@ -255,26 +356,19 @@ def _linux_acl_xattr(fd: int, name: str) -> list[tuple[int, int, int]] | None:
     return [(int.from_bytes(raw[i:i + 2], "little"), int.from_bytes(raw[i + 2:i + 4], "little"),
              int.from_bytes(raw[i + 4:i + 8], "little")) for i in range(4, len(raw), 8)]
 
-def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
-    lib = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-    lib.acl_get_fd_np.restype = ctypes.c_void_p
-    lib.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
-    lib.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
-    lib.acl_get_tag_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
-    lib.acl_get_qualifier.restype = ctypes.c_void_p
-    lib.acl_get_qualifier.argtypes = [ctypes.c_void_p]
-    lib.acl_get_permset.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-    lib.acl_get_perm_np.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    lib.mbr_uuid_to_id.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
-                                   ctypes.POINTER(ctypes.c_int)]
-    lib.acl_free.argtypes = [ctypes.c_void_p]
+def _darwin_acl(fd: int, resolver: _DarwinUUIDResolver | None) -> list[tuple[int, int | None, int]]:
+    _require(isinstance(resolver, _DarwinUUIDResolver), "E_ACL")
+    _require(_DARWIN_ACL_FUNCTIONS is not None, "E_ACL")
+    lib = _DARWIN_ACL_FUNCTIONS.library
+    captured: list[tuple[int, str, int]] = []
+    entry, selector = ctypes.c_void_p(), 0
+    tag, perms = ctypes.c_int(), ctypes.c_void_p()
     ctypes.set_errno(0)
     acl = lib.acl_get_fd_np(fd, 0x100)
     if not acl:
         if ctypes.get_errno() == errno.ENOENT:
             return []
         raise OSError(ctypes.get_errno(), "acl_get_fd_np")
-    rows, entry, selector = [], ctypes.c_void_p(), 0
     try:
         while True:
             ctypes.set_errno(0)
@@ -284,7 +378,7 @@ def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
                     raise OSError(ctypes.get_errno(), "acl_get_entry")
                 break
             selector = -1
-            tag, perms = ctypes.c_int(), ctypes.c_void_p()
+            tag.value, perms.value = 0, None
             if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
                 raise OSError(ctypes.get_errno(), "acl_get_tag_type")
             if lib.acl_get_permset(entry, ctypes.byref(perms)) != 0:
@@ -301,24 +395,37 @@ def _darwin_acl(fd: int) -> list[tuple[int, int | None, int]]:
             qualifier = lib.acl_get_qualifier(entry)
             if not qualifier:
                 raise OSError(ctypes.get_errno() or errno.EIO, "acl_get_qualifier")
-            identifier = None
-            value, kind = ctypes.c_uint32(), ctypes.c_int()
-            uuid = ctypes.string_at(qualifier, 16)
-            if lib.mbr_uuid_to_id(uuid, ctypes.byref(value), ctypes.byref(kind)) == 0 and kind.value == 0:
-                identifier = value.value
-            if lib.acl_free(qualifier) != 0:
-                raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
-            rows.append((tag.value, identifier, bits))
-            _require(len(rows) <= 128, "E_ACL")
+            try:
+                uuid = ctypes.string_at(qualifier, 16)
+                captured.append((tag.value, uuid.hex(), bits))
+            finally:
+                if lib.acl_free(qualifier) != 0:
+                    raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
+            _require(len(captured) <= DARWIN_UUID_COUNT_LIMIT, "E_ACL")
     finally:
         if lib.acl_free(acl) != 0:
             raise OSError(ctypes.get_errno() or errno.EIO, "acl_free")
+    resolved = resolver.resolve([uuid for _tag, uuid, _bits in captured])
+    _require(isinstance(resolved, list) and len(resolved) == len(captured), "E_ACL")
+    rows = []
+    for (tag, uuid, bits), result in zip(captured, resolved):
+        _require(isinstance(result, dict) and set(result) == {"uuid", "status", "kind", "id"}
+                 and result["uuid"] == uuid, "E_ACL")
+        if result["status"] == "resolved":
+            _require(result["kind"] in ("user", "group") and _integer(result["id"])
+                     and 0 <= result["id"] <= 0xffffffff, "E_ACL")
+            identifier = result["id"] if result["kind"] == "user" else None
+        else:
+            _require(result["status"] == "unresolved" and result["kind"] is None
+                     and result["id"] is None, "E_ACL")
+            identifier = None
+        rows.append((tag, identifier, bits))
     return rows
 
-def _acl_state(fd: int) -> tuple[object, object | None]:
+def _acl_state(fd: int, resolver: _DarwinUUIDResolver | None = None) -> tuple[object, object | None]:
     """Private OS observation seam returning access and default ACLs."""
     if sys.platform == "darwin":
-        return _darwin_acl(fd), None
+        return _darwin_acl(fd, resolver), None
     return (_linux_acl_xattr(fd, "system.posix_acl_access"),
             _linux_acl_xattr(fd, "system.posix_acl_default"))
 
@@ -326,24 +433,27 @@ def _linux_install_acl_ok(entries: list[tuple[int, int, int]] | None) -> bool:
     return entries is None or not any(tag in (0x02, 0x08) or (tag == 0x10 and perms & 2)
                                       for tag, perms, _identifier in entries)
 
-def _root_rule(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
-    if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        return False
-    try:
-        access, default = _acl_state(fd)
-    except (OSError, Refusal):
-        return False
-    if sys.platform != "darwin":
-        return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
-    dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
-    return not any(tag == 1 and identifier != 0 and bits & dangerous for tag, identifier, bits in access)
+def _root_rule(resolver: _DarwinUUIDResolver | None = None) -> Rule:
+    def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
+        if state.st_uid != 0 or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+        try:
+            access, default = _acl_state(fd, resolver)
+        except (OSError, Refusal):
+            return False
+        if sys.platform != "darwin":
+            return _linux_install_acl_ok(access) and _linux_install_acl_ok(default)
+        dangerous = sum(1 << n for n in (2, 4, 5, 6, 8, 10, 12, 13))
+        return not any(tag == 1 and identifier != 0 and bits & dangerous
+                       for tag, identifier, bits in access)
+    return check
 
-def _installed_rule(principal_uid: int) -> Rule:
+def _installed_rule(principal_uid: int, resolver: _DarwinUUIDResolver | None = None) -> Rule:
     def check(fd: int, state: os.stat_result, _ancestor: bool) -> bool:
         if state.st_uid not in (0, principal_uid) or state.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             return False
         try:
-            access, default = _acl_state(fd)
+            access, default = _acl_state(fd, resolver)
         except (OSError, Refusal):
             return False
         if sys.platform != "darwin":
@@ -353,12 +463,13 @@ def _installed_rule(principal_uid: int) -> Rule:
                        for tag, identifier, bits in access)
     return check
 
-def _store_rule(uid: int, gid: int, mode: int, directory: bool) -> Rule:
+def _store_rule(uid: int, gid: int, mode: int, directory: bool,
+                resolver: _DarwinUUIDResolver | None = None) -> Rule:
     def check(fd: int, state: os.stat_result, ancestor: bool) -> bool:
         if ancestor:
             return True
         try:
-            access, default = _acl_state(fd)
+            access, default = _acl_state(fd, resolver)
         except (OSError, Refusal):
             return False
         kind = stat.S_ISDIR(state.st_mode) if directory else stat.S_ISREG(state.st_mode)
@@ -394,14 +505,25 @@ def capture_parent_context(fd: int = 3) -> dict:
     _require(_identity(before) == _identity(after), "E_PARENT_CONTEXT")
     doc = _json(raw, PARENT_LIMIT, "E_PARENT_CONTEXT")
     _require(set(doc) == {"schema_version", "kind", "id", "body"} and _integer(doc["schema_version"])
-             and doc["schema_version"] == 1 and doc["kind"] == "shadow_consumer_parent_context"
+             and doc["schema_version"] == 2 and doc["kind"] == "shadow_consumer_parent_context"
              and doc["id"] == "shadow.parent", "E_PARENT_CONTEXT")
     body = doc["body"]
-    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {"helper_executable_size", "helper_path"}
+    _require(isinstance(body, dict) and set(body) == set(HASH_KEYS) | {
+                 "helper_executable_size", "helper_path", "native_release"}
              and all(_sha(body[key]) for key in HASH_KEYS), "E_PARENT_CONTEXT")
     _require(_integer(body["helper_executable_size"]) and 0 < body["helper_executable_size"] <= EXECUTABLE_LIMIT
              and _physical(body["helper_path"]) and body["helper_source_sha256"] == HELPER_SOURCE_SHA256,
              "E_PARENT_CONTEXT")
+    native = body["native_release"]
+    _require(isinstance(native, dict) and set(native) == NATIVE_RELEASE_KEYS
+             and all(_sha(native[key]) for key in ("source_sha256", "build_script_sha256",
+                 "build_record_sha256", "binary_sha256", "python_sha256",
+                 "dependency_record_sha256"))
+             and _physical(native["binary_path"]) and _physical(native["python_path"])
+             and _integer(native["binary_size"]) and 1 <= native["binary_size"] <= EXECUTABLE_LIMIT
+             and isinstance(native["python_abi"], str) and 1 <= len(native["python_abi"]) <= 128
+             and all(0x20 <= ord(char) <= 0x7e for char in native["python_abi"])
+             and native["loader_mode"] == "rtld-now-local.v1", "E_PARENT_CONTEXT")
     return body
 
 @dataclasses.dataclass
@@ -415,8 +537,15 @@ class DependencySnapshot:
         raw = self.snapshot.read(self.size, "E_DEPENDENCY")
         _require(len(raw) == self.size and digest(raw) == self.sha256, "E_DEPENDENCY")
     def close(self) -> None:
-        self.original.close()
-        self.snapshot.close()
+        failure = None
+        for item in (self.original, self.snapshot):
+            try:
+                item.close()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
 def snapshot_dependency(path: str, expected_sha256: str, expected_size: int,
                         private_dir: str, name: str) -> DependencySnapshot:
@@ -605,49 +734,73 @@ class Anchor:
     installed: dict[str, tuple[bytes, str]]
     registry: tuple[str, list[dict]]
     accepted: tuple[str, list[dict]]
+    resolver: _DarwinUUIDResolver | None
     def recheck(self, code: str = "E_INSTALL") -> None:
         for item in self.held:
             item.recheck(code)
+    def seal_recheck(self, code: str = "E_INSTALL") -> None:
+        for item in self.held:
+            item.seal_recheck(code)
     def close(self) -> None:
+        failure = None
         for item in reversed(self.held):
-            item.close()
+            try:
+                item.close()
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            raise failure
 
-def load_anchor() -> Anchor:
+def load_anchor(resolver: _DarwinUUIDResolver | None = None,
+                group_reader: _DarwinGroupReader | None = None) -> Anchor:
     held: list[HeldPath] = []
     try:
-        anchor = _open_held(ANCHOR, True, _root_rule, "E_INSTALL")
+        if sys.platform == "darwin":
+            _require(isinstance(resolver, _DarwinUUIDResolver), "E_INSTALL")
+            _require(isinstance(group_reader, _DarwinGroupReader), "E_INSTALL")
+        root_rule = _root_rule(resolver)
+        anchor = _open_held(ANCHOR, True, root_rule, "E_INSTALL")
         held.append(anchor)
-        config_file = _open_child(anchor, "host-config.json", False, _root_rule, "E_CONFIG")
+        config_file = _open_child(anchor, "host-config.json", False, root_rule, "E_CONFIG")
         held.append(config_file)
-        script = _open_child(anchor, "host-supervisor.py", False, _root_rule, "E_INSTALL")
+        script = _open_child(anchor, "host-supervisor.py", False, root_rule, "E_INSTALL")
         held.append(script)
         config_raw = config_file.read(DOCUMENT_LIMIT, "E_CONFIG")
         config = _parse_config(config_raw)
         uid, gid = config["principal_uid"], config["consumer_gid"]
-        _require(uid > 0 and uid not in (os.getuid(), os.geteuid())
-                 and gid in set(os.getgroups()) | {os.getgid(), os.getegid()}, "E_CONFIG")
+        _require(uid > 0 and uid not in (os.getuid(), os.geteuid()), "E_CONFIG")
+        primary_groups = (os.getgid(), os.getegid())
+        member = gid in primary_groups
+        if not member:
+            member = (group_reader.contains(gid) if group_reader is not None
+                      else gid in os.getgroups())
+        _require(member, "E_CONFIG")
         installed: dict[str, tuple[bytes, str]] = {}
         source_root = _source_root()
         for role, source_name in INSTALLED_SOURCES.items():
             source = _open_held(os.path.join(source_root, source_name), False,
                                 lambda _fd, _state, _ancestor: True, "E_INSTALL")
             held.append(source)
-            target = _open_held(config["installed_files"][role], False, _installed_rule(uid), "E_INSTALL")
+            target = _open_held(config["installed_files"][role], False,
+                                _installed_rule(uid, resolver), "E_INSTALL")
             held.append(target)
             source_raw = source.read(EXECUTABLE_LIMIT, "E_INSTALL")
             target_raw = target.read(EXECUTABLE_LIMIT, "E_INSTALL")
             _require(source_raw == target_raw, "E_INSTALL")
             installed[role] = (target_raw, digest(target_raw))
         for path in (config["identity_paths"]["verifier"], sys.executable):
-            held.append(_open_held(path, False, _installed_rule(uid), "E_INSTALL"))
+            held.append(_open_held(path, False, _installed_rule(uid, resolver), "E_INSTALL"))
         registry = _parse_registry(installed["registry"][0])
         accepted = _parse_accepted(installed["accepted_set"][0])
-        result = Anchor(config, config_raw, held, installed, registry, accepted)
+        result = Anchor(config, config_raw, held, installed, registry, accepted, resolver)
         result.recheck()
         return result
-    except BaseException:
-        for item in reversed(held):
-            item.close()
+    except BaseException as exc:
+        try:
+            _close_paths(held)
+        except OSError as close_exc:
+            raise exc from close_exc
         raise
 
 def verifier_observation(anchor: Anchor, environment_id: str, target_repository_id: str) -> bytes:
@@ -694,12 +847,15 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
     opened: list[HeldPath] = []
     snapshots: dict[str, bytes] = {}
     observations: list[dict] = []
+    failure = None
     try:
-        store = _open_held(root, True, _store_rule(uid, gid, 0o750, True), "E_STORE")
+        store = _open_held(root, True, _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(store)
-        attempt = _open_child(store, attempt_id, True, _store_rule(uid, gid, 0o750, True), "E_STORE")
+        attempt = _open_child(store, attempt_id, True,
+                              _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(attempt)
-        payload = _open_child(attempt, "payload", True, _store_rule(uid, gid, 0o750, True), "E_STORE")
+        payload = _open_child(attempt, "payload", True,
+                              _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
         opened.append(payload)
         observations.extend((_observation(store, "."), _observation(attempt, attempt_id),
                              _observation(payload, "payload")))
@@ -712,10 +868,12 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         _require(payload_names == fixed | optional | ({"evidence"} if evidence_present else set()),
                  "E_STORE")
         files: list[tuple[HeldPath, str]] = []
-        receipt = _open_child(attempt, "receipt.json", False, _store_rule(uid, gid, 0o440, False), "E_STORE")
+        receipt = _open_child(attempt, "receipt.json", False,
+                              _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
         opened.append(receipt); files.append((receipt, "receipt.json"))
         for name in sorted(fixed | optional):
-            item = _open_child(payload, name, False, _store_rule(uid, gid, 0o440, False), "E_STORE")
+            item = _open_child(payload, name, False,
+                               _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
             opened.append(item); files.append((item, "payload/" + name))
         manifest_item = next(item for item, name in files if name == "payload/evidence-manifest.json")
         manifest_raw = manifest_item.read(DOCUMENT_LIMIT, "E_STORE")
@@ -738,12 +896,12 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
         _require(evidence_present == bool(rows), "E_STORE")
         if rows:
             evidence = _open_child(payload, "evidence", True,
-                                   _store_rule(uid, gid, 0o750, True), "E_STORE")
+                                   _store_rule(uid, gid, 0o750, True, anchor.resolver), "E_STORE")
             opened.append(evidence); observations.append(_observation(evidence, "payload/evidence"))
             _require(sorted(os.listdir(evidence.fd)) == expected_evidence, "E_STORE")
             for name in expected_evidence:
                 item = _open_child(evidence, name, False,
-                                   _store_rule(uid, gid, 0o440, False), "E_STORE")
+                                   _store_rule(uid, gid, 0o440, False, anchor.resolver), "E_STORE")
                 opened.append(item); files.append((item, "payload/evidence/" + name))
         output_files = [(item, name) for item, name in files
                         if name in ("payload/stdout", "payload/stderr")
@@ -778,6 +936,84 @@ def read_store_attempt(anchor: Anchor, attempt_id: str) -> tuple[dict[str, bytes
                                      "attempt_id": attempt_id, "entries": observations,
                                      "result": "authenticated"}})
         return snapshots, observation
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
-        for item in reversed(opened):
-            item.close()
+        try:
+            _close_paths(opened)
+        except OSError:
+            if failure is None:
+                raise
+
+def _read_resolver_input() -> bytes:
+    raw = bytearray()
+    while len(raw) <= DARWIN_UUID_INPUT_LIMIT:
+        part = os.read(0, min(4096, DARWIN_UUID_INPUT_LIMIT + 1 - len(raw)))
+        if not part:
+            break
+        raw.extend(part)
+    _require(len(raw) <= DARWIN_UUID_INPUT_LIMIT, "E_ACL")
+    return bytes(raw)
+
+def _resolve_darwin_uuids() -> bytes:
+    _require(sys.platform == "darwin" and _DARWIN_ACL_FUNCTIONS is not None, "E_ACL")
+    uuids = _json_array(_read_resolver_input(), DARWIN_UUID_INPUT_LIMIT, "E_ACL")
+    _require(len(uuids) <= DARWIN_UUID_COUNT_LIMIT and all(_uuid_hex(item) for item in uuids),
+             "E_ACL")
+    function = _DARWIN_ACL_FUNCTIONS.library.mbr_uuid_to_id
+    function.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
+                         ctypes.POINTER(ctypes.c_int)]
+    function.restype = ctypes.c_int
+    rows = []
+    for uuid in uuids:
+        value, kind = ctypes.c_uint32(), ctypes.c_int()
+        ctypes.set_errno(0)
+        result = function(bytes.fromhex(uuid), ctypes.byref(value), ctypes.byref(kind))
+        if result == 0:
+            _require(kind.value in (0, 1), "E_ACL")
+            rows.append({"uuid": uuid, "status": "resolved",
+                         "kind": "user" if kind.value == 0 else "group", "id": value.value})
+        else:
+            error = ctypes.get_errno() or result
+            _require(error in (errno.ENOENT, errno.ESRCH, errno.EIO), "E_ACL")
+            rows.append({"uuid": uuid, "status": "unresolved", "kind": None, "id": None})
+    output = canonical(rows)
+    _require(len(output) <= DARWIN_UUID_OUTPUT_LIMIT, "E_ACL")
+    return output
+
+def _read_darwin_group() -> bytes:
+    _require(sys.platform == "darwin", "E_ACL")
+    raw = bytearray()
+    while len(raw) <= 32:
+        part = os.read(0, min(33 - len(raw), 4096))
+        if not part:
+            break
+        raw.extend(part)
+    _require(len(raw) <= 32, "E_ACL")
+    body = _json(bytes(raw), 32, "E_ACL")
+    _require(set(body) == {"gid"} and _integer(body["gid"])
+             and 0 <= body["gid"] <= 0xffffffff and canonical(body) == bytes(raw), "E_ACL")
+    gid = body["gid"]
+    output = canonical([gid] if gid in os.getgroups() else [])
+    _require(len(output) <= 16, "E_ACL")
+    return output
+
+def _resolver_main(argv: list[str]) -> int:
+    try:
+        _require(len(argv) == 2 and argv[1] in
+                 ("_resolve-darwin-uuids", "_read-darwin-group") and sys.flags.isolated == 1
+                 and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1, "E_ACL")
+        output = (_resolve_darwin_uuids() if argv[1] == "_resolve-darwin-uuids"
+                  else _read_darwin_group())
+        sent = 0
+        while sent < len(output):
+            count = os.write(1, output[sent:])
+            _require(count > 0, "E_ACL")
+            sent += count
+        return 0
+    except (Refusal, OSError, ValueError):
+        return 1
+
+if __name__ == "__main__":
+    raise SystemExit(_resolver_main(sys.argv))
